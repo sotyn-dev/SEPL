@@ -14,8 +14,16 @@ const { getDb } = require('../db/schema');            // erp.db — names + can_
 const { getBoardDb } = require('../db/sotynFlowDb');   // separate board database
 const { emitBoard } = require('../lib/sotynFlowSocket');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const quarantine = require('../lib/quarantine');       // reversible move-not-delete for orphaned attachments
 const router = express.Router();
 router.use(authMiddleware);
+
+// Best-effort: move each attachment URL to quarantine (reversible; lazy-restored on
+// re-serve if a DB revert re-references it). Never throws — attachment cleanup must
+// not fail the delete it accompanies.
+function quarantineUrls(urls) {
+  for (const u of urls) { if (u) { try { quarantine.quarantineUrl(u); } catch (e) { /* best-effort */ } } }
+}
 
 // ── access helpers ──────────────────────────────────────────────────────────
 const isAppAdmin = (req) => req.user.role === 'admin';
@@ -196,6 +204,7 @@ router.delete('/:id', (req, res) => {
   const db = getBoardDb(); const b = +req.params.id;
   if (!canManage(db, req, b)) return res.status(403).json({ error: 'Only a board admin can delete this board' });
   if (!db.prepare('SELECT 1 FROM boards WHERE id=?').get(b)) return res.status(404).json({ error: 'Not found' });
+  const atts = db.prepare('SELECT attachment_url FROM board_card_comments WHERE board_id=? AND attachment_url IS NOT NULL').all(b).map(r => r.attachment_url);
   db.transaction(() => {
     const cardIds = db.prepare('SELECT id FROM board_cards WHERE board_id=?').all(b).map(r => r.id);
     db.prepare('DELETE FROM board_card_comments WHERE board_id=?').run(b);
@@ -206,6 +215,7 @@ router.delete('/:id', (req, res) => {
     db.prepare('DELETE FROM board_members WHERE board_id=?').run(b);
     db.prepare('DELETE FROM boards WHERE id=?').run(b);
   })();
+  quarantineUrls(atts);
   emitBoard(b, 'board_deleted', { boardId: b });
   res.json({ ok: true });
 });
@@ -285,6 +295,7 @@ router.delete('/:id/columns/:colId', (req, res) => {
   const db = getBoardDb(); const b = +req.params.id; const c = +req.params.colId;
   if (!canManage(db, req, b)) return res.status(403).json({ error: 'Only a board admin can delete columns' });
   if (!db.prepare('SELECT 1 FROM board_columns WHERE id=? AND board_id=?').get(c, b)) return res.status(404).json({ error: 'Column not found' });
+  const atts = db.prepare('SELECT c.attachment_url FROM board_card_comments c JOIN board_cards k ON k.id=c.card_id WHERE k.column_id=? AND c.attachment_url IS NOT NULL').all(c).map(r => r.attachment_url);
   db.transaction(() => {
     const cardIds = db.prepare('SELECT id FROM board_cards WHERE column_id=?').all(c).map(r => r.id);
     for (const cid of cardIds) {
@@ -295,6 +306,7 @@ router.delete('/:id/columns/:colId', (req, res) => {
     db.prepare('DELETE FROM board_cards WHERE column_id=?').run(c);
     db.prepare('DELETE FROM board_columns WHERE id=?').run(c);
   })();
+  quarantineUrls(atts);
   emitBoard(b, 'changed', { boardId: b });
   res.json({ ok: true });
 });
@@ -372,12 +384,14 @@ router.delete('/:id/cards/:cardId', (req, res) => {
   const db = getBoardDb(); const b = +req.params.id; const c = +req.params.cardId;
   if (!canAccess(db, req, b)) return res.status(403).json({ error: 'Not a member' });
   if (!db.prepare('SELECT 1 FROM board_cards WHERE id=? AND board_id=?').get(c, b)) return res.status(404).json({ error: 'Card not found' });
+  const atts = db.prepare('SELECT attachment_url FROM board_card_comments WHERE card_id=? AND attachment_url IS NOT NULL').all(c).map(r => r.attachment_url);
   db.transaction(() => {
     db.prepare('DELETE FROM board_card_comments WHERE card_id=?').run(c);
     db.prepare('DELETE FROM board_card_activity WHERE card_id=?').run(c);
     db.prepare('DELETE FROM board_card_members WHERE card_id=?').run(c);
     db.prepare('DELETE FROM board_cards WHERE id=?').run(c);
   })();
+  quarantineUrls(atts);
   emitBoard(b, 'changed', { boardId: b });
   res.json({ ok: true });
 });
@@ -444,6 +458,7 @@ router.delete('/:id/cards/:cardId/comments/:commentId', (req, res) => {
   if (!comment) return res.status(404).json({ error: 'Not found' });
   if (comment.sender_id !== req.user.id && !canManage(db, req, b)) return res.status(403).json({ error: 'You can only delete your own comments' });
   db.prepare('DELETE FROM board_card_comments WHERE id=?').run(cm);
+  if (comment.attachment_url) quarantineUrls([comment.attachment_url]);
   emitBoard(b, 'changed', { boardId: b });
   res.json({ ok: true });
 });

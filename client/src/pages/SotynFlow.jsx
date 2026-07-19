@@ -102,7 +102,7 @@ function CardImage({ url, name }) {
 
 async function uploadFile(file) {
   const fd = new FormData(); fd.append('file', file);
-  const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  const r = await api.post('/upload?folder=sotyn-flow', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
   return r.data; // { url, filename, size }
 }
 
