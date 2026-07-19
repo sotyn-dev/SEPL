@@ -468,6 +468,7 @@ export default function SotynFlow() {
   const mayCreate = canCreate('sotyn_flow');
 
   const [boards, setBoards] = useState([]);
+  const [boardsLoading, setBoardsLoading] = useState(true);   // gate the first-load empty-state flash
   const [canSeeAll, setCanSeeAll] = useState(false);
   const [mineOnly, setMineOnly] = useState(() => localStorage.getItem('flow_mine') === '1');
   const [q, setQ] = useState('');
@@ -489,7 +490,8 @@ export default function SotynFlow() {
     // No `q` param: search is filtered client-side (`shown` below), so we don't
     // re-hit the API on every keystroke.
     api.get('/sotyn-flow', { params: { mine: mineOnly ? 1 : undefined } })
-      .then(r => { setBoards(r.data.boards || []); setCanSeeAll(!!r.data.can_see_all); }).catch(() => {});
+      .then(r => { setBoards(r.data.boards || []); setCanSeeAll(!!r.data.can_see_all); }).catch(() => {})
+      .finally(() => setBoardsLoading(false));   // first resolution ends the gate; later refetches keep it false (no flash)
   }, [mineOnly]);
   const loadBoard = useCallback(() => {
     if (!boardId) return;
@@ -573,14 +575,19 @@ export default function SotynFlow() {
         </SubNav>
 
         <div className="flex-1 overflow-y-auto p-3 border border-gray-200 md:p-5">
-          {shown.length === 0 ? (
-            <div className="flex flex-col items-center justify-center text-gray-400 gap-2 py-20">
+          {boardsLoading ? (
+            <div className="flow-fade flex flex-col items-center justify-center text-gray-400 gap-3 py-20">
+              <div className="w-8 h-8 border-2 border-gray-200 border-t-blue-500 rounded-full animate-spin" />
+              <span className="text-sm">Loading boards…</span>
+            </div>
+          ) : shown.length === 0 ? (
+            <div className="flow-fade flex flex-col items-center justify-center text-gray-400 gap-2 py-20">
               <FiTrello size={44} />
               <span className="text-sm text-center max-w-xs">{q ? 'No boards match your search.' : (mayCreate ? 'No boards yet — create your first one.' : "No boards yet — you'll see boards here once you're added to one.")}</span>
               {!q && mayCreate && <button onClick={() => setNewOpen(true)} className="btn btn-primary mt-1"><FiPlus className="inline -mt-0.5" /> New board</button>}
             </div>
           ) : (
-            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <div className="flow-fade grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {shown.map(b => (
                 <button key={b.id} onClick={() => nav(`/sotyn-flow/${b.id}`)} className="text-left rounded-xl border border-gray-200 bg-white p-4 hover:shadow-md hover:border-blue-300 transition-all flex flex-col">
                   <div className="flex items-start justify-between gap-2">
