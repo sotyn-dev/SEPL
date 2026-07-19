@@ -66,13 +66,10 @@ export default function DatabaseBackups() {
   const latest = data.backups?.[0];
   const latestAge = latest ? Math.round((Date.now() - new Date(latest.created_at)) / 3600000) : null;
 
-  // The list is already sorted newest-first, so the first filename seen for each
-  // db type is that database's latest snapshot — tag those rows LATEST.
-  const latestByDb = {};
-  for (const b of (data.backups || [])) {
-    const key = b.db || 'erp';
-    if (!latestByDb[key]) latestByDb[key] = b.filename;
-  }
+  // LATEST marks the single newest backup overall (the newest consolidated .zip) — see
+  // the isLatest check at render. Under the zip model one run = one file, so the old
+  // "latest per database" tagging wrongly flagged stale legacy per-file backups too.
+  const latestFilename = data.backups?.[0]?.filename;
 
   // Group rows by backup RUN so an ERP snapshot and the Chat snapshot written right
   // after it read as one unit. ERP→Chat of a single run land seconds apart; separate
@@ -110,7 +107,7 @@ export default function DatabaseBackups() {
           <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
             <FiDatabase className="text-red-600" /> Database Backups
           </h3>
-          <p className="text-sm text-gray-500">Automatic nightly snapshots at 2:00 AM. Keeps the last 30 per database (ERP + Chat + SOTYN Flow).</p>
+          <p className="text-sm text-gray-500">Automatic nightly snapshots at 2:00 AM. Keeps the last 30 consolidated backups — one .zip per run, bundling every database.</p>
         </div>
         <div className="flex gap-2">
           <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
@@ -127,7 +124,7 @@ export default function DatabaseBackups() {
         <div className="card">
           <p className="text-xs text-gray-500 uppercase tracking-wide">Total Backups</p>
           <p className="text-2xl font-bold text-gray-800 mt-1">{data.backups?.length || 0}</p>
-          <p className="text-[11px] text-gray-400">Retention: last 30 per database</p>
+          <p className="text-[11px] text-gray-400">Retention: last 30 backups</p>
         </div>
         <div className="card">
           <p className="text-xs text-gray-500 uppercase tracking-wide flex items-center gap-1"><FiClock size={11} /> Latest Backup</p>
@@ -173,12 +170,14 @@ export default function DatabaseBackups() {
           </thead>
           <tbody>
             {rows.map((b) => {
-              const isLatest = latestByDb[b.db || 'erp'] === b.filename;
+              const isLatest = b.filename === latestFilename;
               const dbKind = b.db || 'erp';
-              const badge = dbKind === 'sotynflow'
+              const badge = dbKind === 'archive'
+                ? { label: 'Full backup', cls: 'bg-amber-100 text-amber-800' }
+                : dbKind === 'sotynflow'
                 ? { label: 'SOTYN Flow', cls: 'bg-emerald-100 text-emerald-800' }
                 : dbKind === 'chat'
-                  ? { label: 'Chat', cls: 'bg-violet-100 text-violet-800' }
+                  ? { label: 'SOTYN Chat', cls: 'bg-violet-100 text-violet-800' }
                   : { label: 'ERP', cls: 'bg-blue-100 text-blue-800' };
               const evenGroup = b._group % 2 === 0;
               // Each run reads as one block via a soft shared tint plus a stronger rule
