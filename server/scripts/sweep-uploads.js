@@ -5,7 +5,7 @@
 // scanned, quarantined, or deleted.
 //
 // A file in a swept folder is an ORPHAN only if its basename is referenced by NO
-// row in either DB AND it's older than GRACE_DAYS. Orphans are MOVED to
+// row in ANY DB under data/ AND it's older than GRACE_DAYS. Orphans are MOVED to
 // quarantine (reversible); quarantined files older than QUARANTINE_TTL_DAYS are
 // purged. Before classifying, any quarantined file whose basename is referenced
 // again (e.g. after a DB revert) is restored — self-healing.
@@ -15,7 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { UPLOADS_ROOT, DB_PATH, CHAT_DB_PATH, SWEEP_FOLDERS, uploadsSub } = require('../lib/paths');
+const { UPLOADS_ROOT, DATA_ROOT, SWEEP_FOLDERS, uploadsSub } = require('../lib/paths');
 const quarantine = require('../lib/quarantine');
 
 const GRACE_DAYS = 30;            // don't touch files younger than this (in-flight/abandoned-recent)
@@ -54,8 +54,15 @@ function collectRefs(dbPath, set) {
 
 function buildKeepSet() {
   const set = new Set();
-  collectRefs(DB_PATH, set);
-  collectRefs(CHAT_DB_PATH, set);
+  // Scan EVERY database under data/ (erp, chat, + any feature DB like sotynflow) so a
+  // file referenced by any DB stays in the keep-set — errs toward keeping. Auto-discovery
+  // (like the backup) means new feature DBs are honored with no per-DB wiring; collectRefs
+  // guards absence + opens read-only. `.db` excludes -wal/-shm sidecars.
+  if (fs.existsSync(DATA_ROOT)) {
+    for (const f of fs.readdirSync(DATA_ROOT)) {
+      if (f.endsWith('.db')) collectRefs(path.join(DATA_ROOT, f), set);
+    }
+  }
   return set;
 }
 
