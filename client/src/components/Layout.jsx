@@ -46,6 +46,8 @@ import {
   FiGitMerge,
   // Procurement · backward-pass Gantt (mam 2026-05-28)
   FiGitBranch,
+  // SOTYN Flow · task boards pinned link (mam 2026-07)
+  FiTrello,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -683,12 +685,19 @@ export default function Layout() {
             (mam 2026-06-19: "show above where is change password"). Shown to
             EVERY signed-in user (no site_chat permission needed) — access is
             by group membership, so added people can chat by default. */}
-        <div className="px-3 py-2 border-t border-white/10">
+        <div className="px-3 py-1.5 border-t border-white/10">
           <Link to="/site-chat"
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <BiMessageRoundedCheck size={17} className="text-white" />
             <span className="truncate flex-1">SOTYN Chat</span>
             {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
+          </Link>
+          {/* SOTYN Flow — task boards, pinned right below SOTYN Chat. Open to
+              every signed-in user; access is by board membership. */}
+          <Link to="/sotyn-flow"
+            className={`mt-0.5 flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname.startsWith('/sotyn-flow') ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+            <FiTrello size={17} className="text-white" />
+            <span className="truncate flex-1">SOTYN Flow</span>
           </Link>
         </div>
         <div className="p-3 border-t border-white/10">

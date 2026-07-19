@@ -5618,6 +5618,12 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
+    // SOTYN Flow — Trello-style task boards. Registered ONLY so the "See All"
+    // (can_see_all) toggle exists in Roles & Permissions: ticking it lets a role
+    // see every board (else only boards they're a member of). View/Create/etc.
+    // are not used to gate boards — access is board membership; management is
+    // board-admin.
+    'sotyn_flow',
     // Mam (2026-06-19): Labour Rate Sheet — was sharing the `quotations`
     // permission so it never showed separately in Roles & Permissions.
     // Now its own module so access can be granted/revoked on its own.

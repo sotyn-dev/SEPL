@@ -22,6 +22,7 @@ const ALL_MODULES = [
   { key: 'collections', label: 'Collection Engine' },
   { key: 'ar_ap_tracker', label: 'AR/AP Tracker' },
   { key: 'site_chat', label: 'SOTYN Chat — create/manage groups (chatting is open to all)' },
+  { key: 'sotyn_flow', label: "SOTYN Flow — Create = create & own boards. See All = view & contribute (cards, comments) on every board, not just your own. Board settings, members & lists stay board-admin only." },
   { key: 'dpr', label: 'DPR' },
   { key: 'indent_labour_payment', label: 'Indent Labour Payment' },
   { key: 'labour_payment', label: 'Labour Payment Indents' },
@@ -93,6 +94,14 @@ const ACTIONS = [
   { key: 'can_see_all', label: 'See All', color: 'text-blue-600' },
 ];
 
+// Modules whose access isn't a full CRUD matrix. Only the listed action columns
+// do anything; the rest render as N/A. sotyn_flow: view/contribute is by board
+// membership (no role perm) and edit/delete/members are per-board (board admin) —
+// so only Create (make boards) and See All (see every board) are role-level.
+const MODULE_ACTIONS = { sotyn_flow: ['can_create', 'can_see_all'] };
+const actionApplies = (moduleKey, actionKey) =>
+  !MODULE_ACTIONS[moduleKey] || MODULE_ACTIONS[moduleKey].includes(actionKey);
+
 export default function RolesPermissions() {
   const [roles, setRoles] = useState([]);
   const [selectedRole, setSelectedRole] = useState(null);
@@ -125,11 +134,13 @@ export default function RolesPermissions() {
   };
 
   const togglePerm = (moduleKey, actionKey) => {
+    if (!actionApplies(moduleKey, actionKey)) return;   // N/A cell — not togglable
     setPermissions(prev => prev.map(p => {
       if (p.module !== moduleKey) return p;
       const newVal = p[actionKey] ? 0 : 1;
-      // If enabling any action, also enable view
-      if (newVal && actionKey !== 'can_view') {
+      // If enabling any action, also enable view — but only when View applies to
+      // this module (sotyn_flow has no role-level view; access is by membership).
+      if (newVal && actionKey !== 'can_view' && actionApplies(moduleKey, 'can_view')) {
         return { ...p, [actionKey]: newVal, can_view: 1 };
       }
       // If disabling view, disable all (including the new can_see_all)
@@ -141,8 +152,11 @@ export default function RolesPermissions() {
   };
 
   const toggleAll = (actionKey) => {
-    const allEnabled = permissions.every(p => p[actionKey]);
+    // Only consider rows where this action actually applies (skip N/A cells).
+    const applicable = permissions.filter(p => actionApplies(p.module, actionKey));
+    const allEnabled = applicable.length > 0 && applicable.every(p => p[actionKey]);
     setPermissions(prev => prev.map(p => {
+      if (!actionApplies(p.module, actionKey)) return p;   // leave N/A cells untouched
       if (allEnabled) {
         if (actionKey === 'can_view') return { ...p, can_view: 0, can_create: 0, can_edit: 0, can_delete: 0, can_approve: 0 };
         return { ...p, [actionKey]: 0 };
@@ -263,12 +277,19 @@ export default function RolesPermissions() {
                           <td className="px-4 py-3 text-sm font-medium text-gray-700">{mod?.label || p.module}</td>
                           {ACTIONS.map(a => (
                             <td key={a.key} className="px-3 py-3 text-center">
-                              <button
-                                onClick={() => togglePerm(p.module, a.key)}
-                                className={`w-8 h-8 rounded-lg flex items-center justify-center mx-auto transition-colors ${p[a.key] ? 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200' : 'bg-gray-100 text-gray-300 hover:bg-gray-200'}`}
-                              >
-                                {p[a.key] ? <FiCheck size={16} /> : <FiX size={14} />}
-                              </button>
+                              {actionApplies(p.module, a.key) ? (
+                                <button
+                                  onClick={() => togglePerm(p.module, a.key)}
+                                  className={`w-8 h-8 rounded-lg flex items-center justify-center mx-auto transition-colors ${p[a.key] ? 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200' : 'bg-gray-100 text-gray-300 hover:bg-gray-200'}`}
+                                >
+                                  {p[a.key] ? <FiCheck size={16} /> : <FiX size={14} />}
+                                </button>
+                              ) : (
+                                <span
+                                  title="Not used for SOTYN Flow — board members can always view & contribute; a board's own admins manage its edits, members and deletion."
+                                  className="inline-flex w-8 h-8 items-center justify-center mx-auto text-gray-300 select-none cursor-default"
+                                >–</span>
+                              )}
                             </td>
                           ))}
                         </tr>

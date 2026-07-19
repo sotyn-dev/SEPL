@@ -50,6 +50,7 @@ const CashFlow = lazy(() => import('./pages/CashFlow'));
 const Collections = lazy(() => import('./pages/Collections'));
 const ArApTracker = lazy(() => import('./pages/ArApTracker'));
 const SiteChat = lazy(() => import('./pages/SiteChat'));
+const SotynFlow = lazy(() => import('./pages/SotynFlow'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
 const IndentLabourPayment = lazy(() => import('./pages/IndentLabourPayment'));
@@ -177,6 +178,10 @@ export default function App() {
         {/* WhatsApp is open to all signed-in users — access is by group
             membership, not the site_chat module permission (mam 2026-06-19). */}
         <Route path="site-chat" element={<SiteChat />} />
+        {/* SOTYN Flow — task boards. Full-width; access by board membership
+            (super-viewers see all), so no ModuleRoute gate — same as site-chat. */}
+        <Route path="sotyn-flow" element={<SotynFlow />} />
+        <Route path="sotyn-flow/:boardId" element={<SotynFlow />} />
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}

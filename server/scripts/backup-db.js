@@ -166,14 +166,15 @@ function scheduleNightly() {
 function listBackups() {
   if (!fs.existsSync(BACKUP_DIR)) return [];
   return fs.readdirSync(BACKUP_DIR)
-    // New unified archives, plus any legacy erp-/chat- .db files still on disk.
+    // New unified archives, plus any legacy erp-/chat-/sotynflow- .db files still on disk.
     .filter(f => (f.startsWith('backup-') && f.endsWith('.zip'))
-      || ((f.startsWith('erp-') || f.startsWith('chat-')) && f.endsWith('.db')))
+      || ((f.startsWith('erp-') || f.startsWith('chat-') || f.startsWith('sotynflow-')) && f.endsWith('.db')))
     .map(f => {
       const full = path.join(BACKUP_DIR, f);
       const st = fs.statSync(full);
-      const kind = f.endsWith('.zip') ? 'archive' : (f.startsWith('chat-') ? 'chat' : 'erp');
-      return { filename: f, kind, size: st.size, created_at: st.mtime.toISOString() };
+      // Field is `db` (the admin page reads b.db); zips are the consolidated archive.
+      const db = f.endsWith('.zip') ? 'archive' : (f.startsWith('sotynflow-') ? 'sotynflow' : f.startsWith('chat-') ? 'chat' : 'erp');
+      return { filename: f, db, size: st.size, created_at: st.mtime.toISOString() };
     })
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
