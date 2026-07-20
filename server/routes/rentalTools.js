@@ -16,27 +16,29 @@
 
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
-const storage = require('../lib/storage');
 const { addBusinessHours, addBusinessDays } = require('../lib/businessHours');
 
 const router = express.Router();
 router.use(authMiddleware);
 
 // Photo upload for Stage 2 — mam picked "Live camera + GPS lat/lng"
-// Buffered in memory, then written through the storage seam (lib/storage), so these
-// photos follow STORAGE_DRIVER instead of being pinned to the local disk. Same folder
-// and naming rule as before.
-const PHOTO_FOLDER = 'rental-tools';
+const photoDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'rental-tools');
+if (!fs.existsSync(photoDir)) fs.mkdirSync(photoDir, { recursive: true });
 const photoUpload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: photoDir,
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || '.jpg');
+      cb(null, `rt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+    },
+  }),
   limits: { fileSize: 10 * 1024 * 1024 },  // 10 MB
 });
-const photoName = (file) =>
-  `rt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname || '.jpg')}`;
 
 // ── Helpers ────────────────────────────────────────────────────
 function nextEnquiryNo(db) {
@@ -354,7 +356,7 @@ router.post('/enquiries/:id/finalise-rate', requirePermission('rental_tools', 'c
 // ── POST /api/rental-tools/enquiries/:id/material-received ─────
 // Stage 2 → Stage 3.  Site engineer uploads live photo + GPS;
 // return target date = today + days_required (business days).
-router.post('/enquiries/:id/material-received', requirePermission('rental_tools', 'edit'), photoUpload.single('photo'), async (req, res) => {
+router.post('/enquiries/:id/material-received', requirePermission('rental_tools', 'edit'), photoUpload.single('photo'), (req, res) => {
   const db = getDb();
   const id = +req.params.id;
   const enquiry = db.prepare(`SELECT * FROM rental_tool_enquiry WHERE id=?`).get(id);
@@ -367,16 +369,11 @@ router.post('/enquiries/:id/material-received', requirePermission('rental_tools'
   const lat = req.body.latitude ? +req.body.latitude : null;
   const lng = req.body.longitude ? +req.body.longitude : null;
   if (lat === null || lng === null) {
-    // Nothing to clean up any more — with memoryStorage the photo was never written,
-    // so a GPS rejection can no longer leave a stray file behind.
+    // Clean up uploaded file since we're rejecting
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
     return res.status(400).json({ error: 'latitude + longitude are required (allow GPS in browser)' });
   }
-  let photoUrl;
-  try {
-    photoUrl = await storage.storeUpload(req.file, PHOTO_FOLDER, photoName(req.file));
-  } catch (e) {
-    return res.status(500).json({ error: `Could not store photo: ${e.message}` });
-  }
+  const photoUrl = `/uploads/rental-tools/${req.file.filename}`;
   const now = new Date();
   const returnTarget = addBusinessDays(now, enquiry.days_required);
 
