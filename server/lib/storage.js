@@ -25,11 +25,20 @@ const NS = { UPLOADS: 'uploads', QUARANTINE: 'quarantine' };
 const DRIVER = (process.env.STORAGE_DRIVER || 'local').toLowerCase();
 const isRemote = DRIVER === 's3';
 
-// THE decoupling point for multi-tenant. Today one org, one prefix from env. If tenant
-// orchestration ever lands, this single function resolves the prefix per request and
-// every verb below follows — no other code moves.
+// THE decoupling point for multi-tenant. Every verb below derives its object key from
+// this one function, so when tenant orchestration lands only this changes — either not at
+// all (a process per tenant already has its own env), or to a request-scoped lookup via
+// AsyncLocalStorage for a single process serving many tenants. No call site moves either way.
+//
+// Falls back to TENANT_ID so ONE variable defines tenant identity on both sides:
+//   local  -> data/<TENANT_ID>/uploads/...   (lib/paths.js)
+//   bucket -> <TENANT_ID>/uploads/...        (here)
+// Setting TENANT_ID without S3_KEY_PREFIX used to put local files under the tenant dir
+// while objects went to the BUCKET ROOT — harmless with one tenant, and exactly how two
+// tenants would end up sharing a namespace. S3_KEY_PREFIX still wins when set explicitly,
+// for the case where the bucket layout must differ from the on-disk one.
 function keyPrefix() {
-  const p = process.env.S3_KEY_PREFIX || '';
+  const p = process.env.S3_KEY_PREFIX || process.env.TENANT_ID || '';
   if (!p) return '';
   return p.endsWith('/') ? p : `${p}/`;
 }
