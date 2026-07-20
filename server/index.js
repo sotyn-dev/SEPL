@@ -81,7 +81,12 @@ const upload = multer({
       const f = uploadFolder(req);
       cb(null, f ? ensureDir(uploadsSub(f)) : uploadsDir);
     },
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`),
+    // <epoch>-<rand>-<sanitised name>. The random block matters: with only a timestamp,
+    // two people uploading "photo.jpg" in the SAME millisecond produced the same name and
+    // the second silently overwrote the first — on disk before, and in the bucket now.
+    // The other upload routes (kit-/rt-/hr-) already do this; this brings /api/upload in
+    // line. Only NEW filenames change; existing DB rows and objects are untouched.
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`),
   }),
   limits: { fileSize: 20 * 1024 * 1024 },
 });

@@ -320,7 +320,20 @@ async function moveKey(fromKey, toKey, { fromNs = NS.UPLOADS, toNs = NS.QUARANTI
       Key: remoteKey(toNs, b),
     }));
   } catch { return false; }
-  await removeKey(a, fromNs);
+
+  // The copy landed, so the destination is authoritative from here. If removing the
+  // source fails the object briefly exists in BOTH namespaces — a genuine duplicate, so
+  // say so loudly rather than returning success silently.
+  //
+  // It still returns TRUE: the file really is at the destination, and reporting failure
+  // would be worse than the duplicate. quarantineKey treats false as "nothing moved" and
+  // skips its manifest write, which would leave a quarantined object no longer tracked by
+  // the manifest — unrestorable and never purged. A stale source copy is the lesser evil,
+  // and the next sweep/migration reconciles it.
+  const removed = await removeKey(a, fromNs);
+  if (!removed) {
+    console.warn(`[storage] moveKey: copied to ${toNs}/${b} but could not remove ${fromNs}/${a} — both copies exist until the next reconcile`);
+  }
   return true;
 }
 
