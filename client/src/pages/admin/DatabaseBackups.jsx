@@ -66,6 +66,10 @@ export default function DatabaseBackups() {
   const latest = data.backups?.[0];
   const latestAge = latest ? Math.round((Date.now() - new Date(latest.created_at)) / 3600000) : null;
 
+  // Offsite backups are opt-in (BACKUP_S3). When off, the API sends no `source` at all
+  // and the extra column never renders — the page stays exactly as it is today.
+  const s3On = !!data.s3_enabled;
+
   // LATEST marks the single newest backup overall (the newest consolidated .zip) — see
   // the isLatest check at render. Under the zip model one run = one file, so the old
   // "latest per database" tagging wrongly flagged stale legacy per-file backups too.
@@ -163,6 +167,7 @@ export default function DatabaseBackups() {
             <tr className="border-b-2 border-gray-300">
               <th>Filename</th>
               <th>Database</th>
+              {s3On && <th>Location</th>}
               <th>Created</th>
               <th>Size</th>
               <th>Action</th>
@@ -172,6 +177,13 @@ export default function DatabaseBackups() {
             {rows.map((b) => {
               const isLatest = b.filename === latestFilename;
               const dbKind = b.db || 'erp';
+              // "Local only" is the one worth warning about: it means the offsite push
+              // failed or hasn't run, so that backup dies with the VPS.
+              const loc = b.source === 'both'
+                ? { label: 'Local + Offsite', cls: 'bg-emerald-100 text-emerald-800' }
+                : b.source === 's3'
+                  ? { label: 'Offsite only', cls: 'bg-sky-100 text-sky-800' }
+                  : { label: 'Local only', cls: 'bg-amber-100 text-amber-800' };
               const badge = dbKind === 'archive'
                 ? { label: 'Full backup', cls: 'bg-amber-100 text-amber-800' }
                 : dbKind === 'sotynflow'
@@ -196,6 +208,11 @@ export default function DatabaseBackups() {
                     {badge.label}
                   </span>
                 </td>
+                {s3On && (
+                  <td>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${loc.cls}`}>{loc.label}</span>
+                  </td>
+                )}
                 <td className="whitespace-nowrap text-xs">{fmtDateTime(b.created_at)}</td>
                 <td className="whitespace-nowrap text-xs">{formatSize(b.size)}</td>
                 <td>

@@ -63,8 +63,11 @@ function sdk() {
   try {
     return require('@aws-sdk/client-s3');
   } catch (e) {
+    // Reached via STORAGE_DRIVER=s3 OR BACKUP_S3=true, so name both rather than
+    // sending someone to check the one setting they didn't change.
     throw new Error(
-      'STORAGE_DRIVER=s3 but the AWS SDK is not installed. Run: npm i @aws-sdk/client-s3'
+      'The AWS SDK is not installed (required by STORAGE_DRIVER=s3 or BACKUP_S3=true). '
+      + 'Run: npm i @aws-sdk/client-s3 @aws-sdk/s3-request-presigner'
     );
   }
 }

@@ -92,6 +92,79 @@ function zipStaged(stagingDir, stagedNames, zipPath) {
   });
 }
 
+// ── Offsite (S3) copy ────────────────────────────────────────────────────────────
+// BACKUP_S3 is its OWN flag, deliberately decoupled from STORAGE_DRIVER: pushing
+// backups offsite while uploads stay on local disk is the likely first step, and
+// coupling them would force an all-or-nothing move.
+//
+// Backups live under "<prefix>backups/", NEVER under uploads/ — the uploads sweep
+// must never be able to see, classify, or quarantine a backup archive.
+//
+// Local retention (KEEP_COUNT) is untouched. Remote retention belongs in a bucket
+// lifecycle rule, not in app code that only runs when the app happens to be up.
+const backupS3Enabled = () => /^(1|true|yes)$/i.test(String(process.env.BACKUP_S3 || ''));
+const offsiteKey = (name) => `${require('../lib/storage').keyPrefix()}backups/${name}`;
+
+async function pushOffsite(absPath, name) {
+  const storage = require('../lib/storage');
+  const { PutObjectCommand } = storage._s3.sdk();
+  const bucket = storage._s3.bucket();
+  if (!bucket) throw new Error('BACKUP_S3 is on but S3_BUCKET is not set');
+  // Streamed, not read into memory — archives run to hundreds of MB and this box
+  // has 1-2 GB of RAM.
+  await storage._s3.client().send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: offsiteKey(name),
+    Body: fs.createReadStream(absPath),
+    ContentType: 'application/zip',
+    ContentLength: fs.statSync(absPath).size,
+  }));
+}
+
+// List archives already pushed offsite, newest first. Returns [] when disabled or
+// unreachable — the admin page must still render its local list if S3 is down.
+async function listOffsite() {
+  if (!backupS3Enabled()) return [];
+  try {
+    const storage = require('../lib/storage');
+    const { ListObjectsV2Command } = storage._s3.sdk();
+    const prefix = `${storage.keyPrefix()}backups/`;
+    const out = [];
+    let token;
+    do {
+      const r = await storage._s3.client().send(new ListObjectsV2Command({
+        Bucket: storage._s3.bucket(), Prefix: prefix, ContinuationToken: token,
+      }));
+      for (const o of r.Contents || []) {
+        const filename = o.Key.slice(prefix.length);
+        if (!filename) continue;
+        out.push({
+          filename, db: filename.endsWith('.zip') ? 'archive' : 'erp',
+          size: o.Size, created_at: (o.LastModified || new Date(0)).toISOString(),
+        });
+      }
+      token = r.IsTruncated ? r.NextContinuationToken : undefined;
+    } while (token);
+    return out.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  } catch (e) {
+    console.warn(`[backup] Could not list offsite backups: ${e.message}`);
+    return [];
+  }
+}
+
+// Time-limited URL so the browser downloads straight from the bucket instead of
+// streaming a large archive back through this server.
+async function presignOffsite(name, expiresIn = 300) {
+  const storage = require('../lib/storage');
+  const { GetObjectCommand } = storage._s3.sdk();
+  const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+  return getSignedUrl(
+    storage._s3.client(),
+    new GetObjectCommand({ Bucket: storage._s3.bucket(), Key: offsiteKey(name) }),
+    { expiresIn }
+  );
+}
+
 async function runBackup({ silent = false } = {}) {
   const dbs = discoverDbs();
   if (dbs.length === 0) {
@@ -135,10 +208,26 @@ async function runBackup({ silent = false } = {}) {
       try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (e) { /* ignore */ }
     }
 
+    // 3.5 Offsite copy — BEST-EFFORT. A backup that exists only on the same VPS as
+    // the data isn't disaster recovery, so push it to the bucket too. Deliberately
+    // never fails the local backup: a network blip must not turn a good local backup
+    // into a reported failure, and the next run retries anyway.
+    let offsite = null;
+    if (backupS3Enabled()) {
+      try {
+        await pushOffsite(outPath, outName);
+        offsite = { ok: true, key: offsiteKey(outName) };
+        if (!silent) console.log(`[backup] Pushed ${outName} offsite`);
+      } catch (e) {
+        offsite = { ok: false, error: e.message };
+        console.warn(`[backup] Offsite push failed (local backup is fine): ${e.message}`);
+      }
+    }
+
     if (!silent) {
       console.log(`[backup] Wrote ${outName} (${(size / 1024 / 1024).toFixed(2)} MB) — ${stagedNames.length} DB(s): ${stagedNames.join(', ')}; kept ${Math.min(existing.length, KEEP_COUNT)} total`);
     }
-    return { ok: true, filename: outName, size, contents: stagedNames, backup_dir: BACKUP_DIR };
+    return { ok: true, filename: outName, size, contents: stagedNames, backup_dir: BACKUP_DIR, offsite };
   } finally {
     // 4. Always clean the staging dir.
     try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
@@ -179,7 +268,10 @@ function listBackups() {
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-module.exports = { runBackup, scheduleNightly, listBackups, BACKUP_DIR };
+module.exports = {
+  runBackup, scheduleNightly, listBackups, BACKUP_DIR,
+  backupS3Enabled, listOffsite, presignOffsite,
+};
 
 // If invoked directly via `node server/scripts/backup-db.js`, run once.
 if (require.main === module) {
