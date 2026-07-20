@@ -202,6 +202,82 @@ function publicUrl(key) {
   return k ? `/uploads/${k}` : null;
 }
 
+// Take a file multer has already streamed to local disk and put it where the driver wants it.
+//
+// This is how uploads reach S3 *inline* without ever buffering a whole file in RAM:
+// multer.diskStorage streams the request to disk (flat memory), then this streams that
+// file up and unlinks it. memoryStorage would have been the obvious route to inline S3
+// and is exactly the wrong one on a 1-2 GB box.
+//
+// Returns "/uploads/<key>" either way, so callers store the same DB value on both drivers.
+//
+// NEVER throws for a storage failure. If the bucket is unreachable the local file is left
+// in place and the URL is still returned: the /uploads resolver serves it from disk via
+// dual-read, and the migration job (or the nightly) moves it later. A hiccup in the bucket
+// must not fail a user's upload or lose their file.
+async function adoptLocalFile(absPath, key, contentType) {
+  const k = safeKey(key);
+  if (!k) throw new Error('Invalid storage key');
+  // Local driver: multer already wrote it to its final home. Nothing to do.
+  if (!isRemote) return publicUrl(k);
+
+  let size = 0;
+  try { size = fs.statSync(absPath).size; } catch { return publicUrl(k); }
+
+  try {
+    const { PutObjectCommand } = sdk();
+    await s3().send(new PutObjectCommand({
+      Bucket: bucket(), Key: remoteKey(NS.UPLOADS, k),
+      Body: fs.createReadStream(absPath),
+      ContentLength: size,
+      ContentType: contentType || 'application/octet-stream',
+    }));
+    // Verify before the local copy is treated as expendable.
+    const st = await statKey(k, NS.UPLOADS);
+    if (!st || st.size !== size) {
+      console.warn(`[storage] adopt verify failed for ${k} — keeping local copy`);
+      return publicUrl(k);
+    }
+    try { fs.unlinkSync(absPath); } catch { /* keeping it is harmless */ }
+  } catch (e) {
+    console.warn(`[storage] adopt failed for ${k} (kept on local disk): ${e.message}`);
+  }
+  return publicUrl(k);
+}
+
+// Open a readable stream for a key, or null when absent.
+//
+// Streamed rather than buffered because callers pipe straight to an HTTP response and
+// some of these files are 30 MB drawings with no bound on concurrent viewers — getObject's
+// Buffer would be N x 30 MB of heap.
+//
+// Mirrors the /uploads resolver's dual-read: on the s3 driver a bucket miss falls back to
+// the local file, so anything not yet migrated keeps serving.
+async function openStream(key, ns = NS.UPLOADS) {
+  const k = safeKey(key);
+  if (!k) return null;
+
+  const localOpen = () => {
+    const abs = localPath(ns, k);
+    try {
+      const st = fs.statSync(abs);
+      if (!st.isFile()) return null;
+      return { stream: fs.createReadStream(abs), size: st.size };
+    } catch { return null; }
+  };
+
+  if (!isRemote) return localOpen();
+
+  try {
+    const { GetObjectCommand } = sdk();
+    const r = await s3().send(new GetObjectCommand({ Bucket: bucket(), Key: remoteKey(ns, k) }));
+    return { stream: r.Body, size: typeof r.ContentLength === 'number' ? r.ContentLength : undefined };
+  } catch (e) {
+    if (!isNotFound(e)) console.warn(`[storage] stream failed for ${k}: ${e.message}`);
+    return localOpen();   // dual-read
+  }
+}
+
 async function removeKey(key, ns = NS.UPLOADS) {
   const k = safeKey(key);
   if (!k) return false;
@@ -289,6 +365,7 @@ async function listKeys(prefix = '', ns = NS.UPLOADS) {
 module.exports = {
   NS, DRIVER, isRemote, keyPrefix, safeKey,
   putObject, getObject, exists, statKey, publicUrl, removeKey, moveKey, listKeys,
+  adoptLocalFile, openStream,
   // exposed for the backup push (5c), which writes outside the uploads namespace
   _s3: { client: s3, bucket, sdk, remoteKey },
 };
