@@ -15,8 +15,9 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { UPLOADS_ROOT, DATA_ROOT, SWEEP_FOLDERS, uploadsSub } = require('../lib/paths');
+const { DATA_ROOT, SWEEP_FOLDERS } = require('../lib/paths');
 const quarantine = require('../lib/quarantine');
+const storage = require('../lib/storage');
 
 const GRACE_DAYS = 30;            // don't touch files younger than this (in-flight/abandoned-recent)
 const QUARANTINE_TTL_DAYS = 45;   // > 30-day backup horizon, so a DB revert can still recover
@@ -66,22 +67,11 @@ function buildKeepSet() {
   return set;
 }
 
-// Recursively list files under a dir as { key (posix, rel to uploads root), mtimeMs }.
-function walk(dir, out) {
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
-  for (const e of entries) {
-    const abs = path.join(dir, e.name);
-    if (e.isDirectory()) { walk(abs, out); continue; }
-    if (!e.isFile()) continue;
-    const rel = path.relative(UPLOADS_ROOT, abs).split(path.sep).join('/');
-    let mtimeMs = 0; try { mtimeMs = fs.statSync(abs).mtimeMs; } catch {}
-    out.push({ key: rel, size: (() => { try { return fs.statSync(abs).size; } catch { return 0; } })(), mtimeMs });
-  }
-  return out;
-}
-
-function runSweep({ dryRun = false, silent = false } = {}) {
+// File listing now comes from the storage seam (lib/storage.listKeys), which returns
+// the same { key (posix, rel to uploads root), size, mtimeMs } shape the old local
+// walk() produced — so classification below is unchanged, only the source of the list
+// differs. That is what makes this work identically on local disk and on a bucket.
+async function runSweep({ dryRun = false, silent = false } = {}) {
   const keep = buildKeepSet();
 
   // 0. Rehydrate — restore any quarantined file whose basename is referenced again.
@@ -89,7 +79,7 @@ function runSweep({ dryRun = false, silent = false } = {}) {
   for (const e of quarantine.list()) {
     if (keep.has(path.posix.basename(e.key))) {
       if (dryRun) restored++;
-      else if (quarantine.restoreKey(e.key)) restored++;
+      else if (await quarantine.restoreKey(e.key)) restored++;
     }
   }
 
@@ -98,9 +88,8 @@ function runSweep({ dryRun = false, silent = false } = {}) {
   let scanned = 0, quarantined = 0, quarantinedBytes = 0;
   const orphans = [];
   for (const folder of SWEEP_FOLDERS) {
-    const root = uploadsSub(folder);
-    if (!fs.existsSync(root)) continue;
-    for (const f of walk(root, [])) {
+    // listKeys returns [] for a folder that doesn't exist, so no existence pre-check.
+    for (const f of await storage.listKeys(`${folder}/`, storage.NS.UPLOADS)) {
       scanned++;
       const base = path.posix.basename(f.key);
       if (keep.has(base)) continue;             // referenced anywhere → keep
@@ -110,7 +99,7 @@ function runSweep({ dryRun = false, silent = false } = {}) {
   }
   for (const o of orphans) {
     if (dryRun) { quarantined++; quarantinedBytes += o.size; continue; }
-    const r = quarantine.quarantineKey(o.key);
+    const r = await quarantine.quarantineKey(o.key);
     if (r.ok) { quarantined++; quarantinedBytes += r.size || 0; }
   }
 
@@ -123,7 +112,7 @@ function runSweep({ dryRun = false, silent = false } = {}) {
       if (Number.isFinite(a) && a < cut) { purged++; purgedBytes += e.size || 0; }
     }
   } else {
-    const r = quarantine.purgeExpired(QUARANTINE_TTL_DAYS);
+    const r = await quarantine.purgeExpired(QUARANTINE_TTL_DAYS);
     purged = r.purged; purgedBytes = r.bytes;
   }
 
@@ -134,10 +123,15 @@ function runSweep({ dryRun = false, silent = false } = {}) {
   return summary;
 }
 
-module.exports = { runSweep, GRACE_DAYS, QUARANTINE_TTL_DAYS };
+// buildKeepSet/collectRefs are exported so the S3 backfill can reuse the EXACT same
+// notion of "referenced" — two different answers to that question is how you lose a file.
+module.exports = { runSweep, buildKeepSet, collectRefs, GRACE_DAYS, QUARANTINE_TTL_DAYS };
 
 if (require.main === module) {
   const dryRun = process.argv.includes('--dry-run');
-  runSweep({ dryRun });
-  process.exit(0);
+  // runSweep is async now — exiting synchronously would kill it mid-move and could
+  // leave a file renamed but unrecorded in the manifest.
+  runSweep({ dryRun })
+    .then(() => process.exit(0))
+    .catch((e) => { console.error('[sweep] failed:', e.message); process.exit(1); });
 }

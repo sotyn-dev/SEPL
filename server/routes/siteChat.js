@@ -270,7 +270,9 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
     db.prepare('DELETE FROM chat_reads WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_groups WHERE id=?').run(g);
   })();
-  for (const a of atts) { try { quarantine.quarantineUrl(a.attachment_url); } catch (e) { /* best-effort */ } }
+  // Fire-and-forget: quarantine is async now, so the rejection must be swallowed on the
+  // promise — a sync catch would no longer see it, and an unhandled rejection kills Node.
+  for (const a of atts) { try { quarantine.quarantineUrl(a.attachment_url).catch(() => {}); } catch (e) { /* best-effort */ } }
   emitChat(g, 'group_deleted', { groupId: g });
   res.json({ ok: true });
 });
@@ -413,7 +415,7 @@ router.delete('/:groupId/messages/:msgId', (req, res) => {
   if (!msg) return res.status(404).json({ error: 'Not found' });
   if (msg.sender_id !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'You can only delete your own messages' });
   db.prepare('DELETE FROM chat_messages WHERE id=?').run(req.params.msgId);
-  if (msg.attachment_url) { try { quarantine.quarantineUrl(msg.attachment_url); } catch (e) { /* best-effort */ } }
+  if (msg.attachment_url) { try { quarantine.quarantineUrl(msg.attachment_url).catch(() => {}); } catch (e) { /* best-effort */ } }
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
 });

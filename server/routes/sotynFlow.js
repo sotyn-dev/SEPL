@@ -22,7 +22,8 @@ router.use(authMiddleware);
 // re-serve if a DB revert re-references it). Never throws — attachment cleanup must
 // not fail the delete it accompanies.
 function quarantineUrls(urls) {
-  for (const u of urls) { if (u) { try { quarantine.quarantineUrl(u); } catch (e) { /* best-effort */ } } }
+  // Async since the storage seam landed — swallow on the promise, not just synchronously.
+  for (const u of urls) { if (u) { try { quarantine.quarantineUrl(u).catch(() => {}); } catch (e) { /* best-effort */ } } }
 }
 
 // ── access helpers ──────────────────────────────────────────────────────────

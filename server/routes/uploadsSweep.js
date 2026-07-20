@@ -15,13 +15,13 @@ const router = express.Router();
 router.use(authMiddleware);
 router.use(adminOnly);
 
-router.get('/sweep/preview', (req, res) => {
-  try { res.json(runSweep({ dryRun: true, silent: true })); }
+router.get('/sweep/preview', async (req, res) => {
+  try { res.json(await runSweep({ dryRun: true, silent: true })); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/sweep', (req, res) => {
-  try { res.json(runSweep({ dryRun: false, silent: true })); }
+router.post('/sweep', async (req, res) => {
+  try { res.json(await runSweep({ dryRun: false, silent: true })); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 

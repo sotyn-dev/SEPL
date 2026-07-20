@@ -329,7 +329,7 @@ router.delete('/:id', (req, res) => {
   db.prepare('DELETE FROM support_tickets WHERE id=?').run(req.params.id);
   // Quarantine the ticket's attachment + proof (reversible cleanup).
   for (const u of [t && t.attachment_link, t && t.proof_url]) {
-    if (u) { try { quarantine.quarantineUrl(u); } catch (e) { /* best-effort */ } }
+    if (u) { try { quarantine.quarantineUrl(u).catch(() => {}); } catch (e) { /* best-effort */ } }
   }
   res.json({ message: 'Deleted' });
 });

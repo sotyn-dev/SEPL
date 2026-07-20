@@ -56,9 +56,9 @@ app.set('trust proxy', 1);
 
 // File uploads
 const multer = require('multer');
-const fs = require('fs');
-const { UPLOADS_ROOT, SWEEP_FOLDERS, uploadsSub, ensureDir } = require('./lib/paths');
+const { UPLOADS_ROOT, SWEEP_FOLDERS, ensureDir } = require('./lib/paths');
 const quarantine = require('./lib/quarantine');
+const storage = require('./lib/storage');
 const uploadsDir = ensureDir(UPLOADS_ROOT);
 // Uploads for these modules go into their own subfolder (whitelisted, so no path
 // traversal) so the orphan sweep can target only them; everything else stays flat.
@@ -67,14 +67,16 @@ const uploadFolder = (req) => {
   const f = String((req.query && req.query.folder) || '');
   return UPLOAD_FOLDER_WHITELIST.has(f) ? f : '';
 };
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const f = uploadFolder(req);
-    cb(null, f ? ensureDir(uploadsSub(f)) : uploadsDir);
-  },
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`)
-});
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+// Buffer in memory, then hand the bytes to the storage seam — that one indirection is
+// what lets the same endpoint write to local disk or to a bucket. The 20 MB cap is what
+// bounds memory here, and it is unchanged from the diskStorage version.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+// Same naming rule as before the seam: <epoch-ms>-<sanitised original name>.
+const uploadKey = (req, file) => {
+  const f = uploadFolder(req);
+  const name = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+  return f ? `${f}/${name}` : name;
+};
 
 // Initialize DB
 initializeDatabase();
@@ -465,11 +467,18 @@ app.use('/audit', require('./routes/auditReport'));
 
 // File upload endpoint
 const { authMiddleware } = require('./middleware/auth');
-app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
+app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const f = uploadFolder(req);
-  const prefix = f ? `${f}/` : '';
-  res.json({ url: `/uploads/${prefix}${req.file.filename}`, filename: req.file.originalname, size: req.file.size });
+  const key = uploadKey(req, req.file);
+  try {
+    await storage.putObject({ key, body: req.file.buffer, contentType: req.file.mimetype });
+  } catch (e) {
+    console.error('[upload] store failed:', e.message);
+    return res.status(500).json({ error: 'Upload failed' });
+  }
+  // publicUrl() always yields "/uploads/<key>" under BOTH drivers, so the value stored
+  // in the DB is identical to what this endpoint returned before the seam.
+  res.json({ url: storage.publicUrl(key), filename: req.file.originalname, size: req.file.size });
 });
 
 // Serve uploaded files
@@ -477,15 +486,41 @@ app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
 // quarantine (e.g. a chat/ticket was deleted, then a DB revert re-referenced its
 // file), pull it back out of quarantine and serve it — automatic recovery, no
 // manual sweep needed. Runs before express.static so the restored file is served.
-app.use('/uploads', (req, res, next) => {
+app.use('/uploads', async (req, res, next) => {
+  let key = null;
   try {
-    const key = quarantine.normalizeKey(decodeURIComponent(req.path.replace(/^\/+/, '')));
-    if (key) {
-      const abs = path.join(uploadsDir, ...key.split('/'));
-      if (!fs.existsSync(abs) && quarantine.isQuarantined(key)) quarantine.restoreKey(key);
+    key = quarantine.normalizeKey(decodeURIComponent(req.path.replace(/^\/+/, '')));
+  } catch (e) { return next(); }          // undecodable path — let static 404 it
+  if (!key) return next();
+
+  try {
+    // Lazy restore, driver-agnostic: absent from live storage but sitting in
+    // quarantine → pull it back before serving.
+    if (!(await storage.exists(key)) && await quarantine.isQuarantined(key)) {
+      await quarantine.restoreKey(key);
     }
-  } catch (e) { /* ignore — fall through to static */ }
-  next();
+  } catch (e) { /* ignore — fall through */ }
+
+  // Local driver: nothing more to do, express.static below serves the file exactly as
+  // it always has. This keeps the live path byte-for-byte the pre-seam behaviour.
+  if (!storage.isRemote) return next();
+
+  try {
+    // A public bucket/CDN can serve the bytes directly — cheaper than proxying.
+    if (process.env.S3_PUBLIC_BASE_URL) {
+      return res.redirect(302, `${process.env.S3_PUBLIC_BASE_URL.replace(/\/+$/, '')}/${key}`);
+    }
+    const buf = await storage.getObject(key);
+    if (buf) {
+      res.type(path.extname(key) || 'application/octet-stream');
+      return res.send(buf);
+    }
+  } catch (e) { /* fall through to the local fallback */ }
+
+  // DUAL-READ: the object isn't in the bucket (or the bucket errored), so fall through
+  // to express.static and serve the local copy. This is what makes the cutover
+  // zero-downtime — files not yet migrated keep serving while the backfill runs.
+  return next();
 });
 app.use('/uploads', express.static(uploadsDir));
 
