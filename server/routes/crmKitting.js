@@ -31,11 +31,12 @@
 
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
+const storage = require('../lib/storage');
+const { uploadsSub, ensureDir } = require('../lib/paths');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -43,8 +44,11 @@ router.use(authMiddleware);
 const UPLOAD_BACK_DAYS = 5;
 
 // Photo uploads
-const photoDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'crm-kitting');
-if (!fs.existsSync(photoDir)) fs.mkdirSync(photoDir, { recursive: true });
+// uploadsSub() honours DATA_ROOT (lib/paths) instead of hardcoding data/uploads, so this
+// follows a tenant move for free. diskStorage is deliberate — it streams to disk, keeping
+// memory flat; storage.adoptLocalFile then pushes to the bucket when the driver is s3.
+const PHOTO_FOLDER = 'crm-kitting';
+const photoDir = ensureDir(uploadsSub(PHOTO_FOLDER));
 const photoUpload = multer({
   storage: multer.diskStorage({
     destination: photoDir,
@@ -539,7 +543,7 @@ router.get('/project', requirePermission('crm_kitting', 'view'), (req, res) => {
 router.post('/entry',
   requirePermission('crm_kitting', 'edit'),
   photoUpload.single('photo'),
-  (req, res) => {
+  async (req, res) => {
     const db = getDb();
     const projectKey = String(req.body?.project_key || '').trim();
     const { checkpoint_id, status, remarks } = req.body || {};
@@ -578,7 +582,11 @@ router.post('/entry',
       const cp = db.prepare(`SELECT id FROM crm_kitting_checkpoint WHERE id = ?`).get(cpId);
       if (!cp) return res.status(404).json({ error: 'checkpoint not found' });
 
-      const photoPath = req.file ? `/uploads/crm-kitting/${path.basename(req.file.path)}` : null;
+      // Pushed to the bucket here (s3 driver) or left where multer put it (local). Either
+      // way the DB stores the same "/uploads/crm-kitting/<file>" value it always has.
+      const photoPath = req.file
+        ? await storage.adoptLocalFile(req.file.path, `${PHOTO_FOLDER}/${path.basename(req.file.path)}`, req.file.mimetype)
+        : null;
       const r = db.prepare(`
         INSERT INTO crm_kitting_entry
           (project_key, checkpoint_id, status, photo_path, remarks, observation_date, uploaded_by)
