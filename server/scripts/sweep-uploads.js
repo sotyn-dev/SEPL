@@ -22,7 +22,19 @@ const storage = require('../lib/storage');
 const GRACE_DAYS = 30;            // don't touch files younger than this (in-flight/abandoned-recent)
 const QUARANTINE_TTL_DAYS = 45;   // > 30-day backup horizon, so a DB revert can still recover
 
-const FILE_RE = /[\w.\-]+\.(?:pdf|jpe?g|png|gif|webp|bmp|svg|xlsx?|docx?|pptx?|csv|txt|mp3|mp4|wav|ogg|webm|zip|rar)/gi;
+// Matches a BARE filename in a text column. Only used for references that are NOT stored
+// as a "/uploads/..." URL — addTokens keeps URL basenames regardless of extension, so this
+// list only ever matters for columns holding a bare name (procurement_schedule_drawings
+// .storage_path and subcon_hiring_files.storage_path are the ones that do).
+//
+// A production DB audit found live references to .heic (288), .jfif (97), .dwg and .mov
+// that this list did not cover; CAD formats are added alongside because those two tables
+// exist to hold drawings.
+//
+// Widening is safe BY CONSTRUCTION: the keep-set is only ever asked "is this referenced?",
+// so more matches means more files KEPT by the sweep and more files MIGRATED by the
+// backfill. It can never cause a deletion.
+const FILE_RE = /[\w.\-]+\.(?:pdf|jpe?g|jfif|png|gif|webp|bmp|svg|heic|heif|xlsx?|docx?|pptx?|csv|txt|mp3|mp4|mov|avi|mkv|wav|ogg|webm|zip|rar|7z|dwg|dxf|dwf|step|stp|iges|igs)/gi;
 
 // Pull filename tokens out of one cell value into the keep-set.
 function addTokens(v, set) {

@@ -29,14 +29,17 @@ const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const storage = require('../lib/storage');
+const { uploadsSub, ensureDir } = require('../lib/paths');
 
 const router = express.Router();
 router.use(authMiddleware);
 
 // Drawing uploads — Bundle A (mam 2026-05-28). Stored only for now;
 // vision-API reading is Bundle B if mam wants to pay the token cost.
-const drawingDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'procurement-schedule');
-if (!fs.existsSync(drawingDir)) fs.mkdirSync(drawingDir, { recursive: true });
+// uploadsSub() honours DATA_ROOT (lib/paths) instead of hardcoding data/uploads.
+const DRAWING_FOLDER = 'procurement-schedule';
+const drawingDir = ensureDir(uploadsSub(DRAWING_FOLDER));
 const drawingUpload = multer({
   storage: multer.diskStorage({
     destination: drawingDir,
@@ -414,16 +417,35 @@ router.post('/:project_id/drawings', requirePermission('procurement_schedule', '
 
 // GET /procurement-schedule/drawing/:fileId — stream the file (admin-readable
 // only, since drawings can be commercially sensitive).
-router.get('/drawing/:fileId', requirePermission('procurement_schedule', 'view'), (req, res) => {
+router.get('/drawing/:fileId', requirePermission('procurement_schedule', 'view'), async (req, res) => {
   const db = getDb();
   const f = db.prepare('SELECT filename, storage_path, file_type FROM procurement_schedule_drawings WHERE id = ?')
     .get(+req.params.fileId);
   if (!f) return res.status(404).json({ error: 'File not found' });
-  const fullPath = path.join(drawingDir, f.storage_path);
-  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File missing on disk' });
+
+  // Served through the storage seam rather than res.sendFile, because once uploads move
+  // to the bucket the local copy is gone and sendFile would 404. openStream reads from
+  // the bucket and falls back to local disk, so this works mid-migration too.
+  //
+  // Deliberately NOT a redirect to /uploads/<key>: that mount has no auth middleware, and
+  // these drawings are permission-gated and commercially sensitive. The bytes must keep
+  // flowing through this handler, behind requirePermission.
+  //
+  // Streamed, not buffered — drawings run to 30 MB and any number of people may open one
+  // at once, so a Buffer per request would be real heap pressure.
+  let obj = null;
+  try {
+    obj = await storage.openStream(`${DRAWING_FOLDER}/${f.storage_path}`);
+  } catch (e) {
+    return res.status(502).json({ error: `Storage unavailable: ${e.message}` });
+  }
+  if (!obj) return res.status(404).json({ error: 'File missing on disk' });
+
   res.setHeader('Content-Type', f.file_type || 'application/octet-stream');
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.filename)}"`);
-  res.sendFile(fullPath);
+  if (obj.size != null) res.setHeader('Content-Length', obj.size);
+  obj.stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
+  obj.stream.pipe(res);
 });
 
 // DELETE /procurement-schedule/drawing/:fileId

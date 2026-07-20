@@ -31,6 +31,8 @@ const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const storage = require('../lib/storage');
+const { uploadsSub, ensureDir } = require('../lib/paths');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -98,8 +100,9 @@ try {
 }
 
 // ── File upload setup ─────────────────────────────────────────────
-const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'subcon-hiring');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+// uploadsSub() honours DATA_ROOT (lib/paths) instead of hardcoding data/uploads.
+const UPLOAD_FOLDER = 'subcon-hiring';
+const uploadDir = ensureDir(uploadsSub(UPLOAD_FOLDER));
 const upload = multer({
   storage: multer.diskStorage({
     destination: uploadDir,
@@ -349,16 +352,32 @@ router.post('/:id/step/:no/upload', requirePermission('subcon_hiring', 'edit'),
 });
 
 // GET /api/subcon-hiring/file/:fileId — serve the uploaded file
-router.get('/file/:fileId', requirePermission('subcon_hiring', 'view'), (req, res) => {
+router.get('/file/:fileId', requirePermission('subcon_hiring', 'view'), async (req, res) => {
   const db = getDb();
   const f = db.prepare('SELECT filename, storage_path, file_type FROM subcon_hiring_files WHERE id=?')
     .get(+req.params.fileId);
   if (!f) return res.status(404).json({ error: 'File not found' });
-  const fullPath = path.join(uploadDir, f.storage_path);
-  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File missing on disk' });
+
+  // Through the storage seam, not res.sendFile — once uploads move to the bucket the
+  // local copy is gone and sendFile would 404. openStream reads the bucket and falls back
+  // to local disk, so it also works mid-migration.
+  //
+  // Deliberately NOT a redirect to /uploads/<key>: that mount is unauthenticated, and
+  // these files sit behind requirePermission. Streamed rather than buffered so a 20 MB
+  // file opened by several people at once is not several copies of heap.
+  let obj = null;
+  try {
+    obj = await storage.openStream(`${UPLOAD_FOLDER}/${f.storage_path}`);
+  } catch (e) {
+    return res.status(502).json({ error: `Storage unavailable: ${e.message}` });
+  }
+  if (!obj) return res.status(404).json({ error: 'File missing on disk' });
+
   res.setHeader('Content-Type', f.file_type || 'application/octet-stream');
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.filename)}"`);
-  res.sendFile(fullPath);
+  if (obj.size != null) res.setHeader('Content-Length', obj.size);
+  obj.stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
+  obj.stream.pipe(res);
 });
 
 // DELETE /api/subcon-hiring/file/:fileId
