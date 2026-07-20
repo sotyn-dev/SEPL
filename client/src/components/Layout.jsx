@@ -12,6 +12,7 @@ import toast from 'react-hot-toast';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useAppSocket } from '../context/SocketProvider';
+import { useModuleFlags } from '../context/ModuleFlagsContext';
 import {
   // Navigation + UI controls (kept as-is)
   FiHome, FiMenu, FiX, FiLogOut, FiChevronRight, FiChevronDown, FiKey,
@@ -242,6 +243,12 @@ export default function Layout() {
   // link — even when not on the chat page. Driven by the chat Socket.IO with
   // a 25 s poll fallback. `unread` already excludes the user's own messages.
   const [waUnread, setWaUnread] = useState(0);
+  // Global module switches — hide the pinned links when an admin turns a module off.
+  // Fails open (see ModuleFlagsContext): if the flags never load, both links show, and
+  // the server 404 remains the real gate.
+  const { access: moduleAccess } = useModuleFlags();
+  const chatOn = moduleAccess('site_chat').ok;
+  const flowOn = moduleAccess('sotyn_flow').ok;
   const waPrev = useRef(null);                 // Map<groupId, unread> from the last fetch
   const pathRef = useRef(location.pathname);
   pathRef.current = location.pathname;
@@ -685,21 +692,30 @@ export default function Layout() {
             (mam 2026-06-19: "show above where is change password"). Shown to
             EVERY signed-in user (no site_chat permission needed) — access is
             by group membership, so added people can chat by default. */}
+        {/* Each link is hidden when an admin switches that module off (see
+            lib/features.js). The whole block goes with them so a disabled pair
+            doesn't leave a stray top border above the user footer. */}
+        {(chatOn || flowOn) && (
         <div className="px-3 py-1.5 border-t border-white/10">
+          {chatOn && (
           <Link to="/site-chat"
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <BiMessageRoundedCheck size={17} className="text-white" />
             <span className="truncate flex-1">SOTYN Chat</span>
             {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
           </Link>
+          )}
           {/* SOTYN Flow — task boards, pinned right below SOTYN Chat. Open to
               every signed-in user; access is by board membership. */}
+          {flowOn && (
           <Link to="/sotyn-flow"
-            className={`mt-0.5 flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname.startsWith('/sotyn-flow') ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+            className={`${chatOn ? 'mt-0.5 ' : ''}flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname.startsWith('/sotyn-flow') ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <FiTrello size={17} className="text-white" />
             <span className="truncate flex-1">SOTYN Flow</span>
           </Link>
+          )}
         </div>
+        )}
         <div className="p-3 border-t border-white/10">
           <div className="flex items-center gap-2.5 mb-1">
             {user?.avatar_url ? (

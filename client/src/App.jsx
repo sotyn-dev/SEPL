@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
+import { ModuleGate } from './context/ModuleFlagsContext';
 import Login from './pages/Login';
 // Layout (the authenticated app shell — sidebar, header, CallProvider/WebRTC,
 // AI chat, bells, ~64 icons) is lazy so it stays OUT of the entry chunk. A
@@ -176,12 +177,16 @@ export default function App() {
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
         <Route path="ar-ap-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
         {/* WhatsApp is open to all signed-in users — access is by group
-            membership, not the site_chat module permission (mam 2026-06-19). */}
-        <Route path="site-chat" element={<SiteChat />} />
+            membership, not the site_chat module permission (mam 2026-06-19).
+            ModuleGate is the global on/off switch, NOT a permission check — it's
+            separate from ModuleRoute precisely because these two have no view
+            permission to check. */}
+        <Route path="site-chat" element={<ModuleGate module="site_chat"><SiteChat /></ModuleGate>} />
         {/* SOTYN Flow — task boards. Full-width; access by board membership
-            (super-viewers see all), so no ModuleRoute gate — same as site-chat. */}
-        <Route path="sotyn-flow" element={<SotynFlow />} />
-        <Route path="sotyn-flow/:boardId" element={<SotynFlow />} />
+            (super-viewers see all), so no ModuleRoute permission gate — only the
+            same global ModuleGate switch as site-chat. */}
+        <Route path="sotyn-flow" element={<ModuleGate module="sotyn_flow"><SotynFlow /></ModuleGate>} />
+        <Route path="sotyn-flow/:boardId" element={<ModuleGate module="sotyn_flow"><SotynFlow /></ModuleGate>} />
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}

@@ -362,8 +362,13 @@ app.post('/api/admin/cmd-email/send-now', _authMw, (req, res) => {
 const { auditMiddleware } = require('./middleware/audit');
 app.use(auditMiddleware);
 
+// Module availability — the global on/off switch for whole features, one layer above
+// role permissions (see lib/features.js). Mounted before the feature routes it gates.
+const { requireModuleEnabled } = require('./lib/features');
+
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/module-flags', require('./routes/moduleFlags'));
 app.use('/api/admin/audit', require('./routes/audit'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/leads', require('./routes/leads'));
@@ -440,9 +445,13 @@ app.use('/api/collections', require('./routes/collections'));
 // AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
-app.use('/api/site-chat', require('./routes/siteChat'));
-// SOTYN Flow — Trello-style task boards (own DB sotynflow.db + shared socket)
-app.use('/api/sotyn-flow', require('./routes/sotynFlow'));
+// requireModuleEnabled: admin can switch the whole module off (see lib/features.js);
+// when off every endpoint 404s, so a pasted URL has nothing to load. NOTE this gates
+// the chat FEATURE only — initChatSocket() below must still start, because SOTYN Flow
+// and WebRTC call signalling both ride that same io.
+app.use('/api/site-chat', requireModuleEnabled('site_chat'), require('./routes/siteChat'));
+// SOTYN Flow — task boards (own DB sotynflow.db + shared socket)
+app.use('/api/sotyn-flow', requireModuleEnabled('sotyn_flow'), require('./routes/sotynFlow'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 
