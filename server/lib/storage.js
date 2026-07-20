@@ -49,16 +49,14 @@ const localPath = (ns, key) => path.join(localRoot(ns), ...key.split('/'));
 const remoteKey = (ns, key) => `${keyPrefix()}${ns}/${key}`;
 
 // ── s3 client (lazy) ────────────────────────────────────────────────────────────
-// Required ONLY when the driver is s3, so a local install never pays for the SDK and
-// `npm i` stays as light as it is today.
-// NOT a package.json dependency on purpose. This whole phase exists to reclaim disk on a
-// RAM/disk-constrained VPS, so shipping ~20 MB of AWS SDK to every install for a feature
-// that is OFF by default would work against the goal. Enabling s3 is therefore a two-step
-// opt-in: `npm i @aws-sdk/client-s3` + STORAGE_DRIVER=s3. The error below makes the
-// missing half obvious instead of throwing a bare MODULE_NOT_FOUND.
-// EVERY access to the SDK goes through this one loader, because the verbs below call
-// sdk() to grab a command class BEFORE they call s3() — so putting the friendly error
-// only in s3() would let a bare MODULE_NOT_FOUND escape first.
+// The AWS SDK is deliberately NOT a package.json dependency. This whole phase is about
+// reclaiming disk on a RAM/disk-constrained VPS, so shipping ~20 MB of SDK to every
+// install for a feature that is OFF by default would work against the goal. Enabling s3
+// is a two-step opt-in: `npm i @aws-sdk/client-s3` + STORAGE_DRIVER=s3.
+//
+// EVERY SDK access goes through this one loader, because the verbs below call sdk() to
+// grab a command class BEFORE they call s3() — putting the friendly error only in s3()
+// would let a bare MODULE_NOT_FOUND escape first.
 function sdk() {
   try {
     return require('@aws-sdk/client-s3');
@@ -136,13 +134,40 @@ async function statKey(key, ns = NS.UPLOADS) {
     // throttling) must propagate: silently reporting "not there" would tell the sweep
     // every file is an orphan, and would make restoreKey drop live manifest rows. A
     // loud failure is always recoverable; a silent wrong answer deletes data.
-    if (isNotFound(e)) return null;
+    // A 404 is only trustworthy once the bucket itself is known to exist — see above.
+    if (isNotFound(e)) { await assertBucketExists(); return null; }
     throw e;
   }
 }
 
 const isNotFound = (e) =>
   e && (e.name === 'NotFound' || e.name === 'NoSuchKey' || e.$metadata?.httpStatusCode === 404);
+
+// HeadObject sends an EMPTY body on error, so the SDK cannot parse a code and reports a
+// bare "NotFound"/404 for BOTH a missing key and a missing/misnamed bucket. Verified
+// against MinIO — the two are genuinely indistinguishable from the error alone.
+//
+// That ambiguity is dangerous: a typo'd S3_BUCKET would make every file look absent, and
+// restoreKey would then drop every live manifest row. So prove the bucket exists ONCE per
+// process; after that a NotFound really does mean the key is gone. Only the positive
+// result is cached, so a genuine outage keeps failing loudly instead of latching.
+// Cache the NAME that was verified, not a bare boolean — otherwise a changed S3_BUCKET
+// would inherit the previous bucket's clean bill of health.
+let _bucketOk = null;
+async function assertBucketExists() {
+  const b = bucket();
+  if (_bucketOk === b) return;
+  const { HeadBucketCommand } = sdk();
+  try {
+    await s3().send(new HeadBucketCommand({ Bucket: b }));
+    _bucketOk = b;
+  } catch (e) {
+    throw new Error(
+      `S3 bucket "${b}" is not reachable (${e.name || e.message}). `
+      + 'Refusing to report files as missing — check S3_BUCKET and credentials.'
+    );
+  }
+}
 
 async function exists(key, ns = NS.UPLOADS) {
   return (await statKey(key, ns)) !== null;
