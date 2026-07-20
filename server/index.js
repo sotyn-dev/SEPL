@@ -56,7 +56,7 @@ app.set('trust proxy', 1);
 
 // File uploads
 const multer = require('multer');
-const { UPLOADS_ROOT, SWEEP_FOLDERS, ensureDir } = require('./lib/paths');
+const { UPLOADS_ROOT, SWEEP_FOLDERS, uploadsSub, ensureDir } = require('./lib/paths');
 const quarantine = require('./lib/quarantine');
 const storage = require('./lib/storage');
 const uploadsDir = ensureDir(UPLOADS_ROOT);
@@ -67,15 +67,28 @@ const uploadFolder = (req) => {
   const f = String((req.query && req.query.folder) || '');
   return UPLOAD_FOLDER_WHITELIST.has(f) ? f : '';
 };
-// Buffer in memory, then hand the bytes to the storage seam — that one indirection is
-// what lets the same endpoint write to local disk or to a bucket. The 20 MB cap is what
-// bounds memory here, and it is unchanged from the diskStorage version.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
-// Same naming rule as before the seam: <epoch-ms>-<sanitised original name>.
+// diskStorage, NOT memoryStorage. This is the busiest upload path in the app (site-chat,
+// help-tickets, sotyn-flow, avatars, Business Book, Checklists, DPR), and memoryStorage
+// buffers the whole file in RAM before it is written anywhere — 20 MB x concurrent
+// uploads on a 1-2 GB VPS. diskStorage streams the request straight to disk, so memory
+// stays flat no matter how many people upload at once.
+//
+// Reaching S3 is then storage.adoptLocalFile()'s job (see the handler): it streams the
+// file up and unlinks it. Inline S3 without ever holding a file in memory.
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const f = uploadFolder(req);
+      cb(null, f ? ensureDir(uploadsSub(f)) : uploadsDir);
+    },
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+// multer has already chosen the filename; the seam key is just <folder>/<that name>.
 const uploadKey = (req, file) => {
   const f = uploadFolder(req);
-  const name = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-  return f ? `${f}/${name}` : name;
+  return f ? `${f}/${file.filename}` : file.filename;
 };
 
 // Initialize DB
@@ -470,15 +483,17 @@ const { authMiddleware } = require('./middleware/auth');
 app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const key = uploadKey(req, req.file);
-  try {
-    await storage.putObject({ key, body: req.file.buffer, contentType: req.file.mimetype });
-  } catch (e) {
-    console.error('[upload] store failed:', e.message);
-    return res.status(500).json({ error: 'Upload failed' });
-  }
-  // publicUrl() always yields "/uploads/<key>" under BOTH drivers, so the value stored
-  // in the DB is identical to what this endpoint returned before the seam.
-  res.json({ url: storage.publicUrl(key), filename: req.file.originalname, size: req.file.size });
+  // On local this is a no-op (multer already wrote the file where it belongs). On s3 it
+  // streams the file into the bucket and removes the local copy — so uploads land in
+  // object storage inline, at request time.
+  //
+  // It never throws for a storage failure: if the bucket is unreachable the file stays on
+  // disk, the /uploads resolver serves it via dual-read, and the migration job moves it
+  // later. The user's upload succeeds either way.
+  const url = await storage.adoptLocalFile(req.file.path, key, req.file.mimetype);
+  // Always "/uploads/<key>" under BOTH drivers, so the value stored in the DB is
+  // identical to what this endpoint has always returned.
+  res.json({ url, filename: req.file.originalname, size: req.file.size });
 });
 
 // Serve uploaded files
