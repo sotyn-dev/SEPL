@@ -31,11 +31,11 @@
 
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
+const storage = require('../lib/storage');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -43,18 +43,16 @@ router.use(authMiddleware);
 const UPLOAD_BACK_DAYS = 5;
 
 // Photo uploads
-const photoDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'crm-kitting');
-if (!fs.existsSync(photoDir)) fs.mkdirSync(photoDir, { recursive: true });
+// Buffered in memory, then written through the storage seam (lib/storage), so these
+// photos follow STORAGE_DRIVER like every other upload instead of being pinned to the
+// local disk. Same folder, same naming rule as before.
+const PHOTO_FOLDER = 'crm-kitting';
 const photoUpload = multer({
-  storage: multer.diskStorage({
-    destination: photoDir,
-    filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname || '.jpg');
-      cb(null, `kit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },  // 10 MB
 });
+const photoName = (file) =>
+  `kit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname || '.jpg')}`;
 
 // ── Idempotent schema migration ────────────────────────────────
 try {
@@ -539,7 +537,7 @@ router.get('/project', requirePermission('crm_kitting', 'view'), (req, res) => {
 router.post('/entry',
   requirePermission('crm_kitting', 'edit'),
   photoUpload.single('photo'),
-  (req, res) => {
+  async (req, res) => {
     const db = getDb();
     const projectKey = String(req.body?.project_key || '').trim();
     const { checkpoint_id, status, remarks } = req.body || {};
@@ -578,7 +576,11 @@ router.post('/entry',
       const cp = db.prepare(`SELECT id FROM crm_kitting_checkpoint WHERE id = ?`).get(cpId);
       if (!cp) return res.status(404).json({ error: 'checkpoint not found' });
 
-      const photoPath = req.file ? `/uploads/crm-kitting/${path.basename(req.file.path)}` : null;
+      // Store the photo only after every validation above has passed, so a rejected
+      // request leaves nothing behind — previously the file was already on disk by then.
+      const photoPath = req.file
+        ? await storage.storeUpload(req.file, PHOTO_FOLDER, photoName(req.file))
+        : null;
       const r = db.prepare(`
         INSERT INTO crm_kitting_entry
           (project_key, checkpoint_id, status, photo_path, remarks, observation_date, uploaded_by)

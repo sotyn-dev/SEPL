@@ -15,28 +15,26 @@
 
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
+const storage = require('../lib/storage');
 
 const router = express.Router();
 router.use(authMiddleware);
 
 // Resume / offer-letter / training video uploads land here.
-const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'hr');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+// Buffered in memory, then written through the storage seam (lib/storage), so these
+// files follow STORAGE_DRIVER instead of being pinned to the local disk. Same folder
+// and naming rule as before.
+const UPLOAD_FOLDER = 'hr';
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: uploadDir,
-    filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname || '.bin');
-      cb(null, `hr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
 });
+const uploadName = (file) =>
+  `hr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${path.extname(file.originalname || '.bin')}`;
 
 // ── Idempotent migrations ───────────────────────────────────────
 try {
@@ -464,9 +462,14 @@ router.post('/candidates/:id/status', requirePermission('hr_system', 'edit'), (r
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/candidates/:id/resume', requirePermission('hr_system', 'edit'), upload.single('file'), (req, res) => {
+router.post('/candidates/:id/resume', requirePermission('hr_system', 'edit'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const url = `/uploads/hr/${path.basename(req.file.path)}`;
+  let url;
+  try {
+    url = await storage.storeUpload(req.file, UPLOAD_FOLDER, uploadName(req.file));
+  } catch (e) {
+    return res.status(500).json({ error: `Could not store file: ${e.message}` });
+  }
   const db = getDb();
   try {
     db.prepare('UPDATE hr_candidates SET resume_url=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(url, req.params.id);

@@ -202,6 +202,20 @@ function publicUrl(key) {
   return k ? `/uploads/${k}` : null;
 }
 
+// Convenience for feature routes moving off their own multer.diskStorage: take a
+// multer MEMORY file, store it under <folder>/<filename>, and return the "/uploads/..."
+// URL to persist. Keeps each route's change to a couple of lines and guarantees they
+// all derive the stored URL the same way.
+//
+// Bonus of memoryStorage: a request rejected AFTER multer runs (bad GPS, failed
+// validation) never wrote anything to disk, so there is no temp file to clean up.
+async function storeUpload(file, folder, filename) {
+  if (!file || !file.buffer) throw new Error('No uploaded file buffer');
+  const key = folder ? `${folder}/${filename}` : filename;
+  await putObject({ key, body: file.buffer, contentType: file.mimetype });
+  return publicUrl(key);
+}
+
 async function removeKey(key, ns = NS.UPLOADS) {
   const k = safeKey(key);
   if (!k) return false;
@@ -288,7 +302,7 @@ async function listKeys(prefix = '', ns = NS.UPLOADS) {
 
 module.exports = {
   NS, DRIVER, isRemote, keyPrefix, safeKey,
-  putObject, getObject, exists, statKey, publicUrl, removeKey, moveKey, listKeys,
+  putObject, getObject, exists, statKey, publicUrl, storeUpload, removeKey, moveKey, listKeys,
   // exposed for the backup push (5c), which writes outside the uploads namespace
   _s3: { client: s3, bucket, sdk, remoteKey },
 };
