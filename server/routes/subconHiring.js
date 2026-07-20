@@ -358,9 +358,20 @@ router.get('/file/:fileId', requirePermission('subcon_hiring', 'view'), async (r
     .get(+req.params.fileId);
   if (!f) return res.status(404).json({ error: 'File not found' });
 
-  // Through the storage seam, not res.sendFile — once uploads move to the bucket the
-  // local copy is gone and sendFile would 404. openStream reads the bucket and falls back
-  // to local disk, so it also works mid-migration.
+  res.setHeader('Content-Type', f.file_type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.filename)}"`);
+
+  // LOCAL driver: keep res.sendFile. Files never leave local disk on this driver, and
+  // sendFile gives Accept-Ranges, ETag, Last-Modified and 304s for free — without them a
+  // 20 MB file is re-downloaded in full on every view and browsers cannot range-stream it.
+  if (!storage.isRemote) {
+    const fullPath = path.join(uploadDir, f.storage_path);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File missing on disk' });
+    return res.sendFile(fullPath);
+  }
+
+  // REMOTE driver: the local copy may be gone, so stream from the bucket (openStream falls
+  // back to local for anything not yet migrated).
   //
   // Deliberately NOT a redirect to /uploads/<key>: that mount is unauthenticated, and
   // these files sit behind requirePermission. Streamed rather than buffered so a 20 MB
@@ -373,8 +384,6 @@ router.get('/file/:fileId', requirePermission('subcon_hiring', 'view'), async (r
   }
   if (!obj) return res.status(404).json({ error: 'File missing on disk' });
 
-  res.setHeader('Content-Type', f.file_type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.filename)}"`);
   if (obj.size != null) res.setHeader('Content-Length', obj.size);
   obj.stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
   obj.stream.pipe(res);
