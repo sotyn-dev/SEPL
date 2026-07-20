@@ -181,6 +181,24 @@ if (!process.env.ERP_DISABLE_DB_MAINTENANCE) {
   }
 }
 
+// Nightly uploads → S3 migration at 02:30. Ordering is deliberate: 02:00 backup
+// captures the DB rows that reference these files, 02:15 compaction settles the DBs,
+// and only THEN are files moved off local disk — so a restore point always exists
+// before anything leaves. Never move this earlier.
+//
+// It self-disables (no timer at all) unless STORAGE_DRIVER=s3, so on the local driver
+// this is inert. It exists to cover the feature routes that still write to local disk —
+// they need no code change — plus any file whose inline push failed while the bucket was
+// unreachable. Skip in dev via ERP_DISABLE_UPLOADS_BACKFILL=1.
+if (!process.env.ERP_DISABLE_UPLOADS_BACKFILL) {
+  try {
+    const { scheduleNightlyBackfill } = require('./scripts/backfill-uploads-s3');
+    scheduleNightlyBackfill();
+  } catch (e) {
+    console.warn('[backfill] Scheduler not started:', e.message);
+  }
+}
+
 // Daily 07:30 AM audit JSON snapshot — TOC v3 P0 #5.  Writes the same
 // JSON the /audit endpoints return into data/audit-snapshots/<date>/
 // so the CMD's 09:00 email and the four role dashboards can render
