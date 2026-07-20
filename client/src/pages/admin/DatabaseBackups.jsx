@@ -8,7 +8,7 @@
 import { useState, useEffect } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { FiDownload, FiRefreshCw, FiDatabase, FiClock, FiHardDrive, FiAlertTriangle } from 'react-icons/fi';
+import { FiDownload, FiRefreshCw, FiDatabase, FiClock, FiHardDrive, FiAlertTriangle, FiUploadCloud } from 'react-icons/fi';
 import { fmtDateTime } from '../../utils/datetime';
 import { getToken } from '../../lib/tokenStore';
 
@@ -61,6 +61,59 @@ export default function DatabaseBackups() {
     a.href = `/api/admin/backups/${encodeURIComponent(filename)}/download?token=${encodeURIComponent(token)}`;
     a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
+  };
+
+  // ── Uploads → S3 migration ────────────────────────────────────────────────
+  // The whole block below renders ONLY when the server reports the s3 driver, so on the
+  // local driver this page is exactly what it has always been.
+  const [mig, setMig] = useState(null);        // preview: counts / bytes / stragglers
+  const [migJob, setMigJob] = useState(null);  // server-side job status
+  const [confirming, setConfirming] = useState(false);
+
+  const loadMigration = async () => {
+    try {
+      const [p, s] = await Promise.all([
+        api.get('/admin/uploads/migrate/preview'),
+        api.get('/admin/uploads/migrate/status'),
+      ]);
+      setMig(p.data);
+      setMigJob(s.data);
+    } catch { /* non-fatal: the backups page must still render */ }
+  };
+  useEffect(() => { loadMigration(); }, []);
+
+  // Poll while a job is running. Progress lives on the SERVER, so closing and reopening
+  // this page picks a running migration back up instead of losing sight of it.
+  useEffect(() => {
+    if (!migJob?.running) return undefined;
+    const t = setInterval(async () => {
+      try {
+        const s = await api.get('/admin/uploads/migrate/status');
+        setMigJob(s.data);
+        if (!s.data.running) {
+          const sum = s.data.summary;
+          if (sum) {
+            toast.success(`Moved ${sum.uploaded + sum.skippedExisting} file(s), freed ${formatSize(sum.freedBytes)}${sum.failed ? ` — ${sum.failed} failed` : ''}`);
+          } else if (s.data.error) {
+            toast.error(`Migration failed: ${s.data.error}`);
+          }
+          loadMigration();
+        }
+      } catch { /* keep polling */ }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [migJob?.running]);
+
+  const startMigration = async () => {
+    setConfirming(false);
+    try {
+      await api.post('/admin/uploads/migrate', { deleteLocal: true });
+      toast.success('Migration started');
+      const s = await api.get('/admin/uploads/migrate/status');
+      setMigJob(s.data);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not start migration');
+    }
   };
 
   const latest = data.backups?.[0];
@@ -159,6 +212,82 @@ export default function DatabaseBackups() {
           </p>
         </div>
       </div>
+
+      {/* Upload storage — only when the server is actually on the s3 driver */}
+      {mig?.s3_enabled && (
+        <div className="card">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+                <FiUploadCloud size={16} /> Upload storage
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Move uploaded files off the VPS disk into object storage. Runs automatically at 2:30 AM;
+                use this to do it now.
+              </p>
+            </div>
+            <button
+              onClick={() => setConfirming(true)}
+              disabled={migJob?.running || !mig?.stragglers}
+              className="btn btn-primary text-xs flex items-center gap-1 disabled:opacity-50"
+            >
+              <FiUploadCloud size={14} />
+              {migJob?.running ? 'Moving…' : 'Move uploads to S3'}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+            <div>
+              <p className="text-[11px] text-gray-500 uppercase tracking-wide">On local disk</p>
+              <p className="text-lg font-bold text-gray-800">{mig.referenced ?? 0}</p>
+              <p className="text-[11px] text-gray-400">{formatSize(mig.bytes || 0)} referenced</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-gray-500 uppercase tracking-wide">Still to move</p>
+              <p className={`text-lg font-bold ${mig.stragglers ? 'text-amber-700' : 'text-emerald-700'}`}>
+                {mig.stragglers ?? 0}
+              </p>
+              <p className="text-[11px] text-gray-400">{mig.stragglers ? 'not yet in the bucket' : 'all moved'}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-gray-500 uppercase tracking-wide">Unreferenced</p>
+              <p className="text-lg font-bold text-gray-500">{mig.skippedUnreferenced ?? 0}</p>
+              <p className="text-[11px] text-gray-400">left alone, never uploaded</p>
+            </div>
+          </div>
+
+          {migJob?.running && (
+            <div className="mt-3">
+              <div className="flex justify-between text-[11px] text-gray-500 mb-1">
+                <span>Moving files…</span>
+                <span>{migJob.processed} / {migJob.total || '?'}</span>
+              </div>
+              <div className="h-1.5 bg-gray-200 rounded overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 transition-all"
+                  style={{ width: migJob.total ? `${Math.round((migJob.processed / migJob.total) * 100)}%` : '10%' }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Confirm first — this deletes local copies, so it must not be one click. */}
+          {confirming && (
+            <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
+              <p className="font-semibold text-amber-900">Move {mig.stragglers} file(s) to S3?</p>
+              <p className="text-xs text-amber-800 mt-1">
+                Each file is uploaded and verified in the bucket, then its local copy is deleted —
+                in batches, so disk frees as it goes. Files not referenced by any record are left
+                untouched. Anything that fails to upload keeps its local copy.
+              </p>
+              <div className="flex gap-2 mt-2">
+                <button onClick={startMigration} className="btn btn-primary text-xs">Yes, move them</button>
+                <button onClick={() => setConfirming(false)} className="btn btn-secondary text-xs">Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Backup list */}
       <div className="card p-0 overflow-x-auto">
