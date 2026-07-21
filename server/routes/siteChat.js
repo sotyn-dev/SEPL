@@ -47,6 +47,12 @@ const accessWhereFor = (admin) => admin
   ? 'g.is_dm=0 OR g.id IN (SELECT group_id FROM chat_group_members WHERE user_id=?)'
   : 'g.id IN (SELECT group_id FROM chat_group_members WHERE user_id=?)';
 
+// Soft-archive predicate. ALWAYS combined with accessWhereFor() wrapped in its own
+// parentheses — the admin variant is a bare `A OR B`, so an unparenthesised
+// `... OR B AND archived_at IS NULL` would bind the AND to B alone and leak
+// archived groups back into an admin's list.
+const archiveWhere = (archived) => (archived ? 'g.archived_at IS NOT NULL' : 'g.archived_at IS NULL');
+
 // Shared enrichment: DM display name/avatar + last-message/member-count/unread
 // per group, scoped to EXACTLY the ids passed in (a full list for the legacy
 // unpaginated path, a ~30-row page for the paginated list, or a handful of
@@ -100,11 +106,11 @@ const GROUP_MAX = 100;
 // `last_id < ?` is safe. Phase 2's key (name) is NOT unique — group names can
 // collide — so it uses a COMPOUND (name, id) keyset; a bare `name > ?` would
 // skip the rest of a run of identically-named groups straddling a page edge.
-function pageOfGroups(db, { uid, admin, limit, q, cursor }) {
+function pageOfGroups(db, { uid, admin, limit, q, cursor, archived }) {
   const accessWhere = accessWhereFor(admin);
   const qWhere = q ? ' AND (g.name LIKE ? OR EXISTS (SELECT 1 FROM chat_group_members m2 WHERE m2.group_id=g.id AND m2.user_id<>? AND m2.user_name LIKE ?))' : '';
   const qParams = q ? [`%${q}%`, uid, `%${q}%`] : [];
-  const candidateSql = `SELECT g.id, g.name, g.is_dm, (SELECT MAX(id) FROM chat_messages m WHERE m.group_id=g.id) AS last_id FROM chat_groups g WHERE (${accessWhere})${qWhere}`;
+  const candidateSql = `SELECT g.id, g.name, g.is_dm, g.archived_at, (SELECT MAX(id) FROM chat_messages m WHERE m.group_id=g.id) AS last_id FROM chat_groups g WHERE (${accessWhere}) AND ${archiveWhere(archived)}${qWhere}`;
   const phase = cursor?.phase === 2 ? 2 : 1;
 
   if (phase === 1) {
@@ -163,12 +169,15 @@ router.get('/groups', (req, res) => {
   // sidebar "Only chats I'm in" toggle). Treating the admin as a non-admin here
   // reuses the exact member-only predicate; pagination/search/counts all follow.
   const db = getChatDb(); const uid = req.user.id; const admin = isAdmin(req) && req.query.mine !== '1';
+  // ?archived=1 → the Archived view (same access rules; an admin still never
+  // sees someone else's DM, because accessWhereFor already excludes them).
+  const archived = req.query.archived === '1';
   // No ?limit → legacy full-list behaviour, unchanged (kept for any other
   // caller that still wants everything at once). Admin here IS every non-DM
   // group + own DMs, same rule as before this perf pass; only the paginated
   // branch below avoids materialising + enriching all of them on every load.
   if (req.query.limit == null) {
-    const groups = db.prepare(`SELECT g.id, g.name, g.is_dm FROM chat_groups g WHERE ${accessWhereFor(admin)} ORDER BY g.name`).all(uid);
+    const groups = db.prepare(`SELECT g.id, g.name, g.is_dm, g.archived_at FROM chat_groups g WHERE (${accessWhereFor(admin)}) AND ${archiveWhere(archived)} ORDER BY g.name`).all(uid);
     return res.json(sortGroups(enrichGroups(db, uid, groups)));
   }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || GROUP_PAGE, 1), GROUP_MAX);
@@ -176,7 +185,7 @@ router.get('/groups', (req, res) => {
   const cursor = req.query.phase
     ? { phase: parseInt(req.query.phase, 10), after_last_id: req.query.after_last_id != null ? parseInt(req.query.after_last_id, 10) : null, after_name: req.query.after_name != null ? String(req.query.after_name) : null, after_id: req.query.after_id != null ? parseInt(req.query.after_id, 10) : null }
     : null;
-  const { rows, hasMore, nextCursor } = pageOfGroups(db, { uid, admin, limit, q, cursor });
+  const { rows, hasMore, nextCursor } = pageOfGroups(db, { uid, admin, limit, q, cursor, archived });
   const groups = sortGroups(enrichGroups(db, uid, rows)).map(({ last_id, ...g }) => g);
   res.json({ groups, hasMore, nextCursor });
 });
@@ -190,7 +199,9 @@ router.get('/groups', (req, res) => {
 const UNREAD_GROUPS_CAP = 30;
 router.get('/unread-count', (req, res) => {
   const db = getChatDb(); const uid = req.user.id; const admin = isAdmin(req);
-  const accessIdsSql = `SELECT g.id FROM chat_groups g WHERE ${accessWhereFor(admin)}`;
+  // Archived groups raise no badge and no toast — that is the point of archiving.
+  // Parenthesised: see archiveWhere()'s note on the bare OR in the admin variant.
+  const accessIdsSql = `SELECT g.id FROM chat_groups g WHERE (${accessWhereFor(admin)}) AND ${archiveWhere(false)}`;
   const unreadCountSql = `SELECT cm.group_id, COUNT(*) c FROM chat_messages cm
       WHERE cm.group_id IN (${accessIdsSql}) AND cm.sender_id<>?
         AND cm.id > COALESCE((SELECT last_read_id FROM chat_reads r WHERE r.group_id=cm.group_id AND r.user_id=?),0)
@@ -256,6 +267,29 @@ router.put('/:groupId', requirePermission('site_chat', 'create'), (req, res) => 
   res.json({ ok: true });
 });
 
+// Archive / restore — the reversible alternative to DELETE. Deleting a group is
+// permanent (its rows are gone; only the attachments are recoverable, via
+// quarantine), so archiving is what "remove this from the list" should normally
+// mean. Same privilege as delete, since it hides the group for every member.
+// Nothing is deleted, so this reclaims NO disk — it is list hygiene, not cleanup.
+// A DM cannot be archived: one participant archiving would hide it for the other
+// too, and per-user archive would need its own table. Same rule as rename.
+const setArchived = (req, res, archived) => {
+  const db = getChatDb(); const g = +req.params.groupId;
+  const grp = db.prepare('SELECT * FROM chat_groups WHERE id=?').get(g);
+  if (!grp) return res.status(404).json({ error: 'Not found' });
+  if (grp.is_dm) return res.status(400).json({ error: 'A direct message cannot be archived' });
+  if (grp.created_by !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'Only the creator or an admin can archive the group' });
+  db.prepare('UPDATE chat_groups SET archived_at=? WHERE id=?').run(archived ? new Date().toISOString() : null, g);
+  // On archive reuse 'group_deleted' — for a client it means exactly "this group
+  // has left your list", so the sidebar refreshes AND an open thread is closed.
+  // On restore 'changed' triggers the same loadGroups() reconcile.
+  emitChat(g, archived ? 'group_deleted' : 'changed', { groupId: g });
+  res.json({ ok: true, archived });
+};
+router.post('/:groupId/archive', requirePermission('site_chat', 'delete'), (req, res) => setArchived(req, res, true));
+router.post('/:groupId/unarchive', requirePermission('site_chat', 'delete'), (req, res) => setArchived(req, res, false));
+
 router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   const grp = db.prepare('SELECT * FROM chat_groups WHERE id=?').get(g);
@@ -280,7 +314,7 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
 router.get('/:groupId', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
-  const group = db.prepare('SELECT id, name, is_dm FROM chat_groups WHERE id=?').get(g);
+  const group = db.prepare('SELECT id, name, is_dm, archived_at FROM chat_groups WHERE id=?').get(g);
   if (!group) return res.status(404).json({ error: 'Group not found' });
   // Cursor pagination (backward-compatible): a client that passes ?limit=N gets
   // the most-recent N (or N older than ?before=<id>) via idx_cmsg_group_id; a
@@ -339,6 +373,12 @@ const sendLimiter = rateLimit({
 router.post('/:groupId', sendLimiter, (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
+  // An archived group is read-only. Without this a client holding the thread open
+  // could still post into it — the message would land in a group that shows in no
+  // list and raises no unread badge, i.e. silently lost to everyone.
+  if (db.prepare('SELECT archived_at FROM chat_groups WHERE id=?').get(g)?.archived_at) {
+    return res.status(409).json({ error: 'This group is archived. Restore it to send messages.' });
+  }
   const { body, attachment_url, attachment_name, reply_to_id } = req.body;
   if ((!body || !String(body).trim()) && !attachment_url) return res.status(400).json({ error: 'Type a message or attach a file' });
   // Quoted reply — only accept an id that belongs to THIS group (mam 2026-06-25).

@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage, FiEdit2 } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage, FiEdit2, FiArchive, FiRotateCcw } from 'react-icons/fi';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
@@ -173,16 +173,19 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
 // Search is now server-driven (perf pass — admin-slowness fix): `groups` is
 // already the filtered/paginated page from the server, not the full list, so
 // there's no client-side .filter() left here — just render + scroll-to-load-more.
-const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, hasMore, loadingMore, onLoadMore, onSelect }) {
+const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, archived, hasMore, loadingMore, onLoadMore, onSelect }) {
   const onScroll = (e) => {
     const el = e.currentTarget;
     if (hasMore && !loadingMore && el.scrollHeight - el.scrollTop - el.clientHeight < 120) onLoadMore();
   };
   return (
     <div className="overflow-y-auto flex-1" onScroll={onScroll}>
-      {groups.length === 0 && <div className="text-center text-gray-400 text-sm py-8">{q ? 'No groups match your search.' : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}</div>}
+      {groups.length === 0 && <div className="text-center text-gray-400 text-sm py-8">{q ? 'No groups match your search.' : archived ? 'No archived groups.' : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}</div>}
+      {/* is_dm / archived_at ride along in onSelect: the thread needs them BEFORE
+          its first fetch resolves, to hide Archive on a DM and to render an
+          archived group read-only instead of briefly offering a composer that 409s. */}
       {groups.map(g => (
-        <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name })}
+        <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name, is_dm: g.is_dm, archived_at: g.archived_at || null })}
           className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${selId === g.id ? 'bg-blue-50' : ''}`}>
           <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
           <div className="min-w-0 flex-1">
@@ -220,6 +223,7 @@ export default function SiteChat() {
   const [groups, setGroups] = useState([]);
   const [q, setQ] = useState('');
   const [mineOnly, setMineOnly] = useState(false);  // admin-only "Only chats I'm in" filter
+  const [showArchived, setShowArchived] = useState(false);  // Archived view — same list, archived_at IS NOT NULL
   const [sel, setSel] = useState(null);            // selected group {id, name}
   const [msgs, setMsgs] = useState([]);
   const [members, setMembers] = useState([]);
@@ -276,6 +280,8 @@ export default function SiteChat() {
   const searchTimerRef = useRef(null);          // debounce timer for server-side group search
   const searchMountedRef = useRef(false);       // skip the debounce effect's own fetch on first mount
   const mineOnlyRef = useRef(false);            // current "only my chats" toggle, read inside loadGroups without a stale closure
+  const archivedRef = useRef(false);            // current Archived-view toggle, same stale-closure reason
+  const archivedMountedRef = useRef(false);
   const mineMountedRef = useRef(false);         // skip the toggle effect's own fetch on first mount
 
   // Keyset-paginated group list (perf pass — admin-slowness fix). Default: fetch
@@ -290,9 +296,11 @@ export default function SiteChat() {
     const more = !!opts.more;
     const requestQ = qRef.current;
     const requestMine = mineOnlyRef.current;
+    const requestArchived = archivedRef.current;
     const params = { limit: more ? GROUP_PAGE : Math.min(GROUP_MAX, Math.max(GROUP_PAGE, groupsLenRef.current || GROUP_PAGE)) };
     if (requestQ) params.q = requestQ;
     if (requestMine) params.mine = 1;
+    if (requestArchived) params.archived = 1;
     if (more && groupsCursorRef.current) {
       params.phase = groupsCursorRef.current.phase;
       if (groupsCursorRef.current.after_last_id != null) params.after_last_id = groupsCursorRef.current.after_last_id;
@@ -301,7 +309,7 @@ export default function SiteChat() {
     }
     groupsLoadingRef.current = true; setLoadingGroups(true);
     return api.get('/site-chat/groups', { params }).then(r => {
-      if (requestQ !== qRef.current || requestMine !== mineOnlyRef.current) return;   // a newer search/toggle superseded this response — drop it
+      if (requestQ !== qRef.current || requestMine !== mineOnlyRef.current || requestArchived !== archivedRef.current) return;   // a newer search/toggle superseded this response — drop it
       const { groups: incoming = [], hasMore: incomingHasMore = false, nextCursor = null } = r.data || {};
       if (more) setGroups(gs => { const seen = new Set(gs.map(g => g.id)); return [...gs, ...incoming.filter(g => !seen.has(g.id))]; });
       else setGroups(incoming);
@@ -335,7 +343,9 @@ export default function SiteChat() {
       } else {
         setMsgs(incoming); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
         setQuotedParents(qp); setHasMore(!!r.data.hasMore);
-        if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
+        // archived_at re-syncs here too, so a group archived by someone else while
+        // you had it open turns read-only on the next reconcile rather than on reload.
+        if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm, archived_at: r.data.group.archived_at || null } : s));
         // Opening/polling a thread marks it read — clear its unread badge locally
         // instead of re-fetching the whole groups list every 6s (perf pass). The
         // list's own 12s timer + socket 'changed' still refresh names/last-message.
@@ -457,6 +467,15 @@ export default function SiteChat() {
     if (!mineMountedRef.current) { mineMountedRef.current = true; return; }
     groupsCursorRef.current = null; loadGroups();
   }, [mineOnly, loadGroups]);
+  // Archived view toggle — same shape as mineOnly: reset the cursor, refetch the
+  // first page in the new scope, and drop any open thread (it belongs to the
+  // other scope). Skips its own mount run so it never double-fetches.
+  useEffect(() => {
+    archivedRef.current = showArchived;
+    if (!archivedMountedRef.current) { archivedMountedRef.current = true; return; }
+    setSel(null);
+    groupsCursorRef.current = null; loadGroups();
+  }, [showArchived, loadGroups]);
   // After a scroll-up page prepends older messages, anchor the scroll so the
   // messages the user was reading stay in place (runs before paint = no jump).
   useLayoutEffect(() => {
@@ -681,6 +700,18 @@ export default function SiteChat() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // Archive / restore — the reversible alternative to Delete. Nothing is removed,
+  // so no destructive confirm is needed on the way in; restoring is one click in
+  // the Archived view.
+  const archiveGroup = async (archive) => {
+    if (!sel) return;
+    try {
+      await api.post(`/site-chat/${sel.id}/${archive ? 'archive' : 'unarchive'}`);
+      toast.success(archive ? 'Group archived' : 'Group restored');
+      setSel(null); setMemOpen(false); loadGroups();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
   // Hidden file input for the profile photo — kept at the top level so BOTH the
   // desktop header button and the mobile (chat-list) avatar button can trigger
   // it. `hidden` keeps the element mounted, so the ref stays valid on mobile.
@@ -739,8 +770,17 @@ export default function SiteChat() {
                 </button>
               </label>
             )}
+            {/* Archived view — swaps the whole list to archived groups. Archived
+                chats keep every message and can be restored from the header. */}
+            <label className="flex w-fit ml-auto items-center gap-2 mt-2 px-1 text-xs text-gray-500 cursor-pointer select-none">
+              <span>{showArchived ? 'Showing archived' : 'Show archived'}</span>
+              <button type="button" role="switch" aria-checked={showArchived} onClick={() => setShowArchived(v => !v)}
+                className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${showArchived ? 'bg-amber-500' : 'bg-gray-300'}`}>
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showArchived ? 'translate-x-4' : ''}`} />
+              </button>
+            </label>
           </div>
-          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')}
+          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')} archived={showArchived}
             hasMore={groupsHasMore} loadingMore={loadingGroups} onLoadMore={() => loadGroups({ more: true })} onSelect={setSel} />
         </div>
 
@@ -852,6 +892,14 @@ export default function SiteChat() {
                   <button onClick={cancelEdit} className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-700" title="Cancel edit"><FiX size={16} /></button>
                 </div>
               )}
+              {/* An archived group is read-only — the server rejects a send with
+                  409, so the composer is replaced rather than left to fail. The
+                  thread above stays fully scrollable and searchable. */}
+              {sel?.archived_at ? (
+              <div className="border-t px-3 py-3 bg-amber-50 text-center text-xs text-amber-800 flex items-center justify-center gap-2">
+                <FiArchive size={14} /> This group is archived — read-only. Restore it to send messages.
+              </div>
+              ) : (
               <div className="border-t p-2 flex items-end gap-2 bg-gray-50 relative">
                 {/* @-mention picker — floats above the composer */}
                 {mention && mentionList.length > 0 && (
@@ -901,6 +949,7 @@ export default function SiteChat() {
                   </>
                 )}
               </div>
+              )}
             </>
           )}
         </div>
@@ -988,6 +1037,14 @@ export default function SiteChat() {
                   ))}
                 </div>
               </div>
+            )}
+            {/* Archive sits ABOVE Delete and is offered first — it is reversible,
+                Delete is not. Never shown for a DM (the server rejects it too:
+                archiving would hide the conversation for the other person). */}
+            {canDelete('site_chat') && !sel?.is_dm && (
+              showArchived
+                ? <button onClick={() => archiveGroup(false)} className="text-xs text-emerald-700 font-semibold flex items-center gap-1.5 pt-1"><FiRotateCcw size={13} /> Restore group</button>
+                : <button onClick={() => archiveGroup(true)} className="text-xs text-amber-700 font-semibold flex items-center gap-1.5 pt-1"><FiArchive size={13} /> Archive group</button>
             )}
             {canDelete('site_chat') && <button onClick={delGroup} className="text-xs text-red-600 font-semibold flex items-center gap-1.5 pt-1"><FiTrash2 size={13} /> Delete group</button>}
           </div>

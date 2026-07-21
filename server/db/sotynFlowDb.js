@@ -84,6 +84,14 @@ function getBoardDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_bca_card ON board_card_activity(card_id, id);
   `);
+  // archived_at: soft archive — the board drops out of the board list but keeps
+  // every column, card, comment and activity row, so it is restorable instantly
+  // and still fully readable if opened directly. NULL = active. Deliberately NOT
+  // a space-saving feature: nothing is deleted, so the file does not shrink.
+  try {
+    const bcols = flowDb.prepare("PRAGMA table_info(boards)").all().map(c => c.name);
+    if (!bcols.includes('archived_at')) flowDb.exec("ALTER TABLE boards ADD COLUMN archived_at DATETIME");
+  } catch (e) { /* ignore */ }
   return flowDb;
 }
 

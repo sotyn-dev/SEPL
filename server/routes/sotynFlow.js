@@ -137,12 +137,15 @@ router.get('/', (req, res) => {
   const seeAll = canSeeAllBoards(req);
   const mineOnly = req.query.mine === '1';
   const q = String(req.query.q || '').trim().toLowerCase();
+  // ?archived=1 → the Archived view. Archived boards are hidden from the default
+  // list but stay fully readable (and usable) if opened directly by URL.
+  const arch = req.query.archived === '1' ? 'archived_at IS NOT NULL' : 'archived_at IS NULL';
   let boards = (seeAll && !mineOnly)
-    ? db.prepare('SELECT * FROM boards ORDER BY datetime(created_at) DESC, id DESC').all()
-    : db.prepare('SELECT b.* FROM boards b JOIN board_members m ON m.board_id=b.id AND m.user_id=? ORDER BY datetime(b.created_at) DESC, b.id DESC').all(uid);
+    ? db.prepare(`SELECT * FROM boards WHERE ${arch} ORDER BY datetime(created_at) DESC, id DESC`).all()
+    : db.prepare(`SELECT b.* FROM boards b JOIN board_members m ON m.board_id=b.id AND m.user_id=? WHERE b.${arch} ORDER BY datetime(b.created_at) DESC, b.id DESC`).all(uid);
   if (q) boards = boards.filter(b => (b.name || '').toLowerCase().includes(q) || (b.description || '').toLowerCase().includes(q));
   const boardsOut = boards.map(b => ({
-    id: b.id, name: b.name, description: b.description, labels: parseJson(b.labels, []),
+    id: b.id, name: b.name, description: b.description, labels: parseJson(b.labels, []), archived_at: b.archived_at || null,
     member_count: db.prepare('SELECT COUNT(*) c FROM board_members WHERE board_id=?').get(b.id).c,
     card_count: db.prepare('SELECT COUNT(*) c FROM board_cards WHERE board_id=?').get(b.id).c,
     column_count: db.prepare('SELECT COUNT(*) c FROM board_columns WHERE board_id=?').get(b.id).c,
@@ -183,7 +186,7 @@ router.get('/:id', (req, res) => {
   const cards = db.prepare('SELECT * FROM board_cards WHERE board_id=? ORDER BY position, id').all(b).map(c => enrichCard(db, c));
   const members = db.prepare("SELECT user_id, user_name AS name, role FROM board_members WHERE board_id=? ORDER BY (role='admin') DESC, user_name").all(b);
   res.json({
-    board: { id: board.id, name: board.name, description: board.description, labels: [...PRIORITY_LABELS, ...customs], my_role: myRole(db, b, req.user.id) },
+    board: { id: board.id, name: board.name, description: board.description, labels: [...PRIORITY_LABELS, ...customs], my_role: myRole(db, b, req.user.id), archived_at: board.archived_at || null },
     columns, cards, members,
   });
 });
@@ -200,6 +203,25 @@ router.put('/:id', (req, res) => {
   emitBoard(b, 'changed', { boardId: b });
   res.json({ ok: true });
 });
+
+// Archive / restore — the reversible alternative to DELETE, which is permanent
+// (rows across seven tables are gone; only attachments survive, via quarantine).
+// Same privilege as delete. Nothing is deleted, so this reclaims NO disk.
+// Unlike an archived chat group, an archived board stays writable if opened by
+// URL — a card added there is still visible on reopening, so nothing is silently
+// lost, and blocking would mean guarding a dozen write routes for no real gain.
+const setBoardArchived = (req, res, archived) => {
+  const db = getBoardDb(); const b = +req.params.id;
+  if (!canManage(db, req, b)) return res.status(403).json({ error: 'Only a board admin can archive this board' });
+  if (!db.prepare('SELECT 1 FROM boards WHERE id=?').get(b)) return res.status(404).json({ error: 'Not found' });
+  db.prepare('UPDATE boards SET archived_at=? WHERE id=?').run(archived ? new Date().toISOString() : null, b);
+  // 'board_deleted' reads to a client as "this board left your list" — the list
+  // refreshes and anyone viewing it is navigated away. Restore uses 'changed'.
+  emitBoard(b, archived ? 'board_deleted' : 'changed', { boardId: b });
+  res.json({ ok: true, archived });
+};
+router.post('/:id/archive', (req, res) => setBoardArchived(req, res, true));
+router.post('/:id/unarchive', (req, res) => setBoardArchived(req, res, false));
 
 router.delete('/:id', (req, res) => {
   const db = getBoardDb(); const b = +req.params.id;

@@ -13,7 +13,7 @@ import { getToken } from '../lib/tokenStore';
 import {
   FiPlus, FiSearch, FiX, FiTrash2, FiArrowLeft, FiChevronDown, FiUsers,
   FiPaperclip, FiMoreHorizontal, FiCalendar, FiTag, FiCheckSquare, FiFile,
-  FiEdit2, FiSettings, FiTrello, FiCheck, FiMessageSquare, FiImage,
+  FiEdit2, FiSettings, FiTrello, FiCheck, FiMessageSquare, FiImage, FiArchive, FiRotateCcw,
 } from 'react-icons/fi';
 
 const NAVY = '#1e3a8a';
@@ -485,14 +485,15 @@ export default function SotynFlow() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [boardMenu, setBoardMenu] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);   // Archived view — archived_at IS NOT NULL
 
   const loadBoards = useCallback(() => {
     // No `q` param: search is filtered client-side (`shown` below), so we don't
     // re-hit the API on every keystroke.
-    api.get('/sotyn-flow', { params: { mine: mineOnly ? 1 : undefined } })
+    api.get('/sotyn-flow', { params: { mine: mineOnly ? 1 : undefined, archived: showArchived ? 1 : undefined } })
       .then(r => { setBoards(r.data.boards || []); setCanSeeAll(!!r.data.can_see_all); }).catch(() => {})
       .finally(() => setBoardsLoading(false));   // first resolution ends the gate; later refetches keep it false (no flash)
-  }, [mineOnly]);
+  }, [mineOnly, showArchived]);
   const loadBoard = useCallback(() => {
     if (!boardId) return;
     api.get(`/sotyn-flow/${boardId}`).then(r => setBoard(r.data))
@@ -571,6 +572,12 @@ export default function SotynFlow() {
               <span className="hidden md:inline">Only mine</span>
             </button>
           )}
+          {/* Archived view — archived boards keep everything and can be restored
+              from the board's own actions menu. */}
+          <button onClick={() => setShowArchived(v => !v)} title={showArchived ? 'Back to active boards' : 'Show archived boards'}
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg ${showArchived ? 'bg-amber-400/90 text-amber-950 font-semibold' : 'text-white/90 hover:bg-white/15'}`}>
+            <FiArchive size={14} /> <span className="hidden md:inline">{showArchived ? 'Archived' : 'Archive'}</span>
+          </button>
           {mayCreate && <button onClick={() => setNewOpen(true)} className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 text-white text-sm font-medium px-3 py-1.5 rounded-lg"><FiPlus size={16} /> <span className="hidden sm:inline">New board</span></button>}
         </SubNav>
 
@@ -583,8 +590,8 @@ export default function SotynFlow() {
           ) : shown.length === 0 ? (
             <div className="flow-fade flex flex-col items-center justify-center text-gray-400 gap-2 py-20">
               <FiTrello size={44} />
-              <span className="text-sm text-center max-w-xs">{q ? 'No boards match your search.' : (mayCreate ? 'No boards yet — create your first one.' : "No boards yet — you'll see boards here once you're added to one.")}</span>
-              {!q && mayCreate && <button onClick={() => setNewOpen(true)} className="btn btn-primary mt-1"><FiPlus className="inline -mt-0.5" /> New board</button>}
+              <span className="text-sm text-center max-w-xs">{q ? 'No boards match your search.' : showArchived ? 'No archived boards.' : (mayCreate ? 'No boards yet — create your first one.' : "No boards yet — you'll see boards here once you're added to one.")}</span>
+              {!q && !showArchived && mayCreate && <button onClick={() => setNewOpen(true)} className="btn btn-primary mt-1"><FiPlus className="inline -mt-0.5" /> New board</button>}
             </div>
           ) : (
             <div className="flow-fade grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -620,6 +627,15 @@ export default function SotynFlow() {
     try { await api.delete(`/sotyn-flow/${boardId}`); toast.success('Board deleted'); nav('/sotyn-flow'); }
     catch (e) { toast.error(e.response?.data?.error || 'Failed to delete board'); }
   };
+  // Archive / restore — reversible, so no destructive confirm. Everything on the
+  // board is kept; it just leaves the board list until restored.
+  const archiveBoard = async (archive) => {
+    try {
+      await api.post(`/sotyn-flow/${boardId}/${archive ? 'archive' : 'unarchive'}`);
+      toast.success(archive ? 'Board archived' : 'Board restored');
+      nav('/sotyn-flow');
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
 
   return (
     <div className="flow-wrapper flex flex-col h-[calc(100dvh-69px)] -m-2 md:m-0 sm:h-[calc(100dvh-61px)] md:h-[calc(100dvh-104px)]">
@@ -628,7 +644,10 @@ export default function SotynFlow() {
         {/* board switcher */}
         <div className="relative">
           <button onClick={() => setSwitcherOpen(o => !o)} className="flex items-center gap-1.5 font-bold text-base sm:text-lg max-w-[40vw] truncate">
-            <span className="truncate">{board.board.name}</span><FiChevronDown size={16} className="flex-shrink-0" />
+            <span className="truncate">{board.board.name}</span>
+            {/* Opened by URL, an archived board looks identical to a live one — label it. */}
+            {board.board.archived_at && <span className="flex-shrink-0 text-[10px] font-bold uppercase bg-amber-400/90 text-amber-950 px-1.5 py-0.5 rounded">Archived</span>}
+            <FiChevronDown size={16} className="flex-shrink-0" />
           </button>
           {switcherOpen && (
             <div className="absolute z-30 mt-1 left-0 w-60 max-h-72 overflow-y-auto rounded-lg bg-white shadow-lg border text-gray-700 py-1" onMouseLeave={() => setSwitcherOpen(false)}>
@@ -646,6 +665,10 @@ export default function SotynFlow() {
             {boardMenu && (
               <div className="absolute right-0 z-30 mt-1 w-44 rounded-lg bg-white shadow-lg border text-gray-700 py-1 text-sm" onMouseLeave={() => setBoardMenu(false)}>
                 <button onClick={() => { setBoardMenu(false); setSettingsOpen(true); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2"><FiSettings size={14} /> Board settings</button>
+                {/* Archive is offered before Delete — it is reversible, Delete is not. */}
+                {board.board.archived_at
+                  ? <button onClick={() => { setBoardMenu(false); archiveBoard(false); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2 border-t"><FiRotateCcw size={14} /> Restore board</button>
+                  : <button onClick={() => { setBoardMenu(false); archiveBoard(true); }} className="w-full text-left px-3 py-2 hover:bg-amber-50 text-amber-700 flex items-center gap-2 border-t"><FiArchive size={14} /> Archive board</button>}
                 <button onClick={() => { setBoardMenu(false); deleteBoard(); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2 border-t"><FiTrash2 size={14} /> Delete board</button>
               </div>
             )}
