@@ -280,6 +280,12 @@ export default function Procurement() {
     }, { replace: true });
   };
   const [indents, setIndents] = useState([]);
+  // L2 approval on/off switch (mam 2026-07-21). The toggle button itself lives
+  // in the ⚙ Responsible tab (next to the L1/L2 approver names). Here we just
+  // DERIVE the current state from the loaded indents (every row carries
+  // i.l2_enabled) — so the tiles, filter and buttons reflect it, and it auto-
+  // refreshes whenever the indent list reloads (e.g. on tab switch).
+  const l2Enabled = indents.some(i => !!i.l2_enabled);
   const [vendorPos, setVendorPos] = useState([]);
   // Indent raising window (mam 2026-06-16): { isSaturday, emergencyActive,
   // allowed }. Saturday-only raising with an admin one-day emergency override.
@@ -1352,16 +1358,23 @@ export default function Procurement() {
       // without waiting for the load() roundtrip. Otherwise mam sees the
       // old "PENDING" row for ~1 second and thinks the click did nothing
       // (her exact words: "i need to refresh its not good software indication").
+      // When the L2 switch is ON the backend returns stage='l1_done' after L1
+      // (→ status 'l1_approved', awaiting L2); the final L2 approve returns no
+      // stage (→ 'approved'). When L2 is OFF, L1 approve finalises directly and
+      // L2 is marked 'n/a' (its mini-row stays hidden). load() reconciles either
+      // way; this just avoids the ~1s stale-row flash.
       const newStatus = res.data?.stage === 'l1_done' ? 'l1_approved' : 'approved';
+      const hadL2Stage = it => it.approval_policy === 'two_level' || it.approval_policy === 'crm_two_level';
       setIndents(prev => prev.map(it => it.id === approveTarget.id ? ({
         ...it,
         status: newStatus,
         l1_status: newStatus === 'l1_approved' || newStatus === 'approved' ? 'approved' : it.l1_status,
         l1_by: it.l1_by || user?.id,
         l1_at: it.l1_at || new Date().toISOString(),
-        l2_status: newStatus === 'approved' && it.approval_policy === 'two_level' ? 'approved' : it.l2_status,
-        l2_by: newStatus === 'approved' && it.approval_policy === 'two_level' ? user?.id : it.l2_by,
-        l2_at: newStatus === 'approved' && it.approval_policy === 'two_level' ? new Date().toISOString() : it.l2_at,
+        // Final approve: L2 ON → the L2 step just completed ('approved');
+        // L2 OFF → no L2 stage ('n/a'). L1-only step leaves l2 untouched.
+        l2_status: newStatus !== 'approved' ? it.l2_status
+          : (!hadL2Stage(it) ? it.l2_status : (it.l2_enabled ? 'approved' : 'n/a')),
       }) : it));
       setApproveTarget(null);
       setApproveQtyOverrides({});
@@ -2232,7 +2245,7 @@ export default function Procurement() {
             // (server treats it exactly like 'submitted' for L1), so it must
             // count here — it was silently missing before (mam 2026-07-04).
             const submitted   = kpiScope.filter(i => i.status === 'submitted' || i.status === 'crm_approved');
-            const l1Approved  = byStatus('l1_approved');   // Pending L2 (two-level only, mam 2026-05-26)
+            const l1Approved  = byStatus('l1_approved');   // Pending L2 (only when L2 switch is ON)
             const approved    = byStatus('approved');
             const rejected    = byStatus('rejected');
             const poSent      = byStatus('po_sent');
@@ -2283,14 +2296,14 @@ export default function Procurement() {
                     📊 Showing totals for the current filter ({kpiScope.length} of {indents.length} indents).
                   </div>
                 )}
-                {/* 7 KPI tiles auto-fit one row on large screens (mam
-                    2026-06-12): 2-up on phones, 4-up on tablets, 7-up on
-                    desktop.  PO Generate + Payment Required jump to their
-                    own tabs on click instead of filtering the indent list. */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+                {/* KPI tiles auto-fit one row on large screens (mam 2026-06-12):
+                    2-up on phones, 4-up on tablets, 7/8-up on desktop. A Pending
+                    L2 tile is added only when the L2 switch is ON. PO Generate +
+                    Payment Required jump to their own tabs on click. */}
+                <div className={`grid grid-cols-2 sm:grid-cols-4 ${l2Enabled ? 'lg:grid-cols-8' : 'lg:grid-cols-7'} gap-2`}>
                   {tile('Total Indents',     kpiScope.length,   sum(kpiScope),   { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700',    ring: 'ring-gray-400'    }, 'all')}
-                  {tile('Pending L1',        submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
-                  {tile('Pending L2',        l1Approved.length, sum(l1Approved), { border: 'border-purple-300',  bg: 'bg-purple-50',   text: 'text-purple-700',  ring: 'ring-purple-400'  }, 'l1_approved')}
+                  {tile(l2Enabled ? 'Pending L1' : 'Pending Approval',  submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
+                  {l2Enabled && tile('Pending L2', l1Approved.length, sum(l1Approved), { border: 'border-purple-300',  bg: 'bg-purple-50',   text: 'text-purple-700',  ring: 'ring-purple-400'  }, 'l1_approved')}
                   {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
                   {/* Billable · Approved (mam 2026-06-16): BOQ sale value booked
                       once indents clear approval. Clicking jumps to the Approved
@@ -2316,8 +2329,8 @@ export default function Procurement() {
               <select className="select text-xs" value={indFilterStatus}
                 onChange={e => { setIndFilterStatus(e.target.value); setIndPage(1); }}>
                 <option value="all">All ({indents.length})</option>
-                <option value="submitted">Pending L1</option>
-                <option value="l1_approved">Pending L2</option>
+                <option value="submitted">{l2Enabled ? 'Pending L1' : 'Pending Approval'}</option>
+                {l2Enabled && <option value="l1_approved">Pending L2</option>}
                 <option value="approved">Approved</option>
                 <option value="rejected">Rejected</option>
                 <option value="po_sent">PO Sent</option>
@@ -2396,8 +2409,14 @@ export default function Procurement() {
               // (2026-06-06: "admin can also approval like others"). Matches
               // the backend, which lets admin approve indents they raised.
               const isCreator = i.created_by === user?.id && !isAdmin();
-              const canActL1 = isAdmin() || user?.approval_role === 'l1';
-              const canActL2 = isAdmin() || user?.approval_role === 'l2';
+              // Approvers come from the ⚙ Responsible RACI names (mam 2026-07-21):
+              // L1 = i.l1_approver_id, L2 = i.l2_approver_id (only when the L2
+              // switch is ON, carried per-row as i.l2_enabled). Admin always can.
+              const l2On = !!i.l2_enabled;
+              const canActL1 = isAdmin() || (i.l1_approver_id != null && user?.id === i.l1_approver_id);
+              const canActL2 = isAdmin() || (i.l2_approver_id != null && user?.id === i.l2_approver_id);
+              // Same person can't sign both L1 and L2 (needs a second reviewer).
+              const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
               // RGP single HR sign-off (mam 2026-06-04).
               const isHrSingle = i.approval_policy === 'hr_single';
               const canActHr = isAdmin() || user?.approval_role === 'hr';
@@ -2411,7 +2430,6 @@ export default function Procurement() {
               // role — matches the server gate (mam 2026-06-03).
               const isAssignedCrm = crmNameMatchesUser(i.planning_crm_name, user?.name);
               const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm;
-              const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
 
               const renderActionButtons = () => {
                 // CRM stage (Extra-billable indents) — fires first, before L1/L2.
@@ -2438,11 +2456,11 @@ export default function Procurement() {
                   if (isTwoLevel) {
                     if (canActL1) return (
                       <>
-                        <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve L1</button>
-                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject L1</button>
+                        <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">{l2On ? 'Approve L1' : 'Approve'}</button>
+                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">{l2On ? 'Reject L1' : 'Reject'}</button>
                       </>
                     );
-                    return <span className="text-[10px] text-amber-600 italic">Awaiting {i.approver_names?.l1 || 'L1'}</span>;
+                    return <span className="text-[10px] text-amber-600 italic">Awaiting {i.approver_names?.l1 || 'approver'}</span>;
                   }
                   if (canApprove('procurement') || isAdmin()) return (
                     <>
@@ -2455,21 +2473,32 @@ export default function Procurement() {
                 if ((i.status === 'crm_approved') && !isCreator) {
                   if (canActL1) return (
                     <>
-                      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve L1</button>
-                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject L1</button>
+                      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">{l2On ? 'Approve L1' : 'Approve'}</button>
+                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">{l2On ? 'Reject L1' : 'Reject'}</button>
                     </>
                   );
-                  return <span className="text-[10px] text-amber-600 italic">CRM ✓ · Awaiting L1</span>;
+                  return <span className="text-[10px] text-amber-600 italic">CRM ✓ · Awaiting {i.approver_names?.l1 || 'approver'}</span>;
                 }
                 if (i.status === 'l1_approved' && !isCreator) {
-                  if (canActL2 && !blockSelfL2) return (
+                  if (l2On) {
+                    // L2 switch ON — real second sign-off by the L2 approver.
+                    if (canActL2 && !blockSelfL2) return (
+                      <>
+                        <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve L2</button>
+                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject L2</button>
+                      </>
+                    );
+                    if (canActL2 && blockSelfL2) return <span className="text-[10px] text-gray-500 italic">L2 needs different reviewer</span>;
+                    return <span className="text-[10px] text-purple-600 italic">Awaiting {i.approver_names?.l2 || 'L2'}</span>;
+                  }
+                  // L2 switch OFF — legacy row: L1 approver / admin finalises it.
+                  if (canActL1) return (
                     <>
-                      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve L2</button>
-                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject L2</button>
+                      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve</button>
+                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>
                     </>
                   );
-                  if (canActL2 && blockSelfL2) return <span className="text-[10px] text-gray-500 italic">L2 needs different reviewer</span>;
-                  return <span className="text-[10px] text-purple-600 italic">Awaiting {i.approver_names?.l2 || 'L2'}</span>;
+                  return <span className="text-[10px] text-purple-600 italic">Awaiting {i.approver_names?.l1 || 'approver'}</span>;
                 }
                 if (i.status === 'draft') return (
                   <button onClick={() => approveIndent(i.id, 'submitted')} className="btn btn-primary text-xs py-1 px-2 flex-1">Submit</button>
@@ -2477,19 +2506,19 @@ export default function Procurement() {
                 if ((i.status === 'submitted' || i.status === 'l1_approved') && isCreator) {
                   return <span className="text-[10px] text-gray-500 italic">Awaiting approval</span>;
                 }
-                if (i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2')) return (
+                if (i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id)) return (
                   <>
                     <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Re-confirm this approval">Re-approve</button>
                     <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Re-reject</button>
                   </>
                 );
-                // PO already sent, but admin/MD still wants to issue some qty
-                // from store (mam 2026-06-23). Reopen the approve modal so the
+                // PO already sent, but admin / approver still wants to issue some
+                // qty from store (mam 2026-06-23). Reopen the approve modal so the
                 // From-Store split can be entered + a Store Issue Challan cut.
-                if (i.status === 'po_sent' && (isAdmin() || user?.approval_role === 'l2')) return (
+                if (i.status === 'po_sent' && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id)) return (
                   <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Re-open to issue items from store">Issue from Store</button>
                 );
-                if (i.status === 'rejected' && (isAdmin() || user?.approval_role === 'l2')) return (
+                if (i.status === 'rejected' && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id)) return (
                   <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Revoke rejection and approve">Re-approve</button>
                 );
                 return null;
@@ -2608,12 +2637,18 @@ export default function Procurement() {
                             name={i.crm_by_name} at={i.crm_at}
                             isReject={i.status === 'rejected' && i.crm_status === 'rejected'} reason={i.crm_reason || i.rejection_reason} />
                         )}
-                        <ApprovalLevelRow label="L1" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
+                        <ApprovalLevelRow label={i.l2_enabled ? 'L1' : 'Approval'} status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
                           waiting={isCrmTwoLevel && i.crm_status !== 'approved' && i.l1_status === 'pending'}
                           isReject={i.status === 'rejected' && i.l1_status === 'rejected'} reason={i.rejection_reason} />
-                        <ApprovalLevelRow label="L2" status={i.l2_status} name={i.l2_by_name || i.approver_names?.l2} at={i.l2_at}
-                          waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
-                          isReject={i.status === 'rejected' && i.l2_status === 'rejected'} reason={i.rejection_reason} />
+                        {/* L2 row shows when the switch is ON, or for a genuinely
+                            completed historical L2 (approved/rejected). A stale
+                            'pending' from before L2 was turned off stays hidden
+                            (that indent finalises at L1). mam 2026-07-21. */}
+                        {i.l2_status && i.l2_status !== 'n/a' && (i.l2_enabled || i.l2_status === 'approved' || i.l2_status === 'rejected') && (
+                          <ApprovalLevelRow label="L2" status={i.l2_status} name={i.l2_by_name} at={i.l2_at}
+                            waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                            isReject={i.status === 'rejected' && i.l2_status === 'rejected'} reason={i.rejection_reason} />
+                        )}
                       </div>
                     ) : (
                       <>
@@ -2789,7 +2824,7 @@ export default function Procurement() {
                           />
                         )}
                         <ApprovalLevelRow
-                          label="L1"
+                          label={i.l2_enabled ? 'L1' : 'Approval'}
                           status={i.l1_status}
                           name={i.l1_by_name || i.approver_names?.l1}
                           at={i.l1_at}
@@ -2797,15 +2832,20 @@ export default function Procurement() {
                           isReject={i.status === 'rejected' && i.l1_status === 'rejected'}
                           reason={i.rejection_reason}
                         />
-                        <ApprovalLevelRow
-                          label="L2"
-                          status={i.l2_status}
-                          name={i.l2_by_name || i.approver_names?.l2}
-                          at={i.l2_at}
-                          waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
-                          isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
-                          reason={i.rejection_reason}
-                        />
+                        {/* L2 row: shown when the switch is ON, or for a genuinely
+                            completed historical L2. Stale 'pending' from before L2
+                            was turned off stays hidden. mam 2026-07-21. */}
+                        {i.l2_status && i.l2_status !== 'n/a' && (i.l2_enabled || i.l2_status === 'approved' || i.l2_status === 'rejected') && (
+                          <ApprovalLevelRow
+                            label="L2"
+                            status={i.l2_status}
+                            name={i.l2_by_name}
+                            at={i.l2_at}
+                            waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                            isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
+                            reason={i.rejection_reason}
+                          />
+                        )}
                       </div>
                     ) : (
                       <>
@@ -2860,8 +2900,12 @@ export default function Procurement() {
               // (2026-06-06: "admin can also approval like others"). Matches
               // the backend, which lets admin approve indents they raised.
               const isCreator = i.created_by === user?.id && !isAdmin();
-                        const canActL1 = isAdmin() || user?.approval_role === 'l1';
-                        const canActL2 = isAdmin() || user?.approval_role === 'l2';
+                        // Approvers from the ⚙ Responsible RACI names (mam 2026-07-21).
+                        // L2 columns only apply when the switch is ON (i.l2_enabled).
+                        const l2On = !!i.l2_enabled;
+                        const canActL1 = isAdmin() || (i.l1_approver_id != null && user?.id === i.l1_approver_id);
+                        const canActL2 = isAdmin() || (i.l2_approver_id != null && user?.id === i.l2_approver_id);
+                        const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
                         const isHrSingle = i.approval_policy === 'hr_single';
                         const canActHr = isAdmin() || user?.approval_role === 'hr';
                         // CRM action = anyone with CRM module (crm_funnel)
@@ -2870,7 +2914,6 @@ export default function Procurement() {
                         // the server gate (mam 2026-06-03).
                         const isAssignedCrm = crmNameMatchesUser(i.planning_crm_name, user?.name);
                         const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm;
-                        const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
 
                         // CRM stage (Extra-billable) — fires first, before L1/L2.
                         if (needsCrm && i.status === 'submitted' && !isCreator) {
@@ -2898,18 +2941,19 @@ export default function Procurement() {
                           return <span className="text-[10px] text-teal-600 italic">Awaiting HR approval</span>;
                         }
 
-                        // L1 stage — submitted + (legacy OR two_level pending L1)
+                        // L1 stage — submitted + (legacy OR two_level pending L1).
+                        // Label flips to "Approve L1" only when the L2 switch is ON.
                         if (i.status === 'submitted' && !isCreator) {
                           if (isTwoLevel) {
                             if (canActL1) {
                               return (
                                 <>
-                                  <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve L1</button>
-                                  <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject L1</button>
+                                  <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">{l2On ? 'Approve L1' : 'Approve'}</button>
+                                  <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">{l2On ? 'Reject L1' : 'Reject'}</button>
                                 </>
                               );
                             }
-                            return <span className="text-[10px] text-amber-600 italic" title={`Waiting for ${i.approver_names?.l1 || 'L1 approver'}`}>Awaiting {i.approver_names?.l1 || 'L1'}</span>;
+                            return <span className="text-[10px] text-amber-600 italic" title={`Waiting for ${i.approver_names?.l1 || 'approver'}`}>Awaiting {i.approver_names?.l1 || 'approver'}</span>;
                           }
                           // Legacy single-approval flow — original buttons unchanged.
                           if (canApprove('procurement') || isAdmin()) {
@@ -2927,28 +2971,40 @@ export default function Procurement() {
                           if (canActL1) {
                             return (
                               <>
-                                <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve L1</button>
-                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject L1</button>
+                                <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">{l2On ? 'Approve L1' : 'Approve'}</button>
+                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">{l2On ? 'Reject L1' : 'Reject'}</button>
                               </>
                             );
                           }
-                          return <span className="text-[10px] text-amber-600 italic" title={`Waiting for ${i.approver_names?.l1 || 'L1 approver'}`}>CRM ✓ · Awaiting {i.approver_names?.l1 || 'L1'}</span>;
+                          return <span className="text-[10px] text-amber-600 italic" title={`Waiting for ${i.approver_names?.l1 || 'approver'}`}>CRM ✓ · Awaiting {i.approver_names?.l1 || 'approver'}</span>;
                         }
 
-                        // L2 stage — two_level + crm_two_level indents.
+                        // l1_approved — L2 stage when the switch is ON, else a
+                        // legacy row the L1 approver / admin finalises.
                         if (i.status === 'l1_approved' && !isCreator) {
-                          if (canActL2 && !blockSelfL2) {
+                          if (l2On) {
+                            if (canActL2 && !blockSelfL2) {
+                              return (
+                                <>
+                                  <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve L2</button>
+                                  <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject L2</button>
+                                </>
+                              );
+                            }
+                            if (canActL2 && blockSelfL2) {
+                              return <span className="text-[10px] text-gray-500 italic" title="You approved L1 — L2 needs a different reviewer">Needs different reviewer</span>;
+                            }
+                            return <span className="text-[10px] text-purple-600 italic" title={`Waiting for ${i.approver_names?.l2 || 'L2 approver'}`}>Awaiting {i.approver_names?.l2 || 'L2'}</span>;
+                          }
+                          if (canActL1) {
                             return (
                               <>
-                                <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve L2</button>
-                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject L2</button>
+                                <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve</button>
+                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
                               </>
                             );
                           }
-                          if (canActL2 && blockSelfL2) {
-                            return <span className="text-[10px] text-gray-500 italic" title="You approved L1 — L2 needs a different reviewer">Needs different reviewer</span>;
-                          }
-                          return <span className="text-[10px] text-purple-600 italic" title={`Waiting for ${i.approver_names?.l2 || 'L2 approver'}`}>Awaiting {i.approver_names?.l2 || 'L2'}</span>;
+                          return <span className="text-[10px] text-purple-600 italic" title={`Waiting for ${i.approver_names?.l1 || 'approver'}`}>Awaiting {i.approver_names?.l1 || 'approver'}</span>;
                         }
                         return null;
                       })()}
@@ -2957,7 +3013,7 @@ export default function Procurement() {
                           the approval and flips back to rejected, using the
                           same mandatory-reason modal.  Mam (2026-05-25):
                           "give this permission to delete or again reject". */}
-                      {i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2') && (
+                      {i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id) && (
                         <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2" title="Revoke approval and reject this indent">
                           Re-reject
                         </button>
@@ -2968,7 +3024,7 @@ export default function Procurement() {
                           and a Store Issue Challan cut. Admin or the L2 approver
                           / MD (mam 2026-06-04, 2026-06-23: "issue items from
                           store now" on a PO-sent indent). */}
-                      {(i.status === 'rejected' || i.status === 'approved' || i.status === 'po_sent') && (isAdmin() || user?.approval_role === 'l2') && (
+                      {(i.status === 'rejected' || i.status === 'approved' || i.status === 'po_sent') && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id) && (
                         <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2" title={i.status === 'rejected' ? 'Revoke rejection and approve' : 'Re-open to edit qty / issue from store'}>
                           {i.status === 'po_sent' ? 'Issue from Store' : 'Re-approve'}
                         </button>
@@ -3325,6 +3381,9 @@ export default function Procurement() {
                 {ratesPg.rows.map(r => {
                   const stat = r.rate_status || 'pending';
                   const statColor = stat === 'finalized' ? 'bg-emerald-100 text-emerald-700' : stat === 'quoted' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700';
+                  // All 3 vendor quotes (name + rate) required before Finalize
+                  // (mam 2026-07-21). Server enforces the same rule.
+                  const threeFilled = [1, 2, 3].every(n => Number(r[`vendor${n}_rate`]) > 0 && String(r[`vendor${n}_name`] || '').trim());
                   return (
                     <tr key={r.indent_item_ids.join('-')} className={`border-b hover:bg-red-50/30 ${rateSel[rowKey(r)] ? 'bg-blue-50/60' : ''}`}>
                       <td className="px-2 py-2 whitespace-nowrap">
@@ -3437,7 +3496,7 @@ export default function Procurement() {
                         <div className="flex items-center gap-1">
                           {stat === 'finalized'
                             ? <div className="text-[11px]"><div className="font-semibold text-emerald-700">{r.final_vendor_name}</div><div>Rs {r.final_rate}</div></div>
-                            : <button onClick={() => openFinalize(r)} disabled={stat === 'pending'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">Finalize</button>}
+                            : <button onClick={() => openFinalize(r)} disabled={!threeFilled} title={threeFilled ? 'Finalize the best rate' : 'Fill all 3 vendor rates first'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">Finalize</button>}
                           {/* Admin-only: clear ALL vendor quotes for this row.
                               Useful when mam wants to re-quote (wrong rates,
                               vendor change, etc.). Returns row to Pending. */}
@@ -3462,6 +3521,8 @@ export default function Procurement() {
           <div className="lg:hidden space-y-2">
             {ratesPg.rows.map(r => {
               const stat = r.rate_status || 'pending';
+              // All 3 vendor quotes (name + rate) required before Finalize (mam 2026-07-21).
+              const threeFilled = [1, 2, 3].every(n => Number(r[`vendor${n}_rate`]) > 0 && String(r[`vendor${n}_name`] || '').trim());
               return (
                 <div key={r.indent_item_ids.join('-')} className={`card p-3 space-y-2 ${rateSel[rowKey(r)] ? 'ring-1 ring-blue-300 bg-blue-50/40' : ''}`}>
                   <div className="flex justify-between items-start gap-2">
@@ -3507,7 +3568,10 @@ export default function Procurement() {
                   ))}
                   {stat === 'finalized'
                     ? <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs"><b className="text-emerald-700">Final:</b> {r.final_vendor_name} @ Rs {r.final_rate}</div>
-                    : <button onClick={() => openFinalize(r)} disabled={stat === 'pending'} className="btn btn-primary text-xs w-full disabled:opacity-40">Finalize Rate</button>}
+                    : <>
+                        <button onClick={() => openFinalize(r)} disabled={!threeFilled} className="btn btn-primary text-xs w-full disabled:opacity-40">Finalize Rate</button>
+                        {!threeFilled && <p className="text-[10px] text-amber-600 text-center mt-1">Fill all 3 vendor rates to finalize.</p>}
+                      </>}
                 </div>
               );
             })}

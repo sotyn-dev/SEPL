@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
 
 // hours → compact "2.5h" / "1d 3h" / "—"
 function fmtDur(h) {
@@ -26,9 +27,35 @@ const RACI_FIELDS = [
 ];
 
 export default function ResponsibilityTab({ module, title }) {
+  const { isAdmin } = useAuth();
   const [data, setData] = useState(null);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // L2 (second) approval on/off switch — lives HERE next to the L1/L2 approver
+  // names (mam 2026-07-21: "give that in raci"). Indent module + admin only.
+  const isIndent = module === 'indent_to_dispatch';
+  const [l2Enabled, setL2Enabled] = useState(false);
+  const [l2Saving, setL2Saving] = useState(false);
+  useEffect(() => {
+    if (!isIndent) return;
+    api.get('/procurement/l2-setting').then(r => setL2Enabled(!!r.data?.enabled)).catch(() => {});
+  }, [isIndent]);
+  const toggleL2 = async () => {
+    if (!isAdmin()) return;
+    const next = !l2Enabled;
+    if (!window.confirm(next
+      ? 'Turn L2 (second) approval ON? Indents will need L1 then L2 sign-off. The L2 approver is whoever you set as Responsible on the "L2 Approval" step below.'
+      : 'Turn L2 (second) approval OFF? L1 becomes the final approval for all indents.')) return;
+    setL2Saving(true);
+    try {
+      const r = await api.put('/procurement/l2-setting', { enabled: next });
+      setL2Enabled(!!r.data?.enabled);
+      toast.success(r.data?.message || 'Saved');
+      if (showBoard) load();            // refresh the board's step columns
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not change L2 setting'); }
+    finally { setL2Saving(false); }
+  };
   const [view, setView] = useState('grid');         // 'grid' | 'summary'
   const [q, setQ] = useState('');
   // The per-record board loads ALL records × steps — heavy enough to hang big
@@ -82,6 +109,7 @@ export default function ResponsibilityTab({ module, title }) {
           sla_hours: s.sla_hours === '' || s.sla_hours == null ? null : +s.sla_hours,
           weight: s.weight === '' || s.weight == null ? null : +s.weight,
           commitment: s.commitment && String(s.commitment).trim() !== '' ? s.commitment : null,
+          enabled: s.enabled !== false,   // per-step ON/OFF (mam 2026-07-21)
         })),
       });
       toast.success('Saved'); setEditRec(null); if (showBoard) load();
@@ -110,6 +138,24 @@ export default function ResponsibilityTab({ module, title }) {
 
   return (
     <div className="space-y-3">
+      {/* L2 (second) approval on/off — admin-only, indent module only.
+          OFF = L1 is the final approval; ON = the L1 → L2 flow returns and the
+          "L2 Approval" step below becomes the L2 approver. mam 2026-07-21. */}
+      {isIndent && isAdmin() && (
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <div className="text-xs text-slate-600">
+            <span className="font-bold text-slate-800">L2 (second) approval</span> —{' '}
+            {l2Enabled
+              ? 'ON: indents need L1 then L2 sign-off. Set the L2 approver on the "L2 Approval" step below.'
+              : 'OFF: L1 is the final approval (no second sign-off).'}
+          </div>
+          <button type="button" onClick={toggleL2} disabled={l2Saving}
+            className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold border transition disabled:opacity-50 ${l2Enabled ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'}`}>
+            <span className={`inline-block w-2 h-2 rounded-full ${l2Enabled ? 'bg-white' : 'bg-slate-400'}`} />
+            {l2Saving ? 'Saving…' : (l2Enabled ? 'L2 is ON — turn OFF' : 'L2 is OFF — turn ON')}
+          </button>
+        </div>
+      )}
       {/* Header / controls */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
@@ -249,9 +295,32 @@ export default function ResponsibilityTab({ module, title }) {
             <div className="py-8 text-center text-gray-400 text-sm">Loading…</div>
           ) : (
             <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-              {editSteps.map((s, i) => (
-                <div key={s.key} className="border rounded-lg p-3 bg-white">
-                  <div className="font-semibold text-sm mb-2 text-gray-800">{s.label}</div>
+              {editSteps.map((s, i) => {
+                const isWholeModule = editRec?.id === 0;   // per-step ON/OFF only on the module default
+                const stepOn = s.enabled !== false;
+                // Indent CRM + L2 are the two approval stages that OFF actually
+                // SKIPS in the real flow (mam 2026-07-21); every other step is
+                // hide-from-tracking only.
+                const flowStep = module === 'indent_to_dispatch' && (s.key === 'crm' || s.key === 'l2');
+                return (
+                <div key={s.key} className={`border rounded-lg p-3 bg-white ${isWholeModule && !stepOn ? 'opacity-50' : ''}`}>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="font-semibold text-sm text-gray-800">
+                      {s.label}
+                      {isWholeModule && !stepOn && <span className="ml-2 text-[10px] font-normal text-rose-500">{flowStep ? '(OFF — skipped in flow)' : '(OFF — not tracked)'}</span>}
+                    </div>
+                    {/* Per-step ON/OFF. For the indent's CRM + L2 it SKIPS the
+                        approval in the real flow; for every other step it just
+                        hides it from the board + scorecard. mam 2026-07-21. */}
+                    {isWholeModule && (
+                      <button type="button" onClick={() => setField(i, 'enabled', !stepOn)}
+                        title={flowStep ? 'Turn this approval step on/off — OFF skips it in the real approval flow' : 'Turn this step on/off for the Responsible board + scorecard'}
+                        className={`shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold border transition ${stepOn ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'}`}>
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${stepOn ? 'bg-white' : 'bg-slate-400'}`} />
+                        {stepOn ? 'ON' : 'OFF'}
+                      </button>
+                    )}
+                  </div>
                   <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
                     {RACI_FIELDS.map(([field, label, tint]) => (
                       <div key={field}>
@@ -276,7 +345,8 @@ export default function ResponsibilityTab({ module, title }) {
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
           <div className="flex justify-end gap-2 pt-2 border-t">
