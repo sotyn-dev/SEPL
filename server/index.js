@@ -204,6 +204,20 @@ if (!process.env.ERP_DISABLE_UPLOADS_BACKFILL) {
   }
 }
 
+// 02:20 orphan sweep — slots between 02:15 compaction and the 02:30 S3 backfill, so
+// orphans are quarantined BEFORE we pay to upload them, and after the 02:00 backup has
+// captured the rows that reference them.
+//
+// Opt-in twice over: no timer at all unless ERP_ENABLE_SWEEP_CRON=1, and dry-run even
+// then unless ERP_SWEEP_CRON_DRYRUN=0. Without this the QUARANTINE_TTL never fired
+// outside a manual admin run, so quarantined files accumulated forever.
+try {
+  const { scheduleNightlySweep } = require('./scripts/sweep-uploads');
+  scheduleNightlySweep();
+} catch (e) {
+  console.warn('[sweep] Scheduler not started:', e.message);
+}
+
 // Daily 07:30 AM audit JSON snapshot — TOC v3 P0 #5.  Writes the same
 // JSON the /audit endpoints return into data/audit-snapshots/<date>/
 // so the CMD's 09:00 email and the four role dashboards can render

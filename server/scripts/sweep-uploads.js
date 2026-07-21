@@ -135,9 +135,59 @@ async function runSweep({ dryRun = false, silent = false } = {}) {
   return summary;
 }
 
+// ── nightly scheduler ───────────────────────────────────────────────────────────
+// Until this existed the sweep ran ONLY from the admin endpoint, which meant the
+// QUARANTINE_TTL_DAYS expiry never fired on its own: every file quarantined by a
+// delete sat on disk indefinitely, and no orphan was ever collected unless somebody
+// remembered to press a button.
+//
+// OFF unless ERP_ENABLE_SWEEP_CRON=1, and DRY-RUN even then unless
+// ERP_SWEEP_CRON_DRYRUN=0. Both defaults are the safe direction: enabling the cron
+// gets you a nightly log line and nothing else, so you can read a week of
+// "quarantined=N purged=M" before anything is allowed to move a file.
+//
+// 02:20 is not arbitrary — it sits inside the existing nightly chain:
+//   02:00 backup (rollback point) → 02:15 db-maintenance (VACUUM) → 02:20 sweep
+//   → 02:30 backfill-uploads-s3.
+// Sweeping BEFORE the S3 backfill means we don't pay to upload files that are about
+// to be quarantined; sweeping AFTER any row deletion means the orphans those
+// deletions created are already visible in the keep-set.
+//
+// Driver-agnostic by construction: runSweep goes through the storage seam
+// (listKeys/quarantineKey), so this schedules identically on local disk and on S3.
+function scheduleNightlySweep() {
+  if (process.env.ERP_ENABLE_SWEEP_CRON !== '1') {
+    console.log('[sweep] Scheduler not started: set ERP_ENABLE_SWEEP_CRON=1 to enable.');
+    return;                                  // return WITHOUT arming a timer; never exit
+  }
+  const dryRun = process.env.ERP_SWEEP_CRON_DRYRUN !== '0';   // dry-run unless explicitly disarmed
+  const nextRun = () => {
+    const now = new Date();
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 2, 20, 0, 0); // 02:20 today
+    if (target <= now) target.setDate(target.getDate() + 1);
+    const delay = target - now;
+    setTimeout(async () => {
+      try {
+        const r = await runSweep({ dryRun, silent: true });
+        // Dry-run always reports (that IS the deliverable during the trial week).
+        // A live run stays quiet on a no-op night, like the backfill does.
+        if (dryRun || r.restored || r.quarantined || r.purged) {
+          console.log(`[sweep] nightly${dryRun ? ' DRY-RUN' : ''}: refs=${r.referenced} scanned=${r.scanned} restored=${r.restored} quarantined=${r.quarantined} (${(r.quarantinedBytes / 1024 / 1024).toFixed(2)} MB) purged=${r.purged} (${(r.purgedBytes / 1024 / 1024).toFixed(2)} MB)`);
+        }
+      } catch (e) {
+        // A bad night must not kill the chain — log and let it reschedule below.
+        console.error('[sweep] Scheduled run failed:', e.message);
+      }
+      nextRun();
+    }, delay);
+    console.log(`[sweep] Next scheduled run at ${target.toISOString()} (in ${Math.round(delay / 60000)} min)${dryRun ? ' — DRY-RUN (set ERP_SWEEP_CRON_DRYRUN=0 to arm)' : ' — LIVE'}`);
+  };
+  nextRun();
+}
+
 // buildKeepSet/collectRefs are exported so the S3 backfill can reuse the EXACT same
 // notion of "referenced" — two different answers to that question is how you lose a file.
-module.exports = { runSweep, buildKeepSet, collectRefs, GRACE_DAYS, QUARANTINE_TTL_DAYS };
+module.exports = { runSweep, scheduleNightlySweep, buildKeepSet, collectRefs, GRACE_DAYS, QUARANTINE_TTL_DAYS };
 
 if (require.main === module) {
   const dryRun = process.argv.includes('--dry-run');
