@@ -4984,6 +4984,40 @@ function initializeDatabase() {
     console.warn('[backfill] po_items.po_id link failed:', e.message);
   }
 
+  // ─── One-time: seed item_master.current_price from the LATEST finalized ─────
+  // vendor rate per item (mam 2026-07-21: "both … and always auto-update if
+  // finalise rate"). NON-PIPE items only — a pipe's rate is ₹/kg, a unit that
+  // doesn't match the per-metre/piece master price, so pipes are left untouched
+  // (matches the runtime rule in procurement.js). Guarded to run once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='backfill_item_price_from_finalized_v1'").get();
+    if (!done) {
+      const rows = db.prepare(`
+        SELECT ii.item_master_id AS mid, r.final_rate AS rate
+          FROM indent_item_rates r
+          JOIN indent_items ii ON ii.id = r.indent_item_id
+          LEFT JOIN item_master im ON im.id = ii.item_master_id
+         WHERE r.status='finalized' AND r.final_rate > 0
+           AND ii.item_master_id IS NOT NULL
+           AND COALESCE(ii.weight_per_meter, im.weight_per_meter, 0) = 0
+         ORDER BY ii.item_master_id, COALESCE(r.finalized_at, r.updated_at) DESC, r.id DESC
+      `).all();
+      const latest = {};
+      for (const row of rows) if (!(row.mid in latest)) latest[row.mid] = +row.rate;   // first = latest per item
+      const upd = db.prepare("UPDATE item_master SET current_price=?, source_type='Procurement', priced_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND COALESCE(weight_per_meter,0)=0");
+      const hist = db.prepare("INSERT INTO item_price_history (item_id, rate, quantity, source) VALUES (?,?,0,'vendor_rate_backfill')");
+      let n = 0;
+      for (const mid of Object.keys(latest)) {
+        const rate = Math.round(latest[mid] * 100) / 100;
+        if (upd.run(rate, mid).changes > 0) { hist.run(mid, rate); n++; }
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('backfill_item_price_from_finalized_v1', '1')").run();
+      if (n > 0) console.log(`[backfill] item_master.current_price seeded from latest finalized rate for ${n} non-pipe items`);
+    }
+  } catch (e) {
+    console.warn('[backfill] item price from finalized failed:', e.message);
+  }
+
   // ─── One-time backfill: historical DPR Table A → labour (11% of SITC) ──
   // Mam (2026-05-30): the BOQ/PO rate is the full SITC value (Supply +
   // Installation + T&C) and already includes labour; the DPR should carry

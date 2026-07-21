@@ -6489,37 +6489,68 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
          status='finalized', finalized_by=?, finalized_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
      WHERE id=?`
   ).run(+final_rate, final_vendor_name, final_terms || null, +final_credit_days || 0, req.user.id, req.params.id);
-  // Note: the Item Master price is NOT updated here — it updates from the actual
-  // Vendor PO instead (mam 2026-07-21: "in items only one … from po update rate
-  // as per current"). See the /vendor-po create endpoint.
-  res.json({ message: 'Finalized' });
+
+  // Push the finalized rate into the Item Master so its price reflects the
+  // current final price the moment you finalize (mam 2026-07-21). Works for ALL
+  // linked items INCLUDING pipes — a pipe's rate is ₹/kg, converted to the
+  // item's per-metre price via kg/m (bumpItemMasterPrice). The Vendor PO does
+  // the same later, keeping it current if the ordered rate differs. Best-effort.
+  let itemPriceUpdated = false;
+  try {
+    const link = db.prepare(
+      `SELECT ii.item_master_id AS mid, ii.quantity AS qty,
+              COALESCE(ii.weight_per_meter, im.weight_per_meter) AS wpm
+         FROM indent_item_rates r
+         JOIN indent_items ii ON ii.id = r.indent_item_id
+         LEFT JOIN item_master im ON im.id = ii.item_master_id
+        WHERE r.id = ?`
+    ).get(req.params.id);
+    if (link && link.mid) {
+      itemPriceUpdated = bumpItemMasterPrice(db, link.mid, +final_rate, +link.wpm || 0, +link.qty || 0, 'vendor_rate', req.user.id, req.user.name);
+    }
+  } catch (e) {
+    console.error('[finalize] item_master price update failed (finalize saved anyway):', e.message);
+  }
+  res.json({ message: 'Finalized', item_price_updated: itemPriceUpdated });
 });
 
+// The Item Master price to write from a finalized/ordered vendor rate — in the
+// item's own unit. mam 2026-07-21: "update all items with unit as per finalise,
+// LEAVE only pipes". Pipes are quoted in ₹/kg (qty in metres), a unit that does
+// NOT match the per-metre/piece Item Master price, so pipe lines
+// (weight_per_meter > 0) are LEFT untouched — returns null so the caller skips.
+// Every non-pipe item updates to its finalized rate as-is (already in its unit).
+function itemPriceFromVendorRate(rawRate, weightPerMeter) {
+  const r = +rawRate;
+  if (!(r > 0)) return null;
+  if (+weightPerMeter > 0) return null;          // pipe — leave its rate untouched
+  return Math.round(r * 100) / 100;
+}
+
+// Push a finalized/ordered rate into item_master.current_price + log history.
+// Shared by the finalize endpoint and the Vendor-PO create. Best-effort.
+function bumpItemMasterPrice(db, mid, rawRate, wpm, qty, source, userId, userName) {
+  const price = itemPriceFromVendorRate(rawRate, wpm);
+  if (!mid || price == null) return false;
+  db.prepare(`INSERT INTO item_price_history (item_id, rate, quantity, source, created_by, created_by_name)
+              VALUES (?,?,?,?,?,?)`).run(mid, price, +qty || 0, source, userId, userName || null);
+  db.prepare(`UPDATE item_master SET current_price=?, source_type='Procurement',
+              priced_at=CURRENT_TIMESTAMP, priced_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(price, userId, mid);
+  return true;
+}
+
 // When a Vendor PO is created, push each linked item's ACTUAL ordered rate into
-// the Item Master as its current price (mam 2026-07-21). The PO is the single
-// source of truth for "current" item rate. Skips pipe lines (rate is ₹/kg there,
-// which would corrupt a per-piece master price) and unlinked/manual lines. Logs
-// to item_price_history for the last-rate + AI trail. Best-effort — never fails
-// the PO. Call inside the PO-create transaction with its line list.
+// the Item Master (mam 2026-07-21). Pipe lines are CONVERTED ₹/kg → ₹/m (not
+// skipped); unlinked/manual lines are ignored. Best-effort — never fails the PO.
 function updateItemMasterFromPoLines(db, lines, userId, userName) {
   try {
     const getMid = db.prepare('SELECT item_master_id AS mid FROM indent_items WHERE id=?');
-    const logHist = db.prepare(
-      `INSERT INTO item_price_history (item_id, rate, quantity, source, created_by, created_by_name)
-       VALUES (?,?,?,?,?,?)`
-    );
-    const updMaster = db.prepare(
-      `UPDATE item_master SET current_price=?, source_type='Procurement',
-              priced_at=CURRENT_TIMESTAMP, priced_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
-    );
     for (const i of (lines || [])) {
-      const rate = +i.rate;
-      if (!(rate > 0) || !i.indent_item_id) continue;
-      if (+i.weight_per_meter > 0) continue;                 // pipe line = ₹/kg, skip
+      if (!(+i.rate > 0) || !i.indent_item_id) continue;
       const mid = getMid.get(i.indent_item_id)?.mid;
       if (!mid) continue;                                    // manual / unlinked line
-      logHist.run(mid, rate, +i.quantity || 0, 'vendor_po', userId, userName || null);
-      updMaster.run(rate, userId, mid);
+      bumpItemMasterPrice(db, mid, +i.rate, +i.weight_per_meter || 0, +i.quantity || 0, 'vendor_po', userId, userName);
     }
   } catch (e) {
     console.error('[vendor-po] item_master price update failed (PO saved anyway):', e.message);
