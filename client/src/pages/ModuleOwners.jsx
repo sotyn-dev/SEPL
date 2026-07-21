@@ -39,7 +39,12 @@ export default function ModuleOwners() {
     setSaving(mod.key);
     try {
       const cur = await api.get(`/raci/record/${mod.key}/0`);
-      const steps = (cur.data.steps || []).map(s => ({
+      // Never bulk-appoint the indent approver steps (l1/l2 = who approves spend,
+      // crm = CRM gate) — those are admin-only and set explicitly in ⚙ Set RACI
+      // (mam 2026-07-21 / plan). Skip them so "set one owner" can't silently
+      // make someone the approver.
+      const GATE_KEYS = mod.key === 'indent_to_dispatch' ? ['l1', 'l2', 'crm'] : [];
+      const steps = (cur.data.steps || []).filter(s => !GATE_KEYS.includes(s.key)).map(s => ({
         step_key: s.key,
         responsible_id: ownerId ? +ownerId : null,
         accountable_id: s.accountable_id || null,

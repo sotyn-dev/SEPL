@@ -120,6 +120,39 @@ router.put('/record/:module/:recordId', (req, res) => {
   if (!mod) return res.status(404).json({ error: 'Unknown module' });
   const validKeys = new Set(editorStepsFor(db, req.params.module).map(s => s.key));
   const rows = Array.isArray(req.body.steps) ? req.body.steps : [];
+
+  // ── Indent approver gate steps (security + guard rails, mam 2026-07-21) ──
+  // For the indent whole-module default (record_id 0), steps l1/l2 name the
+  // people who APPROVE company spend and crm gates the CRM stage. These drive
+  // the real flow, so:
+  //   (C2) only an admin may change them — otherwise any logged-in user could
+  //        appoint themselves the approver (privilege escalation).
+  //   (A3/A4/C3) enforce L1-required-for-L2 + L2-needs-its-own-name, evaluating
+  //        the incoming payload merged over what is already stored.
+  const enOf = (v) => (v === false || v === 0 || v === '0') ? 0 : 1;
+  if (req.params.module === 'indent_to_dispatch' && +req.params.recordId === 0) {
+    const GATE = new Set(['l1', 'l2', 'crm']);
+    const touched = rows.filter(r => GATE.has(String(r.step_key)));
+    if (touched.length && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only an admin can set the indent approvers / approval steps. Ask an admin to change these in ⚙ Set RACI for whole module.' });
+    }
+    if (touched.length) {
+      const stored = getRecordRaci(db, 'indent_to_dispatch', 0);
+      const inMap = {}; for (const r of rows) inMap[String(r.step_key)] = r;
+      const respOf = (k) => {
+        if (k in inMap) { const n = +inMap[k].responsible_id; return Number.isFinite(n) && n > 0 ? n : null; }
+        return stored[k]?.responsible_id || null;
+      };
+      const l1resp = respOf('l1'), l2resp = respOf('l2');
+      // Final L2-on state: payload's l2.enabled if the l2 row is being written,
+      // else the live switch.
+      const l2on = ('l2' in inMap && inMap['l2'].enabled !== undefined)
+        ? enOf(inMap['l2'].enabled) === 1 : l2EnabledRaci(db);
+      if (l2on && !l1resp) return res.status(400).json({ error: 'Set the Indent L1 Approver (a Responsible name) before turning L2 on.' });
+      if (l2on && !l2resp) return res.status(400).json({ error: 'Pick a Responsible for the Indent L2 Approver before turning it on.' });
+    }
+  }
+
   const up = db.prepare(`
     INSERT INTO raci_assignment (module, record_id, step_key, responsible_id, accountable_id, consulted_id, informed_id, sla_hours, weight, commitment, step_enabled, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
