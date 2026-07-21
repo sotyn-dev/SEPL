@@ -17,6 +17,7 @@
 const fs = require('fs');
 const { getDb } = require('../db/schema');
 const { getChatDb } = require('../db/chatDb');
+const { getBoardDb } = require('../db/sotynFlowDb');
 
 // VACUUM only when reclaimable space is meaningful — avoids a nightly full-file
 // rewrite when there's almost nothing to reclaim.
@@ -73,6 +74,9 @@ function runMaintenance({ silent = false } = {}) {
   const targets = [];
   try { targets.push(['erp.db', getDb()]); } catch (e) { if (!silent) console.warn('[db-maint] erp.db unavailable:', e.message); }
   try { targets.push(['chat.db', getChatDb()]); } catch (e) { if (!silent) console.warn('[db-maint] chat.db unavailable:', e.message); }
+  // sotynflow.db was missing here since the module landed — its WAL was never
+  // checkpointed and the file never compacted by the nightly pass.
+  try { targets.push(['sotynflow.db', getBoardDb()]); } catch (e) { if (!silent) console.warn('[db-maint] sotynflow.db unavailable:', e.message); }
   for (const [label, db] of targets) {
     try { results.push(maintainOne(label, db, silent)); }
     catch (e) { if (!silent) console.error(`[db-maint] ${label} failed:`, e.message); }
