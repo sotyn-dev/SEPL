@@ -428,9 +428,11 @@ router.patch('/stock/:id', requirePermission('inventory', 'edit'), (req, res) =>
   }
   if (newQty != null && newQty < 0) return res.status(400).json({ error: 'Quantity cannot be negative' });
   if (newRate != null && newRate < 0) return res.status(400).json({ error: 'Rate cannot be negative' });
-  const VALID_CONDITIONS = ['Used', 'Unused', 'Scrap', null, ''];
+  // 'Free to use' = spare stock available to redeploy to another site
+  // (mam 2026-07-15). Stored as a readable string like its peers.
+  const VALID_CONDITIONS = ['Used', 'Unused', 'Scrap', 'Free to use', null, ''];
   if (newCondition !== null && !VALID_CONDITIONS.includes(newCondition)) {
-    return res.status(400).json({ error: 'condition must be Used, Unused, or Scrap' });
+    return res.status(400).json({ error: 'condition must be Used, Unused, Scrap, or Free to use' });
   }
 
   const sb = db.prepare('SELECT * FROM stock_balance WHERE id=?').get(id);

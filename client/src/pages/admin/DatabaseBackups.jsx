@@ -66,6 +66,42 @@ export default function DatabaseBackups() {
   const latest = data.backups?.[0];
   const latestAge = latest ? Math.round((Date.now() - new Date(latest.created_at)) / 3600000) : null;
 
+  // The list is already sorted newest-first, so the first filename seen for each
+  // db type is that database's latest snapshot — tag those rows LATEST.
+  const latestByDb = {};
+  for (const b of (data.backups || [])) {
+    const key = b.db || 'erp';
+    if (!latestByDb[key]) latestByDb[key] = b.filename;
+  }
+
+  // Group rows by backup RUN so an ERP snapshot and the Chat snapshot written right
+  // after it read as one unit. ERP→Chat of a single run land seconds apart; separate
+  // runs (nightly, or a manual "Backup Now") are minutes/hours apart — so we cluster
+  // by time proximity rather than a shared id. This also works for existing on-disk
+  // backups, which carry independent per-file timestamps. Consecutive runs get an
+  // alternating left color band so each pair is visually distinct without breaking the
+  // one-row-per-file layout. GROUP_GAP_MS is the single knob if it ever needs tuning
+  // (two manual runs within this window would merge into one band — rare, harmless).
+  const GROUP_GAP_MS = 5 * 60 * 1000;
+  const groups = [];
+  let prevT = null;
+  for (const b of (data.backups || [])) {
+    const t = new Date(b.created_at).getTime();
+    if (prevT === null || prevT - t > GROUP_GAP_MS) groups.push([]);
+    prevT = t;
+    groups[groups.length - 1].push(b);
+  }
+  // Within each run show ERP first, then Chat (ERP is the primary db) — runs
+  // themselves stay newest-first. Sort is stable, so any extra same-db files keep
+  // their newest-first order. _newGroup flags the first row of each run for the
+  // between-runs divider.
+  const rows = [];
+  groups.forEach((g, gi) => {
+    [...g]
+      .sort((a, b) => (a.db === 'chat' ? 1 : 0) - (b.db === 'chat' ? 1 : 0))
+      .forEach((b, i) => rows.push({ ...b, _group: gi, _newGroup: gi > 0 && i === 0 }));
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -73,7 +109,7 @@ export default function DatabaseBackups() {
           <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
             <FiDatabase className="text-red-600" /> Database Backups
           </h3>
-          <p className="text-sm text-gray-500">Automatic nightly snapshots at 2:00 AM. Keeps the last 30 backups.</p>
+          <p className="text-sm text-gray-500">Automatic nightly snapshots at 2:00 AM. Keeps the last 30 per database (ERP + Chat).</p>
         </div>
         <div className="flex gap-2">
           <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
@@ -90,7 +126,7 @@ export default function DatabaseBackups() {
         <div className="card">
           <p className="text-xs text-gray-500 uppercase tracking-wide">Total Backups</p>
           <p className="text-2xl font-bold text-gray-800 mt-1">{data.backups?.length || 0}</p>
-          <p className="text-[11px] text-gray-400">Retention: last 30 kept</p>
+          <p className="text-[11px] text-gray-400">Retention: last 30 per database</p>
         </div>
         <div className="card">
           <p className="text-xs text-gray-500 uppercase tracking-wide flex items-center gap-1"><FiClock size={11} /> Latest Backup</p>
@@ -126,19 +162,34 @@ export default function DatabaseBackups() {
       <div className="card p-0 overflow-x-auto">
         <table className="text-sm">
           <thead>
-            <tr>
+            <tr className="border-b-2 border-gray-300">
               <th>Filename</th>
+              <th>Database</th>
               <th>Created</th>
               <th>Size</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            {(data.backups || []).map((b, idx) => (
-              <tr key={b.filename} className={idx === 0 ? 'bg-emerald-50/50' : ''}>
+            {rows.map((b) => {
+              const isLatest = latestByDb[b.db || 'erp'] === b.filename;
+              const isChat = b.db === 'chat';
+              const evenGroup = b._group % 2 === 0;
+              // Each run reads as one block via a soft shared tint plus a stronger rule
+              // between runs. Rows are trimmed to equal top/bottom padding (py-2 instead
+              // of the base py-3). LATEST keeps its emerald highlight layered on top.
+              const divider = b._newGroup ? 'border-t-2 border-gray-200' : '';
+              const fill = isLatest ? 'bg-emerald-50/60' : (evenGroup ? '' : 'bg-indigo-50/50');
+              return (
+              <tr key={b.filename} className={`[&>td]:py-2 ${divider} ${fill}`}>
                 <td className="font-mono text-xs">
                   {b.filename}
-                  {idx === 0 && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold">LATEST</span>}
+                  {isLatest && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold">LATEST</span>}
+                </td>
+                <td>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${isChat ? 'bg-violet-100 text-violet-800' : 'bg-blue-100 text-blue-800'}`}>
+                    {isChat ? 'Chat' : 'ERP'}
+                  </span>
                 </td>
                 <td className="whitespace-nowrap text-xs">{fmtDateTime(b.created_at)}</td>
                 <td className="whitespace-nowrap text-xs">{formatSize(b.size)}</td>
@@ -148,9 +199,10 @@ export default function DatabaseBackups() {
                   </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {(data.backups || []).length === 0 && (
-              <tr><td colSpan="4" className="text-center py-8 text-gray-400">
+              <tr><td colSpan="5" className="text-center py-8 text-gray-400">
                 No backups yet. The first scheduled run happens at 2:00 AM — or click <b>Backup Now</b> to create one immediately.
               </td></tr>
             )}

@@ -62,6 +62,12 @@ function getChatDb() {
     const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
     if (!mcols.includes('reply_to_id')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN reply_to_id INTEGER");
   } catch (e) { /* ignore */ }
+  // edited_at: set when the sender edits the message body (WhatsApp-style,
+  // 15-min window). NULL = never edited; drives the "edited" marker (mam 2026-07-15).
+  try {
+    const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
+    if (!mcols.includes('edited_at')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN edited_at DATETIME");
+  } catch (e) { /* ignore */ }
   return chatDb;
 }
 
