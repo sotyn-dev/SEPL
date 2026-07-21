@@ -7,6 +7,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { getToken } from '../lib/tokenStore';
@@ -486,6 +487,8 @@ export default function SotynFlow() {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [boardMenu, setBoardMenu] = useState(false);
   const [showArchived, setShowArchived] = useState(false);   // Archived view — archived_at IS NOT NULL
+  const [confirmKind, setConfirmKind] = useState(null);      // null | 'archive' | 'delete'
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   const loadBoards = useCallback(() => {
     // No `q` param: search is filtered client-side (`shown` below), so we don't
@@ -622,20 +625,27 @@ export default function SotynFlow() {
   if (!board) return <div className="flex items-center justify-center h-full text-gray-400"><span className="w-8 h-8 rounded-full border-[3px] border-gray-300 border-t-blue-600 animate-spin" /></div>;
   const { columns, members } = board;
 
-  const deleteBoard = async () => {
-    if (!confirm('Delete this board and everything in it? This cannot be undone.')) return;
+  // Archive and Delete both route through the shared ConfirmDialog (same one
+  // SOTYN Chat uses) instead of window.confirm(), so the two read differently:
+  // amber + "you can restore it" vs red + "cannot be undone". Restore is not
+  // confirmed — it only ever puts a board back.
+  const doDeleteBoard = async () => {
+    setConfirmBusy(true);
     try { await api.delete(`/sotyn-flow/${boardId}`); toast.success('Board deleted'); nav('/sotyn-flow'); }
     catch (e) { toast.error(e.response?.data?.error || 'Failed to delete board'); }
+    finally { setConfirmBusy(false); setConfirmKind(null); }
   };
-  // Archive / restore — reversible, so no destructive confirm. Everything on the
-  // board is kept; it just leaves the board list until restored.
-  const archiveBoard = async (archive) => {
+  const doArchiveBoard = async (archive) => {
+    setConfirmBusy(true);
     try {
       await api.post(`/sotyn-flow/${boardId}/${archive ? 'archive' : 'unarchive'}`);
       toast.success(archive ? 'Board archived' : 'Board restored');
       nav('/sotyn-flow');
     } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+    finally { setConfirmBusy(false); setConfirmKind(null); }
   };
+  const deleteBoard = () => setConfirmKind('delete');
+  const archiveBoard = (archive) => (archive ? setConfirmKind('archive') : doArchiveBoard(false));
 
   return (
     <div className="flow-wrapper flex flex-col h-[calc(100dvh-69px)] -m-2 md:m-0 sm:h-[calc(100dvh-61px)] md:h-[calc(100dvh-104px)]">
@@ -698,8 +708,25 @@ export default function SotynFlow() {
       {settingsOpen && (
         <BoardSettings board={board} allUsers={allUsers} avatars={avatars} canManage={canManage} user={user} isAdmin={isAdmin}
           boardId={boardId} onClose={() => setSettingsOpen(false)} onReload={loadBoard}
-          onDeleted={() => { setSettingsOpen(false); nav('/sotyn-flow'); }} />
+          onRequestDelete={() => { setSettingsOpen(false); deleteBoard(); }} />
       )}
+      {/* Shared confirm — same component SOTYN Chat uses, so archive vs delete
+          reads identically across both modules. */}
+      <ConfirmDialog
+        open={!!confirmKind}
+        busy={confirmBusy}
+        tone={confirmKind === 'delete' ? 'danger' : 'warning'}
+        title={confirmKind === 'delete' ? <>Delete “{board.board.name}”?</> : <>Archive “{board.board.name}”?</>}
+        confirmLabel={confirmKind === 'delete' ? 'Delete' : 'Archive'}
+        message={confirmKind === 'delete'
+          ? <>The board and <strong>every list, card and comment</strong> go, for everyone.</>
+          : <>It moves to <strong>Archived</strong> — out of everyone's board list.</>}
+        note={confirmKind === 'delete'
+          ? "Can't be undone. Archive it instead if you just want it out of the way."
+          : 'Nothing is deleted. Bring it back any time.'}
+        onCancel={() => setConfirmKind(null)}
+        onConfirm={() => (confirmKind === 'delete' ? doDeleteBoard() : doArchiveBoard(true))}
+      />
     </div>
   );
 }
@@ -716,6 +743,8 @@ const Column = memo(function Column({ col, cards, avatars, boardLabels, canManag
   const [menu, setMenu] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(col.title);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [delBusy, setDelBusy] = useState(false);
 
   const addCard = async () => {
     const t = title.trim(); if (!t) return;
@@ -723,7 +752,13 @@ const Column = memo(function Column({ col, cards, avatars, boardLabels, canManag
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
   const rename = async () => { const n = name.trim(); if (n && n !== col.title) { try { await api.put(`/sotyn-flow/${boardId}/columns/${col.id}`, { title: n }); } catch { toast.error('Failed'); } } setRenaming(false); onReload(); };
-  const del = async () => { if (!confirm(`Delete list "${col.title}" and its ${cards.length} card(s)?`)) return; try { await api.delete(`/sotyn-flow/${boardId}/columns/${col.id}`); onReload(); } catch { toast.error('Failed'); } };
+  const del = () => setConfirmDel(true);
+  const doDel = async () => {
+    setDelBusy(true);
+    try { await api.delete(`/sotyn-flow/${boardId}/columns/${col.id}`); onReload(); }
+    catch { toast.error('Failed'); }
+    finally { setDelBusy(false); setConfirmDel(false); }
+  };
 
   return (
     <div className="w-[85vw] sm:w-72 flex-shrink-0 flex flex-col max-h-full snap-start bg-black/[0.03] rounded-xl"
@@ -764,6 +799,16 @@ const Column = memo(function Column({ col, cards, avatars, boardLabels, canManag
           <button onClick={() => setAdding(true)} className="w-full text-left text-sm text-gray-500 hover:text-blue-700 hover:bg-white/60 rounded-lg px-2 py-1.5 flex items-center gap-1.5"><FiPlus size={14} /> Add a card</button>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmDel}
+        busy={delBusy}
+        title={<>Delete “{col.title}”?</>}
+        confirmLabel="Delete"
+        message={cards.length ? <>The list and its <strong>{cards.length} card{cards.length === 1 ? '' : 's'}</strong> go.</> : 'The list goes.'}
+        note="Can't be undone."
+        onCancel={() => setConfirmDel(false)}
+        onConfirm={doDel}
+      />
     </div>
   );
 });
@@ -771,13 +816,21 @@ const Column = memo(function Column({ col, cards, avatars, boardLabels, canManag
 /* ── card tile ────────────────────────────────────────────────── */
 const CardTile = memo(function CardTile({ card, avatars, boardLabels, columns, onOpen, onDropCard, onMove, boardId, onReload }) {
   const [menu, setMenu] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [delBusy, setDelBusy] = useState(false);
   const dm = dueMeta(card.due_date, card.completed);
   const labels = (card.label_ids || []).map(id => boardLabels.find(l => l.id === id)).filter(Boolean);
   const priority = labels.find(l => isPriorityId(l.id));
   const customs = labels.filter(l => !isPriorityId(l.id));
   const done = (card.checklist || []).filter(i => i.done).length;
   const total = (card.checklist || []).length;
-  const del = async (e) => { e.stopPropagation(); if (!confirm('Delete this card?')) return; try { await api.delete(`/sotyn-flow/${boardId}/cards/${card.id}`); onReload(); } catch { toast.error('Failed'); } };
+  const del = (e) => { e.stopPropagation(); setConfirmDel(true); };
+  const doDel = async () => {
+    setDelBusy(true);
+    try { await api.delete(`/sotyn-flow/${boardId}/cards/${card.id}`); onReload(); }
+    catch { toast.error('Failed'); }
+    finally { setDelBusy(false); setConfirmDel(false); }
+  };
 
   return (
     <div draggable onDragStart={() => { window.__flowDragId = card.id; }} onDragOver={e => e.preventDefault()} onDrop={e => { e.stopPropagation(); onDropCard(card); }}
@@ -815,6 +868,16 @@ const CardTile = memo(function CardTile({ card, avatars, boardLabels, columns, o
           </div>
         </Modal>
       )}
+      <ConfirmDialog
+        open={confirmDel}
+        busy={delBusy}
+        title="Delete this card?"
+        confirmLabel="Delete"
+        message={<>“{card.title}” and its comments go.</>}
+        note="Can't be undone."
+        onCancel={() => setConfirmDel(false)}
+        onConfirm={doDel}
+      />
     </div>
   );
 });
@@ -870,7 +933,7 @@ function NewBoardModal({ open, onClose, allUsers, user, avatars, onCreated }) {
 }
 
 /* ── board settings / members / labels ────────────────────────── */
-function BoardSettings({ board, allUsers, avatars, canManage, user, isAdmin, boardId, onClose, onReload, onDeleted }) {
+function BoardSettings({ board, allUsers, avatars, canManage, user, isAdmin, boardId, onClose, onReload, onRequestDelete }) {
   const b = board.board;
   const [name, setName] = useState(b.name); const [desc, setDesc] = useState(b.description || '');
   const [memSearch, setMemSearch] = useState('');
@@ -881,7 +944,9 @@ function BoardSettings({ board, allUsers, avatars, canManage, user, isAdmin, boa
   const addMember = (id) => api.post(`/sotyn-flow/${boardId}/members`, { user_ids: [id] }).then(onReload).catch(() => toast.error('Failed'));
   const removeMember = (id) => api.delete(`/sotyn-flow/${boardId}/members/${id}`).then(onReload).catch(e => toast.error(e.response?.data?.error || 'Failed'));
   const setRole = (id, role) => api.put(`/sotyn-flow/${boardId}/members/${id}/role`, { role }).then(onReload).catch(e => toast.error(e.response?.data?.error || 'Failed'));
-  const del = async () => { if (!confirm('Delete this board and everything in it? This cannot be undone.')) return; try { await api.delete(`/sotyn-flow/${boardId}`); onDeleted(); } catch { toast.error('Failed'); } };
+  // Delegates to the parent's shared ConfirmDialog rather than owning a second
+  // delete path — one confirm, one wording, whichever entry point you came from.
+  const del = () => onRequestDelete();
 
   const adminCount = members.filter(m => m.role === 'admin').length;
   const saveLabels = (next) => { setLabels(next); api.put(`/sotyn-flow/${boardId}`, { labels: next }).then(onReload).catch(() => toast.error('Failed')); };

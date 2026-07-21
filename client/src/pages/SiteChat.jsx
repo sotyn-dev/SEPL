@@ -5,10 +5,11 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, mem
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage, FiEdit2, FiArchive, FiRotateCcw } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage, FiEdit2, FiArchive, FiRotateCcw, FiMoreVertical } from 'react-icons/fi';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
@@ -241,6 +242,10 @@ export default function SiteChat() {
   const [busy, setBusy] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
   const [memOpen, setMemOpen] = useState(false);
+  const [groupMenu, setGroupMenu] = useState(false);   // ⋮ group-actions dropdown in the thread header
+  const [confirmKind, setConfirmKind] = useState(null);  // null | 'archive' | 'delete'
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [pendingDelMsg, setPendingDelMsg] = useState(null);   // message staged for the delete confirm
   const [memSearch, setMemSearch] = useState('');
   const [renameVal, setRenameVal] = useState('');
   const [dmOpen, setDmOpen] = useState(false);     // "new direct message" picker
@@ -282,6 +287,7 @@ export default function SiteChat() {
   const mineOnlyRef = useRef(false);            // current "only my chats" toggle, read inside loadGroups without a stale closure
   const archivedRef = useRef(false);            // current Archived-view toggle, same stale-closure reason
   const archivedMountedRef = useRef(false);
+  const loadGroupsRef = useRef(null);           // holds loadGroups so it can re-run itself after a scope change
   const mineMountedRef = useRef(false);         // skip the toggle effect's own fetch on first mount
 
   // Keyset-paginated group list (perf pass — admin-slowness fix). Default: fetch
@@ -315,8 +321,24 @@ export default function SiteChat() {
       else setGroups(incoming);
       setGroupsHasMore(incomingHasMore);
       groupsCursorRef.current = nextCursor;
-    }).catch(() => {}).finally(() => { groupsLoadingRef.current = false; setLoadingGroups(false); });
+    }).catch(() => {}).finally(() => {
+      groupsLoadingRef.current = false; setLoadingGroups(false);
+      // Scope changed WHILE this request was in flight, so two things already went
+      // wrong: the response above was discarded as superseded, AND the toggle's own
+      // loadGroups() was dropped by the in-flight guard at the top. Neither fired,
+      // so the list would sit in the OLD scope indefinitely — "Only chats I'm in"
+      // reads ON while every group is still listed, and nothing self-heals until
+      // the next socket event. Re-run now that the slot is free; each re-run
+      // re-reads the refs, so a burst of toggling converges instead of looping.
+      const stale = qRef.current !== requestQ
+        || mineOnlyRef.current !== requestMine
+        || archivedRef.current !== requestArchived;
+      if (stale) { groupsCursorRef.current = null; loadGroupsRef.current?.(); }
+    });
   }, []);
+  // Self-reference for the re-run above, kept in a ref so the useCallback stays
+  // dependency-free (a direct call would make loadGroups depend on itself).
+  loadGroupsRef.current = loadGroups;
   const reloadUsers = useCallback(() => api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}), []);
   // Cursor pagination (perf pass — S2-B). Default: fetch the most-recent PAGE and
   // REPLACE (thread open / reconnect). { before }: fetch the PAGE older than that
@@ -420,6 +442,7 @@ export default function SiteChat() {
   useLayoutEffect(() => {
     if (!sel) return;
     setText(''); setMention(null); setReplyTo(null); setEditingId(null);   // drop the composer draft + reply + edit when switching threads
+    setGroupMenu(false);                                                    // ...and never leave the ⋮ menu open over a different group
     justSentRef.current = { body: '', at: 0 };         // disarm the send-guard for the new thread
     setMsgs([]); setThreadLoading(true);               // clear the previous thread + show the loader immediately
   }, [sel?.id]);
@@ -641,11 +664,16 @@ export default function SiteChat() {
   };
   // (renderBody / @mention highlighting now lives in the memoised MessageList.)
 
-  const delMsg = useCallback(async (m) => {
-    if (!confirm('Delete this message?')) return;
-    try { await api.delete(`/site-chat/${sel.id}/messages/${m.id}`); loadThread(sel.id); }
+  // Stages the message, then the shared ConfirmDialog does the asking — same
+  // dialog as group archive/delete, so nothing in this page pops a native alert.
+  const delMsg = useCallback((m) => setPendingDelMsg(m), []);
+  const doDelMsg = async () => {
+    if (!pendingDelMsg || !sel) return;
+    setConfirmBusy(true);
+    try { await api.delete(`/site-chat/${sel.id}/messages/${pendingDelMsg.id}`); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  }, [sel?.id, loadThread]);
+    finally { setConfirmBusy(false); setPendingDelMsg(null); }
+  };
   // Edit reuses the bottom composer (WhatsApp-style): load the text into the field,
   // show an "Editing message" bar with an ✕ to cancel, and the send button confirms.
   const startEdit = useCallback((m) => {
@@ -694,23 +722,29 @@ export default function SiteChat() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed to create group'); }
     finally { setBusy(false); }
   };
-  const delGroup = async () => {
-    if (!sel || !confirm(`Delete the group "${sel.name}" and all its messages?`)) return;
-    try { await api.delete(`/site-chat/${sel.id}`); setSel(null); setMemOpen(false); loadGroups(); }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-
-  // Archive / restore — the reversible alternative to Delete. Nothing is removed,
-  // so no destructive confirm is needed on the way in; restoring is one click in
-  // the Archived view.
-  const archiveGroup = async (archive) => {
+  // Both destructive-ish actions go through the SAME confirm dialog, so the only
+  // difference the user sees is the wording and the button colour — which is
+  // exactly the difference that matters (reversible vs permanent). Restore is NOT
+  // confirmed: it only ever puts a group back.
+  const doDelete = async () => {
     if (!sel) return;
+    setConfirmBusy(true);
+    try { await api.delete(`/site-chat/${sel.id}`); toast.success('Group deleted'); setSel(null); setMemOpen(false); loadGroups(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setConfirmBusy(false); setConfirmKind(null); }
+  };
+  const doArchive = async (archive) => {
+    if (!sel) return;
+    setConfirmBusy(true);
     try {
       await api.post(`/site-chat/${sel.id}/${archive ? 'archive' : 'unarchive'}`);
       toast.success(archive ? 'Group archived' : 'Group restored');
       setSel(null); setMemOpen(false); loadGroups();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setConfirmBusy(false); setConfirmKind(null); }
   };
+  const delGroup = () => setConfirmKind('delete');
+  const archiveGroup = (archive) => (archive ? setConfirmKind('archive') : doArchive(false));
 
   // Hidden file input for the profile photo — kept at the top level so BOTH the
   // desktop header button and the mobile (chat-list) avatar button can trigger
@@ -770,18 +804,27 @@ export default function SiteChat() {
                 </button>
               </label>
             )}
-            {/* Archived view — swaps the whole list to archived groups. Archived
-                chats keep every message and can be restored from the header. */}
-            <label className="flex w-fit ml-auto items-center gap-2 mt-2 px-1 text-xs text-gray-500 cursor-pointer select-none">
-              <span>{showArchived ? 'Showing archived' : 'Show archived'}</span>
-              <button type="button" role="switch" aria-checked={showArchived} onClick={() => setShowArchived(v => !v)}
-                className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${showArchived ? 'bg-amber-500' : 'bg-gray-300'}`}>
-                <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showArchived ? 'translate-x-4' : ''}`} />
-              </button>
-            </label>
           </div>
           <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')} archived={showArchived}
             hasMore={groupsHasMore} loadingMore={loadingGroups} onLoadMore={() => loadGroups({ more: true })} onSelect={setSel} />
+          {/* Archived switch — pinned to the FOOT of the list column, not up beside
+              the search box where it read as a filter on the search and was easy to
+              leave on by accident. Outside GroupList's scroll container, so it stays
+              put however far the list scrolls.
+              A SWITCH with a fixed label, not a button whose label flips: the label
+              stays "Show archived" in both states so it never has to be re-read, and
+              it matches the role="switch" idiom "Only chats I'm in" already uses
+              directly above. The whole bar is the hit target, and it goes amber when
+              on — the list you're looking at is NOT your normal one, and that has to
+              be unmissable. */}
+          <button type="button" role="switch" aria-checked={showArchived} onClick={() => setShowArchived(v => !v)}
+            className={`flex-shrink-0 border-t px-3 py-2.5 flex items-center justify-center gap-2 text-xs font-semibold transition-colors ${
+              showArchived ? 'bg-amber-100 text-amber-900 hover:bg-amber-200' : 'text-gray-500 hover:bg-gray-50'}`}>
+            <FiArchive size={14} /> <span>Show archived</span>
+            <span className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${showArchived ? 'bg-amber-500' : 'bg-gray-300'}`}>
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showArchived ? 'translate-x-4' : ''}`} />
+            </span>
+          </button>
         </div>
 
         {/* ── Thread ────────────────────────────────────── */}
@@ -819,6 +862,24 @@ export default function SiteChat() {
                       <div className="text-[11px] text-white/80 truncate">{members.length ? members.map(m => m.name).filter(Boolean).slice(0, 5).join(', ') : 'tap to add members'}</div>
                     </button>
                     <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="Members"><FiUsers size={18} /></button>
+                    {/* Group actions — same ⋮ dropdown SOTYN Flow uses for a board, so
+                        the two modules behave alike. Archive/Delete live here rather
+                        than buried under the members modal, which is where you go to
+                        manage PEOPLE. Non-DM only: a DM can't be archived, and the
+                        members modal it would sit beside doesn't exist for DMs. */}
+                    {canDelete('site_chat') && (
+                      <div className="relative">
+                        <button onClick={() => setGroupMenu(o => !o)} className="p-1.5 rounded hover:bg-white/15" title="Group actions"><FiMoreVertical size={18} /></button>
+                        {groupMenu && (
+                          <div className="absolute right-0 z-30 mt-1 w-44 rounded-lg bg-white shadow-lg border text-gray-700 py-1 text-sm" onMouseLeave={() => setGroupMenu(false)}>
+                            {sel?.archived_at
+                              ? <button onClick={() => { setGroupMenu(false); archiveGroup(false); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2"><FiRotateCcw size={14} /> Restore group</button>
+                              : <button onClick={() => { setGroupMenu(false); archiveGroup(true); }} className="w-full text-left px-3 py-2 hover:bg-amber-50 text-amber-700 flex items-center gap-2"><FiArchive size={14} /> Archive group</button>}
+                            <button onClick={() => { setGroupMenu(false); delGroup(); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2 border-t"><FiTrash2 size={14} /> Delete group</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -998,6 +1059,35 @@ export default function SiteChat() {
         </div>
       </Modal>
 
+      {/* ── Archive / Delete confirmation ─────────────────── */}
+      {/* Same component for both; the wording carries the difference. Archive
+          says what changes AND that nothing is lost; Delete says permanent. */}
+      <ConfirmDialog
+        open={!!confirmKind && !!sel}
+        busy={confirmBusy}
+        tone={confirmKind === 'delete' ? 'danger' : 'warning'}
+        title={confirmKind === 'delete' ? <>Delete “{sel?.name}”?</> : <>Archive “{sel?.name}”?</>}
+        confirmLabel={confirmKind === 'delete' ? 'Delete' : 'Archive'}
+        message={confirmKind === 'delete'
+          ? <>The chat and <strong>all its messages</strong> go, for everyone.</>
+          : <>It moves to <strong>Archived</strong> — out of the list, no badges, read-only.</>}
+        note={confirmKind === 'delete'
+          ? "Can't be undone. Archive it instead if you just want it out of the way."
+          : 'Nothing is deleted. Bring it back any time.'}
+        onCancel={() => setConfirmKind(null)}
+        onConfirm={() => (confirmKind === 'delete' ? doDelete() : doArchive(true))}
+      />
+      <ConfirmDialog
+        open={!!pendingDelMsg}
+        busy={confirmBusy}
+        title="Delete this message?"
+        confirmLabel="Delete"
+        message="It disappears for everyone in the chat."
+        note="Can't be undone."
+        onCancel={() => setPendingDelMsg(null)}
+        onConfirm={doDelMsg}
+      />
+
       {/* ── Members ───────────────────────────────────────── */}
       {sel && (
         <Modal isOpen={memOpen} onClose={() => setMemOpen(false)} title={`Members · ${sel.name}`}>
@@ -1038,15 +1128,10 @@ export default function SiteChat() {
                 </div>
               </div>
             )}
-            {/* Archive sits ABOVE Delete and is offered first — it is reversible,
-                Delete is not. Never shown for a DM (the server rejects it too:
-                archiving would hide the conversation for the other person). */}
-            {canDelete('site_chat') && !sel?.is_dm && (
-              showArchived
-                ? <button onClick={() => archiveGroup(false)} className="text-xs text-emerald-700 font-semibold flex items-center gap-1.5 pt-1"><FiRotateCcw size={13} /> Restore group</button>
-                : <button onClick={() => archiveGroup(true)} className="text-xs text-amber-700 font-semibold flex items-center gap-1.5 pt-1"><FiArchive size={13} /> Archive group</button>
-            )}
-            {canDelete('site_chat') && <button onClick={delGroup} className="text-xs text-red-600 font-semibold flex items-center gap-1.5 pt-1"><FiTrash2 size={13} /> Delete group</button>}
+            {/* Archive / Delete deliberately NOT here — they live in the ⋮ menu in
+                the thread header. This modal is for managing PEOPLE; keeping the
+                destructive actions in one place avoids two routes to the same
+                irreversible button. */}
           </div>
         </Modal>
       )}
