@@ -148,8 +148,12 @@ router.put('/record/:module/:recordId', (req, res) => {
       // else the live switch.
       const l2on = ('l2' in inMap && inMap['l2'].enabled !== undefined)
         ? enOf(inMap['l2'].enabled) === 1 : l2EnabledRaci(db);
-      if (l2on && !l1resp) return res.status(400).json({ error: 'Set the Indent L1 Approver (a Responsible name) before turning L2 on.' });
-      if (l2on && !l2resp) return res.status(400).json({ error: 'Pick a Responsible for the Indent L2 Approver before turning it on.' });
+      // L1/L2 may rely on the seeded approver (Indent Approval Role = l1/l2) when
+      // no explicit RACI Responsible is set — mirror getL1Approver/getL2Approver
+      // so the editor's "falls back to default" matches what save allows.
+      const hasRoleUser = (role) => { try { return !!db.prepare("SELECT 1 FROM users WHERE approval_role=? AND active=1 LIMIT 1").get(role); } catch (_) { return false; } };
+      if (l2on && !l1resp && !hasRoleUser('l1')) return res.status(400).json({ error: 'Set an L1 approver (a Responsible name, or a user with Indent Approval Role = L1) before turning L2 on.' });
+      if (l2on && !l2resp && !hasRoleUser('l2')) return res.status(400).json({ error: 'Set an L2 approver (a Responsible name, or a user with Indent Approval Role = L2) before turning L2 on.' });
     }
   }
 

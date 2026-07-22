@@ -59,18 +59,24 @@ function stepsFor(db, moduleKey) {
   return out;
 }
 
-// Per-step ON/OFF for the RACI board + scorecard (mam 2026-07-21: "every step
-// on/off button, same all erp"). A step turned OFF is hidden from the board and
-// excluded from scoring — it does NOT change the underlying module workflow.
-// Stored on the whole-module default row (record_id=0) as step_enabled=0.
-// Returns the SET of disabled step keys for a module (default = enabled).
+// Steps hidden from the RACI board + scorecard. The per-step ON/OFF *reporting*
+// toggle was RETIRED (mam 2026-07-22: "retire report toggle switches … like
+// before yesterday"): reporting no longer honors step_enabled for any step —
+// EXCEPT the indent CRM stage. CRM's toggle drops the whole approval stage from
+// the real workflow (procurement.crmStageActive), so a skipped CRM produces no
+// event and has no viable reporter; reporting must follow it and hide it when off.
+// L2 follows the same principle upstream via stepsFor (the l2 step is simply
+// absent when indent_l2_enabled is off). Every other step is ALWAYS reported.
 function disabledStepKeys(db, moduleKey) {
   const off = new Set();
-  try {
-    for (const r of db.prepare(
-      "SELECT step_key FROM raci_assignment WHERE module=? AND record_id=0 AND step_enabled=0"
-    ).all(moduleKey)) off.add(r.step_key);
-  } catch (_) { /* column not added yet → nothing disabled */ }
+  if (moduleKey === 'indent_to_dispatch') {
+    try {
+      const r = db.prepare(
+        "SELECT step_enabled FROM raci_assignment WHERE module='indent_to_dispatch' AND record_id=0 AND step_key='crm'"
+      ).get();
+      if (r && r.step_enabled === 0) off.add('crm');   // CRM skipped → drop it from reporting too
+    } catch (_) { /* column/row not present → CRM active → nothing hidden */ }
+  }
   return off;
 }
 
