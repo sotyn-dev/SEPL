@@ -6071,6 +6071,18 @@ in your first week. If a process feels broken, raise a Help Ticket
     console.warn('[rental_tools] migrations skipped (non-fatal):', e.message);
   }
 
+  // Indent → Dispatch approval flow settings (2026-07-23) — the single home for
+  // "who may approve at each gate" + the optional gate switches. Replaces the
+  // four scattered authority sources (raci_assignment, users.approval_role,
+  // the hardcoded PO_APPROVERS names, crm_funnel role) and the two on/off
+  // sources (app_settings.indent_l2_enabled, raci_assignment.step_enabled).
+  try {
+    const { runIndentFlowSettingsMigrations } = require('./indentToDispatchSchema');
+    runIndentFlowSettingsMigrations(db);
+  } catch (e) {
+    console.warn('[indent_flow_settings] migrations skipped (non-fatal):', e.message);
+  }
+
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────
   // "in rec. against delivery note show here ok site name also show here
   // delivery note number and against it we will upload receiving".
