@@ -100,7 +100,7 @@ function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }
     return (
       <div className="flex items-baseline gap-1 text-[11px]">
         <span className="text-emerald-600 font-mono w-3">✓</span>
-        <span className="font-semibold text-gray-600 w-5">{label}</span>
+        <span className="font-semibold text-gray-600 w-6">{label}</span>
         <span className="text-emerald-700 font-medium truncate">{name || '—'}</span>
         <span className="text-[10px] text-gray-500 ml-auto">{fmt(at)}</span>
       </div>
@@ -110,7 +110,7 @@ function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }
     return (
       <div className="flex items-baseline gap-1 text-[11px]" title={reason || ''}>
         <span className="text-red-600 font-mono w-3">✗</span>
-        <span className="font-semibold text-gray-600 w-5">{label}</span>
+        <span className="font-semibold text-gray-600 w-6">{label}</span>
         <span className="text-red-700 font-medium truncate">{name || '—'}</span>
         {reason && <span className="text-[10px] text-red-500 italic ml-auto truncate max-w-[100px]">“{reason.slice(0, 18)}{reason.length > 18 ? '…' : ''}”</span>}
       </div>
@@ -120,7 +120,7 @@ function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }
   return (
     <div className="flex items-baseline gap-1 text-[11px]">
       <span className={`font-mono w-3 ${waiting ? 'text-gray-300' : 'text-amber-500'}`}>●</span>
-      <span className="font-semibold text-gray-500 w-5">{label}</span>
+      <span className="font-semibold text-gray-500 w-6">{label}</span>
       <span className="text-gray-500 italic truncate">{name || (waiting ? 'Waiting' : 'Pending')}</span>
     </div>
   );
@@ -2637,7 +2637,7 @@ export default function Procurement() {
                             name={i.crm_by_name} at={i.crm_at}
                             isReject={i.status === 'rejected' && i.crm_status === 'rejected'} reason={i.crm_reason || i.rejection_reason} />
                         )}
-                        <ApprovalLevelRow label={i.l2_enabled ? 'L1' : 'Approval'} status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
+                        <ApprovalLevelRow label="L1" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
                           waiting={isCrmTwoLevel && i.crm_status !== 'approved' && i.l1_status === 'pending'}
                           isReject={i.status === 'rejected' && i.l1_status === 'rejected'} reason={i.rejection_reason} />
                         {/* L2 row shows when the switch is ON, or for a genuinely
@@ -2824,7 +2824,7 @@ export default function Procurement() {
                           />
                         )}
                         <ApprovalLevelRow
-                          label={i.l2_enabled ? 'L1' : 'Approval'}
+                          label="L1"
                           status={i.l1_status}
                           name={i.l1_by_name || i.approver_names?.l1}
                           at={i.l1_at}
