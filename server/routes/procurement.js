@@ -68,20 +68,13 @@ function fireIndent(db, indentId, eventKey, extra = {}) {
 // mam's requirement (2026-04-23): site can create indent, nothing else.
 const needsApprove = requirePermission('procurement', 'approve');
 
-// L1 approver identity (mam 2026-07-21). L2 approval has been removed — L1 is
-// now the single, FINAL sign-off on an indent. WHO the L1 approver is comes
-// from the ⚙ Responsible (RACI) board's whole-module default (record_id=0),
-// "L1 Approval" step, for the indent_to_dispatch module:  mam's words —
-// "if in L1 i change responsible name then he can approve".  Only that named
-// person (plus admin) may approve. If mam hasn't named anyone yet we fall back
-// to the legacy approval_role='l1' user so approvals never lock up. Returns
-// { id, name, source }.
+// Indent → Dispatch approval gates — the catalogue + the only reader of the
+// gate settings tables. Every "who may act here" question routes through it.
 const approvalGates = require('../utils/indentToDispatchGates');
 
 // Who may act at an indent gate, as a LIST (2026-07-23).
 //   1. ⚙ Approval Settings — authoritative the moment anyone is named there.
-//   2. Legacy fallback — the existing single approver: the ⚙ Responsible (RACI)
-//      name, then users.approval_role. Both untouched below.
+//   2. Legacy fallback — the single users.approval_role user for that level.
 //
 // An EMPTY settings list means "not configured yet", NOT "nobody", so behaviour
 // is identical until someone is actually named. When the legacy half is deleted
@@ -96,14 +89,20 @@ function gateApproverList(db, gate, legacyFn) {
   return legacy && legacy.id ? [{ id: legacy.id, name: legacy.name }] : [];
 }
 
-// Legacy L1 approver — the pre-Phase-5 mechanism, kept only as the fallback for
+// Legacy L1 approver — the pre-Phase-5 mechanism, kept ONLY as the fallback for
 // a database where no L1 approver has been named in ⚙ Approval Settings yet.
+//
+// NAMED "legacy" ON PURPOSE. It answers "who is the single approval_role='l1'
+// user", NOT "who may approve L1" — that is gateApproverList(db,'l1',…), which
+// consults the settings list first. The old name (getL1Approver) read like the
+// authority and got called directly in two places that then silently ignored
+// every approver named on the settings screen.
 //
 // It NO LONGER reads raci_assignment. Between 2026-07-21 and 2026-07-23 the ⚙
 // Responsible (RACI) Responsible name decided who could approve; that made a
 // reporting table load-bearing for authorization and left "who approves L1?"
 // answerable only by joining two systems. RACI is reporting again.
-function getL1Approver(db) {
+function legacyL1Approver(db) {
   const legacy = db.prepare("SELECT id, name FROM users WHERE approval_role='l1' AND active=1 LIMIT 1").get();
   return legacy ? { id: legacy.id, name: legacy.name, source: 'role' } : { id: null, name: null, source: 'none' };
 }
@@ -113,16 +112,19 @@ function getL1Approver(db) {
 // SOURCE OF TRUTH (2026-07-23) = indent_to_dispatch_settings, key
 // 'approval.l2.enabled', set in Procurement → ⚙ Approval Settings.
 //
-// app_settings.indent_l2_enabled is now only a MIRROR, kept written so the three
-// readers that still consult it stay correct until they're migrated:
-// raciModules.l2EnabledRaci (RACI board step list), dashboards.js (CMD one-click
-// approve) and the ⚙ Responsible editor's display. It is also the fallback below,
-// so a database where the new setting has never been saved keeps its existing
-// behaviour rather than silently reverting to the catalogue default.
+// app_settings.indent_l2_enabled survives for ONE reason: it is the fallback
+// inside effectiveEnabled(), so a database that has never saved the new setting
+// keeps its existing L2 state instead of silently reverting to the catalogue
+// default (OFF). Nothing else reads it — the three consumers this mirror was
+// originally kept for (raciModules.l2EnabledRaci, dashboards.js, the ⚙
+// Responsible editor's L2 banner) were all deleted or migrated on 2026-07-23.
 //
-// NOTE: the ⚙ Responsible L2 step toggle (raci.js) writes ONLY the mirror, so it
-// no longer changes the flow. That screen is due to be decommissioned; until it
-// is, ⚙ Approval Settings is the only place that actually flips L2.
+// So the mirror write in PUT /approval-settings now feeds only this fallback.
+// Retiring it takes a one-time import of the old key into the settings table;
+// until that lands, both halves stay.
+//
+// NOTE: saving the ⚙ Responsible (RACI) board no longer touches the L2 switch at
+// all. ⚙ Approval Settings is the only place that flips L2.
 function l2Enabled(db) {
   return approvalGates.effectiveEnabled(db, 'l2');
 }
@@ -133,10 +135,10 @@ function l2Enabled(db) {
 // at raise time and the billable po_items row added on CRM approval, so the
 // revenue side of a client-billable Extra never opened.)
 
-// Legacy L2 approver — same as getL1Approver: the pre-Phase-5 mechanism, kept
-// only as the fallback when nobody is named in ⚙ Approval Settings. No longer
-// reads raci_assignment.
-function getL2Approver(db) {
+// Legacy L2 approver — same contract as legacyL1Approver: the pre-Phase-5
+// mechanism, the fallback when nobody is named in ⚙ Approval Settings. Not the
+// authority — that is gateApproverList(db,'l2',…). No longer reads raci_assignment.
+function legacyL2Approver(db) {
   const legacy = db.prepare("SELECT id, name FROM users WHERE approval_role='l2' AND active=1 LIMIT 1").get();
   return legacy ? { id: legacy.id, name: legacy.name, source: 'role' } : { id: null, name: null, source: 'none' };
 }
@@ -771,20 +773,29 @@ router.get('/indents', (req, res) => {
   // see only the ones they raised. Mam toggles this by checking / unchecking
   // 'approve' on the role's procurement permissions.
   const isAdmin = req.user.role === 'admin';
-  // The designated L1 approver (from the ⚙ Responsible RACI default) must be
-  // able to SEE every indent even if their role lacks procurement.approve —
-  // otherwise "change the L1 Responsible name → he can approve" would leave the
-  // named person with an empty list (mam 2026-07-21). getL1Approver used again
-  // below for approver_names / l1_approver_id; cheap enough to call twice.
-  const isL1Approver = (() => {
+  // ANYONE named on an indent approval gate must be able to SEE every indent,
+  // even if their role lacks procurement.approve — otherwise naming an approver
+  // hands them the right to approve and an empty list to approve from (mam
+  // 2026-07-21, when the source was still the ⚙ Responsible RACI board).
+  //
+  // Resolved through gateApproverList — the SAME function the approve gate and
+  // the button-rendering payload use — so "can act" and "can see" can never
+  // drift apart. It used to call the legacy single-user lookups directly, which
+  // silently excluded everyone named on the settings screen: they could approve,
+  // but had nothing on screen to approve. Going through the resolver also means
+  // a superseded legacy approver stops seeing all indents the moment someone is
+  // named on the gate, instead of keeping see-all they can no longer act on.
+  //
+  // L2 counts only while the L2 switch is ON; when it is OFF the L2 list is not
+  // part of the flow and must not widen visibility.
+  const isGateApprover = (() => {
     try {
-      if (getL1Approver(db).id === req.user.id) return true;
-      // The L2 approver (when the L2 switch is ON) must also see indents.
-      if (l2Enabled(db) && getL2Approver(db).id === req.user.id) return true;
+      if (gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id)) return true;
+      if (l2Enabled(db) && gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id)) return true;
       return false;
     } catch (_) { return false; }
   })();
-  const canSeeAll = isAdmin || isL1Approver || (() => {
+  const canSeeAll = isAdmin || isGateApprover || (() => {
     const r = db.prepare(`
       SELECT MAX(CASE WHEN rp.can_approve = 1 OR rp.can_see_all = 1 THEN 1 ELSE 0 END) as ok
       FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
@@ -1070,15 +1081,15 @@ router.get('/indents', (req, res) => {
   // Names of the currently-designated L1 / L2 approvers — surfaced so the
   // UI can show "Awaiting Nitin Jain ji" on rows where nobody has acted
   // yet. Pulled once per request, not per row.
-  // L1 approver comes from the ⚙ Responsible (RACI) module default (mam
-  // 2026-07-21). L2 approver only matters when the L2 switch is ON.
+  // Approvers come from ⚙ Approval Settings, else the legacy approval_role user.
+  // L2 only matters when the L2 switch is ON.
   const l2On = l2Enabled(db);
   // Approver LISTS — ⚙ Approval Settings, else the legacy single approver.
   // A gate can name several people now, so the ids arrays are what the buttons
   // test; the single *_approver_id fields stay only so an older cached bundle
   // keeps gating correctly against this server.
-  const l1List = gateApproverList(db, 'l1', getL1Approver);
-  const l2List = l2On ? gateApproverList(db, 'l2', getL2Approver) : [];
+  const l1List = gateApproverList(db, 'l1', legacyL1Approver);
+  const l2List = l2On ? gateApproverList(db, 'l2', legacyL2Approver) : [];
   // CRM named approvers — an ADDITIONAL allow beside the existing crm_funnel role
   // and the project's own CRM person. No fallback needed: an empty list simply
   // grants nobody extra, and the original rule still answers on its own.
@@ -1110,11 +1121,17 @@ router.get('/indents', (req, res) => {
   })));
 });
 
-// ─── L2 approval on/off switch (mam 2026-07-21) ──────────────────────
-// A self-serve toggle so mam / management can turn the indent's second
-// approval level on or off without a code change. Stored in app_settings.
-// GET is open to any authenticated user (the UI needs it to render the
-// right buttons); PUT is admin-only.
+// ─── L2 approval on/off switch (mam 2026-07-21) — DEAD, NO CALLERS ──────
+// This was the self-serve L2 toggle, stored in app_settings. Superseded
+// 2026-07-23 by ⚙ Approval Settings (PUT /approval-settings), which stores the
+// authoritative value in indent_to_dispatch_settings. The ⚙ Responsible banner
+// that was this route's only client is gone, so nothing calls either verb.
+//
+// DO NOT wire anything new to the PUT: it writes ONLY the app_settings mirror,
+// so it would flip the fallback while leaving the real setting untouched — the
+// switch would appear to move and the flow would ignore it. Delete both verbs
+// with the rest of the mirror retirement. (The GET is at least harmless — it
+// reports the effective value via l2Enabled.)
 router.get('/l2-setting', (req, res) => {
   res.json({ enabled: l2Enabled(getDb()) });
 });
@@ -1134,10 +1151,16 @@ router.put('/l2-setting', (req, res) => {
 // flow" and the optional gate switches. Backs Procurement → ⚙ Approval Settings.
 //
 // ENFORCED for indent L1 / L2 (see gateApproverList near the top): once anyone is
-// named on those gates here, they are the approver. CRM, the PO levels and Revoke
-// are NOT wired yet — they still resolve from crm_funnel access, the hardcoded PO
-// names and users.approval_role respectively. The L2 on/off switch also still
-// comes from app_settings.indent_l2_enabled.
+// named on those gates here, they are the approver — for approving, for rejecting,
+// for revoke / re-approve, and for SEEING the indents waiting on them. The L2
+// on/off switch is stored here too and is authoritative.
+//
+// Revoke / re-approve is NOT a gate here — it follows the L1/L2 lists above
+// automatically (see canRevoke), so there is nothing to assign.
+//
+// NOT wired yet: the CRM gate still also admits anyone with crm_funnel access or
+// the project's Client-PO CRM person (naming people here only ADDS to that); and
+// the PO levels still resolve from the hardcoded PO_APPROVERS names.
 //
 // Reads are open to any signed-in user (approver names already appear on the
 // indent list); writes are admin-only — this is authorization config.
@@ -1165,13 +1188,12 @@ router.put('/approval-settings', (req, res) => {
     const db = getDb();
     const gates = approvalGates.writeAll(db, req.body?.gates, req.user.id);
     // L2 stage ON/OFF. writeAll has already stored the authoritative value in
-    // indent_to_dispatch_settings ('approval.l2.enabled'); this ALSO writes the
-    // app_settings mirror so the readers not yet migrated stay correct:
-    // raciModules.l2EnabledRaci (RACI board step list), dashboards.js (the CMD
-    // one-click approve) and the ⚙ Responsible editor's display. Without it the
-    // board would show an L2 step the flow skips, and the one-click would stamp
-    // l2_status='n/a' on an indent that still needs L2.
-    // Drop this write once those three read the settings table directly.
+    // indent_to_dispatch_settings ('approval.l2.enabled'); this ALSO keeps the
+    // app_settings mirror in step. Nothing reads that key any more EXCEPT the
+    // fallback inside effectiveEnabled(), so the mirror exists purely to stop
+    // the two from disagreeing while the fallback is still there. Drop this
+    // write together with the fallback, once a one-time import has seeded
+    // 'approval.l2.enabled' on every database.
     const l2Enabled = req.body?.gates?.l2?.enabled;
     if (l2Enabled !== undefined) {
       db.prepare(`INSERT INTO app_settings (key, value) VALUES ('indent_l2_enabled', ?)
@@ -1678,16 +1700,35 @@ router.put('/indents/:id', (req, res) => {
       ).get(id);
 
       // ── Re-approve / Re-reject of a FINAL indent (mam 2026-06-04) ──
-      // Allowed for ADMIN, the legacy L2 approver (mam's MD), OR the current
-      // RACI L1 approver (mam 2026-07-21: L2 removed, so the L1 sign-off owner
-      // inherits the revoke power).  Re-approve flips a REJECTED indent back to
-      // approved (revoke the rejection) without re-raising it.
+      // Revoke belongs to ADMIN and to whoever is CURRENTLY the final signer —
+      // and only them. The L2 switch decides which that is, so exactly one
+      // approver level holds revoke at a time:
+      //   L2 ON  → L2 is the final sign-off → L2 approvers may revoke (L1 may not)
+      //   L2 OFF → L1 is the final sign-off → L1 approvers may revoke (L2 may not)
+      // Re-approve flips a REJECTED indent back to approved (revoke the
+      // rejection) without re-raising it.
+      //
+      // WHY BOTH CLAUSES ARE GATED ON l2On. The original 2026-06-04 rule was
+      // "admin + the MD (approval_role='l2')", written when there was NO L2
+      // switch — so "the MD, always" simply meant "the one final signer". Once
+      // L2 became togglable, an ungated MD clause contradicts L2 OFF: it would
+      // let an L2 approver revoke a flow that currently has no L2 stage. Gating
+      // both ends keeps authority with the active final signer and leaves none
+      // stranded on the inactive level. (Phase 5, 2026-07-21, had ADDED an
+      // ungated L1 clause on top of the ungated MD clause — with L2 ON that let
+      // L1 alone unwind a two-signature indent, the mirror of the same bug.)
+      //
+      // Both clauses resolve through gateApproverList — the SAME resolver the
+      // approve gate uses — so "who may revoke" and "who may approve" name the
+      // same people. Admin covers any indent stranded by a switch flip after it
+      // was signed (authority follows the current switch, not the old signature,
+      // consistent with canActL2 in the forward path).
       const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
       const isAdminActor = actorRow.role === 'admin' || req.user.role === 'admin';
-      const l2On = l2Enabled(db);   // L2 switch state (mam 2026-07-21)
-      const revokeL1 = getL1Approver(db);
-      const canRevoke = isAdminActor || actorRow.approval_role === 'l2'
-        || (revokeL1.id != null && req.user.id === revokeL1.id);
+      const l2On = l2Enabled(db);   // ERP-wide L2 switch — ⚙ Approval Settings (rule: mam 2026-07-21)
+      const canRevoke = isAdminActor
+        || ( l2On && gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id))
+        || (!l2On && gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id));
       // Re-approve fires for a REJECTED indent (revoke the rejection) OR an
       // already-APPROVED one (re-confirm — mam 2026-06-04 wanted it on
       // approved indents too).  mam (2026-06-04 follow-up): a re-approve can
@@ -1699,10 +1740,24 @@ router.put('/indents/:id', (req, res) => {
         // to issue items from store. Re-approve flips it back to 'approved'
         // and applies the from-store split; the already-sent vendor PO must be
         // reduced/cancelled separately for the store-issued qty.
-        if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve this indent.' });
+        if (!canRevoke) return res.status(403).json({ error: 'Only an admin or an indent approver can re-approve this indent. Approvers are set in ⚙ Approval Settings.' });
         isReapprove = true;
-        // When L2 is OFF, mark l2 'n/a' (no stage); when ON, mark it approved
-        // (admin/approver re-confirm covers both levels). mam 2026-07-21.
+        // Whether THIS indent has an L2 stage is a property of the indent, fixed
+        // when it was raised (l2_status starts 'pending' if L2 was on then, else
+        // NULL — see the create path), NOT of today's global switch. Re-approve
+        // must re-confirm the indent's OWN state, so we drive l2 off cur2, not
+        // l2On. Using l2On here corrupted the record two ways:
+        //   • raised L2-ON, switch later OFF → l2On=false wiped l2_status to 'n/a'
+        //     but the l2_at/l2_by arms (guarded on the same flag) did NOT clear,
+        //     leaving 'n/a' still carrying a real approver + timestamp, and a
+        //     genuine L2 sign-off erased from the status.
+        //   • raised L2-OFF, switch later ON → l2On=true stamped l2_status
+        //     ='approved' + l2_by=<re-approver> on an indent that never had an L2
+        //     stage, inventing a second signature that never happened.
+        // indentHasL2 is true only for a row that actually reached an L2 verdict
+        // ('approved'/'rejected'); 'pending' can't appear here (it means the
+        // indent is still at l1_approved, not a final state this branch fires on).
+        const indentHasL2 = cur2.l2_status != null && cur2.l2_status !== 'n/a';
         db.prepare(
           `UPDATE indents SET
                l1_status='approved', l1_at=COALESCE(l1_at, CURRENT_TIMESTAMP), l1_by=COALESCE(l1_by, ?),
@@ -1711,30 +1766,29 @@ router.put('/indents/:id', (req, res) => {
                l2_by=CASE WHEN approval_policy IN ('two_level','crm_two_level') AND ?='1' THEN COALESCE(l2_by, ?) ELSE l2_by END,
                crm_status=CASE WHEN approval_policy='crm_two_level' THEN 'approved' ELSE crm_status END
            WHERE id=?`
-        ).run(req.user.id, l2On ? 'approved' : 'n/a', l2On ? '1' : '0', l2On ? '1' : '0', req.user.id, id);
+        ).run(req.user.id, indentHasL2 ? 'approved' : 'n/a', indentHasL2 ? '1' : '0', indentHasL2 ? '1' : '0', req.user.id, id);
         // do NOT return — fall through to the legacy approve path below.
       }
       // Re-reject: revoking an ALREADY-APPROVED indent is limited to admin or
       // the L2 approver (MD) — hard server gate, not just the hidden UI button.
       if (status === 'rejected' && cur2 && cur2.status === 'approved' && !canRevoke) {
-        return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can revoke (re-reject) an already-approved indent.' });
+        return res.status(403).json({ error: 'Only an admin or an indent approver can revoke (re-reject) an already-approved indent. Approvers are set in ⚙ Approval Settings.' });
       }
 
       if (!isReapprove && cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {
         const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
         const isAdminUser = actor.role === 'admin';
-        // L1 = the RACI-designated approver (mam 2026-07-21) or admin. L2 has
-        // been removed; canActL2 now only governs the drain of any legacy row
-        // still parked at l1_approved, so it mirrors canActL1.
+        // L1 = anyone named on the gate in ⚙ Approval Settings (else the legacy
+        // approval_role='l1' user), or admin.
         // Membership, not identity — a gate can name several approvers now. Same
         // resolver the list payload uses, so the rendered buttons and this check
         // can never disagree.
-        const l1Allowed = gateApproverList(db, 'l1', getL1Approver);
+        const l1Allowed = gateApproverList(db, 'l1', legacyL1Approver);
         const canActL1 = isAdminUser || l1Allowed.some(u => u.id === actor.id);
         // L2 approver (only when the L2 switch is ON). When L2 is OFF, canActL2
         // mirrors canActL1 so the L1 owner / admin can still drain any legacy row
         // parked at l1_approved.
-        const l2Allowed = gateApproverList(db, 'l2', getL2Approver);
+        const l2Allowed = gateApproverList(db, 'l2', legacyL2Approver);
         const canActL2 = l2On
           ? (isAdminUser || l2Allowed.some(u => u.id === actor.id))
           : canActL1;
@@ -1978,10 +2032,10 @@ router.put('/indents/:id', (req, res) => {
           // the L1 branch reuses without changes.
           if (effectiveStatus === 'submitted' && cur2.l1_status === 'pending'
               && (cur2.approval_policy !== 'crm_two_level' || cur2.crm_status === 'approved')) {
-            // L1 approve — gated by the RACI L1 approver / admin.
+            // L1 approve — gated by the L1 approver list / admin.
             if (!canActL1) {
-              // Surface WHO is blocked and WHY so admin can fix it from the
-              // ⚙ Responsible board without SSHing into the box.
+              // Surface WHO is blocked and WHY so admin can fix it from
+              // ⚙ Approval Settings without SSHing into the box.
               const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
               return res.status(403).json({
                 error: `You (${actorName}) can't approve ${l2On ? 'L1' : 'this indent'}. ${l2On ? 'L1 a' : 'A'}pprovers: ${whoFor(l1Allowed)}. Set in ⚙ Approval Settings.`,
@@ -2008,7 +2062,7 @@ router.put('/indents/:id', (req, res) => {
             // no return — legacy approve path below finalises the indent.
           } else if (cur2.status === 'l1_approved' && cur2.l2_status !== 'rejected') {
             if (l2On) {
-              // L2 approve (switch ON) — gate by the RACI L2 approver + block the
+              // L2 approve (switch ON) — gate by the L2 approver list + block the
               // L1 approver from also doing L2 (needs a second pair of eyes).
               if (!canActL2) {
                 const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
@@ -2755,14 +2809,37 @@ router.put('/indents/:id', (req, res) => {
 //   2. delete the Stock Issue Note(s)
 //   3. merge each store child back into its parent line at full qty
 //      (or flip a 100%-from-store line back to source='procure')
-// Admin or L2 (MD) only — same gate as re-approve. Idempotent: a no-op
-// when the indent has no store issues.
+// WHO MAY RESET — a SUPERSET of who may re-approve, never a subset. Resetting a
+// store issue only happens INSIDE a re-approve ("on re-approve let me edit qty" —
+// mam 2026-06-04): it is the edit step of that action, not a separate one. So
+// whoever can re-approve must be able to reset, or the wheel jams — you could
+// start the re-approve but not perform the qty edit it exists to allow.
+//
+// The gate therefore mirrors re-approve's active-final-signer rule and ADDS the
+// L2 approver as an always-on safeguard:
+//   admin                     — always
+//   L1, only while L2 is OFF   — the final signer then, so also the re-approver
+//   L2, always                 — the standing stock-correction authority; moving
+//                                real stock stays available to it in either state
+// Set math: L2 OFF → {admin,L1,L2} ⊇ re-approve {admin,L1};  L2 ON → {admin,L2}
+// = re-approve {admin,L2}. The re-approver is never blocked. (The extra L2-when-
+// off members are unreachable via the UI — the reset button lives in the
+// re-approve modal, gated on the re-approve rule — so "L2 always" is a defensive
+// safety-valve for the stock authority, not a live half-action.)
+//
+// Source: ⚙ Approval Settings, else the legacy approval_role user per level. In
+// production today no L2 approver is set and L2 is OFF, so this resolves to
+// admin ∪ the L1 approver. Idempotent: a no-op when the indent has no store issues.
 router.post('/indents/:id/reset-store-issue', (req, res) => {
   const db = getDb();
   const id = +req.params.id;
-  const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
-  const canRevoke = actorRow.role === 'admin' || req.user.role === 'admin' || actorRow.approval_role === 'l2';
-  if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can reset a store issue.' });
+  const isAdminActor = req.user.role === 'admin'
+    || db.prepare('SELECT role FROM users WHERE id=?').get(req.user.id)?.role === 'admin';
+  const l2On = l2Enabled(db);
+  const canReset = isAdminActor
+    || (!l2On && gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id))
+    ||          gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id);  // L2 — always (safeguard)
+  if (!canReset) return res.status(403).json({ error: 'Only an admin, the L2 approver, or (while L2 is off) the L1 approver can reset a store issue. Approvers are set in ⚙ Approval Settings.' });
 
   const children = db.prepare("SELECT * FROM indent_items WHERE indent_id=? AND source='store'").all(id);
   if (!children.length) return res.json({ message: 'No store issues to reset', reversed: 0, reversed_qty: 0 });

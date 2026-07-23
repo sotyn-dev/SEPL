@@ -52,11 +52,10 @@ const GATES = [
     hint: 'Second sign-off. The PO goes live only after this.',
     conflictsWith: 'po_l1',
   },
-  {
-    key: 'revoke',
-    label: 'Revoke / Re-approve',
-    hint: 'Undo a closed indent — re-approve a rejected one, re-reject an approved one, reset a store issue.',
-  },
+  // No 'revoke' card: undoing a closed indent (re-approve / re-reject / reset a
+  // store issue) is NOT a separately-assignable gate. It follows the current
+  // final signer automatically — L2 approvers when L2 is on, L1 when it's off —
+  // so naming people here would be a dead list nothing reads.
 ];
 
 const emptyState = () => {

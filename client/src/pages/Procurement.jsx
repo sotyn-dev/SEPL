@@ -2455,10 +2455,18 @@ export default function Procurement() {
               // (2026-06-06: "admin can also approval like others"). Matches
               // the backend, which lets admin approve indents they raised.
               const isCreator = i.created_by === user?.id && !isAdmin();
-              // Approvers = ⚙ Approval Settings list, else the ⚙ Responsible RACI
-              // name. Whole-module values, so they come from approvalCtx (hoisted
+              // Approvers = ⚙ Approval Settings list, else the legacy approval_role
+              // user. Whole-module values, so they come from approvalCtx (hoisted
               // above both render paths) rather than being rebuilt on every row.
               const { l2On, canActL1, canActL2 } = approvalCtx;
+              // Revoke / re-approve / re-reject — mirrors the SERVER gate, which is
+              // switch-symmetric: whoever is the CURRENT final signer may unwind.
+              //   L2 on  → L2 approvers      L2 off → L1 approvers   (admin always)
+              // Both canActL1/canActL2 already fold in admin + the new _ids arrays,
+              // so this can never name someone the server rejects (or hide someone
+              // it accepts). Replaces the old approval_role==='l2' || l1_approver_id
+              // test, which missed L1 approver #2+ and legacy-column mismatches.
+              const canRevoke = l2On ? canActL2 : canActL1;
               // Same person can't sign both L1 and L2 (needs a second reviewer).
               const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
               // RGP single HR sign-off (mam 2026-06-04).
@@ -2553,7 +2561,7 @@ export default function Procurement() {
                 if ((i.status === 'submitted' || i.status === 'l1_approved') && isCreator) {
                   return <span className="text-[10px] text-gray-500 italic">Awaiting approval</span>;
                 }
-                if (i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id)) return (
+                if (i.status === 'approved' && canRevoke) return (
                   <>
                     <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Re-confirm this approval">Re-approve</button>
                     <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Re-reject</button>
@@ -2562,10 +2570,10 @@ export default function Procurement() {
                 // PO already sent, but admin / approver still wants to issue some
                 // qty from store (mam 2026-06-23). Reopen the approve modal so the
                 // From-Store split can be entered + a Store Issue Challan cut.
-                if (i.status === 'po_sent' && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id)) return (
+                if (i.status === 'po_sent' && canRevoke) return (
                   <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Re-open to issue items from store">Issue from Store</button>
                 );
-                if (i.status === 'rejected' && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id)) return (
+                if (i.status === 'rejected' && canRevoke) return (
                   <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Revoke rejection and approve">Re-approve</button>
                 );
                 return null;
@@ -2957,6 +2965,8 @@ export default function Procurement() {
                         // Same hoisted whole-module values as the card path above —
                         // one definition, so the two render paths cannot drift.
                         const { l2On, canActL1, canActL2 } = approvalCtx;
+                        // Switch-symmetric revoke, identical to the card path + server.
+                        const canRevoke = l2On ? canActL2 : canActL1;
                         const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
                         const isHrSingle = i.approval_policy === 'hr_single';
                         const canActHr = isAdmin() || user?.approval_role === 'hr';
@@ -3068,7 +3078,7 @@ export default function Procurement() {
                           the approval and flips back to rejected, using the
                           same mandatory-reason modal.  Mam (2026-05-25):
                           "give this permission to delete or again reject". */}
-                      {i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id) && (
+                      {i.status === 'approved' && canRevoke && (
                         <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2" title="Revoke approval and reject this indent">
                           Re-reject
                         </button>
@@ -3079,7 +3089,7 @@ export default function Procurement() {
                           and a Store Issue Challan cut. Admin or the L2 approver
                           / MD (mam 2026-06-04, 2026-06-23: "issue items from
                           store now" on a PO-sent indent). */}
-                      {(i.status === 'rejected' || i.status === 'approved' || i.status === 'po_sent') && (isAdmin() || user?.approval_role === 'l2' || user?.id === i.l1_approver_id) && (
+                      {(i.status === 'rejected' || i.status === 'approved' || i.status === 'po_sent') && canRevoke && (
                         <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2" title={i.status === 'rejected' ? 'Revoke rejection and approve' : 'Re-open to edit qty / issue from store'}>
                           {i.status === 'po_sent' ? 'Issue from Store' : 'Re-approve'}
                         </button>

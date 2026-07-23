@@ -52,10 +52,11 @@ const GATES = {
     togglable: false,
     conflictsWith: 'po_l1',       // NEW — the PO side has no such check today
   },
-  revoke: {
-    label: 'Revoke / Re-approve',
-    togglable: false,
-  },
+  // No 'revoke' gate. Undoing a closed indent (re-approve / re-reject / reset a
+  // store issue) is NOT separately assignable — it follows the current final
+  // signer: the 'l2' approvers when L2 is on, the 'l1' approvers when it's off
+  // (see canRevoke in procurement.js). A standalone list here would be a third
+  // authority source that nothing reads — exactly the tangle this table removes.
 };
 
 const GATE_KEYS = Object.keys(GATES);
