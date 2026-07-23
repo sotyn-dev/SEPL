@@ -6,6 +6,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
 import ResponsibilityTab from '../components/ResponsibilityTab';
+import ApprovalSettingsModal from '../components/ApprovalSettingsModal';
 import NumInput from '../components/NumInput';
 import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
@@ -98,21 +99,25 @@ function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }
   };
   if (status === 'approved') {
     return (
-      <div className="flex items-baseline gap-1 text-[11px]">
-        <span className="text-emerald-600 font-mono w-3">✓</span>
-        <span className="font-semibold text-gray-600 w-6">{label}</span>
-        <span className="text-emerald-700 font-medium truncate">{name || '—'}</span>
-        <span className="text-[10px] text-gray-500 ml-auto">{fmt(at)}</span>
+      <div className="text-[11px]">
+        <div className="inline-flex items-baseline gap-1 md:flex">
+          <span className="text-emerald-600 font-mono w-3">✓</span>
+          <span className="font-semibold text-gray-600 w-6 md:w-auto">{label}</span>
+          <span className="text-emerald-700 font-medium">{name || '—'}</span>
+        </div>
+        <span className="text-[10px] text-gray-500 pl-1 md:pl-4">{fmt(at)}</span>
       </div>
     );
   }
   if (status === 'rejected' || isReject) {
     return (
-      <div className="flex items-baseline gap-1 text-[11px]" title={reason || ''}>
-        <span className="text-red-600 font-mono w-3">✗</span>
-        <span className="font-semibold text-gray-600 w-6">{label}</span>
-        <span className="text-red-700 font-medium truncate">{name || '—'}</span>
-        {reason && <span className="text-[10px] text-red-500 italic ml-auto truncate max-w-[100px]">“{reason.slice(0, 18)}{reason.length > 18 ? '…' : ''}”</span>}
+      <div className="text-[11px]" title={reason || ''}>
+        <div className="inline-flex items-baseline gap-1 md:flex">
+          <span className="text-red-600 font-mono w-3">✗</span>
+          <span className="font-semibold text-gray-600 w-6 md:w-auto">{label}</span>
+          <span className="text-red-700 font-medium">{name || '—'}</span>
+        </div>
+        {reason && <span className="pl-1 text-[10px] text-red-500 italic truncate max-w-[100px] md:pl-4">“{reason.slice(0, 18)}{reason.length > 18 ? '…' : ''}”</span>}
       </div>
     );
   }
@@ -120,8 +125,8 @@ function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }
   return (
     <div className="flex items-baseline gap-1 text-[11px]">
       <span className={`font-mono w-3 ${waiting ? 'text-gray-300' : 'text-amber-500'}`}>●</span>
-      <span className="font-semibold text-gray-500 w-6">{label}</span>
-      <span className="text-gray-500 italic truncate">{name || (waiting ? 'Waiting' : 'Pending')}</span>
+      <span className="font-semibold text-gray-500 w-6 md:w-auto">{label}</span>
+      <span className="text-gray-500 italic">{name || (waiting ? 'Waiting' : 'Pending')}</span>
     </div>
   );
 }
@@ -279,7 +284,35 @@ export default function Procurement() {
       return sp;
     }, { replace: true });
   };
+  // ⚙ Approval Settings popup — approval gate config (who may act + on/off).
+  const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
   const [indents, setIndents] = useState([]);
+  // Row-INVARIANT approval context. The L1/L2 approvers and the L2 switch are a
+  // whole-module setting, so every indent row carries the SAME values — they were
+  // being recomputed per row, in two separate render paths (desktop table and
+  // mobile cards), which read as if approvers could differ per indent. Derived
+  // once here from the first row instead.
+  // Row-DEPENDENT checks (isCreator, blockSelfL2, isAssignedCrm) stay in the maps.
+  const approvalCtx = useMemo(() => {
+    const r = indents[0] || {};
+    // Prefer the ids LIST (a gate may name several approvers); fall back to the
+    // pre-2026-07-23 single id so a stale cached bundle still gates correctly.
+    const idsFor = (gate) => {
+      const list = r[`${gate}_approver_ids`];
+      if (Array.isArray(list) && list.length) return list;
+      const single = r[`${gate}_approver_id`];
+      return single != null ? [single] : [];
+    };
+    return {
+      l2On: !!r.l2_enabled,
+      canActL1: isAdmin() || idsFor('l1').includes(user?.id),
+      canActL2: isAdmin() || idsFor('l2').includes(user?.id),
+      // CRM approvers named in ⚙ Approval Settings — an ADDITIONAL allow on top
+      // of the existing rule, not a replacement. Pure membership; the rest of the
+      // CRM chain stays in the maps.
+      crmNamed: (r.crm_approver_ids || []).includes(user?.id),
+    };
+  }, [indents, user?.id]);
   // L2 approval on/off switch (mam 2026-07-21). The toggle button itself lives
   // in the ⚙ Responsible tab (next to the L1/L2 approver names). Here we just
   // DERIVE the current state from the loaded indents (every row carries
@@ -2092,7 +2125,7 @@ export default function Procurement() {
   return (
     <div className="space-y-3">
       <div className="sticky-toolbar">
-        <div className="flex gap-2 flex-wrap items-center justify-between">
+        <div className="flex gap-2 flex-wrap items-center justify-start">
           <div className="flex gap-2 flex-wrap">{tabs.map(t => {
             // Urgent-payment badge on the Payment tab — Accounts can see
             // at a glance whether anything needs clearing without clicking
@@ -2119,9 +2152,22 @@ export default function Procurement() {
             if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
             if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
             if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
-          }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+          }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
+          {/* Approval flow control — who may act at each gate (L1 / L2 / CRM /
+              PO L1 / PO L2 / Revoke) and which optional gates are on. Separate
+              from ⚙ Responsible: that tab is per-record RACI reporting, this is
+              the real approval gate config. Admin only. */}
+          {isAdmin() && (
+            <button onClick={() => setApprovalSettingsOpen(true)}
+              className="btn btn-secondary flex items-center gap-2 text-sm"
+              title="Set who may approve at each step of the Indent → Dispatch flow">
+              ⚙ Approval Settings
+            </button>
+          )}
         </div>
       </div>
+
+      <ApprovalSettingsModal open={approvalSettingsOpen} onClose={() => setApprovalSettingsOpen(false)} />
 
       {tab === 'responsible' && <ResponsibilityTab module="indent_to_dispatch" title="Indent to Dispatch" />}
 
@@ -2409,12 +2455,10 @@ export default function Procurement() {
               // (2026-06-06: "admin can also approval like others"). Matches
               // the backend, which lets admin approve indents they raised.
               const isCreator = i.created_by === user?.id && !isAdmin();
-              // Approvers come from the ⚙ Responsible RACI names (mam 2026-07-21):
-              // L1 = i.l1_approver_id, L2 = i.l2_approver_id (only when the L2
-              // switch is ON, carried per-row as i.l2_enabled). Admin always can.
-              const l2On = !!i.l2_enabled;
-              const canActL1 = isAdmin() || (i.l1_approver_id != null && user?.id === i.l1_approver_id);
-              const canActL2 = isAdmin() || (i.l2_approver_id != null && user?.id === i.l2_approver_id);
+              // Approvers = ⚙ Approval Settings list, else the ⚙ Responsible RACI
+              // name. Whole-module values, so they come from approvalCtx (hoisted
+              // above both render paths) rather than being rebuilt on every row.
+              const { l2On, canActL1, canActL2 } = approvalCtx;
               // Same person can't sign both L1 and L2 (needs a second reviewer).
               const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
               // RGP single HR sign-off (mam 2026-06-04).
@@ -2429,7 +2473,10 @@ export default function Procurement() {
               // (planning_crm_name, e.g. Sushila/Lovely) even without the
               // role — matches the server gate (mam 2026-06-03).
               const isAssignedCrm = crmNameMatchesUser(i.planning_crm_name, user?.name);
-              const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm;
+              // Original rule + anyone named as a CRM approver in ⚙ Approval
+              // Settings. Purely additive — nobody who could approve before loses
+              // it. Mirrors the server gate in procurement.js.
+              const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm || approvalCtx.crmNamed;
 
               const renderActionButtons = () => {
                 // CRM stage (Extra-billable indents) — fires first, before L1/L2.
@@ -2880,7 +2927,14 @@ export default function Procurement() {
                     )}
                   </td>
                   <td>
-                    <div className="flex gap-1 items-center flex-wrap">
+                    {/* Two FIXED lines so the cell never reshuffles between rows:
+                        line 1 = stage actions (Approve / Reject / Re-approve / the
+                        "Awaiting …" note), line 2 = the row utilities (edit,
+                        delete). Previously all of it shared one flex-wrap
+                        container, so a long button pushed the icons onto a new
+                        line on some rows and not others. */}
+                    <div className="flex flex-col gap-1 items-end w-[100px]">
+                    <div className="flex gap-1 items-center flex-wrap justify-end">
                       {/* ─── 2-Level approval routing (mam 2026-05-26) ─────
                           For two_level indents, the same Approve / Reject
                           modals are reused but the label flips to "Approve L1"
@@ -2900,11 +2954,9 @@ export default function Procurement() {
               // (2026-06-06: "admin can also approval like others"). Matches
               // the backend, which lets admin approve indents they raised.
               const isCreator = i.created_by === user?.id && !isAdmin();
-                        // Approvers from the ⚙ Responsible RACI names (mam 2026-07-21).
-                        // L2 columns only apply when the switch is ON (i.l2_enabled).
-                        const l2On = !!i.l2_enabled;
-                        const canActL1 = isAdmin() || (i.l1_approver_id != null && user?.id === i.l1_approver_id);
-                        const canActL2 = isAdmin() || (i.l2_approver_id != null && user?.id === i.l2_approver_id);
+                        // Same hoisted whole-module values as the card path above —
+                        // one definition, so the two render paths cannot drift.
+                        const { l2On, canActL1, canActL2 } = approvalCtx;
                         const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
                         const isHrSingle = i.approval_policy === 'hr_single';
                         const canActHr = isAdmin() || user?.approval_role === 'hr';
@@ -2913,7 +2965,10 @@ export default function Procurement() {
                         // (planning_crm_name) even without the role — matches
                         // the server gate (mam 2026-06-03).
                         const isAssignedCrm = crmNameMatchesUser(i.planning_crm_name, user?.name);
-                        const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm;
+                        // Original rule + anyone named as a CRM approver in ⚙ Approval
+              // Settings. Purely additive — nobody who could approve before loses
+              // it. Mirrors the server gate in procurement.js.
+              const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm || approvalCtx.crmNamed;
 
                         // CRM stage (Extra-billable) — fires first, before L1/L2.
                         if (needsCrm && i.status === 'submitted' && !isCreator) {
@@ -3037,17 +3092,25 @@ export default function Procurement() {
                         <span className="text-[10px] text-gray-500 italic" title="Only an approver can act on your indent">Awaiting approval</span>
                       )}
                       {i.status === 'draft' && <button onClick={() => approveIndent(i.id, 'submitted')} className="btn btn-primary text-xs py-1 px-2">Submit</button>}
-                      {/* Edit — site engineers in training need to fix wrong
-                          indents. Allowed for submitted / draft / rejected;
-                          approved indents are frozen (server enforces too). */}
-                      {(canEdit('procurement') || isAdmin()) && i.status !== 'approved' && (
-                        <button onClick={() => openEditIndent(i)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit indent"><FiEdit2 size={14} /></button>
-                      )}
-                      {canDelete('procurement') && <button onClick={async () => {
-                        if (!confirm(`Delete indent "${i.indent_number}"?`)) return;
-                        try { await api.delete(`/procurement/indents/${i.id}`); toast.success('Deleted'); load(); }
-                        catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                      }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                    </div>
+                    {/* Line 2 — row utilities. Same place on every row, and only
+                        rendered when there is at least one, so rows without them
+                        don't carry an empty gap. */}
+                    {(((canEdit('procurement') || isAdmin()) && i.status !== 'approved') || canDelete('procurement')) && (
+                      <div className="flex gap-1 items-center justify-end">
+                        {/* Edit — site engineers in training need to fix wrong
+                            indents. Allowed for submitted / draft / rejected;
+                            approved indents are frozen (server enforces too). */}
+                        {(canEdit('procurement') || isAdmin()) && i.status !== 'approved' && (
+                          <button onClick={() => openEditIndent(i)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit indent"><FiEdit2 size={14} /></button>
+                        )}
+                        {canDelete('procurement') && <button onClick={async () => {
+                          if (!confirm(`Delete indent "${i.indent_number}"?`)) return;
+                          try { await api.delete(`/procurement/indents/${i.id}`); toast.success('Deleted'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                        }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                      </div>
+                    )}
                     </div>
                   </td>
                 </tr>
