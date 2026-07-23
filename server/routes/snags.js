@@ -17,6 +17,8 @@
 //   delete   — delete a snag (audit-friendly, admins typically only)
 
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
@@ -32,45 +34,52 @@ function isApprover(db, user) {
   return !!r?.ok;
 }
 
+// Shared filtered-list query — used by the JSON list AND the .xlsx export so
+// a downloaded sheet always matches what's on screen.
+function buildSnagQuery(req) {
+  const { status, priority, site_id, assigned_to, scope, search } = req.query;
+  let sql = `
+    SELECT s.*,
+           rb.name as raised_by_name,
+           at.name as assigned_to_user_name,
+           ap.name as approved_by_name,
+           ps.name as proof_submitted_by_name,
+           site.name as site_name_live
+    FROM snags s
+    LEFT JOIN users rb ON rb.id = s.raised_by
+    LEFT JOIN users at ON at.id = s.assigned_to
+    LEFT JOIN users ap ON ap.id = s.approved_by
+    LEFT JOIN users ps ON ps.id = s.proof_submitted_by
+    LEFT JOIN sites site ON site.id = s.site_id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (status) { sql += ' AND s.status = ?'; params.push(status); }
+  if (priority) { sql += ' AND s.priority = ?'; params.push(priority); }
+  if (site_id) { sql += ' AND s.site_id = ?'; params.push(site_id); }
+  if (assigned_to) { sql += ' AND s.assigned_to = ?'; params.push(assigned_to); }
+  // scope=mine → only those raised-by or assigned-to me
+  if (scope === 'mine') {
+    sql += ' AND (s.raised_by = ? OR s.assigned_to = ?)';
+    params.push(req.user.id, req.user.id);
+  }
+  if (search) {
+    sql += ' AND (s.description LIKE ? OR s.location LIKE ? OR s.snag_no LIKE ? OR s.site_name LIKE ?)';
+    const q = `%${search}%`;
+    params.push(q, q, q, q);
+  }
+  // Open / submitted at top so urgent things are visible first
+  sql += ` ORDER BY
+    CASE s.status WHEN 'submitted' THEN 0 WHEN 'open' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
+    s.raised_at DESC`;
+  return { sql, params };
+}
+
 // LIST
 router.get('/', requirePermission('snags', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const { status, priority, site_id, assigned_to, scope, search } = req.query;
-    let sql = `
-      SELECT s.*,
-             rb.name as raised_by_name,
-             at.name as assigned_to_user_name,
-             ap.name as approved_by_name,
-             ps.name as proof_submitted_by_name,
-             site.name as site_name_live
-      FROM snags s
-      LEFT JOIN users rb ON rb.id = s.raised_by
-      LEFT JOIN users at ON at.id = s.assigned_to
-      LEFT JOIN users ap ON ap.id = s.approved_by
-      LEFT JOIN users ps ON ps.id = s.proof_submitted_by
-      LEFT JOIN sites site ON site.id = s.site_id
-      WHERE 1=1
-    `;
-    const params = [];
-    if (status) { sql += ' AND s.status = ?'; params.push(status); }
-    if (priority) { sql += ' AND s.priority = ?'; params.push(priority); }
-    if (site_id) { sql += ' AND s.site_id = ?'; params.push(site_id); }
-    if (assigned_to) { sql += ' AND s.assigned_to = ?'; params.push(assigned_to); }
-    // scope=mine → only those raised-by or assigned-to me
-    if (scope === 'mine') {
-      sql += ' AND (s.raised_by = ? OR s.assigned_to = ?)';
-      params.push(req.user.id, req.user.id);
-    }
-    if (search) {
-      sql += ' AND (s.description LIKE ? OR s.location LIKE ? OR s.snag_no LIKE ? OR s.site_name LIKE ?)';
-      const q = `%${search}%`;
-      params.push(q, q, q, q);
-    }
-    // Open / submitted at top so urgent things are visible first
-    sql += ` ORDER BY
-      CASE s.status WHEN 'submitted' THEN 0 WHEN 'open' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
-      s.raised_at DESC`;
+    const { sql, params } = buildSnagQuery(req);
     res.json(db.prepare(sql).all(...params));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -85,6 +94,95 @@ router.get('/stats', requirePermission('snags', 'view'), (req, res) => {
     const rejected = db.prepare("SELECT COUNT(*) as c FROM snags WHERE status='rejected'").get().c;
     const critical = db.prepare("SELECT COUNT(*) as c FROM snags WHERE priority='critical' AND status NOT IN ('approved')").get().c;
     res.json({ total, open, submitted, approved, rejected, critical });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// EXPORT — a real .xlsx of the snag list with the defect + proof photos
+// embedded, so the downloaded punch-list is self-explanatory without opening
+// the app (client 2026-07: "download the sheet with the uploaded images too").
+// Respects the same filters as the list (?status/?priority/?site_id/…).
+router.get('/export.xlsx', requirePermission('snags', 'view'), async (req, res) => {
+  try {
+    const db = getDb();
+    const { sql, params } = buildSnagQuery(req);
+    const rows = db.prepare(sql).all(...params);
+
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Secured Engineers Pvt Ltd';
+    const ws = wb.addWorksheet('Snags');
+    ws.columns = [
+      { header: 'Snag #', key: 'snag_no', width: 12 },
+      { header: 'Site', key: 'site', width: 20 },
+      { header: 'Location', key: 'location', width: 18 },
+      { header: 'Description', key: 'description', width: 42 },
+      { header: 'Priority', key: 'priority', width: 10 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Raised By', key: 'raised_by', width: 16 },
+      { header: 'Assigned To', key: 'assigned_to', width: 16 },
+      { header: 'Target Date', key: 'target_date', width: 13 },
+      { header: 'Raised At', key: 'raised_at', width: 18 },
+      { header: 'Snag Photo', key: 'photo', width: 24 },
+      { header: 'Proof Photo', key: 'proof', width: 24 },
+    ];
+    // Navy header row (matches the quotation export style).
+    const head = ws.getRow(1); head.height = 22;
+    head.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    });
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+    const uploadsDir = path.join(__dirname, '..', '..', 'data', 'uploads');
+    // Resolve a stored /uploads/<file> URL to an on-disk path — local uploads
+    // only, so this can never read arbitrary files; remote URLs are skipped.
+    const resolveLocal = (url) => {
+      const m = typeof url === 'string' && url.match(/\/uploads\/([^/?#]+)$/);
+      if (!m) return null;
+      const p = path.join(uploadsDir, decodeURIComponent(m[1]));
+      return fs.existsSync(p) ? p : null;
+    };
+    const extOf = (p) => { const e = path.extname(p).toLowerCase().slice(1); return e === 'jpg' ? 'jpeg' : e; };
+    const IMG = { width: 150, height: 110 };
+
+    rows.forEach((s) => {
+      const row = ws.addRow({
+        snag_no: s.snag_no || '',
+        site: s.site_name_live || s.site_name || '',
+        location: s.location || '',
+        description: s.description || '',
+        priority: s.priority || '',
+        status: s.status || '',
+        raised_by: s.raised_by_name || '',
+        assigned_to: s.assigned_to_user_name || s.assigned_to_name || '',
+        target_date: s.target_date || '',
+        raised_at: s.raised_at || '',
+      });
+      row.alignment = { vertical: 'top', wrapText: true };
+      const embed = (url, colIndex0) => {
+        const local = resolveLocal(url);
+        if (!local) return false;
+        const ext = extOf(local);
+        if (!['png', 'jpeg', 'gif'].includes(ext)) return false;
+        try {
+          // Feed the image bytes as base64 so the picture is embedded straight
+          // into the .xlsx (no S3 / external URL — the sheet is self-contained).
+          const base64 = fs.readFileSync(local).toString('base64');
+          const id = wb.addImage({ base64, extension: ext });
+          ws.addImage(id, { tl: { col: colIndex0 + 0.15, row: (row.number - 1) + 0.1 }, ext: IMG });
+          return true;
+        } catch { return false; }
+      };
+      const a = embed(s.photo_url, 10);  // 'Snag Photo'  → 0-based col 10
+      const b = embed(s.proof_url, 11);  // 'Proof Photo' → 0-based col 11
+      row.height = (a || b) ? 88 : 18;   // give image rows room; keep text rows compact
+    });
+
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="snags-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.send(buf);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
