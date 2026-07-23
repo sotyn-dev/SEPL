@@ -1155,12 +1155,18 @@ router.put('/l2-setting', (req, res) => {
 // for revoke / re-approve, and for SEEING the indents waiting on them. The L2
 // on/off switch is stored here too and is authoritative.
 //
+// CRM is wired too, but ADDITIVELY: canActCrm already admits admins, anyone with
+// crm_funnel view access, and the CRM person named on the project's Client PO —
+// naming people here GRANTS approval on top of those, without handing out
+// crm_funnel module access. So an empty CRM list changes nothing; it never
+// removes an existing approver. (No on/off switch — the CRM stage is mandatory
+// for billable Extra indents; crmStageActive was removed 2026-07-23.)
+//
 // Revoke / re-approve is NOT a gate here — it follows the L1/L2 lists above
 // automatically (see canRevoke), so there is nothing to assign.
 //
-// NOT wired yet: the CRM gate still also admits anyone with crm_funnel access or
-// the project's Client-PO CRM person (naming people here only ADDS to that); and
-// the PO levels still resolve from the hardcoded PO_APPROVERS names.
+// STILL NOT wired: the PO L1/L2 levels resolve from the hardcoded PO_APPROVERS
+// names, so naming people on those two cards has no effect yet.
 //
 // Reads are open to any signed-in user (approver names already appear on the
 // indent list); writes are admin-only — this is authorization config.
