@@ -101,7 +101,19 @@ export default function ApprovalSettingsModal({ open, onClose }) {
     return () => { cancelled = true; };
   }, [open]);
 
+  // A togglable stage switched ON with nobody named is admin-only — every indent
+  // would then park at that stage waiting on an admin. Block the save (the server
+  // enforces the same, but catch it here so the admin sees why without a round-
+  // trip). Mirrors the writeAll guard in indentToDispatchGates.js.
+  const gatesMissingApprover = GATES.filter(
+    g => g.togglable && cfg[g.key]?.enabled && (cfg[g.key]?.users?.length || 0) === 0
+  );
+
   const save = async () => {
+    if (gatesMissingApprover.length) {
+      toast.error(`Name an approver for "${gatesMissingApprover[0].label}" before turning it on.`);
+      return;
+    }
     setSaving(true);
     try {
       // `enabled` is sent only for gates that actually own a switch here (L2).
@@ -200,10 +212,19 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                         className="text-emerald-600 hover:text-rose-600 font-bold leading-none">×</button>
                     </span>
                   ))}
-                  {st.users.length === 0 && (
+                  {st.users.length === 0 && !(g.togglable && on) && (
                     <span className="text-[11px] text-amber-700">no one else named — admin only</span>
                   )}
                 </div>
+
+                {/* A togglable stage ON with no approver = admin-only → the queue
+                    parks on an admin. Hard-flag it and block Save. */}
+                {g.togglable && on && st.users.length === 0 && (
+                  <div className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+                    <b>{g.label} is ON but no approver is named.</b> Only an admin could act, and
+                    every indent would wait at this stage. Add an approver, or switch it OFF.
+                  </div>
+                )}
 
                 {g.conflictsWith && (
                   <div className="text-[11px] text-slate-400 mt-2">
@@ -221,8 +242,13 @@ export default function ApprovalSettingsModal({ open, onClose }) {
         <div className="sticky bottom-0 z-10 bg-white border-t flex justify-end items-center gap-2
                         -mx-3 sm:-mx-5 px-3 sm:px-5 pt-2 pb-3 sm:pb-5 -mb-3 sm:-mb-5">
           {loading && <span className="text-[11px] text-slate-400 mr-auto">Loading…</span>}
+          {!loading && gatesMissingApprover.length > 0 && (
+            <span className="text-[11px] text-rose-600 mr-auto">
+              Name an approver for {gatesMissingApprover.map(g => g.label).join(', ')} or turn it off.
+            </span>
+          )}
           <button onClick={onClose} className="btn btn-secondary ml-auto">Cancel</button>
-          <button onClick={save} disabled={saving || loading} className="btn btn-primary">
+          <button onClick={save} disabled={saving || loading || gatesMissingApprover.length > 0} className="btn btn-primary">
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>

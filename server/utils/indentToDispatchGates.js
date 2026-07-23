@@ -196,6 +196,24 @@ function writeAll(db, payload, actorId) {
     }
   }
 
+  // Guard: never switch a togglable stage ON with nobody able to act it. An
+  // enabled stage with no approver is admin-only, and every indent then parks
+  // at that stage waiting on an admin (the L2-on-with-no-approver foot-gun —
+  // prod has no approval_role='l2' user, so a bare "turn L2 on" would strand the
+  // queue). Allowed only if the legacy approval_role user still covers the gate,
+  // since then the stage isn't admin-only. Admin does NOT count as "an approver"
+  // here — admin-only is exactly the state this prevents.
+  for (const gate of gates) {
+    const def = GATES[gate];
+    const g = payload[gate] || {};
+    if (!def.togglable || g.enabled !== true) continue;
+    const namedCount = Array.isArray(g.users) ? g.users.length : approversOf(db, gate).length;
+    const hasLegacy = !!db.prepare("SELECT 1 FROM users WHERE approval_role=? AND active=1 LIMIT 1").get(gate);
+    if (namedCount === 0 && !hasLegacy) {
+      throw new Error(`Name at least one "${def.label}" approver before switching it ON — otherwise only an admin could act and indents would pile up.`);
+    }
+  }
+
   const setScalar = db.prepare(`
     INSERT INTO indent_to_dispatch_settings (key, value, updated_at, updated_by)
     VALUES (?, ?, CURRENT_TIMESTAMP, ?)
