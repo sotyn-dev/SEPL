@@ -39,7 +39,7 @@ const GATES = [
   {
     key: 'crm',
     label: 'CRM Approval (billable Extra indents)',
-    hint: 'Extra-Schedule / Extra-Non-Schedule indents are charged to the client, so CRM signs off before L1. Anyone with CRM module access, and the CRM person on that project’s Client PO, can already approve — naming people here adds to that. Turn the stage on/off in ⚙ Responsible.',
+    hint: 'Extra-Schedule / Extra-Non-Schedule indents are charged to the client, so CRM signs off before L1. Anyone with CRM module access, and the CRM person on that project’s Client PO, can already approve — naming people here adds to that. The stage is always on: skipping it would also skip the CRM lead and the billable PO line.',
   },
   {
     key: 'po_l1',
@@ -154,13 +154,14 @@ export default function ApprovalSettingsModal({ open, onClose }) {
       <div className="space-y-3">
         <p className="text-xs text-gray-500">
           Name the people who may approve at each step. Only <b>active</b> users can be picked.
-          An <b>admin</b> can always act at every step. The <b>CRM</b> stage is switched on or off
-          in <b>⚙ Responsible</b>, not here.
+          An <b>admin</b> can always act at every step. Whoever is the current final signer
+          (L2 when it is ON, otherwise L1) can also revoke / re-approve a closed indent.
         </p>
 
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-          <b>Saved, but not yet enforced.</b> These settings are stored, but the approval
-          gates still read ⚙ Responsible / User Management until the next step wires them over.
+          <b>Vendor PO steps are not enforced yet.</b> Indent L1 / L2 / CRM are live — they
+          drive the real approval flow. The two <b>Vendor PO</b> cards are stored but not yet
+          read by the PO approval gate.
         </div>
 
         {/* No inner scroll — the Modal shell already scrolls (max-h-90vh), and a
