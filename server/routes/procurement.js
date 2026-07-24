@@ -1194,7 +1194,21 @@ router.put('/approval-settings', (req, res) => {
   }
   try {
     const db = getDb();
-    const gates = approvalGates.writeAll(db, req.body?.gates, req.user.id);
+    // Save only the sections the caller actually sent. The screen always sends
+    // both (gates + standin — see ApprovalSettingsModal), but a caller editing
+    // just one — e.g. the stand-in on its own — must NOT be rejected for "no
+    // gates supplied". So writeAll is called only when gates are present; when
+    // they're absent readAll returns the unchanged gates, keeping the response
+    // shape identical either way. A body carrying neither section is the only
+    // real "nothing to save", and is rejected below.
+    const hasGates   = req.body?.gates   != null;
+    const hasStandin = req.body?.standin != null;
+    if (!hasGates && !hasStandin) {
+      return res.status(400).json({ error: 'No settings supplied' });
+    }
+    const gates = hasGates
+      ? approvalGates.writeAll(db, req.body.gates, req.user.id)
+      : approvalGates.readAll(db);
     // L2 stage ON/OFF. writeAll has already stored the authoritative value in
     // indent_to_dispatch_settings ('approval.l2.enabled'); this ALSO keeps the
     // app_settings mirror in step. Nothing reads that key any more EXCEPT the
@@ -1210,7 +1224,7 @@ router.put('/approval-settings', (req, res) => {
     // Vendor PO stand-in (role mailbox). Only written when the screen sends it,
     // so a save that doesn't touch it leaves the rule alone. Validation lives in
     // writePoStandin and surfaces as the 400 below.
-    if (req.body?.standin !== undefined) {
+    if (hasStandin) {
       approvalGates.writePoStandin(db, req.body.standin, req.user.id);
     }
     res.json({ gates, standin: approvalGates.readPoStandin(db), message: 'Approval settings saved' });
