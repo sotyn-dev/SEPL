@@ -43,14 +43,28 @@ const GATES = {
     // Client PO — mam 2026-06-03). Both of those stay unconditional, so there is
     // nothing here to switch off.
   },
+  // SINGLE approver each. The PO rule has always been exactly one named person
+  // per level (PO_APPROVERS = {1:'Nitin Jain', 2:'Ankur Kaplesh'}), matched by
+  // identity. Allowing a list here would silently WIDEN who can commit money on
+  // a vendor PO, which is a rule change wearing a UI change's clothes — so the
+  // cap is enforced server-side too, not just in the picker.
+  //
+  // Deliberately NO conflictsWith on po_l2: the PO code has never enforced a
+  // second-pair-of-eyes, and production has never had one — all 7 fully-signed
+  // POs were signed by ONE person (vs indents, where 97 of 124 had two different
+  // signers). Declaring it here made the settings screen advertise a rule the
+  // system does not keep. Whether PO *should* need two signatures is a policy
+  // question for mam; if it ever does, staff a distinct L2 approver FIRST, then
+  // turn the check on — enforcing before staffing would strand the queue.
   po_l1: {
     label: 'Vendor PO — L1 Approval',
     togglable: false,
+    single: true,
   },
   po_l2: {
     label: 'Vendor PO — L2 Approval',
     togglable: false,
-    conflictsWith: 'po_l1',       // NEW — the PO side has no such check today
+    single: true,
   },
   // No 'revoke' gate. Undoing a closed indent (re-approve / re-reject / reset a
   // store issue) is NOT separately assignable — it follows the current final
@@ -160,6 +174,7 @@ function readAll(db) {
     const entry = {
       label: def.label,
       togglable: !!def.togglable,
+      single: !!def.single,          // one approver only (the PO levels)
       conflicts_with: def.conflictsWith || null,
       enabled: gateEnabled(db, gate),
       users: approversOf(db, gate),
@@ -183,6 +198,11 @@ function writeAll(db, payload, actorId) {
     if (!GATES[gate]) throw new Error(`Unknown approval gate "${gate}"`);
     const g = payload[gate] || {};
     if (g.users != null && !Array.isArray(g.users)) throw new Error(`"${gate}" users must be a list`);
+    // Single-approver gates (the PO levels) cap at one. Enforced here and not
+    // only in the picker, so a direct API call can't widen the gate either.
+    if (GATES[gate].single && Array.isArray(g.users) && g.users.length > 1) {
+      throw new Error(`"${GATES[gate].label}" takes a single approver, not ${g.users.length}.`);
+    }
   }
 
   // Validate every id up front — an inactive or deleted user must never end up

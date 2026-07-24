@@ -45,16 +45,21 @@ const GATES = [
     // only way in.
     extra: 'CRM-module users and the Client PO’s CRM person already qualify.',
   },
+  // ONE approver each — the PO rule has always been a single named person per
+  // level. A list would widen who can commit money on a PO. No conflictsWith:
+  // the PO flow has never required two different signatures (and production has
+  // never had one), so claiming it here would advertise a rule that isn't kept.
   {
     key: 'po_l1',
     label: 'Vendor PO — L1 Approval',
     hint: 'First sign-off on the vendor PO.',
+    single: true,
   },
   {
     key: 'po_l2',
     label: 'Vendor PO — L2 Approval',
     hint: 'Second sign-off. The PO goes live after this.',
-    conflictsWith: 'po_l1',
+    single: true,
   },
   // No 'revoke' card: undoing a closed indent (re-approve / re-reject / reset a
   // store issue) is NOT a separately-assignable gate. It follows the current
@@ -147,6 +152,11 @@ export default function ApprovalSettingsModal({ open, onClose }) {
       ? c
       : { ...c, [gate]: { ...c[gate], users: [...c[gate].users, id] } }));
 
+  // Single-approver gates: pick REPLACES, empty clears. Kept as its own setter so
+  // the stored shape is still a list (one entry) and nothing downstream special-cases.
+  const setOnlyUser = (gate, id) =>
+    setCfg(c => ({ ...c, [gate]: { ...c[gate], users: id ? [id] : [] } }));
+
   const dropUser = (gate, id) =>
     setCfg(c => ({ ...c, [gate]: { ...c[gate], users: c[gate].users.filter(x => x !== id) } }));
 
@@ -196,27 +206,47 @@ export default function ApprovalSettingsModal({ open, onClose }) {
 
                 <div className="text-[11px] text-slate-500 mb-2">{g.hint}</div>
 
-                <label className="label text-[10px] text-emerald-600">Approvers</label>
-                <select className="input text-xs w-full" value="" onChange={e => addUser(g.key, e.target.value ? +e.target.value : null)}>
-                  <option value="">+ add approver…</option>
-                  {available.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                </select>
+                {/* SINGLE-approver gates (the PO levels) get a plain picker bound to
+                    the one selection — picking someone REPLACES them. Multi gates
+                    keep the add-then-chip flow. Two affordances because the two
+                    rules genuinely differ; a chip list on a single gate would imply
+                    you can add a second person and then reject the save. */}
+                {g.single ? (
+                  <>
+                    <label className="label text-[10px] text-emerald-600">Approver</label>
+                    <select
+                      className="input text-xs w-full"
+                      value={st.users[0] ?? ''}
+                      onChange={e => setOnlyUser(g.key, e.target.value ? +e.target.value : null)}>
+                      <option value="">— not set (admin only) —</option>
+                      {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
+                  </>
+                ) : (
+                  <>
+                    <label className="label text-[10px] text-emerald-600">Approvers</label>
+                    <select className="input text-xs w-full" value="" onChange={e => addUser(g.key, e.target.value ? +e.target.value : null)}>
+                      <option value="">+ add approver…</option>
+                      {available.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
 
-                {/* Named approvers only. "Admin always" is NOT a chip here — it is
-                    not stored, and as a chip it sat in the same row as removable
-                    people and read like one of them. It lives in the card footer. */}
-                <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                  {st.users.map(id => (
-                    <span key={id} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 text-[11px] font-medium">
-                      {nameOf(id)}
-                      <button type="button" onClick={() => dropUser(g.key, id)} title="Remove"
-                        className="text-emerald-600 hover:text-rose-600 font-bold leading-none">×</button>
-                    </span>
-                  ))}
-                  {st.users.length === 0 && !(g.togglable && on) && (
-                    <span className="text-[11px] text-slate-400 italic">Nobody named — admin only</span>
-                  )}
-                </div>
+                    {/* Named approvers only. "Admin always" is NOT a chip here — it is
+                        not stored, and as a chip it sat in the same row as removable
+                        people and read like one of them. It lives in the card footer. */}
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                      {st.users.map(id => (
+                        <span key={id} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 text-[11px] font-medium">
+                          {nameOf(id)}
+                          <button type="button" onClick={() => dropUser(g.key, id)} title="Remove"
+                            className="text-emerald-600 hover:text-rose-600 font-bold leading-none">×</button>
+                        </span>
+                      ))}
+                      {st.users.length === 0 && !(g.togglable && on) && (
+                        <span className="text-[11px] text-slate-400 italic">Nobody named — admin only</span>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 {/* A togglable stage ON with no approver = admin-only → the queue
                     parks on an admin. Hard-flag it and block Save. */}
