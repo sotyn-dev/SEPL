@@ -211,8 +211,8 @@ export default function ApprovalSettingsModal({ open, onClose }) {
         <div className="space-y-4">
           {SECTIONS.map(sec => (
             <div key={sec.key} className="space-y-2">
-              <div className="flex items-baseline gap-2 border-b border-slate-200 pb-1">
-                <h3 className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{sec.title}</h3>
+              <div className="flex items-baseline gap-2 border-b-2 border-slate-300 pb-1.5">
+                <h3 className="text-sm font-bold uppercase tracking-wide text-slate-700">{sec.title}</h3>
                 <span className="text-[10px] text-slate-400">{sec.note}</span>
               </div>
               {GATES.filter(g => g.group === sec.key).map(g => renderCard(g))}
@@ -247,9 +247,9 @@ export default function ApprovalSettingsModal({ open, onClose }) {
             const dimmed = g.togglable && !on;
             const available = users.filter(u => !st.users.includes(u.id));
             return (
-              <div key={g.key} className={`border rounded-lg p-3 bg-white ${dimmed ? 'opacity-60' : ''}`}>
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <div className="font-semibold text-sm text-gray-800">
+              <div key={g.key} className={`border rounded-lg px-3 py-2 bg-white ${dimmed ? 'opacity-60' : ''}`}>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <div className="font-semibold text-xs text-gray-800">
                     {g.label}
                     {dimmed && <span className="ml-2 text-[10px] font-normal text-rose-500">(OFF — skipped in flow)</span>}
                   </div>
@@ -358,9 +358,9 @@ export default function ApprovalSettingsModal({ open, onClose }) {
   function renderStandin() {
     const locked = !editingStandin;
     return (
-      <div className="border border-slate-200 rounded-lg p-3 bg-slate-50/60">
+      <div className="border border-slate-200 rounded-lg px-3 py-2 bg-slate-50/60">
         <div className="flex items-center justify-between gap-2 mb-1">
-          <div className="font-semibold text-sm text-gray-800">Vendor PO — Stand-in</div>
+          <div className="font-semibold text-xs text-gray-800">Vendor PO — Stand-in</div>
           <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-600 cursor-pointer select-none">
             <input type="checkbox" checked={standin.enabled}
               onChange={e => setStandin(s => ({ ...s, enabled: e.target.checked }))} />
