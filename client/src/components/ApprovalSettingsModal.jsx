@@ -27,29 +27,33 @@ const GATES = [
   {
     key: 'l1',
     label: 'Indent — L1 Approval',
-    hint: 'First sign-off on the indent. When L2 is OFF this is the final approval.',
+    hint: 'First sign-off. Final approval while L2 is off.',
   },
   {
     key: 'l2',
     label: 'Indent — L2 Approval',
-    hint: 'Second sign-off. OFF means L1 is final — the stage is skipped in the real flow. Must be a different person from L1.',
+    hint: 'Second sign-off. Off means L1 is final.',
     togglable: true,
     conflictsWith: 'l1',
   },
   {
     key: 'crm',
     label: 'CRM Approval (billable Extra indents)',
-    hint: 'Extra-Schedule / Extra-Non-Schedule indents are charged to the client, so CRM signs off before L1. Anyone with CRM module access, and the CRM person on that project’s Client PO, can already approve — naming people here adds to that. The stage is always on: skipping it would also skip the CRM lead and the billable PO line.',
+    hint: 'Signs off billable Extra indents before L1. Always on.',
+    // CRM already admits anyone with crm_funnel access and the Client PO's own CRM
+    // person; naming here ADDS to them. Said on the card so it doesn't read as the
+    // only way in.
+    extra: 'CRM-module users and the Client PO’s CRM person already qualify.',
   },
   {
     key: 'po_l1',
     label: 'Vendor PO — L1 Approval',
-    hint: 'First sign-off on the vendor PO, after the indent is approved.',
+    hint: 'First sign-off on the vendor PO.',
   },
   {
     key: 'po_l2',
     label: 'Vendor PO — L2 Approval',
-    hint: 'Second sign-off. The PO goes live only after this.',
+    hint: 'Second sign-off. The PO goes live after this.',
     conflictsWith: 'po_l1',
   },
   // No 'revoke' card: undoing a closed indent (re-approve / re-reject / reset a
@@ -153,9 +157,8 @@ export default function ApprovalSettingsModal({ open, onClose }) {
     <Modal isOpen={open} onClose={onClose} title="⚙ Approval Settings — Indent to Dispatch">
       <div className="space-y-3">
         <p className="text-xs text-gray-500">
-          Name the people who may approve at each step. Only <b>active</b> users can be picked.
-          An <b>admin</b> can always act at every step. Whoever is the current final signer
-          (L2 when it is ON, otherwise L1) can also revoke / re-approve a closed indent.
+          Name who may approve at each step — <b>active</b> users only. The current final
+          signer (L2 when on, else L1) can also revoke or re-approve a closed indent.
         </p>
 
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
@@ -199,13 +202,10 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                   {available.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
 
+                {/* Named approvers only. "Admin always" is NOT a chip here — it is
+                    not stored, and as a chip it sat in the same row as removable
+                    people and read like one of them. It lives in the card footer. */}
                 <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                  {/* Admin always passes every gate — shown as a locked chip so the
-                      card never reads as "nobody can approve this". Not stored. */}
-                  <span title="Any admin can always act at every gate — this cannot be removed"
-                    className="inline-flex items-center gap-1 rounded-full bg-slate-100 text-slate-600 border border-slate-300 px-2 py-0.5 text-[11px] font-medium">
-                    Admin · always
-                  </span>
                   {st.users.map(id => (
                     <span key={id} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 text-[11px] font-medium">
                       {nameOf(id)}
@@ -214,7 +214,7 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                     </span>
                   ))}
                   {st.users.length === 0 && !(g.togglable && on) && (
-                    <span className="text-[11px] text-amber-700">no one else named — admin only</span>
+                    <span className="text-[11px] text-slate-400 italic">Nobody named — admin only</span>
                   )}
                 </div>
 
@@ -222,17 +222,23 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                     parks on an admin. Hard-flag it and block Save. */}
                 {g.togglable && on && st.users.length === 0 && (
                   <div className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
-                    <b>{g.label} is ON but no approver is named.</b> Only an admin could act, and
-                    every indent would wait at this stage. Add an approver, or switch it OFF.
+                    <b>ON with no approver.</b> Only an admin could act and every indent
+                    would wait here. Add an approver, or switch it off.
                   </div>
                 )}
 
-                {g.conflictsWith && (
-                  <div className="text-[11px] text-slate-400 mt-2">
-                    The same person cannot sign both this and{' '}
-                    <b>{GATES.find(x => x.key === g.conflictsWith)?.label}</b> on one record.
-                  </div>
-                )}
+                {/* Card footer — the standing facts about this gate, separated from
+                    the editable part above so they don't read as removable entries. */}
+                <div className="mt-2.5 pt-2 border-t border-slate-100 text-[10px] leading-relaxed text-slate-400">
+                  Admin can always act here.
+                  {/* Full label, not the short tail — "L1 Approval" alone reads as the
+                      INDENT's L1 when shown on a Vendor PO card. */}
+                  {g.conflictsWith && (
+                    <> · Cannot be the same person as <b className="font-semibold">
+                      {GATES.find(x => x.key === g.conflictsWith)?.label}</b> on one record.</>
+                  )}
+                  {g.extra && <> · {g.extra}</>}
+                </div>
               </div>
             );
           })}
