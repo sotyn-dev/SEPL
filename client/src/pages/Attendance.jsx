@@ -65,6 +65,7 @@ export default function Attendance() {
   const [gridMonth, setGridMonth] = useState(monthNow());
   const [grid, setGrid] = useState(null);
   const [gridBusy, setGridBusy] = useState(false);
+  const [cellInfo, setCellInfo] = useState(null);
   const [location, setLocation] = useState(null);
   const [address, setAddress] = useState('');
   const [photo, setPhoto] = useState(null);
@@ -312,38 +313,44 @@ export default function Attendance() {
 
   const cellMeta = (c) => {
     const s = c?.status || '';
+    // Worked on a scheduled week-off (e.g. a Sunday punch) — flag it distinctly
+    // so HR can see who's owed comp / extra-day pay.
+    if (c?.worked_on_off) return { t: 'WOP', cls: 'bg-teal-100 text-teal-700 ring-1 ring-inset ring-teal-300' };
     if (s === 'present') return { t: 'P', cls: 'bg-emerald-100 text-emerald-700' };
-    if (s === 'late') return { t: 'L', cls: 'bg-amber-100 text-amber-700' };
-    if (s === 'half_day') return { t: '½', cls: 'bg-orange-100 text-orange-700' };
-    if (s === 'short_day') return { t: 'S', cls: 'bg-orange-100 text-orange-700' };
-    if (s === 'leave') return { t: 'CL', cls: 'bg-purple-100 text-purple-700' };
-    if (s === 'sunday') return { t: '–', cls: 'bg-gray-50 text-gray-300' };
+    if (s === 'late') return { t: 'P', cls: 'bg-amber-100 text-amber-700' };            // present, but late (tallied separately)
+    if (s === 'half_day' || s === 'short_day') return { t: 'H', cls: 'bg-orange-100 text-orange-700' };
+    if (s === 'leave') return { t: 'L', cls: 'bg-purple-100 text-purple-700' };
+    if (s === 'sunday' || c?.week_off) return { t: 'WO', cls: 'bg-indigo-50 text-indigo-400' };
     if (s === 'absent') return { t: 'A', cls: 'bg-red-50 text-red-600' };
     return { t: '·', cls: 'bg-white text-gray-300' };
   };
-  // Export the month's grid to a spreadsheet to share with a hiring manager
-  // (mam 2026-07-02). Same P/A/½/CL/L letters as on screen + per-person totals.
-  const exportGrid = () => {
+  // Download the month's muster as a formatted .xlsx (identity columns + a
+  // column per day with P/A/WO/WOP/H/L codes + present/half/leave/late totals).
+  // The server builds it so it matches HR's printed attendance-sheet format.
+  const exportGrid = async () => {
     if (!grid || !grid.employees?.length) return;
-    const headers = ['Employee', ...grid.days.map(d => String(d.d)), 'Present', 'Absent', 'Half', 'Leave', 'Late'];
-    const rows = grid.employees.map(emp => {
-      let p = 0, a = 0, h = 0, cl = 0, late = 0;
-      const cells = grid.days.map(day => {
-        if (day.future) return '';
-        const s = (emp.cells[day.date] || {}).status || '';
-        if (s === 'present') p++;
-        else if (s === 'absent') a++;
-        else if (s === 'half_day' || s === 'short_day') h++;
-        else if (s === 'leave') cl++;
-        else if (s === 'late') late++;
-        const t = cellMeta({ status: s }).t;
-        return (t === '·' || t === '–') ? '' : t;
-      });
-      return [emp.name, ...cells, p, a, h, cl, late];
-    });
-    exportCsv(`monthly-attendance-${gridMonth}`, headers, rows);
-    toast.success('Monthly grid exported — open the file in Excel to print or send.');
+    try {
+      const resp = await api.get(`/attendance/grid/export.xlsx?month=${gridMonth}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([resp.data]));
+      const a = document.createElement('a');
+      a.href = url; a.download = `attendance-muster-${gridMonth}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success('Monthly muster exported — open in Excel to print or send.');
+    } catch { toast.error('Export failed'); }
   };
+  // Programmatic file picker → resolves the chosen File (or null if cancelled).
+  const pickFile = (accept) => new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = accept;
+    let done = false;
+    const finish = (f) => { if (done) return; done = true; resolve(f); };
+    inp.onchange = () => finish(inp.files?.[0] || null);
+    // Cancel fires no reliable event; when the window refocuses with nothing
+    // chosen shortly after, treat it as cancelled.
+    window.addEventListener('focus', () => setTimeout(() => finish(null), 400), { once: true });
+    inp.click();
+  });
   const markCell = async (emp, date, status) => {
     if (!emp.user_id) return;
     setGridBusy(true);
@@ -355,8 +362,10 @@ export default function Attendance() {
   // Real punches and approved leaves are read-only here.
   const onCellClick = (emp, day, c) => {
     if (!emp.user_id || day.future) return;
-    if (c.source === 'punch') { toast('Real punch — edit it under Records'); return; }
-    if (c.source === 'leave') { toast('Approved leave — manage it under Leaves'); return; }
+    // Show the day's detail (In/Out/status) in the panel below the grid.
+    setCellInfo({ name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
+    // Real punches / approved leaves are read-only — detail only, no cycling.
+    if (c.source === 'punch' || c.source === 'leave') return;
     const order = ['present', 'absent', 'half_day', 'leave', 'clear'];
     const next = c.source === 'admin' ? order[(order.indexOf(c.status) + 1) % order.length] : 'present';
     markCell(emp, day.date, next);
@@ -364,9 +373,16 @@ export default function Attendance() {
   const markAllPresent = async (emp) => {
     if (!emp.user_id) return;
     if (!confirm(`Mark ${emp.name} PRESENT on every blank working day in ${gridMonth}? (Sundays, real punches and leaves are left untouched.)`)) return;
+    // Bulk back-dating a month present → a proof document is mandatory.
+    const file = await pickFile('.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx');
+    if (!file) { toast.error('A proof document is required to mark the month present'); return; }
     setGridBusy(true);
-    try { const r = await api.post('/attendance/admin-mark-bulk', { user_id: emp.user_id, month: gridMonth, status: 'present' }); toast.success(r.data.message); loadGrid(); }
-    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const up = await api.post('/upload', fd);
+      const r = await api.post('/attendance/admin-mark-bulk', { user_id: emp.user_id, month: gridMonth, status: 'present', proof_url: up.data.url });
+      toast.success(r.data.message); loadGrid();
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
     finally { setGridBusy(false); }
   };
   const linkLogin = async (emp, userId) => {
@@ -398,21 +414,23 @@ export default function Attendance() {
         <div className="space-y-3">
           <div className="text-xs text-gray-600 bg-amber-50 border border-amber-100 rounded-lg px-4 py-2.5">
             A day with <b>no punch counts as absent</b> in payroll. Mark people here so salary is right.
-            Click a cell to cycle <b>P</b>resent → <b>A</b>bsent → <b>½</b> half → <b>CL</b> leave → clear.
+            Click a cell to cycle <b>P</b>resent → <b>A</b>bsent → <b>H</b> half → <b>L</b> leave → clear.
             Real punches and approved leaves are read-only. Use <b>“P all”</b> to fill a person’s blank working days as present.
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <input type="month" className="input text-sm" value={gridMonth} onChange={e => setGridMonth(e.target.value)} />
             <button onClick={loadGrid} className="btn btn-secondary text-sm">Refresh</button>
-            <button onClick={exportGrid} disabled={!grid || !grid.employees?.length} className="btn btn-primary text-sm flex items-center gap-1" title="Download this month's grid as a spreadsheet to send / show the hiring manager">
-              <FiDownload size={14} /> Export for Hiring Manager
+            <button onClick={exportGrid} disabled={!grid || !grid.employees?.length} className="btn btn-primary text-sm flex items-center gap-1" title="Download this month's attendance muster as an Excel sheet — identity columns + day-wise codes + present/half/leave/late totals">
+              <FiDownload size={14} /> Export Excel
             </button>
             <div className="flex items-center gap-2 text-[11px] text-gray-500 ml-auto">
               <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">P present</span>
               <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-600">A absent</span>
-              <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">½ half</span>
-              <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">CL leave</span>
-              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">L late</span>
+              <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">H half</span>
+              <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">L leave</span>
+              <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-400">WO week-off</span>
+              <span className="px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">WOP worked on off</span>
+              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">P late</span>
             </div>
           </div>
           {!grid ? (
@@ -424,10 +442,18 @@ export default function Attendance() {
               <table className="text-xs border-collapse">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="sticky left-0 z-10 bg-gray-50 text-left px-3 py-2 font-semibold min-w-[160px]">Employee</th>
+                    <th className="sticky left-0 z-10 bg-gray-50 text-left px-3 py-2 font-semibold min-w-[150px]">Employee</th>
+                    <th className="text-left px-2 py-2 font-semibold text-gray-500 min-w-[110px]">Designation</th>
+                    <th className="text-left px-2 py-2 font-semibold text-gray-500 min-w-[110px]">Site</th>
+                    <th className="text-right px-2 py-2 font-semibold text-gray-500 min-w-[70px]">Salary</th>
+                    <th className="text-left px-2 py-2 font-semibold text-gray-500 min-w-[120px]">Shift</th>
                     {grid.days.map(day => (
                       <th key={day.date} className={`px-0 py-2 text-center font-semibold w-7 ${day.sunday ? 'text-red-400' : 'text-gray-500'}`} title={day.date}>{day.d}</th>
                     ))}
+                    <th className="px-1.5 py-2 text-center font-semibold text-emerald-600" title="Present days (incl. late & worked week-offs)">P</th>
+                    <th className="px-1.5 py-2 text-center font-semibold text-orange-600" title="Half days">H</th>
+                    <th className="px-1.5 py-2 text-center font-semibold text-purple-600" title="Leave days">L</th>
+                    <th className="px-1.5 py-2 text-center font-semibold text-amber-600" title="Late marks">Late</th>
                     <th className="px-2 py-2"></th>
                   </tr>
                 </thead>
@@ -446,21 +472,30 @@ export default function Attendance() {
                           </div>
                         )}
                       </td>
+                      <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap">{emp.designation || '—'}</td>
+                      <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap">{emp.site || '—'}</td>
+                      <td className="px-2 py-1.5 text-right text-gray-600 whitespace-nowrap">{emp.salary ? '₹' + emp.salary.toLocaleString('en-IN') : '—'}</td>
+                      <td className="px-2 py-1.5 text-gray-500 text-[10px] whitespace-nowrap">{emp.roster_label || '—'}</td>
                       {grid.days.map(day => {
                         const c = emp.cells[day.date] || {};
                         const meta = cellMeta(c);
-                        const ro = !emp.user_id || day.future || c.source === 'punch' || c.source === 'leave';
+                        const cellTitle = `${day.date}${c.status ? ' · ' + c.status : ''}${c.week_off ? ' · Week-Off' : ''}${c.worked_on_off ? ' (worked)' : ''}${c.in ? ' · In ' + fmtT(c.in) : ''}${c.out ? ' · Out ' + fmtT(c.out) : ''}${c.hours ? ' · ' + c.hours + 'h' : ''}${c.late_label ? ' · ' + c.late_label + ' late' : ''}${c.source ? ' (' + c.source + ')' : ''}`;
                         return (
-                          <td key={day.date} className="p-0 text-center">
-                            <button type="button" disabled={gridBusy || ro}
+                          <td key={day.date} className="p-0 text-center" title={cellTitle}>
+                            <button type="button" disabled={gridBusy || day.future}
                               onClick={() => onCellClick(emp, day, c)}
-                              title={`${day.date}${c.status ? ' · ' + c.status : ''}${c.source ? ' (' + c.source + ')' : ''}`}
-                              className={`w-7 h-7 text-[10px] font-bold ${meta.cls} ${c.source === 'punch' ? 'ring-1 ring-inset ring-blue-200' : ''} ${ro ? 'cursor-default opacity-90' : 'hover:brightness-95'}`}>
-                              {day.future ? '' : meta.t}
+                              className={`w-7 h-7 text-[10px] font-bold ${meta.cls} ${c.source === 'punch' ? 'ring-1 ring-inset ring-blue-200' : ''} ${day.future ? '' : 'cursor-pointer hover:brightness-95'}`}>
+                              {day.future ? '' : (c.late_label
+                                ? <span className="flex flex-col items-center justify-center leading-none"><span>P</span><span className="text-[6px] font-semibold">{c.late_label}</span></span>
+                                : meta.t)}
                             </button>
                           </td>
                         );
                       })}
+                      <td className="px-1.5 py-1.5 text-center font-semibold text-emerald-700">{emp.totals?.present || 0}</td>
+                      <td className="px-1.5 py-1.5 text-center text-orange-700">{emp.totals?.half || 0}</td>
+                      <td className="px-1.5 py-1.5 text-center text-purple-700">{emp.totals?.leave || 0}</td>
+                      <td className="px-1.5 py-1.5 text-center text-amber-700">{emp.totals?.late || 0}</td>
                       <td className="px-2 py-1.5 whitespace-nowrap">
                         {emp.user_id
                           ? <button onClick={() => markAllPresent(emp)} disabled={gridBusy} className="btn btn-secondary text-[11px] py-0.5">P all</button>
@@ -470,6 +505,22 @@ export default function Attendance() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {cellInfo && (
+            <div className="card p-3 flex items-start justify-between gap-3 border-l-4 border-blue-400 bg-blue-50/40">
+              <div className="text-sm">
+                <div className="font-semibold text-gray-800">{cellInfo.name} · {cellInfo.date}</div>
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-gray-700">
+                  <span>Status: <b className="capitalize">{(cellInfo.worked_on_off ? 'week-off (worked)' : cellInfo.week_off ? 'week-off' : (cellInfo.status || '—')).replace('_', ' ')}</b></span>
+                  <span>In: <b>{cellInfo.in ? fmtT(cellInfo.in) : '—'}</b></span>
+                  <span>Out: <b>{cellInfo.out ? fmtT(cellInfo.out) : '—'}</b></span>
+                  <span>Hours: <b>{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b></span>
+                  {cellInfo.late_label && <span className="text-amber-700">Late by: <b>{cellInfo.late_label}</b></span>}
+                  {cellInfo.source && <span className="text-gray-400">({cellInfo.source})</span>}
+                </div>
+              </div>
+              <button onClick={() => setCellInfo(null)} className="text-gray-400 hover:text-gray-700 text-lg leading-none">×</button>
             </div>
           )}
         </div>
@@ -1514,7 +1565,7 @@ export default function Attendance() {
 
       {/* Edit Geofence Modal */}
       <Modal isOpen={modal === 'edit-geofence'} onClose={() => setModal(null)} title="Edit Geofence">
-        <form onSubmit={async (e) => { e.preventDefault(); try { await api.put(`/attendance/geofence/${form.id}`, form); toast.success('Updated'); setModal(null); load(); } catch (err) { toast.error('Failed'); } }} className="space-y-4">
+        <form onSubmit={async (e) => { e.preventDefault(); try { await api.put(`/attendance/geofence/${form.id}`, form); toast.success('Updated'); setModal(null); load(); } catch { toast.error('Failed'); } }} className="space-y-4">
           <div><label className="label">Site Name *</label><input className="input" value={form.site_name || ''} onChange={e => setForm({ ...form, site_name: e.target.value })} required /></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">Latitude</label><input className="input" type="number" step="any" value={form.latitude || ''} onChange={e => setForm({ ...form, latitude: e.target.value })} /></div>
@@ -1537,10 +1588,22 @@ export default function Attendance() {
           if (!form.user_id) return toast.error('Please select an employee');
           if (!form.date) return toast.error('Please pick a date');
           if (form.date > today) return toast.error('Cannot mark a future date');
+          const worked = ['present', 'half_day', 'short_day'].includes(form.status || 'present');
+          const isBackdate = form.date < today;
+          if (worked && isBackdate && !form._proofFile && !form.proof_url) {
+            return toast.error('Attach a proof document (signed sheet / photo) to back-date a worked day');
+          }
           try {
+            let proof_url = form.proof_url || null;
+            if (form._proofFile) {
+              const fd = new FormData(); fd.append('file', form._proofFile);
+              const up = await api.post('/upload', fd);
+              proof_url = up.data.url;
+            }
             await api.post('/attendance/admin-mark', {
               user_id: +form.user_id, date: form.date,
               status: form.status || 'present', remarks: form.remarks || '',
+              proof_url,
             });
             const who = allUsers.find(u => u.id === +form.user_id)?.name || 'Employee';
             toast.success(`${who} marked ${(form.status || 'present').replace('_', ' ')} for ${form.date}`);
@@ -1575,6 +1638,14 @@ export default function Attendance() {
             <label className="label">Reason / Remarks (for audit)</label>
             <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
           </div>
+          {['present', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
+            <div>
+              <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date a worked day)</span></label>
+              <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
+                onChange={e => setForm({ ...form, _proofFile: e.target.files?.[0] || null })} />
+              {form._proofFile && <p className="text-[11px] text-emerald-600 mt-1">Attached: {form._proofFile.name}</p>}
+            </div>
+          )}
           <p className="text-[11px] text-gray-500 italic">Admin-marked rows are hidden from the employee's own dashboard / month view and won't overwrite a real punch.</p>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>

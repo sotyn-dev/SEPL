@@ -8,10 +8,17 @@ const { getEmailConfig } = require('../lib/email');
 // they can never drift apart. See server/lib/geofence.js for the rule that
 // stops weak indoor phone-GPS from falsely blocking on-site staff.
 const { haversine, evaluateGeofence, geoSettings } = require('../lib/geofence');
+const { rosterCutoffs, ROSTERS } = require('../lib/roster');
 const atUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const atDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 const router = express.Router();
 router.use(authMiddleware);
+
+// "Today" as an IST (UTC+5:30) YYYY-MM-DD. The VPS runs UTC, so a bare
+// toISOString().split('T')[0] rolls the date over at 05:30 IST — punches and
+// admin-marks in that pre-dawn window landed on the WRONG calendar day (L4).
+// Always derive the attendance DATE in IST; point-in-time `now` stamps stay UTC.
+const istTodayStr = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().split('T')[0];
 
 // Late detection — read cutoff from payroll_settings (admin-tunable), fall
 // back to 09:46 IST. Returns true if `whenIso` (ISO string in UTC) lies
@@ -21,12 +28,13 @@ router.use(authMiddleware);
 // UTC hours. On a UTC-running VPS this meant 10:23 IST = 04:53 UTC, so
 // `4 > 9` was false → no one got flagged late before 15:15 IST. Bug
 // affected every attendance row since deploy.
-function isPunchLate(db, whenIso) {
+function isPunchLate(db, whenIso, roster) {
   let cutoffMin = 9 * 60 + 46; // default 09:46 IST
   try {
     const ps = db.prepare('SELECT late_after_time FROM payroll_settings WHERE id=1').get();
-    if (ps?.late_after_time) {
-      const [h, m] = String(ps.late_after_time).split(':').map(Number);
+    const eff = rosterCutoffs(ps || {}, roster);
+    if (eff.late_after_time) {
+      const [h, m] = String(eff.late_after_time).split(':').map(Number);
       cutoffMin = h * 60 + (m || 0);
     }
   } catch {}
@@ -44,7 +52,7 @@ function isPunchLate(db, whenIso) {
 // auto-mark allow-list rows stay hidden (they're a convenience flag, not a
 // real presence the user should see).
 router.get('/my-today', (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayStr();
   const record = getDb().prepare(
     `SELECT * FROM attendance WHERE user_id=? AND date=?
         AND NOT (COALESCE(admin_marked,0)=1 AND COALESCE(remarks,'')='Auto-marked (allow-list)')`
@@ -92,8 +100,10 @@ router.get('/my-month', (req, res) => {
   let lateCutoffMin = 9 * 60 + 46;
   try {
     const ps = db.prepare(`SELECT late_after_time FROM payroll_settings WHERE id=1`).get();
-    if (ps?.late_after_time) {
-      const [h, m] = ps.late_after_time.split(':').map(Number);
+    const empRoster = db.prepare('SELECT roster FROM employees WHERE user_id=?').get(req.user.id)?.roster;
+    const eff = rosterCutoffs(ps || {}, empRoster);
+    if (eff.late_after_time) {
+      const [h, m] = eff.late_after_time.split(':').map(Number);
       lateCutoffMin = h * 60 + (m || 0);
     }
   } catch {}
@@ -233,7 +243,7 @@ router.get('/my-month', (req, res) => {
 // allow-list rows stay hidden, same as /my-today and /my-month.
 router.get('/my-history', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayStr();
   const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
   let from = ok(req.query.from) ? req.query.from : today;
   let to   = ok(req.query.to)   ? req.query.to   : today;
@@ -287,7 +297,7 @@ function syncAutoMarkPresent(db, today, byUserId) {
 
 router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayStr();
   // Auto-mark allow-list before computing today's stats.
   syncAutoMarkPresent(db, today, req.user.id);
   const totalUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE active=1").get();
@@ -352,11 +362,11 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
 // admin_marked=1 so the user's own dashboard / month view skips it.
 // Restricted to admins or roles with attendance.approve.
 router.post('/admin-mark', (req, res) => {
-  const { user_id, date, status, remarks } = req.body;
+  const { user_id, date, status, remarks, proof_url } = req.body;
   if (!user_id || !date) return res.status(400).json({ error: 'user_id and date are required' });
 
   // Admin may backfill any PAST date, but never a future one.
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = istTodayStr();
   if (date > todayStr) return res.status(400).json({ error: 'Cannot mark a future date' });
 
   // Permission gate: admin OR a role with attendance.approve
@@ -379,6 +389,16 @@ router.post('/admin-mark', (req, res) => {
   }
   const finalStatus = ['present','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
 
+  // Proof gate (SEPL 2026-07): claiming a person WORKED on a PAST day
+  // (present/half/short) without a punch MUST carry a supporting document, so
+  // a back-dated mark is never anonymous (the new-hire onboarding case). A
+  // same-day "forgot to punch" mark is low-risk and stays frictionless. The
+  // client uploads via POST /api/upload and passes the returned proof_url.
+  const WORKED = ['present', 'half_day', 'short_day'];
+  if (WORKED.includes(finalStatus) && date < todayStr && !proof_url) {
+    return res.status(400).json({ error: `A proof document is required to back-date a day as ${finalStatus.replace('_', ' ')}. Upload the signed attendance sheet / photo first.` });
+  }
+
   // If a real attendance row already exists (user actually punched), don't
   // overwrite it. Admin-mark is meant for the missing-row case only.
   const existing = db.prepare('SELECT id, admin_marked FROM attendance WHERE user_id=? AND date=?').get(user_id, date);
@@ -387,15 +407,15 @@ router.post('/admin-mark', (req, res) => {
   }
   if (existing && existing.admin_marked) {
     db.prepare(
-      `UPDATE attendance SET status=?, remarks=?, marked_by=? WHERE id=?`
-    ).run(finalStatus, remarks || null, req.user.id, existing.id);
+      `UPDATE attendance SET status=?, remarks=?, marked_by=?, marked_at=CURRENT_TIMESTAMP, proof_url=COALESCE(?, proof_url) WHERE id=?`
+    ).run(finalStatus, remarks || null, req.user.id, proof_url || null, existing.id);
     return res.json({ message: 'Updated', id: existing.id });
   }
 
   const r = db.prepare(
-    `INSERT INTO attendance (user_id, date, status, remarks, admin_marked, marked_by, total_hours)
-     VALUES (?,?,?,?,1,?, ?)`
-  ).run(user_id, date, finalStatus, remarks || null, req.user.id, finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
+    `INSERT INTO attendance (user_id, date, status, remarks, admin_marked, marked_by, marked_at, proof_url, total_hours)
+     VALUES (?,?,?,?,1,?,CURRENT_TIMESTAMP,?, ?)`
+  ).run(user_id, date, finalStatus, remarks || null, req.user.id, proof_url || null, finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
   res.status(201).json({ id: r.lastInsertRowid, message: 'Marked' });
 });
 
@@ -417,13 +437,42 @@ function canMarkAttendance(db, req) {
 }
 const gpad = n => String(n).padStart(2, '0');
 
-// GET /attendance/grid?month=YYYY-MM — per-employee per-day status for the
-// month, plus the "no login linked" employees with suggested user matches.
-router.get('/grid', (req, res) => {
-  const db = getDb();
-  if (!canMarkAttendance(db, req)) return res.status(403).json({ error: 'Forbidden' });
-  const month = String(req.query.month || '');
-  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+// Status → muster day-code, matching HR's printed attendance-sheet format:
+// P present · A absent · H half · L leave · WO week-off · WOP worked-on-off.
+// A late day still shows P (present) — lateness is tallied in its own total.
+function dayCode(c) {
+  if (!c || c.future) return '';
+  if (c.worked_on_off) return 'WOP';
+  const s = c.status;
+  if (s === 'present' || s === 'late') return 'P';
+  if (s === 'half_day' || s === 'short_day') return 'H';
+  if (s === 'leave') return 'L';
+  if (s === 'sunday' || c.week_off) return 'WO';
+  if (s === 'absent') return 'A';
+  return '';
+}
+
+// Minute-of-day (IST) for a stored UTC punch timestamp — same +5:30 shift as
+// isPunchLate, so lateness lines up with how the day was flagged.
+function istMinuteOfDay(iso) {
+  const ist = new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000);
+  return ist.getUTCHours() * 60 + ist.getUTCMinutes();
+}
+function hhmmToMin(hhmm) {
+  const [h, m] = String(hhmm || '').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+// Compact late label measured from the roster start: 25 -> "25m", 75 -> "1h15m".
+function lateLabel(min) {
+  if (!min || min <= 0) return '';
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60), r = min % 60;
+  return r ? `${h}h${r}m` : `${h}h`;
+}
+
+// Full month muster: per-employee identity + one cell per day + P/H/L/late
+// totals. Shared by the JSON grid (screen) and the .xlsx export (print/send).
+function computeGrid(db, month) {
   const [y, m] = month.split('-').map(Number);
   const lastDay = new Date(y, m, 0).getDate();
   const start = `${month}-01`, end = `${month}-${gpad(lastDay)}`;
@@ -437,10 +486,10 @@ router.get('/grid', (req, res) => {
   }
 
   const employees = db.prepare(
-    `SELECT id, name, user_id FROM employees WHERE (status IS NULL OR status='active') ORDER BY name`
+    `SELECT id, name, user_id, designation, department, salary, roster
+       FROM employees WHERE (status IS NULL OR status='active') ORDER BY name`
   ).all();
   const activeUsers = db.prepare(`SELECT id, name FROM users WHERE active=1`).all();
-  const usersById = new Map(activeUsers.map(u => [u.id, u]));
   const linkedUserIds = new Set(employees.map(e => e.user_id).filter(Boolean));
   const tokens = s => String(s || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
   const suggestFor = (name) => {
@@ -455,13 +504,14 @@ router.get('/grid', (req, res) => {
   };
 
   const userIds = [...linkedUserIds];
-  let attByUserDate = new Map(), leavesByUser = new Map();
+  const attByUserDate = new Map(), leavesByUser = new Map(), siteByUser = new Map();
   if (userIds.length) {
     const ph = userIds.map(() => '?').join(',');
     for (const a of db.prepare(
-      `SELECT user_id, date, status, admin_marked, punch_in_time FROM attendance
+      `SELECT user_id, date, status, admin_marked, punch_in_time, punch_out_time, total_hours, site_name FROM attendance
         WHERE user_id IN (${ph}) AND date BETWEEN ? AND ?`).all(...userIds, start, end)) {
       attByUserDate.set(`${a.user_id}|${a.date}`, a);
+      if (a.site_name) siteByUser.set(a.user_id, a.site_name); // most recent non-empty site wins
     }
     for (const lr of db.prepare(
       `SELECT user_id, leave_type, from_date, to_date FROM leave_requests
@@ -473,6 +523,9 @@ router.get('/grid', (req, res) => {
 
   const rows = employees.map(e => {
     const cells = {};
+    const totals = { present: 0, half: 0, leave: 0, late: 0 };
+    const rst = ROSTERS[e.roster] || ROSTERS.general || {};
+    const rosterStartMin = hhmmToMin(rst.start || '09:30');
     if (e.user_id) {
       const leaves = leavesByUser.get(e.user_id) || [];
       for (const day of days) {
@@ -490,7 +543,27 @@ router.get('/grid', (req, res) => {
         } else {
           status = ''; source = 'future';
         }
-        cells[day.date] = { status, source };
+        const cell = {
+          status, source,
+          in: att?.punch_in_time || null,
+          out: att?.punch_out_time || null,
+          hours: att?.total_hours ?? null,
+          week_off: day.sunday,
+          worked_on_off: !!(day.sunday && att && (att.punch_in_time || ['present', 'half_day', 'short_day', 'late'].includes(String(att.status || '').toLowerCase()))),
+          future: day.future,
+        };
+        // Late days show P plus how late they arrived vs their shift start.
+        if (status === 'late' && att && att.punch_in_time) {
+          const lm = Math.max(0, istMinuteOfDay(att.punch_in_time) - rosterStartMin);
+          cell.late_minutes = lm;
+          cell.late_label = lateLabel(lm);
+        }
+        const code = dayCode(cell);
+        if (code === 'P' || code === 'WOP') totals.present++;
+        else if (code === 'H') totals.half++;
+        else if (code === 'L') totals.leave++;
+        if (status === 'late') totals.late++;
+        cells[day.date] = cell;
       }
     }
     return {
@@ -498,12 +571,99 @@ router.get('/grid', (req, res) => {
       name: e.name,
       user_id: e.user_id || null,
       no_login: !e.user_id,
+      designation: e.designation || '',
+      site: siteByUser.get(e.user_id) || e.department || '',
+      salary: e.salary || 0,
+      roster: e.roster || 'general',
+      roster_label: rst.label || '',
       suggestions: e.user_id ? [] : suggestFor(e.name),
       cells,
+      totals,
     };
   });
 
-  res.json({ month, today: todayStr, days, employees: rows });
+  return { month, today: todayStr, days, employees: rows };
+}
+
+// GET /attendance/grid?month=YYYY-MM — per-employee per-day status for the
+// month, plus the "no login linked" employees with suggested user matches.
+router.get('/grid', (req, res) => {
+  const db = getDb();
+  if (!canMarkAttendance(db, req)) return res.status(403).json({ error: 'Forbidden' });
+  const month = String(req.query.month || '');
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+  res.json(computeGrid(db, month));
+});
+
+// GET /attendance/grid/export.xlsx?month=YYYY-MM — the monthly muster as a
+// printable Excel sheet: identity columns + one column per day (P/A/WO/WOP/H/L)
+// + present/half/leave/late totals. Matches HR's raw attendance-sheet format.
+router.get('/grid/export.xlsx', async (req, res) => {
+  const db = getDb();
+  if (!canMarkAttendance(db, req)) return res.status(403).json({ error: 'Forbidden' });
+  const month = String(req.query.month || '');
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+  const grid = computeGrid(db, month);
+
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Secured Engineers Pvt Ltd';
+  const ws = wb.addWorksheet(`Attendance ${month}`);
+  ws.columns = [
+    { header: 'Name', key: 'name', width: 22 },
+    { header: 'Designation', key: 'designation', width: 16 },
+    { header: 'Site', key: 'site', width: 16 },
+    { header: 'Salary', key: 'salary', width: 10 },
+    { header: 'Roster', key: 'roster', width: 16 },
+    ...grid.days.map(d => ({ header: String(d.d), key: 'd' + d.d, width: 5 })),
+    { header: 'Present', key: 'present', width: 8 },
+    { header: 'Half', key: 'half', width: 6 },
+    { header: 'Leave', key: 'leave', width: 6 },
+    { header: 'Late', key: 'late', width: 6 },
+  ];
+  const head = ws.getRow(1); head.height = 20;
+  head.eachCell((cell, col) => {
+    // Sundays get a red header; everything else navy.
+    const dObj = grid.days[col - 6];
+    const argb = (dObj && dObj.sunday) ? 'FFB91C1C' : 'FF1E3A8A';
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+  ws.getColumn('name').alignment = { horizontal: 'left' };
+  ws.views = [{ state: 'frozen', xSplit: 5, ySplit: 1 }];
+
+  const CODE_FILL = { P: 'FFDCFCE7', A: 'FFFEE2E2', H: 'FFFFEDD5', L: 'FFEDE9FE', WO: 'FFEEF2FF', WOP: 'FFCCFBF1' };
+  const LATE_FILL = 'FFFEF3C7'; // amber-100 — late day
+  grid.employees.forEach(emp => {
+    const rowData = {
+      name: emp.name, designation: emp.designation, site: emp.site,
+      salary: emp.salary || 0, roster: emp.roster_label,
+      present: emp.totals.present, half: emp.totals.half, leave: emp.totals.leave, late: emp.totals.late,
+    };
+    let hasLate = false;
+    grid.days.forEach(d => {
+      const cell = emp.cells[d.date];
+      const code = dayCode(cell);
+      // Late days: show "P" + how late (e.g. "P 25m"); the wrap puts minutes on line 2.
+      if (cell && cell.status === 'late' && cell.late_label) { rowData['d' + d.d] = `P ${cell.late_label}`; hasLate = true; }
+      else rowData['d' + d.d] = code;
+    });
+    const r = ws.addRow(rowData);
+    r.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    if (hasLate) r.height = 26;
+    ['name', 'designation', 'site'].forEach(k => { r.getCell(k).alignment = { horizontal: 'left', vertical: 'middle' }; });
+    grid.days.forEach(d => {
+      const cell = emp.cells[d.date];
+      const argb = (cell && cell.status === 'late') ? LATE_FILL : CODE_FILL[dayCode(cell)];
+      if (argb) r.getCell('d' + d.d).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+    });
+  });
+
+  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="attendance-muster-${month}.xlsx"`);
+  res.send(buf);
 });
 
 // POST /attendance/admin-mark-bulk — mark every BLANK (no record) non-Sunday
@@ -512,9 +672,12 @@ router.get('/grid', (req, res) => {
 router.post('/admin-mark-bulk', (req, res) => {
   const db = getDb();
   if (!canMarkAttendance(db, req)) return res.status(403).json({ error: 'Forbidden' });
-  const { user_id, month } = req.body;
+  const { user_id, month, proof_url } = req.body;
   if (!user_id || !/^\d{4}-\d{2}$/.test(String(month || ''))) return res.status(400).json({ error: 'user_id and month=YYYY-MM required' });
   const status = ['present', 'half_day', 'absent'].includes(req.body.status) ? req.body.status : 'present';
+  if (['present', 'half_day'].includes(status) && !proof_url) {
+    return res.status(400).json({ error: `A proof document is required to bulk-mark days as ${status.replace('_', ' ')}. Upload the signed attendance sheet / photo first.` });
+  }
   const [y, m] = String(month).split('-').map(Number);
   const lastDay = new Date(y, m, 0).getDate();
   const todayStr = new Date(new Date().getTime() + 5.5 * 3600 * 1000).toISOString().split('T')[0];
@@ -523,7 +686,7 @@ router.post('/admin-mark-bulk', (req, res) => {
       .all(user_id, `${month}-01`, `${month}-${gpad(lastDay)}`).map(r => r.date)
   );
   const ins = db.prepare(
-    `INSERT INTO attendance (user_id, date, status, admin_marked, marked_by, total_hours) VALUES (?,?,?,1,?,?)`
+    `INSERT INTO attendance (user_id, date, status, admin_marked, marked_by, marked_at, proof_url, total_hours) VALUES (?,?,?,1,?,CURRENT_TIMESTAMP,?,?)`
   );
   const hrs = status === 'half_day' ? 4 : status === 'present' ? 8 : 0;
   let marked = 0;
@@ -533,7 +696,7 @@ router.post('/admin-mark-bulk', (req, res) => {
       if (dateStr > todayStr) continue;
       if (new Date(y, m - 1, d).getDay() === 0) continue;   // skip Sundays (auto-paid)
       if (existing.has(dateStr)) continue;                  // never overwrite a punch/admin row
-      ins.run(user_id, dateStr, status, req.user.id, hrs);
+      ins.run(user_id, dateStr, status, req.user.id, proof_url || null, hrs);
       marked++;
     }
   });
@@ -561,7 +724,7 @@ router.post('/punch-in', (req, res) => {
   if (!latitude || !longitude) return res.status(400).json({ error: 'Location required. Please enable GPS.' });
 
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayStr();
   const now = new Date().toISOString();
 
   // Check if already punched in today
@@ -592,7 +755,8 @@ router.post('/punch-in', (req, res) => {
   // Check if late — uses IST timezone + payroll_settings.late_after_time.
   // Fixes the UTC-vs-IST bug where 10:23 IST (04:53 UTC) was treated as
   // not-late because getHours() on UTC-running VPS returned 4.
-  const isLate = isPunchLate(db, now);
+  const empRoster = db.prepare('SELECT roster FROM employees WHERE user_id=?').get(req.user.id)?.roster;
+  const isLate = isPunchLate(db, now, empRoster);
 
   const r = db.prepare(`INSERT INTO attendance (user_id, date, punch_in_time, punch_in_lat, punch_in_lng, punch_in_address, punch_in_photo, site_name, status, punch_in_accuracy, location_verified)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(req.user.id, today, now, latitude, longitude, address, photo, matchedSite, isLate ? 'late' : 'present', accuracy || null, geo.verified);
@@ -612,7 +776,7 @@ router.post('/punch-in', (req, res) => {
 router.post('/punch-out', (req, res) => {
   const { latitude, longitude, address, photo } = req.body;
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayStr();
   const now = new Date().toISOString();
 
   const record = db.prepare('SELECT * FROM attendance WHERE user_id=? AND date=?').get(req.user.id, today);
@@ -666,7 +830,7 @@ router.post('/punch-out', (req, res) => {
 router.post('/track-location', (req, res) => {
   const { latitude, longitude, address, accuracy, gps_off, reason } = req.body;
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayStr();
   const now = new Date().toISOString();
 
   // Heartbeat with gps_off=true → user is online (page is open, network
@@ -1013,7 +1177,7 @@ router.delete('/:id', requirePermission('attendance', 'delete'), (req, res) => {
 // punch-out). Flag columns let admins spot auto-marked rows.
 function runAutoPunchCheck() {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayStr();
   const now = new Date().toISOString();
   const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
