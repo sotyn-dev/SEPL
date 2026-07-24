@@ -3094,9 +3094,22 @@ router.get('/vendor-po', (req, res) => {
     LEFT JOIN users rju ON vp.po_reject_by = rju.id
     ORDER BY vp.created_at DESC
   `).all();
-  // Who the PO is waiting on right now (for the list badge / approve gating).
-  const PO_NEXT = { pending_l1: 'Nitin Jain', pending_l2: 'Ankur Kaplesh' };
-  for (const r of rows) r.po_pending_approver = PO_NEXT[r.po_approval] || null;
+  // Who the PO is waiting on right now (list badge + which buttons render).
+  // Resolved ONCE per request from the same resolver the approve/reject gate
+  // uses — this used to be a second hardcoded copy (PO_NEXT), so the chip could
+  // name one person while the gate accepted another. The ids array is what the
+  // client tests membership against; the name string is display only.
+  const poL1 = poApproversFor(db, 1);
+  const poL2 = poApproversFor(db, 2);
+  const poNameOf = { pending_l1: poL1.map(a => a.name).join(', ') || null,
+                     pending_l2: poL2.map(a => a.name).join(', ') || null };
+  for (const r of rows) {
+    r.po_pending_approver = poNameOf[r.po_approval] || null;
+    r.po_l1_approver_ids = poL1.map(a => a.id);
+    r.po_l2_approver_ids = poL2.map(a => a.id);
+    r.po_pending_approver_ids = r.po_approval === 'pending_l1' ? r.po_l1_approver_ids
+                              : r.po_approval === 'pending_l2' ? r.po_l2_approver_ids : [];
+  }
   // Surface drift so the frontend can show a small warning chip if
   // the stored header total disagrees with the items sum.
   for (const r of rows) {
@@ -3847,10 +3860,23 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
 });
 
 // ── Vendor PO 2-level approval (mam 2026-06-19) ──────────────────────────
-// A new PO must be signed off L1 → L2 before it's live. L1 = Nitin Jain,
-// L2 = Ankur Kaplesh (resolved by name so it survives across local/prod DBs).
-// Admin and the COO (coo@… login) can stand in for either level.
+// A new PO must be signed off L1 → L2 before it's live. Admin and the COO
+// (coo@… login) can stand in for either level.
+//
+// WHO the level's approver is now comes from Procurement → ⚙ Approval Settings
+// ('po_l1' / 'po_l2' — a SINGLE person each, matching the original rule), with
+// the hardcoded name below as the fallback for a database where nobody has been
+// named yet. NOTHING ELSE CHANGED: the L1→L2 sequence, the admin short-circuit,
+// the COO stand-in, rejection and the state machine are all exactly as they were.
+// With an empty settings list the legacy names resolve as before, so deploying
+// this is a no-op — including for the POs already sitting in the queue.
+//
+// Retire the constants once every environment has both PO gates named (check:
+// SELECT * FROM indent_to_dispatch_setting_users WHERE key LIKE 'approval.po_%').
+// Until then they are the only thing standing between a fresh DB and admin-only
+// PO approval.
 const PO_APPROVERS = { 1: 'Nitin Jain', 2: 'Ankur Kaplesh' };
+const poGateKey = (level) => (level === 1 ? 'po_l1' : 'po_l2');
 function resolvePoUserByName(db, name) {
   if (!name) return null;
   try {
@@ -3858,13 +3884,21 @@ function resolvePoUserByName(db, name) {
       || db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(name) LIKE LOWER(?) ORDER BY id LIMIT 1').get('%' + name + '%');
   } catch (_) { return null; }
 }
+// Legacy single approver for a PO level — the pre-settings mechanism, kept only
+// as the fallback. Same shape as legacyL1Approver/legacyL2Approver on the indent
+// side, so gateApproverList can consume it.
+const legacyPoApprover = (level) => (db) => resolvePoUserByName(db, PO_APPROVERS[level]) || { id: null, name: null };
+// The people who may sign this level: ⚙ Approval Settings, else the legacy name.
+// ONE source, used by the gate, the 403 text and the list payload alike — the old
+// code had a second hardcoded copy (PO_NEXT) driving the display, so the chip
+// could name someone the gate would refuse.
+const poApproversFor = (db, level) => gateApproverList(db, poGateKey(level), legacyPoApprover(level));
 function canApprovePoLevel(db, userId, level) {
   const u = db.prepare('SELECT role, email, username FROM users WHERE id=?').get(userId);
   if (u?.role === 'admin') return true;
   const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
   if (isCoo(u?.email) || isCoo(u?.username)) return true;          // COO can stand in
-  const approver = resolvePoUserByName(db, PO_APPROVERS[level]);
-  return !!approver && approver.id === userId;
+  return poApproversFor(db, level).some(a => a.id === userId);
 }
 const poLevelOf = (s) => (s === 'pending_l1' ? 1 : s === 'pending_l2' ? 2 : null);
 
@@ -3876,7 +3910,10 @@ router.post('/vendor-po/:id/po-approve', (req, res) => {
   const level = poLevelOf(po.po_approval);
   if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
   if (!canApprovePoLevel(db, req.user.id, level)) {
-    return res.status(403).json({ error: `Only ${PO_APPROVERS[level]} (L${level}) or admin can approve this step` });
+    // Named from the SAME resolver the gate uses, so the message can never point
+    // at someone the gate would reject.
+    const who = poApproversFor(db, level).map(a => a.name).join(', ') || 'nobody named';
+    return res.status(403).json({ error: `Only ${who} (PO L${level}) or an admin can approve this step. Set in ⚙ Approval Settings.` });
   }
   if (level === 1) db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
   else             db.prepare("UPDATE vendor_pos SET po_approval='approved',  po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
@@ -3891,7 +3928,8 @@ router.post('/vendor-po/:id/po-reject', (req, res) => {
   const level = poLevelOf(po.po_approval);
   if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
   if (!canApprovePoLevel(db, req.user.id, level)) {
-    return res.status(403).json({ error: `Only ${PO_APPROVERS[level]} (L${level}) or admin can reject this step` });
+    const who = poApproversFor(db, level).map(a => a.name).join(', ') || 'nobody named';
+    return res.status(403).json({ error: `Only ${who} (PO L${level}) or an admin can reject this step. Set in ⚙ Approval Settings.` });
   }
   const reason = String(req.body?.reason || '').trim();
   if (reason.length < 3) return res.status(400).json({ error: 'A rejection reason is required' });

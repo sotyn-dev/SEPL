@@ -1610,15 +1610,22 @@ export default function Procurement() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-  // ── Vendor PO 2-level approval (mam 2026-06-19: L1 Nitin Jain, L2 Ankur
-  // Kaplesh). Show the Approve/Reject buttons to the pending-level approver,
-  // admin, or the COO. The backend enforces the same rule.
+  // ── Vendor PO 2-level approval (mam 2026-06-19). Show the Approve/Reject
+  // buttons to the pending-level approver, admin, or the COO. Same rule as the
+  // backend — only the identity source moved: the approver is now whoever is
+  // named on that PO level in ⚙ Approval Settings (the hardcoded name is the
+  // server-side fallback), delivered as po_pending_approver_ids.
+  //
+  // Membership on IDS, not a name comparison. This used to test
+  // user.name === v.po_pending_approver, i.e. authorization keyed on a display
+  // string — two users sharing a name both got the button, and a rename silently
+  // took it away. The ids come from the same resolver as the server gate.
   const canApprovePo = (v) => {
     if (v.po_approval !== 'pending_l1' && v.po_approval !== 'pending_l2') return false;
     if (isAdmin()) return true;
     const email = String(user?.email || '').toLowerCase(), uname = String(user?.username || '').toLowerCase();
     if (email.startsWith('coo@') || uname.startsWith('coo@')) return true;
-    return String(user?.name || '').trim().toLowerCase() === String(v.po_pending_approver || '').trim().toLowerCase();
+    return (v.po_pending_approver_ids || []).includes(user?.id);
   };
   const approvePo = async (v) => {
     try { await api.post(`/procurement/vendor-po/${v.id}/po-approve`); toast.success('PO approved'); load(); }
