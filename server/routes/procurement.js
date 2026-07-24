@@ -3107,12 +3107,20 @@ router.get('/vendor-po', (req, res) => {
   // uses — this used to be a second hardcoded copy (PO_NEXT), so the chip could
   // name one person while the gate accepted another. The ids array is what the
   // client tests membership against; the name string is display only.
+  //
+  // The DISPLAY name falls all the way back to the hardcoded PO_APPROVERS label,
+  // even when that name doesn't resolve to a user — so the badge always reads
+  // "Pending L1 · Nitin Jain" like the old PO_NEXT did, never a blank "· ". The
+  // ids array does NOT get this string fallback (you can't gate a button to a
+  // non-user): if the name resolves, its id is there; if not, only admin + the
+  // stand-in can act — which is exactly what the server gate enforces too.
   const poL1 = poApproversFor(db, 1);
   const poL2 = poApproversFor(db, 2);
-  const poNameOf = { pending_l1: poL1.map(a => a.name).join(', ') || null,
-                     pending_l2: poL2.map(a => a.name).join(', ') || null };
+  const poNameOf = { pending_l1: poL1.map(a => a.name).join(', ') || PO_APPROVERS[1],
+                     pending_l2: poL2.map(a => a.name).join(', ') || PO_APPROVERS[2] };
   for (const r of rows) {
-    r.po_pending_approver = poNameOf[r.po_approval] || null;
+    r.po_pending_approver = (r.po_approval === 'pending_l1' || r.po_approval === 'pending_l2')
+      ? poNameOf[r.po_approval] : null;
     r.po_l1_approver_ids = poL1.map(a => a.id);
     r.po_l2_approver_ids = poL2.map(a => a.id);
     r.po_pending_approver_ids = r.po_approval === 'pending_l1' ? r.po_l1_approver_ids
