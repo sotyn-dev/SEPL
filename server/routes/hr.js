@@ -7,6 +7,7 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { parseResume } = require('../utils/resumeParser');
+const { normalizeRoster } = require('../lib/roster');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -744,7 +745,7 @@ router.get('/roster-audit', (req, res) => {
 
 router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
   const { name, phone, email, designation, department, join_date, salary,
-          aadhar_file, pan_file, qualification_file } = req.body;
+          aadhar_file, pan_file, qualification_file, roster } = req.body;
   let { user_id } = req.body;
   const db = getDb();
   // Auto-link by email if user_id wasn't explicitly set
@@ -759,10 +760,10 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   if (!qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
   const r = db.prepare(`
     INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
-                           aadhar_file, pan_file, qualification_file)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                           aadhar_file, pan_file, qualification_file, roster)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
-        aadhar_file || null, pan_file || null, qualification_file || null);
+        aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster));
   res.status(201).json({ id: r.lastInsertRowid, linked_user_id: user_id || null });
 });
 
@@ -803,18 +804,20 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
 
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
-          aadhar_file, pan_file, qualification_file } = req.body;
+          aadhar_file, pan_file, qualification_file, roster } = req.body;
   const db = getDb();
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
   // upload — frontend can edit other fields without re-uploading docs.
   db.prepare(`
     UPDATE employees
        SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?,
+           roster = COALESCE(?, roster),
            aadhar_file        = COALESCE(?, aadhar_file),
            pan_file           = COALESCE(?, pan_file),
            qualification_file = COALESCE(?, qualification_file)
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null,
+        roster ? normalizeRoster(roster) : null,
         aadhar_file || null, pan_file || null, qualification_file || null, req.params.id);
 
   // Sync the linked login's `active` flag to the employee's on-roll status.

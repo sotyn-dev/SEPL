@@ -15,6 +15,8 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
+const { logAuditEvent } = require('../middleware/audit');
+const { rosterCutoffs } = require('../lib/roster');
 
 router.use(authMiddleware);
 
@@ -246,8 +248,12 @@ function calculateForEmployee(db, settings, employee, month) {
   const breakdown = []; // per-day for slip
   const lateDays = []; // [{date, minutes_late, applies_penalty: bool}]
 
-  const lateAfter = timeToMinutes(settings.late_after_time);
-  const halfDayAfter = timeToMinutes(settings.half_day_after_time);
+  // Roster-aware cutoffs (SEPL 2026-07): a 9:00 (early) roster employee is late
+  // 30 min earlier than the 9:30 (general) default. Times still come from the
+  // admin-tuned payroll_settings; the roster just shifts them.
+  const cut = rosterCutoffs(settings, employee.roster);
+  const lateAfter = timeToMinutes(cut.late_after_time);
+  const halfDayAfter = timeToMinutes(cut.half_day_after_time);
 
   for (let day = 1; day <= lastDay; day++) {
     const dateStr = `${year}-${pad(mm)}-${pad(day)}`;
@@ -548,6 +554,11 @@ function calculateForEmployee(db, settings, employee, month) {
     cl_overridden: clOverridden,
     unpaid_leaves: unpaidLeaves,
     sunday_count: sundayCount,
+    ot_eligible: !!employee.ot_eligible,
+    roster: cut.roster,
+    roster_label: cut.roster_label,
+    late_after_time: cut.late_after_time,
+    half_day_after_time: cut.half_day_after_time,
     ot_hours: round2(otHours),
     ot_threshold: settings.ot_threshold_hours,            // hours/day before OT (= 9)
     ot_per_hour_rate: round2(perHourRate * (settings.ot_rate_multiplier || 1)), // = salary/days/9
@@ -588,7 +599,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance FROM employees WHERE status='active' AND salary > 0`).all();
+    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance, roster FROM employees WHERE status='active' AND salary > 0`).all();
     // Active employees with NO salary set are silently excluded from payroll —
     // surface them so admin knows who's missing and why (mam 2026-06-12:
     // "X not in payroll even they present").  Salary, not attendance, gates
@@ -637,16 +648,22 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
     const { month } = req.body;
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month required' });
     const db = getDb();
+    // Re-finalise guard (SEPL 2026-07): finalise is a one-way snapshot. If the
+    // month is already finalised, refuse to overwrite it with fresh live
+    // numbers — the admin must explicitly /unlock first. Prevents a silent
+    // re-run from clobbering a frozen, possibly-already-paid month.
+    const alreadyFinal = db.prepare('SELECT COUNT(*) AS c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+    if (alreadyFinal > 0) return res.status(409).json({ error: `${month} is already finalised. Unlock it first if you really need to re-finalise.` });
     const settings = getSettings(db);
     const employees = db.prepare(`SELECT * FROM employees WHERE status='active' AND salary > 0`).all();
 
     const ins = db.prepare(`INSERT OR REPLACE INTO payroll_runs (
       month, employee_id, employee_name, base_salary, working_days, paid_days, half_days,
       absent_days, late_marks, lates_converted_absent, late_penalty, paid_leaves, unpaid_leaves, sundays,
-      ot_hours, gross_earned, ot_pay, deductions, net_pay,
+      ot_hours, gross_earned, ot_pay, ot_eligible, ot_per_hour_rate, ot_threshold, net_before_ot, roster, deductions, net_pay,
       basic_pay, conveyance, hra, adhoc, misc, advance,
       breakdown_json, status, finalised_by, finalised_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
 
     const tx = db.transaction(() => {
       for (const emp of employees) {
@@ -654,7 +671,7 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
         ins.run(
           month, emp.id, emp.name, r.base_salary, r.working_days, r.paid_days, r.half_days,
           r.absent_days, r.late_marks, r.lates_converted_absent, r.late_penalty, r.paid_leaves, r.unpaid_leaves, r.sunday_count,
-          r.ot_hours, r.gross_earned, r.ot_pay, r.deductions, r.net_pay,
+          r.ot_hours, r.gross_earned, r.ot_pay, (emp.ot_eligible ? 1 : 0), r.ot_per_hour_rate, r.ot_threshold, r.net_before_ot, (emp.roster || 'general'), r.deductions, r.net_pay,
           r.basic_pay, r.conveyance, r.hra, r.adhoc, r.misc, r.advance,
           JSON.stringify(r.breakdown), 'finalised', req.user.id
         );
@@ -695,9 +712,24 @@ router.put('/paid/:employee_id', requirePermission('payroll', 'edit'), (req, res
 // POST unlock a finalised month (admin only — for corrections)
 router.post('/unlock', adminOnly, (req, res) => {
   const { month } = req.body;
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
   const db = getDb();
-  db.prepare('DELETE FROM payroll_runs WHERE month=? AND status != ?').run(month, 'disbursed');
-  res.json({ message: `Unlocked ${month}` });
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null;
+  const ua = req.headers['user-agent'] || null;
+  // Integrity guard (SEPL 2026-07): once ANY employee in this month is marked
+  // PAID, final payment is done and the month is a permanent record. Unlocking
+  // would delete the frozen snapshot and let the next open live-recompute base
+  // salary / OT / deductions from CURRENT data — silently corrupting history
+  // (the "June showed unlocked" incident). Block it, and log every attempt so
+  // a reopen is never anonymous again.
+  const paidCount = db.prepare('SELECT COUNT(*) AS c FROM payroll_runs WHERE month=? AND paid=1').get(month).c;
+  if (paidCount > 0) {
+    logAuditEvent({ user: req.user, action: 'PAYROLL_UNLOCK_BLOCKED', entity_type: 'payroll', entity_label: month, method: 'POST', path: '/api/payroll/unlock', status_code: 409, ip, user_agent: ua });
+    return res.status(409).json({ error: `${month} has ${paidCount} employee(s) already marked paid — this is a locked payroll record and cannot be unlocked. Reverse those payments first if a correction is genuinely required.` });
+  }
+  const result = db.prepare('DELETE FROM payroll_runs WHERE month=? AND paid=0').run(month);
+  logAuditEvent({ user: req.user, action: 'PAYROLL_UNLOCK', entity_type: 'payroll', entity_label: month, method: 'POST', path: '/api/payroll/unlock', status_code: 200, ip, user_agent: ua, after: { removed: result.changes } });
+  res.json({ message: `Unlocked ${month}`, removed: result.changes });
 });
 
 // PUT an employee's advance-salary amount for a month (admin). Deducted
