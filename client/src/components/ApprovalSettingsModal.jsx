@@ -1,4 +1,4 @@
-// ⚙ Approval Settings — the ONE place that says who may act at each approval
+// ⚙ Workflow Settings — the ONE place that says who may act at each approval
 // gate of the Indent → Dispatch flow, and which gates are switched on.
 //
 // Deliberately separate from ⚙ Responsible (RACI): RACI is per-record reporting
@@ -161,7 +161,7 @@ export default function ApprovalSettingsModal({ open, onClose }) {
       });
       // Refresh the live "currently matches" from the server's re-resolution.
       if (data?.standin) setStandin(s => ({ ...s, matches: data.standin.matches || [] }));
-      toast.success('Approval settings saved');
+      toast.success('Workflow settings saved');
       onClose();
     } catch (e) {
       toast.error(e.response?.data?.error || 'Save failed');
@@ -197,7 +197,7 @@ export default function ApprovalSettingsModal({ open, onClose }) {
     setCfg(c => ({ ...c, [gate]: { ...c[gate], enabled: !c[gate].enabled } }));
 
   return (
-    <Modal isOpen={open} onClose={onClose} title="⚙ Approval Settings — Indent to Dispatch">
+    <Modal isOpen={open} onClose={onClose} title="⚙ Workflow Settings — Indent to Dispatch">
       <div className="space-y-3">
         <p className="text-xs text-gray-500">
           Name who may approve at each step — <b>active</b> users only. An <b>admin</b> can

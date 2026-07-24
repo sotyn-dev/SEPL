@@ -284,7 +284,7 @@ export default function Procurement() {
       return sp;
     }, { replace: true });
   };
-  // ⚙ Approval Settings popup — approval gate config (who may act + on/off).
+  // ⚙ Workflow Settings popup — approval gate config (who may act + on/off).
   const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
   const [indents, setIndents] = useState([]);
   // Row-INVARIANT approval context. The L1/L2 approvers and the L2 switch are a
@@ -315,7 +315,7 @@ export default function Procurement() {
       // each render path — the desktop path declared it inside the actions IIFE
       // but used it outside, which threw "canRevoke is not defined" at runtime.
       canRevoke: l2On ? canActL2 : canActL1,
-      // CRM approvers named in ⚙ Approval Settings — an ADDITIONAL allow on top
+      // CRM approvers named in ⚙ Workflow Settings — an ADDITIONAL allow on top
       // of the existing rule, not a replacement. Pure membership; the rest of the
       // CRM chain stays in the maps.
       crmNamed: (r.crm_approver_ids || []).includes(user?.id),
@@ -1613,7 +1613,7 @@ export default function Procurement() {
   // ── Vendor PO 2-level approval (mam 2026-06-19). Show the Approve/Reject
   // buttons to the pending-level approver, admin, or the COO. Same rule as the
   // backend — only the identity source moved: the approver is now whoever is
-  // named on that PO level in ⚙ Approval Settings (the hardcoded name is the
+  // named on that PO level in ⚙ Workflow Settings (the hardcoded name is the
   // server-side fallback), delivered as po_pending_approver_ids.
   //
   // Membership on IDS, not a name comparison. This used to test
@@ -2175,8 +2175,8 @@ export default function Procurement() {
           {isAdmin() && (
             <button onClick={() => setApprovalSettingsOpen(true)}
               className="btn btn-secondary flex items-center gap-2 text-sm"
-              title="Set who may approve at each step of the Indent → Dispatch flow">
-              ⚙ Approval Settings
+              title="Approval workflow for Indent → Dispatch — who may act at each gate">
+              ⚙ Workflow Settings
             </button>
           )}
         </div>
@@ -2470,7 +2470,7 @@ export default function Procurement() {
               // (2026-06-06: "admin can also approval like others"). Matches
               // the backend, which lets admin approve indents they raised.
               const isCreator = i.created_by === user?.id && !isAdmin();
-              // Approvers = ⚙ Approval Settings list, else the legacy approval_role
+              // Approvers = ⚙ Workflow Settings list, else the legacy approval_role
               // user. Whole-module values, so they come from approvalCtx (hoisted
               // above both render paths) rather than being rebuilt on every row.
               const { l2On, canActL1, canActL2, canRevoke } = approvalCtx;
