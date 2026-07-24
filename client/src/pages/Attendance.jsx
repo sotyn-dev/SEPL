@@ -337,7 +337,7 @@ export default function Attendance() {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       toast.success('Monthly muster exported — open in Excel to print or send.');
-    } catch (e) { toast.error('Export failed'); }
+    } catch { toast.error('Export failed'); }
   };
   // Programmatic file picker → resolves the chosen File (or null if cancelled).
   const pickFile = (accept) => new Promise((resolve) => {
