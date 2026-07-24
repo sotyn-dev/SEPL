@@ -1180,7 +1180,9 @@ router.get('/approval-settings', (req, res) => {
     // else the app_settings fallback — so the pill matches what the flow does on
     // a database where L2 has never been set from this screen.
     if (gates.l2) gates.l2.enabled = l2Enabled(db);
-    res.json({ gates });
+    // The Vendor PO stand-in (role mailbox) config + who it resolves to now.
+    const standin = approvalGates.readPoStandin(db);
+    res.json({ gates, standin });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1205,7 +1207,13 @@ router.put('/approval-settings', (req, res) => {
       db.prepare(`INSERT INTO app_settings (key, value) VALUES ('indent_l2_enabled', ?)
                   ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(l2Enabled ? '1' : '0');
     }
-    res.json({ gates, message: 'Approval settings saved' });
+    // Vendor PO stand-in (role mailbox). Only written when the screen sends it,
+    // so a save that doesn't touch it leaves the rule alone. Validation lives in
+    // writePoStandin and surfaces as the 400 below.
+    if (req.body?.standin !== undefined) {
+      approvalGates.writePoStandin(db, req.body.standin, req.user.id);
+    }
+    res.json({ gates, standin: approvalGates.readPoStandin(db), message: 'Approval settings saved' });
   } catch (e) {
     // Validation failures (unknown gate/flag, inactive user) are the caller's
     // fault, not a server fault — surface them as 400 so the screen can show why.
@@ -3894,10 +3902,13 @@ const legacyPoApprover = (level) => (db) => resolvePoUserByName(db, PO_APPROVERS
 // could name someone the gate would refuse.
 const poApproversFor = (db, level) => gateApproverList(db, poGateKey(level), legacyPoApprover(level));
 function canApprovePoLevel(db, userId, level) {
-  const u = db.prepare('SELECT role, email, username FROM users WHERE id=?').get(userId);
+  const u = db.prepare('SELECT role, email FROM users WHERE id=?').get(userId);
   if (u?.role === 'admin') return true;
-  const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
-  if (isCoo(u?.email) || isCoo(u?.username)) return true;          // COO can stand in
+  // Stand-in (role mailbox, e.g. coo@…) may act at either level. Configurable in
+  // ⚙ Approval Settings; defaults to the old hardcoded 'coo@' EMAIL match when
+  // unset — so this is a no-op on deploy. Username is no longer consulted (no
+  // real username is an email; that branch matched nobody).
+  if (approvalGates.isPoStandin(db, u?.email)) return true;
   return poApproversFor(db, level).some(a => a.id === userId);
 }
 const poLevelOf = (s) => (s === 'pending_l1' ? 1 : s === 'pending_l2' ? 2 : null);

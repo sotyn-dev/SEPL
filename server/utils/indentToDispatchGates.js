@@ -149,6 +149,73 @@ function isApprover(db, gate, userId) {
   return approversOf(db, gate).some(u => u.id === +userId);
 }
 
+// ── Vendor PO stand-in ─────────────────────────────────────────────────────
+// A role MAILBOX (e.g. coo@…) whose current holder may act at EITHER PO level —
+// approve or reject. Named for what it is: a stand-in, not a generic "override".
+// It is an email-prefix match, so it follows the office as the person changes,
+// which a per-user pick could not. Stored as two scalars in the settings table:
+//   approval.po.standin.email    — one or more prefixes, comma-separated
+//   approval.po.standin.enabled  — '1' / '0'
+//
+// DEFAULTS reproduce the pre-settings hardcoded rule exactly: enabled, prefix
+// 'coo@', EMAIL ONLY. The old code also matched username, but no real username is
+// an email (they look like 'Nitin.jain'); that branch matched nobody and was a
+// silent second grant surface, so it is dropped here — an intentional no-op today.
+const PO_STANDIN_DEFAULT = 'coo@';
+function poStandin(db) {
+  const enRaw = rawScalar(db, 'approval.po.standin.enabled');
+  const enabled = enRaw == null ? true : enRaw === '1';           // default ON
+  const raw = rawScalar(db, 'approval.po.standin.email');
+  const patterns = String(raw == null ? PO_STANDIN_DEFAULT : raw)  // default legacy value
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  return { enabled, patterns };
+}
+// Does this EMAIL match the active stand-in rule? Fails closed: disabled or no
+// pattern ⇒ nobody. Username is deliberately NOT consulted.
+function isPoStandin(db, email) {
+  const { enabled, patterns } = poStandin(db);
+  if (!enabled || !patterns.length) return false;
+  const e = String(email || '').trim().toLowerCase();
+  return !!e && patterns.some(p => e.startsWith(p));
+}
+// The users an active stand-in rule currently RESOLVES to — for the screen's
+// "currently matches: …" preview and for letting them SEE pending POs. Empty
+// when the rule is off.
+function poStandinUsers(db) {
+  const { enabled, patterns } = poStandin(db);
+  if (!enabled || !patterns.length) return [];
+  try {
+    const rows = db.prepare("SELECT id, name, email FROM users WHERE active=1 AND email IS NOT NULL AND email<>''").all();
+    return rows.filter(u => { const e = u.email.trim().toLowerCase(); return patterns.some(p => e.startsWith(p)); })
+               .map(u => ({ id: u.id, name: u.name }));
+  } catch (_) { return []; }
+}
+// Persist the stand-in scalars. Admin-gated by the route. Validates so a
+// fat-fingered value can't silently widen or disable PO authority:
+//   • enabled must be boolean-ish
+//   • when enabled, at least one pattern, each containing '@' and no bare '*'
+function writePoStandin(db, payload, actorId) {
+  if (!payload || typeof payload !== 'object') return;
+  const enabled = payload.enabled === true || payload.enabled === 1 || payload.enabled === '1';
+  const patterns = String(payload.email ?? '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  if (enabled) {
+    if (!patterns.length) throw new Error('Enter a stand-in email pattern before enabling it (or leave it disabled).');
+    for (const p of patterns) {
+      if (!p.includes('@')) throw new Error(`Stand-in pattern "${p}" must contain "@" — it matches the start of an email address.`);
+      if (p === '*' || p === '@' || p === '%') throw new Error(`Stand-in pattern "${p}" is too broad — it would grant PO approval to everyone.`);
+    }
+  }
+  const setScalar = db.prepare(`
+    INSERT INTO indent_to_dispatch_settings (key, value, updated_at, updated_by)
+    VALUES (?, ?, CURRENT_TIMESTAMP, ?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP, updated_by=excluded.updated_by`);
+  db.transaction(() => {
+    setScalar.run('approval.po.standin.email', patterns.join(', '), actorId || null);
+    setScalar.run('approval.po.standin.enabled', enabled ? '1' : '0', actorId || null);
+  })();
+}
+
 // Every gate this ACTIVE user is named on — used by the indent/PO list so an
 // approver can SEE the records waiting on them without procurement.approve.
 function gatesForUser(db, userId) {
@@ -182,6 +249,13 @@ function readAll(db) {
     out[gate] = entry;
   }
   return out;
+}
+
+// The PO stand-in config for the screen, with the users it currently resolves to
+// so the modal can show "currently matches: …" without a second round-trip.
+function readPoStandin(db) {
+  const { enabled, patterns } = poStandin(db);
+  return { enabled, email: patterns.join(', '), matches: poStandinUsers(db) };
 }
 
 // ── Write ────────────────────────────────────────────────────────────────────
@@ -293,5 +367,6 @@ module.exports = {
   GATES, GATE_KEYS,
   usersKey, enabledKey,
   approversOf, gateEnabled, storedEnabled, effectiveEnabled, isApprover, gatesForUser,
+  isPoStandin, poStandinUsers, readPoStandin, writePoStandin,
   readAll, writeAll,
 };
