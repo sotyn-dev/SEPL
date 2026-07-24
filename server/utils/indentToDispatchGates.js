@@ -234,6 +234,31 @@ function writeAll(db, payload, actorId) {
     }
   }
 
+  // Guard: the two Vendor PO levels must be DIFFERENT people. Under the old
+  // hardcoded rule this was structural, not policy — PO_APPROVERS held two
+  // different names, so a non-admin could only ever match one level. Production
+  // bears it out: every PO signed at both levels was signed by an ADMIN
+  // (Admin x4, Nitin x2, Ankur x1 — zero non-admins), because admin is a separate
+  // short-circuit. Naming one non-admin on both cards would let a single person
+  // carry an entire vendor PO, which the system could not express before.
+  //
+  // This constrains CONFIGURATION only. Admins still pass both levels exactly as
+  // they always have — that override is unchanged and accepted.
+  if (gates.includes('po_l1') || gates.includes('po_l2')) {
+    // Effective final state: the payload's list when it sets one, else what is
+    // already stored — a save touching only one gate must still be checked
+    // against the other's existing value.
+    const finalOf = (gate) => (Array.isArray(payload[gate]?.users)
+      ? payload[gate].users.map(Number)
+      : approversOf(db, gate).map(u => u.id));
+    const l1 = finalOf('po_l1'), l2 = finalOf('po_l2');
+    const clash = l1.find(id => l2.includes(id));
+    if (clash != null) {
+      const nm = db.prepare('SELECT name FROM users WHERE id=?').get(clash)?.name || `#${clash}`;
+      throw new Error(`${nm} cannot hold both Vendor PO L1 and L2 — the two levels must be different people.`);
+    }
+  }
+
   const setScalar = db.prepare(`
     INSERT INTO indent_to_dispatch_settings (key, value, updated_at, updated_by)
     VALUES (?, ?, CURRENT_TIMESTAMP, ?)

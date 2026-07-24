@@ -54,12 +54,14 @@ const GATES = [
     label: 'Vendor PO — L1 Approval',
     hint: 'First sign-off on the vendor PO.',
     single: true,
+    exclusiveWith: 'po_l2',
   },
   {
     key: 'po_l2',
     label: 'Vendor PO — L2 Approval',
     hint: 'Second sign-off. The PO goes live after this.',
     single: true,
+    exclusiveWith: 'po_l1',
   },
   // No 'revoke' card: undoing a closed indent (re-approve / re-reject / reset a
   // store issue) is NOT a separately-assignable gate. It follows the current
@@ -157,6 +159,12 @@ export default function ApprovalSettingsModal({ open, onClose }) {
   const setOnlyUser = (gate, id) =>
     setCfg(c => ({ ...c, [gate]: { ...c[gate], users: id ? [id] : [] } }));
 
+  // Is this person already holding the mutually-exclusive partner gate? The two
+  // Vendor PO levels must be different people — one non-admin must never be able
+  // to carry a whole PO. Mirrors the writeAll guard; the server is the authority.
+  const takenByOther = (g, userId) =>
+    !!g.exclusiveWith && (cfg[g.exclusiveWith]?.users || []).includes(userId);
+
   const dropUser = (gate, id) =>
     setCfg(c => ({ ...c, [gate]: { ...c[gate], users: c[gate].users.filter(x => x !== id) } }));
 
@@ -219,7 +227,17 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                       value={st.users[0] ?? ''}
                       onChange={e => setOnlyUser(g.key, e.target.value ? +e.target.value : null)}>
                       <option value="">— not set (admin only) —</option>
-                      {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                      {users.map(u => {
+                        // The person holding the OTHER PO level can't hold this one too —
+                        // shown disabled rather than hidden, so it's clear why they're
+                        // unavailable instead of them silently missing from the list.
+                        const taken = takenByOther(g, u.id);
+                        return (
+                          <option key={u.id} value={u.id} disabled={taken}>
+                            {u.name}{taken ? '  — already PO ' + (g.exclusiveWith === 'po_l2' ? 'L2' : 'L1') : ''}
+                          </option>
+                        );
+                      })}
                     </select>
                   </>
                 ) : (
@@ -266,6 +284,11 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                   {g.conflictsWith && (
                     <> · Cannot be the same person as <b className="font-semibold">
                       {GATES.find(x => x.key === g.conflictsWith)?.label}</b> on one record.</>
+                  )}
+                  {g.exclusiveWith && (
+                    <> · Must be a different person from <b className="font-semibold">
+                      {GATES.find(x => x.key === g.exclusiveWith)?.label}</b> — one person
+                      must not carry a whole PO. (An admin can still act at both.)</>
                   )}
                   {g.extra && <> · {g.extra}</>}
                 </div>
