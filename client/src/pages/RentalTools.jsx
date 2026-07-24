@@ -57,7 +57,7 @@ const fmtDt = (iso) => iso ? fmtDateTime(iso, { dateStyle: 'medium', timeStyle: 
 const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 
 export default function RentalTools() {
-  const { user, canCreate } = useAuth();
+  const { user, canCreate, canEdit, canApprove } = useAuth();
   const [tab, setTab] = useUrlTab('dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [enquiries, setEnquiries] = useState([]);
@@ -121,7 +121,15 @@ export default function RentalTools() {
   useEffect(() => { loadDashboard(); loadEnquiries(); loadLookups(); }, []);
   useEffect(() => { loadEnquiries(); }, [filters]);
 
-  const isApprover = dashboard?.approver_user_id ? user?.id === dashboard.approver_user_id : false;
+  // Mirrors server canApprove(): the designated approver if one is
+  // configured, otherwise anyone whose role has can_approve on the
+  // module.  Previously the fallback was `false`, so with no approver
+  // configured the buttons were ENABLED for everyone (…&& !!approver_id
+  // made disabled=false) and the server 403'd on click.
+  const isApprover = dashboard?.approver_user_id
+    ? user?.id === dashboard.approver_user_id
+    : canApprove('rental_tools');
+  const mayEdit = canEdit('rental_tools');
   // Stage labels — admin-renamable from Settings.  Falls back to the
   // hard-coded English defaults while the dashboard request is in
   // flight or if the override hasn't been saved.
@@ -466,7 +474,7 @@ export default function RentalTools() {
             <div><label className="label">Days Required *</label><input className="input" type="number" min="1" required value={form.days_required} onChange={e => setForm({ ...form, days_required: +e.target.value })} /></div>
             <div className="col-span-2">
               <label className="label">Site Engineer *</label>
-              <select className="select" value={form.site_engineer_id} onChange={e => {
+              <select className="select" required value={form.site_engineer_id} onChange={e => {
                 const u = usersList.find(x => x.id === +e.target.value);
                 setForm({ ...form, site_engineer_id: e.target.value, site_engineer_name: u?.name || '' });
               }}>
@@ -547,9 +555,11 @@ export default function RentalTools() {
                   <div className="text-xs font-semibold uppercase text-gray-700 flex items-center gap-2">
                     <FiFileText /> Stage 1 · Finalise Rate + Create PO
                   </div>
-                  {!isApprover && dashboard?.approver_user_id && (
+                  {!isApprover && (
                     <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                      Only the designated approver (Ajmer) can finalise. Logged in as {user?.name}.
+                      {dashboard?.approver_user_id
+                        ? <>Only the designated approver (Ajmer) can finalise. Logged in as {user?.name}.</>
+                        : <>Only users with approve permission on Rental Tools can finalise. Ask admin to grant it or set an approver in Settings.</>}
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2 text-xs">
@@ -605,7 +615,7 @@ export default function RentalTools() {
                       <input className="input w-full" value={rateForm.crm_name} onChange={e => setRateForm({ ...rateForm, crm_name: e.target.value })} />
                     </label>
                   </div>
-                  <button onClick={finaliseRate} disabled={!isApprover && !!dashboard?.approver_user_id}
+                  <button onClick={finaliseRate} disabled={!isApprover}
                           className="btn btn-primary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                     <FiCheckCircle /> Finalise Rate & Create PO
                   </button>
@@ -631,9 +641,14 @@ export default function RentalTools() {
                     </div>
                     <div className="text-gray-500">Site engineer takes a live photo + allows GPS when material lands at site.</div>
                   </div>
+                  {!mayEdit && (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                      You need edit permission on Rental Tools to mark material received. Ask admin to grant it.
+                    </div>
+                  )}
                   <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={onPhotoPicked} className="hidden" />
-                  <button onClick={captureAndUploadPhoto} disabled={uploadingPhoto}
-                          className="btn btn-primary w-full text-sm flex items-center justify-center gap-2">
+                  <button onClick={captureAndUploadPhoto} disabled={uploadingPhoto || !mayEdit}
+                          className="btn btn-primary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                     <FiCamera /> {uploadingPhoto ? 'Uploading…' : 'Take Photo & Mark Received'}
                   </button>
                 </div>
@@ -650,16 +665,18 @@ export default function RentalTools() {
                     {drawerEnq.material_received_photo && <div><a href={drawerEnq.material_received_photo} target="_blank" rel="noreferrer" className="text-blue-600 underline">View receipt photo</a></div>}
                     <div><strong>Return target:</strong> {fmtD(drawerEnq.return_target_date)}</div>
                   </div>
-                  {!isApprover && dashboard?.approver_user_id && (
+                  {!isApprover && (
                     <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                      Only Ajmer can sign the return.
+                      {dashboard?.approver_user_id
+                        ? <>Only Ajmer can sign the return.</>
+                        : <>Only users with approve permission on Rental Tools can sign the return.</>}
                     </div>
                   )}
                   <label className="space-y-1 text-xs block">
                     <span className="text-gray-600">Notes (optional)</span>
                     <input className="input w-full" value={returnNotes} onChange={e => setReturnNotes(e.target.value)} placeholder="e.g. one drum dented, ₹500 deduction" />
                   </label>
-                  <button onClick={signReturn} disabled={!isApprover && !!dashboard?.approver_user_id}
+                  <button onClick={signReturn} disabled={!isApprover}
                           className="btn btn-primary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                     <FiCheckCircle /> Sign Return & Close
                   </button>
@@ -674,8 +691,10 @@ export default function RentalTools() {
                 </div>
               )}
 
-              {/* Cancel link */}
-              {drawerEnq.status === 'open' && (
+              {/* Cancel link — server needs the edit bit, so hide it
+                  from view-only users instead of letting them click
+                  into a 403 "Failed" toast. */}
+              {drawerEnq.status === 'open' && mayEdit && (
                 <button onClick={cancelEnquiry} className="text-xs text-red-600 hover:underline flex items-center gap-1">
                   <FiXCircle size={12} /> Cancel this enquiry
                 </button>

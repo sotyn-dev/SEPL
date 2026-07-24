@@ -31,6 +31,12 @@ router.post('/', adminOnly, (req, res) => {
   if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Rule name is required' });
   if (!b.event_key || !EVENTS[b.event_key]) return res.status(400).json({ error: 'Pick a valid event' });
   const db = getDb();
+  // One rule per recipient-list (listOnly) event — a second rule would silently
+  // merge extra recipients into the HR cron's send (mam 2026-07-22).
+  if (EVENTS[b.event_key].listOnly) {
+    const dupe = db.prepare('SELECT id FROM email_rules WHERE event_key=?').get(b.event_key);
+    if (dupe) return res.status(409).json({ error: 'This recipient list already has a rule — edit the existing one instead of adding another.' });
+  }
   const r = db.prepare(
     `INSERT INTO email_rules (name, event_key, enabled, conditions, recipients, from_addr, subject_tpl, body_tpl, created_by)
      VALUES (?,?,?,?,?,?,?,?,?)`
@@ -51,6 +57,12 @@ router.put('/:id', adminOnly, (req, res) => {
   const db = getDb();
   const existing = db.prepare('SELECT id FROM email_rules WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Rule not found' });
+  // Same one-rule-per-listOnly-event guard on update (e.g. re-pointing a rule
+  // at an event that already has one).
+  if (b.event_key && EVENTS[b.event_key]?.listOnly) {
+    const dupe = db.prepare('SELECT id FROM email_rules WHERE event_key=? AND id<>?').get(b.event_key, req.params.id);
+    if (dupe) return res.status(409).json({ error: 'This recipient list already has another rule — remove it first.' });
+  }
   db.prepare(
     `UPDATE email_rules SET name=?, event_key=?, enabled=?, conditions=?, recipients=?,
                             from_addr=?, subject_tpl=?, body_tpl=?, updated_at=CURRENT_TIMESTAMP

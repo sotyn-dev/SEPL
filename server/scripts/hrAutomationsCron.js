@@ -22,6 +22,9 @@
 const { getDb } = require('../db/schema');
 let sendEmailFn = null;
 try { sendEmailFn = require('../lib/email').sendEmail; } catch (_) {}
+// Resolve the Email Triggers recipient list (fixed + roles) for a reminder event.
+let resolveRecipients = null;
+try { resolveRecipients = require('../lib/emailRules').resolveRecipients; } catch (_) {}
 
 const INTERVAL_MS = 30 * 60 * 1000;     // 30 min
 const OFFER_EXPIRY_DAYS = 7;
@@ -59,6 +62,32 @@ function notify(db, { user_id, type, title, body, link_url, dedupe_key, sendEmai
 
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Send ONE reminder email for `eventKey` (jobs 2 & 3). Recipients come from the
+// enabled Email Triggers rule (fixed addresses + roles); if none is configured
+// it falls back to HR dept/role users minus admins (so the MD isn't emailed).
+// minusEmail (job 3) drops the requester's own address. mam 2026-07-22.
+function sendReminderEmail(db, eventKey, { title, body, link_url }, minusEmail) {
+  if (!sendEmailFn) return;
+  let to = [];
+  try {
+    const set = new Set();
+    if (resolveRecipients) {
+      for (const r of db.prepare('SELECT recipients FROM email_rules WHERE event_key=? AND enabled=1').all(eventKey))
+        for (const e of resolveRecipients(r.recipients, {})) set.add(e);
+    }
+    to = [...set];
+  } catch (_) { /* email_rules may not exist yet */ }
+  if (!to.length) to = findHrUsers(db).filter(u => (u.role || '').toLowerCase() !== 'admin').map(u => u.email).filter(Boolean);
+  if (minusEmail) to = to.filter(e => e.toLowerCase() !== String(minusEmail).toLowerCase());
+  if (!to.length) return;
+  sendEmailFn({
+    to: to.join(', '),
+    subject: `[SEPL ERP] ${title}`,
+    text: `${title}\n\n${body || ''}\n\n${link_url ? 'Open: ' + link_url : ''}`,
+    html: `<h3>${escapeHtml(title)}</h3><p>${escapeHtml(body || '')}</p>${link_url ? `<p><a href="${escapeHtml(link_url)}">Open in ERP</a></p>` : ''}`,
+  }).catch(e => console.warn('[hr-cron] reminder email failed:', e.message));
 }
 
 // ── Scanners ────────────────────────────────────────────────────
@@ -107,21 +136,23 @@ function scanOfferExpiries(db) {
        AND julianday('now') - julianday(offer_sent_at) >= ?
   `).all(OFFER_EXPIRY_DAYS);
   if (stale.length === 0) return 0;
-  const hrUsers = findHrUsers(db);
+  const hrUsers = findHrUsers(db);   // bell → all (incl. admins)
   let made = 0;
   for (const c of stale) {
+    const dedupe = `offer_expiry:${c.id}:${Math.floor(Date.now() / (1000 * 60 * 60 * 24))}`;  // re-trigger daily
+    // First cron pass today for this offer? Fire the email once/day (before the
+    // bell loop writes the dedupe rows).
+    const firstToday = !db.prepare('SELECT 1 FROM notifications WHERE dedupe_key=? LIMIT 1').get(dedupe);
+    const title = `Offer pending response — ${c.name}`;
+    const body = `Offer was sent on ${c.offer_sent_at?.slice(0,10)} and candidate has not responded. Consider following up.`;
+    // In-app bell only (sendEmailTo:null); the email is handled once, below.
     for (const u of hrUsers) {
-      const dedupe = `offer_expiry:${c.id}:${Math.floor(Date.now() / (1000 * 60 * 60 * 24))}`;  // re-trigger daily
       if (notify(db, {
-        user_id: u.id,
-        type: 'offer_expiry',
-        title: `Offer pending response — ${c.name}`,
-        body: `Offer was sent on ${c.offer_sent_at?.slice(0,10)} and candidate has not responded. Consider following up.`,
-        link_url: '/hr',
-        dedupe_key: dedupe,
-        sendEmailTo: u.email,
+        user_id: u.id, type: 'offer_expiry', title, body,
+        link_url: '/hr', dedupe_key: dedupe, sendEmailTo: null,
       })) made++;
     }
+    if (firstToday) sendReminderEmail(db, 'hr.offer_pending', { title, body, link_url: '/hr' });
   }
   return made;
 }
@@ -130,37 +161,43 @@ function scanPendingApprovals(db) {
   // Hiring requests still 'pending' after 24h.  Notify HR users
   // (separation of duties means the original requester can't approve).
   const stale = db.prepare(`
-    SELECT id, position_title, department, requested_by, requested_by_name, created_at
-      FROM hiring_requests
-     WHERE status = 'pending'
-       AND julianday('now') - julianday(created_at) >= (? / 24.0)
+    SELECT hr.id, hr.position_title, hr.department, hr.requested_by, hr.requested_by_name, hr.created_at,
+           ru.email AS requester_email
+      FROM hiring_requests hr
+      LEFT JOIN users ru ON ru.id = hr.requested_by
+     WHERE hr.status = 'pending'
+       AND julianday('now') - julianday(hr.created_at) >= (? / 24.0)
   `).all(PENDING_APPROVAL_HRS);
   if (stale.length === 0) return 0;
-  const hrUsers = findHrUsers(db);
+  const hrUsers = findHrUsers(db);   // bell → all (incl. admins)
   let made = 0;
   for (const r of stale) {
+    const dedupe = `approval_pending:${r.id}:${Math.floor(Date.now() / (1000 * 60 * 60 * 24))}`;
+    const firstToday = !db.prepare('SELECT 1 FROM notifications WHERE dedupe_key=? LIMIT 1').get(dedupe);
+    const title = `Hiring Request awaiting approval — ${r.position_title}`;
+    const body = `${r.requested_by_name || 'A manager'} raised a hiring request for ${r.position_title} (${r.department}). It's been pending for >${PENDING_APPROVAL_HRS}h.`;
+    // In-app bell only — skip the requester (they already know).
     for (const u of hrUsers) {
-      // Don't notify the requester themselves — they already know.
       if (u.id === r.requested_by) continue;
-      const dedupe = `approval_pending:${r.id}:${Math.floor(Date.now() / (1000 * 60 * 60 * 24))}`;
       if (notify(db, {
-        user_id: u.id,
-        type: 'approval_pending',
-        title: `Hiring Request awaiting approval — ${r.position_title}`,
-        body: `${r.requested_by_name || 'A manager'} raised a hiring request for ${r.position_title} (${r.department}). It's been pending for >${PENDING_APPROVAL_HRS}h.`,
-        link_url: '/hr',
-        dedupe_key: dedupe,
-        sendEmailTo: u.email,
+        user_id: u.id, type: 'approval_pending', title, body,
+        link_url: '/hr', dedupe_key: dedupe, sendEmailTo: null,
       })) made++;
     }
+    // Email once/day; separation of duties → drop the requester's own address.
+    if (firstToday) sendReminderEmail(db, 'hr.hiring_approval_pending', { title, body, link_url: '/hr' }, r.requester_email);
   }
   return made;
 }
 
-// HR users = admin OR users with department/role containing "hr".
+// HR users = admin OR users with department/role containing "hr". Selects
+// u.role too so jobs 2 & 3 can send the in-app bell to everyone here (admins
+// included) but filter the EMAIL in JS to non-admins — a person who is here
+// only because role='admin' (the MD, etc.) gets the bell but not the email
+// (mam 2026-07-22).
 function findHrUsers(db) {
   return db.prepare(`
-    SELECT DISTINCT u.id, u.email
+    SELECT DISTINCT u.id, u.email, u.role
       FROM users u
       LEFT JOIN user_roles ur ON ur.user_id = u.id
       LEFT JOIN roles r ON r.id = ur.role_id

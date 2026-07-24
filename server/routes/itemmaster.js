@@ -306,6 +306,22 @@ function snapshotCurrentPrice(db, oldRow, actor) {
   );
 }
 
+// Update just the item identity (name / specification / make) — a SAFE partial
+// update for the Inventory row edit (mam 2026-06-30: "edit item name also").
+// Avoids the full PUT /:id, which would blank the other columns when not sent.
+router.patch('/:id/identity', requirePermission('item_master', 'edit'), (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const cur = db.prepare('SELECT item_name, specification, make FROM item_master WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Item not found' });
+  const item_name = (b.item_name != null && String(b.item_name).trim()) ? String(b.item_name).trim() : cur.item_name;
+  const specification = (b.specification !== undefined) ? String(b.specification || '') : cur.specification;
+  const make = (b.make !== undefined) ? String(b.make || '') : cur.make;
+  db.prepare('UPDATE item_master SET item_name=?, specification=?, make=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(item_name, specification, make, req.params.id);
+  res.json({ ok: true });
+});
+
 // Inline price patch (Inventory page uses this). Snapshots history.
 router.patch('/:id/price', requirePermission('item_master', 'edit'), (req, res) => {
   const db = getDb();

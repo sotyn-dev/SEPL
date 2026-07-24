@@ -68,6 +68,70 @@ function fireIndent(db, indentId, eventKey, extra = {}) {
 // mam's requirement (2026-04-23): site can create indent, nothing else.
 const needsApprove = requirePermission('procurement', 'approve');
 
+// L1 approver identity (mam 2026-07-21). L2 approval has been removed — L1 is
+// now the single, FINAL sign-off on an indent. WHO the L1 approver is comes
+// from the ⚙ Responsible (RACI) board's whole-module default (record_id=0),
+// "L1 Approval" step, for the indent_to_dispatch module:  mam's words —
+// "if in L1 i change responsible name then he can approve".  Only that named
+// person (plus admin) may approve. If mam hasn't named anyone yet we fall back
+// to the legacy approval_role='l1' user so approvals never lock up. Returns
+// { id, name, source }.
+function getL1Approver(db) {
+  let row = null;
+  try {
+    row = db.prepare(
+      "SELECT responsible_id FROM raci_assignment WHERE module='indent_to_dispatch' AND record_id=0 AND step_key='l1'"
+    ).get();
+  } catch (_) { /* raci_assignment not created yet */ }
+  if (row && row.responsible_id) {
+    const u = db.prepare('SELECT id, name FROM users WHERE id=?').get(row.responsible_id);
+    if (u) return { id: u.id, name: u.name, source: 'raci' };
+  }
+  const legacy = db.prepare("SELECT id, name FROM users WHERE approval_role='l1' AND active=1 LIMIT 1").get();
+  return legacy ? { id: legacy.id, name: legacy.name, source: 'role' } : { id: null, name: null, source: 'none' };
+}
+
+// L2 approval on/off switch (mam 2026-07-21: "i want to turn l2 off/on myself").
+// Stored in app_settings.indent_l2_enabled = '1' (ON, old L1→L2 flow) or '0'/
+// absent (OFF, L1 is final — the default after the 2026-07-21 removal). Admin
+// flips it from the Procurement page; no code change needed each time.
+function l2Enabled(db) {
+  try {
+    return db.prepare("SELECT value v FROM app_settings WHERE key='indent_l2_enabled'").get()?.v === '1';
+  } catch (_) { return false; }
+}
+
+// CRM approval stage on/off (mam 2026-07-21: "if step off, skip it, go to next").
+// Driven by the per-step ON/OFF on the "CRM Approval" step in the ⚙ Responsible
+// whole-module editor (raci_assignment record_id=0, step_key='crm'). Default ON.
+// When OFF, billable Extra indents SKIP the CRM sign-off and go straight to L1.
+function crmStageActive(db) {
+  try {
+    const r = db.prepare(
+      "SELECT step_enabled FROM raci_assignment WHERE module='indent_to_dispatch' AND record_id=0 AND step_key='crm'"
+    ).get();
+    return !r || r.step_enabled == null || r.step_enabled !== 0;   // default ON
+  } catch (_) { return true; }
+}
+
+// L2 approver identity — mirror of getL1Approver but for the 'l2' RACI step
+// (mam picked "the L2 Approval Responsible name"). Only meaningful when L2 is
+// switched ON. Falls back to the legacy approval_role='l2' user if unset.
+function getL2Approver(db) {
+  let row = null;
+  try {
+    row = db.prepare(
+      "SELECT responsible_id FROM raci_assignment WHERE module='indent_to_dispatch' AND record_id=0 AND step_key='l2'"
+    ).get();
+  } catch (_) { /* raci_assignment not created yet */ }
+  if (row && row.responsible_id) {
+    const u = db.prepare('SELECT id, name FROM users WHERE id=?').get(row.responsible_id);
+    if (u) return { id: u.id, name: u.name, source: 'raci' };
+  }
+  const legacy = db.prepare("SELECT id, name FROM users WHERE approval_role='l2' AND active=1 LIMIT 1").get();
+  return legacy ? { id: legacy.id, name: legacy.name, source: 'role' } : { id: null, name: null, source: 'none' };
+}
+
 // Match a Business Book row by company / client name (mam 2026-06-06: Extra
 // indents not linked to a project should still pull client + mobile + state +
 // district from the Business Book "according to company name"). Returns the
@@ -698,7 +762,20 @@ router.get('/indents', (req, res) => {
   // see only the ones they raised. Mam toggles this by checking / unchecking
   // 'approve' on the role's procurement permissions.
   const isAdmin = req.user.role === 'admin';
-  const canSeeAll = isAdmin || (() => {
+  // The designated L1 approver (from the ⚙ Responsible RACI default) must be
+  // able to SEE every indent even if their role lacks procurement.approve —
+  // otherwise "change the L1 Responsible name → he can approve" would leave the
+  // named person with an empty list (mam 2026-07-21). getL1Approver used again
+  // below for approver_names / l1_approver_id; cheap enough to call twice.
+  const isL1Approver = (() => {
+    try {
+      if (getL1Approver(db).id === req.user.id) return true;
+      // The L2 approver (when the L2 switch is ON) must also see indents.
+      if (l2Enabled(db) && getL2Approver(db).id === req.user.id) return true;
+      return false;
+    } catch (_) { return false; }
+  })();
+  const canSeeAll = isAdmin || isL1Approver || (() => {
     const r = db.prepare(`
       SELECT MAX(CASE WHEN rp.can_approve = 1 OR rp.can_see_all = 1 THEN 1 ELSE 0 END) as ok
       FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
@@ -984,12 +1061,12 @@ router.get('/indents', (req, res) => {
   // Names of the currently-designated L1 / L2 approvers — surfaced so the
   // UI can show "Awaiting Nitin Jain ji" on rows where nobody has acted
   // yet. Pulled once per request, not per row.
-  const l1User = db.prepare("SELECT name FROM users WHERE approval_role='l1' AND active=1 LIMIT 1").get();
-  const l2User = db.prepare("SELECT name FROM users WHERE approval_role='l2' AND active=1 LIMIT 1").get();
-  const approverNames = {
-    l1: l1User?.name || 'L1 approver',
-    l2: l2User?.name || 'L2 approver',
-  };
+  // L1 approver comes from the ⚙ Responsible (RACI) module default (mam
+  // 2026-07-21). L2 approver only matters when the L2 switch is ON.
+  const l1Appr = getL1Approver(db);
+  const l2On = l2Enabled(db);
+  const l2Appr = l2On ? getL2Approver(db) : { id: null, name: null };
+  const approverNames = { l1: l1Appr.name || 'L1 approver', l2: l2On ? (l2Appr.name || 'L2 approver') : null };
 
   res.json(indents.map(i => ({
     ...i,
@@ -1000,7 +1077,31 @@ router.get('/indents', (req, res) => {
     delivery_bill_amount: +(deliveryByIndent.get(i.id) || 0).toFixed(2),
     delivery_pct: pctByIndent.get(i.id) || 0,
     approver_names: approverNames,
+    // Approver ids the frontend gates the Approve buttons on (user.id === this).
+    // Same for every row (module default). l2_enabled drives the whole L2 UI.
+    l1_approver_id: l1Appr.id,
+    l2_approver_id: l2Appr.id,
+    l2_enabled: l2On,
   })));
+});
+
+// ─── L2 approval on/off switch (mam 2026-07-21) ──────────────────────
+// A self-serve toggle so mam / management can turn the indent's second
+// approval level on or off without a code change. Stored in app_settings.
+// GET is open to any authenticated user (the UI needs it to render the
+// right buttons); PUT is admin-only.
+router.get('/l2-setting', (req, res) => {
+  res.json({ enabled: l2Enabled(getDb()) });
+});
+router.put('/l2-setting', (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only an admin can turn L2 approval on or off.' });
+  }
+  const enabled = req.body?.enabled === true || req.body?.enabled === 1 || req.body?.enabled === '1';
+  const db = getDb();
+  db.prepare(`INSERT INTO app_settings (key, value) VALUES ('indent_l2_enabled', ?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(enabled ? '1' : '0');
+  res.json({ enabled, message: enabled ? 'L2 approval turned ON' : 'L2 approval turned OFF' });
 });
 
 // ─── Indent raising window (mam 2026-06-16) ──────────────────────────
@@ -1270,7 +1371,11 @@ router.post('/indents', (req, res) => {
   const basePolicy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
   // RGP now follows the normal L1 → L2 chain like Material (mam 2026-06-06:
   // "rgp approval like as material l1,l2" — reverses the earlier hr_single).
-  const policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
+  // Billable Extra indents normally route through CRM first (crm_two_level).
+  // But if the CRM approval step has been switched OFF in ⚙ Responsible, that
+  // stage is skipped — the indent goes straight to L1 like a normal two_level
+  // (mam 2026-07-21: "if step off, skip it, go to next").
+  const policy = isBillable && basePolicy === 'two_level' && crmStageActive(db) ? 'crm_two_level' : basePolicy;
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
@@ -1283,8 +1388,10 @@ router.post('/indents', (req, res) => {
     // l1_status — pending for two_level / crm_two_level AND hr_single
     // (the single HR gate is tracked on l1_*).
     policy === 'two_level' || policy === 'crm_two_level' || policy === 'hr_single' ? 'pending' : null,
-    // l2_status — only the two-level chains have an L2 stage; hr_single has none.
-    policy === 'two_level' || policy === 'crm_two_level' ? 'pending' : null,
+    // l2_status — depends on the L2 on/off switch (mam 2026-07-21). When L2 is
+    // OFF (default), L1 is final so no indent waits for L2 → NULL. When ON, the
+    // two-level chains get an L2 stage again → 'pending'.
+    (l2Enabled(db) && (policy === 'two_level' || policy === 'crm_two_level')) ? 'pending' : null,
     category,
     policy === 'crm_two_level' ? 'pending' : 'n/a',
   );
@@ -1486,12 +1593,16 @@ router.put('/indents/:id', (req, res) => {
       ).get(id);
 
       // ── Re-approve / Re-reject of a FINAL indent (mam 2026-06-04) ──
-      // Allowed for ADMIN or the L2 approver (mam's MD).  Re-approve flips a
-      // REJECTED indent back to approved (revoke the rejection) without
-      // re-raising it; all approval levels are marked approved.
+      // Allowed for ADMIN, the legacy L2 approver (mam's MD), OR the current
+      // RACI L1 approver (mam 2026-07-21: L2 removed, so the L1 sign-off owner
+      // inherits the revoke power).  Re-approve flips a REJECTED indent back to
+      // approved (revoke the rejection) without re-raising it.
       const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
       const isAdminActor = actorRow.role === 'admin' || req.user.role === 'admin';
-      const canRevoke = isAdminActor || actorRow.approval_role === 'l2';
+      const l2On = l2Enabled(db);   // L2 switch state (mam 2026-07-21)
+      const revokeL1 = getL1Approver(db);
+      const canRevoke = isAdminActor || actorRow.approval_role === 'l2'
+        || (revokeL1.id != null && req.user.id === revokeL1.id);
       // Re-approve fires for a REJECTED indent (revoke the rejection) OR an
       // already-APPROVED one (re-confirm — mam 2026-06-04 wanted it on
       // approved indents too).  mam (2026-06-04 follow-up): a re-approve can
@@ -1505,15 +1616,17 @@ router.put('/indents/:id', (req, res) => {
         // reduced/cancelled separately for the store-issued qty.
         if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve this indent.' });
         isReapprove = true;
+        // When L2 is OFF, mark l2 'n/a' (no stage); when ON, mark it approved
+        // (admin/approver re-confirm covers both levels). mam 2026-07-21.
         db.prepare(
           `UPDATE indents SET
                l1_status='approved', l1_at=COALESCE(l1_at, CURRENT_TIMESTAMP), l1_by=COALESCE(l1_by, ?),
-               l2_status=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN 'approved' ELSE l2_status END,
-               l2_at=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN COALESCE(l2_at, CURRENT_TIMESTAMP) ELSE l2_at END,
-               l2_by=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN COALESCE(l2_by, ?) ELSE l2_by END,
+               l2_status=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN ? ELSE l2_status END,
+               l2_at=CASE WHEN approval_policy IN ('two_level','crm_two_level') AND ?='1' THEN COALESCE(l2_at, CURRENT_TIMESTAMP) ELSE l2_at END,
+               l2_by=CASE WHEN approval_policy IN ('two_level','crm_two_level') AND ?='1' THEN COALESCE(l2_by, ?) ELSE l2_by END,
                crm_status=CASE WHEN approval_policy='crm_two_level' THEN 'approved' ELSE crm_status END
            WHERE id=?`
-        ).run(req.user.id, req.user.id, id);
+        ).run(req.user.id, l2On ? 'approved' : 'n/a', l2On ? '1' : '0', l2On ? '1' : '0', req.user.id, id);
         // do NOT return — fall through to the legacy approve path below.
       }
       // Re-reject: revoking an ALREADY-APPROVED indent is limited to admin or
@@ -1525,8 +1638,18 @@ router.put('/indents/:id', (req, res) => {
       if (!isReapprove && cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {
         const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
         const isAdminUser = actor.role === 'admin';
-        const canActL1 = isAdminUser || actor.approval_role === 'l1';
-        const canActL2 = isAdminUser || actor.approval_role === 'l2';
+        // L1 = the RACI-designated approver (mam 2026-07-21) or admin. L2 has
+        // been removed; canActL2 now only governs the drain of any legacy row
+        // still parked at l1_approved, so it mirrors canActL1.
+        const l1Appr = getL1Approver(db);
+        const canActL1 = isAdminUser || (l1Appr.id != null && actor.id === l1Appr.id);
+        // L2 approver (only when the L2 switch is ON) = the RACI 'l2' Responsible
+        // or admin. When L2 is OFF, canActL2 mirrors canActL1 so the L1 owner /
+        // admin can still drain any legacy row parked at l1_approved.
+        const l2Appr = getL2Approver(db);
+        const canActL2 = l2On
+          ? (isAdminUser || (l2Appr.id != null && actor.id === l2Appr.id))
+          : canActL1;
         // Mam (2026-06-02): "anyone with CRM module access" can approve
         // Extra indents at the CRM stage.  We check the runtime permission
         // via the same requirePermission helper used elsewhere — but
@@ -1750,52 +1873,63 @@ router.put('/indents/:id', (req, res) => {
           // the L1 branch reuses without changes.
           if (effectiveStatus === 'submitted' && cur2.l1_status === 'pending'
               && (cur2.approval_policy !== 'crm_two_level' || cur2.crm_status === 'approved')) {
-            // L1 approve — gate by role, then write l1_* and flip status='l1_approved'.
+            // L1 approve — gated by the RACI L1 approver / admin.
             if (!canActL1) {
-              // Surface WHO is blocked and WHY so admin can fix it from
-              // User Management without SSHing into the box (mam 2026-05-28).
+              // Surface WHO is blocked and WHY so admin can fix it from the
+              // ⚙ Responsible board without SSHing into the box.
               const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
               return res.status(403).json({
-                error: `Not authorised for L1 approval. You're signed in as "${actorName}" (approval_role=${actor.approval_role || 'none'}). Admin → User Management → edit your user → set Indent Approval Role = L1.`,
+                error: `Not authorised to approve this indent. You're signed in as "${actorName}". The ${l2On ? 'L1' : ''} approver is ${l1Appr.name || 'not set'} — change it in Procurement → ⚙ Responsible.`,
               });
             }
+            if (l2On) {
+              // L2 switch ON — L1 is only the first sign-off. Stamp l1, flip to
+              // l1_approved and STOP (awaiting L2). No fall-through.
+              db.prepare(
+                `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, status='l1_approved'
+                   WHERE id=?`
+              ).run(actor.id, id);
+              fireIndent(db, id, 'indent.l1_approved', { l1_by: actor.name || actor.email || '' });
+              return res.json({ message: 'L1 approved — awaiting L2 sign-off', stage: 'l1_done' });
+            }
+            // L2 switch OFF — L1 is the FINAL sign-off. Stamp l1, mark l2 'n/a',
+            // then FALL THROUGH to the legacy approve path (flips status='approved',
+            // applies quantity_overrides + from-store issue).
             db.prepare(
-              `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP,
-                                  status='l1_approved'
+              `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP, l2_status='n/a'
                  WHERE id=?`
             ).run(actor.id, id);
             fireIndent(db, id, 'indent.l1_approved', { l1_by: actor.name || actor.email || '' });
-            return res.json({ message: 'L1 approved — awaiting L2 sign-off', stage: 'l1_done' });
-          }
-          if (cur2.status === 'l1_approved' && cur2.l2_status !== 'rejected') {
-            // L2 approve — gate by role + sequence + self-double-sign block.
-            // NOTE: l2_status may already be 'approved' here. The L2 sign-off
-            // and the final status flip (in the approve transaction below) are
-            // NOT atomic: if that transaction bounced on a validation error
-            // (e.g. a store-issue qty check) AFTER l2_status was written, the
-            // row gets stuck at status='l1_approved' + l2_status='approved'.
-            // Accepting l2_status != 'rejected' (instead of == 'pending') makes
-            // this branch idempotent so a retry self-heals the stuck row and
-            // finally flips status='approved'. mam (2026-06-04).
-            if (!canActL2) {
-              const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
-              return res.status(403).json({
-                error: `Not authorised for L2 approval. You're signed in as "${actorName}" (approval_role=${actor.approval_role || 'none'}). Admin → User Management → edit your user → set Indent Approval Role = L2.`,
-              });
+            // no return — legacy approve path below finalises the indent.
+          } else if (cur2.status === 'l1_approved' && cur2.l2_status !== 'rejected') {
+            if (l2On) {
+              // L2 approve (switch ON) — gate by the RACI L2 approver + block the
+              // L1 approver from also doing L2 (needs a second pair of eyes).
+              if (!canActL2) {
+                const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
+                return res.status(403).json({
+                  error: `Not authorised for L2 approval. You're signed in as "${actorName}". The L2 approver is ${l2Appr.name || 'not set'} — change it in Procurement → ⚙ Responsible → L2 Approval (Responsible).`,
+                });
+              }
+              if (cur2.l1_by && cur2.l1_by === actor.id && !isAdminUser) {
+                return res.status(400).json({ error: 'Same user cannot do both L1 and L2 — get a second pair of eyes' });
+              }
+              db.prepare(`UPDATE indents SET l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP WHERE id=?`)
+                .run(actor.id, id);
+              // Fall through → legacy approve path flips status='approved'.
+            } else {
+              // Legacy drain (switch OFF): an indent raised while L2 was ON may
+              // still sit at l1_approved. The L1 approver / admin finalises it
+              // here — no second sign-off. Mark l2 'n/a', fall through.
+              if (!canActL1) {
+                const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
+                return res.status(403).json({
+                  error: `Not authorised to finalise this indent. You're signed in as "${actorName}". The approver is ${l1Appr.name || 'not set'}.`,
+                });
+              }
+              db.prepare(`UPDATE indents SET l2_status='n/a' WHERE id=?`).run(id);
+              // Fall through to the existing approve path.
             }
-            // Self-double-sign block keys off who did L1. On a recovery retry
-            // l2_by is already set to the original L2 approver, so guard against
-            // the L1 approver only. Admin is exempt — the super-user can sign
-            // both levels (mam 2026-06-06: "admin do everything l1,l2").
-            if (cur2.l1_by && cur2.l1_by === actor.id && !isAdminUser) {
-              return res.status(400).json({ error: 'Same user cannot do both L1 and L2 — get a second pair of eyes' });
-            }
-            db.prepare(
-              `UPDATE indents SET l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP
-                 WHERE id=?`
-            ).run(actor.id, id);
-            // Fall through to the existing approve path → it sets status='approved',
-            // approved_by, approved_at, and applies quantity_overrides.
           } else if (cur2.status !== 'submitted' && cur2.status !== 'crm_approved') {
             // Trying to "approve" a row that isn't waiting for CRM / L1 / L2
             // (e.g. already approved, rejected, po_sent, or stuck in an exotic
@@ -1819,13 +1953,17 @@ router.put('/indents/:id', (req, res) => {
           }
           if (cur2.l1_status === 'pending') {
             if (!canActL1) {
-              return res.status(403).json({ error: 'Only the designated L1 approver (Nitin Jain ji) can reject L1' });
+              return res.status(403).json({ error: `Only the designated L1 approver (${l1Appr.name || 'not set'}) can reject this indent.` });
             }
             db.prepare('UPDATE indents SET l1_status=?, l1_by=?, l1_at=CURRENT_TIMESTAMP WHERE id=?')
               .run('rejected', actor.id, id);
           } else if (cur2.l2_status === 'pending' && cur2.l1_status === 'approved') {
-            if (!canActL2) {
-              return res.status(403).json({ error: 'Only the designated L2 approver (Nitin Sir) can reject L2' });
+            // Indent parked at l1_approved (Pending L2). When L2 is ON the L2
+            // approver rejects; when OFF the L1 approver / admin drains it.
+            const canRejectHere = l2On ? canActL2 : canActL1;
+            const who = l2On ? (l2Appr.name || 'not set') : (l1Appr.name || 'not set');
+            if (!canRejectHere) {
+              return res.status(403).json({ error: `Only the designated ${l2On ? 'L2 ' : ''}approver (${who}) can reject this indent.` });
             }
             db.prepare('UPDATE indents SET l2_status=?, l2_by=?, l2_at=CURRENT_TIMESTAMP WHERE id=?')
               .run('rejected', actor.id, id);
@@ -3502,6 +3640,9 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         const mtr = +i.original_qty_mtr > 0 ? +i.original_qty_mtr : null;
         insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr);
       }
+      // Push the actual ordered rate into the Item Master (mam 2026-07-21:
+      // "in items only one … from po update rate as per current").
+      updateItemMasterFromPoLines(db, lines, req.user.id, req.user.name);
       if (indent_id) db.prepare('UPDATE indents SET status=? WHERE id=?').run('po_sent', indent_id);
       return vpoId;
     });
@@ -6325,6 +6466,19 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
   const { final_rate, final_vendor_name, final_terms, final_credit_days } = b;
   if (!final_vendor_name || !final_rate) return res.status(400).json({ error: 'final_vendor_name and final_rate are required' });
 
+  // All 3 vendor quotes mandatory before finalizing (mam 2026-07-21: "3 vendors
+  // rate is mandatory to fill then can finalise rate"). Each vendor slot needs
+  // BOTH a name and a rate > 0. Enforced here too so a direct API call / the
+  // bulk-fill path can't bypass the button gate.
+  const q = db.prepare(
+    `SELECT vendor1_name, vendor1_rate, vendor2_name, vendor2_rate, vendor3_name, vendor3_rate
+       FROM indent_item_rates WHERE id=?`
+  ).get(req.params.id);
+  const threeFilled = q && [1, 2, 3].every(n => +q[`vendor${n}_rate`] > 0 && String(q[`vendor${n}_name`] || '').trim());
+  if (!threeFilled) {
+    return res.status(400).json({ error: 'All 3 vendor quotes (name + rate) must be filled before you can finalize the rate.' });
+  }
+
   // Same gate as the upsert — block finalization if the parent indent
   // isn't fully approved (defends against direct API calls).
   const block = assertIndentApprovedByRate(db, req.params.id);
@@ -6335,8 +6489,73 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
          status='finalized', finalized_by=?, finalized_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
      WHERE id=?`
   ).run(+final_rate, final_vendor_name, final_terms || null, +final_credit_days || 0, req.user.id, req.params.id);
-  res.json({ message: 'Finalized' });
+
+  // Push the finalized rate into the Item Master so its price reflects the
+  // current final price the moment you finalize (mam 2026-07-21). Works for ALL
+  // linked items INCLUDING pipes — a pipe's rate is ₹/kg, converted to the
+  // item's per-metre price via kg/m (bumpItemMasterPrice). The Vendor PO does
+  // the same later, keeping it current if the ordered rate differs. Best-effort.
+  let itemPriceUpdated = false;
+  try {
+    const link = db.prepare(
+      `SELECT ii.item_master_id AS mid, ii.quantity AS qty,
+              COALESCE(ii.weight_per_meter, im.weight_per_meter) AS wpm
+         FROM indent_item_rates r
+         JOIN indent_items ii ON ii.id = r.indent_item_id
+         LEFT JOIN item_master im ON im.id = ii.item_master_id
+        WHERE r.id = ?`
+    ).get(req.params.id);
+    if (link && link.mid) {
+      itemPriceUpdated = bumpItemMasterPrice(db, link.mid, +final_rate, +link.wpm || 0, +link.qty || 0, 'vendor_rate', req.user.id, req.user.name);
+    }
+  } catch (e) {
+    console.error('[finalize] item_master price update failed (finalize saved anyway):', e.message);
+  }
+  res.json({ message: 'Finalized', item_price_updated: itemPriceUpdated });
 });
+
+// The Item Master price to write from a finalized/ordered vendor rate — in the
+// item's own unit. mam 2026-07-21: "update all items with unit as per finalise,
+// LEAVE only pipes". Pipes are quoted in ₹/kg (qty in metres), a unit that does
+// NOT match the per-metre/piece Item Master price, so pipe lines
+// (weight_per_meter > 0) are LEFT untouched — returns null so the caller skips.
+// Every non-pipe item updates to its finalized rate as-is (already in its unit).
+function itemPriceFromVendorRate(rawRate, weightPerMeter) {
+  const r = +rawRate;
+  if (!(r > 0)) return null;
+  if (+weightPerMeter > 0) return null;          // pipe — leave its rate untouched
+  return Math.round(r * 100) / 100;
+}
+
+// Push a finalized/ordered rate into item_master.current_price + log history.
+// Shared by the finalize endpoint and the Vendor-PO create. Best-effort.
+function bumpItemMasterPrice(db, mid, rawRate, wpm, qty, source, userId, userName) {
+  const price = itemPriceFromVendorRate(rawRate, wpm);
+  if (!mid || price == null) return false;
+  db.prepare(`INSERT INTO item_price_history (item_id, rate, quantity, source, created_by, created_by_name)
+              VALUES (?,?,?,?,?,?)`).run(mid, price, +qty || 0, source, userId, userName || null);
+  db.prepare(`UPDATE item_master SET current_price=?, source_type='Procurement',
+              priced_at=CURRENT_TIMESTAMP, priced_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(price, userId, mid);
+  return true;
+}
+
+// When a Vendor PO is created, push each linked item's ACTUAL ordered rate into
+// the Item Master (mam 2026-07-21). Pipe lines are CONVERTED ₹/kg → ₹/m (not
+// skipped); unlinked/manual lines are ignored. Best-effort — never fails the PO.
+function updateItemMasterFromPoLines(db, lines, userId, userName) {
+  try {
+    const getMid = db.prepare('SELECT item_master_id AS mid FROM indent_items WHERE id=?');
+    for (const i of (lines || [])) {
+      if (!(+i.rate > 0) || !i.indent_item_id) continue;
+      const mid = getMid.get(i.indent_item_id)?.mid;
+      if (!mid) continue;                                    // manual / unlinked line
+      bumpItemMasterPrice(db, mid, +i.rate, +i.weight_per_meter || 0, +i.quantity || 0, 'vendor_po', userId, userName);
+    }
+  } catch (e) {
+    console.error('[vendor-po] item_master price update failed (PO saved anyway):', e.message);
+  }
+}
 
 // ADMIN ONLY — wipe all dispatches/indents, vendor POs, purchase bills,
 // delivery notes and vendor rate rows. Used when mam wants a clean slate.

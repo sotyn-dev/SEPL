@@ -114,13 +114,17 @@ router.post('/approve/:key/:id', adminOnly, (req, res) => {
   const id = +req.params.id;
   try {
     if (req.params.key === 'indents') {
+      // Admin one-click = CMD final authority (covers all levels in one shot).
+      // L2 switch OFF → mark L2 'n/a'; ON → mark it approved by admin. mam 2026-07-21.
+      const l2On = (() => { try { return db.prepare("SELECT value v FROM app_settings WHERE key='indent_l2_enabled'").get()?.v === '1'; } catch (_) { return false; } })();
       db.prepare(`UPDATE indents SET
           l1_status='approved', l1_by=COALESCE(l1_by,?), l1_at=COALESCE(l1_at,CURRENT_TIMESTAMP),
-          l2_status='approved', l2_by=COALESCE(l2_by,?), l2_at=COALESCE(l2_at,CURRENT_TIMESTAMP),
+          l2_status=?, l2_by=CASE WHEN ?='approved' THEN COALESCE(l2_by,?) ELSE l2_by END,
+          l2_at=CASE WHEN ?='approved' THEN COALESCE(l2_at,CURRENT_TIMESTAMP) ELSE l2_at END,
           crm_status=CASE WHEN approval_policy='crm_two_level' THEN 'approved' ELSE crm_status END,
           status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP,
           rejected_by=NULL, rejected_at=NULL, rejection_reason=NULL
-        WHERE id=?`).run(uid, uid, uid, id);
+        WHERE id=?`).run(uid, l2On ? 'approved' : 'n/a', l2On ? 'approved' : 'n/a', uid, l2On ? 'approved' : 'n/a', uid, id);
     } else if (req.params.key === 'vendor_po') {
       db.prepare(`UPDATE vendor_pos SET po_approval='approved',
           po_l1_by=COALESCE(po_l1_by,?), po_l1_at=COALESCE(po_l1_at,CURRENT_TIMESTAMP),

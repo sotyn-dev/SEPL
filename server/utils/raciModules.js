@@ -34,6 +34,77 @@ function firstOpen(steps, stamps) {
   return null;
 }
 
+// L2 approval on/off switch (mam 2026-07-21) — same app_settings flag the
+// procurement routes read. Controls whether indent_to_dispatch shows an
+// 'L2 Approval' step.
+function l2EnabledRaci(db) {
+  try { return db.prepare("SELECT value v FROM app_settings WHERE key='indent_l2_enabled'").get()?.v === '1'; }
+  catch (_) { return false; }
+}
+
+// The effective step list for a module, honouring the L2 switch. For every
+// module except indent_to_dispatch this is just MODULE_DEFS[key].steps. For
+// indent_to_dispatch: OFF (default) → the base steps (l1 = 'Approval', no l2);
+// ON → 'l1' relabelled 'L1 Approval' with an 'L2 Approval' step inserted after
+// it. One place so the board, ⚙ editor and scoring all agree.
+function stepsFor(db, moduleKey) {
+  const def = MODULE_DEFS[moduleKey];
+  if (!def) return [];
+  if (moduleKey !== 'indent_to_dispatch' || !l2EnabledRaci(db)) return def.steps;
+  const out = [];
+  for (const s of def.steps) {
+    if (s.key === 'l1') { out.push({ key: 'l1', label: 'L1 Approval' }); out.push({ key: 'l2', label: 'L2 Approval' }); }
+    else out.push(s);
+  }
+  return out;
+}
+
+// Steps hidden from the RACI board + scorecard. The per-step ON/OFF *reporting*
+// toggle was RETIRED (mam 2026-07-22: "retire report toggle switches … like
+// before yesterday"): reporting no longer honors step_enabled for any step —
+// EXCEPT the indent CRM stage. CRM's toggle drops the whole approval stage from
+// the real workflow (procurement.crmStageActive), so a skipped CRM produces no
+// event and has no viable reporter; reporting must follow it and hide it when off.
+// L2 follows the same principle upstream via stepsFor (the l2 step is simply
+// absent when indent_l2_enabled is off). Every other step is ALWAYS reported.
+function disabledStepKeys(db, moduleKey) {
+  const off = new Set();
+  if (moduleKey === 'indent_to_dispatch') {
+    try {
+      const r = db.prepare(
+        "SELECT step_enabled FROM raci_assignment WHERE module='indent_to_dispatch' AND record_id=0 AND step_key='crm'"
+      ).get();
+      if (r && r.step_enabled === 0) off.add('crm');   // CRM skipped → drop it from reporting too
+    } catch (_) { /* column/row not present → CRM active → nothing hidden */ }
+  }
+  return off;
+}
+
+// stepsFor minus any step the user switched OFF. Use this for the board + the
+// scorecard (what's tracked); the EDITOR uses editorStepsFor instead so every
+// step (incl. a switched-off one) stays visible to be turned back on.
+function activeSteps(db, moduleKey) {
+  const off = disabledStepKeys(db, moduleKey);
+  return stepsFor(db, moduleKey).filter(s => !off.has(s.key));
+}
+
+// Step list for the ⚙ Responsible EDITOR. Same as stepsFor for every module,
+// EXCEPT the indent always shows BOTH 'L1 Approval' and 'L2 Approval' (mam
+// 2026-07-21: "show L1/L2, not Approval") — even when L2 is switched off — so
+// mam can see the two levels and toggle L2 on/off right there. The board /
+// scorecard keep using stepsFor/activeSteps, which hide L2 when it's off.
+function editorStepsFor(db, moduleKey) {
+  const def = MODULE_DEFS[moduleKey];
+  if (!def) return [];
+  if (moduleKey !== 'indent_to_dispatch') return def.steps;
+  const out = [];
+  for (const s of def.steps) {
+    if (s.key === 'l1') { out.push({ key: 'l1', label: 'L1 Approval' }); out.push({ key: 'l2', label: 'L2 Approval' }); }
+    else out.push(s);
+  }
+  return out;
+}
+
 const MODULE_DEFS = {
   // ── Payables (the original pilot) — timing from payment_approvals ────────
   payables: {
@@ -226,10 +297,16 @@ const MODULE_DEFS = {
   // ── Indent to Dispatch (indent approvals → vendor PO → dispatch) ─────────
   indent_to_dispatch: {
     label: 'Indent to Dispatch',
+    // These are the steps when the L2 switch is OFF (the default) — L1 is the
+    // single 'Approval' and there is NO 'l2' step. When mam turns L2 ON, the
+    // dynamic stepsFor() below relabels 'l1' → 'L1 Approval' and inserts an
+    // 'L2 Approval' step right after it. Everything that reads this module's
+    // steps (board, ⚙ editor, scoring) goes through stepsFor(db,key) so the
+    // toggle is honoured in one place (mam 2026-07-21). PO L1/L2 below are the
+    // separate Vendor-PO approval — unrelated to the indent's L2.
     steps: [
       { key: 'raised', label: 'Indent Raised' },
-      { key: 'l1', label: 'L1 Approval' },
-      { key: 'l2', label: 'L2 Approval' },
+      { key: 'l1', label: 'Approval' },
       { key: 'crm', label: 'CRM Approval (billable)' },
       { key: 'approved', label: 'Final Approved' },
       { key: 'po_l1', label: 'PO L1 Approval' },
@@ -238,7 +315,7 @@ const MODULE_DEFS = {
       { key: 'purchase_bill', label: 'Purchase Bill' },
     ],
     rows(db) {
-      const steps = this.steps;
+      const steps = stepsFor(db, 'indent_to_dispatch');
       return safeAll(db, `
         SELECT i.id, i.indent_number, i.site_name, i.created_at, i.created_by,
                i.l1_at, i.l2_at, i.crm_at, i.approved_at, i.status,
@@ -545,6 +622,7 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
     // scorecard must not), so opening any person's card shows only the steps
     // assigned to their name (mam 2026-06-27: "show only where her name … from raci").
     const responsibleOf = (s, cfg, m, rec) => (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
+    const defSteps = activeSteps(db, key);  // honour L2 switch + per-step ON/OFF (mam 2026-07-21)
     for (const rec of recs) {
       const recRaci = raciByRec[rec.id] || {};
       // current_key === null means the module considers the record done/cancelled,
@@ -552,7 +630,7 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
       const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
       let sawOpen = false;                             // only the FIRST open step is in-flight
-      for (const s of def.steps) {
+      for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
         const responsibleId = responsibleOf(s, cfg, m, rec);
@@ -628,12 +706,13 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     // scorecard must not), so opening any person's card shows only the steps
     // assigned to their name (mam 2026-06-27: "show only where her name … from raci").
     const responsibleOf = (s, cfg, m, rec) => (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
+    const defSteps = activeSteps(db, key);  // honour L2 switch + per-step ON/OFF (mam 2026-07-21)
     for (const rec of recs) {
       const recRaci = raciByRec[rec.id] || {};
       const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
       let sawOpen = false;
-      for (const s of def.steps) {
+      for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
         const responsibleId = responsibleOf(s, cfg, m, rec);
@@ -664,7 +743,7 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
   }
   const moduleOrder = Object.keys(MODULE_DEFS);
   const stepOrder = {};
-  for (const k of moduleOrder) stepOrder[k] = Object.fromEntries(MODULE_DEFS[k].steps.map((s, i) => [s.key, i]));
+  for (const k of moduleOrder) stepOrder[k] = Object.fromEntries(activeSteps(db, k).map((s, i) => [s.key, i]));
   return Array.from(acc.values()).sort((a, b) => {
     const mo = moduleOrder.indexOf(a.module) - moduleOrder.indexOf(b.module);
     if (mo) return mo;
@@ -672,4 +751,4 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
   });
 }
 
-module.exports = { MODULE_DEFS, tsMs, raciUserWeek, raciUserWeekBreakdown };
+module.exports = { MODULE_DEFS, tsMs, raciUserWeek, raciUserWeekBreakdown, stepsFor, activeSteps, editorStepsFor, disabledStepKeys, l2EnabledRaci };

@@ -34,6 +34,9 @@ export default function EmailTriggers() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm());
   const [testTo, setTestTo] = useState('');
+  // Which kind of thing the modal is creating: 'event' (fires on an action) or
+  // 'reminder' (a listOnly recipient list). Keeps the two creation flows apart.
+  const [ruleMode, setRuleMode] = useState('event');
 
   const load = () => {
     Promise.all([
@@ -52,8 +55,9 @@ export default function EmailTriggers() {
   const evMap = Object.fromEntries(events.map(e => [e.key, e]));
   const selectedEvent = evMap[form.event_key];
 
-  const openNew = () => { setEditing(null); setForm(emptyForm()); setModalOpen(true); };
+  const openNew = (mode = 'event') => { setRuleMode(mode); setEditing(null); setForm(emptyForm()); setModalOpen(true); };
   const openEdit = (r) => {
+    setRuleMode(evMap[r.event_key]?.listOnly ? 'reminder' : 'event');
     setEditing(r);
     setForm({
       name: r.name, event_key: r.event_key, enabled: !!r.enabled,
@@ -120,70 +124,112 @@ export default function EmailTriggers() {
   const groups = {};
   for (const e of events) { (groups[e.group] = groups[e.group] || []).push(e); }
 
+  // One data source, two concerns. Event emails fire on an action; reminder
+  // emails are recipient lists a scheduled job reads (listOnly events).
+  const eventRules = rules.filter(r => !evMap[r.event_key]?.listOnly);
+  const reminderRules = rules.filter(r => evMap[r.event_key]?.listOnly);
+  // The modal's event dropdown shows ONLY the kind being created, so event
+  // triggers and reminders never appear in the same picker.
+  const modeGroups = {};
+  for (const [g, evs] of Object.entries(groups)) {
+    const filtered = evs.filter(ev => !!ev.listOnly === (ruleMode === 'reminder'));
+    if (filtered.length) modeGroups[g] = filtered;
+  }
+
+  // Shared table renderer for both sections (DRY). listOnly trims the columns
+  // that don't apply to a recipient list (Event, Last fired).
+  const rulesTable = (rows, listOnly) => (
+    <div className="bg-white border rounded-lg overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
+          <tr>
+            <th className="text-left px-3 py-2">Rule</th>
+            {!listOnly && <th className="text-left px-3 py-2">Event</th>}
+            {listOnly && <th className="text-left px-3 py-2">Category</th>}
+            <th className="text-left px-3 py-2">Recipients</th>
+            <th className="text-center px-3 py-2">On</th>
+            {!listOnly && <th className="text-left px-3 py-2">Last fired</th>}
+            <th className="text-right px-3 py-2">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => {
+            const ev = evMap[r.event_key];
+            const rcpt = r.recipients || {};
+            const parts = [];
+            if (rcpt.people?.length) parts.push(`${rcpt.people.length} from record`);
+            if (rcpt.roles?.length) parts.push(`roles: ${rcpt.roles.join(', ')}`);
+            if (rcpt.fixed) parts.push('fixed list');
+            return (
+              <tr key={r.id} className="border-t">
+                <td className="px-3 py-2 font-medium">{r.name}</td>
+                {!listOnly && <td className="px-3 py-2">{ev ? ev.label : r.event_key}</td>}
+                {listOnly && <td className="px-3 py-2"><span className="inline-block bg-gray-100 text-gray-600 rounded px-1.5 py-0.5 text-xs font-medium">{ev?.group || 'Other'}</span></td>}
+                <td className="px-3 py-2 text-gray-600">{parts.join(' · ') || <span className="text-amber-600">none set</span>}</td>
+                <td className="px-3 py-2 text-center">
+                  <button onClick={() => toggle(r)} className={`px-2 py-0.5 rounded text-xs font-semibold ${r.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-500'}`}>
+                    {r.enabled ? 'ON' : 'OFF'}
+                  </button>
+                </td>
+                {!listOnly && (
+                  <td className="px-3 py-2 text-gray-500 text-xs">
+                    {r.last_fired_at ? `${fmtDate(r.last_fired_at)} · ${r.fire_count || 0}×` : '—'}
+                  </td>
+                )}
+                <td className="px-3 py-2">
+                  <div className="flex items-center justify-end gap-1">
+                    <button onClick={() => sendTest(r)} className="p-1 text-gray-500 hover:text-blue-600" title="Send test"><FiSend size={15} /></button>
+                    <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-amber-600" title="Edit"><FiEdit2 size={15} /></button>
+                    <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={15} /></button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+
   return (
     <div className="p-4 sm:p-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2"><FiMail /> Email Triggers</h1>
-          <p className="text-sm text-gray-500">Send custom emails automatically when events happen. Uses your SMTP settings (Admin → Email).</p>
+          <p className="text-sm text-gray-500">Set up automatic emails and who receives them.</p>
         </div>
-        <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> New Rule</button>
       </div>
 
-      {rules.length === 0 ? (
-        <div className="bg-gray-50 border border-dashed rounded-lg p-8 text-center text-gray-500">
-          No email rules yet. Click <b>New Rule</b> to create your first trigger.
+      {/* Section A — Event emails: fire automatically on an action. */}
+      <section className="mb-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Event emails</h2>
+          <button onClick={() => openNew('event')} className="btn btn-primary text-sm flex items-center gap-1"><FiPlus /> New event email</button>
         </div>
-      ) : (
-        <div className="bg-white border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
-              <tr>
-                <th className="text-left px-3 py-2">Rule</th>
-                <th className="text-left px-3 py-2">Event</th>
-                <th className="text-left px-3 py-2">Recipients</th>
-                <th className="text-center px-3 py-2">On</th>
-                <th className="text-left px-3 py-2">Last fired</th>
-                <th className="text-right px-3 py-2">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map(r => {
-                const ev = evMap[r.event_key];
-                const rcpt = r.recipients || {};
-                const parts = [];
-                if (rcpt.people?.length) parts.push(`${rcpt.people.length} from record`);
-                if (rcpt.roles?.length) parts.push(`roles: ${rcpt.roles.join(', ')}`);
-                if (rcpt.fixed) parts.push('fixed list');
-                return (
-                  <tr key={r.id} className="border-t">
-                    <td className="px-3 py-2 font-medium">{r.name}</td>
-                    <td className="px-3 py-2">{ev ? ev.label : r.event_key}</td>
-                    <td className="px-3 py-2 text-gray-600">{parts.join(' · ') || <span className="text-amber-600">none set</span>}</td>
-                    <td className="px-3 py-2 text-center">
-                      <button onClick={() => toggle(r)} className={`px-2 py-0.5 rounded text-xs font-semibold ${r.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-500'}`}>
-                        {r.enabled ? 'ON' : 'OFF'}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-gray-500 text-xs">
-                      {r.last_fired_at ? `${fmtDate(r.last_fired_at)} · ${r.fire_count || 0}×` : '—'}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => sendTest(r)} className="p-1 text-gray-500 hover:text-blue-600" title="Send test"><FiSend size={15} /></button>
-                        <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-amber-600" title="Edit"><FiEdit2 size={15} /></button>
-                        <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={15} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+        <p className="text-sm text-gray-500 mb-2">Send an email automatically when something happens.</p>
+        {eventRules.length === 0 ? (
+          <div className="bg-gray-50 border border-dashed rounded-lg p-6 text-center text-gray-500 text-sm">
+            No event emails yet. Click <b>New event email</b> and pick an event.
+          </div>
+        ) : rulesTable(eventRules, false)}
+      </section>
 
-      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit Email Rule' : 'New Email Rule'} wide>
+      {/* Section B — Reminder emails: recipient lists a scheduled job reads,
+          grouped by category so future non-HR reminders stay separated. */}
+      <section>
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Reminder emails</h2>
+          <button onClick={() => openNew('reminder')} className="btn btn-primary text-sm flex items-center gap-1"><FiPlus /> Add reminder</button>
+        </div>
+        <p className="text-sm text-gray-500 mb-2">Choose who gets reminded about pending items — like an offer awaiting a response.</p>
+        {reminderRules.length === 0 ? (
+          <div className="bg-gray-50 border border-dashed rounded-lg p-6 text-center text-gray-500 text-sm">
+            No reminders set yet. Click <b>Add reminder</b> and pick a reminder.
+          </div>
+        ) : rulesTable(reminderRules, true)}
+      </section>
+
+      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={`${editing ? 'Edit' : 'New'} ${ruleMode === 'reminder' ? 'reminder' : 'event email'}`} wide>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -191,12 +237,22 @@ export default function EmailTriggers() {
               <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Notify CRM on extra indent approval" />
             </div>
             <div>
-              <label className="label">When this event happens *</label>
+              <label className="label">{ruleMode === 'reminder' ? 'Which reminder *' : 'When this event happens *'}</label>
               <select className="select" value={form.event_key} onChange={e => setForm({ ...form, event_key: e.target.value, conditions: [], recipients: { people: [], roles: [], fixed: '' } })}>
-                <option value="">Select event…</option>
-                {Object.entries(groups).map(([g, evs]) => (
+                <option value="">{ruleMode === 'reminder' ? 'Select reminder…' : 'Select event…'}</option>
+                {Object.entries(modeGroups).map(([g, evs]) => (
                   <optgroup key={g} label={g}>
-                    {evs.map(ev => <option key={ev.key} value={ev.key}>{ev.label}</option>)}
+                    {evs.map(ev => {
+                      // listOnly events allow only ONE rule — once one is saved,
+                      // grey the event out (disabled) so it can't be duplicated.
+                      // Stays selectable while editing its own rule.
+                      const taken = ev.listOnly && rules.some(r => r.event_key === ev.key && (!editing || editing.id !== r.id));
+                      return (
+                        <option key={ev.key} value={ev.key} disabled={taken}>
+                          {ev.label}{taken ? ' — already configured' : ''}
+                        </option>
+                      );
+                    })}
                   </optgroup>
                 ))}
               </select>
@@ -205,6 +261,34 @@ export default function EmailTriggers() {
 
           {selectedEvent && (
             <>
+              {selectedEvent.listOnly ? (
+                /* Recipient-list-only event (HR cron): only By-role + Fixed
+                   addresses. No dynamic people / conditions / template — this
+                   rule just holds who the cron emails. (mam 2026-07-22) */
+                <div className="border rounded-lg p-3 space-y-3">
+                  <div className="font-semibold text-sm">Who gets the email?</div>
+                  {roles.length > 0 && (
+                    <div>
+                      <div className="text-xs text-gray-500 mb-1">By role (all active users with the role)</div>
+                      <div className="flex flex-wrap gap-2">
+                        {roles.map(rn => (
+                          <button type="button" key={rn} onClick={() => toggleRole(rn)}
+                            className={`px-2 py-1 rounded text-xs border ${form.recipients.roles.includes(rn) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-300'}`}>
+                            {rn}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Fixed addresses (comma / newline separated)</div>
+                    <textarea className="input text-sm" rows="2" value={form.recipients.fixed}
+                      onChange={e => setForm({ ...form, recipients: { ...form.recipients, fixed: e.target.value } })}
+                      placeholder="name@example.com, name2@example.com" />
+                  </div>
+                </div>
+              ) : (
+              <>
               {/* Recipients */}
               <div className="border rounded-lg p-3 space-y-3">
                 <div className="font-semibold text-sm">Who gets the email?</div>
@@ -290,6 +374,8 @@ export default function EmailTriggers() {
                     placeholder={`Hello,\n\nIndent {{indent_no}} ({{category}}) at {{site}} for ₹{{amount}} was approved.\n\n— SOTYN.AI`} />
                 </div>
               </div>
+              </>
+              )}
 
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={form.enabled} onChange={e => setForm({ ...form, enabled: e.target.checked })} />

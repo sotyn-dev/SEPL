@@ -7,7 +7,7 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
-const { MODULE_DEFS, tsMs } = require('../utils/raciModules');
+const { MODULE_DEFS, tsMs, stepsFor, activeSteps, editorStepsFor, l2EnabledRaci } = require('../utils/raciModules');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -35,7 +35,10 @@ try {
 // Guarded ALTERs so they run once on existing databases without a migration.
 // weight (per-step weightage %, makes the scorecard step-wise % weighted) and
 // commitment (a free-text "for next week" note per step) — mam 2026-06-29.
-for (const col of ['done_at DATETIME', 'done_by INTEGER', 'weight REAL', 'commitment TEXT']) {
+// step_enabled — per-step ON/OFF for the board + scorecard (mam 2026-07-21:
+// "every step on/off, same all erp"). Default 1 (enabled); set to 0 on the
+// whole-module default row (record_id 0) to hide a step from tracking.
+for (const col of ['done_at DATETIME', 'done_by INTEGER', 'weight REAL', 'commitment TEXT', 'step_enabled INTEGER DEFAULT 1']) {
   try { getDb().exec(`ALTER TABLE raci_assignment ADD COLUMN ${col}`); } catch (e) { /* already exists */ }
 }
 
@@ -70,9 +73,12 @@ function getRaciForRecords(db, module, ids) {
   return out;
 }
 
-// Module + step list (so the editor knows the steps to show).
+// Module + step list (so the editor knows the steps to show). Steps are
+// resolved dynamically so the indent's L2 Approval row appears/disappears with
+// the L2 on/off switch (mam 2026-07-21).
 router.get('/modules', (req, res) => {
-  res.json(Object.entries(MODULE_STEPS).map(([key, m]) => ({ key, label: m.label, steps: m.steps })));
+  const db = getDb();
+  res.json(Object.keys(MODULE_DEFS).map(key => ({ key, label: MODULE_DEFS[key].label, steps: editorStepsFor(db, key) })));
 });
 
 // Per-record RACI for the editor — step list merged with this record's saved
@@ -83,10 +89,15 @@ router.get('/record/:module/:recordId', (req, res) => {
   if (!mod) return res.status(404).json({ error: 'Unknown module' });
   const saved = getRecordRaci(db, req.params.module, +req.params.recordId);
   const nm = (id) => { if (!id) return null; const u = db.prepare('SELECT id, name FROM users WHERE id=?').get(id); return u || null; };
+  const l2On = l2EnabledRaci(db);
   res.json({
     module: req.params.module, record_id: +req.params.recordId, label: mod.label,
-    steps: mod.steps.map(s => {
+    steps: editorStepsFor(db, req.params.module).map(s => {
       const c = saved[s.key] || {};
+      // The indent 'L2 Approval' step's ON/OFF is the real L2 flow switch, so its
+      // enabled state comes from that (not the generic step_enabled). Every other
+      // step uses step_enabled (default = enabled). mam 2026-07-21.
+      const isIndentL2 = req.params.module === 'indent_to_dispatch' && s.key === 'l2';
       return {
         ...s,
         responsible_id: c.responsible_id || null, responsible: nm(c.responsible_id),
@@ -96,6 +107,7 @@ router.get('/record/:module/:recordId', (req, res) => {
         sla_hours: c.sla_hours != null ? +c.sla_hours : null,
         weight: c.weight != null ? +c.weight : null,
         commitment: c.commitment || null,
+        enabled: isIndentL2 ? l2On : (c.step_enabled == null ? true : c.step_enabled !== 0),
       };
     }),
   });
@@ -106,27 +118,80 @@ router.put('/record/:module/:recordId', (req, res) => {
   const db = getDb();
   const mod = MODULE_STEPS[req.params.module];
   if (!mod) return res.status(404).json({ error: 'Unknown module' });
-  const validKeys = new Set(mod.steps.map(s => s.key));
+  const validKeys = new Set(editorStepsFor(db, req.params.module).map(s => s.key));
   const rows = Array.isArray(req.body.steps) ? req.body.steps : [];
+
+  // ── Indent approver gate steps (security + guard rails, mam 2026-07-21) ──
+  // For the indent whole-module default (record_id 0), steps l1/l2 name the
+  // people who APPROVE company spend and crm gates the CRM stage. These drive
+  // the real flow, so:
+  //   (C2) only an admin may change them — otherwise any logged-in user could
+  //        appoint themselves the approver (privilege escalation).
+  //   (A3/A4/C3) enforce L1-required-for-L2 + L2-needs-its-own-name, evaluating
+  //        the incoming payload merged over what is already stored.
+  const enOf = (v) => (v === false || v === 0 || v === '0') ? 0 : 1;
+  if (req.params.module === 'indent_to_dispatch' && +req.params.recordId === 0) {
+    const GATE = new Set(['l1', 'l2', 'crm']);
+    const touched = rows.filter(r => GATE.has(String(r.step_key)));
+    if (touched.length && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only an admin can set the indent approvers / approval steps. Ask an admin to change these in ⚙ Set RACI for whole module.' });
+    }
+    if (touched.length) {
+      const stored = getRecordRaci(db, 'indent_to_dispatch', 0);
+      const inMap = {}; for (const r of rows) inMap[String(r.step_key)] = r;
+      const respOf = (k) => {
+        if (k in inMap) { const n = +inMap[k].responsible_id; return Number.isFinite(n) && n > 0 ? n : null; }
+        return stored[k]?.responsible_id || null;
+      };
+      const l1resp = respOf('l1'), l2resp = respOf('l2');
+      // Final L2-on state: payload's l2.enabled if the l2 row is being written,
+      // else the live switch.
+      const l2on = ('l2' in inMap && inMap['l2'].enabled !== undefined)
+        ? enOf(inMap['l2'].enabled) === 1 : l2EnabledRaci(db);
+      // L1/L2 may rely on the seeded approver (Indent Approval Role = l1/l2) when
+      // no explicit RACI Responsible is set — mirror getL1Approver/getL2Approver
+      // so the editor's "falls back to default" matches what save allows.
+      const hasRoleUser = (role) => { try { return !!db.prepare("SELECT 1 FROM users WHERE approval_role=? AND active=1 LIMIT 1").get(role); } catch (_) { return false; } };
+      if (l2on && !l1resp && !hasRoleUser('l1')) return res.status(400).json({ error: 'Set an L1 approver (a Responsible name, or a user with Indent Approval Role = L1) before turning L2 on.' });
+      if (l2on && !l2resp && !hasRoleUser('l2')) return res.status(400).json({ error: 'Set an L2 approver (a Responsible name, or a user with Indent Approval Role = L2) before turning L2 on.' });
+    }
+  }
+
   const up = db.prepare(`
-    INSERT INTO raci_assignment (module, record_id, step_key, responsible_id, accountable_id, consulted_id, informed_id, sla_hours, weight, commitment, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    INSERT INTO raci_assignment (module, record_id, step_key, responsible_id, accountable_id, consulted_id, informed_id, sla_hours, weight, commitment, step_enabled, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
     ON CONFLICT(module, record_id, step_key) DO UPDATE SET
       responsible_id=excluded.responsible_id, accountable_id=excluded.accountable_id,
       consulted_id=excluded.consulted_id, informed_id=excluded.informed_id,
-      sla_hours=excluded.sla_hours, weight=excluded.weight, commitment=excluded.commitment, updated_at=CURRENT_TIMESTAMP`);
+      sla_hours=excluded.sla_hours, weight=excluded.weight, commitment=excluded.commitment,
+      step_enabled=excluded.step_enabled, updated_at=CURRENT_TIMESTAMP`);
   const id = (v) => { const n = +v; return Number.isFinite(n) && n > 0 ? n : null; };
   const sla = (v) => (v != null && v !== '' && +v >= 0) ? +v : null;
   const wt = (v) => (v != null && v !== '' && Number.isFinite(+v) && +v >= 0) ? +v : null;
   const txt = (v) => (v != null && String(v).trim() !== '') ? String(v).trim() : null;
+  // step_enabled: default ON. Only an explicit false/0 disables the step.
+  const en = (v) => (v === false || v === 0 || v === '0') ? 0 : 1;
   const tx = db.transaction(() => {
     for (const r of rows) {
       if (!validKeys.has(String(r.step_key))) continue;
       up.run(req.params.module, +req.params.recordId, String(r.step_key),
-        id(r.responsible_id), id(r.accountable_id), id(r.consulted_id), id(r.informed_id), sla(r.sla_hours), wt(r.weight), txt(r.commitment));
+        id(r.responsible_id), id(r.accountable_id), id(r.consulted_id), id(r.informed_id), sla(r.sla_hours), wt(r.weight), txt(r.commitment), en(r.enabled));
     }
   });
   tx();
+
+  // Special-case (mam 2026-07-21): for the indent whole-module default, the
+  // 'L2 Approval' step's ON/OFF drives the REAL L2 flow switch — OFF actually
+  // skips L2 (L1 becomes final), not just hides it from tracking. (CRM skips via
+  // its own step_enabled, read directly by the raise flow.)
+  if (req.params.module === 'indent_to_dispatch' && +req.params.recordId === 0) {
+    const l2row = rows.find(r => String(r.step_key) === 'l2');
+    if (l2row) {
+      const on = en(l2row.enabled) === 1;
+      db.prepare(`INSERT INTO app_settings (key, value) VALUES ('indent_l2_enabled', ?)
+                  ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(on ? '1' : '0');
+    }
+  }
   res.json({ message: 'RACI saved' });
 });
 
@@ -139,7 +204,7 @@ router.put('/step-done/:module/:recordId', (req, res) => {
   const mod = MODULE_STEPS[req.params.module];
   if (!mod) return res.status(404).json({ error: 'Unknown module' });
   const stepKey = String(req.body.step_key || '');
-  if (!mod.steps.some(s => s.key === stepKey)) return res.status(400).json({ error: 'Unknown step' });
+  if (!editorStepsFor(db, req.params.module).some(s => s.key === stepKey)) return res.status(400).json({ error: 'Unknown step' });
 
   // Normalise done_at: a bare date is stored at local-noon so a day-only stamp
   // doesn't slide to the previous day when re-read as UTC.
@@ -167,7 +232,7 @@ router.put('/step-commitment/:module/:recordId', (req, res) => {
   const mod = MODULE_STEPS[req.params.module];
   if (!mod) return res.status(404).json({ error: 'Unknown module' });
   const stepKey = String(req.body.step_key || '');
-  if (!mod.steps.some(s => s.key === stepKey)) return res.status(400).json({ error: 'Unknown step' });
+  if (!editorStepsFor(db, req.params.module).some(s => s.key === stepKey)) return res.status(400).json({ error: 'Unknown step' });
   const commitment = (req.body.commitment != null && String(req.body.commitment).trim() !== '')
     ? String(req.body.commitment).trim() : null;
   db.prepare(`
@@ -187,6 +252,7 @@ router.put('/step-commitment/:module/:recordId', (req, res) => {
 function buildBoard(db, moduleKey) {
   const def = MODULE_DEFS[moduleKey];
   if (!def) return null;
+  const defSteps = activeSteps(db, moduleKey);   // honour L2 switch + per-step ON/OFF (mam 2026-07-21)
   const recs = def.rows(db) || [];
   const raci = getRaciForRecords(db, moduleKey, recs.map(r => r.id));
   // Module-wide DEFAULT RACI (stored under the sentinel record_id = 0). It fills
@@ -211,14 +277,14 @@ function buildBoard(db, moduleKey) {
   const rows = recs.map(rec => {
     const recRaci = raci[rec.id] || {};
     const stampOf = (k) => (recRaci[k] && recRaci[k].done_at) || rec.stamps[k] || null;
-    const anyManual = def.steps.some(s => recRaci[s.key] && recRaci[s.key].done_at);
+    const anyManual = defSteps.some(s => recRaci[s.key] && recRaci[s.key].done_at);
     const useMerged = anyManual || rec.owner_id != null;
     const currentKey = useMerged
-      ? (rec.current_key == null ? null : ((def.steps.find(s => !stampOf(s.key)) || {}).key || null))
+      ? (rec.current_key == null ? null : ((defSteps.find(s => !stampOf(s.key)) || {}).key || null))
       : rec.current_key;
 
     let prev = tsMs(rec.created_at);
-    const steps = def.steps.map(s => {
+    const steps = defSteps.map(s => {
       const cfg = recRaci[s.key] || {};
       const m = md[s.key] || {};        // module-wide default for this step
       const sla = cfg.sla_hours != null ? +cfg.sla_hours
@@ -266,7 +332,7 @@ function buildBoard(db, moduleKey) {
     }))
     .sort((a, b) => b.steps - a.steps);
 
-  return { module: moduleKey, label: def.label, steps: def.steps, rows, summary };
+  return { module: moduleKey, label: def.label, steps: defSteps, rows, summary };
 }
 
 // GET /api/raci/board/:module — one module's Responsible board.
