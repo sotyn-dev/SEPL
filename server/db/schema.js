@@ -5167,28 +5167,36 @@ function initializeDatabase() {
   }
 
   // Re-classify attendance rows so status reflects the CURRENT cutoff
-  // (payroll_settings.late_after_time, IST). Idempotent and bidirectional:
-  // - Rows past the cutoff become 'late'
-  // - Rows at/before the cutoff become 'present'
+  // (payroll_settings.late_after_time, IST), ROSTER-AWARE. Idempotent and
+  // bidirectional:
+  // - Rows past the employee's roster cutoff become 'late'
+  // - Rows at/before it become 'present'
   // - half_day / short_day / on_leave / absent / admin_marked rows are
   //   left alone so we don't trample manual classifications.
-  // Fixes both the original UTC-vs-IST bug AND the case where a previous
-  // tighter cutoff left rows mismarked as 'late' after mam relaxed it.
+  // The 'early' (9:00) roster is late 30 min sooner than the 'general' (9:30)
+  // default — same offset as server/lib/roster.js — so an early-shift punch
+  // isn't wrongly re-marked 'present'. Fixes the UTC-vs-IST bug, the relaxed-
+  // cutoff case, AND the roster-unaware backfill.
   try {
     const ps = db.prepare("SELECT late_after_time FROM payroll_settings WHERE id=1").get();
     const cutoffStr = (ps?.late_after_time || '09:46').padEnd(5, '0').slice(0, 5);
+    const toMin = (s) => { const [h, m] = s.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+    const toHHMM = (n) => { const t = Math.max(0, Math.min(1439, n)); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+    const earlyStr = toHHMM(toMin(cutoffStr) - 30);
     const r = db.prepare(`
       UPDATE attendance
          SET status = CASE
-             WHEN time(datetime(punch_in_time, '+5 hours', '+30 minutes')) > ?
+             WHEN time(datetime(punch_in_time, '+5 hours', '+30 minutes')) >
+                  CASE WHEN (SELECT roster FROM employees e WHERE e.user_id = attendance.user_id LIMIT 1) = 'early'
+                       THEN ? ELSE ? END
                   THEN 'late'
              ELSE 'present'
            END
        WHERE punch_in_time IS NOT NULL
          AND status IN ('present', 'late')
          AND COALESCE(admin_marked, 0) = 0
-    `).run(cutoffStr + ':00');
-    if (r.changes > 0) console.log(`[backfill] re-synced ${r.changes} attendance rows against cutoff ${cutoffStr} IST`);
+    `).run(earlyStr + ':00', cutoffStr + ':00');
+    if (r.changes > 0) console.log(`[backfill] re-synced ${r.changes} attendance rows (roster-aware: general ${cutoffStr}, early ${earlyStr} IST)`);
   } catch (e) { /* non-fatal */ }
 
   // ─── Sales Funnel — stage key migration to mam's 11-stage spec ─────

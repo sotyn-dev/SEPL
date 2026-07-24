@@ -218,7 +218,7 @@ export default function Employees() {
         toast.error(`${res.data.errors.length} errors: ${res.data.errors[0]}`);
       }
       setBulkModal(false); setBulkData(''); setBulkPreview([]); load();
-    } catch (err) { toast.error('Import failed'); }
+    } catch { toast.error('Import failed'); }
   };
 
   const filtered = employees.filter(e =>

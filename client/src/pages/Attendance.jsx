@@ -1565,7 +1565,7 @@ export default function Attendance() {
 
       {/* Edit Geofence Modal */}
       <Modal isOpen={modal === 'edit-geofence'} onClose={() => setModal(null)} title="Edit Geofence">
-        <form onSubmit={async (e) => { e.preventDefault(); try { await api.put(`/attendance/geofence/${form.id}`, form); toast.success('Updated'); setModal(null); load(); } catch (err) { toast.error('Failed'); } }} className="space-y-4">
+        <form onSubmit={async (e) => { e.preventDefault(); try { await api.put(`/attendance/geofence/${form.id}`, form); toast.success('Updated'); setModal(null); load(); } catch { toast.error('Failed'); } }} className="space-y-4">
           <div><label className="label">Site Name *</label><input className="input" value={form.site_name || ''} onChange={e => setForm({ ...form, site_name: e.target.value })} required /></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">Latitude</label><input className="input" type="number" step="any" value={form.latitude || ''} onChange={e => setForm({ ...form, latitude: e.target.value })} /></div>
