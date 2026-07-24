@@ -116,7 +116,17 @@ router.post('/approve/:key/:id', adminOnly, (req, res) => {
     if (req.params.key === 'indents') {
       // Admin one-click = CMD final authority (covers all levels in one shot).
       // L2 switch OFF → mark L2 'n/a'; ON → mark it approved by admin. mam 2026-07-21.
-      const l2On = (() => { try { return db.prepare("SELECT value v FROM app_settings WHERE key='indent_l2_enabled'").get()?.v === '1'; } catch (_) { return false; } })();
+      // Shared resolver — Procurement → ⚙ Approval Settings is the source of
+      // truth, with the legacy app_settings flag as the fallback. This used to be
+      // an inline copy of the flag query; once the new settings could turn L2 ON
+      // independently, the copy would still have read the old flag and stamped
+      // l2_status='n/a' here — closing an indent by marking a REQUIRED L2 as not
+      // applicable. Reading the stale value here corrupts the approval record,
+      // so it must go through the same resolver as the approve flow.
+      const l2On = (() => {
+        try { return require('../utils/indentToDispatchGates').effectiveEnabled(db, 'l2'); }
+        catch (_) { return false; }
+      })();
       db.prepare(`UPDATE indents SET
           l1_status='approved', l1_by=COALESCE(l1_by,?), l1_at=COALESCE(l1_at,CURRENT_TIMESTAMP),
           l2_status=?, l2_by=CASE WHEN ?='approved' THEN COALESCE(l2_by,?) ELSE l2_by END,
