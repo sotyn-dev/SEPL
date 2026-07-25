@@ -1372,6 +1372,76 @@ function initializeDatabase() {
       UNIQUE(site_id, attendance_date, contractor_name)
     );
 
+    -- DPR compliance log (director ask, 2026-07-25): "link HR attendance to
+    -- DPR — if it's not uploaded on time". One row per (user, site, date) a
+    -- site engineer owed a DPR and hadn't filed one by the 18:00 sweep
+    -- (scripts/dprAutoPrompt.js). This is what HR reviews and what
+    -- attendance's live "DPR filed?" flag is backed by historically —
+    -- separate from a push notification so it survives past the day it fired.
+    CREATE TABLE IF NOT EXISTS dpr_compliance_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(id),
+      site_id INTEGER REFERENCES sites(id),
+      report_date DATE NOT NULL,
+      status TEXT DEFAULT 'missed',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, site_id, report_date)
+    );
+
+    -- Sub-contractor Attendance module (director ask, 2026-07-25, gate
+    -- tightened same-day follow-up: "no work order no attendance"). Each
+    -- sub-contractor gets their own login and submits their crew's daily
+    -- attendance directly, with named workers + team photos, instead of the
+    -- site engineer doing a manual morning headcount punch (contractor_
+    -- attendance above). On save, routes/subcontractorAttendance.js upserts
+    -- an aggregate row into contractor_attendance so DPR's existing
+    -- "Contractors on Site" prefill picks it up with zero DPR-side changes.
+    -- Site access is derived LIVE from active proj_work_orders rows (see
+    -- lib/subcontractorWorkOrders.js) — there is no manual assignment table.
+
+    -- Named worker roster per sub-contractor.
+    CREATE TABLE IF NOT EXISTS sub_contractor_workers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sub_contractor_id INTEGER NOT NULL REFERENCES sub_contractors(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      phone TEXT,
+      id_proof_no TEXT,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- One row per (sub-contractor, site, date) daily attendance submission.
+    CREATE TABLE IF NOT EXISTS sub_contractor_attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sub_contractor_id INTEGER NOT NULL REFERENCES sub_contractors(id) ON DELETE CASCADE,
+      site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+      attendance_date TEXT NOT NULL,
+      submitted_by INTEGER REFERENCES users(id),
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(sub_contractor_id, site_id, attendance_date)
+    );
+
+    -- Team photos for one attendance submission — max 4 workers per photo
+    -- (enforced client-side as a soft sanity check on worker_count; multiple
+    -- photos cover larger crews).
+    CREATE TABLE IF NOT EXISTS sub_contractor_attendance_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      attendance_id INTEGER NOT NULL REFERENCES sub_contractor_attendance(id) ON DELETE CASCADE,
+      photo_url TEXT NOT NULL,
+      worker_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Per-worker present/absent for one attendance submission.
+    CREATE TABLE IF NOT EXISTS sub_contractor_attendance_workers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      attendance_id INTEGER NOT NULL REFERENCES sub_contractor_attendance(id) ON DELETE CASCADE,
+      worker_id INTEGER NOT NULL REFERENCES sub_contractor_workers(id),
+      present INTEGER DEFAULT 1
+    );
+
     -- Work items from PO (item name, qty, rate, amount + floor/zone + planned/actual)
     CREATE TABLE IF NOT EXISTS dpr_work_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3674,6 +3744,11 @@ function initializeDatabase() {
     ['rent_requests', 'pincode TEXT'],
     ['rent_requests', 'pincode_city TEXT'],
     ['rent_requests', 'metro_type TEXT'],
+    // Sub-contractor self-service login (director ask, 2026-07-25): mirrors
+    // employees.user_id — links a sub_contractors company row to the users
+    // row their crew logs in as, scoped by the Sub-Contractor role + an
+    // active Work Order (see routes/subcontractorAttendance.js).
+    ['sub_contractors', 'user_id INTEGER REFERENCES users(id)'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index
@@ -5637,6 +5712,10 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-05-22) HR System Phase 1 roles.
     { name: 'Hiring Manager', desc: 'Raises hiring requests, reviews candidates', is_system: 0 },
     { name: 'Interviewer', desc: 'Conducts interviews and submits feedback', is_system: 0 },
+    // Sub-contractor self-service login (director ask, 2026-07-25) — scoped
+    // to their own crew roster + daily attendance for sites where they hold
+    // an active Work Order (routes/subcontractorAttendance.js), nothing else.
+    { name: 'Sub-Contractor', desc: "Sub-contractor self-service — submit own crew's daily attendance", is_system: 0 },
   ];
 
   const ALL_MODULES = [
@@ -5688,6 +5767,11 @@ in your first week. If a process feels broken, raise a Help Ticket
     // and the sidebar, but it was never added here, so no role got a
     // role_permissions row and it never showed in Roles & Permissions.
     'solar_quotation',
+    // Sub-contractor Attendance (director ask, 2026-07-25) — the
+    // Sub-Contractor role's own crew roster + daily attendance submission,
+    // gated separately from `sub_contractors` (the company-master module
+    // admin/site-engineers use).
+    'subcontractor_attendance',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -5797,6 +5881,8 @@ in your first week. If a process feels broken, raise a Help Ticket
           insertPermIfMissing.run(role.id, mod, 1, 1, 1, 1, 0);
         } else if (role.name === 'Accountant' && (mod === 'cashflow' || mod === 'collections' || mod === 'payment_required')) {
           insertPermIfMissing.run(role.id, mod, 1, 1, 1, 0, 1);
+        } else if (role.name === 'Sub-Contractor' && mod === 'subcontractor_attendance') {
+          insertPermIfMissing.run(role.id, mod, 1, 1, 1, 0, 0);
         } else {
           // Default DENY — new modules are hidden until explicitly granted.
           insertPermIfMissing.run(role.id, mod, 0, 0, 0, 0, 0);
