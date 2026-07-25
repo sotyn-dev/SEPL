@@ -3,8 +3,10 @@
 // be filtered/searched alongside the rest of the data.
 
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
+const { sitesWithActiveWorkOrder } = require('../lib/subcontractorWorkOrders');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -143,6 +145,91 @@ router.delete('/:id', requirePermission('sub_contractors', 'delete'), (req, res)
   const r = getDb().prepare('DELETE FROM sub_contractors WHERE id=?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
+});
+
+// ── Sub-contractor self-service login (director ask, 2026-07-25) ────────
+// Admin-only: creates a `users` row scoped to the "Sub-Contractor" role
+// (seeded in schema.js) and links it via sub_contractors.user_id — same
+// nullable-FK pattern as employees.user_id. The resulting login can only
+// see its own crew roster + attendance for sites where it holds an ACTIVE
+// Work Order (routes/subcontractorAttendance.js).
+router.post('/:id/create-login', adminOnly, (req, res) => {
+  const db = getDb();
+  const sc = db.prepare('SELECT id, name, user_id FROM sub_contractors WHERE id=?').get(req.params.id);
+  if (!sc) return res.status(404).json({ error: 'Sub-contractor not found' });
+  if (sc.user_id) return res.status(400).json({ error: 'This sub-contractor already has a login' });
+
+  const { email, username, password } = req.body || {};
+  // users.email is UNIQUE NOT NULL — synthesize one if admin didn't give a
+  // real address, so a subcontractor without email can still get a login.
+  const finalEmail = (email && String(email).trim()) || `subcon-${sc.id}@subcontractor.sotyn.local`;
+  const finalUsername = (username && String(username).trim()) || `subcon${sc.id}`;
+  const finalPassword = (password && String(password).length >= 4) ? String(password) : Math.random().toString(36).slice(2, 10);
+
+  const dupe = db.prepare('SELECT id FROM users WHERE LOWER(email)=LOWER(?) OR username=?').get(finalEmail, finalUsername);
+  if (dupe) return res.status(409).json({ error: 'A user with this email/username already exists' });
+
+  const role = db.prepare(`SELECT id FROM roles WHERE name='Sub-Contractor'`).get();
+  if (!role) return res.status(500).json({ error: "Sub-Contractor role not seeded — restart the server" });
+
+  const hash = bcrypt.hashSync(finalPassword, 10);
+  const txn = db.transaction(() => {
+    const u = db.prepare(
+      `INSERT INTO users (name, email, username, password, role, department) VALUES (?,?,?,?,?,?)`
+    ).run(sc.name, finalEmail, finalUsername, hash, 'user', 'Sub-Contractor');
+    db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?,?)').run(u.lastInsertRowid, role.id);
+    db.prepare('UPDATE sub_contractors SET user_id=? WHERE id=?').run(u.lastInsertRowid, sc.id);
+    return u.lastInsertRowid;
+  });
+  try {
+    const userId = txn();
+    // Password is only ever returned here, once, right after creation —
+    // same as the pattern used for the seeded backup-admin account.
+    res.status(201).json({ user_id: userId, username: finalUsername, email: finalEmail, password: finalPassword });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Which sites a sub-contractor can currently submit attendance for — read-
+// only, derived from active Work Orders (director ask, 2026-07-25: "no work
+// order no attendance"). There's no manual assignment step: issuing a Work
+// Order for this sub-contractor at a project (Projects → Indent Labour
+// Payment → Work Orders) is what grants access, automatically.
+router.get('/:id/work-order-sites', requirePermission('sub_contractors', 'view'), (req, res) => {
+  res.json(sitesWithActiveWorkOrder(getDb(), +req.params.id));
+});
+
+// Admin/site-engineer review: recent daily attendance submissions for one
+// sub-contractor, with named worker present/absent + photos, so mam can
+// audit a crew's attendance without needing the subcontractor's own login.
+router.get('/:id/attendance-log', requirePermission('sub_contractors', 'view'), (req, res) => {
+  const db = getDb();
+  const dateFrom = String(req.query.date_from || '').slice(0, 10) || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const dateTo = String(req.query.date_to || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const attendance = db.prepare(
+    `SELECT a.id, a.site_id, a.attendance_date, a.notes, s.name as site_name, u.name as submitted_by_name
+       FROM sub_contractor_attendance a
+       JOIN sites s ON s.id = a.site_id
+       LEFT JOIN users u ON u.id = a.submitted_by
+      WHERE a.sub_contractor_id = ? AND a.attendance_date BETWEEN ? AND ?
+      ORDER BY a.attendance_date DESC`
+  ).all(req.params.id, dateFrom, dateTo);
+  if (!attendance.length) return res.json([]);
+  const ids = attendance.map(a => a.id);
+  const ph = ids.map(() => '?').join(',');
+  const photos = db.prepare(`SELECT * FROM sub_contractor_attendance_photos WHERE attendance_id IN (${ph})`).all(...ids);
+  const workers = db.prepare(
+    `SELECT aw.attendance_id, aw.present, w.id as worker_id, w.name, w.phone
+       FROM sub_contractor_attendance_workers aw
+       JOIN sub_contractor_workers w ON w.id = aw.worker_id
+      WHERE aw.attendance_id IN (${ph})`
+  ).all(...ids);
+  res.json(attendance.map(a => ({
+    ...a,
+    photos: photos.filter(p => p.attendance_id === a.id),
+    workers: workers.filter(w => w.attendance_id === a.id),
+  })));
 });
 
 module.exports = router;

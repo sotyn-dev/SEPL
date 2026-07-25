@@ -3,7 +3,7 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2, FiPhone, FiMapPin, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiPhone, FiMapPin, FiDownload, FiUsers, FiKey, FiCalendar, FiCheckCircle } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE, CONTRACTOR_TYPES } from '../data/indiaLocations';
@@ -34,6 +34,38 @@ export default function SubContractors() {
   const [form, setForm] = useState(blankForm());
   const [saving, setSaving] = useState(false);
   const [uploadingWO, setUploadingWO] = useState(false);
+
+  // ── Crew Access (director ask, 2026-07-25; "no work order no attendance"):
+  // admin manages a sub-contractor's self-service login, sees which sites
+  // they can currently submit attendance for (derived live from active Work
+  // Orders — no manual assignment step), and reviews their submitted crew
+  // attendance.
+  const [crewModal, setCrewModal] = useState(false);
+  const [crewRow, setCrewRow] = useState(null);
+  const [crewWoSites, setCrewWoSites] = useState([]);
+  const [crewLog, setCrewLog] = useState([]);
+  const [crewBusy, setCrewBusy] = useState(false);
+  const [crewCreds, setCrewCreds] = useState(null); // shown once, right after Create Login
+
+  const openCrew = (row) => {
+    setCrewRow(row);
+    setCrewCreds(null);
+    setCrewModal(true);
+    api.get(`/sub-contractors/${row.id}/work-order-sites`).then(r => setCrewWoSites(r.data || [])).catch(() => setCrewWoSites([]));
+    api.get(`/sub-contractors/${row.id}/attendance-log`).then(r => setCrewLog(r.data || [])).catch(() => setCrewLog([]));
+  };
+
+  const createLogin = async () => {
+    if (!crewRow) return;
+    setCrewBusy(true);
+    try {
+      const { data } = await api.post(`/sub-contractors/${crewRow.id}/create-login`, {});
+      setCrewCreds(data);
+      toast.success('Login created — share these credentials with the sub-contractor');
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to create login'); }
+    finally { setCrewBusy(false); }
+  };
 
   const load = () => {
     setLoading(true);
@@ -200,6 +232,7 @@ export default function SubContractors() {
                 <td>
                   <div className="flex gap-1">
                     <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>
+                    {isAdmin && <button onClick={() => openCrew(r)} className="p-1 text-gray-500 hover:text-blue-600" title="Crew Access — login, Work-Order sites, attendance"><FiUsers size={14} /></button>}
                     {isAdmin && <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete (admin only)"><FiTrash2 size={14} /></button>}
                   </div>
                 </td>
@@ -348,6 +381,71 @@ export default function SubContractors() {
             <button type="submit" disabled={saving} className="btn btn-primary">{saving ? 'Saving…' : (editing ? 'Update' : 'Add')}</button>
           </div>
         </form>
+      </Modal>
+
+      {/* Crew Access (director ask, 2026-07-25) — self-service login, Work-
+          Order-derived site access ("no work order no attendance"), and
+          attendance review for one sub-contractor. */}
+      <Modal isOpen={crewModal} onClose={() => setCrewModal(false)} title={`Crew Access — ${crewRow?.name || ''}`} wide>
+        <div className="space-y-5">
+          <div>
+            <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2"><FiKey size={14} /> Self-Service Login</h4>
+            {crewCreds ? (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm space-y-1">
+                <p className="font-semibold text-emerald-800">Login created — share these with the sub-contractor now (shown once):</p>
+                <p>Username: <span className="font-mono font-bold">{crewCreds.username}</span></p>
+                <p>Password: <span className="font-mono font-bold">{crewCreds.password}</span></p>
+              </div>
+            ) : crewRow?.user_id ? (
+              <p className="text-sm text-emerald-700 flex items-center gap-1.5"><FiCheckCircle size={14} /> Login already active for this sub-contractor.</p>
+            ) : (
+              <button onClick={createLogin} disabled={crewBusy} className="btn btn-secondary text-sm">Create Login</button>
+            )}
+          </div>
+
+          <div>
+            <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2"><FiMapPin size={14} /> Sites (via active Work Order)</h4>
+            <p className="text-xs text-gray-500 mb-2">
+              No manual assignment — a sub-contractor can only submit attendance for a site once an <b>active Work Order</b> exists for them there
+              (Projects → Indent Labour Payment → Work Orders). "No work order, no attendance."
+            </p>
+            <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y">
+              {crewWoSites.map(s => (
+                <div key={s.site_id} className="flex items-center justify-between gap-2 px-2 py-1.5 text-sm">
+                  <span>{s.site_name}</span>
+                  <span className="text-[10px] text-gray-400 font-mono">{s.wo_number || `WO#${s.work_order_id}`}</span>
+                </div>
+              ))}
+              {crewWoSites.length === 0 && <p className="text-xs text-gray-400 p-2">No active Work Order for this sub-contractor yet — they cannot submit attendance anywhere until one is issued.</p>}
+            </div>
+          </div>
+
+          <div>
+            <h4 className="font-semibold text-sm flex items-center gap-1.5 mb-2"><FiCalendar size={14} /> Recent Attendance (last 30 days)</h4>
+            {crewLog.length === 0 ? (
+              <p className="text-xs text-gray-400">No attendance submitted yet.</p>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {crewLog.map(a => (
+                  <div key={a.id} className="border border-gray-100 rounded-lg p-2 text-xs">
+                    <div className="flex justify-between font-medium">
+                      <span>{a.attendance_date} — {a.site_name}</span>
+                      <span className="text-gray-500">{(a.workers || []).filter(w => w.present).length}/{(a.workers || []).length} present</span>
+                    </div>
+                    {a.workers?.length > 0 && (
+                      <div className="text-gray-500 mt-1">{a.workers.map(w => `${w.name}${w.present ? '' : ' (absent)'}`).join(', ')}</div>
+                    )}
+                    {a.photos?.length > 0 && (
+                      <div className="flex gap-1 mt-1.5">
+                        {a.photos.map(p => <img key={p.id} src={p.photo_url} alt="" className="w-14 h-11 object-cover rounded border border-gray-200" />)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </Modal>
     </div>
   );

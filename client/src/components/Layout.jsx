@@ -131,6 +131,7 @@ const SIDEBAR_GROUPS = [
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
     { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
+    { path: '/cash-chain',       label: 'Cash Flow Chain', icon: FiGitMerge, module: 'cashflow' },
     { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
     // Expenses module removed from the menu (mam 2026-07-03). Route + page kept
     // dormant in App.jsx so it's reversible and existing links don't 404.
@@ -158,6 +159,7 @@ const SIDEBAR_GROUPS = [
     { path: '/champions',       label: 'Champions League',          icon: FaTrophy,     module: 'gamification' },
     { path: '/module-owners',   label: 'Module Owners',             icon: FiAward,      module: 'scoring' },
     { path: '/sub-contractors', label: 'Sub-contractor Master Detail', icon: FiHexagon, module: 'sub_contractors' },
+    { path: '/subcontractor-attendance', label: 'Sub-contractor Attendance', icon: FiClipboard, module: 'subcontractor_attendance' },
   ]},
   { id: 'inventory', label: 'Inventory', icon: FiPackage, items: [
     { path: '/rental-tools',   label: 'Tool Rentals', icon: FiClock,    module: 'rental_tools' },

@@ -398,6 +398,10 @@ app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/ai-agent', require('./routes/aiAgent'));
 app.use('/api/email-rules', require('./routes/emailRules'));
 app.use('/api/sub-contractors', require('./routes/subcontractors'));
+// Sub-contractor self-service crew attendance (director ask, 2026-07-25) —
+// separate from /api/sub-contractors (the company-master module admin/
+// site-engineers use). Access gated on an active Work Order.
+app.use('/api/subcontractor-attendance', require('./routes/subcontractorAttendance'));
 app.use('/api/subcon-hiring', require('./routes/subconHiring'));
 app.use('/api/procurement-schedule', require('./routes/procurementSchedule'));
 app.use('/api/crm-funnel', require('./routes/crmFunnel'));
@@ -414,6 +418,8 @@ app.use('/api/cashflow', require('./routes/cashflow'));
 app.use('/api/collections', require('./routes/collections'));
 // AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
+// Cash Flow Chain — PMS → CRM → Finance handoff view + seat scorecards (mam 2026-07-25)
+app.use('/api/cash-chain', require('./routes/cashChain'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
 app.use('/api/site-chat', require('./routes/siteChat'));
 app.use('/api/indent-fms', require('./routes/indentfms'));

@@ -36,6 +36,7 @@ const Complaints = lazy(() => import('./pages/Complaints'));
 const HR = lazy(() => import('./pages/HR'));
 const Payroll = lazy(() => import('./pages/Payroll'));
 const SalarySlipPrint = lazy(() => import('./pages/SalarySlipPrint'));
+const CashFlowChain = lazy(() => import('./pages/CashFlowChain'));
 const Scorecard = lazy(() => import('./pages/Scorecard'));
 const Champions = lazy(() => import('./pages/Champions'));
 const ModuleOwners = lazy(() => import('./pages/ModuleOwners'));
@@ -73,6 +74,7 @@ const Locations = lazy(() => import('./pages/admin/Locations'));
 const CollectionsMD = lazy(() => import('./pages/admin/CollectionsMD'));
 const AISettings = lazy(() => import('./pages/AISettings'));
 const SubContractors = lazy(() => import('./pages/SubContractors'));
+const SubcontractorAttendance = lazy(() => import('./pages/SubcontractorAttendance'));
 const SubconHiring = lazy(() => import('./pages/SubconHiring'));
 const ProcurementSchedule = lazy(() => import('./pages/ProcurementSchedule'));
 const CRMFunnel = lazy(() => import('./pages/CRMFunnel'));
@@ -170,6 +172,7 @@ export default function App() {
         <Route path="training" element={<Training />} />
         {/* 4 Critical Systems */}
         <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
+        <Route path="cash-chain" element={<ModuleRoute module="cashflow"><CashFlowChain /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
         <Route path="attendance" element={<ModuleRoute module="attendance"><Attendance /></ModuleRoute>} />
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
@@ -234,6 +237,7 @@ export default function App() {
         <Route path="admin/email-settings" element={<AdminRoute><EmailSettings /></AdminRoute>} />
         <Route path="admin/email-triggers" element={<AdminRoute><EmailTriggers /></AdminRoute>} />
         <Route path="sub-contractors" element={<ModuleRoute module="sub_contractors"><SubContractors /></ModuleRoute>} />
+        <Route path="subcontractor-attendance" element={<ModuleRoute module="subcontractor_attendance"><SubcontractorAttendance /></ModuleRoute>} />
         <Route path="subcon-hiring" element={<ModuleRoute module="subcon_hiring"><SubconHiring /></ModuleRoute>} />
         <Route path="procurement-schedule" element={<ModuleRoute module="procurement_schedule"><ProcurementSchedule /></ModuleRoute>} />
         <Route path="crm-funnel" element={<ModuleRoute module="crm_funnel"><CRMFunnel /></ModuleRoute>} />
