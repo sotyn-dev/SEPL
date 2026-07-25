@@ -977,6 +977,12 @@ router.post('/', (req, res) => {
      VALUES (?,?,?,?,?,?,?,?,?,?)`
   );
   let stockOuts = 0;
+  // Audit fix (2026-07-25, director ask "DPR should not silently desync
+  // inventory"): collect shortfalls instead of only console.warn'ing them,
+  // and track every (warehouse,item) touched so we can check reorder_level
+  // once the loop is done.
+  const stockShortfalls = [];
+  const touchedStock = [];
   // Resolve the site's site_store warehouse once (auto-OUT FROM here)
   const siteStore = db.prepare(
     `SELECT id FROM warehouses WHERE site_id = ? AND type = 'site_store' AND active = 1 LIMIT 1`
@@ -996,27 +1002,63 @@ router.post('/', (req, res) => {
       try {
         const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(siteStore.id, m.item_master_id);
         const prevQty = cur ? +cur.quantity : 0;
-        if (prevQty >= consumed) {
-          const rate = cur ? +cur.avg_rate : 0;
+        // Deduct whatever's actually on hand — capped so stock never goes
+        // negative — rather than skipping the OUT entirely when the engineer
+        // reports consuming more than the books show. The gap is recorded
+        // as a shortfall below instead of silently vanishing into a
+        // console.warn (mam: DPR was saving "successfully" while inventory
+        // quietly drifted out of sync with what was actually reported used).
+        const deduct = Math.min(prevQty, consumed);
+        if (deduct > 0 && cur) {
+          const rate = +cur.avg_rate || 0;
           db.prepare('UPDATE stock_balance SET quantity=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
-            .run(prevQty - consumed, cur.id);
+            .run(prevQty - deduct, cur.id);
           db.prepare(
             `INSERT INTO stock_movements
               (warehouse_id, item_master_id, type, quantity, rate, total_value,
                reference_type, reference_id, site_id, notes, created_by)
              VALUES (?,?,?,?,?,?,?,?,?,?,?)`
-          ).run(siteStore.id, m.item_master_id, 'OUT', consumed, rate, consumed * rate,
+          ).run(siteStore.id, m.item_master_id, 'OUT', deduct, rate, deduct * rate,
                 'DPR_CONSUMPTION', `DPR-${dprId}`, site_id,
                 `Consumed in DPR #${dprId} on ${report_date}`, req.user.id);
           stockOuts += 1;
-        } else {
-          // Insufficient stock — log but don't fail the DPR submission.
-          // mam can manually adjust or do a stock-in to reconcile.
-          console.warn(`[dpr] Skipped auto-OUT for item ${m.item_master_id}: have ${prevQty}, need ${consumed}`);
+          touchedStock.push({ warehouse_id: siteStore.id, item_master_id: m.item_master_id });
+        }
+        if (consumed > prevQty) {
+          stockShortfalls.push({
+            item_master_id: m.item_master_id,
+            material_name: matName || null,
+            requested: consumed,
+            available: prevQty,
+            shortfall: consumed - prevQty,
+          });
+          console.warn(`[dpr] Stock shortfall for item ${m.item_master_id}: have ${prevQty}, need ${consumed}`);
         }
       } catch (e) {
         console.error('[dpr] auto-OUT failed:', e.message);
       }
+    }
+  }
+
+  // Reorder-level check — for every item this DPR actually decremented,
+  // see if it just crossed (or already sits at/below) its reorder_level.
+  // Notifies Procurement so a shortage surfaces the moment it happens
+  // instead of waiting on a manual stock-recon walk.
+  const lowStockAlerts = [];
+  if (touchedStock.length) {
+    const seen = new Set();
+    for (const t of touchedStock) {
+      const key = `${t.warehouse_id}:${t.item_master_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const bal = db.prepare('SELECT quantity, reorder_level FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(t.warehouse_id, t.item_master_id);
+      if (!bal || !(bal.reorder_level > 0) || bal.quantity > bal.reorder_level) continue;
+      const item = db.prepare('SELECT item_name, item_code FROM item_master WHERE id=?').get(t.item_master_id);
+      lowStockAlerts.push({
+        warehouse_id: t.warehouse_id, item_master_id: t.item_master_id,
+        item_name: item?.item_name || null, item_code: item?.item_code || null,
+        quantity: bal.quantity, reorder_level: bal.reorder_level,
+      });
     }
   }
 
@@ -1028,7 +1070,15 @@ router.post('/', (req, res) => {
       console.warn('[dpr] loss-streak alert failed:', e.message)));
   }
 
-  res.status(201).json({ id: dprId, message: 'DPR submitted', stock_outs: stockOuts });
+  if (lowStockAlerts.length) {
+    setImmediate(() => notifyLowStock(dprId, site_id, lowStockAlerts).catch(e =>
+      console.warn('[dpr] low-stock alert failed:', e.message)));
+  }
+
+  res.status(201).json({
+    id: dprId, message: 'DPR submitted', stock_outs: stockOuts,
+    stock_shortfalls: stockShortfalls, low_stock_alerts: lowStockAlerts,
+  });
   } catch (err) {
     console.error('DPR submit error:', err.message);
     res.status(500).json({ error: err.message || 'Failed to submit DPR' });
@@ -1131,6 +1181,56 @@ async function checkConsecutiveLossAndAlert(latestDprId, siteId) {
       site_engineer_email: eng?.email || null,
     });
   } catch (e) { /* never block the DPR save */ }
+}
+
+// Users who should hear about a low-stock/reorder situation: active admins,
+// plus anyone whose role has can_approve on 'procurement' (Purchase Manager
+// et al). Deliberately NOT can_view — a separate pre-existing migration
+// ("any authenticated user should be able to raise an indent") grants
+// procurement can_view+can_create to nearly every role including Sub-
+// Contractor logins, which would otherwise blast internal stock alerts to
+// subcontractors. can_approve stays a much smaller, actually-procurement set.
+function findProcurementUsers(db) {
+  const ids = new Set();
+  db.prepare(`SELECT id FROM users WHERE role='admin' AND active=1`).all().forEach(r => ids.add(r.id));
+  db.prepare(`
+    SELECT DISTINCT u.id FROM users u
+    JOIN user_roles ur ON ur.user_id = u.id
+    JOIN role_permissions rp ON rp.role_id = ur.role_id
+    WHERE rp.module = 'procurement' AND rp.can_approve = 1 AND u.active = 1
+  `).all().forEach(r => ids.add(r.id));
+  return [...ids];
+}
+
+// Fire-and-forget: notify Procurement + admins that a DPR's material
+// consumption pushed one or more items to/below their reorder_level.
+// Writes an in-app `notifications` row per user (deduped per item+day,
+// same convention as scripts/hrAutomationsCron.js) and a web push
+// (same shape as scripts/dprAutoPrompt.js).
+async function notifyLowStock(dprId, siteId, alerts) {
+  const db = getDb();
+  const site = db.prepare('SELECT name FROM sites WHERE id=?').get(siteId);
+  const today = new Date().toISOString().slice(0, 10);
+  const userIds = findProcurementUsers(db);
+  if (!userIds.length) return;
+  for (const a of alerts) {
+    const label = a.item_name || a.item_code || `Item #${a.item_master_id}`;
+    const title = `⚠ Low stock — ${label}`;
+    const body = `${site?.name || `Site #${siteId}`}: ${label} at ${a.quantity} (reorder level ${a.reorder_level}), triggered by DPR #${dprId}.`;
+    const dedupeKey = `low_stock_reorder:${a.warehouse_id}:${a.item_master_id}:${today}`;
+    for (const uid of userIds) {
+      const existing = db.prepare('SELECT id FROM notifications WHERE user_id=? AND dedupe_key=?').get(uid, dedupeKey);
+      if (existing) continue;
+      db.prepare(
+        `INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+         VALUES (?,?,?,?,?,?,?)`
+      ).run(uid, 'low_stock_reorder', title, body, '/inventory', 'in_app', dedupeKey);
+    }
+    try {
+      const pushLib = require('../lib/push');
+      pushLib.notifyMany(userIds, { title, body, url: '/inventory', tag: dedupeKey });
+    } catch (e) { console.warn('[dpr] low-stock push failed:', e.message); }
+  }
 }
 
 function isoMinusOneDay(iso) {

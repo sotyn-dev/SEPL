@@ -200,6 +200,11 @@ export default function DPR() {
   const [mmRecTo, setMmRecTo] = useState('');
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [poItemsForSite, setPoItemsForSite] = useState([]);
+  // TABLE C: Materials Consumed — audit fix (2026-07-25). Was fully absent
+  // from the submit form even though the backend has always supported
+  // materials[] with auto stock-OUT (server/routes/dpr.js). Mirrors
+  // workItems: sourced from the same poItemsForSite BOQ list.
+  const [materials, setMaterials] = useState([]);
   // Server-side diagnostic when po_items can't be fetched (no BB, no
   // items, or rates not set). Surfaced as a yellow banner above the
   // work items grid so mam knows exactly what to fix.
@@ -294,6 +299,7 @@ export default function DPR() {
   const handleSiteSelect = (siteId) => {
     setForm(f => ({ ...f, site_id: siteId }));
     setWorkItems([]);
+    setMaterials([]);
     if (siteId) {
       // Response is now { items, diagnostic, total_count } — older format
       // was a bare array. Handle both for robustness.
@@ -430,6 +436,23 @@ export default function DPR() {
     if (field === 'qty' || field === 'rate') n[i].amount = (n[i].qty || 0) * (n[i].rate || 0);
     setWorkItems(n);
   };
+  const addMaterial = () => setMaterials([...materials, { po_item_id: '', item_master_id: '', material_name: '', unit: 'nos', boq_qty: 0, consumed_today: 0 }]);
+  const removeMaterial = (i) => setMaterials(materials.filter((_, idx) => idx !== i));
+  const selectMaterial = (i, poItemId) => {
+    const item = poItemsForSite.find(p => p.id === +poItemId);
+    const n = [...materials];
+    n[i].po_item_id = +poItemId || '';
+    n[i].item_master_id = item?.item_master_id || '';
+    n[i].material_name = item?.description || '';
+    n[i].unit = item?.unit || 'nos';
+    n[i].boq_qty = item?.quantity || 0;
+    setMaterials(n);
+  };
+  const updateMaterial = (i, field, val) => {
+    const n = [...materials];
+    n[i][field] = val;
+    setMaterials(n);
+  };
   const updateCost = (i, field, val) => {
     const n = [...costs];
     // Block manual rate edits on fixed-rate rows (Skilled 800, Helper 500)
@@ -543,17 +566,25 @@ export default function DPR() {
   const submitDpr = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/dpr', {
+      const { data } = await api.post('/dpr', {
         ...form,
         work_items: workItems.filter(w => w.po_item_id || w.description),
         manpower: costs.filter(c => c.qty > 0 || c.amount > 0),
         machinery: machinery.filter(m => m.equipment),
         contractors: contractors.filter(c => (c.name && c.name.trim()) || c.manpower > 0),
+        materials: materials.filter(m => (m.material_name && m.material_name.trim()) || m.item_master_id || m.po_item_id).filter(m => (+m.consumed_today || 0) > 0),
         grand_total_a: grandTotalA,
         grand_total_b: grandTotalB,
         profit_loss: profitLoss
       });
-      toast.success('DPR submitted!'); setModal(false); load();
+      toast.success('DPR submitted!');
+      // Audit fix (2026-07-25): surface stock shortfalls instead of letting
+      // them vanish into a server console.warn — the DPR still saved, this
+      // is informational so the engineer/mam know inventory ran short.
+      (data?.stock_shortfalls || []).forEach(s => {
+        toast.error(`⚠ Stock short: ${s.material_name || 'item'} — needed ${s.requested}, only ${s.available} in site store (short by ${s.shortfall}).`, { duration: 8000 });
+      });
+      setModal(false); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Error'); }
   };
 
@@ -765,7 +796,7 @@ export default function DPR() {
                 className="btn btn-secondary flex items-center gap-2"><FiList /> Attendance Records</button>
               <button onClick={() => {
                 setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
-                setWorkItems([]); setPoItemsForSite([]);
+                setWorkItems([]); setPoItemsForSite([]); setMaterials([]);
                 setCosts([
                   { type: 'Skilled Manpower', qty: 0, rate: 800, amount: 0, fixed: true },
                   { type: 'Helper', qty: 0, rate: 500, amount: 0, fixed: true },
@@ -1269,6 +1300,54 @@ export default function DPR() {
                 </div>
               </>
             ) : <p className="text-xs text-amber-600">{form.site_id ? 'No PO items for this site. Add PO items in Orders first.' : 'Select a site to load PO items.'}</p>}
+          </div>
+
+          {/* TABLE C: Materials Consumed — feeds dpr_material and auto-decrements
+              the site's inventory (server/routes/dpr.js). Optional: only items
+              added here get deducted from stock; leaving this empty behaves
+              exactly as before. */}
+          <div className="border-2 border-amber-300 rounded-lg p-3 bg-amber-50">
+            <div className="flex justify-between items-center mb-3">
+              <h5 className="font-bold text-amber-800">TABLE C: Materials Consumed (updates Site Inventory)</h5>
+              {poItemsForSite.length > 0 && <button type="button" onClick={addMaterial} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Material</button>}
+            </div>
+            {poItemsForSite.length > 0 ? (
+              <>
+                <div className="hidden md:grid grid-cols-12 gap-1 text-[10px] font-bold text-gray-600 mb-1 px-1 uppercase">
+                  <div className="md:col-span-6">BOQ Item</div><div className="md:col-span-2">Unit</div><div className="md:col-span-3">Consumed Today</div><div></div>
+                </div>
+                {materials.map((m, i) => (
+                  <div key={i} className="grid grid-cols-12 gap-1 mb-2 md:mb-1.5 items-center bg-white rounded p-2 md:p-1 border md:border-0 border-gray-100">
+                    <div className="col-span-12 md:col-span-6">
+                      <SearchableSelect
+                        options={poItemsForSite.filter(item => item.item_master_id).map(item => ({
+                          id: item.id,
+                          label: `${item.item_code ? `[${item.item_code}] ` : ''}${item.description} (${item.unit})`,
+                          ...item,
+                        }))}
+                        value={m.po_item_id || null}
+                        valueKey="id"
+                        displayKey="label"
+                        placeholder="-- Select Material (from BOQ) --"
+                        onChange={(item) => selectMaterial(i, item?.id || '')}
+                      />
+                    </div>
+                    <div className="col-span-4 md:col-span-2">
+                      <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Unit</div>
+                      <div className="text-sm text-gray-600 pt-1.5">{m.unit || '-'}</div>
+                    </div>
+                    <div className="col-span-6 md:col-span-3">
+                      <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Consumed Today</div>
+                      <input className="input text-sm w-full" type="number" placeholder="0" value={m.consumed_today || ''} onChange={e => updateMaterial(i, 'consumed_today', +e.target.value)} />
+                    </div>
+                    <div className="col-span-2 md:col-span-1 flex justify-center pt-2 md:pt-0">
+                      <button type="button" onClick={() => removeMaterial(i)} className="p-1 text-red-400 hover:text-red-600"><FiTrash2 size={14} /></button>
+                    </div>
+                  </div>
+                ))}
+                {materials.length === 0 && <p className="text-xs text-gray-400 text-center py-3">Click "+ Add Material" to log what was consumed from site stock today (optional)</p>}
+              </>
+            ) : <p className="text-xs text-amber-700">{form.site_id ? 'No BOQ items for this site.' : 'Select a site to log materials consumed.'}</p>}
           </div>
 
           {/* TABLE B: Costs */}
