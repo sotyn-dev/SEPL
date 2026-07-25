@@ -487,6 +487,7 @@ export default function HR() {
         {[
           { id: 'dashboard',       label: 'Dashboard',          icon: FiBarChart2 },
           { id: 'manpower',        label: 'Manpower Plan',      icon: FiUsers },
+          { id: 'dpr-compliance',  label: 'DPR Compliance',     icon: FiAlertTriangle },
           { id: 'candidates',      label: 'Candidates (ATS)',   icon: FiUser },
           { id: 'hiring-requests', label: 'Hiring Requests',    icon: FiBriefcase },
           { id: 'jds',             label: 'Job Descriptions',   icon: FiFileText },
@@ -514,6 +515,7 @@ export default function HR() {
 
       {tab === 'dashboard'       && <DashboardTab />}
       {tab === 'manpower'        && <ManpowerTab />}
+      {tab === 'dpr-compliance'  && <DprComplianceTab />}
       {tab === 'hiring-requests' && <HiringRequestsTab employees={employees} />}
       {tab === 'jds'             && <JobDescriptionsTab />}
       {tab === 'screening'       && <ScreeningQuestionsTab />}
@@ -1512,6 +1514,74 @@ export default function HR() {
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+// DPR Compliance (director ask, 2026-07-25: "link HR attendance to DPR — if
+// it's not uploaded on time"). Reads /hr/dpr-compliance, which aggregates
+// dpr_compliance_log — written nightly by scripts/dprAutoPrompt.js's 18:00
+// sweep for every site engineer who owed a DPR and hadn't filed one. This is
+// HR's actual review lane: following up on repeat delinquency, not signing
+// off on BOQ/technical content (that stays with the site-incharge/billing-
+// engineer dpr:approve permission).
+function DprComplianceTab() {
+  const today = new Date().toISOString().slice(0, 10);
+  const [dateFrom, setDateFrom] = useState(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  const [dateTo, setDateTo] = useState(today);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const load = () => {
+    setLoading(true);
+    api.get('/hr/dpr-compliance', { params: { date_from: dateFrom, date_to: dateTo } })
+      .then(r => setRows(r.data?.rows || []))
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [dateFrom, dateTo]);
+
+  return (
+    <div className="space-y-4">
+      <div className="text-xs text-gray-600 bg-gradient-to-r from-red-50 to-amber-50 border border-red-100 rounded-lg px-4 py-2.5">
+        Every day at 6 PM, any site engineer who owns an active site but hasn't filed that site's DPR gets logged here (and pushed a reminder).
+        This is HR's follow-up list — repeat misses are what to raise in review, not a substitute for the site-incharge's DPR approval.
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-xs text-gray-500">From <input type="date" className="input text-sm ml-1" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></label>
+        <label className="text-xs text-gray-500">To <input type="date" className="input text-sm ml-1" value={dateTo} onChange={e => setDateTo(e.target.value)} /></label>
+      </div>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="text-sm w-full">
+            <thead>
+              <tr className="bg-gradient-to-b from-gray-50 to-gray-100 border-b border-gray-200 text-[10px] uppercase tracking-wider text-gray-500">
+                <th className="px-4 py-3 text-left font-semibold">Engineer</th>
+                <th className="px-4 py-3 text-left font-semibold">Department</th>
+                <th className="px-4 py-3 text-center font-semibold">Missed DPRs</th>
+                <th className="px-4 py-3 text-left font-semibold">Sites</th>
+                <th className="px-4 py-3 text-left font-semibold">Last Missed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan="5" className="text-center py-10 text-gray-400">Loading…</td></tr>
+              ) : rows.length === 0 ? (
+                <tr><td colSpan="5" className="text-center py-10 text-gray-400">No missed DPRs in this range — full compliance.</td></tr>
+              ) : rows.map((r, i) => (
+                <tr key={r.user_id} className={`border-b border-gray-100 ${i % 2 ? 'bg-gray-50/40' : 'bg-white'}`}>
+                  <td className="px-4 py-2.5 font-medium text-gray-800">{r.user_name || `User #${r.user_id}`}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500">{r.department || '-'}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${r.missed_count >= 5 ? 'bg-red-100 text-red-700' : r.missed_count >= 2 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>{r.missed_count}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-gray-600">{r.site_names || '-'}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-600">{r.last_missed_date || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

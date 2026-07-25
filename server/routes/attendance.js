@@ -108,6 +108,20 @@ router.get('/my-month', (req, res) => {
     }
   } catch {}
 
+  // DPR-filed indicator (director ask, 2026-07-25 — link HR attendance to
+  // DPR): for days this user owned an active site, was a DPR actually filed
+  // for it? Computed live (not only from the nightly dpr_compliance_log)
+  // so today's cell isn't blank until the 18:00 sweep runs.
+  const ownedSiteIds = db.prepare(`SELECT id FROM sites WHERE site_engineer_id=? AND status='active'`).all(req.user.id).map(r => r.id);
+  let dprDatesForOwned = new Set();
+  if (ownedSiteIds.length) {
+    const ph = ownedSiteIds.map(() => '?').join(',');
+    dprDatesForOwned = new Set(
+      db.prepare(`SELECT DISTINCT report_date FROM dpr WHERE site_id IN (${ph}) AND report_date BETWEEN ? AND ?`)
+        .all(...ownedSiteIds, monthStart, monthEnd).map(r => r.report_date)
+    );
+  }
+
   // Build a per-day map of status. Key = YYYY-MM-DD.
   // Order of precedence: attendance row wins; else leave; else (past weekdays) absent; future = blank.
   const today = new Date().toISOString().slice(0, 10);
@@ -155,6 +169,11 @@ router.get('/my-month', (req, res) => {
     // render a per-day timeline. Also embed any approved leave that
     // covers this date (short_leave or full-day) for at-a-glance audit.
     const dayLeave = leaves.find(l => dateStr >= l.from_date && dateStr <= l.to_date);
+    // Applicable only on days this user owned an active site, SEPL's
+    // 6-day week (Sunday off — matches scripts/dprAutoPrompt.js isWeekend),
+    // and not a future date. Null = not applicable, not "missed".
+    const dprApplicable = ownedSiteIds.length > 0 && dow !== 0 && dObj <= todayObj;
+    const dprFiled = dprApplicable ? dprDatesForOwned.has(dateStr) : null;
     days.push({
       date: dateStr,
       day: d,
@@ -163,6 +182,7 @@ router.get('/my-month', (req, res) => {
       punch_in_time: att?.punch_in_time || null,
       punch_out_time: att?.punch_out_time || null,
       total_hours: att?.total_hours || 0,
+      dpr_filed: dprFiled,
       leave: dayLeave ? {
         leave_type: dayLeave.leave_type,
         from_time: dayLeave.from_time || null,
@@ -263,7 +283,19 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   // COALESCE to the snapshot so a deleted user's KEPT attendance rows still
   // show who they belonged to (user_id is nulled on force-delete but the name
   // snapshot stays) — mam 2026-07-06 "old attendance data don't delete".
-  let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;
+  // dpr_filed (director ask, 2026-07-25 — link HR attendance to DPR):
+  // NULL when the user isn't a current site engineer (not applicable),
+  // else 1/0 for whether a DPR exists for one of their active sites on
+  // that attendance date. Computed live — same site/dpr shape scripts/
+  // dprAutoPrompt.js already uses to find who owes a DPR.
+  let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone,
+      CASE WHEN EXISTS (SELECT 1 FROM sites s WHERE s.site_engineer_id = a.user_id AND s.status='active')
+        THEN (CASE WHEN EXISTS (
+              SELECT 1 FROM sites s JOIN dpr d ON d.site_id = s.id
+              WHERE s.site_engineer_id = a.user_id AND s.status='active' AND d.report_date = a.date
+            ) THEN 1 ELSE 0 END)
+        ELSE NULL END AS dpr_filed
+    FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;
   const params = [];
   if (date) { sql += ' AND a.date=?'; params.push(date); }
   if (user_id) { sql += ' AND a.user_id=?'; params.push(user_id); }

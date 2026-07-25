@@ -48,6 +48,39 @@ function findAdminsForRollup(db) {
   return db.prepare(`SELECT id FROM users WHERE role='admin' AND active=1`).all().map(r => r.id);
 }
 
+// Same WHERE clause as findEngineersOwingDpr but ungrouped — one row per
+// (user, site) miss, since dpr_compliance_log needs site-level granularity
+// that the GROUP_CONCAT'd version above collapses away (director ask,
+// 2026-07-25: "link HR attendance to DPR — if it's not uploaded on time").
+function findEngineerSiteMisses(db) {
+  const today = todayIso();
+  return db.prepare(`
+    SELECT u.id user_id, s.id site_id
+    FROM sites s
+    JOIN users u ON s.site_engineer_id = u.id
+    WHERE s.status = 'active'
+      AND u.active = 1
+      AND NOT EXISTS (
+        SELECT 1 FROM dpr d
+        WHERE d.site_id = s.id AND d.report_date = ?
+      )
+  `).all(today);
+}
+
+// Log every (user, site) miss for the day so HR has a persistent,
+// queryable compliance history — the push notification alone disappears
+// once the day passes. Idempotent: UNIQUE(user_id, site_id, report_date)
+// on dpr_compliance_log means re-running the sweep never double-logs.
+function logComplianceMisses(db) {
+  const today = todayIso();
+  const misses = findEngineerSiteMisses(db);
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO dpr_compliance_log (user_id, site_id, report_date, status) VALUES (?,?,?,'missed')`
+  );
+  for (const m of misses) insert.run(m.user_id, m.site_id, today);
+  return misses.length;
+}
+
 async function runOnce() {
   if (process.env.ERP_DISABLE_DPR_PROMPT === '1') return;
   if (isWeekend()) { console.log('[dpr-prompt] Sunday, skipping'); return; }
@@ -58,6 +91,8 @@ async function runOnce() {
   const db = getDb();
   const today = todayIso();
   const owing = findEngineersOwingDpr(db);
+  const loggedMisses = logComplianceMisses(db);
+  if (loggedMisses) console.log(`[dpr-prompt] ${today} 18:00 — logged ${loggedMisses} compliance miss(es)`);
 
   if (owing.length === 0) {
     console.log(`[dpr-prompt] ${today} 18:00 — every active site has a DPR submitted, no prompts sent`);
@@ -116,4 +151,4 @@ function scheduleDprAutoPrompt() {
   }, msUntil);
 }
 
-module.exports = { scheduleDprAutoPrompt, runOnce };
+module.exports = { scheduleDprAutoPrompt, runOnce, logComplianceMisses, findEngineerSiteMisses };

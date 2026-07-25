@@ -849,8 +849,8 @@ export default function Attendance() {
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <input type="date" className="input w-48" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
             <button onClick={() => exportCsv(`attendance-${filterDate || 'all'}`,
-              ['Name','Date','In','Out','Hours','Site','Status'],
-              records.map(r => [r.user_name, r.date, r.punch_in_time, r.punch_out_time, r.total_hours, r.site_name, r.status]))}
+              ['Name','Date','In','Out','Hours','Site','Status','DPR Filed'],
+              records.map(r => [r.user_name, r.date, r.punch_in_time, r.punch_out_time, r.total_hours, r.site_name, r.status, r.dpr_filed === null ? '' : (r.dpr_filed ? 'Yes' : 'No')]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
           </div>
           {/* Desktop table (mobile gets card list below — mam 2026-06-02). */}
@@ -863,7 +863,13 @@ export default function Attendance() {
                 <td className="text-xs">{fmtT(r.punch_out_time)}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                 <td className="font-semibold">{r.total_hours || '-'}</td>
                 <td className="text-xs">{r.site_name || '-'}{r.punch_in_time && r.location_verified === 0 ? <span className="ml-1 text-[9px] bg-orange-100 text-orange-700 px-1 rounded font-bold" title="GPS could not confirm this location — check the selfie">⚠ GPS?</span> : null}</td>
-                <td><StatusBadge status={r.status} /></td>
+                <td>
+                  <StatusBadge status={r.status} />
+                  {/* DPR-filed pill (director ask, 2026-07-25): only rendered when
+                      applicable (r.dpr_filed is 1/0, not null — see GET /attendance). */}
+                  {r.dpr_filed === 1 && <span className="ml-1 text-[9px] bg-emerald-100 text-emerald-700 px-1 rounded font-bold" title="DPR filed for this site/date">DPR ✓</span>}
+                  {r.dpr_filed === 0 && <span className="ml-1 text-[9px] bg-red-100 text-red-700 px-1 rounded font-bold" title="DPR NOT filed for this site/date">DPR ✗</span>}
+                </td>
                 <td>{r.punch_in_photo && <img src={r.punch_in_photo} alt="" onClick={() => setLightbox({ src: r.punch_in_photo, label: `${r.user_name} — Punch In` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>
                 <td>{r.punch_out_photo && <img src={r.punch_out_photo} alt="" onClick={() => setLightbox({ src: r.punch_out_photo, label: `${r.user_name} — Punch Out` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>
                 <td>{canDelete('attendance') && <button onClick={async () => {
@@ -899,7 +905,11 @@ export default function Attendance() {
                       {r.date || '—'}
                     </div>
                   </div>
-                  <StatusBadge status={r.status} />
+                  <div className="flex flex-col items-end gap-1">
+                    <StatusBadge status={r.status} />
+                    {r.dpr_filed === 1 && <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">DPR ✓</span>}
+                    {r.dpr_filed === 0 && <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">DPR ✗</span>}
+                  </div>
                 </div>
                 {r.site_name && (
                   <div className="flex items-start gap-1.5 text-xs">

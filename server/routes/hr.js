@@ -268,6 +268,32 @@ router.put('/manpower-plan/category', requirePermission('hr', 'edit'), (req, res
   }
 });
 
+// ── DPR Compliance (director ask, 2026-07-25: "link HR attendance to DPR —
+// if it's not uploaded on time") ────────────────────────────────────────
+// Aggregates dpr_compliance_log (written nightly by scripts/dprAutoPrompt.js
+// at 18:00 for every site engineer who owed a DPR and hadn't filed one) into
+// per-user miss counts over a date range. This is HR's actual review lane —
+// following up on repeat DPR delinquency — separate from the site-incharge/
+// billing-engineer `dpr:approve` permission that signs off on BOQ content.
+router.get('/dpr-compliance', requirePermission('hr', 'view'), (req, res) => {
+  const db = getDb();
+  const dateFrom = String(req.query.date_from || '').slice(0, 10) || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const dateTo = String(req.query.date_to || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const rows = db.prepare(`
+    SELECT l.user_id, u.name as user_name, u.department,
+           COUNT(*) as missed_count,
+           MAX(l.report_date) as last_missed_date,
+           GROUP_CONCAT(DISTINCT s.name) as site_names
+      FROM dpr_compliance_log l
+      LEFT JOIN users u ON u.id = l.user_id
+      LEFT JOIN sites s ON s.id = l.site_id
+     WHERE l.report_date BETWEEN ? AND ?
+     GROUP BY l.user_id
+     ORDER BY missed_count DESC, last_missed_date DESC
+  `).all(dateFrom, dateTo);
+  res.json({ date_from: dateFrom, date_to: dateTo, rows });
+});
+
 // Mam (2026-05-22): bulk Excel upload for checklists.  Re-uses the
 // /data/uploads dir + 10MB cap so behaviour matches the PO/BOQ
 // upload flow.  File is deleted after parsing to avoid junk.
