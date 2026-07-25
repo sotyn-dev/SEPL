@@ -971,17 +971,43 @@ export default function DPR() {
       {tab === 'sites' && (
         <>
           <div className="flex justify-between items-center"><h4 className="font-semibold">Project Sites</h4>
-            <button onClick={() => { setForm({ name: '', address: '', client_name: '', site_engineer_id: '', supervisor: '' }); setSiteModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Site</button>
+            <button onClick={() => { setForm({ name: '', address: '', client_name: '', site_engineer_id: '', junior_engineer_id: '', supervisor: '' }); setSiteModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Site</button>
           </div>
           <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th>Lead No</th><th>Site</th><th>Address</th><th>Client</th><th>Engineer</th><th>Supervisor</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Lead No</th><th>Site</th><th>Address</th><th>Client</th><th>Senior Eng</th><th title="Owns store-keeping + all SOTYN data punching">Junior Eng (data)</th><th>Supervisor</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{sites.map(s => (
               <tr key={s.id}>
                 <td className="text-red-600 font-bold">{s.lead_no || '-'}</td>
-                <td className="font-medium">{s.name}</td>
+                <td className="font-medium">
+                  {s.name}
+                  {s.status === 'active' && (!s.site_engineer_id || !s.junior_engineer_id) && (
+                    <span className="ml-1 text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold" title="Staffing rule: every site needs 1 Senior + 1 Junior engineer">
+                      {!s.site_engineer_id && !s.junior_engineer_id ? 'NO SR+JR' : !s.site_engineer_id ? 'NO SENIOR' : 'NO JUNIOR'}
+                    </span>
+                  )}
+                </td>
                 <td>{s.address}</td>
                 <td>{s.client_name}</td>
-                <td>{s.engineer_name}</td>
+                <td>{s.engineer_name || <span className="text-red-500 text-xs font-semibold">—</span>}</td>
+                <td>
+                  {(canEdit('dpr') || isAdmin()) ? (
+                    <select className="select text-xs" style={{ minWidth: '120px' }} value={s.junior_engineer_id || ''}
+                      onChange={async e => {
+                        try {
+                          await api.put(`/dpr/sites/${s.id}`, {
+                            name: s.name, address: s.address, client_name: s.client_name,
+                            site_engineer_id: s.site_engineer_id, junior_engineer_id: e.target.value || null,
+                            supervisor: s.supervisor, status: s.status,
+                          });
+                          toast.success('Junior engineer set');
+                          api.get('/dpr/sites').then(r => setSites(r.data));
+                        } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+                      }}>
+                      <option value="">— assign —</option>
+                      {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
+                  ) : (s.junior_engineer_name || <span className="text-red-500 text-xs font-semibold">—</span>)}
+                </td>
                 <td>{s.supervisor}</td>
                 <td><StatusBadge status={s.status} /></td>
                 <td>
@@ -996,7 +1022,8 @@ export default function DPR() {
                         try {
                           await api.put(`/dpr/sites/${s.id}`, {
                             name: s.name, address: s.address, client_name: s.client_name,
-                            site_engineer_id: s.site_engineer_id, supervisor: s.supervisor,
+                            site_engineer_id: s.site_engineer_id, junior_engineer_id: s.junior_engineer_id,
+                            supervisor: s.supervisor,
                             status: 'on_hold',
                           });
                           toast.success('Deactivated');
@@ -1008,7 +1035,8 @@ export default function DPR() {
                         try {
                           await api.put(`/dpr/sites/${s.id}`, {
                             name: s.name, address: s.address, client_name: s.client_name,
-                            site_engineer_id: s.site_engineer_id, supervisor: s.supervisor,
+                            site_engineer_id: s.site_engineer_id, junior_engineer_id: s.junior_engineer_id,
+                            supervisor: s.supervisor,
                             status: 'active',
                           });
                           toast.success('Reactivated');
@@ -1020,7 +1048,7 @@ export default function DPR() {
                 </td>
               </tr>
             ))}
-              {sites.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No sites</td></tr>}</tbody>
+              {sites.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No sites</td></tr>}</tbody>
           </table></div>
         </>
       )}
@@ -1535,7 +1563,11 @@ export default function DPR() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Client</label><input className="input" value={form.client_name || ''} onChange={e => setForm({ ...form, client_name: e.target.value })} /></div>
             <div><label className="label">Supervisor</label><input className="input" list="dprUsersDL" value={form.supervisor || ''} onChange={e => setForm({ ...form, supervisor: e.target.value })} placeholder="Pick or type" /><datalist id="dprUsersDL">{users.map(u => <option key={u.id} value={u.name} />)}</datalist></div>
-            <div><label className="label">Site Engineer</label><select className="select" value={form.site_engineer_id || ''} onChange={e => setForm({ ...form, site_engineer_id: e.target.value })}><option value="">Select</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
+            <div><label className="label">Senior Engineer *</label><select className="select" value={form.site_engineer_id || ''} onChange={e => setForm({ ...form, site_engineer_id: e.target.value })}><option value="">Select</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
+            {/* Director 2026-07-26: every site carries 1 Senior + 1 Junior —
+                the Junior owns store-keeping + all SOTYN data punching (DPR
+                reminders and compliance follow the Junior). */}
+            <div><label className="label">Junior Engineer (store + data) *</label><select className="select" value={form.junior_engineer_id || ''} onChange={e => setForm({ ...form, junior_engineer_id: e.target.value })}><option value="">Select</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setSiteModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Create Site</button></div>
         </form>

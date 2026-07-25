@@ -3230,6 +3230,12 @@ function initializeDatabase() {
     ['receivables', 'next_planned_date DATE'],
     ['receivables', 'last_discussion TEXT'],
     ['receivables', 'business_book_id INTEGER REFERENCES business_book(id)'],
+    // Bill → receivable provenance (mam 2026-07-25): a receivable auto-born
+    // from a billing document carries a real key back to it, so a bill can
+    // NEVER be raised without a chaseable receivable. source_type ∈
+    // sales_bill | ra_bill | installation_bill | proforma | business_book | manual.
+    ['receivables', "source_type TEXT DEFAULT 'manual'"],
+    ['receivables', 'source_id INTEGER'],
     // DPR consumption now optionally links to the item_master so the
     // auto-OUT to inventory can decrement the right SKU's stock.
     ['dpr_material', 'item_master_id INTEGER REFERENCES item_master(id)'],
@@ -3867,6 +3873,12 @@ function initializeDatabase() {
     // row their crew logs in as, scoped by the Sub-Contractor role + an
     // active Work Order (see routes/subcontractorAttendance.js).
     ['sub_contractors', 'user_id INTEGER REFERENCES users(id)'],
+    // Site staffing rule (director 2026-07-26): every site carries ONE
+    // senior engineer (existing site_engineer_id slot) and ONE junior
+    // engineer — the junior owns store-keeping and ALL data punching in
+    // SOTYN (DPR, material receipts, attendance follow-ups). Reminders and
+    // DPR-compliance accountability target the junior, senior as fallback.
+    ['sites', 'junior_engineer_id INTEGER REFERENCES users(id)'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index
@@ -4531,6 +4543,37 @@ function initializeDatabase() {
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
+
+  // One receivable per billing document — a partial unique index guarantees a
+  // bill can't spawn duplicate receivables no matter how many times its
+  // approve/backfill path runs (mam 2026-07-25).
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_recv_source ON receivables(source_type, source_id) WHERE source_id IS NOT NULL`);
+  } catch (e) {}
+
+  // Backfill: every already-APPROVED Type-4 Final sales bill should have a
+  // chaseable receivable. Idempotent — the engine upserts on (source_type,
+  // source_id), so re-runs are no-ops (mam 2026-07-25).
+  try {
+    const { upsertReceivableFromBill, dueDateFromTerms } = require('../lib/cashSync');
+    const finals = db.prepare(
+      `SELECT id, bill_number, bill_date, total_amount, business_book_id, po_id, customer_name, project_name
+       FROM sales_bills WHERE bill_type=4 AND approval_status='approved'`
+    ).all();
+    let made = 0;
+    for (const b of finals) {
+      const bb = b.business_book_id ? db.prepare('SELECT credit_days FROM business_book WHERE id=?').get(b.business_book_id) : null;
+      const r = upsertReceivableFromBill(db, {
+        source_type: 'sales_bill', source_id: b.id,
+        client_name: b.customer_name, project_name: b.project_name,
+        business_book_id: b.business_book_id, po_id: b.po_id || null,
+        invoice_number: b.bill_number, invoice_date: b.bill_date,
+        invoice_amount: b.total_amount, due_date: dueDateFromTerms(b.bill_date, bb?.credit_days),
+      });
+      if (r.created) made += 1;
+    }
+    if (made > 0) console.log(`[migration] backfilled ${made} receivable(s) from approved Final bills`);
+  } catch (e) { console.warn('[migration] final-bill receivable backfill failed:', e.message); }
 
   // Manpower Plan — admin override of the auto (value-slab) required manpower
   // per project (mam 2026-06-12: "admin wants to edit required manpower").

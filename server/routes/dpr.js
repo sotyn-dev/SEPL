@@ -169,25 +169,30 @@ router.get('/sites', (req, res) => {
     MAX(s.po_id) as po_id,
     MAX(s.business_book_id) as business_book_id,
     MAX(s.site_engineer_id) as site_engineer_id,
+    MAX(s.junior_engineer_id) as junior_engineer_id,
     MAX(s.supervisor) as supervisor,
     CASE WHEN SUM(CASE WHEN s.status='active' THEN 1 ELSE 0 END) > 0 THEN 'active' ELSE MIN(s.status) END as status,
     MAX(u.name) as engineer_name,
+    MAX(uj.name) as junior_engineer_name,
     MAX(bb.lead_no) as lead_no,
     COUNT(*) as entry_count
     FROM sites s
     LEFT JOIN users u ON s.site_engineer_id=u.id
+    LEFT JOIN users uj ON s.junior_engineer_id=uj.id
     LEFT JOIN business_book bb ON s.business_book_id=bb.id`;
   const params = [];
 
   if (!canSeeAll && !all) {
-    sql += ` WHERE (s.site_engineer_id = ? OR EXISTS (
+    // junior_engineer_id included (director 2026-07-26): the site's junior
+    // is the designated data-puncher, so their login must see the site.
+    sql += ` WHERE (s.site_engineer_id = ? OR s.junior_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
         AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?
           OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
           OR (',' || COALESCE(po.supervisor_ids,'') || ',') LIKE ?)
     ))`;
-    params.push(uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`);
+    params.push(uid, uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`);
   }
 
   sql += ` GROUP BY ${siteKeySql('s.name')} ORDER BY name`;
@@ -196,7 +201,7 @@ router.get('/sites', (req, res) => {
 
 router.post('/sites', (req, res) => {
   const db = getDb();
-  const { name, address, client_name, po_id, site_engineer_id, supervisor } = req.body;
+  const { name, address, client_name, po_id, site_engineer_id, junior_engineer_id, supervisor } = req.body;
   // Auto-resolve business_book_id so the new site is wired to BOQ items
   // out of the box. Tries: (1) po_id → purchase_orders.business_book_id,
   // (2) business_book.project_name matching site name. Without this the
@@ -214,20 +219,20 @@ router.post('/sites', (req, res) => {
       LIMIT 1`).get(name, name, name);
     if (byProject?.id) bbId = byProject.id;
   }
-  const r = db.prepare('INSERT INTO sites (name, address, client_name, po_id, business_book_id, site_engineer_id, supervisor) VALUES (?,?,?,?,?,?,?)')
-    .run(name, address, client_name, po_id, bbId, site_engineer_id, supervisor);
+  const r = db.prepare('INSERT INTO sites (name, address, client_name, po_id, business_book_id, site_engineer_id, junior_engineer_id, supervisor) VALUES (?,?,?,?,?,?,?,?)')
+    .run(name, address, client_name, po_id, bbId, site_engineer_id, junior_engineer_id || null, supervisor);
   res.status(201).json({ id: r.lastInsertRowid, business_book_id: bbId });
 });
 
 router.put('/sites/:id', (req, res) => {
-  const { name, address, client_name, site_engineer_id, supervisor, supervisor_id, status } = req.body;
+  const { name, address, client_name, site_engineer_id, junior_engineer_id, supervisor, supervisor_id, status } = req.body;
   const db = getDb();
   db.prepare(
     `UPDATE sites SET
        name=?, address=?, client_name=?,
-       site_engineer_id=?, supervisor=?, supervisor_id=?, status=?
+       site_engineer_id=?, junior_engineer_id=?, supervisor=?, supervisor_id=?, status=?
      WHERE id=?`
-  ).run(name, address, client_name, site_engineer_id, supervisor, supervisor_id || null, status, req.params.id);
+  ).run(name, address, client_name, site_engineer_id, junior_engineer_id || null, supervisor, supervisor_id || null, status, req.params.id);
 
   // The Sites tab dedupes rows by the normalized site key (Excel-paste
   // quote / whitespace noise creates phantom duplicates). When mam clicks

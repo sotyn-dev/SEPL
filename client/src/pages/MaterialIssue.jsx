@@ -30,6 +30,15 @@ export default function MaterialIssue() {
     });
   }, []);
 
+  // Default "issue to" = the site's JUNIOR engineer — the designated
+  // store-keeper/data-puncher (director 2026-07-26) — else the senior.
+  useEffect(() => {
+    if (!siteId) return;
+    const site = sites.find(s => String(s.id) === String(siteId));
+    const def = site?.junior_engineer_id || site?.site_engineer_id;
+    if (def) setEngineerId(String(def));
+  }, [siteId, sites]);
+
   // Live stock for the picked site's store — what CAN be issued. Resolve
   // the site → its site_store warehouse via /inventory/summary (each
   // warehouse row carries site_id), then filter /inventory/stock by it.

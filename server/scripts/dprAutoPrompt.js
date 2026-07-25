@@ -21,17 +21,18 @@ function isWeekend() {
   return d === 0; // Sunday only; SEPL works 6-day week with Saturday active
 }
 
-// Find site engineers who own at least one active site but who haven't
-// submitted a DPR today for any of those sites.
+// Find the engineer accountable for each active site's DPR who hasn't
+// submitted one today. Director (2026-07-26): "junior engineer is
+// responsible for punching all data in sotyn" — so the JUNIOR is the
+// accountable data-puncher when assigned, falling back to the senior
+// (site_engineer_id) on sites that don't have a junior yet.
 function findEngineersOwingDpr(db) {
   const today = todayIso();
-  // sites.site_engineer_id is the primary; some sites also store a
-  // CSV in a sister column.  Stick with the FK column for simplicity.
   return db.prepare(`
     SELECT DISTINCT u.id user_id, u.name user_name, COUNT(s.id) site_count,
            GROUP_CONCAT(s.name, ' · ') site_names
     FROM sites s
-    JOIN users u ON s.site_engineer_id = u.id
+    JOIN users u ON u.id = COALESCE(s.junior_engineer_id, s.site_engineer_id)
     WHERE s.status = 'active'
       AND u.active = 1
       AND NOT EXISTS (
@@ -57,7 +58,7 @@ function findEngineerSiteMisses(db) {
   return db.prepare(`
     SELECT u.id user_id, s.id site_id
     FROM sites s
-    JOIN users u ON s.site_engineer_id = u.id
+    JOIN users u ON u.id = COALESCE(s.junior_engineer_id, s.site_engineer_id)
     WHERE s.status = 'active'
       AND u.active = 1
       AND NOT EXISTS (
@@ -65,6 +66,32 @@ function findEngineerSiteMisses(db) {
         WHERE d.site_id = s.id AND d.report_date = ?
       )
   `).all(today);
+}
+
+// Site staffing check (director 2026-07-26: "one junior engineer (for
+// store keeping) and one senior engineer must be at every site"). Any
+// active site missing either slot is pushed to admins once a day so the
+// gap gets filled instead of silently persisting.
+function alertUnstaffedSites(db, pushLib) {
+  const today = todayIso();
+  const gaps = db.prepare(`
+    SELECT MIN(id) as id, name,
+           MAX(CASE WHEN site_engineer_id IS NOT NULL THEN 1 ELSE 0 END) as has_senior,
+           MAX(CASE WHEN junior_engineer_id IS NOT NULL THEN 1 ELSE 0 END) as has_junior
+      FROM sites WHERE status = 'active'
+     GROUP BY TRIM(LOWER(name))
+    HAVING has_senior = 0 OR has_junior = 0
+  `).all();
+  if (!gaps.length) return 0;
+  const lines = gaps.slice(0, 6).map(g =>
+    `${g.name}: needs ${[!g.has_senior && 'Senior', !g.has_junior && 'Junior'].filter(Boolean).join(' + ')}`);
+  pushLib.notifyMany(findAdminsForRollup(db), {
+    title: `⚠ ${gaps.length} site(s) under-staffed`,
+    body: `Every site needs 1 Senior + 1 Junior (data-puncher). ${lines.join(' · ')}${gaps.length > 6 ? ' …' : ''}`,
+    url: '/dpr?tab=sites',
+    tag: `site-staffing-${today}`,
+  });
+  return gaps.length;
 }
 
 // Log every (user, site) miss for the day so HR has a persistent,
@@ -93,6 +120,10 @@ async function runOnce() {
   const owing = findEngineersOwingDpr(db);
   const loggedMisses = logComplianceMisses(db);
   if (loggedMisses) console.log(`[dpr-prompt] ${today} 18:00 — logged ${loggedMisses} compliance miss(es)`);
+  try {
+    const gaps = alertUnstaffedSites(db, pushLib);
+    if (gaps) console.log(`[dpr-prompt] ${today} — ${gaps} under-staffed site(s) alerted to admins`);
+  } catch (e) { console.warn('[dpr-prompt] staffing check failed:', e.message); }
 
   if (owing.length === 0) {
     console.log(`[dpr-prompt] ${today} 18:00 — every active site has a DPR submitted, no prompts sent`);

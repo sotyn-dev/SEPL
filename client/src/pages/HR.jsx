@@ -1738,7 +1738,7 @@ function ManpowerTab() {
         <b>Required</b> manpower comes from each project's total value
         (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
         <b> Actual</b> is the average manpower across the project's DPRs. A red <b>gap</b> means more people are needed.
-        <b> Site Eng / Jr. Site Eng / Foreman</b> show <i>on site (from the project's PO engineers, by designation) / target</i> — red means short. Every project needs 1 Jr. Site Eng + 1 Foreman; a Site Eng is added once the project is ₹1.5 Cr+.
+        <b> Site Eng / Jr. Site Eng / Foreman</b> show <i>on site (from the project's PO engineers, by designation) / target</i> — red means short. <b>Every site needs 1 Senior + 1 Jr. Site Eng + 1 Foreman</b> (director rule 2026-07-26) — the Junior owns store-keeping and all SOTYN data punching.
         {editable && <span className="text-blue-700"> · Click the ✏️ on any <b>Required</b> / target to override it, and set a <b>Category</b> per project — <b>Handover</b> needs no team / no planning.</span>}
       </div>
 

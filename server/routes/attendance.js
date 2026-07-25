@@ -112,7 +112,7 @@ router.get('/my-month', (req, res) => {
   // DPR): for days this user owned an active site, was a DPR actually filed
   // for it? Computed live (not only from the nightly dpr_compliance_log)
   // so today's cell isn't blank until the 18:00 sweep runs.
-  const ownedSiteIds = db.prepare(`SELECT id FROM sites WHERE site_engineer_id=? AND status='active'`).all(req.user.id).map(r => r.id);
+  const ownedSiteIds = db.prepare(`SELECT id FROM sites WHERE COALESCE(junior_engineer_id, site_engineer_id)=? AND status='active'`).all(req.user.id).map(r => r.id);
   let dprDatesForOwned = new Set();
   if (ownedSiteIds.length) {
     const ph = ownedSiteIds.map(() => '?').join(',');
@@ -288,11 +288,13 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   // else 1/0 for whether a DPR exists for one of their active sites on
   // that attendance date. Computed live — same site/dpr shape scripts/
   // dprAutoPrompt.js already uses to find who owes a DPR.
+  // Accountability follows the site's designated data-puncher (director
+  // 2026-07-26): the JUNIOR engineer when assigned, else the senior.
   let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone,
-      CASE WHEN EXISTS (SELECT 1 FROM sites s WHERE s.site_engineer_id = a.user_id AND s.status='active')
+      CASE WHEN EXISTS (SELECT 1 FROM sites s WHERE COALESCE(s.junior_engineer_id, s.site_engineer_id) = a.user_id AND s.status='active')
         THEN (CASE WHEN EXISTS (
               SELECT 1 FROM sites s JOIN dpr d ON d.site_id = s.id
-              WHERE s.site_engineer_id = a.user_id AND s.status='active' AND d.report_date = a.date
+              WHERE COALESCE(s.junior_engineer_id, s.site_engineer_id) = a.user_id AND s.status='active' AND d.report_date = a.date
             ) THEN 1 ELSE 0 END)
         ELSE NULL END AS dpr_filed
     FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;

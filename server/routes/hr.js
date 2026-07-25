@@ -32,14 +32,14 @@ function requiredManpower(value) {
   return 40;
 }
 
-// Required Site Eng / Jr. Site Eng / Foreman per project (mam 2026-06-13):
-// every project needs 1 Jr. Site Eng + 1 Foreman; a senior Site Engineer is
-// only needed once the project crosses ₹1.5 Cr.  Each is editable per project
-// with the ✏️ if a project needs more.
-const ENG_THRESHOLD = 1.5 * CRORE;
-function requiredEngineers(value) {
-  const big = (+value || 0) >= ENG_THRESHOLD;
-  return { se: big ? 1 : 0, jr: 1, fm: 1 };
+// Required Site Eng / Jr. Site Eng / Foreman per project.
+// Director (2026-07-26) supersedes the old ₹1.5Cr threshold: "one junior
+// engineer (for store keeping) and one senior engineer must be at EVERY
+// site" — the junior owns store-keeping + all SOTYN data punching. So the
+// baseline is 1 Senior + 1 Junior + 1 Foreman per project regardless of
+// value; each remains editable per project with the ✏️ override.
+function requiredEngineers() {
+  return { se: 1, jr: 1, fm: 1 };
 }
 
 // Classify a PO-linked person by their assigned ROLE(S) — the same role badges
