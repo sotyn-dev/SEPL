@@ -64,13 +64,16 @@ router.get('/manpower-plan', (req, res) => {
   // Manpower per DPR: prefer the sum of dpr_contractors.manpower, else the
   // legacy dpr.contractor_manpower.  One row per DPR.
   const dprRows = db.prepare(
-    `SELECT d.id, d.site_id, d.report_date,
+    `SELECT d.id, d.site_id, d.report_date, d.profit_loss,
             CASE WHEN COALESCE(SUM(dc.manpower), 0) > 0 THEN SUM(dc.manpower)
                  ELSE COALESCE(d.contractor_manpower, 0) END AS mp
        FROM dpr d
        LEFT JOIN dpr_contractors dc ON dc.dpr_id = d.id
       GROUP BY d.id`
   ).all();
+  // Trailing-30-day cutoff for the profit_30d merge below (director ask,
+  // 2026-07-25: HR's Manpower Plan should see DPR profit, not just staffing).
+  const cutoff30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   // Group business_book rows into unique projects by normalized name.
   const norm = s => String(s || '').trim();
   const keyOf = bb => (norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
@@ -82,7 +85,7 @@ router.get('/manpower-plan', (req, res) => {
     groupByBB.set(bb.id, key);
     const display = norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
       || (bb.lead_no ? `Lead ${bb.lead_no}` : `BB#${bb.id}`);
-    if (!groups.has(key)) groups.set(key, { key, project: display, value: 0, mpSum: 0, mpCount: 0, last_dpr_date: null, engUserIds: new Set() });
+    if (!groups.has(key)) groups.set(key, { key, project: display, value: 0, mpSum: 0, mpCount: 0, last_dpr_date: null, engUserIds: new Set(), profit30d: 0, dprCount30d: 0 });
     groups.get(key).value += +bb.po_amount || 0;
   }
   const siteToBB = new Map();
@@ -98,6 +101,10 @@ router.get('/manpower-plan', (req, res) => {
     const mp = +r.mp || 0;
     if (mp > 0) { g.mpSum += mp; g.mpCount += 1; }
     if (r.report_date && (!g.last_dpr_date || r.report_date > g.last_dpr_date)) g.last_dpr_date = r.report_date;
+    if (r.report_date && r.report_date >= cutoff30) {
+      g.profit30d += (+r.profit_loss || 0);
+      g.dprCount30d += 1;
+    }
   }
 
   // Actual Site Eng / Jr. Site Eng / Foreman per project (mam 2026-06-13):
@@ -145,6 +152,41 @@ router.get('/manpower-plan', (req, res) => {
       }
     }
   } catch (e) { /* purchase_orders / roles tables may be absent on a stale DB */ }
+
+  // Staff-cost reliability (director ask, 2026-07-25): DPR's per-day "Staff
+  // Cost" (GET /dpr/sites/:site_id/staff-cost) silently reports ₹0 when none
+  // of a site's assigned engineers link to an employee+salary record — which
+  // understates cost and *overstates* profit_loss with no visible warning.
+  // Flag it here so HR knows when a project's profit_30d figure shouldn't be
+  // trusted at face value. Runs AFTER the purchase-orders scan above so
+  // g.engUserIds is populated. Mirrors dpr.js's findEmp tiers 1-3 (exact
+  // user_id link, email, exact name) — the 4th first-word-overlap tier is
+  // skipped since this is a coarse trust flag, not a payroll calculation.
+  try {
+    const allEngineerIds = [...new Set([...groups.values()].flatMap(g => [...(g.engUserIds || [])]))];
+    const allEmployees = db.prepare(
+      `SELECT user_id, name, email, salary FROM employees WHERE (status IS NULL OR status = 'active')`
+    ).all();
+    const hasSalary = (u) => {
+      if (!u) return false;
+      let hit = allEmployees.find(e => e.user_id === u.id);
+      if (!hit && u.email) { const ue = u.email.toLowerCase(); hit = allEmployees.find(e => (e.email || '').toLowerCase() === ue); }
+      if (!hit && u.name) { const un = u.name.toLowerCase().trim(); hit = allEmployees.find(e => (e.name || '').toLowerCase().trim() === un); }
+      return !!(hit && (+hit.salary || 0) > 0);
+    };
+    let engUserMap = new Map();
+    if (allEngineerIds.length) {
+      const ph2 = allEngineerIds.map(() => '?').join(',');
+      engUserMap = new Map(
+        db.prepare(`SELECT id, name, email FROM users WHERE id IN (${ph2}) AND active = 1`).all(...allEngineerIds)
+          .map(u => [u.id, u])
+      );
+    }
+    for (const g of groups.values()) {
+      const ids = [...(g.engUserIds || [])];
+      g.staffCostUnreliable = ids.length === 0 || !ids.some(uid => hasSalary(engUserMap.get(uid)));
+    }
+  } catch (e) { /* employees/users table absent on a stale DB — leave unset, defaults to false below */ }
 
   // Per-project settings — category + required override, keyed by project key.
   const settings = new Map();
@@ -209,6 +251,9 @@ router.get('/manpower-plan', (req, res) => {
       fm_gap: fmRequired - fmActual,
       fm_names: g.fmNames || [],
       last_dpr_date: g.last_dpr_date,
+      profit_30d: Math.round(g.profit30d || 0),
+      dpr_count_30d: g.dprCount30d || 0,
+      staff_cost_unreliable: !!g.staffCostUnreliable,
     };
   }).sort((a, b) => b.gap - a.gap || b.value - a.value);
   res.json(projects);

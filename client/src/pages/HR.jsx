@@ -1815,14 +1815,15 @@ function ManpowerTab() {
                 <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Foreman</th>
                 <th className="px-4 py-3 text-left font-semibold w-44">Coverage</th>
                 <th className="px-4 py-3 text-center font-semibold">Gap</th>
+                <th className="px-4 py-3 text-right font-semibold" title="Sum of DPR profit/loss over the trailing 30 days">30d P/L</th>
                 <th className="px-4 py-3 text-left font-semibold">Last DPR</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="11" className="text-center py-10 text-gray-400">Loading…</td></tr>
+                <tr><td colSpan="12" className="text-center py-10 text-gray-400">Loading…</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan="11" className="text-center py-10 text-gray-400">No projects found</td></tr>
+                <tr><td colSpan="12" className="text-center py-10 text-gray-400">No projects found</td></tr>
               ) : filtered.map((r, i) => {
                 const pct = coverage(r);
                 const accent = r.gap > 0 ? 'border-l-red-400' : r.gap === 0 ? 'border-l-emerald-400' : 'border-l-blue-400';
@@ -1897,6 +1898,20 @@ function ManpowerTab() {
                           : r.gap === 0
                             ? <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700">On target</span>
                             : <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-700">+{-r.gap} extra</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      {r.is_handover ? <span className="text-gray-300 text-xs">—</span> : (
+                        <div className="inline-flex items-center gap-1 justify-end">
+                          <span className={`font-semibold text-xs ${r.profit_30d < 0 ? 'text-red-600' : r.profit_30d > 0 ? 'text-emerald-700' : 'text-gray-400'}`}>
+                            {r.profit_30d < 0 ? '−' : ''}₹{Math.abs(r.profit_30d || 0).toLocaleString('en-IN')}
+                          </span>
+                          {r.staff_cost_unreliable && (r.dpr_count_30d > 0) && (
+                            <span title="No engineer on this project links to an employee record with a salary set — DPR's Staff Cost silently reports ₹0, so this P/L figure understates cost and may be unreliable.">
+                              <FiAlertTriangle size={11} className="text-amber-500" />
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-xs whitespace-nowrap">
                       {r.last_dpr_date
