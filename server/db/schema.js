@@ -3727,12 +3727,22 @@ function initializeDatabase() {
   // don't need a migration.
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='support_tickets'").get();
-    if (row && /CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i.test(row.sql)
-            && !/manpower/i.test(row.sql)) {
-      db.exec('BEGIN');
+    // Scope the "already relaxed?" test to the CHECK clause itself — testing the
+    // whole row.sql false-positives on column names (the exact bug that stranded
+    // the status relax below). The table name is quote-tolerant: a prior rebuild
+    // leaves it stored as CREATE TABLE "support_tickets".
+    const checkClause = row && (row.sql.match(/CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i) || [])[0];
+    if (checkClause && !/manpower/i.test(checkClause)) {
+      // FKs OFF for the structural rebuild — an INSERT ... SELECT with FKs on
+      // aborts on any row referencing a since-deleted user. The pragma is a no-op
+      // inside a transaction, so set it before BEGIN and restore after COMMIT.
+      // Matches the payment_requests / indents rebuilds elsewhere in this file.
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS support_tickets_new'); } catch (_) {}
       const newSql = row.sql
-        .replace(/CREATE TABLE\s+support_tickets/i, 'CREATE TABLE support_tickets_new')
+        .replace(/CREATE TABLE\s+"?support_tickets"?/i, 'CREATE TABLE support_tickets_new')
         .replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
+      db.exec('BEGIN');
       db.exec(newSql);
       // Copy by column list so any future renames don't break this.
       const cols = db.prepare("PRAGMA table_info(support_tickets)").all().map(c => c.name).join(',');
@@ -3740,10 +3750,13 @@ function initializeDatabase() {
       db.exec('DROP TABLE support_tickets');
       db.exec('ALTER TABLE support_tickets_new RENAME TO support_tickets');
       db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
       console.log('[migration] support_tickets rebuilt — category CHECK relaxed (manpower/material/payment now allowed)');
     }
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] support_tickets category CHECK relax FAILED:', e.message);
   }
 
   // Relax the support_tickets STATUS CHECK for the Delegation-style proof
@@ -3755,22 +3768,33 @@ function initializeDatabase() {
   // safe even after the assigned_to / proof_* columns were added.
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='support_tickets'").get();
-    if (row && /CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i.test(row.sql)
-            && !/submitted/i.test(row.sql)) {
-      db.exec('BEGIN');
+    // Scope the 'submitted' test to the CHECK clause — the proof_submitted_at /
+    // proof_submitted_by column names also contain "submitted", so testing the
+    // whole row.sql false-positived and this migration never ran on real DBs.
+    // Quote-tolerant name: the category rebuild above leaves the table stored as
+    // CREATE TABLE "support_tickets", which the old /support_tickets\b/ regex
+    // failed to match — the rebuild then collided with "table already exists".
+    const checkClause = row && (row.sql.match(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i) || [])[0];
+    if (checkClause && !/submitted/i.test(checkClause)) {
+      db.pragma('foreign_keys = OFF');       // see the category rebuild above
+      try { db.exec('DROP TABLE IF EXISTS support_tickets_new'); } catch (_) {}
       const newSql = row.sql
-        .replace(/CREATE TABLE\s+support_tickets\b/i, 'CREATE TABLE support_tickets_new')
+        .replace(/CREATE TABLE\s+"?support_tickets"?/i, 'CREATE TABLE support_tickets_new')
         .replace(/,?\s*CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i, '');
+      db.exec('BEGIN');
       db.exec(newSql);
       const cols = db.prepare("PRAGMA table_info(support_tickets)").all().map(c => c.name).join(',');
       db.exec(`INSERT INTO support_tickets_new (${cols}) SELECT ${cols} FROM support_tickets`);
       db.exec('DROP TABLE support_tickets');
       db.exec('ALTER TABLE support_tickets_new RENAME TO support_tickets');
       db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
       console.log('[migration] support_tickets rebuilt — status CHECK relaxed (submitted/rejected now allowed)');
     }
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] support_tickets status CHECK relax FAILED:', e.message);
   }
 
   // Mam (2026-05-21) STILL "not done" after multiple attempts.  Going
