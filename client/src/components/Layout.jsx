@@ -33,7 +33,7 @@ import {
   // People children
   FiUserPlus, FiHelpCircle, FiBookOpen, FiCalendar, FiDollarSign, FiAtSign,
   // Inventory children
-  FiClock, FiBox, FiServer, FiSliders, FiBookmark, FiUploadCloud,
+  FiClock, FiBox, FiServer, FiSliders, FiBookmark, FiUploadCloud, FiPieChart,
   // Tasks children
   FiAward, FiPaperclip, FiLayers, FiCheckCircle,
   // Service Desk children
@@ -124,6 +124,7 @@ const SIDEBAR_GROUPS = [
     { path: '/indent-labour-payment', label: 'Indent Labour Payment', icon: FiClipboard, module: 'indent_labour_payment' },
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/dpr-quick',    label: 'Quick DPR (30s)',  icon: FiFastForward, module: 'dpr' },
+    { path: '/labour-analytics', label: 'Labour Analytics', icon: FiPieChart, module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
     // WhatsApp moved OUT of this group → pinned at the bottom of the sidebar,
     // just above Change Password (mam 2026-06-19). See SIDEBAR footer render.

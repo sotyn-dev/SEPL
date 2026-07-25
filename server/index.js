@@ -407,6 +407,9 @@ app.use('/api/subcontractor-attendance', require('./routes/subcontractorAttendan
 // "no work order no attendance"-style discipline for stock — storekeeper
 // issues, engineer uses+returns, storekeeper confirms). Feeds Quick DPR.
 app.use('/api/material-issues', require('./routes/materialIssues'));
+// Labour Analytics — per-project labour budget vs consumed, manhours,
+// target-vs-actual manpower, ₹/manhour (director ask 2026-07-26).
+app.use('/api/labour-analytics', require('./routes/labourAnalytics'));
 app.use('/api/subcon-hiring', require('./routes/subconHiring'));
 app.use('/api/procurement-schedule', require('./routes/procurementSchedule'));
 app.use('/api/crm-funnel', require('./routes/crmFunnel'));
