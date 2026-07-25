@@ -9,6 +9,7 @@ import { num as fmt, inr } from '../lib/solar/format';
 import { PROJECT_TYPES } from '../lib/solar/engine';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import QualificationChat from './QualificationChat';
+import { QUAL_SECTIONS } from '../lib/solar/qualification';
 
 const cr = (v) => `₹${fmt((v || 0) / 1e7, 2)} Cr`;
 
@@ -349,18 +350,39 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
                 </div>)}
             </div>)}
 
-          {qual && (
-            <div className="border rounded-lg p-3 bg-emerald-50/60 text-xs">
-              <p className="font-bold text-emerald-800 mb-1">✓ Qualified — {fmt(d.capacity_kw)} kW {d.project_type}</p>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-0.5 text-gray-700">
-                {qual.monthly_units && <div>Units/mo: <b>{qual.monthly_units}</b></div>}
-                {qual.monthly_bill && <div>Bill: <b>₹{qual.monthly_bill}</b></div>}
-                {qual.connection && <div>Conn: <b>{qual.connection}</b></div>}
-                {qual.roof_type && <div>Roof: <b>{qual.roof_type}</b></div>}
-                {qual.net_metering && <div>Metering: <b>{qual.net_metering}</b></div>}
-                {qual.timeline && <div>Timeline: <b>{qual.timeline}</b></div>}
+          {qual && (() => {
+            const answeredSections = QUAL_SECTIONS
+              .map((sec) => ({
+                title: sec.title,
+                items: sec.questions.filter((q) => {
+                  const v = qual[q.key];
+                  return v !== undefined && v !== null && String(v).trim() !== '';
+                }),
+              }))
+              .filter((sec) => sec.items.length > 0);
+            return (
+              <div className="border rounded-lg p-3 bg-emerald-50/60 text-xs">
+                <p className="font-bold text-emerald-800 mb-1">✓ Qualified — {fmt(d.capacity_kw)} kW {d.project_type}</p>
+                {answeredSections.length === 0 ? (
+                  <p className="text-[11px] text-gray-500 italic">Marked qualified, but no question answers were recorded on this deal.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {answeredSections.map((sec) => (
+                      <div key={sec.title}>
+                        <p className="text-[11px] font-semibold text-emerald-700/90 mb-0.5">{sec.title}</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 text-gray-700">
+                          {sec.items.map((q) => (
+                            <div key={q.key} className="break-inside-avoid">
+                              <span className="block text-[10px] text-gray-500 leading-tight">{q.label}</span>
+                              <b className="text-gray-800">{String(qual[q.key])}</b>
+                            </div>))}
+                        </div>
+                      </div>))}
+                  </div>
+                )}
               </div>
-            </div>)}
+            );
+          })()}
 
           {/* Quotation options (multiple specs/makes per client) */}
           {!isNew && (
