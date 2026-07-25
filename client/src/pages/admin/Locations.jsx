@@ -15,6 +15,7 @@ import { FiMapPin, FiRefreshCw, FiUser, FiCalendar, FiClock, FiNavigation, FiExt
 import RouteMap from '../../components/RouteMap';
 import TeamMap from '../../components/TeamMap';
 import { fmtTime as fmtTimeIST } from '../../utils/datetime';
+import HrIdentity, { hrDeptText } from '../../components/HrIdentity';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const fmtTime = (iso) => iso ? fmtTimeIST(iso, { hour: '2-digit', minute: '2-digit' }) : '—';
@@ -321,7 +322,7 @@ export default function Locations() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <div className="font-semibold text-gray-800">{u.user_name}</div>
-                        <div className="text-[11px] text-gray-500">{u.department || u.role}</div>
+                        <div><HrIdentity rec={u} /></div>
                       </div>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${pillStyle}`}>
                         {pillLabel}
@@ -431,7 +432,7 @@ export default function Locations() {
               <label className="label flex items-center gap-1"><FiUser size={12} /> Employee</label>
               <select className="select" value={timelineUserId} onChange={e => setTimelineUserId(e.target.value)}>
                 <option value="">Pick an employee…</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ' — ' + u.department : ''}</option>)}
+                {users.map(u => { const d = hrDeptText(u); return <option key={u.id} value={u.id}>{u.name}{d ? ' — ' + d : ''}</option>; })}
               </select>
             </div>
             <div>

@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
+import HrIdentity, { hrDeptText } from '../components/HrIdentity';
 
 // Render a stored UTC ISO timestamp as IST time (hh:mm AM/PM). Always pins to
 // Asia/Kolkata so a punch shows the correct Indian time even when the viewing
@@ -752,7 +753,7 @@ export default function Attendance() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">{dashboard.notPunched.map(u => (
                 <div key={u.id} className="bg-white rounded p-2 text-sm">
                   <div className="font-medium">{u.name}</div>
-                  <div className="text-xs text-gray-500 mb-1.5">{u.department}</div>
+                  <div className="mb-1.5"><HrIdentity rec={u} size="text-xs" /></div>
                   {/* Admin override — back-fill present for users who didn't
                       punch. Row is hidden from the user's own dashboard. */}
                   <button onClick={async () => {
@@ -806,7 +807,7 @@ export default function Attendance() {
                           <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold" title="Admin marked">ADMIN</span>
                         )}
                       </div>
-                      {r.department && <div className="text-[11px] text-gray-500">{r.department}</div>}
+                      <HrIdentity rec={r} />
                       {r.bucket === 'guest' && <div className="text-[10px] font-semibold text-amber-600">⚠ Guest / not tracked</div>}
                       {r.bucket === 'terminated' && <div className="text-[10px] font-semibold text-red-600">⚠ Inactive / Terminated</div>}
                     </div>
@@ -1099,7 +1100,7 @@ export default function Attendance() {
                         onClick={() => setSelectedUserId(u.id)}
                         className={`w-full text-left px-3 py-2 text-sm border-b last:border-b-0 hover:bg-red-50 ${selectedUserId === u.id ? 'bg-red-100 font-semibold' : ''}`}
                       >
-                        {u.name} <span className="text-xs text-gray-400">— {u.department || u.role_names || u.role || 'User'}</span>
+                        {u.name} <span className="text-xs text-gray-400">— {hrDeptText(u) || u.role_names || u.role || 'User'}</span>
                       </button>
                     ))}
                   {allUsers.length === 0 && <p className="p-3 text-xs text-gray-400">No users loaded</p>}
@@ -1136,7 +1137,7 @@ export default function Attendance() {
                     <div className="card p-3 flex items-center justify-between">
                       <div>
                         <h4 className="font-bold text-lg">{selectedUser?.name || '—'}</h4>
-                        <p className="text-xs text-gray-500">{selectedUser?.department || ''} {selectedUser?.email ? `· ${selectedUser.email}` : ''}</p>
+                        <p className="text-xs text-gray-500">{hrDeptText(selectedUser)} {selectedUser?.email ? `· ${selectedUser.email}` : ''}</p>
                       </div>
                       <span className="text-xs text-gray-400">{userDateFrom} → {userDateTo}</span>
                     </div>
@@ -1614,7 +1615,7 @@ export default function Attendance() {
             <label className="label">Employee *</label>
             <select className="select" value={form.user_id || ''} onChange={e => setForm({ ...form, user_id: e.target.value })} required>
               <option value="">-- Select employee --</option>
-              {allUsers.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` · ${u.department}` : ''}</option>)}
+              {allUsers.map(u => { const d = hrDeptText(u); return <option key={u.id} value={u.id}>{u.name}{d ? ` · ${d}` : ''}</option>; })}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">

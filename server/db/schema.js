@@ -1844,6 +1844,11 @@ function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_chq_actions_cheque ON cheque_actions(cheque_id, action_at);
 
+    -- Speeds the HR-identity lookups (employees.department/designation via the user link)
+    -- used for display across Users list, Locations, Attendance, Champions, exports. Plain
+    -- (non-unique) index — pure performance, no data change, no uniqueness enforced.
+    CREATE INDEX IF NOT EXISTS idx_employees_user_id ON employees(user_id);
+
     -- Snag list — defects / punch-list items raised against a site,
     -- assigned to an employee, who uploads proof and only then it's
     -- closed by approval (delegation-style flow). Mam's ask:

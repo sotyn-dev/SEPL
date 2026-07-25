@@ -263,7 +263,11 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   // COALESCE to the snapshot so a deleted user's KEPT attendance rows still
   // show who they belonged to (user_id is nulled on force-delete but the name
   // snapshot stays) — mam 2026-07-06 "old attendance data don't delete".
-  let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;
+  let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = a.user_id) AS hr_department,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = a.user_id) AS hr_designation,
+    (SELECT COUNT(*) FROM employees e WHERE e.user_id = a.user_id) AS hr_record_count
+    FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;
   const params = [];
   if (date) { sql += ' AND a.date=?'; params.push(date); }
   if (user_id) { sql += ' AND a.user_id=?'; params.push(user_id); }
@@ -310,13 +314,20 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
   const lateToday = db.prepare("SELECT COUNT(*) as c FROM attendance WHERE date=? AND status='late'").get(today);
   const onLeave = db.prepare("SELECT COUNT(*) as c FROM leave_requests WHERE status='approved' AND from_date <= ? AND to_date >= ?").get(today, today);
 
-  const todayRecords = db.prepare(`SELECT a.*, u.name as user_name, u.department FROM attendance a
+  const todayRecords = db.prepare(`SELECT a.*, u.name as user_name, u.department,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = a.user_id) AS hr_department,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = a.user_id) AS hr_designation,
+    (SELECT COUNT(*) FROM employees e WHERE e.user_id = a.user_id) AS hr_record_count
+    FROM attendance a
     LEFT JOIN users u ON a.user_id=u.id WHERE a.date=? ORDER BY a.punch_in_time DESC`).all(today);
 
   // Users who haven't punched in. Keep only real integer ids — a stray
   // NULL user_id would otherwise produce `IN (5,,8)` and 500 the dashboard.
   const punchedUserIds = todayRecords.map(r => r.user_id).filter(id => Number.isInteger(id));
-  const notPunched = db.prepare(`SELECT id, name, department, phone FROM users WHERE active=1 ${punchedUserIds.length > 0 ? 'AND id NOT IN (' + punchedUserIds.join(',') + ')' : ''}`).all();
+  const notPunched = db.prepare(`SELECT id, name, department, phone,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = users.id) AS hr_department,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = users.id) AS hr_designation
+    FROM users WHERE active=1 ${punchedUserIds.length > 0 ? 'AND id NOT IN (' + punchedUserIds.join(',') + ')' : ''}`).all();
 
   // Geofence settings
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();

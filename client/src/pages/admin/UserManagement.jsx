@@ -3,6 +3,7 @@ import api from '../../api';
 import Modal from '../../components/Modal';
 import StatusBadge from '../../components/StatusBadge';
 import Pagination, { usePagination } from '../../components/Pagination';
+import HrIdentity from '../../components/HrIdentity';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX } from 'react-icons/fi';
 
@@ -260,7 +261,7 @@ export default function UserManagement() {
         )}
         <table>
           <thead>
-            <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th>Status</th><th>Actions</th></tr>
+            <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {pg.rows.map(u => (
@@ -290,6 +291,7 @@ export default function UserManagement() {
                   </div>
                 </td>
                 <td>{u.department}</td>
+                <td><HrIdentity rec={u} variant="stacked" /></td>
                 <td>{u.active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Inactive</span>}</td>
                 <td>
                   <div className="flex gap-1">

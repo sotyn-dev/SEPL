@@ -149,19 +149,22 @@ router.get('/users/export.xlsx', authMiddleware, adminOnly, (req, res) => {
              COALESCE(
                (SELECT e.designation FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1),
                (SELECT e.designation FROM employees e WHERE LOWER(TRIM(e.name)) = LOWER(TRIM(u.name)) ORDER BY e.id DESC LIMIT 1)
-             ) AS designation
+             ) AS designation,
+             -- Additive HR column: department from the linked employee(s), link-only. Keeps
+             -- u.department (superset field) untouched in its own column — both shown side by side.
+             (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),'')) FROM employees e WHERE e.user_id = u.id) AS hr_department
         FROM users u
        WHERE COALESCE(u.active, 1) = 1
        ORDER BY u.name COLLATE NOCASE
     `).all();
-    const header = ['Name', 'Email', 'Username', 'Role', 'Department', 'Designation', 'Phone', 'Salary (₹)'];
+    const header = ['Name', 'Email', 'Username', 'Role', 'Department', 'HR Department', 'Designation', 'Phone', 'Salary (₹)'];
     const aoa = [header, ...rows.map(r => [
       r.name || '', r.email || '', r.username || '', r.role || '', r.department || '',
-      r.designation || '', r.phone || '', +r.salary || 0,
+      r.hr_department || '', r.designation || '', r.phone || '', +r.salary || 0,
     ])];
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 24 }, { wch: 28 }, { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 14 }];
+    ws['!cols'] = [{ wch: 24 }, { wch: 28 }, { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 14 }];
     XLSX.utils.book_append_sheet(wb, ws, 'Active Users');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -183,7 +186,10 @@ router.get('/users/hierarchy', authMiddleware, (req, res) => {
            COALESCE(
              (SELECT e.designation FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1),
              (SELECT e.designation FROM employees e WHERE LOWER(TRIM(e.name)) = LOWER(TRIM(u.name)) ORDER BY e.id DESC LIMIT 1)
-           ) AS designation
+           ) AS designation,
+           -- HR-domain org chart: department from the linked employee (link-only). The client
+           -- shows hr_department + designation, falling back to u.department only when unlinked.
+           (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),'')) FROM employees e WHERE e.user_id = u.id) AS hr_department
       FROM users u
       LEFT JOIN users m ON m.id = u.manager_id
      WHERE COALESCE(u.active, 1) = 1
@@ -219,10 +225,19 @@ router.get('/users', authMiddleware, (req, res) => {
   // omits the param so it can still see + manage inactives.
   const activeOnly = req.query.active_only === '1';
   const whereClause = activeOnly ? 'WHERE u.active = 1' : '';
+  // HR (records): department + designation resolved from the linked employee(s) via the
+  // existing employees.user_id link — DISPLAY ONLY, alongside the untouched u.department.
+  // Correlated subqueries (not a JOIN) so they never multiply the GROUP_CONCAT(role) rows;
+  // GROUP_CONCAT aggregates every linked employee record (so a duplicate like one login → two
+  // employee rows shows BOTH, and hr_record_count lets the UI flag it) — link-only, no
+  // name-match fallback, so an unlinked person surfaces as blank (a cleanup signal).
   const users = db.prepare(`
     SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active, u.avatar_url,
            COALESCE(u.track_location, 1) as track_location, COALESCE(u.archived, 0) as archived, u.created_at, u.approval_role,
-    GROUP_CONCAT(r.name) as role_names
+    GROUP_CONCAT(r.name) as role_names,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = u.id) AS hr_department,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
+    (SELECT COUNT(*) FROM employees e WHERE e.user_id = u.id) AS hr_record_count
     FROM users u
     LEFT JOIN user_roles ur ON u.id = ur.user_id
     LEFT JOIN roles r ON ur.role_id = r.id
