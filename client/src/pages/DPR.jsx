@@ -312,6 +312,18 @@ export default function DPR() {
           setPoItemsDiag(r.data?.diagnostic || null);
         }
       }).catch(() => { setPoItemsForSite([]); setPoItemsDiag(null); });
+      // Live weather auto-fill (director ask, 2026-07-25): fetch current
+      // conditions for the site and pre-set the Weather radio. The engineer
+      // can still override — this only sets the starting value, and a null
+      // response (no location / API down) leaves the field untouched.
+      api.get(`/dpr/sites/${siteId}/weather`).then(r => {
+        const w = r.data?.weather;
+        if (w) {
+          setForm(f => ({ ...f, weather: w }));
+          const t = r.data.temperature != null ? ` · ${Math.round(r.data.temperature)}°C` : '';
+          toast(`Weather auto-set: ${w}${t}`, { icon: '🌤️', duration: 3500 });
+        }
+      }).catch(() => {});
       // Staff Cost is auto-pulled in a dedicated effect keyed on site + date, so
       // it refreshes when the report date changes (attendance differs per day).
       // Auto-fill TA/DA from approved payment_requests for this site (mam:

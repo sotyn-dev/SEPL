@@ -256,6 +256,23 @@ router.put('/sites/:id', (req, res) => {
 // to site TA/DA that site show here automatically which we fill in payment
 // category TA/DA only'. Optional ?date= filters to that single day's
 // required_by_date so DPRs don't double-count travel claims across days.
+// Live weather for the DPR form (director ask, 2026-07-25: "use google
+// weather updates in dpr automatically"). Returns the classified value
+// (clear/rainy/cloudy/hot/windy) + raw temp/wind so the form can auto-set
+// its weather field the moment a site is picked. Null-safe: if the site
+// can't be geolocated or the weather API is down, returns {weather:null}
+// and the form just keeps its manual default. Provider is Open-Meteo
+// (free, keyless) — see lib/weather.js for the Google-API swap point.
+router.get('/sites/:site_id/weather', async (req, res) => {
+  try {
+    const { getSiteWeather } = require('../lib/weather');
+    const result = await getSiteWeather(getDb(), req.params.site_id);
+    res.json(result || { weather: null });
+  } catch (e) {
+    res.json({ weather: null }); // never block the DPR form on weather
+  }
+});
+
 router.get('/sites/:site_id/ta-da-cost', (req, res) => {
   try {
     const db = getDb();
