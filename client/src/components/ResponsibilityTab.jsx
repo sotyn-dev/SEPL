@@ -1,9 +1,18 @@
 // Reusable "Responsible" tab — drop <ResponsibilityTab module="crm_funnel" />
 // into any module page to get the per-record RACI + SLA time-tracking board
 // (mam 2026-06-27). Per step you pick Responsible / Accountable / Consulted /
-// Informed + the target time (SLA hours); the board shows the actual time each
-// step took and who ran late, plus a By-Person performance summary. Backed by
-// /api/raci/board/:module + /api/raci/record/:module/:id (shared engine).
+// Informed + the target time (SLA hours); the system tracks the actual time
+// each step took and who ran late.
+//
+// Redesigned 2026-07-25 (mam: "team can't understand where the flow is broken
+// and why — need full flow on one single screen"): the tab now opens straight
+// into a FLOW BOARD — one row per in-flight record, one column per step,
+// colour-coded cells (green done · amber running · red overdue · grey not
+// reached) with a bottleneck strip on top counting how many records are stuck
+// at each step. Loads only open records (?open=1) so it stays light on the
+// VPS; "Show completed" pulls the full history. The old per-record cards and
+// By-person summary remain as secondary views.
+// Backed by /api/raci/board/:module + /api/raci/record/:module/:id.
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from './Modal';
@@ -29,42 +38,40 @@ export default function ResponsibilityTab({ module, title }) {
   const [data, setData] = useState(null);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
-
-  // (The L2 on/off banner and its /procurement/l2-setting fetch were removed
-  // 2026-07-23. This tab is RACI reporting only — approvers and the L2 switch
-  // live in Procurement → ⚙ Approval Settings, and nothing here changes the
-  // approval flow any more.)
-  const [view, setView] = useState('grid');         // 'grid' | 'summary'
+  const [showAll, setShowAll] = useState(false);      // false = in-flight only (?open=1)
+  const [view, setView] = useState('flow');           // 'flow' | 'grid' | 'summary' | 'score'
   const [q, setQ] = useState('');
-  // The per-record board loads ALL records × steps — heavy enough to hang big
-  // modules on the small VPS (mam 2026-06-29: "per enquiry no need to show — it
-  // takes data and hangs; only need Set RACI for whole module"). So it's now
-  // opt-in: the tab opens straight to the whole-module RACI setter and the board
-  // loads only when the user clicks "Show per-record board".
-  const [showBoard, setShowBoard] = useState(false);
+  const [stageFilter, setStageFilter] = useState(null); // step key from the bottleneck strip
+  // 🏆 Scorecard — the cross-module /raci/performance leaderboard (mam
+  // 2026-07-25: "make team more accountable, show scorecard"). Loaded on
+  // demand when the view is opened; heavier than one board (walks every
+  // RACI module) so never auto-fetched.
+  const [perf, setPerf] = useState(null);
+  const [perfLoading, setPerfLoading] = useState(false);
 
   // Editor modal
-  const [editRec, setEditRec] = useState(null);      // record being edited
+  const [editRec, setEditRec] = useState(null);
   const [editSteps, setEditSteps] = useState([]);
   const [busy, setBusy] = useState(false);
 
-  // Users for the R/A/C/I dropdowns — light; always loaded so the whole-module
-  // editor works without pulling the heavy board.
   useEffect(() => {
     api.get('/auth/users').then(u => setUsers((u.data || []).filter(x => x.active !== 0))).catch(() => {});
   }, []);
 
-  // Heavy per-record board — loaded only on demand (see showBoard note above).
-  const load = useCallback(async () => {
+  const load = useCallback(async (all = showAll) => {
     setLoading(true);
     try {
-      const b = await api.get(`/raci/board/${module}`);
+      const b = await api.get(`/raci/board/${module}${all ? '' : '?open=1'}`);
       setData(b.data);
-      setShowBoard(true);
     } catch (e) {
-      toast.error(e.response?.data?.error || 'Could not load the Responsible board');
+      toast.error(e.response?.data?.error || 'Could not load the flow board');
     } finally { setLoading(false); }
-  }, [module]);
+  }, [module, showAll]);
+
+  // The flow board IS the tab — load it immediately (open records only, so
+  // the payload stays small; the 2026-06-29 hang was full-history loads).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(false); }, [module]);
 
   const openEditor = async (rec) => {
     setEditRec(rec); setBusy(true);
@@ -76,11 +83,6 @@ export default function ResponsibilityTab({ module, title }) {
   };
   const closeEditor = () => setEditRec(null);
   const setField = (i, k, v) => setEditSteps(s => s.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
-  // (The indent approver guard rails — GATE_KEYS, defaultL1/defaultL2, l1Missing,
-  // gateLocked — were removed 2026-07-23. They existed because the l1/l2/crm rows
-  // here decided who could approve, so non-admins had to be locked out and an L1
-  // name had to be enforced before L2 could be turned on. None of that is true
-  // now: a Responsible name here is scorecard attribution only.)
 
   const save = async () => {
     if (!editRec) return;
@@ -97,71 +99,303 @@ export default function ResponsibilityTab({ module, title }) {
           enabled: s.enabled !== false,
         })),
       });
-      toast.success('Saved'); closeEditor(); if (showBoard) load();
+      toast.success('Saved'); closeEditor(); load();
     } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
     finally { setBusy(false); }
   };
 
-  // Quick "mark done" (or reopen) for one step — stamps the completion date the
-  // scoring view uses for elapsed/late time. value = 'YYYY-MM-DD' to set, null to
-  // reopen. This is the "time" half of mam's "person name + time" per step.
+  const openScore = async () => {
+    setView('score');
+    if (perf || perfLoading) return;
+    setPerfLoading(true);
+    try {
+      const r = await api.get('/raci/performance');
+      setPerf(r.data);
+    } catch (e) { toast.error(e.response?.data?.error || 'Scorecard load nahi hua — dobara try karein'); }
+    finally { setPerfLoading(false); }
+  };
+
+  // Hinglish verdict — one line per person, no ambiguity about where they
+  // stand (mam 2026-07-25: "write something in hinglish" — the team reads
+  // this, so it talks like the team).
+  const verdict = (score) => {
+    if (score >= 80) return { txt: '🌟 Shabash! Kaam time pe — aise hi chalta rahe.', cls: 'text-emerald-700' };
+    if (score >= 60) return { txt: '👍 Theek chal raha hai — thoda aur tez ho sakta hai.', cls: 'text-blue-700' };
+    if (score >= 40) return { txt: '⚠️ Dhyan dein — kaam late ho raha hai, TAT miss ho rahi hai.', cls: 'text-amber-700' };
+    return { txt: '🔴 Kaam atka hai — Monday review mein iska jawab dena hoga.', cls: 'text-rose-700' };
+  };
+
   const stampStep = async (rec, step, value) => {
     try {
       await api.put(`/raci/step-done/${module}/${rec.id}`, { step_key: step.key, done_at: value || null });
       toast.success(value ? `${step.label} marked done` : `${step.label} reopened`);
-      if (showBoard) load();
+      load();
     } catch (e) { toast.error(e.response?.data?.error || 'Could not update the step'); }
   };
   const todayStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 
-  const rows = (data?.rows || []).filter(r => {
+  const stepDefs = data?.step_defaults || data?.steps || [];
+  const allRows = data?.rows || [];
+  const currentKeyOf = (r) => r.steps.find(s => s.status === 'current')?.key || null;
+
+  // Worst offender on top: rows whose current step is most overdue come
+  // first, so the fire is the first thing the team sees — not page 3.
+  const overdueOf = (r) => r.steps.find(s => s.status === 'current')?.late_hours || 0;
+  const runningOf = (r) => r.steps.find(s => s.status === 'current')?.elapsed_hours || 0;
+  const rows = allRows.filter(r => {
+    if (stageFilter && currentKeyOf(r) !== stageFilter) return false;
     if (!q.trim()) return true;
-    const s = (r.title + ' ' + (r.subtitle || '')).toLowerCase();
-    return s.includes(q.trim().toLowerCase());
-  });
+    return (r.title + ' ' + (r.subtitle || '')).toLowerCase().includes(q.trim().toLowerCase());
+  }).sort((a, b) => overdueOf(b) - overdueOf(a) || runningOf(b) - runningOf(a));
   const summary = data?.summary || [];
+  const totalLate = allRows.filter(r => overdueOf(r) > 0).length;
+
+  // Bottleneck strip numbers: how many records are sitting at each step right
+  // now, and how many of those have blown past their target.
+  const strip = stepDefs.map(sd => {
+    const here = allRows.filter(r => currentKeyOf(r) === sd.key);
+    const late = here.filter(r => (r.steps.find(s => s.key === sd.key)?.late_hours || 0) > 0);
+    return { ...sd, count: here.length, late: late.length };
+  });
+  const worstKey = strip.reduce((w, s) => (s.late > (w?.late || 0) ? s : w), null)?.key;
+
+  // One cell of the flow board. The colour answers "where is it broken";
+  // the text answers "who and by how much".
+  const FlowCell = ({ rec, step }) => {
+    if (!step) return <td className="border-l border-gray-100" />;
+    const late = step.late_hours > 0;
+    if (step.status === 'done') {
+      return (
+        <td className="border-l border-gray-100 px-1.5 py-1 text-center bg-emerald-50" title={`${step.label} — done ${step.at ? String(step.at).slice(0, 16) : ''} · took ${fmtDur(step.elapsed_hours)}${step.responsible ? ' · ' + step.responsible : ''}`}>
+          <span className="text-emerald-700 font-bold text-xs">✓</span>
+          <div className="text-[9px] text-emerald-700/80 leading-tight">{fmtDur(step.elapsed_hours)}</div>
+        </td>
+      );
+    }
+    if (step.status === 'current') {
+      return (
+        <td onClick={() => openEditor(rec)}
+          className={`border-l px-1.5 py-1 text-center cursor-pointer ${late ? 'bg-rose-100 border-rose-200 animate-none' : 'bg-amber-50 border-amber-100'}`}
+          title={`${step.label} — running ${fmtDur(step.elapsed_hours)}${step.sla_hours != null ? ' of ' + fmtDur(step.sla_hours) + ' target' : ''}${late ? ' · ' + fmtDur(step.late_hours) + ' OVER' : ''} · ${step.responsible || 'unassigned'} — click to assign / set target`}>
+          <div className={`text-[10px] font-bold leading-tight ${late ? 'text-rose-700' : 'text-amber-700'}`}>
+            {late ? '⚠ ' + fmtDur(step.late_hours) + ' over' : '● ' + fmtDur(step.elapsed_hours)}
+          </div>
+          <div className={`text-[9px] leading-tight truncate max-w-[90px] mx-auto ${late ? 'text-rose-600' : 'text-amber-600'}`}>
+            {step.responsible || 'unassigned'}
+          </div>
+        </td>
+      );
+    }
+    return <td className="border-l border-gray-100 px-1.5 py-1 text-center text-gray-300 text-[10px]">·</td>;
+  };
 
   return (
     <div className="space-y-3">
       {/* Header / controls */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-bold text-gray-800">{title || data?.label || 'Responsible'} — who owns each step & how long it took</h3>
-          <p className="text-[11px] text-gray-500">Assign R / A / C / I + target time per step on each record. Red = ran past the target (late).</p>
+          <h3 className="text-sm font-bold text-gray-800">{title || data?.label || 'Responsible'} — live flow, one screen</h3>
+          <p className="text-[11px] text-gray-500">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-200 align-middle mr-1" />done
+            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-200 align-middle mx-1 ml-3" />running (in target)
+            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-rose-300 align-middle mx-1 ml-3" />stuck — past target
+            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-gray-200 align-middle mx-1 ml-3" />not reached yet
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Set RACI ONCE for the whole module (default for every record, mam
-              2026-06-27: "whole module raci one"). Each record inherits it unless
-              it has its own override. Stored under record_id 0. */}
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => openEditor({ id: 0, title: 'Whole module — default for all records' })}
             className="text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded px-2.5 h-8">
-            ⚙ Set RACI for whole module
+            ⚙ Owners &amp; targets
           </button>
-          {!showBoard ? (
-            <button onClick={load} disabled={loading} className="btn btn-secondary h-8 text-xs">
-              {loading ? 'Loading…' : 'Show per-record board'}
-            </button>
-          ) : (
-            <>
-              <input className="input text-xs h-8 w-44" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} />
-              <div className="flex rounded-lg overflow-hidden border border-gray-300 text-xs">
-                <button onClick={() => setView('grid')} className={`px-3 py-1.5 ${view === 'grid' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>Per record</button>
-                <button onClick={() => setView('summary')} className={`px-3 py-1.5 ${view === 'summary' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>By person</button>
-              </div>
-              <button onClick={load} className="btn btn-secondary h-8 text-xs">↻</button>
-            </>
-          )}
+          <input className="input text-xs h-8 w-40" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} />
+          <div className="flex rounded-lg overflow-hidden border border-gray-300 text-xs">
+            <button onClick={() => setView('flow')} className={`px-3 py-1.5 ${view === 'flow' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>Flow board</button>
+            <button onClick={() => setView('grid')} className={`px-3 py-1.5 ${view === 'grid' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>Cards</button>
+            <button onClick={() => setView('summary')} className={`px-3 py-1.5 ${view === 'summary' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>By person</button>
+            <button onClick={openScore} className={`px-3 py-1.5 font-semibold ${view === 'score' ? 'bg-indigo-600 text-white' : 'bg-white text-amber-600'}`}>🏆 Scorecard</button>
+          </div>
+          <label className="flex items-center gap-1 text-[11px] text-gray-600 cursor-pointer select-none">
+            <input type="checkbox" checked={showAll}
+              onChange={e => { setShowAll(e.target.checked); load(e.target.checked); }} />
+            incl. completed
+          </label>
+          <button onClick={() => load()} className="btn btn-secondary h-8 text-xs" title="Refresh">↻</button>
         </div>
       </div>
 
-      {!showBoard ? (
-        <div className="py-8 px-4 text-center text-gray-500 text-sm border rounded-lg bg-white">
-          Use <b>⚙ Set RACI for whole module</b> to assign Responsible / Accountable / Consulted / Informed, SLA, weight &amp; commitment once — it applies to every record.
-          <div className="text-xs text-gray-400 mt-1">The per-record list is hidden for speed. Click <b>Show per-record board</b> above only if you need to assign or mark steps on individual records.</div>
+      {/* Bottleneck strip — where is work piling up RIGHT NOW. Click a stage
+          to filter the board to the records sitting there. */}
+      {stepDefs.length > 0 && (
+        <div className="flex items-stretch gap-1 overflow-x-auto pb-1">
+          {strip.map((s, i) => {
+            const active = stageFilter === s.key;
+            const tone = s.late > 0 ? 'border-rose-300 bg-rose-50' : s.count > 0 ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white';
+            return (
+              <div key={s.key} className="flex items-center shrink-0">
+                <button onClick={() => setStageFilter(active ? null : s.key)}
+                  className={`rounded-lg border px-2 py-1 text-left min-w-[92px] transition ${tone} ${active ? 'ring-2 ring-indigo-400' : 'hover:shadow-sm'} ${s.key === worstKey && s.late > 0 ? 'ring-2 ring-rose-400' : ''}`}
+                  title={`${s.count} waiting here now${s.late ? `, ${s.late} past target` : ''}${s.responsible ? ` · owner: ${s.responsible}` : ''}${s.sla_hours != null ? ` · target ${fmtDur(s.sla_hours)}` : ''}`}>
+                  <div className="text-[9px] font-semibold uppercase tracking-wide text-gray-500 leading-tight truncate max-w-[110px]">{s.label}</div>
+                  <div className="flex items-baseline gap-1">
+                    <span className={`text-base font-bold leading-none ${s.late > 0 ? 'text-rose-600' : s.count > 0 ? 'text-amber-600' : 'text-gray-300'}`}>{s.count}</span>
+                    {s.late > 0 && <span className="text-[9px] font-bold text-rose-600">{s.late} late</span>}
+                  </div>
+                  <div className="text-[9px] text-gray-500 leading-tight truncate max-w-[110px]">
+                    {s.responsible || '—'}{s.sla_hours != null ? ` · ${fmtDur(s.sla_hours)}` : ''}
+                  </div>
+                </button>
+                {i < strip.length - 1 && <span className="text-gray-300 mx-0.5">→</span>}
+              </div>
+            );
+          })}
         </div>
-      ) : loading && !data ? (
+      )}
+
+      {/* Hinglish accountability banner — plain words, no jargon, so the whole
+          team reads the same truth (mam 2026-07-25). */}
+      {view === 'flow' && data && (
+        totalLate > 0 ? (
+          <div className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+            🔴 {totalLate} kaam target se late chal {totalLate > 1 ? 'rahe hain' : 'raha hai'} — jinke naam red box mein hain, kaam unke paas atka hai. Aaj hi clear karein. Jiska naam, uska kaam.
+          </div>
+        ) : (
+          <div className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+            ✅ Sab kaam target ke andar chal rahe hain — shabash team! Aise hi chalta rahe.
+          </div>
+        )
+      )}
+
+      {loading && !data ? (
         <div className="py-12 text-center text-gray-400 text-sm">Loading…</div>
+      ) : view === 'score' ? (
+        // ── 🏆 SCORECARD — cross-module leaderboard. Score = (Quantity +
+        // Time + Quality) / 3, straight from /api/raci/performance. Public
+        // ranking is the accountability lever: same list every Monday.
+        <div className="space-y-3">
+          <div className="text-xs text-gray-600 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
+            <b>Score kaise banta hai:</b> Kitna kaam kiya (<b>Quantity</b>) + Time pe kiya (<b>Time</b>) + Jo naam pe tha wo poora kiya (<b>Quality</b>) — teeno ka average, 100 mein se. Har Monday review mein yehi list chalegi. Sab modules ka mila-jula score hai, sirf is page ka nahi.
+          </div>
+          {perfLoading ? (
+            <div className="py-12 text-center text-gray-400 text-sm">Score ban raha hai…</div>
+          ) : !perf || (perf.people || []).length === 0 ? (
+            <div className="py-10 text-center text-gray-400 text-sm border rounded-lg bg-white">
+              Abhi kisi ke naam pe kaam assign nahi hai — pehle <b>⚙ Owners &amp; targets</b> se naam daaliye, phir score banega.
+            </div>
+          ) : (
+            <>
+              {(() => {
+                const people = perf.people || [];
+                const star = people[0];
+                const slowest = [...people].sort((a, b) => b.late_hours - a.late_hours)[0];
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="border border-emerald-200 bg-emerald-50 rounded-lg px-3 py-2 text-xs">
+                      <span className="font-bold text-emerald-700">⭐ Star performer:</span>{' '}
+                      <span className="font-semibold text-gray-800">{star.name}</span>
+                      <span className="text-gray-600"> — score {star.score}/100, {star.on_time} kaam time pe. Isse seekho!</span>
+                    </div>
+                    {slowest && slowest.late_hours > 0 && (
+                      <div className="border border-rose-200 bg-rose-50 rounded-lg px-3 py-2 text-xs">
+                        <span className="font-bold text-rose-700">🐢 Sabse zyada atka:</span>{' '}
+                        <span className="font-semibold text-gray-800">{slowest.name}</span>
+                        <span className="text-gray-600"> — total {fmtDur(slowest.late_hours)} late, {slowest.late} kaam TAT ke baahar.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              <div className="overflow-x-auto border rounded-lg bg-white">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-gray-500 uppercase tracking-wide">
+                    <tr>
+                      <th className="text-left p-2">#</th>
+                      <th className="text-left p-2">Naam</th>
+                      <th className="text-right p-2">Score</th>
+                      <th className="text-left p-2 min-w-[130px]">Quantity · Time · Quality</th>
+                      <th className="text-right p-2">Kaam (done/total)</th>
+                      <th className="text-right p-2">Time pe %</th>
+                      <th className="text-right p-2">Late kaam</th>
+                      <th className="text-right p-2">Total late</th>
+                      <th className="text-left p-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(perf.people || []).map((p, i) => {
+                      const v = verdict(p.score);
+                      const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
+                      const bar = (val, cls) => (
+                        <div className="h-1.5 rounded bg-gray-100 overflow-hidden w-full">
+                          <div className={`h-full ${cls}`} style={{ width: `${Math.max(2, val)}%` }} />
+                        </div>
+                      );
+                      const onTimePct = p.completed ? Math.round((p.on_time / p.completed) * 100) : 0;
+                      return (
+                        <tr key={p.name} className={`border-t ${i === 0 ? 'bg-emerald-50/40' : ''}`}>
+                          <td className="p-2 text-sm">{medal}</td>
+                          <td className="p-2 font-semibold text-gray-800">{p.name}
+                            <div className="text-[9px] font-normal text-gray-400">{p.modules} module{p.modules > 1 ? 's' : ''}</div>
+                          </td>
+                          <td className={`p-2 text-right text-base font-bold ${p.score >= 80 ? 'text-emerald-600' : p.score >= 60 ? 'text-blue-600' : p.score >= 40 ? 'text-amber-600' : 'text-rose-600'}`}>{p.score}</td>
+                          <td className="p-2">
+                            <div className="space-y-0.5">
+                              {bar(p.quantity_score, 'bg-indigo-400')}
+                              {bar(p.time_score, 'bg-emerald-400')}
+                              {bar(p.quality_score, 'bg-amber-400')}
+                            </div>
+                          </td>
+                          <td className="p-2 text-right tabular-nums">{p.completed}/{p.owned}</td>
+                          <td className={`p-2 text-right font-semibold ${onTimePct >= 80 ? 'text-emerald-600' : onTimePct >= 50 ? 'text-amber-600' : 'text-rose-600'}`}>{onTimePct}%</td>
+                          <td className={`p-2 text-right ${p.late ? 'text-rose-600 font-semibold' : 'text-gray-400'}`}>{p.late || '—'}</td>
+                          <td className={`p-2 text-right ${p.late_hours ? 'text-rose-600' : 'text-gray-400'}`}>{p.late_hours ? fmtDur(p.late_hours) : '—'}</td>
+                          <td className={`p-2 text-[11px] ${v.cls}`}>{v.txt}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      ) : view === 'flow' ? (
+        // ── THE FLOW BOARD — every in-flight record × every step, one screen ──
+        <div className="overflow-x-auto border rounded-lg bg-white">
+          <table className="w-full text-xs border-collapse">
+            <thead className="bg-gray-50 text-gray-500 uppercase tracking-wide sticky top-0 z-10">
+              <tr>
+                <th className="text-left p-2 min-w-[150px]">Record</th>
+                {stepDefs.map(sd => (
+                  <th key={sd.key} className="p-1.5 border-l border-gray-100 min-w-[96px] text-center">
+                    <div className="text-[9px] leading-tight">{sd.label}</div>
+                    <div className="text-[9px] font-normal normal-case text-gray-400 leading-tight truncate max-w-[110px] mx-auto">
+                      {sd.responsible || '—'}{sd.sla_hours != null ? ` · ${fmtDur(sd.sla_hours)}` : ''}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr><td colSpan={1 + stepDefs.length} className="text-center p-8 text-gray-400">
+                  {allRows.length === 0
+                    ? (showAll ? 'No records.' : 'Nothing in flight right now — tick "incl. completed" to see history.')
+                    : 'Nothing matches the current filter.'}
+                </td></tr>
+              ) : rows.map(r => (
+                <tr key={r.id} className="border-t hover:bg-gray-50/50">
+                  <td className="p-2">
+                    <button onClick={() => openEditor(r)} className="font-semibold text-gray-800 hover:text-indigo-700 text-left leading-tight">
+                      {r.title}
+                    </button>
+                    <div className="text-[10px] text-gray-500 leading-tight truncate max-w-[150px]">{r.subtitle}</div>
+                  </td>
+                  {stepDefs.map(sd => <FlowCell key={sd.key} rec={r} step={r.steps.find(s => s.key === sd.key)} />)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : view === 'summary' ? (
         // ── By-person performance summary ──
         <div className="overflow-x-auto border rounded-lg bg-white">
@@ -179,7 +413,7 @@ export default function ResponsibilityTab({ module, title }) {
             </thead>
             <tbody>
               {summary.length === 0 ? (
-                <tr><td colSpan="7" className="text-center p-6 text-gray-400">No responsible assignments yet. Assign people per step in the “Per record” view.</td></tr>
+                <tr><td colSpan="7" className="text-center p-6 text-gray-400">No responsible assignments yet — use ⚙ Owners &amp; targets.</td></tr>
               ) : summary.map(p => (
                 <tr key={p.name} className="border-t">
                   <td className="p-2 font-semibold text-gray-800">{p.name}</td>
@@ -195,7 +429,7 @@ export default function ResponsibilityTab({ module, title }) {
           </table>
         </div>
       ) : (
-        // ── Per-record grid ──
+        // ── Per-record cards (with manual mark-done stamps) ──
         <div className="space-y-2">
           {rows.length === 0 ? (
             <div className="py-10 text-center text-gray-400 text-sm">No records.</div>
@@ -215,7 +449,7 @@ export default function ResponsibilityTab({ module, title }) {
                 {r.steps.map(s => {
                   const late = s.late_hours > 0;
                   const tint = s.status === 'done' ? 'bg-emerald-50 border-emerald-200'
-                    : s.status === 'current' ? 'bg-amber-50 border-amber-200'
+                    : s.status === 'current' ? (late ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200')
                     : 'bg-gray-50 border-gray-200';
                   return (
                     <div key={s.key} className={`border rounded-md px-2 py-1 text-[11px] min-w-[148px] ${tint}`} title={s.at ? `Completed: ${s.at}` : (s.status === 'current' ? 'In progress' : 'Not started')}>
@@ -230,8 +464,6 @@ export default function ResponsibilityTab({ module, title }) {
                         {s.sla_hours != null && <span className="text-gray-400">/ {fmtDur(s.sla_hours)}</span>}
                         {late && <span className="text-rose-600 font-semibold">⚠ {fmtDur(s.late_hours)} late</span>}
                       </div>
-                      {/* Mark-done date — the "time" half of person + time, fed to scoring.
-                          Works even for steps with no native date (e.g. Negotiation). */}
                       <div className="mt-1 pt-1 border-t border-black/5 flex items-center gap-1">
                         {s.done_at ? (
                           <>
@@ -254,7 +486,7 @@ export default function ResponsibilityTab({ module, title }) {
         </div>
       )}
 
-      {/* Per-record editor */}
+      {/* Per-record / whole-module editor */}
       <Modal isOpen={!!editRec} onClose={closeEditor} title={`Responsible & time — ${editRec?.title || ''}`} xwide>
         <div className="space-y-3">
           <p className="text-xs text-gray-500">Pick the <b>R</b>esponsible / <b>A</b>ccountable / <b>C</b>onsulted / <b>I</b>nformed person, the target time (SLA hours), the <b>Weight %</b> (makes the scorecard step-wise % weighted) and a <b>Commitment</b> for next week — for each step of <b>this</b> record.</p>
@@ -262,12 +494,7 @@ export default function ResponsibilityTab({ module, title }) {
             <div className="py-8 text-center text-gray-400 text-sm">Loading…</div>
           ) : (
             <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-              {editSteps.map((s, i) => {
-                // (The per-step ON/OFF pills, the "admin only" tags and the L1
-                // approver warnings were removed 2026-07-23 — none of this screen
-                // changes the approval flow any more. Approvers and the L2 switch
-                // live in Procurement → ⚙ Approval Settings.)
-                return (
+              {editSteps.map((s, i) => (
                 <div key={s.key} className="border rounded-lg p-3 bg-white">
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <div className="font-semibold text-sm text-gray-800">{s.label}</div>
@@ -296,8 +523,7 @@ export default function ResponsibilityTab({ module, title }) {
                     </div>
                   </div>
                 </div>
-                );
-              })}
+              ))}
             </div>
           )}
           <div className="flex justify-end items-center gap-2 pt-2 border-t">

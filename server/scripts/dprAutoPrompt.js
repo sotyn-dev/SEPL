@@ -106,8 +106,10 @@ async function runOnce() {
       : `${eng.site_count} sites: ${(eng.site_names || '').slice(0, 80)}${(eng.site_names || '').length > 80 ? '…' : ''}`;
     pushLib.notify(eng.user_id, {
       title: '📋 DPR reminder — 6 PM',
-      body: `Submit today's DPR for ${sitesShort}. Adherence % counts on the CMD dashboard.`,
-      url: '/dpr',
+      // Deep-link straight into Quick DPR (director 2026-07-26): everything
+      // is pre-filled there — the tap lands them one confirm away from done.
+      body: `Tap to file today's DPR for ${sitesShort} — it's already pre-filled, 30 seconds.`,
+      url: '/dpr-quick',
       tag: `dpr-reminder-${today}-${eng.user_id}`,
     });
   }

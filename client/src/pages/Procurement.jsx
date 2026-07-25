@@ -385,6 +385,10 @@ export default function Procurement() {
     finally { setDnSaving(false); }
   };
   const [itemRates, setItemRates] = useState([]); // indent items with their 3-vendor rates + final
+  // Quote EVIDENCE per (indent, vendor slot) — slips / screenshots / emailed
+  // PDFs. A slot's rate fields stay LOCKED until its quote doc is attached
+  // (mam 2026-07-25: "manual entry should be locked"). Server enforces too.
+  const [vendorQuotes, setVendorQuotes] = useState([]);
   const [pendingPoItems, setPendingPoItems] = useState([]); // finalized items not yet in a Vendor PO
   const [indentItemsForPo, setIndentItemsForPo] = useState([]); // items of the currently picked indent (for the Create Vendor PO modal)
   const [poItemSelection, setPoItemSelection] = useState({}); // { indent_item_id: { checked, quantity, rate, terms, credit_days } }
@@ -685,6 +689,21 @@ export default function Procurement() {
   const [dispListFrom, setDispListFrom]         = useState('');
   const [dispListTo, setDispListTo]             = useState('');
   const [dispListPage, setDispListPage]         = useState(1);
+  // Deep-link prefill (mam 2026-07-25, FMS Flow Monitor): a cell click on the
+  // Flow Monitor lands here as /procurement?tab=X&subtab=Y&q=IND-0123 — seed
+  // the target tab's search box with the indent so the user sees ONLY the row
+  // they came for. Mount-only; normal in-page typing is untouched.
+  useEffect(() => {
+    const urlQ = (searchParams.get('q') || '').trim();
+    if (!urlQ) return;
+    setIndSearch(urlQ); setRatesSearch(urlQ);
+    setVpoPendingSearch(urlQ); setVpoListSearch(urlQ);
+    setPaymentSearch(urlQ);
+    setDispReadySearch(urlQ); setDispListSearch(urlQ);
+    setBillsFuSearch(urlQ); setBillsListSearch(urlQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [expandedIndents, setExpandedIndents] = useState(() => new Set());
   const toggleIndentRow = (id) => setExpandedIndents(prev => {
     const next = new Set(prev);
@@ -740,6 +759,7 @@ export default function Procurement() {
     rates: () => Promise.all([
       api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
       api.get('/procurement/item-rates').then(r => setItemRates(r.data || [])).catch(() => setItemRates([])),
+      api.get('/procurement/vendor-quotes').then(r => setVendorQuotes(r.data || [])).catch(() => setVendorQuotes([])),
     ]),
     vendorpo: () => Promise.all([
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
@@ -2102,6 +2122,42 @@ export default function Procurement() {
       }
     } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
   };
+  // Latest quote doc per (indent, vendor slot) — the key the evidence lock
+  // hangs off. Upload from ANY row of an indent unlocks that slot for every
+  // item of that indent (one slip usually quotes the whole indent).
+  const quoteMap = useMemo(() => {
+    const m = new Map();
+    for (const q of vendorQuotes) {
+      const k = `${q.indent_id}:${q.vendor_slot}`;
+      if (!m.has(k)) m.set(k, q);           // rows come newest-first
+    }
+    return m;
+  }, [vendorQuotes]);
+  const quoteFor = (indentId, slot) => quoteMap.get(`${indentId}:${slot}`) || null;
+
+  const uploadQuote = async (row, slot, file) => {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('indent_id', row.indent_id);
+    fd.append('vendor_slot', slot);
+    fd.append('vendor_name', row[`vendor${slot}_name`] || '');
+    const tId = toast.loading('Slip upload ho raha hai… AI rate padh raha hai');
+    try {
+      const { data } = await api.post('/procurement/vendor-quotes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.dismiss(tId);
+      if (data.ai_status === 'parsed') toast.success(`✓ Slip attached — AI ne ${data.ai_filled} item ke rate bhar diye`);
+      else if (data.ai_status === 'failed') toast('Slip attached ✓ — AI padh nahi paya, ab rate slip dekh ke haath se bharein', { icon: '📎' });
+      else toast.success('Slip attached ✓ — ab is vendor ke rate bhar sakte hain');
+      // Refresh both: rates (AI may have filled) + quote evidence (unlocks slots)
+      api.get('/procurement/item-rates').then(r => setItemRates(r.data || [])).catch(() => {});
+      api.get('/procurement/vendor-quotes').then(r => setVendorQuotes(r.data || [])).catch(() => {});
+    } catch (err) {
+      toast.dismiss(tId);
+      toast.error(err.response?.data?.error || 'Upload failed');
+    }
+  };
+
   const openFinalize = (row) => {
     // Default to the lowest non-zero vendor rate (best offer) when opening
     const quotes = [
@@ -3514,37 +3570,64 @@ export default function Procurement() {
                           <span className="text-fuchsia-400 text-[10px] animate-pulse" title="AI is estimating the minimum market rate…">AI…</span>
                         )}
                       </td>
-                      {[1,2,3].map(n => (
+                      {[1,2,3].map(n => {
+                        // EVIDENCE LOCK + L1 COMPARISON (mam 2026-07-25): the
+                        // slot stays read-only until its quote doc is attached;
+                        // among filled rates the lowest gets the green L1 badge
+                        // and the rest show their premium vs L1.
+                        const quote = quoteFor(r.indent_id, n);
+                        const filledRates = [1, 2, 3].map(m => +r[`vendor${m}_rate`] || 0).filter(v => v > 0);
+                        const lowest = filledRates.length ? Math.min(...filledRates) : 0;
+                        const myRate = +r[`vendor${n}_rate`] || 0;
+                        const isL1 = myRate > 0 && filledRates.length >= 2 && myRate === lowest;
+                        return (
                         <Fragment key={n}>
                           <td className="px-1 py-1" style={{ minWidth: '200px', width: '200px' }}>
-                            {/* Vendor picker — searchable dropdown sourced from
-                                Vendor Master. Saves vendor.name on the rate
-                                row so downstream code (finalize / Vendor PO)
-                                keeps working with the existing name column. */}
-                            <SearchableSelect
-                              options={vendorOptions}
-                              value={r[`vendor${n}_name`] || null}
-                              valueKey="name" displayKey="label"
-                              placeholder="Pick vendor"
-                              buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-400 text-left flex items-center justify-between gap-1 cursor-pointer"
-                              onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
-                            />
+                            <div className="flex items-center gap-1">
+                              <div className={`flex-1 min-w-0 ${!quote ? 'opacity-50 pointer-events-none' : ''}`}>
+                                <SearchableSelect
+                                  options={vendorOptions}
+                                  value={r[`vendor${n}_name`] || null}
+                                  valueKey="name" displayKey="label"
+                                  placeholder={quote ? 'Pick vendor' : '🔒 slip pehle'}
+                                  buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-400 text-left flex items-center justify-between gap-1 cursor-pointer"
+                                  onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
+                                />
+                              </div>
+                              {quote ? (
+                                <a href={quote.url} target="_blank" rel="noreferrer" title={`Quote attached: ${quote.original_name || 'view'}${quote.ai_filled ? ` · AI ne ${quote.ai_filled} rate padhe` : ''}`} className="text-emerald-600 text-[13px]">📎</a>
+                              ) : (
+                                <label className="shrink-0 text-[10px] font-semibold px-1.5 py-1 rounded bg-amber-100 text-amber-700 border border-amber-300 cursor-pointer hover:bg-amber-200"
+                                  title={`Vendor ${n} ka quote slip / screenshot / email-PDF upload karein — tabhi rate unlock hoga (poore indent ${r.indent_number} ke liye)`}>
+                                  📎 Slip
+                                  <input type="file" accept="image/*,.pdf" className="hidden"
+                                    onChange={e => { uploadQuote(r, n, e.target.files?.[0]); e.target.value = ''; }} />
+                                </label>
+                              )}
+                            </div>
                           </td>
-                          <td className="px-1 py-1" style={{ minWidth: '120px' }}>
+                          <td className={`px-1 py-1 ${isL1 ? 'bg-emerald-50' : ''}`} style={{ minWidth: '120px' }}>
                             <input
-                              className="input text-[11px] px-2 py-1 text-right"
+                              className={`input text-[11px] px-2 py-1 text-right ${isL1 ? 'border-emerald-400 ring-1 ring-emerald-300' : ''}`}
                               style={{ width: '110px', minWidth: '110px' }}
                               type="number"
-                              placeholder="0"
+                              placeholder={quote ? '0' : '🔒'}
+                              disabled={!quote}
+                              title={quote ? '' : 'Locked — pehle is vendor ka quote slip upload karein'}
                               value={r[`vendor${n}_rate`] || ''}
                               onChange={e => updateMergedRate(r, { [`vendor${n}_rate`]: +e.target.value })}
                             />
+                            {isL1 && <div className="text-[9px] font-bold text-emerald-700 text-right mt-0.5">L1 ✓ sabse sasta</div>}
+                            {!isL1 && myRate > 0 && lowest > 0 && myRate > lowest && (
+                              <div className="text-[9px] text-rose-500 text-right mt-0.5">+{Math.round(((myRate - lowest) / lowest) * 100)}% vs L1</div>
+                            )}
                           </td>
                           <td className="px-1 py-1" style={{ minWidth: '180px' }}>
                             <div className="flex items-center gap-1">
                               <select
                                 className="select text-[11px] px-2 py-1"
                                 style={{ width: '90px', minWidth: '90px' }}
+                                disabled={!quote}
                                 value={r[`vendor${n}_terms`] || ''}
                                 onChange={e => editRate(r, { [`vendor${n}_terms`]: e.target.value })}
                               >
@@ -3562,6 +3645,7 @@ export default function Procurement() {
                                   className="input text-[11px] px-1 py-1 text-right"
                                   style={{ width: '70px' }}
                                   placeholder="days"
+                                  disabled={!quote}
                                   value={r[`vendor${n}_credit_days`] || ''}
                                   onChange={e => updateMergedRate(r, { [`vendor${n}_credit_days`]: +e.target.value || 0 })}
                                   title="Credit days"
@@ -3570,13 +3654,28 @@ export default function Procurement() {
                             </div>
                           </td>
                         </Fragment>
-                      ))}
+                        );
+                      })}
                       <td className="px-2 py-2"><span className={`badge ${statColor}`}>{stat}</span></td>
                       <td className="px-2 py-2">
                         <div className="flex items-center gap-1">
                           {stat === 'finalized'
                             ? <div className="text-[11px]"><div className="font-semibold text-emerald-700">{r.final_vendor_name}</div><div>Rs {r.final_rate}</div></div>
-                            : <button onClick={() => openFinalize(r)} disabled={!threeFilled} title={threeFilled ? 'Finalize the best rate' : 'Fill all 3 vendor rates first'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">Finalize</button>}
+                            : (() => {
+                                // Suggest L1 (lowest of the 3) — one glance, one click
+                                // (mam 2026-07-25: "suggest purchase team to make order
+                                // to lowest one"). openFinalize pre-picks L1 already.
+                                const qs = [1, 2, 3].map(m => ({ name: r[`vendor${m}_name`], rate: +r[`vendor${m}_rate`] || 0 })).filter(v => v.name && v.rate > 0).sort((a, b) => a.rate - b.rate);
+                                const l1 = qs[0];
+                                return (
+                                  <div className="text-center">
+                                    {threeFilled && l1 && (
+                                      <div className="text-[9px] text-emerald-700 font-semibold mb-0.5 whitespace-nowrap">👉 L1: {l1.name} @ ₹{l1.rate}</div>
+                                    )}
+                                    <button onClick={() => openFinalize(r)} disabled={!threeFilled} title={threeFilled ? `Order L1 (${l1?.name}) — ya reason ke saath doosra vendor` : 'Fill all 3 vendor rates first'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">{threeFilled ? 'Order L1' : 'Finalize'}</button>
+                                  </div>
+                                );
+                              })()}
                           {/* Admin-only: clear ALL vendor quotes for this row.
                               Useful when mam wants to re-quote (wrong rates,
                               vendor change, etc.). Returns row to Pending. */}
@@ -3620,32 +3719,46 @@ export default function Procurement() {
                     </div>
                     <span className={`badge ${stat === 'finalized' ? 'badge-green' : stat === 'quoted' ? 'badge-blue' : 'badge-yellow'}`}>{stat}</span>
                   </div>
-                  {[1,2,3].map(n => (
-                    <div key={n} className="border rounded p-2 bg-gray-50">
-                      <div className="text-[10px] font-bold text-gray-500 uppercase mb-1">Vendor {n}</div>
-                      {/* Mobile layout: full-width Name on top (searchable
-                          Vendor Master dropdown), Rate + Terms share the row
-                          below. */}
-                      <div className="mb-2">
+                  {[1,2,3].map(n => {
+                    const quote = quoteFor(r.indent_id, n);
+                    const filledRates = [1, 2, 3].map(m => +r[`vendor${m}_rate`] || 0).filter(v => v > 0);
+                    const lowest = filledRates.length ? Math.min(...filledRates) : 0;
+                    const myRate = +r[`vendor${n}_rate`] || 0;
+                    const isL1 = myRate > 0 && filledRates.length >= 2 && myRate === lowest;
+                    return (
+                    <div key={n} className={`border rounded p-2 ${isL1 ? 'bg-emerald-50 border-emerald-300' : 'bg-gray-50'}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="text-[10px] font-bold text-gray-500 uppercase">Vendor {n}{isL1 && <span className="ml-1 text-emerald-700">· L1 ✓ sabse sasta</span>}</div>
+                        {quote ? (
+                          <a href={quote.url} target="_blank" rel="noreferrer" className="text-emerald-600 text-xs">📎 slip</a>
+                        ) : (
+                          <label className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300 cursor-pointer">
+                            📎 Slip upload
+                            <input type="file" accept="image/*,.pdf" className="hidden" onChange={e => { uploadQuote(r, n, e.target.files?.[0]); e.target.value = ''; }} />
+                          </label>
+                        )}
+                      </div>
+                      <div className={`mb-2 ${!quote ? 'opacity-50 pointer-events-none' : ''}`}>
                         <SearchableSelect
                           options={vendorOptions}
                           value={r[`vendor${n}_name`] || null}
                           valueKey="name" displayKey="label"
-                          placeholder="Pick vendor from master"
+                          placeholder={quote ? 'Pick vendor from master' : '🔒 pehle slip upload karein'}
                           buttonClassName="input text-xs w-full text-left flex items-center justify-between gap-1 cursor-pointer"
                           onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <input className="input text-xs" type="number" placeholder="Rate" value={r[`vendor${n}_rate`] || ''} onChange={e => updateMergedRate(r, { [`vendor${n}_rate`]: +e.target.value })} />
-                        <select className="select text-xs" value={r[`vendor${n}_terms`] || ''} onChange={e => editRate(r, { [`vendor${n}_terms`]: e.target.value })}>
+                        <input className="input text-xs" type="number" placeholder={quote ? 'Rate' : '🔒'} disabled={!quote} value={r[`vendor${n}_rate`] || ''} onChange={e => updateMergedRate(r, { [`vendor${n}_rate`]: +e.target.value })} />
+                        <select className="select text-xs" disabled={!quote} value={r[`vendor${n}_terms`] || ''} onChange={e => editRate(r, { [`vendor${n}_terms`]: e.target.value })}>
                           <option value="">— Terms —</option>
                           <option value="Advance">Advance</option>
                           <option value="Credit">Credit</option>
                         </select>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                   {stat === 'finalized'
                     ? <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs"><b className="text-emerald-700">Final:</b> {r.final_vendor_name} @ Rs {r.final_rate}</div>
                     : <>
@@ -7696,6 +7809,26 @@ export default function Procurement() {
             </div>
             <div><label className="label">Credit Days (if Credit)</label><input className="input" type="number" value={finalForm.final_credit_days || 0} onChange={e => setFinalForm(f => ({ ...f, final_credit_days: +e.target.value }))} disabled={finalForm.final_terms !== 'Credit'} /></div>
           </div>
+          {/* L1 override reason — finalizing ABOVE the lowest quote needs a
+              written justification (credit / delivery / quality). Server
+              rejects without it (mam 2026-07-25: order to lowest one). */}
+          {(() => {
+            if (!finalModal) return null;
+            const rates = [1, 2, 3].map(n => +finalModal[`vendor${n}_rate`] || 0).filter(v => v > 0);
+            const lowest = rates.length ? Math.min(...rates) : 0;
+            const above = lowest > 0 && +finalForm.final_rate > lowest;
+            if (!above) return null;
+            return (
+              <div className="bg-amber-50 border border-amber-300 rounded-lg p-3">
+                <p className="text-xs font-semibold text-amber-800 mb-1">
+                  ⚠️ L1 (sabse sasta) ₹{lowest} hai — aap ₹{finalForm.final_rate} pe finalize kar rahe hain (+{Math.round(((+finalForm.final_rate - lowest) / lowest) * 100)}%). Reason likhna zaroori hai:
+                </p>
+                <input className="input text-xs" required placeholder="e.g. 30-din credit, 2 din mein delivery, behtar quality/brand"
+                  value={finalForm.l1_override_reason || ''}
+                  onChange={e => setFinalForm(f => ({ ...f, l1_override_reason: e.target.value }))} />
+              </div>
+            );
+          })()}
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
             <button type="button" onClick={() => { setFinalModal(null); setFinalForm({}); }} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary">Finalize Rate</button>

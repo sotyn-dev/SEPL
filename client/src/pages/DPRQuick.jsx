@@ -41,7 +41,12 @@ export default function DPRQuick() {
   const [helper, setHelper] = useState(0);
   const [rental, setRental] = useState(0);
   const [staffCost, setStaffCost] = useState({ per_day_cost: 0 });
-  const [taDa, setTaDa] = useState({ total_amount: 0 });
+  // ALL daily expenses in one object (director ask 2026-07-26): TA/DA +
+  // room rent (monthly ÷ 30) + on-site tool rentals — fetched, not typed.
+  const [expenses, setExpenses] = useState({ ta_da: { total_amount: 0 }, room_rent: { per_day: 0 }, tool_rentals: { per_day: 0, count: 0 } });
+  // Morning issue slip (material_issues) — engineer only enters USED qty.
+  const [issueSlip, setIssueSlip] = useState(null);
+  const [slipUsed, setSlipUsed] = useState({});   // item_master_id -> qty used
   const [weather, setWeather] = useState('clear');
   const [toolbox, setToolbox] = useState(true);
   const [ppe, setPpe] = useState(true);
@@ -56,12 +61,23 @@ export default function DPRQuick() {
   const startedAt = useRef(Date.now());
 
   // Engineer-scoped site list (GET /dpr/sites already filters to the caller's
-  // own sites for non-admins). Auto-select when there's exactly one.
+  // own sites for non-admins). Auto-select when there's exactly one — and for
+  // multi-site engineers, GPS decides: default to the site their morning
+  // attendance punch-in landed on (director ask 2026-07-26: "site engineer
+  // site is already allotted so he dont have to find the site in drop down").
   useEffect(() => {
-    api.get('/dpr/sites').then(r => {
+    api.get('/dpr/sites').then(async r => {
       const active = (r.data || []).filter(s => s.status === 'active');
       setSites(active);
-      if (active.length === 1) setSiteId(String(active[0].id));
+      if (active.length === 1) { setSiteId(String(active[0].id)); return; }
+      try {
+        const { data: punch } = await api.get('/attendance/my-today');
+        if (punch?.site_id || punch?.site_name) {
+          const hit = active.find(s => s.id === punch.site_id)
+            || active.find(s => (s.name || '').toLowerCase() === (punch.site_name || '').toLowerCase());
+          if (hit) setSiteId(String(hit.id));
+        }
+      } catch { /* no punch yet — engineer picks manually */ }
     }).catch(() => setSites([]));
   }, []);
 
@@ -73,7 +89,7 @@ export default function DPRQuick() {
     Promise.all([
       api.get('/dpr/quick-prefill', { params: { site_id: siteId, date: today } }),
       api.get(`/dpr/sites/${siteId}/staff-cost`).catch(() => ({ data: {} })),
-      api.get(`/dpr/sites/${siteId}/ta-da-cost`).catch(() => ({ data: {} })),
+      api.get(`/dpr/sites/${siteId}/daily-expenses`, { params: { date: today } }).catch(() => ({ data: {} })),
     ]).then(([pf, sc, td]) => {
       const p = pf.data || {};
       setPrefill(p);
@@ -87,7 +103,17 @@ export default function DPRQuick() {
       setRental(+((costOf('rental')?.qty || 0) * (costOf('rental')?.rate || 0)) || 0);
       if (p.weather?.weather) setWeather(p.weather.weather);
       setStaffCost(sc.data || {});
-      setTaDa(td.data || {});
+      setExpenses({
+        ta_da: td.data?.ta_da || { total_amount: 0 },
+        room_rent: td.data?.room_rent || { per_day: 0 },
+        tool_rentals: td.data?.tool_rentals || { per_day: 0, count: 0 },
+      });
+      setIssueSlip(p.material_issue || null);
+      // Default USED to 0 for every issued item — engineer bumps up only
+      // what was actually consumed; the rest auto-returns.
+      const su = {};
+      (p.material_issue?.items || []).forEach(it => { su[it.item_master_id] = 0; });
+      setSlipUsed(su);
       if (p.already_filed_today) toast('A DPR already exists for today — submitting will update it.', { icon: 'ℹ️' });
     }).catch(() => toast.error('Could not load prefill'))
       .finally(() => setLoading(false));
@@ -134,9 +160,14 @@ export default function DPRQuick() {
 
   const totalA = items.reduce((s, it) => s + (+it.qty || 0) * (+it.rate || 0), 0);
   const staffPerDay = +staffCost.per_day_cost || 0;
-  const taDaAmt = +taDa.total_amount || 0;
-  const totalB = skilled * SKILLED_RATE + helper * HELPER_RATE + (+rental || 0) + staffPerDay + taDaAmt;
+  const taDaAmt = +expenses.ta_da?.total_amount || 0;
+  const roomRentDay = +expenses.room_rent?.per_day || 0;
+  const toolRentDay = +expenses.tool_rentals?.per_day || 0;
+  const totalB = skilled * SKILLED_RATE + helper * HELPER_RATE + (+rental || 0) + staffPerDay + taDaAmt + roomRentDay + toolRentDay;
   const pl = totalA - totalB;
+  const bumpSlip = (itemId, delta, max) => setSlipUsed(su => ({
+    ...su, [itemId]: Math.min(max, Math.max(0, (+su[itemId] || 0) + delta)),
+  }));
 
   const submit = async () => {
     if (!siteId) { toast.error('Pick a site'); return; }
@@ -151,6 +182,8 @@ export default function DPRQuick() {
         { type: 'Rental Cost', qty: rental > 0 ? 1 : 0, rate: +rental || 0, amount: +rental || 0 },
         { type: 'Staff Cost', qty: 1, rate: staffPerDay, amount: staffPerDay },
         { type: 'TA/DA', qty: 1, rate: taDaAmt, amount: taDaAmt },
+        { type: 'Room Rent', qty: 1, rate: roomRentDay, amount: roomRentDay },
+        { type: 'Tool Rental', qty: 1, rate: toolRentDay, amount: toolRentDay },
       ].filter(c => c.amount > 0 || c.qty > 0);
       const { data } = await api.post('/dpr', {
         site_id: +siteId, report_date: today, weather, shift: prefill?.shift || 'day',
@@ -169,12 +202,23 @@ export default function DPRQuick() {
         site_photos: photos,
         grand_total_a: totalA, grand_total_b: totalB, profit_loss: pl,
       });
+      // Reconcile the morning issue slip against this DPR: used quantities
+      // recorded, the rest flagged for return (storekeeper confirms receipt).
+      if (issueSlip) {
+        try {
+          await api.post(`/material-issues/${issueSlip.id}/reconcile`, {
+            dpr_id: data?.id,
+            items: (issueSlip.items || []).map(it => ({ item_master_id: it.item_master_id, qty_used: +slipUsed[it.item_master_id] || 0 })),
+          });
+        } catch (e) { toast.error('DPR saved, but the issue slip could not be reconciled — tell the storekeeper.'); }
+      }
       const secs = Math.round((Date.now() - startedAt.current) / 1000);
       toast.success(`DPR filed in ${secs}s ✓`);
       (data?.stock_shortfalls || []).forEach(s =>
         toast.error(`⚠ Stock short: ${s.material_name || 'item'} (short ${s.shortfall})`, { duration: 6000 }));
       // Reset for the (rare) second site of the day.
       setItems([]); setPhotos([]); setNextPlan(''); setHindrance(''); setPrefill(null); setSiteId('');
+      setIssueSlip(null); setSlipUsed({});
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to submit');
     } finally { setSaving(false); }
@@ -211,8 +255,46 @@ export default function DPRQuick() {
             <span>👷 {contractorTotal} manpower ({(prefill.contractors || []).length} contractor{(prefill.contractors || []).length === 1 ? '' : 's'})</span>
             {staffPerDay > 0 && <span>Staff {fmtRs(staffPerDay)}/day</span>}
             {taDaAmt > 0 && <span>TA/DA {fmtRs(taDaAmt)}</span>}
+            {roomRentDay > 0 && <span>Room rent {fmtRs(roomRentDay)}/day</span>}
+            {toolRentDay > 0 && <span>Tools {fmtRs(toolRentDay)}/day ({expenses.tool_rentals.count})</span>}
             <span className="text-gray-400">— all auto</span>
           </div>
+
+          {/* Morning issue slip — enter USED, the rest returns automatically */}
+          {issueSlip && (
+            <div className="card p-3 space-y-2 border-2 border-indigo-200">
+              <div className="flex items-center justify-between">
+                <h4 className="font-semibold text-sm">📦 Materials issued this morning <span className="text-[10px] text-gray-400 font-normal">slip #{issueSlip.id} · {issueSlip.issued_by_name}</span></h4>
+                {issueSlip.status === 'issued' && (
+                  <button type="button" onClick={async () => {
+                    try { await api.post(`/material-issues/${issueSlip.id}/accept`); setIssueSlip(s => ({ ...s, status: 'accepted' })); toast.success('Issue accepted'); }
+                    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+                  }} className="px-3 h-8 rounded-full bg-indigo-600 text-white text-[11px] font-bold">Accept</button>
+                )}
+              </div>
+              {(issueSlip.items || []).map(it => {
+                const used = +slipUsed[it.item_master_id] || 0;
+                const ret = +it.qty_issued - used;
+                return (
+                  <div key={it.id} className="border border-gray-100 rounded-xl p-2.5">
+                    <div className="text-sm font-medium leading-snug">{it.item_name}</div>
+                    <div className="flex items-center justify-between mt-1.5">
+                      <div className="text-[10px] text-gray-400">
+                        Issued: <b className="text-gray-600">{it.qty_issued} {it.uom || ''}</b> · Return: <b className={ret > 0 ? 'text-emerald-600' : 'text-gray-600'}>{ret}</b>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-gray-400 mr-1">Used</span>
+                        <button type="button" onClick={() => bumpSlip(it.item_master_id, -1, +it.qty_issued)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center active:bg-gray-200"><FiMinus size={15} /></button>
+                        <span className="w-10 text-center font-bold">{used}</span>
+                        <button type="button" onClick={() => bumpSlip(it.item_master_id, +1, +it.qty_issued)} className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center active:bg-indigo-700"><FiPlus size={15} /></button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <p className="text-[10px] text-gray-400">On submit: used quantities post to the DPR; the return goes back to stock once the storekeeper confirms receipt.</p>
+            </div>
+          )}
 
           {/* Yesterday's plan = today's todo hint */}
           {prefill.yesterday_plan && (

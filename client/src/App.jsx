@@ -56,6 +56,7 @@ const SiteChat = lazy(() => import('./pages/SiteChat'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
 const DPRQuick = lazy(() => import('./pages/DPRQuick'));
+const MaterialIssue = lazy(() => import('./pages/MaterialIssue'));
 const IndentLabourPayment = lazy(() => import('./pages/IndentLabourPayment'));
 const Delegation = lazy(() => import('./pages/Delegation'));
 const PMSTasks = lazy(() => import('./pages/PMSTasks'));
@@ -186,6 +187,7 @@ export default function App() {
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         <Route path="dpr-quick" element={<ModuleRoute module="dpr"><DPRQuick /></ModuleRoute>} />
+        <Route path="material-issue" element={<ModuleRoute module="inventory"><MaterialIssue /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
         <Route path="indent-labour-payment" element={<ModuleRoute module="indent_labour_payment"><IndentLabourPayment /></ModuleRoute>} />
         <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />

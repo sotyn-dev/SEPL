@@ -33,7 +33,7 @@ import {
   // People children
   FiUserPlus, FiHelpCircle, FiBookOpen, FiCalendar, FiDollarSign, FiAtSign,
   // Inventory children
-  FiClock, FiBox, FiServer, FiSliders, FiBookmark,
+  FiClock, FiBox, FiServer, FiSliders, FiBookmark, FiUploadCloud,
   // Tasks children
   FiAward, FiPaperclip, FiLayers, FiCheckCircle,
   // Service Desk children
@@ -167,6 +167,7 @@ const SIDEBAR_GROUPS = [
     { path: '/subcontractor-attendance', label: 'Sub-contractor Attendance', icon: FiClipboard, module: 'subcontractor_attendance' },
   ]},
   { id: 'inventory', label: 'Inventory', icon: FiPackage, items: [
+    { path: '/material-issue', label: 'Material Issue', icon: FiUploadCloud, module: 'inventory' },
     { path: '/rental-tools',   label: 'Tool Rentals', icon: FiClock,    module: 'rental_tools' },
     { path: '/company-assets', label: 'Assets',       icon: FiBox,      module: 'company_assets' },
     { path: '/inventory',      label: 'Inventory',    icon: FiServer,   module: 'inventory' },
