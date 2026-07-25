@@ -295,6 +295,87 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- ─── AI Tenders (director 2026-07-25) ──────────────────────────────────
+    -- A dedicated home for GOVERNMENT / large tenders, distinct from the
+    -- simpler Quotations flow. A tender is: upload the NIT/BOQ document →
+    -- AI extracts every line + matches to Item Master + builds a priced bid
+    -- (the SAME matchBoqFile engine the Quotations/Estimator pages use) →
+    -- track the eligibility docs, submission and won/lost result. Stage-1
+    -- capture still lives in the Sales Funnel (tender_id/bid_deadline/EMD);
+    -- this module picks a captured tender up (lead_id) and does the pricing.
+    CREATE TABLE IF NOT EXISTS tenders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tender_no TEXT,                                 -- NIT / tender reference no.
+      title TEXT NOT NULL,
+      portal TEXT DEFAULT 'other',                    -- gem / cppp / state / private / other
+      department TEXT,                                -- issuing dept / client
+      lead_id INTEGER,                                -- link to sales_funnel row (optional)
+      source_file TEXT,                               -- last uploaded tender document
+      discipline TEXT,                                -- Electrical/Fire Fighting/... (comma-joined)
+      bid_due_date DATETIME,                          -- submission deadline
+      emd_amount REAL DEFAULT 0,
+      emd_paid INTEGER DEFAULT 0,
+      emd_mode TEXT,                                  -- DD / BG / online / exempt
+      pbg_required INTEGER DEFAULT 0,
+      pbg_amount REAL DEFAULT 0,
+      estimated_value REAL DEFAULT 0,                 -- tender's own estimated cost (govt)
+      default_margin REAL DEFAULT 15,                 -- default margin % for the build-up
+      cost_amount REAL DEFAULT 0,                     -- our computed cost (PP+ACC+LAB)
+      bid_amount REAL DEFAULT 0,                       -- our final quoted (SP) total
+      status TEXT DEFAULT 'draft'
+        CHECK(status IN ('draft','pricing','ready','submitted','won','lost','withdrawn')),
+      submitted_at DATETIME,
+      our_rank INTEGER,                               -- L1=1, L2=2 ...
+      l1_bidder TEXT,
+      l1_amount REAL,
+      result_notes TEXT,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- One priced BOQ line of a tender. Mirrors the Estimator row maths:
+    --   TP (unit cost) = pp + acc + labour
+    --   rate (unit SP) = TP × (1 + margin_pct/100)
+    --   amount         = rate × quantity
+    CREATE TABLE IF NOT EXISTS tender_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tender_id INTEGER REFERENCES tenders(id) ON DELETE CASCADE,
+      sn INTEGER,
+      description TEXT NOT NULL,
+      item_id INTEGER,                                -- matched Item Master id (nullable)
+      matched_name TEXT,
+      match_confidence TEXT,                          -- high / medium / low / none
+      category TEXT,                                  -- department / discipline (for grouping)
+      make TEXT,
+      unit TEXT DEFAULT 'nos',
+      quantity REAL DEFAULT 1,
+      pp REAL DEFAULT 0,                              -- purchase / material rate
+      acc REAL DEFAULT 0,                             -- accessories
+      labour REAL DEFAULT 0,
+      margin_pct REAL DEFAULT 15,
+      rate REAL DEFAULT 0,                            -- computed unit selling rate (SP)
+      amount REAL DEFAULT 0,                          -- rate × quantity
+      subs_json TEXT,                                 -- bundled FOC/accessory sub-items
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_tender_items_tender ON tender_items(tender_id);
+
+    -- Eligibility / compliance document checklist per tender. A default set is
+    -- seeded when a tender is created; users toggle attached/NA and add notes.
+    CREATE TABLE IF NOT EXISTS tender_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tender_id INTEGER REFERENCES tenders(id) ON DELETE CASCADE,
+      doc_name TEXT NOT NULL,
+      required INTEGER DEFAULT 1,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','attached','na')),
+      file_path TEXT,
+      notes TEXT,
+      sort_order INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_tender_docs_tender ON tender_documents(tender_id);
+
     -- Labour Rate sheet (mam 2026-06-10): item-wise labour / sub-contractor
     -- rates by UOM and category. Seeded once from her uploaded sheet.
     CREATE TABLE IF NOT EXISTS labour_rates (
@@ -2346,6 +2427,43 @@ function initializeDatabase() {
       notes TEXT,
       issued_by INTEGER REFERENCES users(id),
       issued_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- ─── Material Issue → Reconcile loop (director ask, 2026-07-26) ─────
+    -- "in morning store keeper will issue the inventory and then they have
+    -- to just enter the stock data what is used, rest submit all back."
+    -- Morning: storekeeper issues items to the engineer (stock OUT at issue
+    -- time — the material physically leaves the store). Engineer taps
+    -- Accept (two-party record). Evening: Quick DPR shows the slip, the
+    -- engineer enters qty USED per item; returned = issued − used. Stock
+    -- comes back IN only when the storekeeper CONFIRMS the physical return
+    -- — a declared-vs-confirmed gap is logged as variance, so shrinkage
+    -- can't hide inside paper returns.
+    CREATE TABLE IF NOT EXISTS material_issues (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site_id INTEGER NOT NULL REFERENCES sites(id),
+      warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+      issue_date DATE NOT NULL,
+      issued_by INTEGER REFERENCES users(id),
+      issued_to INTEGER REFERENCES users(id),
+      status TEXT DEFAULT 'issued' CHECK(status IN ('issued','accepted','reconciled','closed')),
+      accepted_at DATETIME,
+      dpr_id INTEGER REFERENCES dpr(id),
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS material_issue_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      issue_id INTEGER NOT NULL REFERENCES material_issues(id) ON DELETE CASCADE,
+      item_master_id INTEGER NOT NULL REFERENCES item_master(id),
+      qty_issued REAL NOT NULL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      qty_used REAL,
+      qty_returned REAL,
+      qty_return_confirmed REAL,
+      return_confirmed_by INTEGER REFERENCES users(id),
+      return_confirmed_at DATETIME
     );
 
     -- ─── PERFORMANCE INDEXES on hot tables (fast page loads) ────────────
@@ -5772,6 +5890,11 @@ in your first week. If a process feels broken, raise a Help Ticket
     // gated separately from `sub_contractors` (the company-master module
     // admin/site-engineers use).
     'subcontractor_attendance',
+    // AI Tenders (director 2026-07-25) — government/large tender bid builder:
+    // upload NIT/BOQ → AI prices it → track eligibility docs + won/lost.
+    // Reuses the quotations AI engine but gated on its own key so tender
+    // access can be granted to the bidding team independently of Quotations.
+    'tenders',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

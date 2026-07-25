@@ -345,6 +345,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/sales-funnel', require('./routes/salesfunnel'));
 app.use('/api/quotations', require('./routes/quotations'));
+app.use('/api/tenders', require('./routes/tenders'));
 app.use('/api/solar', require('./routes/solar'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/business-book', require('./routes/businessbook'));
@@ -402,6 +403,10 @@ app.use('/api/sub-contractors', require('./routes/subcontractors'));
 // separate from /api/sub-contractors (the company-master module admin/
 // site-engineers use). Access gated on an active Work Order.
 app.use('/api/subcontractor-attendance', require('./routes/subcontractorAttendance'));
+// Morning material issue → evening reconcile loop (director ask 2026-07-26:
+// "no work order no attendance"-style discipline for stock — storekeeper
+// issues, engineer uses+returns, storekeeper confirms). Feeds Quick DPR.
+app.use('/api/material-issues', require('./routes/materialIssues'));
 app.use('/api/subcon-hiring', require('./routes/subconHiring'));
 app.use('/api/procurement-schedule', require('./routes/procurementSchedule'));
 app.use('/api/crm-funnel', require('./routes/crmFunnel'));

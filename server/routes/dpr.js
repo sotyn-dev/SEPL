@@ -341,7 +341,31 @@ router.get('/quick-prefill', async (req, res) => {
     weather = await getSiteWeather(db, siteId);
   } catch (e) { /* weather is best-effort */ }
 
+  // Today's morning issue slip for THIS engineer (director ask 2026-07-26):
+  // shows up as a "materials issued to you" card — engineer enters used qty,
+  // the rest auto-returns. Admins see any open slip for the site.
+  let materialIssue = null;
+  try {
+    const slipSql = `
+      SELECT mi.*, ub.name as issued_by_name
+        FROM material_issues mi LEFT JOIN users ub ON ub.id = mi.issued_by
+       WHERE mi.site_id = ? AND mi.issue_date = ? AND mi.status IN ('issued','accepted')
+         ${req.user.role === 'admin' ? '' : 'AND mi.issued_to = ?'}
+       ORDER BY mi.id DESC LIMIT 1`;
+    const slip = req.user.role === 'admin'
+      ? db.prepare(slipSql).get(siteId, date)
+      : db.prepare(slipSql).get(siteId, date, req.user.id);
+    if (slip) {
+      const slipItems = db.prepare(`
+        SELECT mii.*, im.item_name, im.item_code, im.uom
+          FROM material_issue_items mii JOIN item_master im ON im.id = mii.item_master_id
+         WHERE mii.issue_id = ?`).all(slip.id);
+      materialIssue = { ...slip, items: slipItems };
+    }
+  } catch (e) { /* material_issues absent on stale DB */ }
+
   res.json({
+    material_issue: materialIssue,
     prev_date: prev?.report_date || null,
     yesterday_plan: prev?.next_day_plan || null,
     shift: prev?.shift || 'day',
@@ -355,6 +379,73 @@ router.get('/quick-prefill', async (req, res) => {
       `SELECT 1 FROM dpr WHERE site_id=? AND report_date=? AND COALESCE(is_planned_template,0)=0`
     ).get(siteId, date),
   });
+});
+
+// ── ALL daily site expenses in one call (director ask, 2026-07-26: "add
+// all types of expenses in daily dpr — ta/da, room rent, daily rentals of
+// tools, fetch data from expenses"). Each block is best-effort so one
+// missing table on a stale DB never blanks the others.
+//   ta_da        — final-approved TA/DA payment_requests for the site
+//   room_rent    — active approved/paid rent_requests for the current
+//                  month ÷ 30 → per-day share
+//   tool_rentals — rental_tool_enquiry rows currently ON SITE (received,
+//                  not yet returned) with a per_day vendor rate
+router.get('/sites/:site_id/daily-expenses', (req, res) => {
+  const db = getDb();
+  const siteId = +req.params.site_id;
+  const date = String(req.query.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const month = date.slice(0, 7);
+  const out = {
+    ta_da: { total_amount: 0, count: 0 },
+    room_rent: { monthly_total: 0, per_day: 0, count: 0 },
+    tool_rentals: { per_day: 0, count: 0, tools: [] },
+  };
+  const site = db.prepare('SELECT id, name FROM sites WHERE id=?').get(siteId);
+  if (!site) return res.json(out);
+  try {
+    const r = db.prepare(`
+      SELECT COALESCE(SUM(amount),0) as total_amount, COUNT(*) as count
+        FROM payment_requests
+       WHERE category = 'TA/DA' AND status = 'final_approved'
+         AND (site_id = ? OR site_name = ?)
+    `).get(siteId, site.name);
+    out.ta_da = { total_amount: +r.total_amount || 0, count: r.count || 0 };
+  } catch (e) { /* payment_requests absent */ }
+  try {
+    const r = db.prepare(`
+      SELECT COALESCE(SUM(rent_amount),0) as monthly_total, COUNT(*) as count
+        FROM rent_requests
+       WHERE site_id = ? AND rent_month = ?
+         AND COALESCE(inactive,0) = 0
+         AND status IN ('approved','paid')
+    `).get(siteId, month);
+    out.room_rent = {
+      monthly_total: +r.monthly_total || 0,
+      per_day: Math.round(((+r.monthly_total || 0) / 30) * 100) / 100,
+      count: r.count || 0,
+    };
+  } catch (e) { /* rent_requests absent */ }
+  try {
+    const tools = db.prepare(`
+      SELECT tool_description, vendor_name, vendor_rate, vendor_rate_unit
+        FROM rental_tool_enquiry
+       WHERE site_id = ?
+         AND material_received_at IS NOT NULL
+         AND returned_at IS NULL
+         AND COALESCE(vendor_rate, 0) > 0
+    `).all(siteId);
+    // Only per_day rates count toward the daily figure; other units are
+    // listed but excluded from the auto amount (can't be prorated safely).
+    const perDay = tools
+      .filter(t => (t.vendor_rate_unit || 'per_day') === 'per_day')
+      .reduce((s, t) => s + (+t.vendor_rate || 0), 0);
+    out.tool_rentals = {
+      per_day: Math.round(perDay * 100) / 100,
+      count: tools.length,
+      tools: tools.map(t => ({ description: t.tool_description, vendor: t.vendor_name, rate: t.vendor_rate, unit: t.vendor_rate_unit })),
+    };
+  } catch (e) { /* rental_tool_enquiry absent */ }
+  res.json(out);
 });
 
 router.get('/sites/:site_id/ta-da-cost', (req, res) => {
@@ -1152,24 +1243,10 @@ router.post('/', (req, res) => {
   // Reorder-level check — for every item this DPR actually decremented,
   // see if it just crossed (or already sits at/below) its reorder_level.
   // Notifies Procurement so a shortage surfaces the moment it happens
-  // instead of waiting on a manual stock-recon walk.
-  const lowStockAlerts = [];
-  if (touchedStock.length) {
-    const seen = new Set();
-    for (const t of touchedStock) {
-      const key = `${t.warehouse_id}:${t.item_master_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const bal = db.prepare('SELECT quantity, reorder_level FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(t.warehouse_id, t.item_master_id);
-      if (!bal || !(bal.reorder_level > 0) || bal.quantity > bal.reorder_level) continue;
-      const item = db.prepare('SELECT item_name, item_code FROM item_master WHERE id=?').get(t.item_master_id);
-      lowStockAlerts.push({
-        warehouse_id: t.warehouse_id, item_master_id: t.item_master_id,
-        item_name: item?.item_name || null, item_code: item?.item_code || null,
-        quantity: bal.quantity, reorder_level: bal.reorder_level,
-      });
-    }
-  }
+  // instead of waiting on a manual stock-recon walk. Shared with the
+  // morning Material Issue flow via lib/lowStock.js.
+  const { collectLowStock, notifyLowStock } = require('../lib/lowStock');
+  const lowStockAlerts = touchedStock.length ? collectLowStock(db, touchedStock) : [];
 
   // Fire-and-forget: if this DPR is a loss, check whether the site now
   // has 3+ consecutive loss days and email director@securedengineers.com
@@ -1180,7 +1257,7 @@ router.post('/', (req, res) => {
   }
 
   if (lowStockAlerts.length) {
-    setImmediate(() => notifyLowStock(dprId, site_id, lowStockAlerts).catch(e =>
+    setImmediate(() => notifyLowStock(site_id, lowStockAlerts, `DPR #${dprId}`).catch(e =>
       console.warn('[dpr] low-stock alert failed:', e.message)));
   }
 
@@ -1292,55 +1369,8 @@ async function checkConsecutiveLossAndAlert(latestDprId, siteId) {
   } catch (e) { /* never block the DPR save */ }
 }
 
-// Users who should hear about a low-stock/reorder situation: active admins,
-// plus anyone whose role has can_approve on 'procurement' (Purchase Manager
-// et al). Deliberately NOT can_view — a separate pre-existing migration
-// ("any authenticated user should be able to raise an indent") grants
-// procurement can_view+can_create to nearly every role including Sub-
-// Contractor logins, which would otherwise blast internal stock alerts to
-// subcontractors. can_approve stays a much smaller, actually-procurement set.
-function findProcurementUsers(db) {
-  const ids = new Set();
-  db.prepare(`SELECT id FROM users WHERE role='admin' AND active=1`).all().forEach(r => ids.add(r.id));
-  db.prepare(`
-    SELECT DISTINCT u.id FROM users u
-    JOIN user_roles ur ON ur.user_id = u.id
-    JOIN role_permissions rp ON rp.role_id = ur.role_id
-    WHERE rp.module = 'procurement' AND rp.can_approve = 1 AND u.active = 1
-  `).all().forEach(r => ids.add(r.id));
-  return [...ids];
-}
-
-// Fire-and-forget: notify Procurement + admins that a DPR's material
-// consumption pushed one or more items to/below their reorder_level.
-// Writes an in-app `notifications` row per user (deduped per item+day,
-// same convention as scripts/hrAutomationsCron.js) and a web push
-// (same shape as scripts/dprAutoPrompt.js).
-async function notifyLowStock(dprId, siteId, alerts) {
-  const db = getDb();
-  const site = db.prepare('SELECT name FROM sites WHERE id=?').get(siteId);
-  const today = new Date().toISOString().slice(0, 10);
-  const userIds = findProcurementUsers(db);
-  if (!userIds.length) return;
-  for (const a of alerts) {
-    const label = a.item_name || a.item_code || `Item #${a.item_master_id}`;
-    const title = `⚠ Low stock — ${label}`;
-    const body = `${site?.name || `Site #${siteId}`}: ${label} at ${a.quantity} (reorder level ${a.reorder_level}), triggered by DPR #${dprId}.`;
-    const dedupeKey = `low_stock_reorder:${a.warehouse_id}:${a.item_master_id}:${today}`;
-    for (const uid of userIds) {
-      const existing = db.prepare('SELECT id FROM notifications WHERE user_id=? AND dedupe_key=?').get(uid, dedupeKey);
-      if (existing) continue;
-      db.prepare(
-        `INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
-         VALUES (?,?,?,?,?,?,?)`
-      ).run(uid, 'low_stock_reorder', title, body, '/inventory', 'in_app', dedupeKey);
-    }
-    try {
-      const pushLib = require('../lib/push');
-      pushLib.notifyMany(userIds, { title, body, url: '/inventory', tag: dedupeKey });
-    } catch (e) { console.warn('[dpr] low-stock push failed:', e.message); }
-  }
-}
+// (low-stock alerting moved to lib/lowStock.js — shared with the Material
+// Issue flow so issue-time deductions raise the same Procurement alerts.)
 
 function isoMinusOneDay(iso) {
   const d = new Date(iso + 'T00:00:00Z');
