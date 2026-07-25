@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -825,6 +826,9 @@ export default function DPR() {
                 }
                 setModal(true);
               }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
+              {/* 30-second phone flow (director ask 2026-07-25): pre-filled
+                  from yesterday's DPR — engineers should reach for this one. */}
+              <Link to="/dpr-quick" className="btn flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white font-bold">⚡ Quick DPR</Link>
             </div>
           </div>
           {/* ─── MOBILE CARDS ───────────────────────────────────────

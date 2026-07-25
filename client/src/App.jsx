@@ -10,6 +10,7 @@ const Layout = lazy(() => import('./components/Layout'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Leads = lazy(() => import('./pages/Leads'));
 const Quotations = lazy(() => import('./pages/Quotations'));
+const Tenders = lazy(() => import('./pages/Tenders'));
 const Estimator = lazy(() => import('./pages/Estimator'));
 const SolarQuotation = lazy(() => import('./pages/SolarQuotation'));
 const SolarRateMaster = lazy(() => import('./pages/SolarRateMaster'));
@@ -28,6 +29,7 @@ const Attendance = lazy(() => import('./pages/Attendance'));
 const Vendors = lazy(() => import('./pages/Vendors'));
 const Customers = lazy(() => import('./pages/Customers'));
 const Procurement = lazy(() => import('./pages/Procurement'));
+const FlowMonitor = lazy(() => import('./pages/FlowMonitor'));
 const PriceRequired = lazy(() => import('./pages/PriceRequired'));
 const Installation = lazy(() => import('./pages/Installation'));
 const SalesBilling = lazy(() => import('./pages/SalesBilling'));
@@ -53,6 +55,7 @@ const ArApTracker = lazy(() => import('./pages/ArApTracker'));
 const SiteChat = lazy(() => import('./pages/SiteChat'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
+const DPRQuick = lazy(() => import('./pages/DPRQuick'));
 const IndentLabourPayment = lazy(() => import('./pages/IndentLabourPayment'));
 const Delegation = lazy(() => import('./pages/Delegation'));
 const PMSTasks = lazy(() => import('./pages/PMSTasks'));
@@ -182,6 +185,7 @@ export default function App() {
         <Route path="site-chat" element={<SiteChat />} />
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
+        <Route path="dpr-quick" element={<ModuleRoute module="dpr"><DPRQuick /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
         <Route path="indent-labour-payment" element={<ModuleRoute module="indent_labour_payment"><IndentLabourPayment /></ModuleRoute>} />
         <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />
@@ -189,6 +193,7 @@ export default function App() {
         {/* Other Modules */}
         <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
         <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />
+        <Route path="tenders" element={<ModuleRoute module="tenders"><Tenders /></ModuleRoute>} />
         <Route path="estimator" element={<ModuleRoute module="ai_quotation"><Estimator /></ModuleRoute>} />
         <Route path="solar-funnel" element={<ModuleRoute module="solar_quotation"><SolarFunnel /></ModuleRoute>} />
         <Route path="solar-quotation" element={<ModuleRoute module="solar_quotation"><SolarQuotation /></ModuleRoute>} />
@@ -204,6 +209,9 @@ export default function App() {
         <Route path="vendors" element={<ModuleRoute module="vendors"><Vendors /></ModuleRoute>} />
         <Route path="customers" element={<ModuleRoute module="customers"><Customers /></ModuleRoute>} />
         <Route path="procurement" element={<ModuleRoute module="procurement"><Procurement /></ModuleRoute>} />
+        {/* FMS Flow Monitor — open to every signed-in user (mam 2026-07-25:
+            accountability sabko dikhni chahiye), so no ModuleRoute gate. */}
+        <Route path="flow-monitor" element={<FlowMonitor />} />
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />

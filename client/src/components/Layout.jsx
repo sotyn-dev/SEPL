@@ -27,7 +27,7 @@ import {
   // Procurement children
   FiGrid, FiHexagon, FiInbox, FiTag,
   // Projects children
-  FiBarChart2, FiAlertCircle, FiZap, FiTool,
+  FiBarChart2, FiAlertCircle, FiZap, FiTool, FiFastForward,
   // Finance children
   FiFile, FiCreditCard, FiSend, FiList, FiRefreshCw,
   // People children
@@ -94,6 +94,7 @@ const SIDEBAR_GROUPS = [
     { path: '/solar-rate-master',     label: 'Solar Settings',       icon: FiSliders,    module: 'solar_quotation' },
   ]},
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
+    { path: '/tenders',     label: 'AI Tenders',        icon: FiAward,        module: 'tenders' },
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
     { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiArchive,      module: 'ai_quotation' },
     { path: '/po-foc-stripped', label: 'Price Breakup Master', icon: FiShoppingCart, module: 'quotations' },
@@ -104,6 +105,9 @@ const SIDEBAR_GROUPS = [
   // not quote/order workflow.  Dispatch renamed back to "Indent to
   // Dispatch" to match the page header.
   { id: 'procurement', label: 'Procurement', icon: FiShoppingBag, items: [
+    // FMS — the one-screen flow monitoring sheet, indent raise → sales bill
+    // (mam 2026-07-25). Open to every signed-in user: sabko same sach dikhe.
+    { path: '/flow-monitor',         label: 'Flow Monitor (FMS)', icon: FiActivity,     module: null, open: true },
     { path: '/item-master',          label: 'Items',              icon: FiGrid,         module: 'item_master' },
     { path: '/price-required',       label: 'RFQ Queue',          icon: FiInbox,        module: null, open: true },
     { path: '/vendors',              label: 'Vendors',            icon: FiTag,          module: 'vendors' },
@@ -119,6 +123,7 @@ const SIDEBAR_GROUPS = [
     // Phases 2-6 visible as planned tabs).
     { path: '/indent-labour-payment', label: 'Indent Labour Payment', icon: FiClipboard, module: 'indent_labour_payment' },
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
+    { path: '/dpr-quick',    label: 'Quick DPR (30s)',  icon: FiFastForward, module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
     // WhatsApp moved OUT of this group → pinned at the bottom of the sidebar,
     // just above Change Password (mam 2026-06-19). See SIDEBAR footer render.

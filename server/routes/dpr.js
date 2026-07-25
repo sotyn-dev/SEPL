@@ -273,6 +273,90 @@ router.get('/sites/:site_id/weather', async (req, res) => {
   }
 });
 
+// ── Quick DPR prefill (director ask, 2026-07-25: "within 30 sec engineer
+// can file a dpr, rest all will be automatic") ─────────────────────────
+// One round trip returning everything the phone quick-form needs pre-filled:
+//   • work_items — yesterday's DPR lines, each refreshed with the po_item's
+//     CURRENT remaining qty so the stepper can cap correctly
+//   • costs — yesterday's Table-B rows (skilled/helper/rental qty+rate)
+//   • yesterday_plan — yesterday's "next day plan" text (today's todo hint)
+//   • contractors — today's contractor_attendance (incl. the sub-contractor
+//     self-service submissions bridged in)
+//   • weather — live, classified (same source as /sites/:id/weather)
+// Staff Cost and TA/DA keep their dedicated endpoints (complex logic);
+// the quick page calls those two in parallel with this one.
+router.get('/quick-prefill', async (req, res) => {
+  const db = getDb();
+  const siteId = +req.query.site_id;
+  const date = String(req.query.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  if (!siteId) return res.status(400).json({ error: 'site_id required' });
+
+  // Most recent REAL (non-template) DPR before today for this site.
+  const prev = db.prepare(
+    `SELECT * FROM dpr
+      WHERE site_id = ? AND report_date < ? AND COALESCE(is_planned_template, 0) = 0
+      ORDER BY report_date DESC LIMIT 1`
+  ).get(siteId, date);
+
+  let workItems = [];
+  let costs = [];
+  if (prev) {
+    const rawItems = db.prepare(
+      `SELECT po_item_id, description, unit, rate, actual_qty AS last_qty,
+              floor_zone, work_order_id
+         FROM dpr_work_items WHERE dpr_id = ?`
+    ).all(prev.id);
+    // Refresh each line's BOQ + remaining from the CURRENT po_items state —
+    // yesterday's snapshot may be stale if other DPRs/plans filled qty since.
+    const boqStmt = db.prepare('SELECT quantity FROM po_items WHERE id = ?');
+    const filledStmt = db.prepare(
+      `SELECT COALESCE(SUM(dwi.actual_qty), 0) AS filled
+         FROM dpr_work_items dwi JOIN dpr d ON d.id = dwi.dpr_id
+        WHERE dwi.po_item_id = ? AND COALESCE(d.is_planned_template, 0) = 0`
+    );
+    workItems = rawItems.map(it => {
+      let boqQty = null, remaining = null;
+      if (it.po_item_id) {
+        boqQty = +(boqStmt.get(it.po_item_id)?.quantity || 0);
+        const filled = +(filledStmt.get(it.po_item_id)?.filled || 0);
+        remaining = Math.max(0, boqQty - filled);
+      }
+      return { ...it, boq_qty: boqQty, remaining_qty: remaining };
+    }).filter(it => it.remaining_qty === null || it.remaining_qty > 0); // done items drop off
+    costs = db.prepare(
+      `SELECT trade AS type, required AS qty, deployed AS rate
+         FROM dpr_manpower WHERE dpr_id = ?`
+    ).all(prev.id);
+  }
+
+  const contractors = db.prepare(
+    `SELECT contractor_name AS name, contractor_type, manpower, subcontractor_id
+       FROM contractor_attendance WHERE site_id = ? AND attendance_date = ?
+      ORDER BY contractor_name`
+  ).all(siteId, date);
+
+  let weather = null;
+  try {
+    const { getSiteWeather } = require('../lib/weather');
+    weather = await getSiteWeather(db, siteId);
+  } catch (e) { /* weather is best-effort */ }
+
+  res.json({
+    prev_date: prev?.report_date || null,
+    yesterday_plan: prev?.next_day_plan || null,
+    shift: prev?.shift || 'day',
+    system_type: prev?.system_type || null,
+    floor_zone: prev?.floor_zone || null,
+    work_items: workItems,
+    costs,
+    contractors,
+    weather,
+    already_filed_today: !!db.prepare(
+      `SELECT 1 FROM dpr WHERE site_id=? AND report_date=? AND COALESCE(is_planned_template,0)=0`
+    ).get(siteId, date),
+  });
+});
+
 router.get('/sites/:site_id/ta-da-cost', (req, res) => {
   try {
     const db = getDb();
@@ -866,6 +950,12 @@ router.post('/', (req, res) => {
     floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
     next_day_plan, hindrances, hindrance_category, remarks, grand_total_a, grand_total_b, profit_loss,
     work_items, manpower, machinery, materials, contractors } = req.body;
+  // Proof-of-work photos from the Quick DPR flow (CSV of /uploads URLs).
+  // dpr.site_photos column has existed since the original schema but was
+  // never written by the submit path until now.
+  const sitePhotos = Array.isArray(req.body.site_photos)
+    ? req.body.site_photos.filter(Boolean).join(',')
+    : (req.body.site_photos || null);
 
   if (!site_id || !report_date) return res.status(400).json({ error: 'Site and date required' });
 
@@ -899,6 +989,7 @@ router.post('/', (req, res) => {
         grand_total_a = ?, grand_total_b = ?, profit_loss = ?,
         floor_zone = ?, system_type = ?, safety_toolbox_talk = ?, safety_ppe_compliance = ?,
         safety_incidents = ?, next_day_plan = ?, hindrances = ?, hindrance_category = ?, remarks = ?,
+        site_photos = COALESCE(?, site_photos),
         is_planned_template = 0,
         -- Rates sent by the app are already the labour portion (11% of SITC),
         -- so flag this DPR as converted — the labour-pct backfill skips it.
@@ -909,18 +1000,19 @@ router.post('/', (req, res) => {
         grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
         floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
         safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks,
+        sitePhotos,
         existing.id);
     dprId = existing.id;
   } else {
     const r = db.prepare(`INSERT INTO dpr (site_id, report_date, submitted_by, submission_time, weather, overall_status,
       shift, contractor_name, contractor_manpower, mb_sheet_no, grand_total_a, grand_total_b, profit_loss,
       floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
-      next_day_plan, hindrances, hindrance_category, remarks, labour_pct_applied) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`)
+      next_day_plan, hindrances, hindrance_category, remarks, site_photos, labour_pct_applied) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`)
       .run(site_id, report_date, req.user.id, weather || 'clear', overall_status || 'on_track',
         shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
         grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
         floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
-        safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks);
+        safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks, sitePhotos);
     dprId = r.lastInsertRowid;
   }
 
