@@ -4,7 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { parseResume } = require('../utils/resumeParser');
 const { normalizeRoster } = require('../lib/roster');
@@ -682,29 +682,17 @@ router.get('/candidates/stats', (req, res) => {
   res.json({ total: total.count, byStatus, bySource });
 });
 
-// Employees — salary is confidential; strip it from the response unless the
-// requester is an admin or on the HR team (by role name or department).
-// JWT only carries { id, role, name, email }, so we look up HR role + dept
-// from the DB on each request. The DPR staff-cost endpoint works independently
-// via a server-side aggregate, so non-HR users never see individual figures
-// even if they are site engineers.
-const canSeeSalary = (userId, userRole) => {
-  if (userRole === 'admin') return true;
-  const db = getDb();
-  const u = db.prepare('SELECT department FROM users WHERE id=?').get(userId);
-  if (u?.department && String(u.department).toLowerCase().includes('hr')) return true;
-  const roles = db.prepare(
-    `SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`
-  ).all(userId);
-  return roles.some(r => String(r.name || '').toLowerCase().includes('hr'));
-};
-
+// Employees — salary is confidential; the salary field ships only to callers
+// holding employee_salary.can_view (admin included — getUserPermissions grants
+// admin every action). Everyone else gets the row with salary stripped. The DPR
+// staff-cost endpoint aggregates server-side, so non-HR users never see
+// individual figures even there.
 router.get('/employees', (req, res) => {
   const rows = getDb().prepare(
     `SELECT e.*, u.name as linked_user_name, u.username as linked_username
      FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
   ).all();
-  if (canSeeSalary(req.user.id, req.user.role)) return res.json(rows);
+  if (getUserPermissions(req.user.id)['employee_salary']?.can_view) return res.json(rows);
   // Redact salary for everyone else
   res.json(rows.map(({ salary, ...rest }) => rest));
 });
@@ -1791,18 +1779,12 @@ router.post('/checklists/completions/:id/decision', (req, res) => {
 //
 // All routes are mounted under /api/hr/hiring-requests.
 
-// Helper — only admin / HR can approve or reject.  Hiring manager who
-// raised the request CANNOT approve their own (separation of duties,
-// same rule we enforce on Indent).
+// Helper — only admin / HR-team members may approve, reject, close or delete a
+// hiring request. Membership is the hr_team.can_view capability; getUserPermissions
+// grants admin every action, so admins pass. The requester still cannot approve
+// their own request — see the separation-of-duties check in the approve handler.
 function isHrOrAdmin(req) {
-  if (req.user.role === 'admin') return true;
-  const db = getDb();
-  const u = db.prepare('SELECT department FROM users WHERE id=?').get(req.user.id);
-  if (u?.department && String(u.department).toLowerCase().includes('hr')) return true;
-  const roles = db.prepare(
-    `SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`
-  ).all(req.user.id);
-  return roles.some(r => String(r.name || '').toLowerCase().includes('hr'));
+  return !!getUserPermissions(req.user.id)['hr_team']?.can_view;
 }
 
 router.get('/hiring-requests', (req, res) => {

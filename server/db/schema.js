@@ -5693,6 +5693,13 @@ in your first week. If a process feels broken, raise a Help Ticket
     // and the sidebar, but it was never added here, so no role got a
     // role_permissions row and it never showed in Roles & Permissions.
     'solar_quotation',
+    // Dedicated capabilities replacing the fuzzy department/role-name "is HR"
+    // string checks (LIKE '%hr%'). Granted deliberately in the matrix, never
+    // inferred from a typed department.
+    //   employee_salary.can_view → see the salary field on GET /hr/employees.
+    //   hr_team.can_view         → HR-team member: gates hiring-request actions
+    //                              and the HR-alert recipient group (cron).
+    'employee_salary','hr_team',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

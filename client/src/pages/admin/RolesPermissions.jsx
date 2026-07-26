@@ -67,6 +67,8 @@ const ALL_MODULES = [
   { key: 'hr_system', label: 'HR System (recruitment / ATS / offers)' },
   { key: 'subcon_hiring', label: 'Sub-contractor Hiring' },
   { key: 'hr', label: 'HR & Hiring (legacy)' },
+  { key: 'employee_salary', label: 'Employee Salary — see salary field' },
+  { key: 'hr_team', label: 'HR Team — member (hiring + HR alerts)' },
   { key: 'payroll', label: 'Payroll' },
   { key: 'scoring', label: 'Weekly Score' },
   { key: 'gamification', label: 'Champions League (Gamification)' },
