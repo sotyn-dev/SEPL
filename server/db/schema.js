@@ -5699,7 +5699,8 @@ in your first week. If a process feels broken, raise a Help Ticket
     //   employee_salary.can_view → see the salary field on GET /hr/employees.
     //   hr_team.can_view         → HR-team member: gates hiring-request actions
     //                              and the HR-alert recipient group (cron).
-    'employee_salary','hr_team',
+    //   attendance_grid.can_view → view the Attendance Monthly Grid tab (marking needs attendance.can_approve).
+    'employee_salary','hr_team','attendance_grid',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

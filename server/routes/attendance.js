@@ -400,15 +400,15 @@ router.post('/admin-mark', (req, res) => {
   }
   const finalStatus = ['present','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
 
-  // Proof gate (SEPL 2026-07): claiming a person WORKED on a PAST day
-  // (present/half/short) without a punch MUST carry a supporting document, so
-  // a back-dated mark is never anonymous (the new-hire onboarding case). A
-  // same-day "forgot to punch" mark is low-risk and stays frictionless. The
-  // client uploads via POST /api/upload and passes the returned proof_url.
-  const WORKED = ['present', 'half_day', 'short_day'];
-  if (WORKED.includes(finalStatus) && date < todayStr && !proof_url) {
-    return res.status(400).json({ error: `A proof document is required to back-date a day as ${finalStatus.replace('_', ' ')}. Upload the signed attendance sheet / photo first.` });
-  }
+  // Proof is OPTIONAL on this endpoint (dme 2026-07-26). The 07-24 gate that
+  // rejected a back-dated worked day without proof_url was reverted for the
+  // grid marking path: the monthly-grid cycle marks click-by-click via markCell
+  // (no proof), and blocking it here turned a swift Present↔Absent↔Half flip
+  // into a mandatory upload with no way out — the original one-click cycle is
+  // restored. proof_url is still STORED when supplied, so the Backfill modal
+  // keeps offering the upload as the documented path, ready to re-enforce if
+  // management reinstates the rule. (P-all / admin-mark-bulk still requires
+  // proof — separate endpoint, unchanged.)
 
   // If a real attendance row already exists (user actually punched), don't
   // overwrite it. Admin-mark is meant for the missing-row case only.

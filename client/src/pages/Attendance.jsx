@@ -23,11 +23,19 @@ const fmtT = (iso) => {
 };
 
 export default function Attendance() {
-  const { user, isAdmin, canDelete, canSeeAll } = useAuth();
+  const { user, isAdmin, canDelete, canSeeAll, canView, canApprove } = useAuth();
   // Admins, or anyone granted "See All" on the attendance module, can view
   // everyone's attendance (mam 2026-06-15: "show all attendance if I give some
-  // permission to see all"). Write tools (Grid / Geofence) stay admin-only.
+  // permission to see all"). Geofence config stays admin-only.
   const seeAll = isAdmin() || canSeeAll('attendance');
+  // Monthly Grid access is two frontend layers:
+  //   canGrid     → SEE the grid tab (attendance_grid.can_view).
+  //   canMarkGrid → MARK cells / "P all" (attendance.can_approve). Without it the
+  //                 grid is read-only: clicking a cell opens its detail but never
+  //                 toggles, and "P all" is disabled. (The server independently
+  //                 enforces marking via attendance.can_approve.)
+  const canGrid = isAdmin() || canView('attendance_grid');
+  const canMarkGrid = isAdmin() || canApprove('attendance');
   const [tab, setTab] = useUrlTab('punch');
   const [myToday, setMyToday] = useState(null);
   // Mam: daily attendance detail (in/out times + leave) belongs on the
@@ -306,10 +314,10 @@ export default function Attendance() {
 
   // ── Monthly Attendance Grid helpers ──────────────────────────────
   const loadGrid = useCallback(() => {
-    if (!isAdmin()) return;
+    if (!canGrid) return;
     api.get(`/attendance/grid?month=${gridMonth}`).then(r => setGrid(r.data)).catch(() => setGrid(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridMonth]);
+  }, [gridMonth, canGrid]);
   useEffect(() => { if (tab === 'grid') loadGrid(); }, [tab, gridMonth, loadGrid]);
 
   const cellMeta = (c) => {
@@ -340,18 +348,6 @@ export default function Attendance() {
       toast.success('Monthly muster exported — open in Excel to print or send.');
     } catch { toast.error('Export failed'); }
   };
-  // Programmatic file picker → resolves the chosen File (or null if cancelled).
-  const pickFile = (accept) => new Promise((resolve) => {
-    const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = accept;
-    let done = false;
-    const finish = (f) => { if (done) return; done = true; resolve(f); };
-    inp.onchange = () => finish(inp.files?.[0] || null);
-    // Cancel fires no reliable event; when the window refocuses with nothing
-    // chosen shortly after, treat it as cancelled.
-    window.addEventListener('focus', () => setTimeout(() => finish(null), 400), { once: true });
-    inp.click();
-  });
   const markCell = async (emp, date, status) => {
     if (!emp.user_id) return;
     setGridBusy(true);
@@ -365,26 +361,27 @@ export default function Attendance() {
     if (!emp.user_id || day.future) return;
     // Show the day's detail (In/Out/status) in the panel below the grid.
     setCellInfo({ name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
+    // View-only (no attendance.can_approve): detail is shown above, cell never toggles.
+    if (!canMarkGrid) return;
     // Real punches / approved leaves are read-only — detail only, no cycling.
     if (c.source === 'punch' || c.source === 'leave') return;
     const order = ['present', 'absent', 'half_day', 'leave', 'clear'];
     const next = c.source === 'admin' ? order[(order.indexOf(c.status) + 1) % order.length] : 'present';
+    // One-click write, every status — proof is optional on /admin-mark now, so a
+    // back-dated Present/Half flips straight through instead of forcing a modal
+    // (the original June-13 swift cycle). Proof, when wanted, is attached via the
+    // Backfill modal.
     markCell(emp, day.date, next);
   };
-  const markAllPresent = async (emp) => {
-    if (!emp.user_id) return;
-    if (!confirm(`Mark ${emp.name} PRESENT on every blank working day in ${gridMonth}? (Sundays, real punches and leaves are left untouched.)`)) return;
-    // Bulk back-dating a month present → a proof document is mandatory.
-    const file = await pickFile('.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx');
-    if (!file) { toast.error('A proof document is required to mark the month present'); return; }
-    setGridBusy(true);
-    try {
-      const fd = new FormData(); fd.append('file', file);
-      const up = await api.post('/upload', fd);
-      const r = await api.post('/attendance/admin-mark-bulk', { user_id: emp.user_id, month: gridMonth, status: 'present', proof_url: up.data.url });
-      toast.success(r.data.message); loadGrid();
-    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
-    finally { setGridBusy(false); }
+  const markAllPresent = (emp) => {
+    if (!emp.user_id || !canMarkGrid) return;
+    // Bulk back-date the whole month present. Routed through the visible
+    // Mark/Backfill modal (real file input) instead of confirm()+pickFile: the
+    // old picker's focus heuristic mis-fired on the confirm dialog's own
+    // focus-return, resolving null before the file window opened (proof-required
+    // flashed, no API hit). _bulk flips the modal's submit to /admin-mark-bulk.
+    setForm({ _bulk: true, user_id: emp.user_id, name: emp.name, month: gridMonth, status: 'present' });
+    setModal('admin-mark');
   };
   const linkLogin = async (emp, userId) => {
     if (!userId) return;
@@ -404,14 +401,12 @@ export default function Attendance() {
           <button onClick={() => setTab('report')} className={`btn ${tab === 'report' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Report</button>
           <button onClick={() => setTab('leaves')} className={`btn ${tab === 'leaves' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Leaves</button>
         </>}
-        {isAdmin() && <>
-          <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>
-          <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>
-        </>}
+        {canGrid && <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>}
+        {isAdmin() && <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>}
       </div>
 
       {/* MONTHLY ATTENDANCE GRID TAB */}
-      {tab === 'grid' && isAdmin() && (
+      {tab === 'grid' && canGrid && (
         <div className="space-y-3">
           <div className="text-xs text-gray-600 bg-amber-50 border border-amber-100 rounded-lg px-4 py-2.5">
             A day with <b>no punch counts as absent</b> in payroll. Mark people here so salary is right.
@@ -499,7 +494,7 @@ export default function Attendance() {
                       <td className="px-1.5 py-1.5 text-center text-amber-700">{emp.totals?.late || 0}</td>
                       <td className="px-2 py-1.5 whitespace-nowrap">
                         {emp.user_id
-                          ? <button onClick={() => markAllPresent(emp)} disabled={gridBusy} className="btn btn-secondary text-[11px] py-0.5">P all</button>
+                          ? <button onClick={() => markAllPresent(emp)} disabled={gridBusy || !canMarkGrid} title={!canMarkGrid ? 'Requires attendance approve permission' : undefined} className="btn btn-secondary text-[11px] py-0.5">P all</button>
                           : <span className="text-[10px] text-gray-300">—</span>}
                       </td>
                     </tr>
@@ -1587,6 +1582,21 @@ export default function Attendance() {
         <form onSubmit={async (e) => {
           e.preventDefault();
           if (!form.user_id) return toast.error('Please select an employee');
+          if (form._bulk) {
+            // P-all: mark every blank working day in the grid month present.
+            // Proof is mandatory — same rule the server enforces for a single
+            // back-dated worked day, so require it before the upload/mark calls.
+            if (!form._proofFile) return toast.error('Attach a proof document to mark the month present');
+            try {
+              const fd = new FormData(); fd.append('file', form._proofFile);
+              const up = await api.post('/upload', fd);
+              const r = await api.post('/attendance/admin-mark-bulk', {
+                user_id: +form.user_id, month: form.month, status: 'present', proof_url: up.data.url,
+              });
+              toast.success(r.data.message); setModal(null); loadGrid();
+            } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+            return;
+          }
           if (!form.date) return toast.error('Please pick a date');
           if (form.date > today) return toast.error('Cannot mark a future date');
           const worked = ['present', 'half_day', 'short_day'].includes(form.status || 'present');
@@ -1608,38 +1618,44 @@ export default function Attendance() {
             });
             const who = allUsers.find(u => u.id === +form.user_id)?.name || 'Employee';
             toast.success(`${who} marked ${(form.status || 'present').replace('_', ' ')} for ${form.date}`);
-            setModal(null); load();
+            setModal(null); load(); loadGrid();
           } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
           <div>
             <label className="label">Employee *</label>
-            <select className="select" value={form.user_id || ''} onChange={e => setForm({ ...form, user_id: e.target.value })} required>
+            <select className="select" value={form.user_id || ''} onChange={e => setForm({ ...form, user_id: e.target.value })} required disabled={form._bulk} title={form._bulk ? 'Locked to the row you selected' : undefined}>
               <option value="">-- Select employee --</option>
               {allUsers.map(u => { const d = hrDeptText(u); return <option key={u.id} value={u.id}>{u.name}{d ? ` · ${d}` : ''}</option>; })}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Date *</label>
-              <input className="input" type="date" max={today} value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} required />
+          {form._bulk ? (
+            <div className="rounded bg-amber-50 border border-amber-200 p-3 text-[13px] text-gray-700">
+              Marks <b>every blank working day</b> in <b>{form.month}</b> as <b>Present</b> for this employee. Sundays, real punches and existing rows are left untouched.
+            </div>
+          ) : (<>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Date *</label>
+                <input className="input" type="date" max={today} value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} required />
+              </div>
+              <div>
+                <label className="label">Status *</label>
+                <select className="select" value={form.status || 'present'} onChange={e => setForm({ ...form, status: e.target.value })}>
+                  <option value="present">Present</option>
+                  <option value="half_day">Half Day</option>
+                  <option value="short_day">Short Day</option>
+                  <option value="absent">Absent</option>
+                  <option value="leave">Leave</option>
+                  <option value="holiday">Holiday</option>
+                </select>
+              </div>
             </div>
             <div>
-              <label className="label">Status *</label>
-              <select className="select" value={form.status || 'present'} onChange={e => setForm({ ...form, status: e.target.value })}>
-                <option value="present">Present</option>
-                <option value="half_day">Half Day</option>
-                <option value="short_day">Short Day</option>
-                <option value="absent">Absent</option>
-                <option value="leave">Leave</option>
-                <option value="holiday">Holiday</option>
-              </select>
+              <label className="label">Reason / Remarks (for audit)</label>
+              <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
             </div>
-          </div>
-          <div>
-            <label className="label">Reason / Remarks (for audit)</label>
-            <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
-          </div>
-          {['present', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
+          </>)}
+          {(form._bulk || (['present', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today)) && (
             <div>
               <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date a worked day)</span></label>
               <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"

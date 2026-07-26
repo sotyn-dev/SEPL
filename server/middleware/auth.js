@@ -134,7 +134,8 @@ function getUserPermissions(userId) {
       // employee_salary: gates visibility of the salary field on GET /hr/employees.
       // hr_team: HR-team membership — gates hiring-request actions and the HR-alert
       // recipient group (cron). Both replace the fuzzy department/role "is HR" checks.
-      'employee_salary','hr_team'
+      // attendance_grid: gates viewing the Attendance Monthly Grid tab (marking needs attendance.can_approve).
+      'employee_salary','hr_team','attendance_grid'
     ];
     const perms = {};
     for (const m of modules) {

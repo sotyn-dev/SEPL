@@ -19,6 +19,7 @@ const ALL_MODULES = [
   { key: 'cheques', label: 'Cheque FMS' },
   { key: 'payment_required', label: 'Payment Required' },
   { key: 'attendance', label: 'Attendance' },
+  { key: 'attendance_grid', label: 'Attendance Monthly Grid — view the monthly muster' },
   { key: 'collections', label: 'Collection Engine' },
   { key: 'ar_ap_tracker', label: 'AR/AP Tracker' },
   { key: 'site_chat', label: 'SOTYN Chat — create/manage groups (chatting is open to all)' },
