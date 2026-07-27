@@ -10,6 +10,41 @@ import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
 import HrIdentity, { hrDeptText } from '../components/HrIdentity';
 
+// Monthly-grid intent buttons — the exact marking choices an approver can set
+// on a cell (picked directly, then committed with OK). 'clear' removes an
+// admin mark, reverting the day to its underlying punch / implicit state.
+const GRID_INTENTS = [
+  { value: 'present', label: 'Present' },
+  { value: 'absent', label: 'Absent' },
+  { value: 'half_day', label: 'Half Day' },
+  { value: 'leave', label: 'Leave' },
+  { value: 'clear', label: 'Clear' },
+];
+
+// Grid cell-mark proof capture — OFF (dme: "keep it in shadows"). This single
+// flag is the whole switch: flip it to true and the proof field, the require-
+// guard, the Save-disable and the upload all activate together, gated by the
+// back-date rule (only an applicable back-dated worked day — Present/Half on a
+// past date — demands proof; same-day and Absent/Leave stay swift). Verified
+// on/off. Enable when management wants proof required for grid back-dating;
+// this modal then becomes the single proof path (Backfill modal stops owning it).
+// NOTE: client-side only — for API-proof enforcement also re-arm the /admin-mark
+// server gate that was removed 2026-07-26.
+const CELL_PROOF_CAPTURE = false;
+
+// Attendance is a colour language — the muster grid already speaks it, so the
+// cell-mark modal echoes the same tones: green present, rose absent, amber
+// half, violet leave, slate clear. Current state reads as a tinted chip; a
+// staged pick fills solid. Full literal class strings so Tailwind keeps them.
+const STATUS_TONE_NEUTRAL = { dot: 'bg-slate-400', text: 'text-slate-600', softBg: 'bg-slate-50', softBorder: 'border-slate-200', sel: 'bg-slate-700 border-slate-700 text-white' };
+const STATUS_TONE = {
+  present:  { label: 'Present',  dot: 'bg-emerald-500', text: 'text-emerald-700', softBg: 'bg-emerald-50', softBorder: 'border-emerald-300', sel: 'bg-emerald-600 border-emerald-600 text-white' },
+  absent:   { label: 'Absent',   dot: 'bg-rose-500',    text: 'text-rose-700',    softBg: 'bg-rose-50',    softBorder: 'border-rose-300',    sel: 'bg-rose-600 border-rose-600 text-white' },
+  half_day: { label: 'Half Day', dot: 'bg-amber-500',   text: 'text-amber-700',   softBg: 'bg-amber-50',   softBorder: 'border-amber-300',   sel: 'bg-amber-500 border-amber-500 text-white' },
+  leave:    { label: 'Leave',    dot: 'bg-violet-500',  text: 'text-violet-700',  softBg: 'bg-violet-50',  softBorder: 'border-violet-300',  sel: 'bg-violet-600 border-violet-600 text-white' },
+  clear:    { label: 'Clear',    dot: 'bg-slate-400',   text: 'text-slate-600',   softBg: 'bg-slate-100',  softBorder: 'border-slate-300',   sel: 'bg-slate-700 border-slate-700 text-white' },
+};
+
 // Render a stored UTC ISO timestamp as IST time (hh:mm AM/PM). Always pins to
 // Asia/Kolkata so a punch shows the correct Indian time even when the viewing
 // device's clock isn't set to IST, and returns '—' for rows with no real punch
@@ -75,6 +110,8 @@ export default function Attendance() {
   const [grid, setGrid] = useState(null);
   const [gridBusy, setGridBusy] = useState(false);
   const [cellInfo, setCellInfo] = useState(null);
+  const [stagedStatus, setStagedStatus] = useState(null); // grid panel: chosen-but-not-yet-committed status (stage → OK)
+  const [stagedProof, setStagedProof] = useState(null); // dormant proof doc for the cell-mark modal (see CELL_PROOF_CAPTURE)
   const [location, setLocation] = useState(null);
   const [address, setAddress] = useState('');
   const [photo, setPhoto] = useState(null);
@@ -355,33 +392,48 @@ export default function Attendance() {
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
     finally { setGridBusy(false); }
   };
-  // Click cycles: blank/absent → Present → Absent → Half → Leave → (clear).
-  // Real punches and approved leaves are read-only here.
+  // Click = INSPECT only: open the detail panel for the day. Marking is a
+  // deliberate act — pick an exact status from the intent buttons in the panel
+  // and press OK (stage → commit). A click never mutates on its own, and you
+  // choose the target status in one go instead of cycle-walking to it.
   const onCellClick = (emp, day, c) => {
     if (!emp.user_id || day.future) return;
-    // Show the day's detail (In/Out/status) in the panel below the grid.
-    setCellInfo({ name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
-    // View-only (no attendance.can_approve): detail is shown above, cell never toggles.
-    if (!canMarkGrid) return;
-    // Real punches / approved leaves are read-only — detail only, no cycling.
-    if (c.source === 'punch' || c.source === 'leave') return;
-    const order = ['present', 'absent', 'half_day', 'leave', 'clear'];
-    const next = c.source === 'admin' ? order[(order.indexOf(c.status) + 1) % order.length] : 'present';
-    // One-click write, every status — proof is optional on /admin-mark now, so a
-    // back-dated Present/Half flips straight through instead of forcing a modal
-    // (the original June-13 swift cycle). Proof, when wanted, is attached via the
-    // Backfill modal.
-    markCell(emp, day.date, next);
+    setStagedStatus(null); setStagedProof(null); // fresh cell → no pending choice yet
+    setCellInfo({ user_id: emp.user_id, name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
+  };
+  const closeCellPanel = () => { setCellInfo(null); setStagedStatus(null); setStagedProof(null); };
+  // A back-dated worked-day mark (Present/Half in the past) needs proof — but
+  // ONLY when proof capture is switched on. Flip CELL_PROOF_CAPTURE alone and
+  // this guard, the upload, the field and the Save-disable all activate together.
+  const cellNeedsProof = (status) => CELL_PROOF_CAPTURE && ['present', 'half_day'].includes(status) && !!cellInfo && cellInfo.date < today;
+  // Commit the staged status (OK), then close ("ok and close"). markCell is the
+  // normal no-proof path (unchanged). The proof branch is dormant
+  // (CELL_PROOF_CAPTURE=false) and self-contained, so markCell stays untouched.
+  const commitStagedStatus = async () => {
+    if (!cellInfo || !stagedStatus) return;
+    if (cellNeedsProof(stagedStatus) && !stagedProof) return toast.error('Attach a proof document to back-date a worked day');
+    if (CELL_PROOF_CAPTURE && stagedProof) {
+      setGridBusy(true);
+      try {
+        const fd = new FormData(); fd.append('file', stagedProof);
+        const up = await api.post('/upload', fd);
+        await api.post('/attendance/admin-mark', { user_id: cellInfo.user_id, date: cellInfo.date, status: stagedStatus, proof_url: up.data.url });
+        loadGrid();
+      } catch (e) { toast.error(e.response?.data?.error || 'Failed'); setGridBusy(false); return; }
+      setGridBusy(false); closeCellPanel(); return;
+    }
+    await markCell({ user_id: cellInfo.user_id }, cellInfo.date, stagedStatus);
+    closeCellPanel();
   };
   const markAllPresent = (emp) => {
     if (!emp.user_id || !canMarkGrid) return;
-    // Bulk back-date the whole month present. Routed through the visible
-    // Mark/Backfill modal (real file input) instead of confirm()+pickFile: the
-    // old picker's focus heuristic mis-fired on the confirm dialog's own
-    // focus-return, resolving null before the file window opened (proof-required
-    // flashed, no API hit). _bulk flips the modal's submit to /admin-mark-bulk.
-    setForm({ _bulk: true, user_id: emp.user_id, name: emp.name, month: gridMonth, status: 'present' });
-    setModal('admin-mark');
+    // Bulk back-date the whole month present. Its own dedicated modal (real file
+    // input) — NOT the confirm()+pickFile path, whose focus heuristic mis-fired
+    // on the confirm dialog's own focus-return (proof-required flashed, no API
+    // hit). Kept separate from the single-day Mark/Backfill modal so neither
+    // utility carries the other's branches.
+    setForm({ user_id: emp.user_id, name: emp.name, month: gridMonth });
+    setModal('pall');
   };
   const linkLogin = async (emp, userId) => {
     if (!userId) return;
@@ -410,7 +462,7 @@ export default function Attendance() {
         <div className="space-y-3">
           <div className="text-xs text-gray-600 bg-amber-50 border border-amber-100 rounded-lg px-4 py-2.5">
             A day with <b>no punch counts as absent</b> in payroll. Mark people here so salary is right.
-            Click a cell to cycle <b>P</b>resent → <b>A</b>bsent → <b>H</b> half → <b>L</b> leave → clear.
+            Click any cell to open the day and set its status — <b>Present</b>, <b>Absent</b>, <b>Half&nbsp;Day</b>, <b>Leave</b> or <b>Clear</b>.
             Real punches and approved leaves are read-only. Use <b>“P all”</b> to fill a person’s blank working days as present.
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -501,22 +553,6 @@ export default function Attendance() {
                   ))}
                 </tbody>
               </table>
-            </div>
-          )}
-          {cellInfo && (
-            <div className="card p-3 flex items-start justify-between gap-3 border-l-4 border-blue-400 bg-blue-50/40">
-              <div className="text-sm">
-                <div className="font-semibold text-gray-800">{cellInfo.name} · {cellInfo.date}</div>
-                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-gray-700">
-                  <span>Status: <b className="capitalize">{(cellInfo.worked_on_off ? 'week-off (worked)' : cellInfo.week_off ? 'week-off' : (cellInfo.status || '—')).replace('_', ' ')}</b></span>
-                  <span>In: <b>{cellInfo.in ? fmtT(cellInfo.in) : '—'}</b></span>
-                  <span>Out: <b>{cellInfo.out ? fmtT(cellInfo.out) : '—'}</b></span>
-                  <span>Hours: <b>{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b></span>
-                  {cellInfo.late_label && <span className="text-amber-700">Late by: <b>{cellInfo.late_label}</b></span>}
-                  {cellInfo.source && <span className="text-gray-400">({cellInfo.source})</span>}
-                </div>
-              </div>
-              <button onClick={() => setCellInfo(null)} className="text-gray-400 hover:text-gray-700 text-lg leading-none">×</button>
             </div>
           )}
         </div>
@@ -1582,21 +1618,6 @@ export default function Attendance() {
         <form onSubmit={async (e) => {
           e.preventDefault();
           if (!form.user_id) return toast.error('Please select an employee');
-          if (form._bulk) {
-            // P-all: mark every blank working day in the grid month present.
-            // Proof is mandatory — same rule the server enforces for a single
-            // back-dated worked day, so require it before the upload/mark calls.
-            if (!form._proofFile) return toast.error('Attach a proof document to mark the month present');
-            try {
-              const fd = new FormData(); fd.append('file', form._proofFile);
-              const up = await api.post('/upload', fd);
-              const r = await api.post('/attendance/admin-mark-bulk', {
-                user_id: +form.user_id, month: form.month, status: 'present', proof_url: up.data.url,
-              });
-              toast.success(r.data.message); setModal(null); loadGrid();
-            } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-            return;
-          }
           if (!form.date) return toast.error('Please pick a date');
           if (form.date > today) return toast.error('Cannot mark a future date');
           const worked = ['present', 'half_day', 'short_day'].includes(form.status || 'present');
@@ -1618,44 +1639,38 @@ export default function Attendance() {
             });
             const who = allUsers.find(u => u.id === +form.user_id)?.name || 'Employee';
             toast.success(`${who} marked ${(form.status || 'present').replace('_', ' ')} for ${form.date}`);
-            setModal(null); load(); loadGrid();
+            setModal(null); load();
           } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
           <div>
             <label className="label">Employee *</label>
-            <select className="select" value={form.user_id || ''} onChange={e => setForm({ ...form, user_id: e.target.value })} required disabled={form._bulk} title={form._bulk ? 'Locked to the row you selected' : undefined}>
+            <select className="select" value={form.user_id || ''} onChange={e => setForm({ ...form, user_id: e.target.value })} required>
               <option value="">-- Select employee --</option>
               {allUsers.map(u => { const d = hrDeptText(u); return <option key={u.id} value={u.id}>{u.name}{d ? ` · ${d}` : ''}</option>; })}
             </select>
           </div>
-          {form._bulk ? (
-            <div className="rounded bg-amber-50 border border-amber-200 p-3 text-[13px] text-gray-700">
-              Marks <b>every blank working day</b> in <b>{form.month}</b> as <b>Present</b> for this employee. Sundays, real punches and existing rows are left untouched.
-            </div>
-          ) : (<>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label">Date *</label>
-                <input className="input" type="date" max={today} value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} required />
-              </div>
-              <div>
-                <label className="label">Status *</label>
-                <select className="select" value={form.status || 'present'} onChange={e => setForm({ ...form, status: e.target.value })}>
-                  <option value="present">Present</option>
-                  <option value="half_day">Half Day</option>
-                  <option value="short_day">Short Day</option>
-                  <option value="absent">Absent</option>
-                  <option value="leave">Leave</option>
-                  <option value="holiday">Holiday</option>
-                </select>
-              </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Date *</label>
+              <input className="input" type="date" max={today} value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} required />
             </div>
             <div>
-              <label className="label">Reason / Remarks (for audit)</label>
-              <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
+              <label className="label">Status *</label>
+              <select className="select" value={form.status || 'present'} onChange={e => setForm({ ...form, status: e.target.value })}>
+                <option value="present">Present</option>
+                <option value="half_day">Half Day</option>
+                <option value="short_day">Short Day</option>
+                <option value="absent">Absent</option>
+                <option value="leave">Leave</option>
+                <option value="holiday">Holiday</option>
+              </select>
             </div>
-          </>)}
-          {(form._bulk || (['present', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today)) && (
+          </div>
+          <div>
+            <label className="label">Reason / Remarks (for audit)</label>
+            <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
+          </div>
+          {['present', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
             <div>
               <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date a worked day)</span></label>
               <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
@@ -1666,6 +1681,161 @@ export default function Attendance() {
           <p className="text-[11px] text-gray-500 italic">Admin-marked rows are hidden from the employee's own dashboard / month view and won't overwrite a real punch.</p>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
+      </Modal>
+
+      {/* P-all: back-fill a whole month Present for ONE employee (grid "P all"
+          button). Its own modal + handler — the employee is locked to the row
+          that was clicked and a proof document is mandatory (same rule the
+          server enforces for any back-dated worked day). Kept fully separate
+          from the single-day Mark/Backfill modal above. */}
+      <Modal isOpen={modal === 'pall'} onClose={() => setModal(null)} title="Mark Month Present">
+        <form onSubmit={async (e) => {
+          e.preventDefault();
+          if (!form.user_id) return toast.error('No employee selected');
+          if (!form._proofFile) return toast.error('Attach a proof document to mark the month present');
+          try {
+            const fd = new FormData(); fd.append('file', form._proofFile);
+            const up = await api.post('/upload', fd);
+            const r = await api.post('/attendance/admin-mark-bulk', {
+              user_id: +form.user_id, month: form.month, status: 'present', proof_url: up.data.url,
+            });
+            toast.success(r.data.message); setModal(null); loadGrid();
+          } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+        }} className="space-y-4">
+          <div>
+            <label className="label">Employee</label>
+            <input className="input bg-gray-50" value={form.name || ''} readOnly title="Locked to the row you selected" />
+          </div>
+          <div className="rounded bg-amber-50 border border-amber-200 p-3 text-[13px] text-gray-700">
+            Marks <b>every blank working day</b> in <b>{form.month}</b> as <b>Present</b> for this employee. Sundays, real punches and existing rows are left untouched.
+          </div>
+          <div>
+            <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date the month)</span></label>
+            <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
+              onChange={e => setForm({ ...form, _proofFile: e.target.files?.[0] || null })} />
+            {form._proofFile && <p className="text-[11px] text-emerald-600 mt-1">Attached: {form._proofFile.name}</p>}
+          </div>
+          <p className="text-[11px] text-gray-500 italic">Admin-marked rows are hidden from the employee's own dashboard / month view and won't overwrite a real punch.</p>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Mark Present</button></div>
+        </form>
+      </Modal>
+
+      {/* Cell detail / mark — a DEDICATED, self-contained modal molded from the
+          old inline detail panel. Driven only by cellInfo/stagedStatus (NOT the
+          shared `modal` state), so it never entangles with admin-mark. Centered
+          + mobile-safe via the Modal shell → predictable placement on every
+          screen (the inline card used to render off-screen below the grid).
+          Click = inspect; marking is a deliberate stage → OK. */}
+      <Modal isOpen={!!cellInfo} onClose={closeCellPanel} title="Attendance">
+        {cellInfo && (() => {
+          // Actions only for markable cells (never a real punch / approved leave)
+          // and only for an approver; otherwise the modal is inspect-only.
+          const showActions = canMarkGrid && !['punch', 'leave'].includes(cellInfo.source);
+          const cur = STATUS_TONE[cellInfo.status] || STATUS_TONE_NEUTRAL;
+          const curLabel = cellInfo.worked_on_off ? 'Week-off (worked)'
+            : cellInfo.week_off ? 'Week-off'
+            : (STATUS_TONE[cellInfo.status]?.label || (cellInfo.status || 'No record').replace('_', ' '));
+          // Provenance of the current status — shown inline only where it adds
+          // info; punch/leave say it themselves in the read-only message below.
+          const provenance = { admin: 'admin-marked', implicit: 'no record', auto: 'week-off' }[cellInfo.source];
+          return (
+            <div className="space-y-5">
+              {/* Identity — who / when / what: name, then date + current status
+                  (with provenance), then the punch facts. */}
+              <div>
+                <div className="text-[15px] font-semibold text-gray-900 leading-tight">{cellInfo.name}</div>
+                <div className="flex items-center gap-2 flex-wrap mt-1">
+                  <span className="text-[13px] text-gray-500">{cellInfo.date.split('-').reverse().join('-')}</span>
+                  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold ${cur.softBg} ${cur.text}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${cur.dot}`} />
+                    <span className="capitalize">{curLabel}</span>
+                  </span>
+                  {provenance && <span className="text-[11px] text-gray-400">· {provenance}</span>}
+                </div>
+                <div className="mt-1.5 text-[12.5px] text-gray-500">
+                  In: <b className="font-medium text-gray-700">{cellInfo.in ? fmtT(cellInfo.in) : '—'}</b>
+                  <span className="text-gray-300"> | </span>
+                  Out: <b className="font-medium text-gray-700">{cellInfo.out ? fmtT(cellInfo.out) : '—'}</b>
+                  <span className="text-gray-300"> | </span>
+                  <b className="font-medium text-gray-700">{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b>
+                  {cellInfo.late_label && <span className="text-amber-600 ml-2">Late {cellInfo.late_label}</span>}
+                </div>
+              </div>
+
+              {/* MARK ATTENDANCE — deliberate marking (pick → Save). The current
+                  status is a non-clickable "now" indicator (re-picking it is a
+                  no-op); the other pills are the real changes, each in its own
+                  status colour. Save stays disabled until a different status is
+                  picked, so an enabled Save is always a genuine change. */}
+              {showActions ? (
+                <div className="pt-4 border-t border-gray-100">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2.5">Mark attendance</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {/* 'Clear' only appears when there's an admin mark to remove
+                       (source === 'admin') — same implicit gating the old click-
+                       cycle had, where a non-admin cell could never reach 'clear'. */}
+                    {GRID_INTENTS.filter(o => o.value !== 'clear' || cellInfo.source === 'admin').map(o => {
+                      const t = STATUS_TONE[o.value] || STATUS_TONE_NEUTRAL;
+                      const isCurrent = o.value === cellInfo.status;
+                      const isStaged = stagedStatus === o.value;
+                      if (isCurrent) {
+                        return (
+                          <span key={o.value} className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-[12px] font-medium cursor-default ${t.softBg} ${t.text} ${t.softBorder}`}>
+                            {o.label}<span className="text-[9px] font-bold uppercase tracking-wide opacity-70">now</span>
+                          </span>
+                        );
+                      }
+                      return (
+                        <button key={o.value} type="button" onClick={() => setStagedStatus(o.value)}
+                          className={`rounded-md border px-3 py-1 text-[12px] font-medium transition-colors ${isStaged ? `${t.sel} shadow-sm` : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'}`}>
+                          {o.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* Clear only shows on admin cells; this line clarifies it's a
+                      retraction, not a "set absent" — so pills stay uniform width. */}
+                  {cellInfo.source === 'admin' && <p className="mt-2 text-[11px] text-gray-400"><b className="font-semibold text-gray-500">Clear</b> removes the mark — the day reverts to no record.</p>}
+
+                  {/* Proof upload — DORMANT (CELL_PROOF_CAPTURE=false), but it lives
+                      HERE in the action flow (between the pills and the footer) so
+                      it has a home the moment it's switched on: an applicable
+                      back-dated worked day captures its proof and this modal
+                      becomes the single proof path. */}
+                  {cellNeedsProof(stagedStatus) && (
+                    <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/70 p-3">
+                      <div className="text-[12px] font-medium text-gray-700">Proof document <span className="font-normal text-gray-400">— required to back-date {(STATUS_TONE[stagedStatus]?.label || stagedStatus).replace('_', ' ')}</span></div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <label className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-[12px] text-gray-600 cursor-pointer hover:bg-gray-50">
+                          📎 Choose file
+                          <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx" onChange={e => setStagedProof(e.target.files?.[0] || null)} />
+                        </label>
+                        {stagedProof && <span className="text-[12px] text-emerald-600 font-medium truncate">{stagedProof.name}</span>}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Save + Cancel — equal width. Save is a no-op until a different
+                      status is staged (re-affirming the current state isn't a change). */}
+                  <div className="mt-4 grid grid-cols-2 gap-2 w-[240px]">
+                    <button type="button" disabled={!stagedStatus || stagedStatus === cellInfo.status || gridBusy || (cellNeedsProof(stagedStatus) && !stagedProof)} onClick={commitStagedStatus} className="btn btn-primary text-sm disabled:opacity-50 disabled:cursor-not-allowed">Save</button>
+                    <button type="button" onClick={closeCellPanel} className="btn btn-secondary text-sm">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="pt-4 border-t border-gray-100">
+                  {/* Non-action layer — read-only cells say where they're actually
+                      edited (restored 13-Jun directions); a viewer without approve
+                      rights is simply told they can't mark here. */}
+                  {cellInfo.source === 'punch' && <div className="rounded-lg bg-gray-50 border border-gray-100 px-3.5 py-3 text-[12.5px] text-gray-600"><b className="font-medium text-gray-800">Real punch.</b> Recorded from the employee's device — read-only here. Edit it under <b className="font-medium text-gray-800">Records</b>.</div>}
+                  {cellInfo.source === 'leave' && <div className="rounded-lg bg-gray-50 border border-gray-100 px-3.5 py-3 text-[12.5px] text-gray-600"><b className="font-medium text-gray-800">Approved leave.</b> Owned by the leave workflow — read-only here. Manage it under <b className="font-medium text-gray-800">Leaves</b>.</div>}
+                  {!['punch', 'leave'].includes(cellInfo.source) && <div className="text-[12.5px] text-gray-500">You don't have permission to mark attendance.</div>}
+                  <div className="mt-4 flex justify-end"><button type="button" onClick={closeCellPanel} className="btn btn-secondary text-sm">Close</button></div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </Modal>
 
       {/* Geofence Modal */}
