@@ -51,13 +51,22 @@ export default function UserManagement() {
 
   const save = async (e) => {
     e.preventDefault();
+    // Trim free-text fields on save so stray leading/trailing spaces never
+    // persist ('IT ' -> 'IT', a spaces-only entry -> ''). Fixes the dirt at the
+    // source instead of only at display time. Password is left exactly as typed
+    // — trimming a credential would silently change it.
+    const trimmed = { ...form };
+    for (const k of ['name', 'email', 'username', 'phone', 'department']) {
+      if (typeof trimmed[k] === 'string') trimmed[k] = trimmed[k].trim();
+    }
+    const payload = { ...trimmed, role_ids: selectedRoles };
     try {
       if (editing) {
-        await api.put(`/auth/users/${editing.id}`, { ...form, role_ids: selectedRoles });
+        await api.put(`/auth/users/${editing.id}`, payload);
         toast.success('User updated');
       } else {
         if (!form.password) return toast.error('Password is required');
-        await api.post('/auth/register', { ...form, role_ids: selectedRoles });
+        await api.post('/auth/register', payload);
         toast.success('User created');
       }
       setModal(false);
