@@ -11,6 +11,7 @@
 // since it applies to the whole PO group rather than to either level.
 import { useState, useEffect, useMemo } from 'react';
 import Modal from './Modal';
+import { hrDeptText } from './HrIdentity';
 import api from '../api';
 import toast from 'react-hot-toast';
 
@@ -174,6 +175,20 @@ export default function ApprovalSettingsModal({ open, onClose }) {
     return id => m[id] || `#${id}`;
   }, [users]);
 
+  // Designation + department shown beside each name so the admin can tell
+  // unfamiliar or same-named users apart when naming approvers. Designation
+  // comes from the linked employee record (hr_designation); department falls
+  // back employee → user via hrDeptText (hr_department || users.department).
+  // TRIM each part and drop null / empty / whitespace-only — the user-dept
+  // fallback is raw free-text (untrimmed, e.g. 'IT '), so a spaces-only value
+  // must not print a blank chunk or a dangling ' · '. The separator only shows
+  // when BOTH parts survive.
+  const descOf = (u) =>
+    [u.hr_designation, hrDeptText(u)]
+      .map(s => (s == null ? '' : String(s).trim()))
+      .filter(Boolean)
+      .join(' · ');
+
   const addUser = (gate, id) =>
     setCfg(c => (!id || c[gate].users.includes(id)
       ? c
@@ -285,9 +300,10 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                         // shown disabled rather than hidden, so it's clear why they're
                         // unavailable instead of them silently missing from the list.
                         const taken = takenByOther(g, u.id);
+                        const d = descOf(u);
                         return (
                           <option key={u.id} value={u.id} disabled={taken}>
-                            {u.name}{taken ? '  — already PO ' + (g.exclusiveWith === 'po_l2' ? 'L2' : 'L1') : ''}
+                            {u.name}{d ? ' — ' + d : ''}{taken ? '  · already PO ' + (g.exclusiveWith === 'po_l2' ? 'L2' : 'L1') : ''}
                           </option>
                         );
                       })}
@@ -298,7 +314,10 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                     <label className="label text-[10px] text-emerald-600">Approvers</label>
                     <select className="input text-xs w-full" value="" onChange={e => addUser(g.key, e.target.value ? +e.target.value : null)}>
                       <option value="">+ add approver…</option>
-                      {available.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                      {available.map(u => {
+                        const d = descOf(u);
+                        return <option key={u.id} value={u.id}>{u.name}{d ? ' — ' + d : ''}</option>;
+                      })}
                     </select>
 
                     {/* Named approvers only. "Admin always" is NOT a chip here — it is
