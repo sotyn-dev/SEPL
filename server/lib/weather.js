@@ -37,15 +37,29 @@ async function geocode(query) {
   if (!q) return null;
   if (GEOCODE_CACHE.has(q)) return GEOCODE_CACHE.get(q);
   try {
-    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=en&format=json`;
+    // Open-Meteo's geocoder matches a PLACE NAME only — it returns nothing
+    // for "City, State, Country" style queries. So send just the first
+    // comma-segment ("Ludhiana" from "Ludhiana, Punjab, India", or from a
+    // free-text site address), and disambiguate via the results instead.
+    const placeName = q.split(',')[0].trim();
+    if (!placeName) { GEOCODE_CACHE.set(q, null); return null; }
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(placeName)}&count=5&language=en&format=json`;
     const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
     const j = await r.json();
-    const hit = j?.results?.[0];
+    const results = j?.results || [];
+    // Prefer a hit in the expected country/state when the caller gave one
+    // (e.g. "Ludhiana, Punjab" → the Punjab match, not a same-name town
+    // elsewhere). Falls back to the first result.
+    const rest = q.slice(placeName.length).toLowerCase();
+    const hit = results.find(x =>
+        x.country_code === 'IN' && rest.includes(String(x.admin1 || '').toLowerCase()) && x.admin1)
+      || results.find(x => x.country_code === 'IN')
+      || results[0];
     const out = hit ? { lat: hit.latitude, lon: hit.longitude, resolved: [hit.name, hit.admin1].filter(Boolean).join(', ') } : null;
     GEOCODE_CACHE.set(q, out);
     return out;
   } catch (e) {
-    return null; // network failure — caller falls back / returns null
+    return null; // network failure — caller falls back / returns null (not cached)
   }
 }
 
@@ -59,23 +73,34 @@ async function fetchCurrentWeather(lat, lon) {
 // Resolve a site's coordinates using the order documented above.
 // Returns { lat, lon, source } or null.
 async function resolveSiteLocation(db, siteId) {
-  const gf = db.prepare(
-    `SELECT latitude, longitude FROM geofence_settings WHERE site_id=? AND active=1 LIMIT 1`
-  ).get(siteId);
-  if (gf?.latitude && gf?.longitude) return { lat: gf.latitude, lon: gf.longitude, source: 'geofence' };
-
   const site = db.prepare('SELECT name, address, business_book_id FROM sites WHERE id=?').get(siteId);
   if (!site) return null;
 
-  const bb = site.business_book_id
-    ? db.prepare('SELECT district, state FROM business_book WHERE id=?').get(site.business_book_id)
-    : null;
+  // The `sites` table carries legacy duplicate rows per logical site (one
+  // per PO — the same dedupe problem routes/dpr.js solves with siteKeySql).
+  // A sibling row often holds the address/geofence this row is missing, so
+  // resolve across the whole name-group instead of just this id.
+  const siblings = db.prepare(
+    `SELECT id, address, business_book_id FROM sites WHERE TRIM(LOWER(name)) = TRIM(LOWER(?))`
+  ).all(site.name);
+  const siblingIds = siblings.map(s => s.id);
+  const ph = siblingIds.map(() => '?').join(',');
+
+  const gf = db.prepare(
+    `SELECT latitude, longitude FROM geofence_settings
+      WHERE site_id IN (${ph}) AND active=1 AND latitude IS NOT NULL LIMIT 1`
+  ).get(...siblingIds);
+  if (gf?.latitude && gf?.longitude) return { lat: gf.latitude, lon: gf.longitude, source: 'geofence' };
+
+  const bbId = site.business_book_id || siblings.find(s => s.business_book_id)?.business_book_id;
+  const bb = bbId ? db.prepare('SELECT district, state FROM business_book WHERE id=?').get(bbId) : null;
   if (bb?.district) {
-    const g = await geocode([bb.district, bb.state, 'India'].filter(Boolean).join(', '));
+    const g = await geocode([bb.district, bb.state].filter(Boolean).join(', '));
     if (g) return { lat: g.lat, lon: g.lon, source: `district:${g.resolved}` };
   }
-  if (site.address) {
-    const g = await geocode(site.address);
+  const address = site.address || siblings.find(s => s.address && String(s.address).trim())?.address;
+  if (address) {
+    const g = await geocode(bb?.state ? `${address}, ${bb.state}` : address);
     if (g) return { lat: g.lat, lon: g.lon, source: `address:${g.resolved}` };
   }
   return null;
