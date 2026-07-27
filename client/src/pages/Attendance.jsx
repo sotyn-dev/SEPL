@@ -112,6 +112,8 @@ export default function Attendance() {
   const [cellInfo, setCellInfo] = useState(null);
   const [stagedStatus, setStagedStatus] = useState(null); // grid panel: chosen-but-not-yet-committed status (stage → OK)
   const [stagedProof, setStagedProof] = useState(null); // dormant proof doc for the cell-mark modal (see CELL_PROOF_CAPTURE)
+  const [cellAnchorTop, setCellAnchorTop] = useState(0); // Y offset (within gridWrapRef) of the clicked row's bottom — where the detail panel floats
+  const gridWrapRef = useRef(null); // positioning context for the below-row detail panel
   const [location, setLocation] = useState(null);
   const [address, setAddress] = useState('');
   const [photo, setPhoto] = useState(null);
@@ -356,6 +358,14 @@ export default function Attendance() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gridMonth, canGrid]);
   useEffect(() => { if (tab === 'grid') loadGrid(); }, [tab, gridMonth, loadGrid]);
+  // Esc closes the open cell detail drawer (desktop). setters are stable, so
+  // depending only on cellInfo (add/remove the listener as the drawer opens/closes).
+  useEffect(() => {
+    if (!cellInfo) return;
+    const onKey = (e) => { if (e.key === 'Escape') { setCellInfo(null); setStagedStatus(null); setStagedProof(null); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cellInfo]);
 
   const cellMeta = (c) => {
     const s = c?.status || '';
@@ -396,8 +406,15 @@ export default function Attendance() {
   // deliberate act — pick an exact status from the intent buttons in the panel
   // and press OK (stage → commit). A click never mutates on its own, and you
   // choose the target status in one go instead of cycle-walking to it.
-  const onCellClick = (emp, day, c) => {
+  const onCellClick = (emp, day, c, e) => {
     if (!emp.user_id || day.future) return;
+    // Anchor the below-row detail panel: capture the clicked row's bottom Y
+    // relative to the grid wrapper (absolute-in-wrapper → follows vertical scroll).
+    const wrap = gridWrapRef.current;
+    if (wrap && e?.currentTarget) {
+      const row = e.currentTarget.closest('tr');
+      if (row) setCellAnchorTop(row.getBoundingClientRect().bottom - wrap.getBoundingClientRect().top);
+    }
     setStagedStatus(null); setStagedProof(null); // fresh cell → no pending choice yet
     setCellInfo({ user_id: emp.user_id, name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
   };
@@ -424,6 +441,103 @@ export default function Attendance() {
     }
     await markCell({ user_id: cellInfo.user_id }, cellInfo.date, stagedStatus);
     closeCellPanel();
+  };
+  // Body of the cell detail/mark panel — shared layout, rendered inside the
+  // below-row floating drawer in the grid (identity → status → mark → save).
+  const renderCellDetail = () => {
+    if (!cellInfo) return null;
+    // Actions only for markable cells (never a real punch / approved leave)
+    // and only for an approver; otherwise it's inspect-only.
+    const showActions = canMarkGrid && !['punch', 'leave'].includes(cellInfo.source);
+    const cur = STATUS_TONE[cellInfo.status] || STATUS_TONE_NEUTRAL;
+    const curLabel = cellInfo.worked_on_off ? 'Week-off (worked)'
+      : cellInfo.week_off ? 'Week-off'
+      : (STATUS_TONE[cellInfo.status]?.label || (cellInfo.status || 'No record').replace('_', ' '));
+    // Provenance of the current status — shown inline only where it adds info;
+    // punch/leave say it themselves in the read-only message below.
+    const provenance = { admin: 'admin-marked', implicit: 'no record', auto: 'week-off' }[cellInfo.source];
+    return (
+      <div className="space-y-5">
+        {/* Identity — name, then date + current status (with provenance), then punch facts. */}
+        <div>
+          <div className="text-[15px] font-semibold text-gray-900 leading-tight pr-6">{cellInfo.name}</div>
+          <div className="flex items-center gap-2 flex-wrap mt-1">
+            <span className="text-[13px] text-gray-500">{cellInfo.date.split('-').reverse().join('-')}</span>
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold ${cur.softBg} ${cur.text}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${cur.dot}`} />
+              <span className="capitalize">{curLabel}</span>
+            </span>
+            {provenance && <span className="text-[11px] text-gray-400">· {provenance}</span>}
+          </div>
+          <div className="mt-1.5 text-[12.5px] text-gray-500">
+            In: <b className="font-medium text-gray-700">{cellInfo.in ? fmtT(cellInfo.in) : '—'}</b>
+            <span className="text-gray-300"> | </span>
+            Out: <b className="font-medium text-gray-700">{cellInfo.out ? fmtT(cellInfo.out) : '—'}</b>
+            <span className="text-gray-300"> | </span>
+            <b className="font-medium text-gray-700">{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b>
+            {cellInfo.late_label && <span className="text-amber-600 ml-2">Late {cellInfo.late_label}</span>}
+          </div>
+        </div>
+
+        {/* MARK ATTENDANCE — pick → Save. Current status is a non-clickable "now"
+            indicator; the others are the changes. Save disabled until a real change. */}
+        {showActions ? (
+          <div className="pt-4 border-t border-gray-100">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2.5">Mark attendance</div>
+            <div className="flex flex-wrap gap-1.5">
+              {/* 'Clear' only appears on an admin cell (there's a mark to remove). */}
+              {GRID_INTENTS.filter(o => o.value !== 'clear' || cellInfo.source === 'admin').map(o => {
+                const t = STATUS_TONE[o.value] || STATUS_TONE_NEUTRAL;
+                const isCurrent = o.value === cellInfo.status;
+                const isStaged = stagedStatus === o.value;
+                if (isCurrent) {
+                  return (
+                    <span key={o.value} className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-[12px] font-medium cursor-default ${t.softBg} ${t.text} ${t.softBorder}`}>
+                      {o.label}<span className="text-[9px] font-bold uppercase tracking-wide opacity-70">now</span>
+                    </span>
+                  );
+                }
+                return (
+                  <button key={o.value} type="button" onClick={() => setStagedStatus(o.value)}
+                    className={`rounded-md border px-3 py-1 text-[12px] font-medium transition-colors ${isStaged ? `${t.sel} shadow-sm` : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'}`}>
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+            {cellInfo.source === 'admin' && <p className="mt-2 text-[11px] text-gray-400"><b className="font-semibold text-gray-500">Clear</b> removes the mark — the day reverts to no record.</p>}
+
+            {/* Proof upload — DORMANT (CELL_PROOF_CAPTURE=false); appears for a
+                back-dated worked day when switched on. */}
+            {cellNeedsProof(stagedStatus) && (
+              <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/70 p-3">
+                <div className="text-[12px] font-medium text-gray-700">Proof document <span className="font-normal text-gray-400">— required to back-date {(STATUS_TONE[stagedStatus]?.label || stagedStatus).replace('_', ' ')}</span></div>
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-[12px] text-gray-600 cursor-pointer hover:bg-gray-50">
+                    📎 Choose file
+                    <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx" onChange={e => setStagedProof(e.target.files?.[0] || null)} />
+                  </label>
+                  {stagedProof && <span className="text-[12px] text-emerald-600 font-medium truncate">{stagedProof.name}</span>}
+                </div>
+              </div>
+            )}
+
+            {/* Save + Cancel — equal width. Save is a no-op until a different status is staged. */}
+            <div className="mt-4 grid grid-cols-2 gap-2 w-[240px]">
+              <button type="button" disabled={!stagedStatus || stagedStatus === cellInfo.status || gridBusy || (cellNeedsProof(stagedStatus) && !stagedProof)} onClick={commitStagedStatus} className="btn btn-primary text-sm disabled:opacity-50 disabled:cursor-not-allowed">Save</button>
+              <button type="button" onClick={closeCellPanel} className="btn btn-secondary text-sm">Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div className="pt-4 border-t border-gray-100">
+            {/* Non-action layer — read-only cells say where they're actually edited. */}
+            {cellInfo.source === 'punch' && <div className="rounded-lg bg-gray-50 border border-gray-100 px-3.5 py-3 text-[12.5px] text-gray-600"><b className="font-medium text-gray-800">Real punch.</b> Recorded from the employee's device — read-only here. Edit it under <b className="font-medium text-gray-800">Records</b>.</div>}
+            {cellInfo.source === 'leave' && <div className="rounded-lg bg-gray-50 border border-gray-100 px-3.5 py-3 text-[12.5px] text-gray-600"><b className="font-medium text-gray-800">Approved leave.</b> Owned by the leave workflow — read-only here. Manage it under <b className="font-medium text-gray-800">Leaves</b>.</div>}
+            {!['punch', 'leave'].includes(cellInfo.source) && <div className="text-[12.5px] text-gray-500">You don't have permission to mark attendance.</div>}
+          </div>
+        )}
+      </div>
+    );
   };
   const markAllPresent = (emp) => {
     if (!emp.user_id || !canMarkGrid) return;
@@ -486,7 +600,8 @@ export default function Attendance() {
           ) : grid.employees.length === 0 ? (
             <div className="card p-8 text-center text-gray-400 text-sm">No active employees found.</div>
           ) : (
-            <div className="card p-0 overflow-x-auto">
+            <div ref={gridWrapRef} className="relative">
+            <div className="card p-0 overflow-x-auto min-h-[410px]">
               <table className="text-xs border-collapse">
                 <thead>
                   <tr className="bg-gray-50">
@@ -527,12 +642,16 @@ export default function Attendance() {
                       {grid.days.map(day => {
                         const c = emp.cells[day.date] || {};
                         const meta = cellMeta(c);
+                        // Selected cell "pokes through" the backdrop: lifted above
+                        // it (z) + ringed, so it stays crisp while the rest blurs —
+                        // showing which cell the open drawer belongs to.
+                        const isSel = cellInfo && cellInfo.user_id === emp.user_id && cellInfo.date === day.date;
                         const cellTitle = `${day.date}${c.status ? ' · ' + c.status : ''}${c.week_off ? ' · Week-Off' : ''}${c.worked_on_off ? ' (worked)' : ''}${c.in ? ' · In ' + fmtT(c.in) : ''}${c.out ? ' · Out ' + fmtT(c.out) : ''}${c.hours ? ' · ' + c.hours + 'h' : ''}${c.late_label ? ' · ' + c.late_label + ' late' : ''}${c.source ? ' (' + c.source + ')' : ''}`;
                         return (
-                          <td key={day.date} className="p-0 text-center" title={cellTitle}>
+                          <td key={day.date} className={`p-0 text-center ${isSel ? 'relative z-[25]' : ''}`} title={cellTitle}>
                             <button type="button" disabled={gridBusy || day.future}
-                              onClick={() => onCellClick(emp, day, c)}
-                              className={`w-7 h-7 text-[10px] font-bold ${meta.cls} ${c.source === 'punch' ? 'ring-1 ring-inset ring-blue-200' : ''} ${day.future ? '' : 'cursor-pointer hover:brightness-95'}`}>
+                              onClick={(e) => onCellClick(emp, day, c, e)}
+                              className={`w-7 h-7 text-[10px] font-bold ${meta.cls} ${isSel ? 'relative z-[25] ring-2 ring-inset ring-blue-500' : c.source === 'punch' ? 'ring-1 ring-inset ring-blue-200' : ''} ${day.future ? '' : isSel ? 'cursor-default' : 'cursor-pointer hover:brightness-95'}`}>
                               {day.future ? '' : (c.late_label
                                 ? <span className="flex flex-col items-center justify-center leading-none"><span>P</span><span className="text-[6px] font-semibold">{c.late_label}</span></span>
                                 : meta.t)}
@@ -553,6 +672,22 @@ export default function Attendance() {
                   ))}
                 </tbody>
               </table>
+            </div>
+            {/* Below-row detail drawer — ONE element, positioned by a coordinate
+                (cellAnchorTop), full table-width so horizontal scroll can't hide
+                it, absolute-in-wrapper so vertical page-scroll carries it under
+                its row. Backdrop click / × / Cancel all close. */}
+            {cellInfo && (
+              <>
+                <div className="absolute inset-0 z-20 backdrop-blur-[1px] bg-slate-900/[0.03]" onClick={closeCellPanel} />
+                <div className="absolute left-0 right-0 z-30 px-0 sm:px-3" style={{ top: cellAnchorTop }}>
+                  <div className="relative rounded-[4px] sm:rounded-xl bg-white shadow-xl border border-gray-200 border-l-4 border-l-blue-400 p-4">
+                    <button type="button" onClick={closeCellPanel} aria-label="Close" className="absolute top-2 right-2.5 text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+                    {renderCellDetail()}
+                  </div>
+                </div>
+              </>
+            )}
             </div>
           )}
         </div>
@@ -1718,124 +1853,6 @@ export default function Attendance() {
           <p className="text-[11px] text-gray-500 italic">Admin-marked rows are hidden from the employee's own dashboard / month view and won't overwrite a real punch.</p>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Mark Present</button></div>
         </form>
-      </Modal>
-
-      {/* Cell detail / mark — a DEDICATED, self-contained modal molded from the
-          old inline detail panel. Driven only by cellInfo/stagedStatus (NOT the
-          shared `modal` state), so it never entangles with admin-mark. Centered
-          + mobile-safe via the Modal shell → predictable placement on every
-          screen (the inline card used to render off-screen below the grid).
-          Click = inspect; marking is a deliberate stage → OK. */}
-      <Modal isOpen={!!cellInfo} onClose={closeCellPanel} title="Attendance">
-        {cellInfo && (() => {
-          // Actions only for markable cells (never a real punch / approved leave)
-          // and only for an approver; otherwise the modal is inspect-only.
-          const showActions = canMarkGrid && !['punch', 'leave'].includes(cellInfo.source);
-          const cur = STATUS_TONE[cellInfo.status] || STATUS_TONE_NEUTRAL;
-          const curLabel = cellInfo.worked_on_off ? 'Week-off (worked)'
-            : cellInfo.week_off ? 'Week-off'
-            : (STATUS_TONE[cellInfo.status]?.label || (cellInfo.status || 'No record').replace('_', ' '));
-          // Provenance of the current status — shown inline only where it adds
-          // info; punch/leave say it themselves in the read-only message below.
-          const provenance = { admin: 'admin-marked', implicit: 'no record', auto: 'week-off' }[cellInfo.source];
-          return (
-            <div className="space-y-5">
-              {/* Identity — who / when / what: name, then date + current status
-                  (with provenance), then the punch facts. */}
-              <div>
-                <div className="text-[15px] font-semibold text-gray-900 leading-tight">{cellInfo.name}</div>
-                <div className="flex items-center gap-2 flex-wrap mt-1">
-                  <span className="text-[13px] text-gray-500">{cellInfo.date.split('-').reverse().join('-')}</span>
-                  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold ${cur.softBg} ${cur.text}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${cur.dot}`} />
-                    <span className="capitalize">{curLabel}</span>
-                  </span>
-                  {provenance && <span className="text-[11px] text-gray-400">· {provenance}</span>}
-                </div>
-                <div className="mt-1.5 text-[12.5px] text-gray-500">
-                  In: <b className="font-medium text-gray-700">{cellInfo.in ? fmtT(cellInfo.in) : '—'}</b>
-                  <span className="text-gray-300"> | </span>
-                  Out: <b className="font-medium text-gray-700">{cellInfo.out ? fmtT(cellInfo.out) : '—'}</b>
-                  <span className="text-gray-300"> | </span>
-                  <b className="font-medium text-gray-700">{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b>
-                  {cellInfo.late_label && <span className="text-amber-600 ml-2">Late {cellInfo.late_label}</span>}
-                </div>
-              </div>
-
-              {/* MARK ATTENDANCE — deliberate marking (pick → Save). The current
-                  status is a non-clickable "now" indicator (re-picking it is a
-                  no-op); the other pills are the real changes, each in its own
-                  status colour. Save stays disabled until a different status is
-                  picked, so an enabled Save is always a genuine change. */}
-              {showActions ? (
-                <div className="pt-4 border-t border-gray-100">
-                  <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2.5">Mark attendance</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {/* 'Clear' only appears when there's an admin mark to remove
-                       (source === 'admin') — same implicit gating the old click-
-                       cycle had, where a non-admin cell could never reach 'clear'. */}
-                    {GRID_INTENTS.filter(o => o.value !== 'clear' || cellInfo.source === 'admin').map(o => {
-                      const t = STATUS_TONE[o.value] || STATUS_TONE_NEUTRAL;
-                      const isCurrent = o.value === cellInfo.status;
-                      const isStaged = stagedStatus === o.value;
-                      if (isCurrent) {
-                        return (
-                          <span key={o.value} className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-[12px] font-medium cursor-default ${t.softBg} ${t.text} ${t.softBorder}`}>
-                            {o.label}<span className="text-[9px] font-bold uppercase tracking-wide opacity-70">now</span>
-                          </span>
-                        );
-                      }
-                      return (
-                        <button key={o.value} type="button" onClick={() => setStagedStatus(o.value)}
-                          className={`rounded-md border px-3 py-1 text-[12px] font-medium transition-colors ${isStaged ? `${t.sel} shadow-sm` : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'}`}>
-                          {o.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {/* Clear only shows on admin cells; this line clarifies it's a
-                      retraction, not a "set absent" — so pills stay uniform width. */}
-                  {cellInfo.source === 'admin' && <p className="mt-2 text-[11px] text-gray-400"><b className="font-semibold text-gray-500">Clear</b> removes the mark — the day reverts to no record.</p>}
-
-                  {/* Proof upload — DORMANT (CELL_PROOF_CAPTURE=false), but it lives
-                      HERE in the action flow (between the pills and the footer) so
-                      it has a home the moment it's switched on: an applicable
-                      back-dated worked day captures its proof and this modal
-                      becomes the single proof path. */}
-                  {cellNeedsProof(stagedStatus) && (
-                    <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/70 p-3">
-                      <div className="text-[12px] font-medium text-gray-700">Proof document <span className="font-normal text-gray-400">— required to back-date {(STATUS_TONE[stagedStatus]?.label || stagedStatus).replace('_', ' ')}</span></div>
-                      <div className="mt-2 flex items-center gap-2">
-                        <label className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-[12px] text-gray-600 cursor-pointer hover:bg-gray-50">
-                          📎 Choose file
-                          <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx" onChange={e => setStagedProof(e.target.files?.[0] || null)} />
-                        </label>
-                        {stagedProof && <span className="text-[12px] text-emerald-600 font-medium truncate">{stagedProof.name}</span>}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Save + Cancel — equal width. Save is a no-op until a different
-                      status is staged (re-affirming the current state isn't a change). */}
-                  <div className="mt-4 grid grid-cols-2 gap-2 w-[240px]">
-                    <button type="button" disabled={!stagedStatus || stagedStatus === cellInfo.status || gridBusy || (cellNeedsProof(stagedStatus) && !stagedProof)} onClick={commitStagedStatus} className="btn btn-primary text-sm disabled:opacity-50 disabled:cursor-not-allowed">Save</button>
-                    <button type="button" onClick={closeCellPanel} className="btn btn-secondary text-sm">Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="pt-4 border-t border-gray-100">
-                  {/* Non-action layer — read-only cells say where they're actually
-                      edited (restored 13-Jun directions); a viewer without approve
-                      rights is simply told they can't mark here. */}
-                  {cellInfo.source === 'punch' && <div className="rounded-lg bg-gray-50 border border-gray-100 px-3.5 py-3 text-[12.5px] text-gray-600"><b className="font-medium text-gray-800">Real punch.</b> Recorded from the employee's device — read-only here. Edit it under <b className="font-medium text-gray-800">Records</b>.</div>}
-                  {cellInfo.source === 'leave' && <div className="rounded-lg bg-gray-50 border border-gray-100 px-3.5 py-3 text-[12.5px] text-gray-600"><b className="font-medium text-gray-800">Approved leave.</b> Owned by the leave workflow — read-only here. Manage it under <b className="font-medium text-gray-800">Leaves</b>.</div>}
-                  {!['punch', 'leave'].includes(cellInfo.source) && <div className="text-[12.5px] text-gray-500">You don't have permission to mark attendance.</div>}
-                  <div className="mt-4 flex justify-end"><button type="button" onClick={closeCellPanel} className="btn btn-secondary text-sm">Close</button></div>
-                </div>
-              )}
-            </div>
-          );
-        })()}
       </Modal>
 
       {/* Geofence Modal */}
