@@ -130,7 +130,12 @@ function getUserPermissions(userId) {
     const modules = [
       'dashboard','leads','quotations','solar_quotation','orders','business_book','item_master','vendors','customers','procurement',
       'cashflow','collections','payment_required','attendance','indent_fms','dpr',
-      'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','gamification','tools','rentals'
+      'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','gamification','tools','rentals',
+      // employee_salary: gates visibility of the salary field on GET /hr/employees.
+      // hr_team: HR-team membership — gates hiring-request actions and the HR-alert
+      // recipient group (cron). Both replace the fuzzy department/role "is HR" checks.
+      // attendance_grid: gates viewing the Attendance Monthly Grid tab (marking needs attendance.can_approve).
+      'employee_salary','hr_team','attendance_grid'
     ];
     const perms = {};
     for (const m of modules) {

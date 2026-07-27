@@ -8,6 +8,42 @@ import { useAuth } from '../context/AuthContext';
 import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
+import HrIdentity, { hrDeptText } from '../components/HrIdentity';
+
+// Monthly-grid intent buttons — the exact marking choices an approver can set
+// on a cell (picked directly, then committed with OK). 'clear' removes an
+// admin mark, reverting the day to its underlying punch / implicit state.
+const GRID_INTENTS = [
+  { value: 'present', label: 'Present' },
+  { value: 'absent', label: 'Absent' },
+  { value: 'half_day', label: 'Half Day' },
+  { value: 'leave', label: 'Leave' },
+  { value: 'clear', label: 'Clear' },
+];
+
+// Grid cell-mark proof capture — OFF (dme: "keep it in shadows"). This single
+// flag is the whole switch: flip it to true and the proof field, the require-
+// guard, the Save-disable and the upload all activate together, gated by the
+// back-date rule (only an applicable back-dated worked day — Present/Half on a
+// past date — demands proof; same-day and Absent/Leave stay swift). Verified
+// on/off. Enable when management wants proof required for grid back-dating;
+// this modal then becomes the single proof path (Backfill modal stops owning it).
+// NOTE: client-side only — for API-proof enforcement also re-arm the /admin-mark
+// server gate that was removed 2026-07-26.
+const CELL_PROOF_CAPTURE = false;
+
+// Attendance is a colour language — the muster grid already speaks it, so the
+// cell-mark modal echoes the same tones: green present, rose absent, amber
+// half, violet leave, slate clear. Current state reads as a tinted chip; a
+// staged pick fills solid. Full literal class strings so Tailwind keeps them.
+const STATUS_TONE_NEUTRAL = { dot: 'bg-slate-400', text: 'text-slate-600', softBg: 'bg-slate-50', softBorder: 'border-slate-200', sel: 'bg-slate-700 border-slate-700 text-white' };
+const STATUS_TONE = {
+  present:  { label: 'Present',  dot: 'bg-emerald-500', text: 'text-emerald-700', softBg: 'bg-emerald-50', softBorder: 'border-emerald-300', sel: 'bg-emerald-600 border-emerald-600 text-white' },
+  absent:   { label: 'Absent',   dot: 'bg-rose-500',    text: 'text-rose-700',    softBg: 'bg-rose-50',    softBorder: 'border-rose-300',    sel: 'bg-rose-600 border-rose-600 text-white' },
+  half_day: { label: 'Half Day', dot: 'bg-amber-500',   text: 'text-amber-700',   softBg: 'bg-amber-50',   softBorder: 'border-amber-300',   sel: 'bg-amber-500 border-amber-500 text-white' },
+  leave:    { label: 'Leave',    dot: 'bg-violet-500',  text: 'text-violet-700',  softBg: 'bg-violet-50',  softBorder: 'border-violet-300',  sel: 'bg-violet-600 border-violet-600 text-white' },
+  clear:    { label: 'Clear',    dot: 'bg-slate-400',   text: 'text-slate-600',   softBg: 'bg-slate-100',  softBorder: 'border-slate-300',   sel: 'bg-slate-700 border-slate-700 text-white' },
+};
 
 // Render a stored UTC ISO timestamp as IST time (hh:mm AM/PM). Always pins to
 // Asia/Kolkata so a punch shows the correct Indian time even when the viewing
@@ -22,11 +58,19 @@ const fmtT = (iso) => {
 };
 
 export default function Attendance() {
-  const { user, isAdmin, canDelete, canSeeAll } = useAuth();
+  const { user, isAdmin, canDelete, canSeeAll, canView, canApprove } = useAuth();
   // Admins, or anyone granted "See All" on the attendance module, can view
   // everyone's attendance (mam 2026-06-15: "show all attendance if I give some
-  // permission to see all"). Write tools (Grid / Geofence) stay admin-only.
+  // permission to see all"). Geofence config stays admin-only.
   const seeAll = isAdmin() || canSeeAll('attendance');
+  // Monthly Grid access is two frontend layers:
+  //   canGrid     → SEE the grid tab (attendance_grid.can_view).
+  //   canMarkGrid → MARK cells / "P all" (attendance.can_approve). Without it the
+  //                 grid is read-only: clicking a cell opens its detail but never
+  //                 toggles, and "P all" is disabled. (The server independently
+  //                 enforces marking via attendance.can_approve.)
+  const canGrid = isAdmin() || canView('attendance_grid');
+  const canMarkGrid = isAdmin() || canApprove('attendance');
   const [tab, setTab] = useUrlTab('punch');
   const [myToday, setMyToday] = useState(null);
   // Mam: daily attendance detail (in/out times + leave) belongs on the
@@ -66,6 +110,10 @@ export default function Attendance() {
   const [grid, setGrid] = useState(null);
   const [gridBusy, setGridBusy] = useState(false);
   const [cellInfo, setCellInfo] = useState(null);
+  const [stagedStatus, setStagedStatus] = useState(null); // grid panel: chosen-but-not-yet-committed status (stage → OK)
+  const [stagedProof, setStagedProof] = useState(null); // dormant proof doc for the cell-mark modal (see CELL_PROOF_CAPTURE)
+  const [cellAnchorTop, setCellAnchorTop] = useState(0); // Y offset (within gridWrapRef) of the clicked row's bottom — where the detail panel floats
+  const gridWrapRef = useRef(null); // positioning context for the below-row detail panel
   const [location, setLocation] = useState(null);
   const [address, setAddress] = useState('');
   const [photo, setPhoto] = useState(null);
@@ -305,11 +353,19 @@ export default function Attendance() {
 
   // ── Monthly Attendance Grid helpers ──────────────────────────────
   const loadGrid = useCallback(() => {
-    if (!isAdmin()) return;
+    if (!canGrid) return;
     api.get(`/attendance/grid?month=${gridMonth}`).then(r => setGrid(r.data)).catch(() => setGrid(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridMonth]);
+  }, [gridMonth, canGrid]);
   useEffect(() => { if (tab === 'grid') loadGrid(); }, [tab, gridMonth, loadGrid]);
+  // Esc closes the open cell detail drawer (desktop). setters are stable, so
+  // depending only on cellInfo (add/remove the listener as the drawer opens/closes).
+  useEffect(() => {
+    if (!cellInfo) return;
+    const onKey = (e) => { if (e.key === 'Escape') { setCellInfo(null); setStagedStatus(null); setStagedProof(null); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cellInfo]);
 
   const cellMeta = (c) => {
     const s = c?.status || '';
@@ -339,18 +395,6 @@ export default function Attendance() {
       toast.success('Monthly muster exported — open in Excel to print or send.');
     } catch { toast.error('Export failed'); }
   };
-  // Programmatic file picker → resolves the chosen File (or null if cancelled).
-  const pickFile = (accept) => new Promise((resolve) => {
-    const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = accept;
-    let done = false;
-    const finish = (f) => { if (done) return; done = true; resolve(f); };
-    inp.onchange = () => finish(inp.files?.[0] || null);
-    // Cancel fires no reliable event; when the window refocuses with nothing
-    // chosen shortly after, treat it as cancelled.
-    window.addEventListener('focus', () => setTimeout(() => finish(null), 400), { once: true });
-    inp.click();
-  });
   const markCell = async (emp, date, status) => {
     if (!emp.user_id) return;
     setGridBusy(true);
@@ -358,32 +402,152 @@ export default function Attendance() {
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
     finally { setGridBusy(false); }
   };
-  // Click cycles: blank/absent → Present → Absent → Half → Leave → (clear).
-  // Real punches and approved leaves are read-only here.
-  const onCellClick = (emp, day, c) => {
+  // Click = INSPECT only: open the detail panel for the day. Marking is a
+  // deliberate act — pick an exact status from the intent buttons in the panel
+  // and press OK (stage → commit). A click never mutates on its own, and you
+  // choose the target status in one go instead of cycle-walking to it.
+  const onCellClick = (emp, day, c, e) => {
     if (!emp.user_id || day.future) return;
-    // Show the day's detail (In/Out/status) in the panel below the grid.
-    setCellInfo({ name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
-    // Real punches / approved leaves are read-only — detail only, no cycling.
-    if (c.source === 'punch' || c.source === 'leave') return;
-    const order = ['present', 'absent', 'half_day', 'leave', 'clear'];
-    const next = c.source === 'admin' ? order[(order.indexOf(c.status) + 1) % order.length] : 'present';
-    markCell(emp, day.date, next);
+    // Anchor the below-row detail panel: capture the clicked row's bottom Y
+    // relative to the grid wrapper (absolute-in-wrapper → follows vertical scroll).
+    const wrap = gridWrapRef.current;
+    if (wrap && e?.currentTarget) {
+      const row = e.currentTarget.closest('tr');
+      if (row) setCellAnchorTop(row.getBoundingClientRect().bottom - wrap.getBoundingClientRect().top);
+    }
+    setStagedStatus(null); setStagedProof(null); // fresh cell → no pending choice yet
+    setCellInfo({ user_id: emp.user_id, name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
   };
-  const markAllPresent = async (emp) => {
-    if (!emp.user_id) return;
-    if (!confirm(`Mark ${emp.name} PRESENT on every blank working day in ${gridMonth}? (Sundays, real punches and leaves are left untouched.)`)) return;
-    // Bulk back-dating a month present → a proof document is mandatory.
-    const file = await pickFile('.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx');
-    if (!file) { toast.error('A proof document is required to mark the month present'); return; }
-    setGridBusy(true);
-    try {
-      const fd = new FormData(); fd.append('file', file);
-      const up = await api.post('/upload', fd);
-      const r = await api.post('/attendance/admin-mark-bulk', { user_id: emp.user_id, month: gridMonth, status: 'present', proof_url: up.data.url });
-      toast.success(r.data.message); loadGrid();
-    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
-    finally { setGridBusy(false); }
+  const closeCellPanel = () => { setCellInfo(null); setStagedStatus(null); setStagedProof(null); };
+  // A back-dated worked-day mark (Present/Half in the past) needs proof — but
+  // ONLY when proof capture is switched on. Flip CELL_PROOF_CAPTURE alone and
+  // this guard, the upload, the field and the Save-disable all activate together.
+  const cellNeedsProof = (status) => CELL_PROOF_CAPTURE && ['present', 'half_day'].includes(status) && !!cellInfo && cellInfo.date < today;
+  // Commit the staged status (OK), then close ("ok and close"). markCell is the
+  // normal no-proof path (unchanged). The proof branch is dormant
+  // (CELL_PROOF_CAPTURE=false) and self-contained, so markCell stays untouched.
+  const commitStagedStatus = async () => {
+    if (!cellInfo || !stagedStatus) return;
+    if (cellNeedsProof(stagedStatus) && !stagedProof) return toast.error('Attach a proof document to back-date a worked day');
+    if (CELL_PROOF_CAPTURE && stagedProof) {
+      setGridBusy(true);
+      try {
+        const fd = new FormData(); fd.append('file', stagedProof);
+        const up = await api.post('/upload', fd);
+        await api.post('/attendance/admin-mark', { user_id: cellInfo.user_id, date: cellInfo.date, status: stagedStatus, proof_url: up.data.url });
+        loadGrid();
+      } catch (e) { toast.error(e.response?.data?.error || 'Failed'); setGridBusy(false); return; }
+      setGridBusy(false); closeCellPanel(); return;
+    }
+    await markCell({ user_id: cellInfo.user_id }, cellInfo.date, stagedStatus);
+    closeCellPanel();
+  };
+  // Body of the cell detail/mark panel — shared layout, rendered inside the
+  // below-row floating drawer in the grid (identity → status → mark → save).
+  const renderCellDetail = () => {
+    if (!cellInfo) return null;
+    // Actions only for markable cells (never a real punch / approved leave)
+    // and only for an approver; otherwise it's inspect-only.
+    const showActions = canMarkGrid && !['punch', 'leave'].includes(cellInfo.source);
+    const cur = STATUS_TONE[cellInfo.status] || STATUS_TONE_NEUTRAL;
+    const curLabel = cellInfo.worked_on_off ? 'Week-off (worked)'
+      : cellInfo.week_off ? 'Week-off'
+      : (STATUS_TONE[cellInfo.status]?.label || (cellInfo.status || 'No record').replace('_', ' '));
+    // Provenance of the current status — shown inline only where it adds info;
+    // punch/leave say it themselves in the read-only message below.
+    const provenance = { admin: 'admin-marked', implicit: 'no record', auto: 'week-off' }[cellInfo.source];
+    return (
+      <div className="space-y-5">
+        {/* Identity — name, then date + current status (with provenance), then punch facts. */}
+        <div>
+          <div className="text-[15px] font-semibold text-gray-900 leading-tight pr-6">{cellInfo.name}</div>
+          <div className="flex items-center gap-2 flex-wrap mt-1">
+            <span className="text-[13px] text-gray-500">{cellInfo.date.split('-').reverse().join('-')}</span>
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold ${cur.softBg} ${cur.text}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${cur.dot}`} />
+              <span className="capitalize">{curLabel}</span>
+            </span>
+            {provenance && <span className="text-[11px] text-gray-400">· {provenance}</span>}
+          </div>
+          <div className="mt-1.5 text-[12.5px] text-gray-500">
+            In: <b className="font-medium text-gray-700">{cellInfo.in ? fmtT(cellInfo.in) : '—'}</b>
+            <span className="text-gray-300"> | </span>
+            Out: <b className="font-medium text-gray-700">{cellInfo.out ? fmtT(cellInfo.out) : '—'}</b>
+            <span className="text-gray-300"> | </span>
+            <b className="font-medium text-gray-700">{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b>
+            {cellInfo.late_label && <span className="text-amber-600 ml-2">Late {cellInfo.late_label}</span>}
+          </div>
+        </div>
+
+        {/* MARK ATTENDANCE — pick → Save. Current status is a non-clickable "now"
+            indicator; the others are the changes. Save disabled until a real change. */}
+        {showActions ? (
+          <div className="pt-4 border-t border-gray-100">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-2.5">Mark attendance</div>
+            <div className="flex flex-wrap gap-1.5">
+              {/* 'Clear' only appears on an admin cell (there's a mark to remove). */}
+              {GRID_INTENTS.filter(o => o.value !== 'clear' || cellInfo.source === 'admin').map(o => {
+                const t = STATUS_TONE[o.value] || STATUS_TONE_NEUTRAL;
+                const isCurrent = o.value === cellInfo.status;
+                const isStaged = stagedStatus === o.value;
+                if (isCurrent) {
+                  return (
+                    <span key={o.value} className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-[12px] font-medium cursor-default ${t.softBg} ${t.text} ${t.softBorder}`}>
+                      {o.label}<span className="text-[9px] font-bold uppercase tracking-wide opacity-70">now</span>
+                    </span>
+                  );
+                }
+                return (
+                  <button key={o.value} type="button" onClick={() => setStagedStatus(o.value)}
+                    className={`rounded-md border px-3 py-1 text-[12px] font-medium transition-colors ${isStaged ? `${t.sel} shadow-sm` : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'}`}>
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+            {cellInfo.source === 'admin' && <p className="mt-2 text-[11px] text-gray-400"><b className="font-semibold text-gray-500">Clear</b> removes the mark — the day reverts to no record.</p>}
+
+            {/* Proof upload — DORMANT (CELL_PROOF_CAPTURE=false); appears for a
+                back-dated worked day when switched on. */}
+            {cellNeedsProof(stagedStatus) && (
+              <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/70 p-3">
+                <div className="text-[12px] font-medium text-gray-700">Proof document <span className="font-normal text-gray-400">— required to back-date {(STATUS_TONE[stagedStatus]?.label || stagedStatus).replace('_', ' ')}</span></div>
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-[12px] text-gray-600 cursor-pointer hover:bg-gray-50">
+                    📎 Choose file
+                    <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx" onChange={e => setStagedProof(e.target.files?.[0] || null)} />
+                  </label>
+                  {stagedProof && <span className="text-[12px] text-emerald-600 font-medium truncate">{stagedProof.name}</span>}
+                </div>
+              </div>
+            )}
+
+            {/* Save + Cancel — equal width. Save is a no-op until a different status is staged. */}
+            <div className="mt-4 grid grid-cols-2 gap-2 w-[240px]">
+              <button type="button" disabled={!stagedStatus || stagedStatus === cellInfo.status || gridBusy || (cellNeedsProof(stagedStatus) && !stagedProof)} onClick={commitStagedStatus} className="btn btn-primary text-sm disabled:opacity-50 disabled:cursor-not-allowed">Save</button>
+              <button type="button" onClick={closeCellPanel} className="btn btn-secondary text-sm">Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div className="pt-4 border-t border-gray-100">
+            {/* Non-action layer — read-only cells say where they're actually edited. */}
+            {cellInfo.source === 'punch' && <div className="rounded-lg bg-gray-50 border border-gray-100 px-3.5 py-3 text-[12.5px] text-gray-600"><b className="font-medium text-gray-800">Real punch.</b> Recorded from the employee's device — read-only here. Edit it under <b className="font-medium text-gray-800">Records</b>.</div>}
+            {cellInfo.source === 'leave' && <div className="rounded-lg bg-gray-50 border border-gray-100 px-3.5 py-3 text-[12.5px] text-gray-600"><b className="font-medium text-gray-800">Approved leave.</b> Owned by the leave workflow — read-only here. Manage it under <b className="font-medium text-gray-800">Leaves</b>.</div>}
+            {!['punch', 'leave'].includes(cellInfo.source) && <div className="text-[12.5px] text-gray-500">You don't have permission to mark attendance.</div>}
+          </div>
+        )}
+      </div>
+    );
+  };
+  const markAllPresent = (emp) => {
+    if (!emp.user_id || !canMarkGrid) return;
+    // Bulk back-date the whole month present. Its own dedicated modal (real file
+    // input) — NOT the confirm()+pickFile path, whose focus heuristic mis-fired
+    // on the confirm dialog's own focus-return (proof-required flashed, no API
+    // hit). Kept separate from the single-day Mark/Backfill modal so neither
+    // utility carries the other's branches.
+    setForm({ user_id: emp.user_id, name: emp.name, month: gridMonth });
+    setModal('pall');
   };
   const linkLogin = async (emp, userId) => {
     if (!userId) return;
@@ -403,18 +567,16 @@ export default function Attendance() {
           <button onClick={() => setTab('report')} className={`btn ${tab === 'report' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Report</button>
           <button onClick={() => setTab('leaves')} className={`btn ${tab === 'leaves' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Leaves</button>
         </>}
-        {isAdmin() && <>
-          <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>
-          <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>
-        </>}
+        {canGrid && <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>}
+        {isAdmin() && <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>}
       </div>
 
       {/* MONTHLY ATTENDANCE GRID TAB */}
-      {tab === 'grid' && isAdmin() && (
+      {tab === 'grid' && canGrid && (
         <div className="space-y-3">
           <div className="text-xs text-gray-600 bg-amber-50 border border-amber-100 rounded-lg px-4 py-2.5">
             A day with <b>no punch counts as absent</b> in payroll. Mark people here so salary is right.
-            Click a cell to cycle <b>P</b>resent → <b>A</b>bsent → <b>H</b> half → <b>L</b> leave → clear.
+            Click any cell to open the day and set its status — <b>Present</b>, <b>Absent</b>, <b>Half&nbsp;Day</b>, <b>Leave</b> or <b>Clear</b>.
             Real punches and approved leaves are read-only. Use <b>“P all”</b> to fill a person’s blank working days as present.
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -438,7 +600,8 @@ export default function Attendance() {
           ) : grid.employees.length === 0 ? (
             <div className="card p-8 text-center text-gray-400 text-sm">No active employees found.</div>
           ) : (
-            <div className="card p-0 overflow-x-auto">
+            <div ref={gridWrapRef} className="relative">
+            <div className="card p-0 overflow-x-auto min-h-[410px]">
               <table className="text-xs border-collapse">
                 <thead>
                   <tr className="bg-gray-50">
@@ -479,12 +642,16 @@ export default function Attendance() {
                       {grid.days.map(day => {
                         const c = emp.cells[day.date] || {};
                         const meta = cellMeta(c);
+                        // Selected cell "pokes through" the backdrop: lifted above
+                        // it (z) + ringed, so it stays crisp while the rest blurs —
+                        // showing which cell the open drawer belongs to.
+                        const isSel = cellInfo && cellInfo.user_id === emp.user_id && cellInfo.date === day.date;
                         const cellTitle = `${day.date}${c.status ? ' · ' + c.status : ''}${c.week_off ? ' · Week-Off' : ''}${c.worked_on_off ? ' (worked)' : ''}${c.in ? ' · In ' + fmtT(c.in) : ''}${c.out ? ' · Out ' + fmtT(c.out) : ''}${c.hours ? ' · ' + c.hours + 'h' : ''}${c.late_label ? ' · ' + c.late_label + ' late' : ''}${c.source ? ' (' + c.source + ')' : ''}`;
                         return (
-                          <td key={day.date} className="p-0 text-center" title={cellTitle}>
+                          <td key={day.date} className={`p-0 text-center ${isSel ? 'relative z-[25]' : ''}`} title={cellTitle}>
                             <button type="button" disabled={gridBusy || day.future}
-                              onClick={() => onCellClick(emp, day, c)}
-                              className={`w-7 h-7 text-[10px] font-bold ${meta.cls} ${c.source === 'punch' ? 'ring-1 ring-inset ring-blue-200' : ''} ${day.future ? '' : 'cursor-pointer hover:brightness-95'}`}>
+                              onClick={(e) => onCellClick(emp, day, c, e)}
+                              className={`w-7 h-7 text-[10px] font-bold ${meta.cls} ${isSel ? 'relative z-[25] ring-2 ring-inset ring-blue-500' : c.source === 'punch' ? 'ring-1 ring-inset ring-blue-200' : ''} ${day.future ? '' : isSel ? 'cursor-default' : 'cursor-pointer hover:brightness-95'}`}>
                               {day.future ? '' : (c.late_label
                                 ? <span className="flex flex-col items-center justify-center leading-none"><span>P</span><span className="text-[6px] font-semibold">{c.late_label}</span></span>
                                 : meta.t)}
@@ -498,7 +665,7 @@ export default function Attendance() {
                       <td className="px-1.5 py-1.5 text-center text-amber-700">{emp.totals?.late || 0}</td>
                       <td className="px-2 py-1.5 whitespace-nowrap">
                         {emp.user_id
-                          ? <button onClick={() => markAllPresent(emp)} disabled={gridBusy} className="btn btn-secondary text-[11px] py-0.5">P all</button>
+                          ? <button onClick={() => markAllPresent(emp)} disabled={gridBusy || !canMarkGrid} title={!canMarkGrid ? 'Requires attendance approve permission' : undefined} className="btn btn-secondary text-[11px] py-0.5">P all</button>
                           : <span className="text-[10px] text-gray-300">—</span>}
                       </td>
                     </tr>
@@ -506,21 +673,21 @@ export default function Attendance() {
                 </tbody>
               </table>
             </div>
-          )}
-          {cellInfo && (
-            <div className="card p-3 flex items-start justify-between gap-3 border-l-4 border-blue-400 bg-blue-50/40">
-              <div className="text-sm">
-                <div className="font-semibold text-gray-800">{cellInfo.name} · {cellInfo.date}</div>
-                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-gray-700">
-                  <span>Status: <b className="capitalize">{(cellInfo.worked_on_off ? 'week-off (worked)' : cellInfo.week_off ? 'week-off' : (cellInfo.status || '—')).replace('_', ' ')}</b></span>
-                  <span>In: <b>{cellInfo.in ? fmtT(cellInfo.in) : '—'}</b></span>
-                  <span>Out: <b>{cellInfo.out ? fmtT(cellInfo.out) : '—'}</b></span>
-                  <span>Hours: <b>{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b></span>
-                  {cellInfo.late_label && <span className="text-amber-700">Late by: <b>{cellInfo.late_label}</b></span>}
-                  {cellInfo.source && <span className="text-gray-400">({cellInfo.source})</span>}
+            {/* Below-row detail drawer — ONE element, positioned by a coordinate
+                (cellAnchorTop), full table-width so horizontal scroll can't hide
+                it, absolute-in-wrapper so vertical page-scroll carries it under
+                its row. Backdrop click / × / Cancel all close. */}
+            {cellInfo && (
+              <>
+                <div className="absolute inset-0 z-20 backdrop-blur-[1px] bg-slate-900/[0.03]" onClick={closeCellPanel} />
+                <div className="absolute left-0 right-0 z-30 px-0 sm:px-3" style={{ top: cellAnchorTop }}>
+                  <div className="relative rounded-[4px] sm:rounded-xl bg-white shadow-xl border border-gray-200 border-l-4 border-l-blue-400 p-4">
+                    <button type="button" onClick={closeCellPanel} aria-label="Close" className="absolute top-2 right-2.5 text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+                    {renderCellDetail()}
+                  </div>
                 </div>
-              </div>
-              <button onClick={() => setCellInfo(null)} className="text-gray-400 hover:text-gray-700 text-lg leading-none">×</button>
+              </>
+            )}
             </div>
           )}
         </div>
@@ -752,7 +919,7 @@ export default function Attendance() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">{dashboard.notPunched.map(u => (
                 <div key={u.id} className="bg-white rounded p-2 text-sm">
                   <div className="font-medium">{u.name}</div>
-                  <div className="text-xs text-gray-500 mb-1.5">{u.department}</div>
+                  <div className="mb-1.5"><HrIdentity rec={u} size="text-xs" /></div>
                   {/* Admin override — back-fill present for users who didn't
                       punch. Row is hidden from the user's own dashboard. */}
                   <button onClick={async () => {
@@ -806,7 +973,7 @@ export default function Attendance() {
                           <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold" title="Admin marked">ADMIN</span>
                         )}
                       </div>
-                      {r.department && <div className="text-[11px] text-gray-500">{r.department}</div>}
+                      <HrIdentity rec={r} />
                       {r.bucket === 'guest' && <div className="text-[10px] font-semibold text-amber-600">⚠ Guest / not tracked</div>}
                       {r.bucket === 'terminated' && <div className="text-[10px] font-semibold text-red-600">⚠ Inactive / Terminated</div>}
                     </div>
@@ -1099,7 +1266,7 @@ export default function Attendance() {
                         onClick={() => setSelectedUserId(u.id)}
                         className={`w-full text-left px-3 py-2 text-sm border-b last:border-b-0 hover:bg-red-50 ${selectedUserId === u.id ? 'bg-red-100 font-semibold' : ''}`}
                       >
-                        {u.name} <span className="text-xs text-gray-400">— {u.department || u.role_names || u.role || 'User'}</span>
+                        {u.name} <span className="text-xs text-gray-400">— {hrDeptText(u) || u.role_names || u.role || 'User'}</span>
                       </button>
                     ))}
                   {allUsers.length === 0 && <p className="p-3 text-xs text-gray-400">No users loaded</p>}
@@ -1136,7 +1303,7 @@ export default function Attendance() {
                     <div className="card p-3 flex items-center justify-between">
                       <div>
                         <h4 className="font-bold text-lg">{selectedUser?.name || '—'}</h4>
-                        <p className="text-xs text-gray-500">{selectedUser?.department || ''} {selectedUser?.email ? `· ${selectedUser.email}` : ''}</p>
+                        <p className="text-xs text-gray-500">{hrDeptText(selectedUser)} {selectedUser?.email ? `· ${selectedUser.email}` : ''}</p>
                       </div>
                       <span className="text-xs text-gray-400">{userDateFrom} → {userDateTo}</span>
                     </div>
@@ -1614,7 +1781,7 @@ export default function Attendance() {
             <label className="label">Employee *</label>
             <select className="select" value={form.user_id || ''} onChange={e => setForm({ ...form, user_id: e.target.value })} required>
               <option value="">-- Select employee --</option>
-              {allUsers.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` · ${u.department}` : ''}</option>)}
+              {allUsers.map(u => { const d = hrDeptText(u); return <option key={u.id} value={u.id}>{u.name}{d ? ` · ${d}` : ''}</option>; })}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1648,6 +1815,43 @@ export default function Attendance() {
           )}
           <p className="text-[11px] text-gray-500 italic">Admin-marked rows are hidden from the employee's own dashboard / month view and won't overwrite a real punch.</p>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
+        </form>
+      </Modal>
+
+      {/* P-all: back-fill a whole month Present for ONE employee (grid "P all"
+          button). Its own modal + handler — the employee is locked to the row
+          that was clicked and a proof document is mandatory (same rule the
+          server enforces for any back-dated worked day). Kept fully separate
+          from the single-day Mark/Backfill modal above. */}
+      <Modal isOpen={modal === 'pall'} onClose={() => setModal(null)} title="Mark Month Present">
+        <form onSubmit={async (e) => {
+          e.preventDefault();
+          if (!form.user_id) return toast.error('No employee selected');
+          if (!form._proofFile) return toast.error('Attach a proof document to mark the month present');
+          try {
+            const fd = new FormData(); fd.append('file', form._proofFile);
+            const up = await api.post('/upload', fd);
+            const r = await api.post('/attendance/admin-mark-bulk', {
+              user_id: +form.user_id, month: form.month, status: 'present', proof_url: up.data.url,
+            });
+            toast.success(r.data.message); setModal(null); loadGrid();
+          } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+        }} className="space-y-4">
+          <div>
+            <label className="label">Employee</label>
+            <input className="input bg-gray-50" value={form.name || ''} readOnly title="Locked to the row you selected" />
+          </div>
+          <div className="rounded bg-amber-50 border border-amber-200 p-3 text-[13px] text-gray-700">
+            Marks <b>every blank working day</b> in <b>{form.month}</b> as <b>Present</b> for this employee. Sundays, real punches and existing rows are left untouched.
+          </div>
+          <div>
+            <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date the month)</span></label>
+            <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
+              onChange={e => setForm({ ...form, _proofFile: e.target.files?.[0] || null })} />
+            {form._proofFile && <p className="text-[11px] text-emerald-600 mt-1">Attached: {form._proofFile.name}</p>}
+          </div>
+          <p className="text-[11px] text-gray-500 italic">Admin-marked rows are hidden from the employee's own dashboard / month view and won't overwrite a real punch.</p>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Mark Present</button></div>
         </form>
       </Modal>
 

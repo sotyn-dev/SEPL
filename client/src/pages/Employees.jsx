@@ -8,10 +8,9 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2 } from 'react-icons/fi';
 
 export default function Employees() {
-  const { canDelete, isAdmin, userRoles, user } = useAuth();
-  // Salary is confidential — only admins and HR-role users see it
-  const canSeeSalary = isAdmin() || (userRoles || []).some(r => String(r).toLowerCase().includes('hr'))
-    || String(user?.department || '').toLowerCase().includes('hr');
+  const { canDelete, isAdmin, canView } = useAuth();
+  // Salary is confidential — only admins and holders of employee_salary.can_view see it
+  const canSeeSalary = isAdmin() || canView('employee_salary');
   const [employees, setEmployees] = useState([]);
   const [users, setUsers] = useState([]);
   const [modal, setModal] = useState(false);

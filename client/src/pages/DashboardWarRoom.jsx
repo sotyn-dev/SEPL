@@ -1132,7 +1132,7 @@ const ORG_TREE_CSS = `
 
 // One org-chart card: circular photo straddling the top, ROLE (caps) + name.
 function OrgNode({ u }) {
-  const title = (u.designation || u.department || (u.role && u.role !== 'user' ? u.role : '') || '').toString();
+  const title = (u.designation || u.hr_department || u.department || (u.role && u.role !== 'user' ? u.role : '') || '').toString();
   return (
     <div style={{
       display: 'inline-flex', flexDirection: 'column', alignItems: 'center', minWidth: 150, maxWidth: 190,
@@ -1225,7 +1225,7 @@ function HierarchyView() {
             <tbody>
               {users.map(u => (
                 <tr key={u.id} style={{ borderBottom: '1px solid #f3f3f3' }}>
-                  <td style={{ padding: '7px 8px' }}>{u.name}<span style={{ color: C.ink2, fontSize: 10.5, marginLeft: 6 }}>{u.designation || u.department || u.role || ''}</span></td>
+                  <td style={{ padding: '7px 8px' }}>{u.name}<span style={{ color: C.ink2, fontSize: 10.5, marginLeft: 6 }}>{u.designation || u.hr_department || u.department || u.role || ''}</span></td>
                   <td style={{ padding: '7px 8px' }}>
                     <select value={u.manager_id || ''} disabled={busy === u.id}
                       onChange={e => setManager(u.id, e.target.value ? +e.target.value : null)}

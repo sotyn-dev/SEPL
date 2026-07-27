@@ -1844,6 +1844,11 @@ function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_chq_actions_cheque ON cheque_actions(cheque_id, action_at);
 
+    -- Speeds the HR-identity lookups (employees.department/designation via the user link)
+    -- used for display across Users list, Locations, Attendance, Champions, exports. Plain
+    -- (non-unique) index — pure performance, no data change, no uniqueness enforced.
+    CREATE INDEX IF NOT EXISTS idx_employees_user_id ON employees(user_id);
+
     -- Snag list — defects / punch-list items raised against a site,
     -- assigned to an employee, who uploads proof and only then it's
     -- closed by approval (delegation-style flow). Mam's ask:
@@ -5688,6 +5693,14 @@ in your first week. If a process feels broken, raise a Help Ticket
     // and the sidebar, but it was never added here, so no role got a
     // role_permissions row and it never showed in Roles & Permissions.
     'solar_quotation',
+    // Dedicated capabilities replacing the fuzzy department/role-name "is HR"
+    // string checks (LIKE '%hr%'). Granted deliberately in the matrix, never
+    // inferred from a typed department.
+    //   employee_salary.can_view → see the salary field on GET /hr/employees.
+    //   hr_team.can_view         → HR-team member: gates hiring-request actions
+    //                              and the HR-alert recipient group (cron).
+    //   attendance_grid.can_view → view the Attendance Monthly Grid tab (marking needs attendance.can_approve).
+    'employee_salary','hr_team','attendance_grid',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
