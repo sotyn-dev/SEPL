@@ -219,25 +219,25 @@ export default function Snags() {
       )}
 
       <div className="card p-3 flex flex-wrap items-end gap-3">
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative flex-1 min-w-[160px]">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
           <input className="input pl-9 text-sm" placeholder="Search snag #, site, location, description…" value={filters.search} onChange={e => setFilters(f => ({ ...f, search: e.target.value }))} />
         </div>
-        <div>
+        <div className="w-36 shrink-0">
           <label className="label">Scope</label>
           <select className="select" value={filters.scope} onChange={e => setFilters(f => ({ ...f, scope: e.target.value }))}>
             <option value="">All</option>
             <option value="mine">Mine (raised / assigned)</option>
           </select>
         </div>
-        <div>
+        <div className="w-48 shrink-0">
           <label className="label">Site</label>
           <select className="select" value={filters.site_id} onChange={e => setFilters(f => ({ ...f, site_id: e.target.value }))}>
             <option value="">All</option>
             {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
-        <div>
+        <div className="w-40 shrink-0">
           <label className="label">Status</label>
           <select className="select" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
             <option value="">All</option>
@@ -247,7 +247,7 @@ export default function Snags() {
             <option value="rejected">Rejected</option>
           </select>
         </div>
-        <div>
+        <div className="w-32 shrink-0">
           <label className="label">Priority</label>
           <select className="select" value={filters.priority} onChange={e => setFilters(f => ({ ...f, priority: e.target.value }))}>
             <option value="">All</option>
