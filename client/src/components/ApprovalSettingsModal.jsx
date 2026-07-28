@@ -11,7 +11,8 @@
 // since it applies to the whole PO group rather than to either level.
 import { useState, useEffect, useMemo } from 'react';
 import Modal from './Modal';
-import { hrDeptText } from './HrIdentity';
+import PeoplePicker from './PeoplePicker';
+import { normalizePeople } from '../hooks/usePeopleOptions';
 import api from '../api';
 import toast from 'react-hot-toast';
 
@@ -169,35 +170,20 @@ export default function ApprovalSettingsModal({ open, onClose }) {
     } finally { setSaving(false); }
   };
 
-  const nameOf = useMemo(() => {
-    const m = {};
-    for (const u of users) m[u.id] = u.name;
-    return id => m[id] || `#${id}`;
-  }, [users]);
+  // The active user list, adapted to the shared PeoplePicker's row shape
+  // (name + hr_designation · hr_department + duplicate-record flag). No re-fetch —
+  // reuses the /auth/users rows already loaded above. The picker's own two-line
+  // rows + token search now carry the disambiguation the old descOf label did.
+  const pickerOptions = useMemo(() => normalizePeople(users, 'user'), [users]);
 
-  // Designation + department shown beside each name so the admin can tell
-  // unfamiliar or same-named users apart when naming approvers. Designation
-  // comes from the linked employee record (hr_designation); department falls
-  // back employee → user via hrDeptText (hr_department || users.department).
-  // TRIM each part and drop null / empty / whitespace-only — the user-dept
-  // fallback is raw free-text (untrimmed, e.g. 'IT '), so a spaces-only value
-  // must not print a blank chunk or a dangling ' · '. The separator only shows
-  // when BOTH parts survive.
-  const descOf = (u) =>
-    [u.hr_designation, hrDeptText(u)]
-      .map(s => (s == null ? '' : String(s).trim()))
-      .filter(Boolean)
-      .join(' · ');
-
-  const addUser = (gate, id) =>
-    setCfg(c => (!id || c[gate].users.includes(id)
-      ? c
-      : { ...c, [gate]: { ...c[gate], users: [...c[gate].users, id] } }));
-
-  // Single-approver gates: pick REPLACES, empty clears. Kept as its own setter so
-  // the stored shape is still a list (one entry) and nothing downstream special-cases.
+  // Single-approver gates: pick REPLACES, empty clears. Stored shape stays a list
+  // (one entry) so nothing downstream special-cases.
   const setOnlyUser = (gate, id) =>
     setCfg(c => ({ ...c, [gate]: { ...c[gate], users: id ? [id] : [] } }));
+
+  // Multi gates: the picker owns the whole id list.
+  const setGateUsers = (gate, ids) =>
+    setCfg(c => ({ ...c, [gate]: { ...c[gate], users: ids } }));
 
   // Is this person already holding the mutually-exclusive partner gate? The two
   // Vendor PO levels must be different people — one non-admin must never be able
@@ -205,14 +191,11 @@ export default function ApprovalSettingsModal({ open, onClose }) {
   const takenByOther = (g, userId) =>
     !!g.exclusiveWith && (cfg[g.exclusiveWith]?.users || []).includes(userId);
 
-  const dropUser = (gate, id) =>
-    setCfg(c => ({ ...c, [gate]: { ...c[gate], users: c[gate].users.filter(x => x !== id) } }));
-
   const toggle = gate =>
     setCfg(c => ({ ...c, [gate]: { ...c[gate], enabled: !c[gate].enabled } }));
 
   return (
-    <Modal isOpen={open} onClose={onClose} title="⚙ Workflow Settings — Indent to Dispatch">
+    <Modal isOpen={open} onClose={onClose} title="⚙ Workflow Settings — Indent to Dispatch" scrollOutside>
       <div className="space-y-3">
         <p className="text-xs text-gray-500">
           Name who may approve at each step — <b>active</b> users only. An <b>admin</b> can
@@ -260,7 +243,6 @@ export default function ApprovalSettingsModal({ open, onClose }) {
             const st = cfg[g.key];
             const on = st.enabled;
             const dimmed = g.togglable && !on;
-            const available = users.filter(u => !st.users.includes(u.id));
             return (
               <div key={g.key} className={`border rounded-lg px-3 py-2 bg-white ${dimmed ? 'opacity-60' : ''}`}>
                 <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -290,51 +272,33 @@ export default function ApprovalSettingsModal({ open, onClose }) {
                 {g.single ? (
                   <>
                     <label className="label text-[10px] text-emerald-600">Approver</label>
-                    <select
-                      className="input text-xs w-full"
-                      value={st.users[0] ?? ''}
-                      onChange={e => setOnlyUser(g.key, e.target.value ? +e.target.value : null)}>
-                      <option value="">— not set (admin only) —</option>
-                      {users.map(u => {
-                        // The person holding the OTHER PO level can't hold this one too —
-                        // shown disabled rather than hidden, so it's clear why they're
-                        // unavailable instead of them silently missing from the list.
-                        const taken = takenByOther(g, u.id);
-                        const d = descOf(u);
-                        return (
-                          <option key={u.id} value={u.id} disabled={taken}>
-                            {u.name}{d ? ' — ' + d : ''}{taken ? '  · already PO ' + (g.exclusiveWith === 'po_l2' ? 'L2' : 'L1') : ''}
-                          </option>
-                        );
-                      })}
-                    </select>
+                    {/* The person holding the OTHER PO level stays VISIBLE but greyed
+                        with "already PO L2/L1" (getDisabledReason) rather than hidden,
+                        so it's clear why they can't be picked. */}
+                    <PeoplePicker
+                      options={pickerOptions}
+                      value={st.users[0] ?? null}
+                      onChange={(id) => setOnlyUser(g.key, id)}
+                      placeholder="Search a person…"
+                      emptyText="No active users"
+                      getDisabledReason={(row) =>
+                        takenByOther(g, row.id) ? `already PO ${g.exclusiveWith === 'po_l2' ? 'L2' : 'L1'}` : null}
+                    />
                   </>
                 ) : (
                   <>
                     <label className="label text-[10px] text-emerald-600">Approvers</label>
-                    <select className="input text-xs w-full" value="" onChange={e => addUser(g.key, e.target.value ? +e.target.value : null)}>
-                      <option value="">+ add approver…</option>
-                      {available.map(u => {
-                        const d = descOf(u);
-                        return <option key={u.id} value={u.id}>{u.name}{d ? ' — ' + d : ''}</option>;
-                      })}
-                    </select>
-
-                    {/* Named approvers only. "Admin always" is NOT a chip here — it is
-                        not stored, and as a chip it sat in the same row as removable
-                        people and read like one of them. It lives in the card footer. */}
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                      {st.users.map(id => (
-                        <span key={id} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 text-[11px] font-medium">
-                          {nameOf(id)}
-                          <button type="button" onClick={() => dropUser(g.key, id)} title="Remove"
-                            className="text-emerald-600 hover:text-rose-600 font-bold leading-none">×</button>
-                        </span>
-                      ))}
-                      {st.users.length === 0 && !(g.togglable && on) && (
-                        <span className="text-[11px] text-slate-400 italic">Nobody named — admin only</span>
-                      )}
-                    </div>
+                    <PeoplePicker
+                      multiple
+                      options={pickerOptions}
+                      value={st.users}
+                      onChange={(ids) => setGateUsers(g.key, ids)}
+                      placeholder="Add approvers…"
+                      emptyText="No active users"
+                    />
+                    {st.users.length === 0 && !(g.togglable && on) && (
+                      <p className="text-[11px] text-slate-400 italic mt-1">Nobody named — admin only</p>
+                    )}
                   </>
                 )}
 

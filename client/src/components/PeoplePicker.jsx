@@ -35,7 +35,7 @@ function Avatar({ url, name, active = true, size = 8 }) {
   const box = size === 5 ? 'w-5 h-5 text-[10px]' : 'w-8 h-8 text-[11px]';
   if (url) return <img src={url} alt="" className={`${box} rounded-full object-cover flex-shrink-0 border border-gray-200`} />;
   return (
-    <span className={`${box} rounded-full font-bold flex items-center justify-center flex-shrink-0 ${active ? 'bg-red-600 text-white' : 'bg-gray-300 text-gray-600'}`}>
+    <span className={`${box} rounded-full font-bold flex items-center justify-center flex-shrink-0 ${active ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>
       {initialsOf(name)}
     </span>
   );
@@ -50,7 +50,7 @@ const nameOf = (r) => (r && r.name && String(r.name).trim()) ? r.name : '(unname
 const closedLabel = (r) => (r ? nameOf(r) : '');
 
 const CheckIcon = () => (
-  <svg className="w-4 h-4 text-red-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <svg className="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
   </svg>
 );
@@ -191,14 +191,14 @@ export default function PeoplePicker({
                 <span
                   key={c.id}
                   title={c._unknown ? String(c.name) : closedLabel(c)}
-                  className={`inline-flex items-center gap-1 rounded-md pl-1.5 pr-1 py-0.5 text-xs max-w-full ${c._unknown ? 'bg-gray-100 text-gray-500' : 'bg-red-50 text-red-700'}`}
+                  className={`inline-flex items-center gap-1 rounded-md pl-1.5 pr-1 py-0.5 text-xs max-w-full ${c._unknown ? 'bg-gray-100 text-gray-500' : 'bg-blue-100 text-blue-800'}`}
                 >
                   <span className="truncate">{nameOf(c)}</span>
                   {!disabled && (
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); removeId(c.id); }}
-                      className="rounded hover:bg-red-100 text-red-500 leading-none w-4 h-4 flex items-center justify-center flex-shrink-0"
+                      className="rounded hover:bg-blue-200 text-blue-600 leading-none w-4 h-4 flex items-center justify-center flex-shrink-0"
                       aria-label={`Remove ${nameOf(c)}`}
                     >×</button>
                   )}
@@ -217,13 +217,15 @@ export default function PeoplePicker({
           )}
         </div>
 
-        {allowClear && hasSelection && !disabled && (
+        {/* Clear-all is single-mode only — in multiselect each chip carries its own
+            × (and Backspace removes the last), so a separate clear-all is redundant. */}
+        {allowClear && hasSelection && !disabled && !multiple && (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); clearAll(); }}
             title="Clear"
             aria-label="Clear selection"
-            className="text-gray-400 hover:text-red-600 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded"
+            className="text-gray-400 hover:text-blue-600 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded"
           >×</button>
         )}
         <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -297,12 +299,12 @@ export default function PeoplePicker({
                   onMouseEnter={() => setActive(i)}
                   onClick={() => { if (!reason) toggle(o); }}
                   title={reason ? `${nm} — ${reason}` : `${nm}${meta ? ` — ${meta}` : ''}`}
-                  className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${reason ? 'opacity-50 cursor-not-allowed' : ''} ${!reason && (isActive || (!multiple && isSel)) ? 'bg-red-50' : ''}`}
+                  className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${reason ? 'opacity-50 cursor-not-allowed' : ''} ${!reason && (isActive || (!multiple && isSel)) ? 'bg-blue-50' : ''}`}
                 >
                   <Avatar url={o.avatar_url} name={o.name} active={o.active} size={8} />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
-                      <span className={`text-sm truncate ${isSel ? 'font-semibold text-red-700' : 'text-gray-900'}`}>{nm}</span>
+                      <span className={`text-sm truncate ${isSel ? 'font-semibold text-blue-700' : 'text-gray-900'}`}>{nm}</span>
                       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${o.active ? 'bg-green-500' : 'bg-gray-300'}`} title={o.active ? 'active' : 'inactive'} />
                       {o.dupCount > 1 && (
                         <span className="text-[10px] font-medium text-amber-700 bg-amber-100 rounded px-1 flex-shrink-0" title="This login maps to more than one employee record — pick carefully.">
