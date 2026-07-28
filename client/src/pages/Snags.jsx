@@ -262,7 +262,12 @@ export default function Snags() {
       {/* Reverted to the original 10-column table per mam
           (2026-05-21: "dont change also snag list old is ok"). */}
       <div className="card p-0">
-        <table className="freeze-head">
+        {/* Own bounded scroll box → the sticky `freeze-head` thead pins to
+            THIS container's top (Excel-style frozen header), and `freeze-col`
+            keeps the Snag-No column fixed during horizontal scroll.
+            mam (2026-07-28): "freeze like excel". */}
+        <div className="overflow-auto max-h-[70vh]">
+        <table className="freeze-head freeze-col w-full">
           <thead>
             <tr>
               <th>Snag No</th><th>Raised</th><th>Site / Location</th><th>Description</th>
@@ -329,6 +334,7 @@ export default function Snags() {
             ))}
           </tbody>
         </table>
+        </div>
         {snags.length > PAGE_SIZE && (
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-t text-sm">
             <span className="text-gray-500">
