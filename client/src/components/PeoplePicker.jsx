@@ -64,6 +64,8 @@ export default function PeoplePicker({
   error = false,
   onRetry,
   excludeIds = [],
+  getDisabledReason,          // (row) => string | null — keep a row VISIBLE but non-
+                              // selectable, greyed with the reason (vs excludeIds = hide)
   disabled = false,
   disabledHint,
   allowClear = true,
@@ -159,7 +161,7 @@ export default function PeoplePicker({
     if (e.key === 'Escape') { setOpen(false); return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, shown.length - 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)); }
-    else if (e.key === 'Enter') { e.preventDefault(); if (shown[active]) toggle(shown[active]); }
+    else if (e.key === 'Enter') { e.preventDefault(); const o = shown[active]; if (o && !getDisabledReason?.(o)) toggle(o); }
     else if (e.key === 'Backspace' && !search && multiple && selectedIds.length) {
       removeId(selectedIds[selectedIds.length - 1]);   // chip-style backspace delete
     }
@@ -281,6 +283,7 @@ export default function PeoplePicker({
               const nm = nameOf(o);
               // Email is search-only — NOT shown. Visible meta = designation · dept.
               const meta = [o.designation, o.department].filter(Boolean).join(' · ');
+              const reason = getDisabledReason?.(o) || null;   // truthy → visible but not pickable
               return (
                 <button
                   type="button"
@@ -289,10 +292,12 @@ export default function PeoplePicker({
                   id={`${listboxId}-opt-${o.id}`}
                   role="option"
                   aria-selected={isSel}
+                  aria-disabled={reason ? true : undefined}
+                  disabled={!!reason}
                   onMouseEnter={() => setActive(i)}
-                  onClick={() => toggle(o)}
-                  title={`${nm}${meta ? ` — ${meta}` : ''}`}
-                  className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${isActive || (!multiple && isSel) ? 'bg-red-50' : ''}`}
+                  onClick={() => { if (!reason) toggle(o); }}
+                  title={reason ? `${nm} — ${reason}` : `${nm}${meta ? ` — ${meta}` : ''}`}
+                  className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${reason ? 'opacity-50 cursor-not-allowed' : ''} ${!reason && (isActive || (!multiple && isSel)) ? 'bg-red-50' : ''}`}
                 >
                   <Avatar url={o.avatar_url} name={o.name} active={o.active} size={8} />
                   <span className="min-w-0 flex-1">
@@ -305,7 +310,12 @@ export default function PeoplePicker({
                         </span>
                       )}
                     </span>
-                    {meta && <span className="block text-xs text-gray-500 truncate">{meta}</span>}
+                    {(meta || reason) && (
+                      <span className="block text-xs truncate">
+                        {meta && <span className="text-gray-500">{meta}</span>}
+                        {reason && <span className="text-amber-700">{meta ? ' · ' : ''}{reason}</span>}
+                      </span>
+                    )}
                   </span>
                   {multiple && isSel && <CheckIcon />}
                 </button>
