@@ -12,7 +12,7 @@
 //
 // Permission gates: snags.view / create / edit / approve / delete.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -44,23 +44,49 @@ const PRIORITY_PILL = {
 export default function Snags() {
   const { canCreate, canEdit, canDelete, canApprove, isAdmin, user } = useAuth();
   const [snags, setSnags] = useState([]);
-  const [stats, setStats] = useState(null);
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
-  const [filters, setFilters] = useState({ status: '', priority: '', search: '', scope: '' });
+  const [filters, setFilters] = useState({ status: '', priority: '', search: '', scope: '', site_id: '' });
   const [modal, setModal] = useState(false);          // raise/edit
   const [proofModal, setProofModal] = useState(null); // snag obj being submitted
   const [proofForm, setProofForm] = useState({});
   const [form, setForm] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
     api.get(`/snags?${params}`).then(r => setSnags(r.data || [])).catch(() => {});
-    api.get('/snags/stats').then(r => setStats(r.data)).catch(() => {});
   }, [filters]);
+
+  // Summary cards reflect exactly what the filtered list shows (site,
+  // status, priority, search, scope) — derived from the loaded rows so
+  // the numbers always match the table below.
+  const stats = useMemo(() => {
+    const s = { total: snags.length, open: 0, submitted: 0, approved: 0, rejected: 0, critical: 0 };
+    for (const x of snags) {
+      if (x.status === 'open') s.open++;
+      else if (x.status === 'submitted') s.submitted++;
+      else if (x.status === 'approved') s.approved++;
+      else if (x.status === 'rejected') s.rejected++;
+      if (x.priority === 'critical' && x.status !== 'approved') s.critical++;
+    }
+    return s;
+  }, [snags]);
+
+  // Paginate the table so we never render 300+ rows (each with two image
+  // thumbnails) at once — that was hanging the page. Cards/stats above stay
+  // on the full filtered set; only the table is sliced per page.
+  const totalPages = Math.max(1, Math.ceil(snags.length / PAGE_SIZE));
+  const pageRows = useMemo(
+    () => snags.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [snags, page],
+  );
+  // Jump back to page 1 whenever the filtered list changes.
+  useEffect(() => { setPage(1); }, [filters]);
 
   useEffect(() => {
     load();
@@ -191,6 +217,13 @@ export default function Snags() {
           </select>
         </div>
         <div>
+          <label className="label">Site</label>
+          <select className="select" value={filters.site_id} onChange={e => setFilters(f => ({ ...f, site_id: e.target.value }))}>
+            <option value="">All</option>
+            {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div>
           <label className="label">Status</label>
           <select className="select" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
             <option value="">All</option>
@@ -227,7 +260,7 @@ export default function Snags() {
             {snags.length === 0 && (
               <tr><td colSpan="10" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
             )}
-            {snags.map(s => (
+            {pageRows.map(s => (
               <tr key={s.id}>
                 <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
                 <td className="text-xs">
@@ -282,6 +315,20 @@ export default function Snags() {
             ))}
           </tbody>
         </table>
+        {snags.length > PAGE_SIZE && (
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-t text-sm">
+            <span className="text-gray-500">
+              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, snags.length)} of {snags.length}
+            </span>
+            <div className="flex items-center gap-1">
+              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page <= 1} onClick={() => setPage(1)}>« First</button>
+              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ Prev</button>
+              <span className="px-2 whitespace-nowrap">Page {page} / {totalPages}</span>
+              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>Next ›</button>
+              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page >= totalPages} onClick={() => setPage(totalPages)}>Last »</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* RAISE / EDIT MODAL */}
