@@ -688,7 +688,23 @@ router.get('/candidates/stats', (req, res) => {
 // staff-cost endpoint aggregates server-side, so non-HR users never see
 // individual figures even there.
 router.get('/employees', (req, res) => {
-  const rows = getDb().prepare(
+  const db = getDb();
+
+  // Lite projection for the shared people picker (client usePeopleOptions):
+  // non-sensitive identity fields only. Salary is EXPLICITLY excluded (it never
+  // leaves the DB here — not even redacted), along with phone / join_date /
+  // timestamps. Avatar comes from the linked user so the picker can show it.
+  if (req.query.lite === '1' || req.query.lite === 'true') {
+    const lite = db.prepare(
+      `SELECT e.id, e.user_id, e.name, e.email, e.designation, e.department, e.status,
+              u.avatar_url AS avatar_url, u.name AS linked_user_name
+       FROM employees e LEFT JOIN users u ON u.id = e.user_id
+       ORDER BY e.name COLLATE NOCASE`
+    ).all();
+    return res.json(lite);
+  }
+
+  const rows = db.prepare(
     `SELECT e.*, u.name as linked_user_name, u.username as linked_username
      FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
   ).all();

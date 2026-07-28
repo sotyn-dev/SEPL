@@ -46,6 +46,8 @@ import {
   FiGitMerge,
   // Procurement · backward-pass Gantt (mam 2026-05-28)
   FiGitBranch,
+  // Org Structure (Phase B)
+  FiShare2,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -149,6 +151,7 @@ const SIDEBAR_GROUPS = [
     { path: '/attendance',      label: 'Attendance',                icon: FiCalendar,   module: 'attendance' },
     { path: '/payroll',         label: 'Payroll',                   icon: FiDollarSign, module: 'payroll' },
     { path: '/employees',       label: 'Employees',                 icon: FiAtSign,     module: 'employees' },
+    { path: '/org-structure',   label: 'Org Structure',             icon: FiShare2,     module: 'org_structure' },
     // Mam (2026-05-30): "performance is under HRMS" — moved from
     // the Tasks group so the scorecard sits with the rest of HR.
     { path: '/scorecard',       label: 'Performance',               icon: FiAward,      module: 'scoring' },

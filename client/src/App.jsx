@@ -44,6 +44,7 @@ const Rentals = lazy(() => import('./pages/Rentals'));
 const Snags = lazy(() => import('./pages/Snags'));
 const CompanyAssets = lazy(() => import('./pages/CompanyAssets'));
 const Employees = lazy(() => import('./pages/Employees'));
+const OrgStructure = lazy(() => import('./pages/hr/OrgStructure'));
 const Expenses = lazy(() => import('./pages/Expenses'));
 const Checklists = lazy(() => import('./pages/Checklists'));
 const CashFlow = lazy(() => import('./pages/CashFlow'));
@@ -220,6 +221,7 @@ export default function App() {
         <Route path="tools" element={<ModuleRoute module="tools"><Tools /></ModuleRoute>} />
         <Route path="rentals" element={<ModuleRoute module="rentals"><Rentals /></ModuleRoute>} />
         <Route path="employees" element={<ModuleRoute module="employees"><Employees /></ModuleRoute>} />
+        <Route path="org-structure" element={<ModuleRoute module="org_structure"><OrgStructure /></ModuleRoute>} />
         <Route path="expenses" element={<ModuleRoute module="expenses"><Expenses /></ModuleRoute>} />
         <Route path="checklists" element={<ModuleRoute module="checklists"><Checklists /></ModuleRoute>} />
         {/* Admin Routes */}

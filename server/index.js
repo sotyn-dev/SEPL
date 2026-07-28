@@ -416,6 +416,8 @@ app.use('/api/collections', require('./routes/collections'));
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
 app.use('/api/site-chat', require('./routes/siteChat'));
+// Org Structure (Phase B) — department tree + designation catalog + openings
+app.use('/api/org-structure', require('./routes/orgStructure'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 

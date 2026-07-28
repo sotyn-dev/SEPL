@@ -76,6 +76,7 @@ const ALL_MODULES = [
   { key: 'tools', label: 'Tools Management' },
   { key: 'rentals', label: 'Room Rentals' },
   { key: 'employees', label: 'Employees' },
+  { key: 'org_structure', label: 'Org Structure' },
   { key: 'expenses', label: 'Expenses' },
 
   // — Platform

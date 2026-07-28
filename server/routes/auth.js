@@ -225,6 +225,25 @@ router.get('/users', authMiddleware, (req, res) => {
   // omits the param so it can still see + manage inactives.
   const activeOnly = req.query.active_only === '1';
   const whereClause = activeOnly ? 'WHERE u.active = 1' : '';
+
+  // Lite projection for the shared people picker (client usePeopleOptions):
+  // ONLY the non-sensitive identity fields needed to render + disambiguate a
+  // person — no phone / role / username / approval_role / flags / timestamps.
+  // Avatar is kept (shown in the picker); salary lives on employees and is
+  // never in this payload. Keeps sensitive/unused columns off the wire.
+  if (req.query.lite === '1' || req.query.lite === 'true') {
+    const lite = db.prepare(`
+      SELECT u.id, u.name, u.email, u.department, u.active, u.avatar_url,
+      (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = u.id) AS hr_department,
+      (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
+      (SELECT COUNT(*) FROM employees e WHERE e.user_id = u.id) AS hr_record_count
+      FROM users u
+      ${whereClause}
+      ORDER BY u.name COLLATE NOCASE
+    `).all();
+    return res.json(lite);
+  }
+
   // HR (records): department + designation resolved from the linked employee(s) via the
   // existing employees.user_id link — DISPLAY ONLY, alongside the untouched u.department.
   // Correlated subqueries (not a JOIN) so they never multiply the GROUP_CONCAT(role) rows;

@@ -4368,6 +4368,124 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Org Structure (Phase B) — hybrid model: department tree + flat designation
+  // catalog + M:N mapping + openings + an effective-dated employee_timeline.
+  // Design: plans/moonlit-puzzling-dawn.md. Built to be migration-proof later:
+  //   · CREATE TABLE / INDEX IF NOT EXISTS → re-running boot is a no-op.
+  //   · NO CHECK constraints on the status columns. A CHECK can only be relaxed
+  //     by a full copy-table rebuild (see the indents.status pain at ~line 4340);
+  //     statuses are validated in the route layer instead, so adding a new status
+  //     value never forces a schema migration.
+  //   · FKs only on STRUCTURAL ids (tree parent, junction, timeline dept/desig/
+  //     employee). Display-only / snapshot refs (head, reports-to, filled-by,
+  //     manager, changed-by) are plain INTEGER — no FK — so they never raise
+  //     "FOREIGN KEY constraint failed" when an unrelated employee/user is removed.
+  //   · Fully reversible: DROP these tables + the one nullable employees column
+  //     and the DB is byte-for-byte as before (nothing else references them).
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS org_departments (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id        INTEGER REFERENCES org_departments(id),   -- NULL = root
+        name             TEXT NOT NULL,
+        alias            TEXT,                                      -- common/site name, e.g. "(Sales & Tendering)"
+        head_employee_id INTEGER,                                  -- DISPLAY ONLY (soft ref, no FK; grants nothing)
+        sort_order       INTEGER DEFAULT 0,
+        active           INTEGER DEFAULT 1,
+        created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(parent_id, name)
+      );
+
+      CREATE TABLE IF NOT EXISTS org_designations (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL UNIQUE,        -- full title, e.g. "Managing Director"
+        tag_name   TEXT,                        -- short chip/code, e.g. "MD"
+        singleton  INTEGER DEFAULT 0,           -- 1 = HARD cap: only ONE active holder (MD/COO/CFO)
+        status     TEXT DEFAULT 'present',      -- present | not_wanted | planned  (validated in routes)
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      -- Partial UNIQUE: tag_name is unique only when present (most titles omit it).
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_org_desig_tag
+        ON org_designations(tag_name) WHERE tag_name IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS org_department_designations (
+        department_id  INTEGER NOT NULL REFERENCES org_departments(id)  ON DELETE CASCADE,
+        designation_id INTEGER NOT NULL REFERENCES org_designations(id) ON DELETE CASCADE,
+        PRIMARY KEY (department_id, designation_id)
+      );
+      -- Reverse lookup (depts-of-a-title); the forward direction is the PK itself.
+      CREATE INDEX IF NOT EXISTS idx_org_dd_designation
+        ON org_department_designations(designation_id);
+
+      CREATE TABLE IF NOT EXISTS org_openings (
+        id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+        department_id          INTEGER REFERENCES org_departments(id),
+        designation_id         INTEGER REFERENCES org_designations(id),
+        headcount              INTEGER DEFAULT 1,
+        reports_to_employee_id INTEGER,               -- soft ref (no FK)
+        status                 TEXT DEFAULT 'open',   -- open | filled | on_hold | closed (validated in routes)
+        filled_employee_id     INTEGER,               -- soft ref (no FK)
+        notes                  TEXT,
+        created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+        closed_at              DATETIME
+      );
+      CREATE INDEX IF NOT EXISTS idx_org_openings_status ON org_openings(status);
+
+      -- Effective-dated employee history spine (HRIS EFFDT/EFFSEQ pattern).
+      -- Wired for dept/designation/manager now; salary/roster/ot/status columns
+      -- are provisioned + snapshotted so later modules link with no schema change.
+      CREATE TABLE IF NOT EXISTS employee_timeline (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id    INTEGER NOT NULL REFERENCES employees(id),
+        department_id  INTEGER REFERENCES org_departments(id),
+        designation_id INTEGER REFERENCES org_designations(id),
+        manager_id     INTEGER,               -- snapshot of users.manager_id (live source stays users; no FK)
+        salary         REAL,                  -- mirrors employees.salary (read-gate with employee_salary.can_view)
+        salary_exempt  INTEGER,               -- mirrors employees.salary_exempt
+        roster         TEXT,                  -- mirrors employees.roster
+        ot_eligible    INTEGER,               -- mirrors employees.ot_eligible
+        status         TEXT,                  -- mirrors employees.status
+        effective_from TEXT NOT NULL,         -- date this state became true (date-level)
+        effective_seq  INTEGER DEFAULT 0,     -- EFFSEQ: tiebreaker for >1 change the same day
+        effective_to   TEXT,                  -- NULL = the current open row
+        reason         TEXT,
+        source         TEXT,                  -- org | payroll | roster | manual
+        changed_by     INTEGER,               -- acting user (soft ref, no FK)
+        changed_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      -- Exactly ONE open row per employee — an invariant the employees table lacks.
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_emp_timeline_open
+        ON employee_timeline(employee_id) WHERE effective_to IS NULL;
+      -- As-of range lookups.
+      CREATE INDEX IF NOT EXISTS idx_emp_timeline_asof
+        ON employee_timeline(employee_id, effective_from, effective_seq);
+      -- Current headcount rollups by dept / title (only the open rows).
+      CREATE INDEX IF NOT EXISTS idx_emp_timeline_dept_open
+        ON employee_timeline(department_id) WHERE effective_to IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_emp_timeline_desig_open
+        ON employee_timeline(designation_id) WHERE effective_to IS NULL;
+    `);
+    // One nullable string column on employees — optional finer sub-title label
+    // (e.g. "ASM · Region 2"). Idempotent guarded ALTER (house pattern, line 4368).
+    try { db.exec(`ALTER TABLE employees ADD COLUMN role_subtitle TEXT`); } catch (_) { /* already exists */ }
+  } catch (e) { console.error('[schema] org_structure tables create failed:', e.message); }
+
+  // Org Structure — SKELETON seed, guarded on empty: company root + the 5
+  // function nodes, nothing else. Everything is editable in the UI afterward
+  // (rename the root, restructure, add sub-departments + the designation
+  // catalog), so a different org reconfigures freely — the seed is a starting
+  // point, not a lock-in. Runs once (guarded on org_departments being empty).
+  try {
+    if (db.prepare('SELECT COUNT(*) c FROM org_departments').get().c === 0) {
+      const rootId = db.prepare('INSERT INTO org_departments (name, sort_order) VALUES (?, 0)')
+        .run('Secured Engineers Pvt Ltd').lastInsertRowid;
+      const insFn = db.prepare('INSERT INTO org_departments (parent_id, name, sort_order) VALUES (?,?,?)');
+      ['Business', 'Operation', 'Finance', 'HR & Admin', 'System & Process'].forEach((n, i) => insFn.run(rootId, n, i));
+      console.log('[schema] org_structure skeleton seeded (root + 5 function nodes)');
+    }
+  } catch (e) { console.error('[schema] org_structure seed failed:', e.message); }
+
   // Manpower Plan — admin override of the auto (value-slab) required manpower
   // per project (mam 2026-06-12: "admin wants to edit required manpower").
   // Keyed by the normalized project key the manpower-plan endpoint groups by.
@@ -5725,6 +5843,11 @@ in your first week. If a process feels broken, raise a Help Ticket
     //                              and the HR-alert recipient group (cron).
     //   attendance_grid.can_view → view the Attendance Monthly Grid tab (marking needs attendance.can_approve).
     'employee_salary','hr_team','attendance_grid',
+    // Phase B: Org Structure — department tree + designation catalog + openings.
+    // Fail-closed: shipping the key makes the seed loop below provision a DENY
+    // (0,0,0,0,0) row for every non-admin role, so nobody gains access until an
+    // admin ticks it in Roles & Permissions; Admin is auto-granted by the top-up.
+    'org_structure',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
