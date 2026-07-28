@@ -4471,6 +4471,25 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE employees ADD COLUMN role_subtitle TEXT`); } catch (_) { /* already exists */ }
   } catch (e) { console.error('[schema] org_structure tables create failed:', e.message); }
 
+  // Case-INSENSITIVE uniqueness for the designation catalog (dme 2026-07-28:
+  // "md | MD | Md | Managing Director | managing director — all compared in
+  // duplication?"). The inline UNIQUE(name) and the tag_name index are BINARY,
+  // so "MD"/"md" and "Managing Director"/"managing director" slipped through as
+  // separate rows. Add LOWER() functional unique indexes — same guarded idiom as
+  // idx_users_username (line ~3695): only swap in the stricter guard when the data
+  // has no case-collisions, so boot never crashes and a real duplicate can't leave
+  // the catalog with weaker (binary-only) protection. Routes already .trim().
+  try {
+    const dup = db.prepare("SELECT 1 FROM org_designations GROUP BY LOWER(name) HAVING COUNT(*)>1 LIMIT 1").get();
+    if (!dup) db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uniq_org_desig_name_ci ON org_designations(LOWER(name))');
+    else console.error('[schema] org_designations.name CI-uniqueness NOT hardened — case-variant titles exist; de-dupe them then restart.');
+  } catch (e) { console.error('[schema] org_desig name CI index error:', e.message); }
+  try {
+    const dup = db.prepare("SELECT 1 FROM org_designations WHERE tag_name IS NOT NULL AND tag_name<>'' GROUP BY LOWER(tag_name) HAVING COUNT(*)>1 LIMIT 1").get();
+    if (!dup) db.exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_org_desig_tag_ci ON org_designations(LOWER(tag_name)) WHERE tag_name IS NOT NULL");
+    else console.error('[schema] org_designations.tag_name CI-uniqueness NOT hardened — case-variant tags exist; de-dupe them then restart.');
+  } catch (e) { console.error('[schema] org_desig tag CI index error:', e.message); }
+
   // Org Structure — SKELETON seed, guarded on empty: company root + the 5
   // function nodes, nothing else. Everything is editable in the UI afterward
   // (rename the root, restructure, add sub-departments + the designation

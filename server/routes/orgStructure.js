@@ -138,6 +138,9 @@ router.put('/departments/:id', requirePermission(M, 'edit'), (req, res) => {
           )
         `).run(newName, id);
       }
+      // NOTE: Set-head records ONLY who leads (head_employee_id). A person's
+      // designation is an employee attribute, authored in the employee form —
+      // NOT here. The org tree references the head; it does not tag their title.
     });
     tx();
     res.json(db.prepare('SELECT * FROM org_departments WHERE id=?').get(id));
@@ -214,8 +217,8 @@ router.post('/designations', requirePermission(M, 'create'), (req, res) => {
       .run(String(name).trim(), tag_name ? String(tag_name).trim() : null, singleton ? 1 : 0, status);
     res.json(db.prepare('SELECT * FROM org_designations WHERE id=?').get(info.lastInsertRowid));
   } catch (e) {
-    if (/UNIQUE/i.test(e.message) && /tag_name/i.test(e.message)) return res.status(400).json({ error: 'That tag/code is already used by another title' });
-    if (/UNIQUE/i.test(e.message)) return res.status(400).json({ error: 'A designation with that title already exists' });
+    if (/UNIQUE/i.test(e.message) && /tag/i.test(e.message)) return res.status(400).json({ error: 'That tag/code is already used by another title (case-insensitive)' });
+    if (/UNIQUE/i.test(e.message)) return res.status(400).json({ error: 'A designation with that title already exists (case-insensitive)' });
     res.status(500).json({ error: e.message });
   }
 });
@@ -258,8 +261,8 @@ router.put('/designations/:id', requirePermission(M, 'edit'), (req, res) => {
     tx();
     res.json(db.prepare('SELECT * FROM org_designations WHERE id=?').get(id));
   } catch (e) {
-    if (/UNIQUE/i.test(e.message) && /tag_name/i.test(e.message)) return res.status(400).json({ error: 'That tag/code is already used by another title' });
-    if (/UNIQUE/i.test(e.message)) return res.status(400).json({ error: 'A designation with that title already exists' });
+    if (/UNIQUE/i.test(e.message) && /tag/i.test(e.message)) return res.status(400).json({ error: 'That tag/code is already used by another title (case-insensitive)' });
+    if (/UNIQUE/i.test(e.message)) return res.status(400).json({ error: 'A designation with that title already exists (case-insensitive)' });
     res.status(500).json({ error: e.message });
   }
 });
