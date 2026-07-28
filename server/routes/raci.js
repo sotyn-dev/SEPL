@@ -7,7 +7,7 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
-const { MODULE_DEFS, tsMs, stepsFor, activeSteps, editorStepsFor, l2EnabledRaci } = require('../utils/raciModules');
+const { MODULE_DEFS, tsMs, stepsFor, activeSteps, editorStepsFor } = require('../utils/raciModules');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -89,15 +89,13 @@ router.get('/record/:module/:recordId', (req, res) => {
   if (!mod) return res.status(404).json({ error: 'Unknown module' });
   const saved = getRecordRaci(db, req.params.module, +req.params.recordId);
   const nm = (id) => { if (!id) return null; const u = db.prepare('SELECT id, name FROM users WHERE id=?').get(id); return u || null; };
-  const l2On = l2EnabledRaci(db);
   res.json({
     module: req.params.module, record_id: +req.params.recordId, label: mod.label,
     steps: editorStepsFor(db, req.params.module).map(s => {
       const c = saved[s.key] || {};
-      // The indent 'L2 Approval' step's ON/OFF is the real L2 flow switch, so its
-      // enabled state comes from that (not the generic step_enabled). Every other
-      // step uses step_enabled (default = enabled). mam 2026-07-21.
-      const isIndentL2 = req.params.module === 'indent_to_dispatch' && s.key === 'l2';
+      // `enabled` is the generic per-step flag only. The indent L2 special-case
+      // that sourced it from the real flow switch was removed 2026-07-23 — that
+      // switch now lives in Procurement → ⚙ Approval Settings, not here.
       return {
         ...s,
         responsible_id: c.responsible_id || null, responsible: nm(c.responsible_id),
@@ -107,7 +105,7 @@ router.get('/record/:module/:recordId', (req, res) => {
         sla_hours: c.sla_hours != null ? +c.sla_hours : null,
         weight: c.weight != null ? +c.weight : null,
         commitment: c.commitment || null,
-        enabled: isIndentL2 ? l2On : (c.step_enabled == null ? true : c.step_enabled !== 0),
+        enabled: c.step_enabled == null ? true : c.step_enabled !== 0,
       };
     }),
   });
@@ -121,37 +119,14 @@ router.put('/record/:module/:recordId', (req, res) => {
   const validKeys = new Set(editorStepsFor(db, req.params.module).map(s => s.key));
   const rows = Array.isArray(req.body.steps) ? req.body.steps : [];
 
-  // ── Indent approver gate steps (security + guard rails, mam 2026-07-21) ──
-  // For the indent whole-module default (record_id 0), steps l1/l2 name the
-  // people who APPROVE company spend and crm gates the CRM stage. These drive
-  // the real flow, so:
-  //   (C2) only an admin may change them — otherwise any logged-in user could
-  //        appoint themselves the approver (privilege escalation).
-  //   (A3/A4/C3) enforce L1-required-for-L2 + L2-needs-its-own-name, evaluating
-  //        the incoming payload merged over what is already stored.
-  const enOf = (v) => (v === false || v === 0 || v === '0') ? 0 : 1;
-  if (req.params.module === 'indent_to_dispatch' && +req.params.recordId === 0) {
-    const GATE = new Set(['l1', 'l2', 'crm']);
-    const touched = rows.filter(r => GATE.has(String(r.step_key)));
-    if (touched.length && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Only an admin can set the indent approvers / approval steps. Ask an admin to change these in ⚙ Set RACI for whole module.' });
-    }
-    if (touched.length) {
-      const stored = getRecordRaci(db, 'indent_to_dispatch', 0);
-      const inMap = {}; for (const r of rows) inMap[String(r.step_key)] = r;
-      const respOf = (k) => {
-        if (k in inMap) { const n = +inMap[k].responsible_id; return Number.isFinite(n) && n > 0 ? n : null; }
-        return stored[k]?.responsible_id || null;
-      };
-      const l1resp = respOf('l1'), l2resp = respOf('l2');
-      // Final L2-on state: payload's l2.enabled if the l2 row is being written,
-      // else the live switch.
-      const l2on = ('l2' in inMap && inMap['l2'].enabled !== undefined)
-        ? enOf(inMap['l2'].enabled) === 1 : l2EnabledRaci(db);
-      if (l2on && !l1resp) return res.status(400).json({ error: 'Set the Indent L1 Approver (a Responsible name) before turning L2 on.' });
-      if (l2on && !l2resp) return res.status(400).json({ error: 'Pick a Responsible for the Indent L2 Approver before turning it on.' });
-    }
-  }
+  // (The indent approver gate guard rails — the admin-only check on steps
+  // l1/l2/crm, and the "set an L1/L2 approver before turning L2 on" validation,
+  // both added 2026-07-21 — were REMOVED 2026-07-23. They existed because these
+  // RACI rows decided who could approve and whether a stage ran. Neither is true
+  // any more: approvers and the L2 switch live in Procurement → ⚙ Approval
+  // Settings, which is admin-only and validates there. RACI rows are reporting
+  // again — a Responsible name here is scorecard attribution, nothing more, so
+  // no privilege-escalation surface remains to guard.)
 
   const up = db.prepare(`
     INSERT INTO raci_assignment (module, record_id, step_key, responsible_id, accountable_id, consulted_id, informed_id, sla_hours, weight, commitment, step_enabled, updated_at)
@@ -176,18 +151,10 @@ router.put('/record/:module/:recordId', (req, res) => {
   });
   tx();
 
-  // Special-case (mam 2026-07-21): for the indent whole-module default, the
-  // 'L2 Approval' step's ON/OFF drives the REAL L2 flow switch — OFF actually
-  // skips L2 (L1 becomes final), not just hides it from tracking. (CRM skips via
-  // its own step_enabled, read directly by the raise flow.)
-  if (req.params.module === 'indent_to_dispatch' && +req.params.recordId === 0) {
-    const l2row = rows.find(r => String(r.step_key) === 'l2');
-    if (l2row) {
-      const on = en(l2row.enabled) === 1;
-      db.prepare(`INSERT INTO app_settings (key, value) VALUES ('indent_l2_enabled', ?)
-                  ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(on ? '1' : '0');
-    }
-  }
+  // (The write-through to app_settings.indent_l2_enabled — added 2026-07-21 so
+  // this editor's 'L2 Approval' pill drove the REAL L2 flow switch — was REMOVED
+  // 2026-07-23. Saving RACI no longer changes the flow. The L2 switch lives in
+  // Procurement → ⚙ Approval Settings.)
   res.json({ message: 'RACI saved' });
 });
 

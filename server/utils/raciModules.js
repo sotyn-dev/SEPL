@@ -34,60 +34,15 @@ function firstOpen(steps, stamps) {
   return null;
 }
 
-// L2 approval on/off switch (mam 2026-07-21) — same app_settings flag the
-// procurement routes read. Controls whether indent_to_dispatch shows an
-// 'L2 Approval' step.
-function l2EnabledRaci(db) {
-  try { return db.prepare("SELECT value v FROM app_settings WHERE key='indent_l2_enabled'").get()?.v === '1'; }
-  catch (_) { return false; }
-}
-
-// The effective step list for a module, honouring the L2 switch. For every
-// module except indent_to_dispatch this is just MODULE_DEFS[key].steps. For
-// indent_to_dispatch: OFF (default) → the base steps (l1 = 'Approval', no l2);
-// ON → 'l1' relabelled 'L1 Approval' with an 'L2 Approval' step inserted after
-// it. One place so the board, ⚙ editor and scoring all agree.
+// The step list for a module. For every module except indent_to_dispatch this is
+// just MODULE_DEFS[key].steps; the indent splits its single 'Approval' step into
+// 'L1 Approval' + 'L2 Approval'.
+//
+// BOTH levels are ALWAYS listed (2026-07-23). Until now the board and scorecard
+// hid the L2 step whenever the L2 switch was off, which meant RACI read a flow
+// switch to decide what to report. RACI is reporting only — it does not consult
+// the approval configuration at all.
 function stepsFor(db, moduleKey) {
-  const def = MODULE_DEFS[moduleKey];
-  if (!def) return [];
-  if (moduleKey !== 'indent_to_dispatch' || !l2EnabledRaci(db)) return def.steps;
-  const out = [];
-  for (const s of def.steps) {
-    if (s.key === 'l1') { out.push({ key: 'l1', label: 'L1 Approval' }); out.push({ key: 'l2', label: 'L2 Approval' }); }
-    else out.push(s);
-  }
-  return out;
-}
-
-// Per-step ON/OFF for the RACI board + scorecard (mam 2026-07-21: "every step
-// on/off button, same all erp"). A step turned OFF is hidden from the board and
-// excluded from scoring — it does NOT change the underlying module workflow.
-// Stored on the whole-module default row (record_id=0) as step_enabled=0.
-// Returns the SET of disabled step keys for a module (default = enabled).
-function disabledStepKeys(db, moduleKey) {
-  const off = new Set();
-  try {
-    for (const r of db.prepare(
-      "SELECT step_key FROM raci_assignment WHERE module=? AND record_id=0 AND step_enabled=0"
-    ).all(moduleKey)) off.add(r.step_key);
-  } catch (_) { /* column not added yet → nothing disabled */ }
-  return off;
-}
-
-// stepsFor minus any step the user switched OFF. Use this for the board + the
-// scorecard (what's tracked); the EDITOR uses editorStepsFor instead so every
-// step (incl. a switched-off one) stays visible to be turned back on.
-function activeSteps(db, moduleKey) {
-  const off = disabledStepKeys(db, moduleKey);
-  return stepsFor(db, moduleKey).filter(s => !off.has(s.key));
-}
-
-// Step list for the ⚙ Responsible EDITOR. Same as stepsFor for every module,
-// EXCEPT the indent always shows BOTH 'L1 Approval' and 'L2 Approval' (mam
-// 2026-07-21: "show L1/L2, not Approval") — even when L2 is switched off — so
-// mam can see the two levels and toggle L2 on/off right there. The board /
-// scorecard keep using stepsFor/activeSteps, which hide L2 when it's off.
-function editorStepsFor(db, moduleKey) {
   const def = MODULE_DEFS[moduleKey];
   if (!def) return [];
   if (moduleKey !== 'indent_to_dispatch') return def.steps;
@@ -98,6 +53,29 @@ function editorStepsFor(db, moduleKey) {
   }
   return out;
 }
+
+// Steps hidden from the RACI board + scorecard. The per-step ON/OFF *reporting*
+// toggle was RETIRED (mam 2026-07-22: "retire report toggle switches … like
+// before yesterday"). The last exception — the indent CRM stage — went with
+// procurement.crmStageActive on 2026-07-23: CRM is unconditional again, so there
+// is no skipped stage to hide. NOTHING is hidden now; step_enabled affects
+// nothing anywhere. Kept as a no-op so activeSteps() and its callers keep their
+// shape — delete it when the step_enabled column itself goes.
+function disabledStepKeys(db, moduleKey) {
+  return new Set();
+}
+
+// stepsFor minus any hidden step. Nothing is hidden any more, so this is now the
+// same list as stepsFor(); kept because the board and scorecard call it by name.
+function activeSteps(db, moduleKey) {
+  const off = disabledStepKeys(db, moduleKey);
+  return stepsFor(db, moduleKey).filter(s => !off.has(s.key));
+}
+
+// Step list for the ⚙ Responsible EDITOR. Identical to stepsFor since both now
+// always list L1 and L2 (mam 2026-07-21: "show L1/L2, not Approval"). Kept as a
+// named alias so the editor route reads clearly and can diverge later if needed.
+const editorStepsFor = stepsFor;
 
 const MODULE_DEFS = {
   // ── Payables (the original pilot) — timing from payment_approvals ────────
@@ -745,4 +723,4 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
   });
 }
 
-module.exports = { MODULE_DEFS, tsMs, raciUserWeek, raciUserWeekBreakdown, stepsFor, activeSteps, editorStepsFor, disabledStepKeys, l2EnabledRaci };
+module.exports = { MODULE_DEFS, tsMs, raciUserWeek, raciUserWeekBreakdown, stepsFor, activeSteps, editorStepsFor, disabledStepKeys };

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin } from 'react-icons/fi';
+import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown } from 'react-icons/fi';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -9,6 +9,7 @@ import { num as fmt, inr } from '../lib/solar/format';
 import { PROJECT_TYPES } from '../lib/solar/engine';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import QualificationChat from './QualificationChat';
+import { QUAL_SECTIONS } from '../lib/solar/qualification';
 
 const cr = (v) => `₹${fmt((v || 0) / 1e7, 2)} Cr`;
 
@@ -178,6 +179,7 @@ export default function SolarFunnel() {
 function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) {
   const [d, setD] = useState({ ...deal });
   const [showQual, setShowQual] = useState(false);
+  const [qualOpen, setQualOpen] = useState(false);
   const [aForm, setAForm] = useState({});
   const isNew = !deal.id;
   const set = (k, v) => setD((p) => ({ ...p, [k]: v }));
@@ -349,18 +351,53 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
                 </div>)}
             </div>)}
 
-          {qual && (
-            <div className="border rounded-lg p-3 bg-emerald-50/60 text-xs">
-              <p className="font-bold text-emerald-800 mb-1">✓ Qualified — {fmt(d.capacity_kw)} kW {d.project_type}</p>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-0.5 text-gray-700">
-                {qual.monthly_units && <div>Units/mo: <b>{qual.monthly_units}</b></div>}
-                {qual.monthly_bill && <div>Bill: <b>₹{qual.monthly_bill}</b></div>}
-                {qual.connection && <div>Conn: <b>{qual.connection}</b></div>}
-                {qual.roof_type && <div>Roof: <b>{qual.roof_type}</b></div>}
-                {qual.net_metering && <div>Metering: <b>{qual.net_metering}</b></div>}
-                {qual.timeline && <div>Timeline: <b>{qual.timeline}</b></div>}
+          {qual && (() => {
+            const filled = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+            const sections = QUAL_SECTIONS.map((sec) => {
+              const items = sec.questions.map((q) => ({ key: q.key, label: q.label, value: qual[q.key], answered: filled(qual[q.key]) }));
+              return { title: sec.title, items, answered: items.filter((i) => i.answered).length };
+            });
+            const answered = sections.reduce((n, s) => n + s.answered, 0);
+            const hasAny = answered > 0;
+            return (
+              <div className="border rounded-lg bg-emerald-50/60 text-xs overflow-hidden">
+                <button type="button" onClick={() => hasAny && setQualOpen((o) => !o)}
+                  className={`w-full flex items-center justify-between gap-2 p-3 text-left ${hasAny ? 'cursor-pointer hover:bg-emerald-50' : 'cursor-default'}`}>
+                  <span className="font-bold text-emerald-800">✓ Qualified — {fmt(d.capacity_kw)} kW {d.project_type}</span>
+                  <span className="flex items-center gap-2 flex-shrink-0">
+                    {hasAny && <FiChevronDown className={`text-emerald-700 transition-transform ${qualOpen ? 'rotate-180' : ''}`} size={14} />}
+                  </span>
+                </button>
+                {!hasAny && <p className="px-3 pb-3 -mt-1 text-[11px] text-gray-500 italic">No qualification answers were recorded on this deal.</p>}
+                {hasAny && qualOpen && (
+                  <div className="px-3 pb-3 space-y-5 border-t border-emerald-100 pt-3">
+                    {sections.filter((s) => s.answered > 0).map((sec) => {
+                      const gaps = sec.items.filter((i) => !i.answered);
+                      return (
+                        <div key={sec.title} className="pt-1">
+                          <p className="text-[11px] font-semibold text-emerald-700/90 mb-2">{sec.title.replace(/\s*\(.*\)$/, '')}</p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2 text-gray-700">
+                            {sec.items.filter((i) => i.answered).map((it) => (
+                              <div key={it.key} className="break-inside-avoid">
+                                <span className="block text-[10px] text-gray-500 leading-tight">{it.label}</span>
+                                <b className="text-gray-800">{String(it.value)}</b>
+                              </div>))}
+                          </div>
+                          {gaps.length > 0 && (
+                            <p className="text-[10px] text-gray-400 mt-2 leading-snug">
+                              <span className="text-gray-500">Not recorded:</span> {gaps.map((g) => g.key.replace(/_/g, ' ')).join(' · ')}
+                            </p>)}
+                        </div>);
+                    })}
+                    {sections.some((s) => s.answered === 0) && (
+                      <p className="text-[10px] text-gray-400 pt-1 border-t border-emerald-100/70">
+                        <span className="text-gray-500">Not recorded:</span> {sections.filter((s) => s.answered === 0).map((s) => s.title.replace(/\s*\(.*\)$/, '').replace(/^\d+ · /, '')).join(' · ')}
+                      </p>)}
+                  </div>
+                )}
               </div>
-            </div>)}
+            );
+          })()}
 
           {/* Quotation options (multiple specs/makes per client) */}
           {!isNew && (

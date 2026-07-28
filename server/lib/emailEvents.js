@@ -228,6 +228,27 @@ const EVENTS = {
     ],
     fields: ['project'],
   },
+  // ── Recruitment cron recipient lists (mam 2026-07-22) ────────────────
+  // These two exist ONLY to hold the email recipients for the HR cron's
+  // "offer pending" (Job 2) and "hiring request pending approval" (Job 3)
+  // reminders. listOnly = the rule editor shows just By-role + Fixed
+  // addresses (no dynamic people / conditions / template). The cron reads
+  // the resolved recipient list as its PRIMARY email target and falls back
+  // to findHrUsers when unset. Not fired through the engine.
+  'hr.offer_pending': {
+    label: 'Recruitment — offer pending response',
+    group: 'HR',
+    live: true,
+    listOnly: true,
+    vars: [], people: [], fields: [],
+  },
+  'hr.hiring_approval_pending': {
+    label: 'Recruitment — hiring request pending approval',
+    group: 'HR',
+    live: true,
+    listOnly: true,
+    vars: [], people: [], fields: [],
+  },
 };
 
 // Sample values so "Send test" renders a realistic preview without needing

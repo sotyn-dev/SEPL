@@ -264,13 +264,20 @@ router.get('/teams', (req, res) => {
   const db = getDb();
   const teams = db.prepare('SELECT * FROM gam_team ORDER BY name').all();
   const members = db.prepare(`
-    SELECT tm.team_id, tm.user_id, u.name, u.role, u.department
+    SELECT tm.team_id, tm.user_id, u.name, u.role, u.department,
+      (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = u.id) AS hr_department,
+      (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
+      (SELECT COUNT(*) FROM employees e WHERE e.user_id = u.id) AS hr_record_count
     FROM gam_team_member tm JOIN users u ON u.id = tm.user_id ORDER BY u.name`).all();
   const byTeam = {};
   for (const m of members) (byTeam[m.team_id] = byTeam[m.team_id] || []).push(m);
   // Active scorable users not yet on a team (so the admin can place them)
   const assigned = new Set(members.map(m => m.user_id));
-  const unassigned = db.prepare('SELECT id, name, role, department FROM users WHERE COALESCE(active,1)=1 ORDER BY name')
+  const unassigned = db.prepare(`SELECT id, name, role, department,
+      (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = users.id) AS hr_department,
+      (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = users.id) AS hr_designation,
+      (SELECT COUNT(*) FROM employees e WHERE e.user_id = users.id) AS hr_record_count
+    FROM users WHERE COALESCE(active,1)=1 ORDER BY name`)
     .all().filter(u => !assigned.has(u.id));
   res.json({ teams: teams.map(t => ({ ...t, members: byTeam[t.id] || [] })), unassigned });
 });

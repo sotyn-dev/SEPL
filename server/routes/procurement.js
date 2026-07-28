@@ -68,66 +68,77 @@ function fireIndent(db, indentId, eventKey, extra = {}) {
 // mam's requirement (2026-04-23): site can create indent, nothing else.
 const needsApprove = requirePermission('procurement', 'approve');
 
-// L1 approver identity (mam 2026-07-21). L2 approval has been removed — L1 is
-// now the single, FINAL sign-off on an indent. WHO the L1 approver is comes
-// from the ⚙ Responsible (RACI) board's whole-module default (record_id=0),
-// "L1 Approval" step, for the indent_to_dispatch module:  mam's words —
-// "if in L1 i change responsible name then he can approve".  Only that named
-// person (plus admin) may approve. If mam hasn't named anyone yet we fall back
-// to the legacy approval_role='l1' user so approvals never lock up. Returns
-// { id, name, source }.
-function getL1Approver(db) {
-  let row = null;
-  try {
-    row = db.prepare(
-      "SELECT responsible_id FROM raci_assignment WHERE module='indent_to_dispatch' AND record_id=0 AND step_key='l1'"
-    ).get();
-  } catch (_) { /* raci_assignment not created yet */ }
-  if (row && row.responsible_id) {
-    const u = db.prepare('SELECT id, name FROM users WHERE id=?').get(row.responsible_id);
-    if (u) return { id: u.id, name: u.name, source: 'raci' };
-  }
+// Indent → Dispatch approval gates — the catalogue + the only reader of the
+// gate settings tables. Every "who may act here" question routes through it.
+const approvalGates = require('../utils/indentToDispatchGates');
+
+// Who may act at an indent gate, as a LIST (2026-07-23).
+//   1. ⚙ Workflow Settings — authoritative the moment anyone is named there.
+//   2. Legacy fallback — the single users.approval_role user for that level.
+//
+// An EMPTY settings list means "not configured yet", NOT "nobody", so behaviour
+// is identical until someone is actually named. When the legacy half is deleted
+// later, an empty list takes on its final meaning: admin only.
+//
+// Used by BOTH the list payload (which buttons render) and the PUT gate (who may
+// actually approve), so the UI and the server can never disagree.
+function gateApproverList(db, gate, legacyFn) {
+  const named = approvalGates.approversOf(db, gate);
+  if (named.length) return named;
+  const legacy = legacyFn ? legacyFn(db) : null;
+  return legacy && legacy.id ? [{ id: legacy.id, name: legacy.name }] : [];
+}
+
+// Legacy L1 approver — the pre-Phase-5 mechanism, kept ONLY as the fallback for
+// a database where no L1 approver has been named in ⚙ Workflow Settings yet.
+//
+// NAMED "legacy" ON PURPOSE. It answers "who is the single approval_role='l1'
+// user", NOT "who may approve L1" — that is gateApproverList(db,'l1',…), which
+// consults the settings list first. The old name (getL1Approver) read like the
+// authority and got called directly in two places that then silently ignored
+// every approver named on the settings screen.
+//
+// It NO LONGER reads raci_assignment. Between 2026-07-21 and 2026-07-23 the ⚙
+// Responsible (RACI) Responsible name decided who could approve; that made a
+// reporting table load-bearing for authorization and left "who approves L1?"
+// answerable only by joining two systems. RACI is reporting again.
+function legacyL1Approver(db) {
   const legacy = db.prepare("SELECT id, name FROM users WHERE approval_role='l1' AND active=1 LIMIT 1").get();
   return legacy ? { id: legacy.id, name: legacy.name, source: 'role' } : { id: null, name: null, source: 'none' };
 }
 
 // L2 approval on/off switch (mam 2026-07-21: "i want to turn l2 off/on myself").
-// Stored in app_settings.indent_l2_enabled = '1' (ON, old L1→L2 flow) or '0'/
-// absent (OFF, L1 is final — the default after the 2026-07-21 removal). Admin
-// flips it from the Procurement page; no code change needed each time.
+//
+// SOURCE OF TRUTH (2026-07-23) = indent_to_dispatch_settings, key
+// 'approval.l2.enabled', set in Procurement → ⚙ Workflow Settings.
+//
+// app_settings.indent_l2_enabled survives for ONE reason: it is the fallback
+// inside effectiveEnabled(), so a database that has never saved the new setting
+// keeps its existing L2 state instead of silently reverting to the catalogue
+// default (OFF). Nothing else reads it — the three consumers this mirror was
+// originally kept for (raciModules.l2EnabledRaci, dashboards.js, the ⚙
+// Responsible editor's L2 banner) were all deleted or migrated on 2026-07-23.
+//
+// So the mirror write in PUT /approval-settings now feeds only this fallback.
+// Retiring it takes a one-time import of the old key into the settings table;
+// until that lands, both halves stay.
+//
+// NOTE: saving the ⚙ Responsible (RACI) board no longer touches the L2 switch at
+// all. ⚙ Workflow Settings is the only place that flips L2.
 function l2Enabled(db) {
-  try {
-    return db.prepare("SELECT value v FROM app_settings WHERE key='indent_l2_enabled'").get()?.v === '1';
-  } catch (_) { return false; }
+  return approvalGates.effectiveEnabled(db, 'l2');
 }
 
-// CRM approval stage on/off (mam 2026-07-21: "if step off, skip it, go to next").
-// Driven by the per-step ON/OFF on the "CRM Approval" step in the ⚙ Responsible
-// whole-module editor (raci_assignment record_id=0, step_key='crm'). Default ON.
-// When OFF, billable Extra indents SKIP the CRM sign-off and go straight to L1.
-function crmStageActive(db) {
-  try {
-    const r = db.prepare(
-      "SELECT step_enabled FROM raci_assignment WHERE module='indent_to_dispatch' AND record_id=0 AND step_key='crm'"
-    ).get();
-    return !r || r.step_enabled == null || r.step_enabled !== 0;   // default ON
-  } catch (_) { return true; }
-}
+// (crmStageActive() — the CRM stage ON/OFF read from raci_assignment.step_enabled,
+// added 2026-07-21 — was REMOVED 2026-07-23 along with the switch itself. Skipping
+// CRM never just skipped an approval: it also dropped the CRM funnel lead created
+// at raise time and the billable po_items row added on CRM approval, so the
+// revenue side of a client-billable Extra never opened.)
 
-// L2 approver identity — mirror of getL1Approver but for the 'l2' RACI step
-// (mam picked "the L2 Approval Responsible name"). Only meaningful when L2 is
-// switched ON. Falls back to the legacy approval_role='l2' user if unset.
-function getL2Approver(db) {
-  let row = null;
-  try {
-    row = db.prepare(
-      "SELECT responsible_id FROM raci_assignment WHERE module='indent_to_dispatch' AND record_id=0 AND step_key='l2'"
-    ).get();
-  } catch (_) { /* raci_assignment not created yet */ }
-  if (row && row.responsible_id) {
-    const u = db.prepare('SELECT id, name FROM users WHERE id=?').get(row.responsible_id);
-    if (u) return { id: u.id, name: u.name, source: 'raci' };
-  }
+// Legacy L2 approver — same contract as legacyL1Approver: the pre-Phase-5
+// mechanism, the fallback when nobody is named in ⚙ Workflow Settings. Not the
+// authority — that is gateApproverList(db,'l2',…). No longer reads raci_assignment.
+function legacyL2Approver(db) {
   const legacy = db.prepare("SELECT id, name FROM users WHERE approval_role='l2' AND active=1 LIMIT 1").get();
   return legacy ? { id: legacy.id, name: legacy.name, source: 'role' } : { id: null, name: null, source: 'none' };
 }
@@ -762,20 +773,29 @@ router.get('/indents', (req, res) => {
   // see only the ones they raised. Mam toggles this by checking / unchecking
   // 'approve' on the role's procurement permissions.
   const isAdmin = req.user.role === 'admin';
-  // The designated L1 approver (from the ⚙ Responsible RACI default) must be
-  // able to SEE every indent even if their role lacks procurement.approve —
-  // otherwise "change the L1 Responsible name → he can approve" would leave the
-  // named person with an empty list (mam 2026-07-21). getL1Approver used again
-  // below for approver_names / l1_approver_id; cheap enough to call twice.
-  const isL1Approver = (() => {
+  // ANYONE named on an indent approval gate must be able to SEE every indent,
+  // even if their role lacks procurement.approve — otherwise naming an approver
+  // hands them the right to approve and an empty list to approve from (mam
+  // 2026-07-21, when the source was still the ⚙ Responsible RACI board).
+  //
+  // Resolved through gateApproverList — the SAME function the approve gate and
+  // the button-rendering payload use — so "can act" and "can see" can never
+  // drift apart. It used to call the legacy single-user lookups directly, which
+  // silently excluded everyone named on the settings screen: they could approve,
+  // but had nothing on screen to approve. Going through the resolver also means
+  // a superseded legacy approver stops seeing all indents the moment someone is
+  // named on the gate, instead of keeping see-all they can no longer act on.
+  //
+  // L2 counts only while the L2 switch is ON; when it is OFF the L2 list is not
+  // part of the flow and must not widen visibility.
+  const isGateApprover = (() => {
     try {
-      if (getL1Approver(db).id === req.user.id) return true;
-      // The L2 approver (when the L2 switch is ON) must also see indents.
-      if (l2Enabled(db) && getL2Approver(db).id === req.user.id) return true;
+      if (gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id)) return true;
+      if (l2Enabled(db) && gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id)) return true;
       return false;
     } catch (_) { return false; }
   })();
-  const canSeeAll = isAdmin || isL1Approver || (() => {
+  const canSeeAll = isAdmin || isGateApprover || (() => {
     const r = db.prepare(`
       SELECT MAX(CASE WHEN rp.can_approve = 1 OR rp.can_see_all = 1 THEN 1 ELSE 0 END) as ok
       FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
@@ -1061,12 +1081,24 @@ router.get('/indents', (req, res) => {
   // Names of the currently-designated L1 / L2 approvers — surfaced so the
   // UI can show "Awaiting Nitin Jain ji" on rows where nobody has acted
   // yet. Pulled once per request, not per row.
-  // L1 approver comes from the ⚙ Responsible (RACI) module default (mam
-  // 2026-07-21). L2 approver only matters when the L2 switch is ON.
-  const l1Appr = getL1Approver(db);
+  // Approvers come from ⚙ Workflow Settings, else the legacy approval_role user.
+  // L2 only matters when the L2 switch is ON.
   const l2On = l2Enabled(db);
-  const l2Appr = l2On ? getL2Approver(db) : { id: null, name: null };
-  const approverNames = { l1: l1Appr.name || 'L1 approver', l2: l2On ? (l2Appr.name || 'L2 approver') : null };
+  // Approver LISTS — ⚙ Workflow Settings, else the legacy single approver.
+  // A gate can name several people now, so the ids arrays are what the buttons
+  // test; the single *_approver_id fields stay only so an older cached bundle
+  // keeps gating correctly against this server.
+  const l1List = gateApproverList(db, 'l1', legacyL1Approver);
+  const l2List = l2On ? gateApproverList(db, 'l2', legacyL2Approver) : [];
+  // CRM named approvers — an ADDITIONAL allow beside the existing crm_funnel role
+  // and the project's own CRM person. No fallback needed: an empty list simply
+  // grants nobody extra, and the original rule still answers on its own.
+  const crmList = approvalGates.approversOf(db, 'crm');
+  const approverNames = {
+    l1: l1List.map(u => u.name).join(', ') || 'L1 approver',
+    l2: l2On ? (l2List.map(u => u.name).join(', ') || 'L2 approver') : null,
+    crm: crmList.map(u => u.name).join(', ') || null,
+  };
 
   res.json(indents.map(i => ({
     ...i,
@@ -1077,19 +1109,29 @@ router.get('/indents', (req, res) => {
     delivery_bill_amount: +(deliveryByIndent.get(i.id) || 0).toFixed(2),
     delivery_pct: pctByIndent.get(i.id) || 0,
     approver_names: approverNames,
-    // Approver ids the frontend gates the Approve buttons on (user.id === this).
-    // Same for every row (module default). l2_enabled drives the whole L2 UI.
-    l1_approver_id: l1Appr.id,
-    l2_approver_id: l2Appr.id,
+    // Approver ids the frontend gates the Approve buttons on. Same for every row
+    // (whole-module setting). l2_enabled drives the whole L2 UI.
+    l1_approver_ids: l1List.map(u => u.id),
+    l2_approver_ids: l2List.map(u => u.id),
+    l1_approver_id: l1List[0]?.id ?? null,   // legacy shape, for cached bundles
+    l2_approver_id: l2List[0]?.id ?? null,
+    // CRM named approvers — additional allow; empty list grants nobody extra.
+    crm_approver_ids: crmList.map(u => u.id),
     l2_enabled: l2On,
   })));
 });
 
-// ─── L2 approval on/off switch (mam 2026-07-21) ──────────────────────
-// A self-serve toggle so mam / management can turn the indent's second
-// approval level on or off without a code change. Stored in app_settings.
-// GET is open to any authenticated user (the UI needs it to render the
-// right buttons); PUT is admin-only.
+// ─── L2 approval on/off switch (mam 2026-07-21) — DEAD, NO CALLERS ──────
+// This was the self-serve L2 toggle, stored in app_settings. Superseded
+// 2026-07-23 by ⚙ Workflow Settings (PUT /approval-settings), which stores the
+// authoritative value in indent_to_dispatch_settings. The ⚙ Responsible banner
+// that was this route's only client is gone, so nothing calls either verb.
+//
+// DO NOT wire anything new to the PUT: it writes ONLY the app_settings mirror,
+// so it would flip the fallback while leaving the real setting untouched — the
+// switch would appear to move and the flow would ignore it. Delete both verbs
+// with the rest of the mirror retirement. (The GET is at least harmless — it
+// reports the effective value via l2Enabled.)
 router.get('/l2-setting', (req, res) => {
   res.json({ enabled: l2Enabled(getDb()) });
 });
@@ -1102,6 +1144,95 @@ router.put('/l2-setting', (req, res) => {
   db.prepare(`INSERT INTO app_settings (key, value) VALUES ('indent_l2_enabled', ?)
               ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(enabled ? '1' : '0');
   res.json({ enabled, message: enabled ? 'L2 approval turned ON' : 'L2 approval turned OFF' });
+});
+
+// ─── Approval gate settings (2026-07-23) ──────────────────────────────────
+// Storage + screen for "who may approve at each gate of the indent→dispatch
+// flow" and the optional gate switches. Backs Procurement → ⚙ Workflow Settings.
+//
+// ENFORCED for indent L1 / L2 (see gateApproverList near the top): once anyone is
+// named on those gates here, they are the approver — for approving, for rejecting,
+// for revoke / re-approve, and for SEEING the indents waiting on them. The L2
+// on/off switch is stored here too and is authoritative.
+//
+// CRM is wired too, but ADDITIVELY: canActCrm already admits admins, anyone with
+// crm_funnel view access, and the CRM person named on the project's Client PO —
+// naming people here GRANTS approval on top of those, without handing out
+// crm_funnel module access. So an empty CRM list changes nothing; it never
+// removes an existing approver. (No on/off switch — the CRM stage is mandatory
+// for billable Extra indents; crmStageActive was removed 2026-07-23.)
+//
+// Revoke / re-approve is NOT a gate here — it follows the L1/L2 lists above
+// automatically (see canRevoke), so there is nothing to assign.
+//
+// STILL NOT wired: the PO L1/L2 levels resolve from the hardcoded PO_APPROVERS
+// names, so naming people on those two cards has no effect yet.
+//
+// Reads are open to any signed-in user (approver names already appear on the
+// indent list); writes are admin-only — this is authorization config.
+// (approvalGates is required once near the top, beside gateApproverList.)
+
+router.get('/approval-settings', (req, res) => {
+  try {
+    const db = getDb();
+    const gates = approvalGates.readAll(db);
+    // Report the EFFECTIVE value — the settings table when it has been saved,
+    // else the app_settings fallback — so the pill matches what the flow does on
+    // a database where L2 has never been set from this screen.
+    if (gates.l2) gates.l2.enabled = l2Enabled(db);
+    // The Vendor PO stand-in (role mailbox) config + who it resolves to now.
+    const standin = approvalGates.readPoStandin(db);
+    res.json({ gates, standin });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.put('/approval-settings', (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only an admin can change approval settings.' });
+  }
+  try {
+    const db = getDb();
+    // Save only the sections the caller actually sent. The screen always sends
+    // both (gates + standin — see ApprovalSettingsModal), but a caller editing
+    // just one — e.g. the stand-in on its own — must NOT be rejected for "no
+    // gates supplied". So writeAll is called only when gates are present; when
+    // they're absent readAll returns the unchanged gates, keeping the response
+    // shape identical either way. A body carrying neither section is the only
+    // real "nothing to save", and is rejected below.
+    const hasGates   = req.body?.gates   != null;
+    const hasStandin = req.body?.standin != null;
+    if (!hasGates && !hasStandin) {
+      return res.status(400).json({ error: 'No settings supplied' });
+    }
+    const gates = hasGates
+      ? approvalGates.writeAll(db, req.body.gates, req.user.id)
+      : approvalGates.readAll(db);
+    // L2 stage ON/OFF. writeAll has already stored the authoritative value in
+    // indent_to_dispatch_settings ('approval.l2.enabled'); this ALSO keeps the
+    // app_settings mirror in step. Nothing reads that key any more EXCEPT the
+    // fallback inside effectiveEnabled(), so the mirror exists purely to stop
+    // the two from disagreeing while the fallback is still there. Drop this
+    // write together with the fallback, once a one-time import has seeded
+    // 'approval.l2.enabled' on every database.
+    const l2Enabled = req.body?.gates?.l2?.enabled;
+    if (l2Enabled !== undefined) {
+      db.prepare(`INSERT INTO app_settings (key, value) VALUES ('indent_l2_enabled', ?)
+                  ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(l2Enabled ? '1' : '0');
+    }
+    // Vendor PO stand-in (role mailbox). Only written when the screen sends it,
+    // so a save that doesn't touch it leaves the rule alone. Validation lives in
+    // writePoStandin and surfaces as the 400 below.
+    if (hasStandin) {
+      approvalGates.writePoStandin(db, req.body.standin, req.user.id);
+    }
+    res.json({ gates, standin: approvalGates.readPoStandin(db), message: 'Approval settings saved' });
+  } catch (e) {
+    // Validation failures (unknown gate/flag, inactive user) are the caller's
+    // fault, not a server fault — surface them as 400 so the screen can show why.
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // ─── Indent raising window (mam 2026-06-16) ──────────────────────────
@@ -1371,11 +1502,15 @@ router.post('/indents', (req, res) => {
   const basePolicy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
   // RGP now follows the normal L1 → L2 chain like Material (mam 2026-06-06:
   // "rgp approval like as material l1,l2" — reverses the earlier hr_single).
-  // Billable Extra indents normally route through CRM first (crm_two_level).
-  // But if the CRM approval step has been switched OFF in ⚙ Responsible, that
-  // stage is skipped — the indent goes straight to L1 like a normal two_level
-  // (mam 2026-07-21: "if step off, skip it, go to next").
-  const policy = isBillable && basePolicy === 'two_level' && crmStageActive(db) ? 'crm_two_level' : basePolicy;
+  // Billable Extra indents ALWAYS route through CRM first (crm_two_level).
+  //
+  // The CRM stage on/off switch (crmStageActive, 2026-07-21) was removed
+  // 2026-07-23: skipping CRM never just skipped an approval. A billable Extra
+  // raised with the stage off becomes plain 'two_level', so the CRM funnel lead
+  // created at raise time and the billable po_items row added on CRM approval
+  // are both never created — the material is bought and the revenue side never
+  // opens. Unconditional again, as it was from 2026-06-02.
+  const policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
@@ -1593,16 +1728,35 @@ router.put('/indents/:id', (req, res) => {
       ).get(id);
 
       // ── Re-approve / Re-reject of a FINAL indent (mam 2026-06-04) ──
-      // Allowed for ADMIN, the legacy L2 approver (mam's MD), OR the current
-      // RACI L1 approver (mam 2026-07-21: L2 removed, so the L1 sign-off owner
-      // inherits the revoke power).  Re-approve flips a REJECTED indent back to
-      // approved (revoke the rejection) without re-raising it.
+      // Revoke belongs to ADMIN and to whoever is CURRENTLY the final signer —
+      // and only them. The L2 switch decides which that is, so exactly one
+      // approver level holds revoke at a time:
+      //   L2 ON  → L2 is the final sign-off → L2 approvers may revoke (L1 may not)
+      //   L2 OFF → L1 is the final sign-off → L1 approvers may revoke (L2 may not)
+      // Re-approve flips a REJECTED indent back to approved (revoke the
+      // rejection) without re-raising it.
+      //
+      // WHY BOTH CLAUSES ARE GATED ON l2On. The original 2026-06-04 rule was
+      // "admin + the MD (approval_role='l2')", written when there was NO L2
+      // switch — so "the MD, always" simply meant "the one final signer". Once
+      // L2 became togglable, an ungated MD clause contradicts L2 OFF: it would
+      // let an L2 approver revoke a flow that currently has no L2 stage. Gating
+      // both ends keeps authority with the active final signer and leaves none
+      // stranded on the inactive level. (Phase 5, 2026-07-21, had ADDED an
+      // ungated L1 clause on top of the ungated MD clause — with L2 ON that let
+      // L1 alone unwind a two-signature indent, the mirror of the same bug.)
+      //
+      // Both clauses resolve through gateApproverList — the SAME resolver the
+      // approve gate uses — so "who may revoke" and "who may approve" name the
+      // same people. Admin covers any indent stranded by a switch flip after it
+      // was signed (authority follows the current switch, not the old signature,
+      // consistent with canActL2 in the forward path).
       const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
       const isAdminActor = actorRow.role === 'admin' || req.user.role === 'admin';
-      const l2On = l2Enabled(db);   // L2 switch state (mam 2026-07-21)
-      const revokeL1 = getL1Approver(db);
-      const canRevoke = isAdminActor || actorRow.approval_role === 'l2'
-        || (revokeL1.id != null && req.user.id === revokeL1.id);
+      const l2On = l2Enabled(db);   // ERP-wide L2 switch — ⚙ Workflow Settings (rule: mam 2026-07-21)
+      const canRevoke = isAdminActor
+        || ( l2On && gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id))
+        || (!l2On && gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id));
       // Re-approve fires for a REJECTED indent (revoke the rejection) OR an
       // already-APPROVED one (re-confirm — mam 2026-06-04 wanted it on
       // approved indents too).  mam (2026-06-04 follow-up): a re-approve can
@@ -1614,10 +1768,24 @@ router.put('/indents/:id', (req, res) => {
         // to issue items from store. Re-approve flips it back to 'approved'
         // and applies the from-store split; the already-sent vendor PO must be
         // reduced/cancelled separately for the store-issued qty.
-        if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve this indent.' });
+        if (!canRevoke) return res.status(403).json({ error: 'Only an admin or an indent approver can re-approve this indent. Approvers are set in ⚙ Workflow Settings.' });
         isReapprove = true;
-        // When L2 is OFF, mark l2 'n/a' (no stage); when ON, mark it approved
-        // (admin/approver re-confirm covers both levels). mam 2026-07-21.
+        // Whether THIS indent has an L2 stage is a property of the indent, fixed
+        // when it was raised (l2_status starts 'pending' if L2 was on then, else
+        // NULL — see the create path), NOT of today's global switch. Re-approve
+        // must re-confirm the indent's OWN state, so we drive l2 off cur2, not
+        // l2On. Using l2On here corrupted the record two ways:
+        //   • raised L2-ON, switch later OFF → l2On=false wiped l2_status to 'n/a'
+        //     but the l2_at/l2_by arms (guarded on the same flag) did NOT clear,
+        //     leaving 'n/a' still carrying a real approver + timestamp, and a
+        //     genuine L2 sign-off erased from the status.
+        //   • raised L2-OFF, switch later ON → l2On=true stamped l2_status
+        //     ='approved' + l2_by=<re-approver> on an indent that never had an L2
+        //     stage, inventing a second signature that never happened.
+        // indentHasL2 is true only for a row that actually reached an L2 verdict
+        // ('approved'/'rejected'); 'pending' can't appear here (it means the
+        // indent is still at l1_approved, not a final state this branch fires on).
+        const indentHasL2 = cur2.l2_status != null && cur2.l2_status !== 'n/a';
         db.prepare(
           `UPDATE indents SET
                l1_status='approved', l1_at=COALESCE(l1_at, CURRENT_TIMESTAMP), l1_by=COALESCE(l1_by, ?),
@@ -1626,30 +1794,39 @@ router.put('/indents/:id', (req, res) => {
                l2_by=CASE WHEN approval_policy IN ('two_level','crm_two_level') AND ?='1' THEN COALESCE(l2_by, ?) ELSE l2_by END,
                crm_status=CASE WHEN approval_policy='crm_two_level' THEN 'approved' ELSE crm_status END
            WHERE id=?`
-        ).run(req.user.id, l2On ? 'approved' : 'n/a', l2On ? '1' : '0', l2On ? '1' : '0', req.user.id, id);
+        ).run(req.user.id, indentHasL2 ? 'approved' : 'n/a', indentHasL2 ? '1' : '0', indentHasL2 ? '1' : '0', req.user.id, id);
         // do NOT return — fall through to the legacy approve path below.
       }
       // Re-reject: revoking an ALREADY-APPROVED indent is limited to admin or
       // the L2 approver (MD) — hard server gate, not just the hidden UI button.
       if (status === 'rejected' && cur2 && cur2.status === 'approved' && !canRevoke) {
-        return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can revoke (re-reject) an already-approved indent.' });
+        return res.status(403).json({ error: 'Only an admin or an indent approver can revoke (re-reject) an already-approved indent. Approvers are set in ⚙ Workflow Settings.' });
       }
 
       if (!isReapprove && cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {
         const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
         const isAdminUser = actor.role === 'admin';
-        // L1 = the RACI-designated approver (mam 2026-07-21) or admin. L2 has
-        // been removed; canActL2 now only governs the drain of any legacy row
-        // still parked at l1_approved, so it mirrors canActL1.
-        const l1Appr = getL1Approver(db);
-        const canActL1 = isAdminUser || (l1Appr.id != null && actor.id === l1Appr.id);
-        // L2 approver (only when the L2 switch is ON) = the RACI 'l2' Responsible
-        // or admin. When L2 is OFF, canActL2 mirrors canActL1 so the L1 owner /
-        // admin can still drain any legacy row parked at l1_approved.
-        const l2Appr = getL2Approver(db);
+        // L1 = anyone named on the gate in ⚙ Workflow Settings (else the legacy
+        // approval_role='l1' user), or admin.
+        // Membership, not identity — a gate can name several approvers now. Same
+        // resolver the list payload uses, so the rendered buttons and this check
+        // can never disagree.
+        const l1Allowed = gateApproverList(db, 'l1', legacyL1Approver);
+        const canActL1 = isAdminUser || l1Allowed.some(u => u.id === actor.id);
+        // L2 approver (only when the L2 switch is ON). When L2 is OFF, canActL2
+        // mirrors canActL1 so the L1 owner / admin can still drain any legacy row
+        // parked at l1_approved.
+        const l2Allowed = gateApproverList(db, 'l2', legacyL2Approver);
         const canActL2 = l2On
-          ? (isAdminUser || (l2Appr.id != null && actor.id === l2Appr.id))
+          ? (isAdminUser || l2Allowed.some(u => u.id === actor.id))
           : canActL1;
+        // 403 text — built from the SAME lists the gates use, so the message can
+        // never name someone the gate doesn't accept. Surfaced as a red toast, and
+        // only when the client and server disagree (stale list, cached bundle,
+        // settings changed in another tab), so it must be short and specific.
+        // Written as "Approvers: A, B" rather than a sentence — that reads the
+        // same for one name or several, so no plural branching is needed.
+        const whoFor = (list) => list.map(u => u.name).join(', ') || 'nobody named';
         // Mam (2026-06-02): "anyone with CRM module access" can approve
         // Extra indents at the CRM stage.  We check the runtime permission
         // via the same requirePermission helper used elsewhere — but
@@ -1697,7 +1874,12 @@ router.put('/indents/:id', (req, res) => {
           a.length > 0 && b.length > 0 &&
           (a === b || a.split(/\s+/).includes(b) || b.split(/\s+/).includes(a));
         const isAssignedCrm = nameMatches(actorName, crmNameNorm);
-        const canActCrm = isAdminUser || crmPerm.can_view === 1 || isAssignedCrm;
+        // CRM authority (2026-07-23) — the original rule PLUS anyone named as a
+        // CRM approver in ⚙ Workflow Settings. Purely additive: nobody who could
+        // approve before loses it, and naming people is how you grant approval
+        // rights without handing out crm_funnel module access.
+        const canActCrm = isAdminUser || crmPerm.can_view === 1 || isAssignedCrm
+          || approvalGates.isApprover(db, 'crm', actor.id);
 
         // CRM stage — only for crm_two_level policy.  Must complete BEFORE
         // L1 can act.  When CRM approves, auto-INSERT a po_items row on
@@ -1707,8 +1889,13 @@ router.put('/indents/:id', (req, res) => {
             && cur2.crm_status === 'pending') {
           if (!canActCrm) {
             const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
+            // Mention BOTH ways in, since both are live: the crm_funnel role and
+            // the named approver list.
+            const crmWho = approvalGates.approversOf(db, 'crm').map(u => u.name).join(', ');
             return res.status(403).json({
-              error: `Extra-Schedule / Extra-Non-Schedule indents require CRM approval first. You're signed in as "${actorName}" — no CRM module access. Admin → User Management → grant CRM access.`,
+              error: `Extra-Schedule / Extra-Non-Schedule indents require CRM approval first. You're signed in as "${actorName}" — no CRM module access`
+                + (crmWho ? `, and you're not a named CRM approver (${crmWho})` : '')
+                + `. Admin → User Management → grant CRM access, or name yourself in Procurement → ⚙ Workflow Settings.`,
             });
           }
           // Margin (mam 2026-06-10): CRM can add a client-quotation margin on
@@ -1873,13 +2060,13 @@ router.put('/indents/:id', (req, res) => {
           // the L1 branch reuses without changes.
           if (effectiveStatus === 'submitted' && cur2.l1_status === 'pending'
               && (cur2.approval_policy !== 'crm_two_level' || cur2.crm_status === 'approved')) {
-            // L1 approve — gated by the RACI L1 approver / admin.
+            // L1 approve — gated by the L1 approver list / admin.
             if (!canActL1) {
-              // Surface WHO is blocked and WHY so admin can fix it from the
-              // ⚙ Responsible board without SSHing into the box.
+              // Surface WHO is blocked and WHY so admin can fix it from
+              // ⚙ Workflow Settings without SSHing into the box.
               const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
               return res.status(403).json({
-                error: `Not authorised to approve this indent. You're signed in as "${actorName}". The ${l2On ? 'L1' : ''} approver is ${l1Appr.name || 'not set'} — change it in Procurement → ⚙ Responsible.`,
+                error: `You (${actorName}) can't approve ${l2On ? 'L1' : 'this indent'}. ${l2On ? 'L1 a' : 'A'}pprovers: ${whoFor(l1Allowed)}. Set in ⚙ Workflow Settings.`,
               });
             }
             if (l2On) {
@@ -1903,12 +2090,12 @@ router.put('/indents/:id', (req, res) => {
             // no return — legacy approve path below finalises the indent.
           } else if (cur2.status === 'l1_approved' && cur2.l2_status !== 'rejected') {
             if (l2On) {
-              // L2 approve (switch ON) — gate by the RACI L2 approver + block the
+              // L2 approve (switch ON) — gate by the L2 approver list + block the
               // L1 approver from also doing L2 (needs a second pair of eyes).
               if (!canActL2) {
                 const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
                 return res.status(403).json({
-                  error: `Not authorised for L2 approval. You're signed in as "${actorName}". The L2 approver is ${l2Appr.name || 'not set'} — change it in Procurement → ⚙ Responsible → L2 Approval (Responsible).`,
+                  error: `You (${actorName}) can't approve L2. L2 approvers: ${whoFor(l2Allowed)}. Set in ⚙ Workflow Settings.`,
                 });
               }
               if (cur2.l1_by && cur2.l1_by === actor.id && !isAdminUser) {
@@ -1924,7 +2111,7 @@ router.put('/indents/:id', (req, res) => {
               if (!canActL1) {
                 const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
                 return res.status(403).json({
-                  error: `Not authorised to finalise this indent. You're signed in as "${actorName}". The approver is ${l1Appr.name || 'not set'}.`,
+                  error: `You (${actorName}) can't finalise this indent. Approvers: ${whoFor(l1Allowed)}.`,
                 });
               }
               db.prepare(`UPDATE indents SET l2_status='n/a' WHERE id=?`).run(id);
@@ -1953,7 +2140,7 @@ router.put('/indents/:id', (req, res) => {
           }
           if (cur2.l1_status === 'pending') {
             if (!canActL1) {
-              return res.status(403).json({ error: `Only the designated L1 approver (${l1Appr.name || 'not set'}) can reject this indent.` });
+              return res.status(403).json({ error: `You can't reject at L1. L1 approvers: ${whoFor(l1Allowed)}.` });
             }
             db.prepare('UPDATE indents SET l1_status=?, l1_by=?, l1_at=CURRENT_TIMESTAMP WHERE id=?')
               .run('rejected', actor.id, id);
@@ -1961,9 +2148,9 @@ router.put('/indents/:id', (req, res) => {
             // Indent parked at l1_approved (Pending L2). When L2 is ON the L2
             // approver rejects; when OFF the L1 approver / admin drains it.
             const canRejectHere = l2On ? canActL2 : canActL1;
-            const who = l2On ? (l2Appr.name || 'not set') : (l1Appr.name || 'not set');
+            const rejList = l2On ? l2Allowed : l1Allowed;
             if (!canRejectHere) {
-              return res.status(403).json({ error: `Only the designated ${l2On ? 'L2 ' : ''}approver (${who}) can reject this indent.` });
+              return res.status(403).json({ error: `You can't reject at ${l2On ? 'L2' : 'L1'}. ${l2On ? 'L2' : 'L1'} approvers: ${whoFor(rejList)}.` });
             }
             db.prepare('UPDATE indents SET l2_status=?, l2_by=?, l2_at=CURRENT_TIMESTAMP WHERE id=?')
               .run('rejected', actor.id, id);
@@ -2650,14 +2837,37 @@ router.put('/indents/:id', (req, res) => {
 //   2. delete the Stock Issue Note(s)
 //   3. merge each store child back into its parent line at full qty
 //      (or flip a 100%-from-store line back to source='procure')
-// Admin or L2 (MD) only — same gate as re-approve. Idempotent: a no-op
-// when the indent has no store issues.
+// WHO MAY RESET — a SUPERSET of who may re-approve, never a subset. Resetting a
+// store issue only happens INSIDE a re-approve ("on re-approve let me edit qty" —
+// mam 2026-06-04): it is the edit step of that action, not a separate one. So
+// whoever can re-approve must be able to reset, or the wheel jams — you could
+// start the re-approve but not perform the qty edit it exists to allow.
+//
+// The gate therefore mirrors re-approve's active-final-signer rule and ADDS the
+// L2 approver as an always-on safeguard:
+//   admin                     — always
+//   L1, only while L2 is OFF   — the final signer then, so also the re-approver
+//   L2, always                 — the standing stock-correction authority; moving
+//                                real stock stays available to it in either state
+// Set math: L2 OFF → {admin,L1,L2} ⊇ re-approve {admin,L1};  L2 ON → {admin,L2}
+// = re-approve {admin,L2}. The re-approver is never blocked. (The extra L2-when-
+// off members are unreachable via the UI — the reset button lives in the
+// re-approve modal, gated on the re-approve rule — so "L2 always" is a defensive
+// safety-valve for the stock authority, not a live half-action.)
+//
+// Source: ⚙ Workflow Settings, else the legacy approval_role user per level. In
+// production today no L2 approver is set and L2 is OFF, so this resolves to
+// admin ∪ the L1 approver. Idempotent: a no-op when the indent has no store issues.
 router.post('/indents/:id/reset-store-issue', (req, res) => {
   const db = getDb();
   const id = +req.params.id;
-  const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
-  const canRevoke = actorRow.role === 'admin' || req.user.role === 'admin' || actorRow.approval_role === 'l2';
-  if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can reset a store issue.' });
+  const isAdminActor = req.user.role === 'admin'
+    || db.prepare('SELECT role FROM users WHERE id=?').get(req.user.id)?.role === 'admin';
+  const l2On = l2Enabled(db);
+  const canReset = isAdminActor
+    || (!l2On && gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id))
+    ||          gateApproverList(db, 'l2', legacyL2Approver).some(u => u.id === req.user.id);  // L2 — always (safeguard)
+  if (!canReset) return res.status(403).json({ error: 'Only an admin, the L2 approver, or (while L2 is off) the L1 approver can reset a store issue. Approvers are set in ⚙ Workflow Settings.' });
 
   const children = db.prepare("SELECT * FROM indent_items WHERE indent_id=? AND source='store'").all(id);
   if (!children.length) return res.json({ message: 'No store issues to reset', reversed: 0, reversed_qty: 0 });
@@ -2906,9 +3116,30 @@ router.get('/vendor-po', (req, res) => {
     LEFT JOIN users rju ON vp.po_reject_by = rju.id
     ORDER BY vp.created_at DESC
   `).all();
-  // Who the PO is waiting on right now (for the list badge / approve gating).
-  const PO_NEXT = { pending_l1: 'Nitin Jain', pending_l2: 'Ankur Kaplesh' };
-  for (const r of rows) r.po_pending_approver = PO_NEXT[r.po_approval] || null;
+  // Who the PO is waiting on right now (list badge + which buttons render).
+  // Resolved ONCE per request from the same resolver the approve/reject gate
+  // uses — this used to be a second hardcoded copy (PO_NEXT), so the chip could
+  // name one person while the gate accepted another. The ids array is what the
+  // client tests membership against; the name string is display only.
+  //
+  // The DISPLAY name falls all the way back to the hardcoded PO_APPROVERS label,
+  // even when that name doesn't resolve to a user — so the badge always reads
+  // "Pending L1 · Nitin Jain" like the old PO_NEXT did, never a blank "· ". The
+  // ids array does NOT get this string fallback (you can't gate a button to a
+  // non-user): if the name resolves, its id is there; if not, only admin + the
+  // stand-in can act — which is exactly what the server gate enforces too.
+  const poL1 = poApproversFor(db, 1);
+  const poL2 = poApproversFor(db, 2);
+  const poNameOf = { pending_l1: poL1.map(a => a.name).join(', ') || PO_APPROVERS[1],
+                     pending_l2: poL2.map(a => a.name).join(', ') || PO_APPROVERS[2] };
+  for (const r of rows) {
+    r.po_pending_approver = (r.po_approval === 'pending_l1' || r.po_approval === 'pending_l2')
+      ? poNameOf[r.po_approval] : null;
+    r.po_l1_approver_ids = poL1.map(a => a.id);
+    r.po_l2_approver_ids = poL2.map(a => a.id);
+    r.po_pending_approver_ids = r.po_approval === 'pending_l1' ? r.po_l1_approver_ids
+                              : r.po_approval === 'pending_l2' ? r.po_l2_approver_ids : [];
+  }
   // Surface drift so the frontend can show a small warning chip if
   // the stored header total disagrees with the items sum.
   for (const r of rows) {
@@ -3659,10 +3890,23 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
 });
 
 // ── Vendor PO 2-level approval (mam 2026-06-19) ──────────────────────────
-// A new PO must be signed off L1 → L2 before it's live. L1 = Nitin Jain,
-// L2 = Ankur Kaplesh (resolved by name so it survives across local/prod DBs).
-// Admin and the COO (coo@… login) can stand in for either level.
+// A new PO must be signed off L1 → L2 before it's live. Admin and the COO
+// (coo@… login) can stand in for either level.
+//
+// WHO the level's approver is now comes from Procurement → ⚙ Workflow Settings
+// ('po_l1' / 'po_l2' — a SINGLE person each, matching the original rule), with
+// the hardcoded name below as the fallback for a database where nobody has been
+// named yet. NOTHING ELSE CHANGED: the L1→L2 sequence, the admin short-circuit,
+// the COO stand-in, rejection and the state machine are all exactly as they were.
+// With an empty settings list the legacy names resolve as before, so deploying
+// this is a no-op — including for the POs already sitting in the queue.
+//
+// Retire the constants once every environment has both PO gates named (check:
+// SELECT * FROM indent_to_dispatch_setting_users WHERE key LIKE 'approval.po_%').
+// Until then they are the only thing standing between a fresh DB and admin-only
+// PO approval.
 const PO_APPROVERS = { 1: 'Nitin Jain', 2: 'Ankur Kaplesh' };
+const poGateKey = (level) => (level === 1 ? 'po_l1' : 'po_l2');
 function resolvePoUserByName(db, name) {
   if (!name) return null;
   try {
@@ -3670,13 +3914,24 @@ function resolvePoUserByName(db, name) {
       || db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(name) LIKE LOWER(?) ORDER BY id LIMIT 1').get('%' + name + '%');
   } catch (_) { return null; }
 }
+// Legacy single approver for a PO level — the pre-settings mechanism, kept only
+// as the fallback. Same shape as legacyL1Approver/legacyL2Approver on the indent
+// side, so gateApproverList can consume it.
+const legacyPoApprover = (level) => (db) => resolvePoUserByName(db, PO_APPROVERS[level]) || { id: null, name: null };
+// The people who may sign this level: ⚙ Workflow Settings, else the legacy name.
+// ONE source, used by the gate, the 403 text and the list payload alike — the old
+// code had a second hardcoded copy (PO_NEXT) driving the display, so the chip
+// could name someone the gate would refuse.
+const poApproversFor = (db, level) => gateApproverList(db, poGateKey(level), legacyPoApprover(level));
 function canApprovePoLevel(db, userId, level) {
-  const u = db.prepare('SELECT role, email, username FROM users WHERE id=?').get(userId);
+  const u = db.prepare('SELECT role, email FROM users WHERE id=?').get(userId);
   if (u?.role === 'admin') return true;
-  const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
-  if (isCoo(u?.email) || isCoo(u?.username)) return true;          // COO can stand in
-  const approver = resolvePoUserByName(db, PO_APPROVERS[level]);
-  return !!approver && approver.id === userId;
+  // Stand-in (role mailbox, e.g. coo@…) may act at either level. Configurable in
+  // ⚙ Workflow Settings; defaults to the old hardcoded 'coo@' EMAIL match when
+  // unset — so this is a no-op on deploy. Username is no longer consulted (no
+  // real username is an email; that branch matched nobody).
+  if (approvalGates.isPoStandin(db, u?.email)) return true;
+  return poApproversFor(db, level).some(a => a.id === userId);
 }
 const poLevelOf = (s) => (s === 'pending_l1' ? 1 : s === 'pending_l2' ? 2 : null);
 
@@ -3688,7 +3943,10 @@ router.post('/vendor-po/:id/po-approve', (req, res) => {
   const level = poLevelOf(po.po_approval);
   if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
   if (!canApprovePoLevel(db, req.user.id, level)) {
-    return res.status(403).json({ error: `Only ${PO_APPROVERS[level]} (L${level}) or admin can approve this step` });
+    // Named from the SAME resolver the gate uses, so the message can never point
+    // at someone the gate would reject.
+    const who = poApproversFor(db, level).map(a => a.name).join(', ') || 'nobody named';
+    return res.status(403).json({ error: `Only ${who} (PO L${level}) or an admin can approve this step. Set in ⚙ Workflow Settings.` });
   }
   if (level === 1) db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
   else             db.prepare("UPDATE vendor_pos SET po_approval='approved',  po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
@@ -3703,7 +3961,8 @@ router.post('/vendor-po/:id/po-reject', (req, res) => {
   const level = poLevelOf(po.po_approval);
   if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
   if (!canApprovePoLevel(db, req.user.id, level)) {
-    return res.status(403).json({ error: `Only ${PO_APPROVERS[level]} (L${level}) or admin can reject this step` });
+    const who = poApproversFor(db, level).map(a => a.name).join(', ') || 'nobody named';
+    return res.status(403).json({ error: `Only ${who} (PO L${level}) or an admin can reject this step. Set in ⚙ Workflow Settings.` });
   }
   const reason = String(req.body?.reason || '').trim();
   if (reason.length < 3) return res.status(400).json({ error: 'A rejection reason is required' });

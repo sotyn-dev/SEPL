@@ -8,7 +8,6 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
-import { useAuth } from '../context/AuthContext';
 
 // hours → compact "2.5h" / "1d 3h" / "—"
 function fmtDur(h) {
@@ -27,35 +26,14 @@ const RACI_FIELDS = [
 ];
 
 export default function ResponsibilityTab({ module, title }) {
-  const { isAdmin } = useAuth();
   const [data, setData] = useState(null);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // L2 (second) approval on/off switch — lives HERE next to the L1/L2 approver
-  // names (mam 2026-07-21: "give that in raci"). Indent module + admin only.
-  const isIndent = module === 'indent_to_dispatch';
-  const [l2Enabled, setL2Enabled] = useState(false);
-  const [l2Saving, setL2Saving] = useState(false);
-  useEffect(() => {
-    if (!isIndent) return;
-    api.get('/procurement/l2-setting').then(r => setL2Enabled(!!r.data?.enabled)).catch(() => {});
-  }, [isIndent]);
-  const toggleL2 = async () => {
-    if (!isAdmin()) return;
-    const next = !l2Enabled;
-    if (!window.confirm(next
-      ? 'Turn L2 (second) approval ON? Indents will need L1 then L2 sign-off. The L2 approver is whoever you set as Responsible on the "L2 Approval" step below.'
-      : 'Turn L2 (second) approval OFF? L1 becomes the final approval for all indents.')) return;
-    setL2Saving(true);
-    try {
-      const r = await api.put('/procurement/l2-setting', { enabled: next });
-      setL2Enabled(!!r.data?.enabled);
-      toast.success(r.data?.message || 'Saved');
-      if (showBoard) load();            // refresh the board's step columns
-    } catch (e) { toast.error(e.response?.data?.error || 'Could not change L2 setting'); }
-    finally { setL2Saving(false); }
-  };
+  // (The L2 on/off banner and its /procurement/l2-setting fetch were removed
+  // 2026-07-23. This tab is RACI reporting only — approvers and the L2 switch
+  // live in Procurement → ⚙ Approval Settings, and nothing here changes the
+  // approval flow any more.)
   const [view, setView] = useState('grid');         // 'grid' | 'summary'
   const [q, setQ] = useState('');
   // The per-record board loads ALL records × steps — heavy enough to hang big
@@ -96,36 +74,30 @@ export default function ResponsibilityTab({ module, title }) {
     } catch { toast.error('Could not load RACI for this record'); }
     finally { setBusy(false); }
   };
+  const closeEditor = () => setEditRec(null);
   const setField = (i, k, v) => setEditSteps(s => s.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
-  // Indent approver guard rails (mam 2026-07-21). In the indent whole-module
-  // editor: l1/l2/crm are gate steps (admin-only); L1 must have a Responsible
-  // before saving; L2 can't be turned on without both L1 and L2 named.
-  const isIndentDefault = module === 'indent_to_dispatch' && editRec?.id === 0;
-  const GATE_KEYS = ['l1', 'l2', 'crm'];
-  const l1Resp = editSteps.find(s => s.key === 'l1')?.responsible_id || null;
-  const l2Resp = editSteps.find(s => s.key === 'l2')?.responsible_id || null;
-  const l1Missing = isIndentDefault && !l1Resp;
-  const gateLocked = isIndentDefault && !isAdmin();   // non-admin: gate rows read-only
+  // (The indent approver guard rails — GATE_KEYS, defaultL1/defaultL2, l1Missing,
+  // gateLocked — were removed 2026-07-23. They existed because the l1/l2/crm rows
+  // here decided who could approve, so non-admins had to be locked out and an L1
+  // name had to be enforced before L2 could be turned on. None of that is true
+  // now: a Responsible name here is scorecard attribution only.)
 
   const save = async () => {
     if (!editRec) return;
-    if (l1Missing) { toast.error('Set the Indent L1 Approver (a Responsible name) before saving.'); return; }
     setBusy(true);
     try {
       await api.put(`/raci/record/${module}/${editRec.id}`, {
-        // Non-admins can't change the gate steps — drop them from the payload so
-        // a normal RACI edit on other steps isn't rejected.
-        steps: editSteps.filter(s => !(gateLocked && GATE_KEYS.includes(s.key))).map(s => ({
+        steps: editSteps.map(s => ({
           step_key: s.key,
           responsible_id: s.responsible_id || null, accountable_id: s.accountable_id || null,
           consulted_id: s.consulted_id || null, informed_id: s.informed_id || null,
           sla_hours: s.sla_hours === '' || s.sla_hours == null ? null : +s.sla_hours,
           weight: s.weight === '' || s.weight == null ? null : +s.weight,
           commitment: s.commitment && String(s.commitment).trim() !== '' ? s.commitment : null,
-          enabled: s.enabled !== false,   // per-step ON/OFF (mam 2026-07-21)
+          enabled: s.enabled !== false,
         })),
       });
-      toast.success('Saved'); setEditRec(null); if (showBoard) load();
+      toast.success('Saved'); closeEditor(); if (showBoard) load();
     } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
     finally { setBusy(false); }
   };
@@ -151,24 +123,6 @@ export default function ResponsibilityTab({ module, title }) {
 
   return (
     <div className="space-y-3">
-      {/* L2 (second) approval on/off — admin-only, indent module only.
-          OFF = L1 is the final approval; ON = the L1 → L2 flow returns and the
-          "L2 Approval" step below becomes the L2 approver. mam 2026-07-21. */}
-      {isIndent && isAdmin() && (
-        <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-          <div className="text-xs text-slate-600">
-            <span className="font-bold text-slate-800">L2 (second) approval</span> —{' '}
-            {l2Enabled
-              ? 'ON: indents need L1 then L2 sign-off. Set the L2 approver on the "L2 Approval" step below.'
-              : 'OFF: L1 is the final approval (no second sign-off).'}
-          </div>
-          <button type="button" onClick={toggleL2} disabled={l2Saving}
-            className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold border transition disabled:opacity-50 ${l2Enabled ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'}`}>
-            <span className={`inline-block w-2 h-2 rounded-full ${l2Enabled ? 'bg-white' : 'bg-slate-400'}`} />
-            {l2Saving ? 'Saving…' : (l2Enabled ? 'L2 is ON — turn OFF' : 'L2 is OFF — turn ON')}
-          </button>
-        </div>
-      )}
       {/* Header / controls */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
@@ -301,7 +255,7 @@ export default function ResponsibilityTab({ module, title }) {
       )}
 
       {/* Per-record editor */}
-      <Modal isOpen={!!editRec} onClose={() => setEditRec(null)} title={`Responsible & time — ${editRec?.title || ''}`} wide>
+      <Modal isOpen={!!editRec} onClose={closeEditor} title={`Responsible & time — ${editRec?.title || ''}`} xwide>
         <div className="space-y-3">
           <p className="text-xs text-gray-500">Pick the <b>R</b>esponsible / <b>A</b>ccountable / <b>C</b>onsulted / <b>I</b>nformed person, the target time (SLA hours), the <b>Weight %</b> (makes the scorecard step-wise % weighted) and a <b>Commitment</b> for next week — for each step of <b>this</b> record.</p>
           {busy && editSteps.length === 0 ? (
@@ -309,45 +263,20 @@ export default function ResponsibilityTab({ module, title }) {
           ) : (
             <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
               {editSteps.map((s, i) => {
-                const isWholeModule = editRec?.id === 0;   // per-step ON/OFF only on the module default
-                const stepOn = s.enabled !== false;
-                // Indent CRM + L2 are the two approval stages that OFF actually
-                // SKIPS in the real flow (mam 2026-07-21); every other step is
-                // hide-from-tracking only.
-                const flowStep = module === 'indent_to_dispatch' && (s.key === 'crm' || s.key === 'l2');
-                // Gate steps (indent l1/l2/crm) are admin-only; the L2 toggle is
-                // blocked until both L1 and L2 have a Responsible name.
-                const isGate = isIndentDefault && GATE_KEYS.includes(s.key);
-                const readOnlyGate = gateLocked && isGate;
-                const l2ToggleBlocked = isIndentDefault && s.key === 'l2' && (!l1Resp || !l2Resp);
-                const toggleDisabled = readOnlyGate || l2ToggleBlocked;
-                const showL1Req = isIndentDefault && s.key === 'l1' && !s.responsible_id;
+                // (The per-step ON/OFF pills, the "admin only" tags and the L1
+                // approver warnings were removed 2026-07-23 — none of this screen
+                // changes the approval flow any more. Approvers and the L2 switch
+                // live in Procurement → ⚙ Approval Settings.)
                 return (
-                <div key={s.key} className={`border rounded-lg p-3 bg-white ${isWholeModule && !stepOn ? 'opacity-50' : ''} ${showL1Req ? 'ring-1 ring-rose-300' : ''}`}>
+                <div key={s.key} className="border rounded-lg p-3 bg-white">
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="font-semibold text-sm text-gray-800">
-                      {s.label}
-                      {isWholeModule && !stepOn && <span className="ml-2 text-[10px] font-normal text-rose-500">{flowStep ? '(OFF — skipped in flow)' : '(OFF — not tracked)'}</span>}
-                      {readOnlyGate && <span className="ml-2 text-[10px] font-normal text-gray-400">(admin only)</span>}
-                    </div>
-                    {/* Per-step ON/OFF. For the indent's CRM + L2 it SKIPS the
-                        approval in the real flow; for every other step it just
-                        hides it from the board + scorecard. mam 2026-07-21. */}
-                    {isWholeModule && (
-                      <button type="button" disabled={toggleDisabled} onClick={() => !toggleDisabled && setField(i, 'enabled', !stepOn)}
-                        title={readOnlyGate ? 'Only an admin can change this' : (l2ToggleBlocked ? 'Set the Indent L1 Approver first (both L1 and L2 need a name)' : (flowStep ? 'Turn this approval step on/off — OFF skips it in the real approval flow' : 'Turn this step on/off for the Responsible board + scorecard'))}
-                        className={`shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold border transition disabled:opacity-40 disabled:cursor-not-allowed ${stepOn ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-100'}`}>
-                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${stepOn ? 'bg-white' : 'bg-slate-400'}`} />
-                        {stepOn ? 'ON' : 'OFF'}
-                      </button>
-                    )}
+                    <div className="font-semibold text-sm text-gray-800">{s.label}</div>
                   </div>
-                  {showL1Req && <div className="text-[11px] text-rose-600 font-medium mb-2">L1 approver is required for the indent flow — pick a Responsible name.</div>}
-                  <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-8 gap-2">
                     {RACI_FIELDS.map(([field, label, tint]) => (
                       <div key={field}>
                         <label className={`label text-[10px] ${tint}`}>{label}</label>
-                        <select className="input text-xs" disabled={readOnlyGate && field === 'responsible_id'} value={s[field] || ''} onChange={e => setField(i, field, e.target.value ? +e.target.value : null)}>
+                        <select className="input text-xs" value={s[field] || ''} onChange={e => setField(i, field, e.target.value ? +e.target.value : null)}>
                           <option value="">— pick —</option>
                           {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                         </select>
@@ -361,7 +290,7 @@ export default function ResponsibilityTab({ module, title }) {
                       <label className="label text-[10px] text-indigo-600">Weight %</label>
                       <input type="number" min="0" step="any" className="input text-xs" placeholder="e.g. 20" value={s.weight ?? ''} onChange={e => setField(i, 'weight', e.target.value === '' ? '' : +e.target.value)} />
                     </div>
-                    <div>
+                    <div className="col-span-2 sm:col-span-3 lg:col-span-2">
                       <label className="label text-[10px] text-amber-600">Commitment (next wk)</label>
                       <input type="text" className="input text-xs" placeholder="for next week" value={s.commitment ?? ''} onChange={e => setField(i, 'commitment', e.target.value)} />
                     </div>
@@ -372,9 +301,8 @@ export default function ResponsibilityTab({ module, title }) {
             </div>
           )}
           <div className="flex justify-end items-center gap-2 pt-2 border-t">
-            {l1Missing && <span className="text-[11px] text-rose-600 mr-auto">Set the Indent L1 Approver to save.</span>}
-            <button onClick={() => setEditRec(null)} className="btn btn-secondary">Cancel</button>
-            <button onClick={save} disabled={busy || editSteps.length === 0 || l1Missing} className="btn btn-primary">{busy ? 'Saving…' : 'Save'}</button>
+            <button onClick={closeEditor} className="btn btn-secondary">Cancel</button>
+            <button onClick={save} disabled={busy || editSteps.length === 0} className="btn btn-primary">{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </div>
       </Modal>

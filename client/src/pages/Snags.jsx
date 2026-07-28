@@ -19,7 +19,6 @@ import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
-import { exportCsv } from '../utils/exportCsv';
 import { fmtDate } from '../utils/datetime';
 
 const STATUS_PILL = {
@@ -87,6 +86,23 @@ export default function Snags() {
   );
   // Jump back to page 1 whenever the filtered list changes.
   useEffect(() => { setPage(1); }, [filters]);
+
+  // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
+  // photos embedded. CSV can't carry images, so this hits the server which
+  // builds the workbook; filters mirror the on-screen list.
+  const exportXlsx = async () => {
+    try {
+      const params = new URLSearchParams();
+      Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
+      const resp = await api.get(`/snags/export.xlsx?${params}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([resp.data]));
+      const a = document.createElement('a');
+      a.href = url; a.download = `snags-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success('Downloaded snags with photos');
+    } catch (e) { toast.error('Export failed'); }
+  };
 
   useEffect(() => {
     load();
@@ -184,9 +200,7 @@ export default function Snags() {
           <p className="text-sm text-gray-500">Management raises site snags · assignee uploads proof · raiser approves to close.</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => exportCsv('snags',
-            ['Snag #','Site','Location','Description','Priority','Status','Raised By','Assigned To','Target Date','Raised At'],
-            snags.map(s => [s.snag_no, s.site_name, s.location, s.description, s.priority, s.status, s.raised_by_name, s.assigned_to_name, s.target_date, s.raised_at]))}
+          <button onClick={exportXlsx}
             className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('snags') && (
             <button onClick={openRaise} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Snag</button>

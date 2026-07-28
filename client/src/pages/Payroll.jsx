@@ -283,6 +283,10 @@ export default function Payroll() {
   };
 
   const fmt = (n) => `Rs ${(Math.round(n || 0)).toLocaleString('en-IN')}`;
+  // Per-hour OT rate for display. Older finalised snapshots stored ot_pay but
+  // left ot_per_hour_rate null (column added later) — derive it from pay/hours
+  // so the OT cell never shows "Rs null/hr" or a bogus "No overtime".
+  const otRate = (r) => r.ot_per_hour_rate || (r.ot_hours ? Math.round((r.ot_pay || 0) / r.ot_hours) : 0);
 
   const total = list.reduce((s, r) => s + (r.net_pay || 0), 0);
   // Disbursement tracking — only meaningful once the month is finalised.
@@ -351,8 +355,12 @@ export default function Payroll() {
             )}
             <div className="flex-1" />
             <button onClick={() => exportCsv(`payroll-${month}`,
-              ['Employee','Dept','Base','Paid Days','Gross','Deductions','Net'],
-              list.map(p => [p.employee_name, p.department, p.base_salary, p.paid_days, p.gross, p.total_deductions, p.net_pay]))}
+              ['Employee','Dept','Paid Days','Base Pay (excl. OT)','OT Hours','OT Pay','Total Payable (Base+OT)'],
+              list.map(p => [p.employee_name, p.department, p.paid_days,
+                (p.net_before_ot ?? (p.net_pay - (p.ot_pay || 0))),
+                (p.ot_eligible ? (p.ot_hours || 0) : 0),
+                (p.ot_eligible ? (p.ot_pay || 0) : 0),
+                p.net_pay]))}
               className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Export Excel</button>
             <div className="text-right">
               <p className="text-xs text-gray-500">Total Net Payout</p>
@@ -376,8 +384,8 @@ export default function Payroll() {
             )}
           </div>
 
-          <div className="card p-0 hidden md:block">
-            <table className="freeze-head">
+          <div className="card p-0 hidden md:block overflow-x-auto">
+            <table className="freeze-head freeze-col whitespace-nowrap">
               <thead>
                 <tr>
                   <th>Employee</th>
@@ -438,9 +446,11 @@ export default function Payroll() {
                         : (r.late_penalty ? fmt(r.late_penalty) : '-')}
                     </td>
                     <td className="text-center text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</td>
-                    <td className="text-right text-blue-600" title={r.ot_per_hour_rate ? `Rs ${r.ot_per_hour_rate}/hr = ${fmt(r.base_salary)} ÷ ${r.total_days_in_month} days ÷ ${r.ot_threshold || 9}h` : 'No overtime'}>
-                      {r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}
-                      {r.ot_hours ? <div className="text-[9px] font-normal text-gray-400">&gt;{r.ot_threshold || 9}h @ Rs {r.ot_per_hour_rate}/h</div> : null}
+                    <td className="text-right text-blue-600" title={!r.ot_eligible ? 'Not OT-eligible (set in Leaves & Balances)' : ((r.ot_hours || r.ot_pay) ? `Rs ${otRate(r)}/hr × ${r.ot_hours || 0}h — paid only for hours beyond ${r.ot_threshold || 9}h/day` : 'No overtime this month')}>
+                      {!r.ot_eligible
+                        ? <span className="text-gray-300">—</span>
+                        : <>{r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}
+                          {r.ot_hours ? <div className="text-[9px] font-normal text-gray-400">&gt;{r.ot_threshold || 9}h @ Rs {otRate(r)}/h</div> : null}</>}
                     </td>
                     <td className="text-right text-gray-600">{fmt(r.net_before_ot ?? (r.net_pay - (r.ot_pay || 0)))}</td>
                     <td className="text-right">
@@ -523,8 +533,10 @@ export default function Payroll() {
                   </div>
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">OT (&gt;9h)</div>
-                    <div className="font-semibold text-blue-700">{r.ot_hours || 0}h{r.ot_pay ? ` +${fmt(r.ot_pay)}` : ''}</div>
-                    {r.ot_hours ? <div className="text-[8px] text-gray-400">Rs {r.ot_per_hour_rate}/h</div> : null}
+                    {!r.ot_eligible
+                      ? <div className="font-semibold text-gray-300">—</div>
+                      : <div className="font-semibold text-blue-700">{r.ot_hours || 0}h{r.ot_pay ? ` +${fmt(r.ot_pay)}` : ''}</div>}
+                    {r.ot_eligible && r.ot_hours ? <div className="text-[8px] text-gray-400">Rs {otRate(r)}/h</div> : null}
                   </div>
                 </div>
                 <div className="grid grid-cols-4 gap-2 pt-1 border-t border-gray-100 text-[11px] text-center">
