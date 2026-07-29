@@ -55,17 +55,17 @@ const seesAll = (req) => {
 // Step numbers stay 1, 2, 3, 5 so the in-flight requests (parked on the old
 // step 1/2/5) keep flowing; step 4 (retired Billing Engineer) is migrated to 5.
 const STANDARD_FLOW = [
-  { step: 1, name: 'L1 Approval (Accountant)', approver_role: 'Accountant' },
-  { step: 2, name: 'L2 Approval (Nitin Jain)', approver_name: 'Nitin Jain' },
-  { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)', approver_name: 'Ankur Kaplesh' },
-  { step: 5, name: 'Payment Release (Aanchal)', approver_name: 'Aanchal' },
+  { step: 1, name: 'L1 Approval', approver_role: 'Accountant' },
+  { step: 2, name: 'L2 Approval', approver_name: 'Nitin Jain' },
+  { step: 3, name: 'L3 Approval', approver_name: 'Ankur Kaplesh' },
+  { step: 5, name: 'Payment Release', approver_name: 'Aanchal' },
 ];
 // TA/DA pre-approval (mam 2026-06-17): from 15/06/2026 every NEW TA/DA request
 // must clear HR (Prabhdeep Singh) BEFORE L1 Accountant. Step 0 is prepended so
 // it always sorts ahead of L1. Existing in-flight requests keep their current
 // step (1+) and simply never visit step 0 — i.e. only new requests get HR.
 const TADA_FLOW = [
-  { step: 0, name: 'HR Approval (Prabhdeep Singh)', approver_name: 'Prabhdeep Singh' },
+  { step: 0, name: 'HR Approval', approver_name: 'Prabhdeep Singh' },
   ...STANDARD_FLOW,
 ];
 const WORKFLOW = {
@@ -208,6 +208,77 @@ function isInTop3Velocity(db, siteName) {
     return top3.some(t => (siteName || '').toLowerCase().includes((t.name || '').toLowerCase()) || (t.name || '').toLowerCase().includes((siteName || '').toLowerCase()));
   } catch (e) { return false; }
 }
+
+// ── Lookups — the option lists the UI needs before any record is loaded ────
+// Categories, the real statuses and the canonical stage order all live in the
+// WORKFLOW constants above; the client used to retype them (CATEGORIES,
+// STATUSES, STAGE_SEQ, STEPS, TADA_STEPS) and they drifted — the stage labels
+// still named people who had since been reassigned, and the status list offered
+// four values retired on 2026-06-11 that could never match a row.
+//
+// Serving them from the SAME constants the flow runs on is what stops the two
+// sides disagreeing.
+//
+// `flows` additionally carries WHO holds each step, resolved per category the
+// same way canUserApproveStep decides it: routing override → named default →
+// role. The step's own `name` stays free of people (a label is a gate, not a
+// person); the holder rides alongside as `approver`, so a re-assignment moves it
+// everywhere at once instead of leaving a stale name baked into a string.
+//
+// Declared before the '/:id' route below.
+const publicSteps = (flow) => flow.map(({ step, name }) => ({ step, name }));
+
+// Who currently holds (category, step). Mirrors canUserApproveStep's precedence
+// minus the admin / COO short-circuits, which are stand-ins rather than holders.
+//   override — a routing override names this person for this category only
+//   default  — the flow's own named approver
+//   role     — open to anyone holding the role
+function stepHolder(db, category, stepInfo, nameById, userForName) {
+  const overrideId = getApprovalRoutingFor(db, category, stepInfo.step);
+  if (overrideId) {
+    const nm = nameById(overrideId);
+    if (nm) return { approver: nm, approver_kind: 'override' };
+  }
+  if (stepInfo.approver_name) {
+    return { approver: userForName(stepInfo.approver_name)?.name || stepInfo.approver_name, approver_kind: 'default' };
+  }
+  return { approver: stepInfo.approver_role || null, approver_kind: 'role' };
+}
+
+router.get('/lookups', (req, res) => {
+  const db = getDb();
+  // Memoised — the same handful of ids / names repeat across all 7 categories.
+  const idMemo = new Map();
+  const nameById = (id) => { if (!idMemo.has(id)) idMemo.set(id, db.prepare('SELECT name FROM users WHERE id=?').get(id)?.name || null); return idMemo.get(id); };
+  const nameMemo = new Map();
+  const userForName = (nm) => { if (!nameMemo.has(nm)) nameMemo.set(nm, resolveUserByName(db, nm) || null); return nameMemo.get(nm); };
+
+  const flows = {};
+  for (const [category, steps] of Object.entries(WORKFLOW)) {
+    flows[category] = steps.map(s => ({
+      step: s.step,
+      name: s.name,
+      ...stepHolder(db, category, s, nameById, userForName),
+    }));
+  }
+
+  res.json({
+    steps:      publicSteps(STANDARD_FLOW),
+    tada_steps: publicSteps(TADA_FLOW),
+    // Canonical stage order = the TA/DA flow, which is the superset (HR + the
+    // four standard steps) and is already in sequence.
+    stage_seq:  TADA_FLOW.map(s => s.name),
+    categories: Object.keys(WORKFLOW),
+    flows,
+    // ONLY the three the flow ever writes: 'pending' (column default),
+    // 'final_approved' (advanceToNextStep) and 'rejected' (the reject routes).
+    statuses: [
+      { value: 'pending',        label: 'Pending' },
+      { value: 'final_approved', label: 'Final Approved' },
+      { value: 'rejected',       label: 'Rejected' },
+    ],
+  });
+});
 
 // GET all with filters
 router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
@@ -1060,7 +1131,7 @@ router.put('/approval-routing', (req, res) => {
   const db = getDb();
   ensureOverrideTable(db);
   const { category, step, user_id } = req.body || {};
-  if (!category || !step) return res.status(400).json({ error: 'category and step required' });
+  if (!category || (!step && step !== 0)) return res.status(400).json({ error: 'category and step required' });
   if (!WORKFLOW[category]) return res.status(400).json({ error: 'unknown category' });
   if (!WORKFLOW[category].find(s => s.step === +step)) return res.status(400).json({ error: 'unknown step for that category' });
 
