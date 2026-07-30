@@ -134,6 +134,42 @@ export default function PaymentRequired() {
     return { step: s.step, short, label: `Approved by ${short}` };
   });
 
+  // Stage label for DISPLAY only — never for comparison, filtering, payloads or
+  // any validation (those all run on the canonical name; see stageOf above).
+  //
+  // Old rows baked the approver into the stored string ('L3 Approval (MD - Ankur
+  // Kaplesh)'); those are history and are shown exactly as recorded. New rows
+  // store the canonical 'L3 Approval' and get the CURRENTLY effective approver
+  // appended, so a re-assignment in Approver Settings moves the name everywhere
+  // at once instead of leaving a stale one baked in. The 'MD -' style title is
+  // metadata on the DEFAULT approver only — an override shows just their name.
+  const displayWorkflowStage = (storedName, category, step) => {
+    const raw = String(storedName || '');
+    if (!raw) return raw;
+    if (raw.includes('(')) return raw;                 // legacy label — untouched
+    const flow = FLOWS[category] || [];
+    const s = flow.find(f => f.name === raw) || flow.find(f => f.step === step);
+    if (!s || !s.approver) return raw;
+    const who = s.approver_kind === 'default' && s.approver_label
+      ? `${s.approver_label} - ${s.approver}`
+      : s.approver;
+    return `${raw} (${who})`;
+  };
+
+  // Why a released request is flagged "⚠ Not Paid". Names the SAME two gates the
+  // server's l3_missing check looks for (workflowStage(flow,'L2'/'L3')), read off
+  // the category's own flow — it used to hardcode "L2 (Nitin) / L3 (MD)", which
+  // went stale the moment either seat was re-assigned.
+  const notPaidReason = (category) => {
+    const flow = FLOWS[category] || [];
+    const gates = ['L2', 'L3']
+      .map(lvl => flow.find(s => new RegExp(`^${lvl}\\b`, 'i').test(String(s.name || ''))))
+      .filter(Boolean)
+      .map(s => displayWorkflowStage(s.name, category, s.step));
+    const missing = gates.length ? gates.join(' / ') : 'the required approvals';
+    return `Released without ${missing} — not properly paid. Needs the backfill to correct.`;
+  };
+
   // Approval routing — admin-only (mam, 2026-05-16: "i want hr
   // approval will give to anchal how can be it dynamic all steps").
   // Loads on demand when the Settings modal opens to avoid an extra
@@ -439,7 +475,7 @@ export default function PaymentRequired() {
             className="btn btn-secondary flex items-center gap-2"><FiDownload size={16} /> Export Excel</button>
           {isAdmin && (
             <button onClick={openRoutingModal} className="btn btn-secondary flex items-center gap-2"
-                    title="Re-assign approval steps to specific users (HR → Aanchal, etc.)">
+                    title="Re-assign any approval step of any category to a specific user">
               <FiSettings size={16} /> Approval Routing
             </button>
           )}
@@ -512,7 +548,7 @@ export default function PaymentRequired() {
                     <td className="text-[11px]">
                       <div className="flex items-center gap-1 mb-0.5">
                         <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-mono text-[10px]">{r.approvals_count || 0}/{r.approvals_total || 2}</span>
-                        {r.current_step_name && <span className="text-amber-700 font-medium">{r.current_step_name}</span>}
+                        {r.current_step_name && <span className="text-amber-700 font-medium">{displayWorkflowStage(r.current_step_name, r.category, r.current_step)}</span>}
                       </div>
                       {r.last_approved_by_name && <div className="text-[10px] text-emerald-700">✓ by <b>{r.last_approved_by_name}</b></div>}
                       {(r.next_approver_name || r.next_approver_role) && (
@@ -706,11 +742,11 @@ export default function PaymentRequired() {
                     <div className="flex items-center gap-1.5">
                       <span className="bg-gray-100 px-2 py-0.5 rounded font-mono">{r.approvals_count || 0}/{r.approvals_total || 5}</span>
                       {r.current_step_name && r.status !== 'final_approved' && r.status !== 'rejected' && (
-                        <span className="text-amber-700 font-medium">→ {r.current_step_name}</span>
+                        <span className="text-amber-700 font-medium">→ {displayWorkflowStage(r.current_step_name, r.category, r.current_step)}</span>
                       )}
                     </div>
                     {r.last_approved_by_name && (
-                      <div className="text-emerald-700">✓ {r.last_approved_step_name} by <b>{r.last_approved_by_name}</b></div>
+                      <div className="text-emerald-700">✓ {displayWorkflowStage(r.last_approved_step_name, r.category)} by <b>{r.last_approved_by_name}</b></div>
                     )}
                     {r.status !== 'final_approved' && r.status !== 'rejected' && (r.next_approver_name || r.next_approver_role) && (
                       <div className="text-amber-800">⏳ Waiting on {r.next_approver_name ? <b>{r.next_approver_name}</b> : <>any <b>{r.next_approver_role}</b></>}</div>
@@ -793,12 +829,12 @@ export default function PaymentRequired() {
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <span className="bg-gray-100 px-2 py-0.5 rounded font-mono text-[11px]">{r.approvals_count || 0}/{r.approvals_total || 5}</span>
                       {r.current_step_name && r.status !== 'final_approved' && r.status !== 'rejected' && (
-                        <span className="text-amber-700 font-medium">→ {r.current_step_name}</span>
+                        <span className="text-amber-700 font-medium">→ {displayWorkflowStage(r.current_step_name, r.category, r.current_step)}</span>
                       )}
                     </div>
                     {r.last_approved_by_name && (
                       <div className="text-[10px] text-emerald-700">
-                        ✓ {r.last_approved_step_name} by <b>{r.last_approved_by_name}</b>
+                        ✓ {displayWorkflowStage(r.last_approved_step_name, r.category)} by <b>{r.last_approved_by_name}</b>
                       </div>
                     )}
                     {r.status !== 'final_approved' && r.status !== 'rejected' && (r.next_approver_name || r.next_approver_role) && (
@@ -816,7 +852,7 @@ export default function PaymentRequired() {
                     const cls = 'px-2 py-0.5 rounded text-[11px] font-semibold whitespace-nowrap ';
                     if (st === 'Rejected') return <span className={cls + 'bg-red-100 text-red-700'}>Rejected</span>;
                     if (st === 'Approved') return r.l3_missing
-                      ? <span className={cls + 'bg-red-100 text-red-700'} title="Released without L2 (Nitin) / L3 (MD) approval — not properly paid. Needs the L3 backfill to correct.">⚠ Not Paid</span>
+                      ? <span className={cls + 'bg-red-100 text-red-700'} title={notPaidReason(r.category)}>⚠ Not Paid</span>
                       : <span className={cls + 'bg-green-600 text-white'}>Paid</span>;
                     // Parked on the LAST stage of the flow = every approval is in,
                     // only the payout remains. Matched by position, not by the
@@ -900,7 +936,7 @@ export default function PaymentRequired() {
                 {isAdmin && (
                   <button onClick={openRoutingModal}
                           className="block ml-auto mt-2 text-[10px] text-blue-600 hover:text-blue-800 underline"
-                          title="Re-assign HR / Accountant / Release steps to specific users (e.g. HR → Aanchal)">
+                          title="Re-assign any approval step of any category to a specific user">
                     Manage step approvers…
                   </button>
                 )}
@@ -941,7 +977,9 @@ export default function PaymentRequired() {
                         {isCurrent && <span>⏳</span>}
                         {!approval && !isCurrent && <span>⏸</span>}
                       </div>
-                      <div className="text-[10.5px] leading-tight">{s.name}</div>
+                      {/* A cleared step shows what history recorded; a pending
+                          one shows the currently effective holder. */}
+                      <div className="text-[10.5px] leading-tight">{displayWorkflowStage(approval?.step_name || s.name, viewData.category, s.step)}</div>
                       {isSystem && <div className="text-[9px] italic text-gray-500 mt-0.5">(auto)</div>}
                       {approval && (
                         <div className="text-[9.5px] mt-1 leading-tight">
@@ -1174,7 +1212,7 @@ export default function PaymentRequired() {
                 <div className="space-y-1">{viewData.approvals.map(a => (
                   <div key={a.id} className={`text-xs p-2 rounded flex justify-between items-center ${a.action === 'approved' ? 'bg-emerald-50' : 'bg-red-50'}`}>
                     <span>
-                      <strong>Step {a.step}:</strong> {a.step_name} —{' '}
+                      <strong>Step {a.step}:</strong> {displayWorkflowStage(a.step_name, viewData.category, a.step)} —{' '}
                       <span className={a.action === 'approved' ? 'text-emerald-700' : 'text-red-600'}>{a.action.toUpperCase()}</span>
                       {' '}by {a.approved_by_name}
                       {a.step_amount != null && (
@@ -1196,7 +1234,7 @@ export default function PaymentRequired() {
               const reduceBy = willReduce ? currentApproved - draft : 0;
               return (
               <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50 space-y-3">
-                <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {(viewData.workflow?.find(w => w.step === viewData.current_step) || {}).name || viewData.current_step_name}</h5>
+                <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {displayWorkflowStage((viewData.workflow?.find(w => w.step === viewData.current_step) || {}).name || viewData.current_step_name, viewData.category, viewData.current_step)}</h5>
 
                 {/* Approver-side amount adjustment (mam 2026-05-28) */}
                 <div>

@@ -57,7 +57,7 @@ const seesAll = (req) => {
 const STANDARD_FLOW = [
   { step: 1, name: 'L1 Approval', approver_role: 'Accountant' },
   { step: 2, name: 'L2 Approval', approver_name: 'Nitin Jain' },
-  { step: 3, name: 'L3 Approval', approver_name: 'Ankur Kaplesh' },
+  { step: 3, name: 'L3 Approval', approver_name: 'Ankur Kaplesh', approver_label: 'MD' },
   { step: 5, name: 'Payment Release', approver_name: 'Aanchal' },
 ];
 // TA/DA pre-approval (mam 2026-06-17): from 15/06/2026 every NEW TA/DA request
@@ -79,6 +79,39 @@ const WORKFLOW = {
   // flow, plus a mandatory proof upload enforced at create time (below).
   'Manpower Advance': STANDARD_FLOW,
 };
+
+// ── Workflow-stage identity ────────────────────────────────────────────────
+// Step names used to carry the approver inside the label ('L2 Approval (Nitin
+// Jain)', 'L3 Approval (MD - Ankur Kaplesh)') and those strings are permanent
+// history in payment_approvals.step_name. The live constants are now canonical
+// ('L2 Approval'), so "was this gate cleared?" has to answer for both spellings.
+// Both consumers below (preReleaseGap + the l3_missing enrichment) used to
+// hand-roll the same person-name regex; they now share these helpers.
+const normalizeStageText = (value) => String(value || '').trim().toLowerCase();
+
+// The flow step for a level token ('L2', 'L3', 'HR'), anchored to the start of
+// the canonical name so 'L2 Approval' matches and nothing else does.
+function workflowStage(flow, level) {
+  return flow.find(step => new RegExp(`^${level}\\b`, 'i').test(String(step.name || '')));
+}
+
+// Was this stage ever cleared? Matches the canonical stage name FIRST, then the
+// template's DEFAULT approver name — that second alias exists only to keep
+// pre-rename history readable. Current Approver Settings / routing overrides
+// NEVER participate here: they say who MAY clear a gate, not whether it WAS
+// cleared. Accepts either approval rows or bare step_name strings.
+function historyHasWorkflowStage(approvals, stage) {
+  if (!stage) return true;              // flow doesn't define it → nothing to miss
+  const aliases = [...new Set(
+    [stage.name, stage.approver_name].map(normalizeStageText).filter(Boolean)
+  )];
+  return approvals.some(approval => {
+    const recorded = normalizeStageText(
+      typeof approval === 'string' ? approval : approval?.step_name
+    );
+    return recorded && aliases.some(alias => recorded.includes(alias));
+  });
+}
 
 // Resolve a named approver (the standard flow pins specific people) to an
 // active user record — exact name first, then a loose LIKE — so it survives
@@ -240,7 +273,11 @@ function stepHolder(db, category, stepInfo, nameById, userForName) {
     if (nm) return { approver: nm, approver_kind: 'override' };
   }
   if (stepInfo.approver_name) {
-    return { approver: userForName(stepInfo.approver_name)?.name || stepInfo.approver_name, approver_kind: 'default' };
+    return {
+      approver: userForName(stepInfo.approver_name)?.name || stepInfo.approver_name,
+      approver_kind: 'default',
+      approver_label: stepInfo.approver_label || null,
+    };
   }
   return { approver: stepInfo.approver_role || null, approver_kind: 'role' };
 }
@@ -370,13 +407,12 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
       // L2 (Nitin) / L3 (MD) was wrongly released under the old flow. Flag it so
       // the UI shows it as NOT actually paid (display only — data untouched).
       {
-        const names = appr.map(a => String(a.step_name || '').toLowerCase());
+        // Audit detector only — display flag, never touches workflow state.
         const flow = WORKFLOW[row.category] || [];
-        const needsL2 = flow.some(w => /\bL2\b|nitin/i.test(w.name));
-        const needsL3 = flow.some(w => /\bL3\b|ankur/i.test(w.name));
-        const hasL2 = !needsL2 || names.some(n => n.includes('l2') || n.includes('nitin'));
-        const hasL3 = !needsL3 || names.some(n => n.includes('l3') || n.includes('ankur'));
-        row.l3_missing = (row.status === 'final_approved') && (!hasL2 || !hasL3);
+        const l2 = workflowStage(flow, 'L2');
+        const l3 = workflowStage(flow, 'L3');
+        row.l3_missing = (row.status === 'final_approved')
+          && (!historyHasWorkflowStage(appr, l2) || !historyHasWorkflowStage(appr, l3));
       }
       row.step_amounts = {};
       for (const a of appr) row.step_amounts[a.step] = (a.step_amount != null ? +a.step_amount : (+row.approved_amount || +row.amount || 0));
@@ -756,12 +792,12 @@ function preReleaseGap(db, request) {
   const flow = WORKFLOW[request.category] || STANDARD_FLOW;
   const releaseStep = flow[flow.length - 1].step;
   if (request.current_step !== releaseStep) return null;
-  const names = db.prepare("SELECT step_name FROM payment_approvals WHERE request_id=? AND action='approved'")
-    .all(request.id).map(a => String(a.step_name || '').toLowerCase());
-  const needL2 = flow.find(w => /\bL2\b|nitin/i.test(w.name));
-  const needL3 = flow.find(w => /\bL3\b|ankur/i.test(w.name));
-  if (needL2 && !names.some(n => n.includes('l2') || n.includes('nitin'))) return needL2;
-  if (needL3 && !names.some(n => n.includes('l3') || n.includes('ankur'))) return needL3;
+  const approvals = db.prepare("SELECT step_name FROM payment_approvals WHERE request_id=? AND action='approved'")
+    .all(request.id);
+  const l2 = workflowStage(flow, 'L2');
+  const l3 = workflowStage(flow, 'L3');
+  if (l2 && !historyHasWorkflowStage(approvals, l2)) return l2;
+  if (l3 && !historyHasWorkflowStage(approvals, l3)) return l3;
   return null;
 }
 
@@ -846,7 +882,13 @@ router.put('/:id/approve', (req, res) => {
   if (!canUserApproveStep(db, req.user.id, request.category, request.current_step)) {
     const workflow = WORKFLOW[request.category];
     const stepInfo = workflow?.find(w => w.step === request.current_step);
-    return res.status(403).json({ error: `Not authorized. This step requires: ${stepInfo?.approver_role}` });
+    // Only L1 carries an approver_role; HR / L2 / L3 / Release are named steps,
+    // so this used to print "requires: undefined" on four gates out of five.
+    // Name the GATE, never the person — a denial message must not leak (or go
+    // stale on) who currently holds the step.
+    const requires = stepInfo?.approver_role
+      || (stepInfo?.name ? `the approver assigned to ${stepInfo.name}` : `step ${request.current_step}`);
+    return res.status(403).json({ error: `Not authorized. This step requires: ${requires}` });
   }
 
   // Separation of duties — the person who raised the request can't approve it.
