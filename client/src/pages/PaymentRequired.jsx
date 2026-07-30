@@ -115,14 +115,14 @@ export default function PaymentRequired() {
 
   // The lists that used to be hardcoded module constants, same names, now served
   // from /payment-required/lookups. Empty until the fetch resolves.
-  const STEPS      = lookups?.steps      || [];
+  const STEPS = lookups?.steps || [];
   const TADA_STEPS = lookups?.tada_steps || [];
-  const STAGE_SEQ  = lookups?.stage_seq  || [];
+  const STAGE_SEQ = lookups?.stage_seq || [];
   const CATEGORIES = lookups?.categories || [];
-  const STATUSES   = lookups?.statuses   || [];   // [{ value, label }] — labels come with them now
+  const STATUSES = lookups?.statuses || [];   // [{ value, label }] — labels come with them now
   // Per-category flow WITH the current holder of each step resolved server-side
   // (override → named default → role): { 'TA/DA': [{ step, name, approver }] }.
-  const FLOWS      = lookups?.flows      || {};
+  const FLOWS = lookups?.flows      || {};
 
   // The levels the "Approved so far" chips offer. Every step except the final
   // payout is an approval. Derived from the flow (TA/DA is the superset) rather

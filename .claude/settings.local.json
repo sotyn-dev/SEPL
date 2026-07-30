@@ -65,7 +65,16 @@
       "Bash(npm config *)",
       "Bash(npm rebuild *)",
       "Bash(git check-ignore *)",
-      "Bash(node -c server/routes/dpr.js)"
+      "Bash(node -c server/routes/dpr.js)",
+      "Bash(curl -s -o /dev/null -w \"5173:%{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(curl -s -o /dev/null -w \"5000:%{http_code}\\\\n\" http://localhost:5000/)",
+      "Bash(node --check server/routes/paymentrequired.js)",
+      "Bash(npx --no-install esbuild client/src/pages/PaymentRequired.jsx --loader=jsx --outfile=/dev/null)",
+      "Bash(./client/node_modules/.bin/esbuild client/src/pages/PaymentRequired.jsx --loader=jsx --outfile=/dev/null)",
+      "Bash(./client/node_modules/.bin/esbuild client/src/pages/PaymentRequired.jsx --loader:.jsx=jsx --outfile=/dev/null)",
+      "Bash(curl -s -o /dev/null -w \"5173:%{http_code} \" http://localhost:5173/)",
+      "Bash(curl -s -o /dev/null -w \"3000:%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(node -e \"let s='';process.stdin.on\\('data',d=>s+=d\\).on\\('end',\\(\\)=>{const j=JSON.parse\\(s\\); console.log\\('has flows:', !!j.flows\\); if\\(j.flows\\) console.log\\(JSON.stringify\\({'TA/DA':j.flows['TA/DA'],'Purchase':j.flows['Purchase']},null,1\\)\\);}\\)\")"
     ]
   }
 }
