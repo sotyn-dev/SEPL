@@ -45,6 +45,9 @@ router.get('/live', (req, res) => {
   // column still default to "tracked".
   const rows = db.prepare(
     `SELECT lt.user_id, u.name as user_name, u.department, u.role,
+            (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = u.id) AS hr_department,
+            (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
+            (SELECT COUNT(*) FROM employees e WHERE e.user_id = u.id) AS hr_record_count,
             lt.latitude, lt.longitude, lt.address, lt.site_name, lt.time
        FROM location_tracking lt
        JOIN users u ON u.id = lt.user_id
@@ -73,6 +76,9 @@ router.get('/live', (req, res) => {
       user_name: r.user_name,
       department: r.department,
       role: r.role,
+      hr_department: r.hr_department,
+      hr_designation: r.hr_designation,
+      hr_record_count: r.hr_record_count,
       latitude: r.latitude,
       longitude: r.longitude,
       address: r.address,
@@ -100,6 +106,9 @@ router.get('/latest', (req, res) => {
 
   const rows = db.prepare(
     `SELECT lt.user_id, u.name as user_name, u.department, u.role,
+            (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = u.id) AS hr_department,
+            (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
+            (SELECT COUNT(*) FROM employees e WHERE e.user_id = u.id) AS hr_record_count,
             lt.latitude, lt.longitude, lt.address, lt.site_name, lt.time
        FROM location_tracking lt
        JOIN users u ON u.id = lt.user_id
@@ -124,6 +133,7 @@ router.get('/latest', (req, res) => {
     const ageMs = now - new Date(r.time).getTime();
     return {
       user_id: r.user_id, user_name: r.user_name, department: r.department, role: r.role,
+      hr_department: r.hr_department, hr_designation: r.hr_designation, hr_record_count: r.hr_record_count,
       latitude: r.latitude, longitude: r.longitude, address: r.address, site_name: r.site_name,
       time: r.time,
       minutes_ago: Math.round(ageMs / 60000),
@@ -149,7 +159,11 @@ router.get('/timeline', (req, res) => {
   if (!userId || !date) return res.status(400).json({ error: 'user_id and date (YYYY-MM-DD) are required' });
 
   const db = getDb();
-  const user = db.prepare('SELECT id, name, department, role FROM users WHERE id=?').get(userId);
+  const user = db.prepare(`SELECT u.id, u.name, u.department, u.role,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = u.id) AS hr_department,
+    (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
+    (SELECT COUNT(*) FROM employees e WHERE e.user_id = u.id) AS hr_record_count
+    FROM users u WHERE u.id=?`).get(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const rows = db.prepare(

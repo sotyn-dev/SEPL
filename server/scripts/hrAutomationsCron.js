@@ -190,23 +190,23 @@ function scanPendingApprovals(db) {
   return made;
 }
 
-// HR users = admin OR users with department/role containing "hr". Selects
-// u.role too so jobs 2 & 3 can send the in-app bell to everyone here (admins
-// included) but filter the EMAIL in JS to non-admins — a person who is here
-// only because role='admin' (the MD, etc.) gets the bell but not the email
+// HR-alert recipients = admin OR holders of the hr_team.can_view capability
+// (the matrix flag that replaced the old department/role "%hr%" match). Selects
+// u.role too so jobs 2 & 3 send the in-app bell to everyone here (admins
+// included) but filter the EMAIL in JS to non-admins — a person here only
+// because role='admin' (the MD, etc.) gets the bell but not the email
 // (mam 2026-07-22).
 function findHrUsers(db) {
   return db.prepare(`
     SELECT DISTINCT u.id, u.email, u.role
       FROM users u
       LEFT JOIN user_roles ur ON ur.user_id = u.id
-      LEFT JOIN roles r ON r.id = ur.role_id
+      LEFT JOIN role_permissions rp ON rp.role_id = ur.role_id AND rp.module = 'hr_team'
      WHERE COALESCE(u.active, 1) = 1
        AND u.email IS NOT NULL AND u.email != ''
        AND (
-         LOWER(COALESCE(u.role, '')) = 'admin'
-         OR LOWER(COALESCE(u.department, '')) LIKE '%hr%'
-         OR LOWER(COALESCE(r.name, '')) LIKE '%hr%'
+         LOWER(COALESCE(u.role, '')) = 'admin'   -- admin always receives (kept)
+         OR rp.can_view = 1                        -- HR-team members (matrix flag)
        )
   `).all();
 }

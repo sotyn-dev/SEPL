@@ -1844,6 +1844,11 @@ function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_chq_actions_cheque ON cheque_actions(cheque_id, action_at);
 
+    -- Speeds the HR-identity lookups (employees.department/designation via the user link)
+    -- used for display across Users list, Locations, Attendance, Champions, exports. Plain
+    -- (non-unique) index — pure performance, no data change, no uniqueness enforced.
+    CREATE INDEX IF NOT EXISTS idx_employees_user_id ON employees(user_id);
+
     -- Snag list — defects / punch-list items raised against a site,
     -- assigned to an employee, who uploads proof and only then it's
     -- closed by approval (delegation-style flow). Mam's ask:
@@ -2358,21 +2363,13 @@ function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_lpi_raised ON labour_payment_indents(raised_by);
     CREATE INDEX IF NOT EXISTS idx_lpi_created ON labour_payment_indents(created_at DESC);
 
-    -- Hot-path FK indexes (mam 2026-06-25 perf audit: "nothing should hang").
-    -- These cover the per-row subqueries / joins that ran full table scans on
-    -- list loads (vendor-PO list total, sales-bill + DPR lookups, indent items,
-    -- payments by reference). Pure speed, no behaviour change.
-    CREATE INDEX IF NOT EXISTS idx_vpitems_vpo      ON vendor_po_items(vendor_po_id);
-    CREATE INDEX IF NOT EXISTS idx_sbills_po        ON sales_bills(po_id);
-    CREATE INDEX IF NOT EXISTS idx_sbills_bb        ON sales_bills(business_book_id);
-    CREATE INDEX IF NOT EXISTS idx_sbitems_bill     ON sales_bill_items(sales_bill_id);
-    CREATE INDEX IF NOT EXISTS idx_dpr_site         ON dpr(site_id);
-    CREATE INDEX IF NOT EXISTS idx_dpr_salesbill    ON dpr(sales_bill_id);
-    CREATE INDEX IF NOT EXISTS idx_dprwi_dpr        ON dpr_work_items(dpr_id);
-    CREATE INDEX IF NOT EXISTS idx_indents_site     ON indents(site_id);
-    CREATE INDEX IF NOT EXISTS idx_indentitems_poi  ON indent_items(po_item_id);
-    CREATE INDEX IF NOT EXISTS idx_payments_ref     ON payments(reference_type, reference_id);
-    CREATE INDEX IF NOT EXISTS idx_pofoc_poi        ON po_foc_entries(po_item_id);
+    -- Hot-path FK indexes (mam 2026-06-25 perf audit: "nothing should hang")
+    -- have MOVED to the end of initializeDatabase(). Several of them index
+    -- columns that are added by the ALTER migrations further down rather
+    -- than by the original CREATE TABLE, so creating them here aborted the
+    -- whole init on a fresh database ("no such column"). They are pure
+    -- speed with no ordering requirement, so the tail is the safe place.
+    -- See "deferred hot-path FK indexes" below.
 
     -- ============================================================
     -- INDENT LABOUR PAYMENT (Project Execution & Billing) — mam
@@ -2846,6 +2843,13 @@ function initializeDatabase() {
     // audit; remarks stores the reason mam typed.
     ['attendance', 'admin_marked INTEGER DEFAULT 0'],
     ['attendance', 'marked_by INTEGER REFERENCES users(id)'],
+    // Backdating proof (SEPL 2026-07): when HR manually marks a past day
+    // Present/Half-Day for a new hire, a supporting document (signed sheet,
+    // photo) MUST be attached so the manual mark is auditable — no anonymous
+    // "mark present". proof_url points at /uploads/<file> (same convention as
+    // delegations/checklists); marked_at stamps WHEN the backdate was done.
+    ['attendance', 'proof_url TEXT'],
+    ['attendance', 'marked_at DATETIME'],
     // Auto-mark-present allow-list. Users with this flag set get an
     // admin_marked='present' row created automatically every day so
     // they don't show up in the 'Not Punched In Today' panel. Mam's
@@ -3025,6 +3029,10 @@ function initializeDatabase() {
     ['employees', 'cl_eligible INTEGER DEFAULT 1'],
     ['employees', 'ot_eligible INTEGER DEFAULT 0'],
     ['employees', 'cl_opening_balance REAL DEFAULT 0'],
+    // Roster / shift assignment (SEPL 2026-07, meeting Item 4). Two rosters:
+    // 'general' (9:30, default) and 'early' (9:00). Drives roster-aware late /
+    // half-day cutoffs in payroll + punch. See server/lib/roster.js.
+    ['employees', "roster TEXT DEFAULT 'general'"],
     // can_see_all on role_permissions: explicit per-role-per-module toggle
     // for "scope = ALL records" vs "scope = OWN only". Decoupled from
     // can_approve so admin can grant a role full visibility without giving
@@ -3629,6 +3637,18 @@ function initializeDatabase() {
     ['payroll_runs', 'paid INTEGER DEFAULT 0'],
     ['payroll_runs', 'paid_at DATETIME'],
     ['payroll_runs', 'paid_by INTEGER REFERENCES users(id)'],
+    // Freeze OT context into the month snapshot (SEPL payroll-integrity fix):
+    // ot_eligible + the per-hour rate + threshold are captured AT FINALISE so a
+    // later toggle of employees.ot_eligible or a settings change can't silently
+    // re-derive a locked month's overtime. net_before_ot is the compliant
+    // base-only figure (salary WITHOUT OT) for the labour-department export.
+    ['payroll_runs', 'ot_eligible INTEGER DEFAULT 0'],
+    ['payroll_runs', 'ot_per_hour_rate REAL DEFAULT 0'],
+    ['payroll_runs', 'ot_threshold REAL DEFAULT 9'],
+    ['payroll_runs', 'net_before_ot REAL DEFAULT 0'],
+    // Freeze the roster used when this month was finalised so a later roster
+    // change on the employee can't retro-shift a locked month's late marks.
+    ['payroll_runs', "roster TEXT DEFAULT 'general'"],
     // Sales Billing — 4-type sequential bill flow (mam 2026-06-13).  Added to
     // the existing sales_bills table so legacy delivery-note rows (bill_type
     // NULL) are untouched; the new module only handles bill_type 1-4.
@@ -3712,12 +3732,22 @@ function initializeDatabase() {
   // don't need a migration.
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='support_tickets'").get();
-    if (row && /CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i.test(row.sql)
-            && !/manpower/i.test(row.sql)) {
-      db.exec('BEGIN');
+    // Scope the "already relaxed?" test to the CHECK clause itself — testing the
+    // whole row.sql false-positives on column names (the exact bug that stranded
+    // the status relax below). The table name is quote-tolerant: a prior rebuild
+    // leaves it stored as CREATE TABLE "support_tickets".
+    const checkClause = row && (row.sql.match(/CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i) || [])[0];
+    if (checkClause && !/manpower/i.test(checkClause)) {
+      // FKs OFF for the structural rebuild — an INSERT ... SELECT with FKs on
+      // aborts on any row referencing a since-deleted user. The pragma is a no-op
+      // inside a transaction, so set it before BEGIN and restore after COMMIT.
+      // Matches the payment_requests / indents rebuilds elsewhere in this file.
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS support_tickets_new'); } catch (_) {}
       const newSql = row.sql
-        .replace(/CREATE TABLE\s+support_tickets/i, 'CREATE TABLE support_tickets_new')
+        .replace(/CREATE TABLE\s+"?support_tickets"?/i, 'CREATE TABLE support_tickets_new')
         .replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
+      db.exec('BEGIN');
       db.exec(newSql);
       // Copy by column list so any future renames don't break this.
       const cols = db.prepare("PRAGMA table_info(support_tickets)").all().map(c => c.name).join(',');
@@ -3725,10 +3755,13 @@ function initializeDatabase() {
       db.exec('DROP TABLE support_tickets');
       db.exec('ALTER TABLE support_tickets_new RENAME TO support_tickets');
       db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
       console.log('[migration] support_tickets rebuilt — category CHECK relaxed (manpower/material/payment now allowed)');
     }
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] support_tickets category CHECK relax FAILED:', e.message);
   }
 
   // Relax the support_tickets STATUS CHECK for the Delegation-style proof
@@ -3740,22 +3773,33 @@ function initializeDatabase() {
   // safe even after the assigned_to / proof_* columns were added.
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='support_tickets'").get();
-    if (row && /CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i.test(row.sql)
-            && !/submitted/i.test(row.sql)) {
-      db.exec('BEGIN');
+    // Scope the 'submitted' test to the CHECK clause — the proof_submitted_at /
+    // proof_submitted_by column names also contain "submitted", so testing the
+    // whole row.sql false-positived and this migration never ran on real DBs.
+    // Quote-tolerant name: the category rebuild above leaves the table stored as
+    // CREATE TABLE "support_tickets", which the old /support_tickets\b/ regex
+    // failed to match — the rebuild then collided with "table already exists".
+    const checkClause = row && (row.sql.match(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i) || [])[0];
+    if (checkClause && !/submitted/i.test(checkClause)) {
+      db.pragma('foreign_keys = OFF');       // see the category rebuild above
+      try { db.exec('DROP TABLE IF EXISTS support_tickets_new'); } catch (_) {}
       const newSql = row.sql
-        .replace(/CREATE TABLE\s+support_tickets\b/i, 'CREATE TABLE support_tickets_new')
+        .replace(/CREATE TABLE\s+"?support_tickets"?/i, 'CREATE TABLE support_tickets_new')
         .replace(/,?\s*CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i, '');
+      db.exec('BEGIN');
       db.exec(newSql);
       const cols = db.prepare("PRAGMA table_info(support_tickets)").all().map(c => c.name).join(',');
       db.exec(`INSERT INTO support_tickets_new (${cols}) SELECT ${cols} FROM support_tickets`);
       db.exec('DROP TABLE support_tickets');
       db.exec('ALTER TABLE support_tickets_new RENAME TO support_tickets');
       db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
       console.log('[migration] support_tickets rebuilt — status CHECK relaxed (submitted/rejected now allowed)');
     }
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] support_tickets status CHECK relax FAILED:', e.message);
   }
 
   // Mam (2026-05-21) STILL "not done" after multiple attempts.  Going
@@ -5186,28 +5230,36 @@ function initializeDatabase() {
   }
 
   // Re-classify attendance rows so status reflects the CURRENT cutoff
-  // (payroll_settings.late_after_time, IST). Idempotent and bidirectional:
-  // - Rows past the cutoff become 'late'
-  // - Rows at/before the cutoff become 'present'
+  // (payroll_settings.late_after_time, IST), ROSTER-AWARE. Idempotent and
+  // bidirectional:
+  // - Rows past the employee's roster cutoff become 'late'
+  // - Rows at/before it become 'present'
   // - half_day / short_day / on_leave / absent / admin_marked rows are
   //   left alone so we don't trample manual classifications.
-  // Fixes both the original UTC-vs-IST bug AND the case where a previous
-  // tighter cutoff left rows mismarked as 'late' after mam relaxed it.
+  // The 'early' (9:00) roster is late 30 min sooner than the 'general' (9:30)
+  // default — same offset as server/lib/roster.js — so an early-shift punch
+  // isn't wrongly re-marked 'present'. Fixes the UTC-vs-IST bug, the relaxed-
+  // cutoff case, AND the roster-unaware backfill.
   try {
     const ps = db.prepare("SELECT late_after_time FROM payroll_settings WHERE id=1").get();
     const cutoffStr = (ps?.late_after_time || '09:46').padEnd(5, '0').slice(0, 5);
+    const toMin = (s) => { const [h, m] = s.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+    const toHHMM = (n) => { const t = Math.max(0, Math.min(1439, n)); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+    const earlyStr = toHHMM(toMin(cutoffStr) - 30);
     const r = db.prepare(`
       UPDATE attendance
          SET status = CASE
-             WHEN time(datetime(punch_in_time, '+5 hours', '+30 minutes')) > ?
+             WHEN time(datetime(punch_in_time, '+5 hours', '+30 minutes')) >
+                  CASE WHEN (SELECT roster FROM employees e WHERE e.user_id = attendance.user_id LIMIT 1) = 'early'
+                       THEN ? ELSE ? END
                   THEN 'late'
              ELSE 'present'
            END
        WHERE punch_in_time IS NOT NULL
          AND status IN ('present', 'late')
          AND COALESCE(admin_marked, 0) = 0
-    `).run(cutoffStr + ':00');
-    if (r.changes > 0) console.log(`[backfill] re-synced ${r.changes} attendance rows against cutoff ${cutoffStr} IST`);
+    `).run(earlyStr + ':00', cutoffStr + ':00');
+    if (r.changes > 0) console.log(`[backfill] re-synced ${r.changes} attendance rows (roster-aware: general ${cutoffStr}, early ${earlyStr} IST)`);
   } catch (e) { /* non-fatal */ }
 
   // ─── Sales Funnel — stage key migration to mam's 11-stage spec ─────
@@ -5671,6 +5723,14 @@ in your first week. If a process feels broken, raise a Help Ticket
     // and the sidebar, but it was never added here, so no role got a
     // role_permissions row and it never showed in Roles & Permissions.
     'solar_quotation',
+    // Dedicated capabilities replacing the fuzzy department/role-name "is HR"
+    // string checks (LIKE '%hr%'). Granted deliberately in the matrix, never
+    // inferred from a typed department.
+    //   employee_salary.can_view → see the salary field on GET /hr/employees.
+    //   hr_team.can_view         → HR-team member: gates hiring-request actions
+    //                              and the HR-alert recipient group (cron).
+    //   attendance_grid.can_view → view the Attendance Monthly Grid tab (marking needs attendance.can_approve).
+    'employee_salary','hr_team','attendance_grid',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -6077,6 +6137,18 @@ in your first week. If a process feels broken, raise a Help Ticket
     console.warn('[rental_tools] migrations skipped (non-fatal):', e.message);
   }
 
+  // Indent → Dispatch approval flow settings (2026-07-23) — the single home for
+  // "who may approve at each gate" + the optional gate switches. Replaces the
+  // four scattered authority sources (raci_assignment, users.approval_role,
+  // the hardcoded PO_APPROVERS names, crm_funnel role) and the two on/off
+  // sources (app_settings.indent_l2_enabled, raci_assignment.step_enabled).
+  try {
+    const { runIndentFlowSettingsMigrations } = require('./indentToDispatchSchema');
+    runIndentFlowSettingsMigrations(db);
+  } catch (e) {
+    console.warn('[indent_flow_settings] migrations skipped (non-fatal):', e.message);
+  }
+
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────
   // "in rec. against delivery note show here ok site name also show here
   // delivery note number and against it we will upload receiving".
@@ -6124,6 +6196,40 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   } catch (e) {
     console.warn('[auto_dn_backfill] skipped (non-fatal):', e.message);
+  }
+
+  // ─── Deferred hot-path FK indexes (mam 2026-06-25 perf audit) ─────────
+  // "nothing should hang" — these cover the per-row subqueries / joins that
+  // ran full table scans on list loads (vendor-PO list total, sales-bill +
+  // DPR lookups, indent items, payments by reference). Pure speed, no
+  // behaviour change.
+  //
+  // They live at the TAIL of init, not inline with the CREATE TABLEs,
+  // because several index a column that arrives via an ALTER migration
+  // rather than the original CREATE TABLE. Inline, they happened to work on
+  // an already-migrated database (the column was there from an earlier
+  // deploy) but aborted initializeDatabase() outright on a fresh one with
+  // "no such column" — meaning the app could not be stood up from scratch.
+  // Each runs independently so one missing column can't cost us the rest.
+  const hotPathIndexes = [
+    'CREATE INDEX IF NOT EXISTS idx_vpitems_vpo      ON vendor_po_items(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sbills_po        ON sales_bills(po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sbills_bb        ON sales_bills(business_book_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sbitems_bill     ON sales_bill_items(sales_bill_id)',
+    'CREATE INDEX IF NOT EXISTS idx_dpr_site         ON dpr(site_id)',
+    'CREATE INDEX IF NOT EXISTS idx_dpr_salesbill    ON dpr(sales_bill_id)',
+    'CREATE INDEX IF NOT EXISTS idx_dprwi_dpr        ON dpr_work_items(dpr_id)',
+    'CREATE INDEX IF NOT EXISTS idx_indents_site     ON indents(site_id)',
+    'CREATE INDEX IF NOT EXISTS idx_indentitems_poi  ON indent_items(po_item_id)',
+    'CREATE INDEX IF NOT EXISTS idx_payments_ref     ON payments(reference_type, reference_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pofoc_poi        ON po_foc_entries(po_item_id)',
+  ];
+  for (const sql of hotPathIndexes) {
+    try {
+      db.exec(sql);
+    } catch (e) {
+      console.warn('[hot_path_index] skipped (non-fatal):', e.message, '::', sql.trim());
+    }
   }
 
   console.log('Database initialized successfully');

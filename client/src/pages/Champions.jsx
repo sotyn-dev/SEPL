@@ -12,6 +12,7 @@ import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { useUrlTab } from '../hooks/useUrlTab';
+import HrIdentity from '../components/HrIdentity';
 import { FaTrophy, FaMedal } from 'react-icons/fa';
 import { FiUsers, FiZap, FiRefreshCw, FiAlertCircle, FiSettings, FiTrash2 } from 'react-icons/fi';
 
@@ -371,7 +372,7 @@ function Setup({ onChanged }) {
       {/* Teams — kanban board (drag players between pods) */}
       {teams && (() => {
         const columns = [
-          { id: null, name: 'Unassigned', members: (teams.unassigned || []).map(u => ({ user_id: u.id, name: u.name, role: u.role, department: u.department })) },
+          { id: null, name: 'Unassigned', members: (teams.unassigned || []).map(u => ({ user_id: u.id, name: u.name, role: u.role, department: u.department, hr_department: u.hr_department, hr_designation: u.hr_designation, hr_record_count: u.hr_record_count })) },
           ...teams.teams,
         ];
         return (
@@ -396,7 +397,7 @@ function Setup({ onChanged }) {
                         onDragEnd={() => setDrag(null)}
                         className="bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs shadow-sm cursor-grab active:cursor-grabbing hover:border-amber-300">
                         <div className="font-medium text-gray-800 truncate">{m.name}</div>
-                        {(m.department || m.role) && <div className="text-[10px] text-gray-400 truncate">{m.department || m.role}</div>}
+                        <HrIdentity rec={m} size="text-[10px]" />
                       </div>
                     ))}
                     {col.members.length === 0 && <div className="text-[11px] text-gray-300 text-center py-3 border border-dashed border-gray-200 rounded-lg">drop here</div>}

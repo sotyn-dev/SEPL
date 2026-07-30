@@ -8,10 +8,9 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2 } from 'react-icons/fi';
 
 export default function Employees() {
-  const { canDelete, isAdmin, userRoles, user } = useAuth();
-  // Salary is confidential — only admins and HR-role users see it
-  const canSeeSalary = isAdmin() || (userRoles || []).some(r => String(r).toLowerCase().includes('hr'))
-    || String(user?.department || '').toLowerCase().includes('hr');
+  const { canDelete, isAdmin, canView } = useAuth();
+  // Salary is confidential — only admins and holders of employee_salary.can_view see it
+  const canSeeSalary = isAdmin() || canView('employee_salary');
   const [employees, setEmployees] = useState([]);
   const [users, setUsers] = useState([]);
   const [modal, setModal] = useState(false);
@@ -218,7 +217,7 @@ export default function Employees() {
         toast.error(`${res.data.errors.length} errors: ${res.data.errors[0]}`);
       }
       setBulkModal(false); setBulkData(''); setBulkPreview([]); load();
-    } catch (err) { toast.error('Import failed'); }
+    } catch { toast.error('Import failed'); }
   };
 
   const filtered = employees.filter(e =>
@@ -237,7 +236,7 @@ export default function Employees() {
           <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export CSV</button>
           <button onClick={autoLink} className="btn btn-secondary flex items-center gap-2 text-sm" title="Link unlinked employees to users by matching email"><FiLink2 size={15} /> Auto-Link by Email</button>
           <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>
-          <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
+          <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
         </div>
       </div>
 
@@ -428,6 +427,13 @@ export default function Employees() {
             <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({...form, join_date: e.target.value})} /></div>
             {canSeeSalary && <div><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /></div>}
             {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['active','training','inactive','terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
+            <div>
+              <label className="label">Roster / Shift</label>
+              <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
+                <option value="general">General — 9:30 AM to 6:30 PM</option>
+                <option value="early">Early — 9:00 AM to 6:00 PM</option>
+              </select>
+            </div>
             <div className="col-span-2">
               <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
               <SearchableSelect
