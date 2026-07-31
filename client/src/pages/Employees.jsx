@@ -3,9 +3,16 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
+import EmployeeChangeCard from '../components/EmployeeChangeCard';
+import EmployeeHistoryDrawer from '../components/EmployeeHistoryDrawer';
+import { computeChanges } from '../constants/employeeChangeCodes';
+import { fmtDate, timeAgo } from '../utils/datetime';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2 } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2, FiClock, FiRotateCcw, FiFileText, FiRefreshCw } from 'react-icons/fi';
+
+// IST calendar date (caps the effective-date picker; matches the server).
+const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
 
 export default function Employees() {
   const { canDelete, isAdmin, canView } = useAuth();
@@ -17,11 +24,22 @@ export default function Employees() {
   const [bulkModal, setBulkModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});
+  const [original, setOriginal] = useState(null);   // snapshot at edit-open, for the live diff
+  const [changeMeta, setChangeMeta] = useState({ action_code: '', reason_code: '', reason: '', effective_date: '' });
+  const [historyEmp, setHistoryEmp] = useState(null); // employee whose history drawer is open
   const [search, setSearch] = useState('');
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
   const [rosterAudit, setRosterAudit] = useState({ backlog: [], guests: [] });
-  const [view, setView] = useState('directory'); // 'directory' | 'review'
+  const [view, setView] = useState('directory'); // 'directory' | 'review' | 'history'
+  // History & Reports tab state
+  const [reportMode, setReportMode] = useState('changelog'); // 'changelog' | 'snapshot'
+  const [changeLog, setChangeLog] = useState([]);
+  const [snapshot, setSnapshot] = useState({ asof: istToday(), rows: [] });
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
+  const [asof, setAsof] = useState(istToday());
+  const [syncing, setSyncing] = useState(false);
   const fileRef = useRef(null);
 
   const load = () => {
@@ -67,6 +85,54 @@ export default function Employees() {
     }
   };
 
+  // ── History & Reports ──────────────────────────────────────────────────────
+  const changeQuery = () => {
+    const p = new URLSearchParams();
+    if (rangeFrom) p.set('from', rangeFrom);
+    if (rangeTo) p.set('to', rangeTo);
+    return p.toString();
+  };
+  const loadChangeLog = () => api.get(`/hr/changes?${changeQuery()}`).then(r => setChangeLog(r.data || [])).catch(() => setChangeLog([]));
+  const loadSnapshot = () => api.get(`/hr/snapshot?asof=${asof}`).then(r => setSnapshot(r.data || { asof, rows: [] })).catch(() => setSnapshot({ asof, rows: [] }));
+
+  // Load report data whenever the History tab / mode / filters change.
+  useEffect(() => {
+    if (view !== 'history') return;
+    if (reportMode === 'changelog') loadChangeLog(); else loadSnapshot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, reportMode, rangeFrom, rangeTo, asof]);
+
+  // Admin: reconstruct history from the audit log. Run ONCE, right after deploy,
+  // before any edits — employees already having timeline rows are skipped.
+  const runSync = async () => {
+    if (!confirm(
+      'Reconstruct employee history from the audit log?\n\n' +
+      'Safe: it never changes any current value, only fills in past changes for employees ' +
+      'who have no history yet. Best run once, before editing employees.'
+    )) return;
+    setSyncing(true);
+    try {
+      const r = await api.post('/hr/employee-timeline/backfill-from-audit');
+      const d = r.data || {};
+      toast.success(`Synced — ${d.processed} employees, ${d.changes} changes reconstructed, ${d.skipped} already had history`);
+      loadChangeLog(); load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Sync failed'); }
+    finally { setSyncing(false); }
+  };
+
+  // Download a styled .xlsx report (blob, like UserManagement export).
+  const exportReport = async () => {
+    try {
+      const url = reportMode === 'changelog' ? `/hr/changes/export.xlsx?${changeQuery()}` : `/hr/snapshot/export.xlsx?asof=${asof}`;
+      const r = await api.get(url, { responseType: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(r.data);
+      a.download = reportMode === 'changelog' ? `employee-change-log-${istToday()}.xlsx` : `employee-snapshot-${asof}.xlsx`;
+      a.click();
+      toast.success('Exported to Excel');
+    } catch { toast.error('Export failed'); }
+  };
+
   // Auto-link employees to users by matching email — for existing records
   const autoLink = async () => {
     try {
@@ -93,6 +159,38 @@ export default function Employees() {
       return null;
     } finally { setUploading(false); }
   };
+
+  // Open the modal to EDIT — snapshot the row for the live diff and reset the
+  // change-capture meta (effective date defaults to today).
+  const openEdit = (emp) => {
+    setEditing(emp);
+    setForm(emp);
+    setOriginal(emp);
+    setChangeMeta({ action_code: '', reason_code: '', reason: '', effective_date: istToday() });
+    setModal(true);
+  };
+  // Open the modal to CREATE — no before-state, so no change card / reason.
+  const openCreate = () => {
+    setEditing(null);
+    setOriginal(null);
+    setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' });
+    setChangeMeta({ action_code: '', reason_code: '', reason: '', effective_date: istToday() });
+    setModal(true);
+  };
+
+  // Live diff of the tracked fields (edit only) — drives the field accents + card.
+  const changes = editing && original ? computeChanges(original, form) : [];
+  const changedSet = new Set(changes.map((c) => c.key));
+  const revertField = (key) => setForm((f) => ({ ...f, [key]: original[key] }));
+  const trackAccent = (key) => (changedSet.has(key) ? 'border-l-4 border-amber-400 pl-2' : '');
+
+  // "↩ was X" hint + revert link under a changed tracked field.
+  const WasHint = ({ k, fmt }) => changedSet.has(k) ? (
+    <p className="text-[10px] text-amber-700 mt-0.5 flex items-center gap-1.5">
+      <FiRotateCcw size={10} /> was {fmt ? fmt(original[k]) : `“${original[k] ?? '—'}”`}
+      <button type="button" onClick={() => revertField(k)} className="underline hover:text-amber-900">revert</button>
+    </p>
+  ) : null;
 
   const save = async (e) => {
     e.preventDefault();
@@ -121,6 +219,15 @@ export default function Employees() {
       if (!payload.aadhar_file)        return toast.error('Upload Aadhar card');
       if (!payload.pan_file)           return toast.error('Upload PAN card');
       if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
+    }
+    // A tracked change requires an action + reason (the server enforces this too).
+    if (editing && changes.length > 0) {
+      if (!changeMeta.action_code) return toast.error('Select an action for this change');
+      if (!changeMeta.reason?.trim()) return toast.error('Add a reason for this change');
+      payload.action_code = changeMeta.action_code;
+      payload.reason_code = changeMeta.reason_code || null;
+      payload.reason = changeMeta.reason.trim();
+      payload.effective_date = changeMeta.effective_date || istToday();
     }
     try {
       if (editing) { await api.put(`/hr/employees/${editing.id}`, payload); }
@@ -236,7 +343,7 @@ export default function Employees() {
           <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export CSV</button>
           <button onClick={autoLink} className="btn btn-secondary flex items-center gap-2 text-sm" title="Link unlinked employees to users by matching email"><FiLink2 size={15} /> Auto-Link by Email</button>
           <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>
-          <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
+          <button onClick={openCreate} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
         </div>
       </div>
 
@@ -256,6 +363,11 @@ export default function Employees() {
           {(rosterAudit.backlog.length + rosterAudit.guests.length) > 0 && (
             <span className="text-[10px] font-bold bg-amber-500 text-white rounded-full px-1.5 py-0.5 leading-none">{rosterAudit.backlog.length + rosterAudit.guests.length}</span>
           )}
+        </button>
+        <button
+          onClick={() => setView('history')}
+          className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px flex items-center gap-1.5 ${view === 'history' ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+          <FiFileText size={14} /> History &amp; Reports
         </button>
       </div>
 
@@ -286,10 +398,18 @@ export default function Employees() {
                   : <span className="badge badge-red text-[10px]">Not linked</span>}
               </td>
               {canSeeSalary && <td className="font-medium">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
-              <td><StatusBadge status={e.status} /></td>
+              <td>
+                <StatusBadge status={e.status} />
+                {e.status_since && (
+                  <div className={`text-[10px] mt-0.5 ${['inactive','terminated'].includes(e.status) ? 'text-red-500' : 'text-gray-400'}`}>
+                    since {fmtDate(e.status_since)}
+                  </div>
+                )}
+              </td>
               <td><div className="flex gap-1">
-                <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
-                {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                <button onClick={() => openEdit(e)} className="p-1.5 hover:bg-red-50 rounded text-red-600" title="Edit"><FiEdit2 size={15} /></button>
+                <button onClick={() => setHistoryEmp(e)} className="p-1.5 hover:bg-gray-100 rounded text-gray-500" title="Change history"><FiClock size={15} /></button>
+                {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
               </div></td>
             </tr>
           ))}
@@ -311,7 +431,14 @@ export default function Employees() {
                 {e.designation && <div className="text-[11px] text-gray-600">{e.designation}</div>}
                 {e.department && <div className="text-[10px] text-gray-400">{e.department}</div>}
               </div>
-              <StatusBadge status={e.status} />
+              <div className="text-right">
+                <StatusBadge status={e.status} />
+                {e.status_since && (
+                  <div className={`text-[9px] mt-0.5 ${['inactive','terminated'].includes(e.status) ? 'text-red-500' : 'text-gray-400'}`}>
+                    since {fmtDate(e.status_since)}
+                  </div>
+                )}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
               {e.phone && (
@@ -346,8 +473,11 @@ export default function Employees() {
                 : <span className="text-[11px] font-semibold text-red-600">Not linked — DPR Staff Cost won't include this employee</span>}
             </div>
             <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-              <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+              <button onClick={() => openEdit(e)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
                 <FiEdit2 size={11} /> Edit
+              </button>
+              <button onClick={() => setHistoryEmp(e)} className="text-gray-500 hover:underline flex items-center gap-1 font-semibold">
+                <FiClock size={11} /> History
               </button>
               {canDelete('employees') && (
                 <button onClick={() => deleteEmployee(e)} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
@@ -415,6 +545,94 @@ export default function Employees() {
         </div>
       )}
 
+      {view === 'history' && (
+        <div className="space-y-4">
+          {/* Toolbar: mode toggle + admin sync + export */}
+          <div className="flex flex-wrap items-center gap-2 justify-between">
+            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+              <button onClick={() => setReportMode('changelog')} className={`px-3 py-1.5 text-sm font-semibold ${reportMode === 'changelog' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>Change Log</button>
+              <button onClick={() => setReportMode('snapshot')} className={`px-3 py-1.5 text-sm font-semibold ${reportMode === 'snapshot' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>As-of Snapshot</button>
+            </div>
+            <div className="flex gap-2">
+              {isAdmin() && (
+                <button onClick={runSync} disabled={syncing} className="btn btn-secondary text-sm flex items-center gap-2 disabled:opacity-50" title="Reconstruct history from the audit log (admin, non-destructive)">
+                  <FiRefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing…' : 'Sync from audit log'}
+                </button>
+              )}
+              <button onClick={exportReport} className="btn btn-primary text-sm flex items-center gap-2"><FiDownload size={14} /> Export Excel</button>
+            </div>
+          </div>
+
+          {/* Change Log */}
+          {reportMode === 'changelog' && (
+            <>
+              <div className="flex flex-wrap items-end gap-3">
+                <div><label className="label">From</label><input type="date" className="input" max={istToday()} value={rangeFrom} onChange={e => setRangeFrom(e.target.value)} /></div>
+                <div><label className="label">To</label><input type="date" className="input" max={istToday()} value={rangeTo} onChange={e => setRangeTo(e.target.value)} /></div>
+                {(rangeFrom || rangeTo) && <button onClick={() => { setRangeFrom(''); setRangeTo(''); }} className="btn btn-secondary text-sm">Clear</button>}
+                <div className="text-xs text-gray-400 ml-auto">{changeLog.length} change{changeLog.length === 1 ? '' : 's'}</div>
+              </div>
+              <div className="card p-0 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-left text-gray-500 border-b bg-gray-50">
+                    <th className="px-3 py-2">Employee</th><th className="px-3 py-2">Action</th><th className="px-3 py-2">Field</th>
+                    <th className="px-3 py-2">From</th><th className="px-3 py-2">To</th><th className="px-3 py-2">Effective</th>
+                    <th className="px-3 py-2">Reason</th><th className="px-3 py-2">By</th>
+                  </tr></thead>
+                  <tbody>
+                    {changeLog.map((ev, i) => (
+                      <tr key={i} className="border-b border-gray-50">
+                        <td className="px-3 py-2 font-medium">{ev.employee_name}</td>
+                        <td className="px-3 py-2">{ev.action}{ev.source === 'backfill' && <span className="ml-1 text-[9px] uppercase bg-gray-100 text-gray-500 rounded px-1">recon</span>}</td>
+                        <td className="px-3 py-2 text-gray-600">{ev.label}</td>
+                        <td className="px-3 py-2 text-gray-500">{ev.from || '—'}</td>
+                        <td className="px-3 py-2 font-semibold">{ev.to || '—'}</td>
+                        <td className="px-3 py-2 text-gray-600">{fmtDate(ev.effective)}</td>
+                        <td className="px-3 py-2 text-gray-600 max-w-[240px] truncate" title={ev.reason}>{ev.reason}{ev.reason_code ? ` (${ev.reason_code})` : ''}</td>
+                        <td className="px-3 py-2 text-gray-500">{ev.by}</td>
+                      </tr>
+                    ))}
+                    {changeLog.length === 0 && <tr><td colSpan={8} className="text-center py-8 text-gray-400">No changes in this range. If history looks empty, an admin can <span className="font-semibold">Sync from audit log</span>.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {/* As-of Snapshot */}
+          {reportMode === 'snapshot' && (
+            <>
+              <div className="flex flex-wrap items-end gap-3">
+                <div><label className="label">State as of</label><input type="date" className="input" max={istToday()} value={asof} onChange={e => setAsof(e.target.value)} /></div>
+                <div className="text-xs text-gray-400 ml-auto">{snapshot.rows.length} employees</div>
+              </div>
+              <div className="card p-0 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-left text-gray-500 border-b bg-gray-50">
+                    <th className="px-3 py-2">Employee</th><th className="px-3 py-2">Designation</th><th className="px-3 py-2">Department</th>
+                    <th className="px-3 py-2">Status</th><th className="px-3 py-2">Roster</th>{canSeeSalary && <th className="px-3 py-2">Salary</th>}<th className="px-3 py-2">Since</th>
+                  </tr></thead>
+                  <tbody>
+                    {snapshot.rows.map((r, i) => (
+                      <tr key={i} className="border-b border-gray-50">
+                        <td className="px-3 py-2 font-medium">{r.employee}</td>
+                        <td className="px-3 py-2 text-gray-600">{r.designation || '—'}</td>
+                        <td className="px-3 py-2 text-gray-600">{r.department || '—'}</td>
+                        <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
+                        <td className="px-3 py-2 text-gray-600">{r.roster || '—'}</td>
+                        {canSeeSalary && <td className="px-3 py-2">Rs {(r.salary || 0).toLocaleString('en-IN')}</td>}
+                        <td className="px-3 py-2 text-gray-500">{fmtDate(r.since)}</td>
+                      </tr>
+                    ))}
+                    {snapshot.rows.length === 0 && <tr><td colSpan={canSeeSalary ? 7 : 6} className="text-center py-8 text-gray-400">No snapshot for this date. History may need a <span className="font-semibold">Sync from audit log</span> first.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Add/Edit Modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Employee' : 'Add Employee'}>
         <form onSubmit={save} className="space-y-4">
@@ -422,17 +640,18 @@ export default function Employees() {
             <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
             <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
             <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /></div>
-            <div><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({...form, designation: e.target.value})} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
-            <div><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({...form, department: e.target.value})} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
+            <div className={trackAccent('designation')}><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({...form, designation: e.target.value})} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist><WasHint k="designation" /></div>
+            <div className={trackAccent('department')}><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({...form, department: e.target.value})} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist><WasHint k="department" /></div>
             <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({...form, join_date: e.target.value})} /></div>
-            {canSeeSalary && <div><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /></div>}
-            {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['active','training','inactive','terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
-            <div>
+            {canSeeSalary && <div className={trackAccent('salary')}><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /><WasHint k="salary" fmt={(v) => `₹${Number(v || 0).toLocaleString('en-IN')}`} /></div>}
+            {editing && <div className={trackAccent('status')}><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['active','training','inactive','terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select><WasHint k="status" /></div>}
+            <div className={trackAccent('roster')}>
               <label className="label">Roster / Shift</label>
               <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
                 <option value="general">General — 9:30 AM to 6:30 PM</option>
                 <option value="early">Early — 9:00 AM to 6:00 PM</option>
               </select>
+              <WasHint k="roster" />
             </div>
             <div className="col-span-2">
               <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
@@ -446,6 +665,19 @@ export default function Employees() {
               />
               <p className="text-[10px] text-gray-500 mt-0.5">If left blank and email matches a user, it will auto-link on save.</p>
             </div>
+
+            {/* Contextual Change Card — appears only when a tracked field moved.
+                Single surface (no popup), full width, right after the grid. */}
+            {editing && (
+              <EmployeeChangeCard
+                changes={changes}
+                statusTo={form.status}
+                meta={changeMeta}
+                setMeta={setChangeMeta}
+                canSeeSalary={canSeeSalary}
+                today={istToday()}
+              />
+            )}
           </div>
 
           {/* Mandatory KYC docs for new employees. When editing, the inputs
@@ -481,12 +713,20 @@ export default function Employees() {
 
           <div className="flex justify-end gap-3">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" disabled={uploading} className="btn btn-primary">
+            <button
+              type="submit"
+              disabled={uploading || (editing && changes.length > 0 && (!changeMeta.action_code || !changeMeta.reason?.trim()))}
+              title={editing && changes.length > 0 && !changeMeta.reason?.trim() ? 'Add a reason to save' : ''}
+              className="btn btn-primary disabled:opacity-50">
               {uploading ? 'Uploading…' : (editing ? 'Update' : 'Create')}
             </button>
           </div>
         </form>
       </Modal>
+
+      {/* Change history drawer — opened from a directory row only (never over the
+          Edit modal, so the two modals can't stack). */}
+      <EmployeeHistoryDrawer isOpen={!!historyEmp} onClose={() => setHistoryEmp(null)} employee={historyEmp} />
 
       {/* Bulk Import Modal */}
       <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Import Employees" wide>

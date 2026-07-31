@@ -17,6 +17,7 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { rosterCutoffs } = require('../lib/roster');
+const { recordEmployeeChange } = require('../lib/employeeTimeline');
 
 router.use(authMiddleware);
 
@@ -924,7 +925,9 @@ router.get('/leave-balances', requirePermission('payroll', 'view'), (req, res) =
 router.put('/leave-balance/:employee_id', adminOnly, (req, res) => {
   try {
     const db = getDb();
-    const emp = db.prepare('SELECT id FROM employees WHERE id=?').get(req.params.employee_id);
+    // ot_eligible is a tracked employee fact, so read its BEFORE value — if it
+    // flips we append a silent system row to the change ledger (no reason prompt).
+    const emp = db.prepare('SELECT id, ot_eligible FROM employees WHERE id=?').get(req.params.employee_id);
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
     const sets = [];
     const vals = [];
@@ -936,12 +939,30 @@ router.put('/leave-balance/:employee_id', adminOnly, (req, res) => {
     if (req.body.cl_eligible !== undefined) {
       sets.push('cl_eligible = ?'); vals.push(req.body.cl_eligible ? 1 : 0);
     }
+    let otChangedTo = null; // non-null when ot_eligible actually moves
     if (req.body.ot_eligible !== undefined) {
-      sets.push('ot_eligible = ?'); vals.push(req.body.ot_eligible ? 1 : 0);
+      const want = req.body.ot_eligible ? 1 : 0;
+      sets.push('ot_eligible = ?'); vals.push(want);
+      if (want !== (emp.ot_eligible ? 1 : 0)) otChangedTo = want;
     }
     if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
     vals.push(emp.id);
-    db.prepare(`UPDATE employees SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    // One transaction so the employee UPDATE and any ledger row commit together;
+    // recordEmployeeChange does the close-open + insert-open, honoring the
+    // one-open-row invariant (a bare INSERT would violate the unique index).
+    const apply = db.transaction(() => {
+      db.prepare(`UPDATE employees SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+      if (otChangedTo !== null) {
+        recordEmployeeChange(db, {
+          employeeId: emp.id,
+          actionCode: 'Payroll Update',
+          reason: `OT eligibility ${otChangedTo ? 'enabled' : 'disabled'} (payroll)`,
+          source: 'payroll',
+          changedBy: req.user && req.user.id,
+        });
+      }
+    });
+    apply();
     res.json({ message: 'Updated' });
   } catch (err) {
     console.error('leave-balance update error', err);

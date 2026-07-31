@@ -48,3 +48,23 @@ export function fmtTime(v, opts) {
   const d = parseUTC(v);
   return d ? d.toLocaleTimeString('en-IN', { timeZone: IST, ...(opts || DEFAULT_TIME) }) : '';
 }
+
+// "5 days ago" / "today" / "yesterday" — coarse relative age for "since" hints.
+// Day-granular (the ledger's effective_from is a date), so it never says "3 hours".
+export function timeAgo(v) {
+  const d = parseUTC(v);
+  if (!d) return '';
+  const startOf = (x) => Date.UTC(
+    +new Date(x).toLocaleString('en-CA', { timeZone: IST, year: 'numeric' }),
+    +new Date(x).toLocaleString('en-US', { timeZone: IST, month: 'numeric' }) - 1,
+    +new Date(x).toLocaleString('en-US', { timeZone: IST, day: 'numeric' })
+  );
+  const days = Math.round((startOf(new Date()) - startOf(d)) / 86400000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days} days ago`;
+  if (days < 60) return 'a month ago';
+  if (days < 365) return `${Math.round(days / 30)} months ago`;
+  const y = Math.floor(days / 365);
+  return y === 1 ? 'a year ago' : `${y} years ago`;
+}

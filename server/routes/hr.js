@@ -4,10 +4,15 @@ const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
+const { authMiddleware, requirePermission, getUserPermissions, adminOnly } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { parseResume } = require('../utils/resumeParser');
 const { normalizeRoster } = require('../lib/roster');
+const { recordEmployeeChange, seedHiredRow, backfillFromAudit, toYMD, istToday } = require('../lib/employeeTimeline');
+const { TRACKED_FIELDS, ACTIONS, suggestAction } = require('../lib/employeeChangeCodes');
+// Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
+// date-level effective_from). Server clock is UTC on the VPS.
+const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -704,8 +709,18 @@ router.get('/employees', (req, res) => {
     return res.json(lite);
   }
 
+  // status_since = when the CURRENT status began — the earliest effective_from of
+  // the contiguous trailing run of rows sharing e.status (NOT the open row's
+  // effective_from, which moves on ANY tracked change). Null until the timeline is
+  // populated (backfill / first edit). Also expose updated_at via e.*.
   const rows = db.prepare(
-    `SELECT e.*, u.name as linked_user_name, u.username as linked_username
+    `SELECT e.*, u.name as linked_user_name, u.username as linked_username,
+            (SELECT MIN(t.effective_from) FROM employee_timeline t
+              WHERE t.employee_id = e.id AND t.status IS e.status
+                AND t.effective_from > COALESCE(
+                  (SELECT MAX(d.effective_from) FROM employee_timeline d
+                    WHERE d.employee_id = e.id AND d.status IS NOT e.status), '0000-00-00')
+            ) AS status_since
      FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
   ).all();
   if (getUserPermissions(req.user.id)['employee_salary']?.can_view) return res.json(rows);
@@ -762,12 +777,23 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   if (!aadhar_file)        return res.status(400).json({ error: 'Aadhar card is required' });
   if (!pan_file)           return res.status(400).json({ error: 'PAN card is required' });
   if (!qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
-  const r = db.prepare(`
-    INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
-                           aadhar_file, pan_file, qualification_file, roster)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
-        aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster));
+  // Insert the employee, stamp updated_at, and seed the opening "Hired" timeline
+  // row — one transaction so the ledger can never be left without its anchor row.
+  const createEmp = db.transaction(() => {
+    const r = db.prepare(`
+      INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
+                             aadhar_file, pan_file, qualification_file, roster, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
+          aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster), istNow());
+    seedHiredRow(db, {
+      employeeId: r.lastInsertRowid,
+      effectiveFrom: join_date || istToday(),
+      changedBy: req.user && req.user.id,
+    });
+    return r;
+  });
+  const r = createEmp();
   res.status(201).json({ id: r.lastInsertRowid, linked_user_id: user_id || null });
 });
 
@@ -793,23 +819,68 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
     return res.status(400).json({ error: 'No employee data provided' });
   }
   const db = getDb();
-  const insert = db.prepare('INSERT INTO employees (name,phone,email,designation,department,join_date,salary) VALUES (?,?,?,?,?,?,?)');
+  const insert = db.prepare('INSERT INTO employees (name,phone,email,designation,department,join_date,salary,updated_at) VALUES (?,?,?,?,?,?,?,?)');
+  // Each row is its OWN transaction: the insert + its opening "Hired" timeline row
+  // commit together (no employee left without an anchor row), while a bad row rolls
+  // back only itself — preserving the existing partial-import UX (skip + report).
+  const importRow = db.transaction((e) => {
+    const r = insert.run(
+      e.name.trim(), e.phone?.trim() || '', e.email?.trim() || '', e.designation?.trim() || '',
+      e.department?.trim() || '', e.join_date || '', e.salary || 0, istNow()
+    );
+    seedHiredRow(db, {
+      employeeId: r.lastInsertRowid,
+      effectiveFrom: e.join_date || istToday(),
+      changedBy: req.user && req.user.id,
+    });
+  });
   let added = 0, errors = [];
   for (let i = 0; i < employees.length; i++) {
     const e = employees[i];
     if (!e.name || !e.name.trim()) { errors.push(`Row ${i + 1}: Name is required`); continue; }
-    try {
-      insert.run(e.name?.trim(), e.phone?.trim() || '', e.email?.trim() || '', e.designation?.trim() || '', e.department?.trim() || '', e.join_date || '', e.salary || 0);
-      added++;
-    } catch (err) { errors.push(`Row ${i + 1}: ${err.message}`); }
+    try { importRow(e); added++; }
+    catch (err) { errors.push(`Row ${i + 1}: ${err.message}`); }
   }
   res.json({ added, errors, total: employees.length });
 });
 
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
-          aadhar_file, pan_file, qualification_file, roster } = req.body;
+          aadhar_file, pan_file, qualification_file, roster,
+          action_code, reason_code, reason, effective_date } = req.body;
   const db = getDb();
+
+  // ── Change-history: diff the TRACKED fields against the current row ──────────
+  // Tracked = status, salary, designation, department, roster (the HR-form fields).
+  // A change in any of them opens a reason-required timeline row; name/phone/email/
+  // KYC edits are untracked (just bump updated_at). Read BEFORE the UPDATE.
+  const before = db.prepare(
+    'SELECT status, salary, designation, department, roster FROM employees WHERE id=?'
+  ).get(req.params.id);
+  if (!before) return res.status(404).json({ error: 'Employee not found' });
+
+  const newRoster = roster ? normalizeRoster(roster) : before.roster;
+  const norm = (v) => (v == null ? '' : String(v).trim());
+  const changed = [];
+  if (norm(status)        !== norm(before.status))        changed.push('status');
+  if (Number(salary || 0) !== Number(before.salary || 0)) changed.push('salary');
+  if (norm(designation)   !== norm(before.designation))   changed.push('designation');
+  if (norm(department)    !== norm(before.department))     changed.push('department');
+  if (norm(newRoster)     !== norm(before.roster))         changed.push('roster');
+
+  // Reason + action are mandatory the moment a tracked field moves. Effective date
+  // defaults to today and may not be in the future (backdate/same-day only for now).
+  const effFrom = toYMD(effective_date);
+  if (changed.length > 0) {
+    if (!norm(action_code)) return res.status(400).json({ error: 'Select an action to record this change.' });
+    if (!norm(reason))      return res.status(400).json({ error: 'A reason is required to record this change.' });
+    if (effFrom > istToday()) return res.status(400).json({ error: 'Effective date cannot be in the future.' });
+  }
+
+  // One transaction: the employee UPDATE, the login active-sync, the updated_at
+  // stamp, and the timeline row all commit together (or roll back together).
+  try {
+    const applyEdit = db.transaction(() => {
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
   // upload — frontend can edit other fields without re-uploading docs.
   db.prepare(`
@@ -818,11 +889,12 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            roster = COALESCE(?, roster),
            aadhar_file        = COALESCE(?, aadhar_file),
            pan_file           = COALESCE(?, pan_file),
-           qualification_file = COALESCE(?, qualification_file)
+           qualification_file = COALESCE(?, qualification_file),
+           updated_at = ?
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null,
         roster ? normalizeRoster(roster) : null,
-        aadhar_file || null, pan_file || null, qualification_file || null, req.params.id);
+        aadhar_file || null, pan_file || null, qualification_file || null, istNow(), req.params.id);
 
   // Sync the linked login's `active` flag to the employee's on-roll status.
   // Attendance strength counts users.active, but HR only edits employees.status —
@@ -854,7 +926,229 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     } catch (e) { console.error('[hr] login active-sync failed:', e.message); }
   }
 
-  res.json({ message: 'Updated' });
+      // Append the ledger row — only when a tracked field actually moved. Reads the
+      // now-updated employee state, so the snapshot is the post-edit truth.
+      if (changed.length > 0) {
+        recordEmployeeChange(db, {
+          employeeId: Number(req.params.id),
+          effectiveFrom: effFrom,
+          actionCode: norm(action_code),
+          reasonCode: norm(reason_code) || null,
+          reason: norm(reason),
+          source: 'hr',
+          changedBy: req.user && req.user.id,
+        });
+      }
+    });
+    applyEdit();
+  } catch (e) {
+    if (e && e.code === 'EFFDT_BACKWARDS') return res.status(400).json({ error: e.message });
+    console.error('[hr] employee update failed:', e.message);
+    return res.status(500).json({ error: 'Update failed' });
+  }
+
+  res.json({ message: 'Updated', recorded: changed });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Employee change-history — backfill, history drawer, Change Log + As-of reports.
+// (plan: magical-wibbling-orbit)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const canSeeSalary = (req) => !!getUserPermissions(req.user.id)['employee_salary']?.can_view;
+
+// The fields surfaced in change events (tracked + payroll-driven ot_eligible).
+const CHANGE_FIELDS = [
+  { key: 'status',      label: 'Status' },
+  { key: 'salary',      label: 'Salary', money: true },
+  { key: 'designation', label: 'Designation' },
+  { key: 'department',  label: 'Department' },
+  { key: 'roster',      label: 'Roster' },
+  { key: 'ot_eligible', label: 'OT eligible', bool: true },
+];
+const fmtVal = (f, v) => {
+  if (v == null || v === '') return '';
+  if (f.bool) return v ? 'Yes' : 'No';
+  return String(v);
+};
+
+// Walk each employee's ordered rows and emit per-field change events (old→new).
+// includeInitial=true also emits the opening "Hired/initial" row (for the drawer);
+// the Change Log report omits it (it isn't a change). Salary is masked for callers
+// without employee_salary.can_view — the event shows, the figure doesn't.
+function buildChangeEvents(db, { employeeId = null, includeInitial = false, canSalary = false } = {}) {
+  const where = employeeId ? 'WHERE t.employee_id = ?' : '';
+  const rows = db.prepare(
+    `SELECT t.*, u.name AS by_name
+       FROM employee_timeline t LEFT JOIN users u ON u.id = t.changed_by
+       ${where}
+       ORDER BY t.employee_id, t.effective_from, t.effective_seq, t.id`
+  ).all(...(employeeId ? [employeeId] : []));
+
+  const events = [];
+  let prev = null, prevEmp = null;
+  for (const r of rows) {
+    const first = r.employee_id !== prevEmp || r.employee_id == null && prevEmp !== null;
+    if (r.employee_id !== prevEmp) { prev = null; prevEmp = r.employee_id; }
+    const base = {
+      employee_id: r.employee_id,
+      employee_name: r.employee_name,
+      action: r.action_code || '',
+      effective: r.effective_from,
+      recorded: r.changed_at,
+      reason_code: r.reason_code || '',
+      reason: r.reason || '',
+      by: r.by_name || '',
+      source: r.source || '',
+    };
+    if (!prev) {
+      if (includeInitial) events.push({ ...base, field: '', label: 'Record created', from: '', to: '' });
+    } else {
+      for (const f of CHANGE_FIELDS) {
+        const a = r[f.key], b = prev[f.key];
+        if (String(a ?? '') === String(b ?? '')) continue;
+        if (f.money && !canSalary) {
+          events.push({ ...base, field: f.key, label: 'Compensation change', from: '••', to: '••', restricted: true });
+        } else {
+          events.push({ ...base, field: f.key, label: f.label, from: fmtVal(f, b), to: fmtVal(f, a) });
+        }
+      }
+    }
+    prev = r;
+  }
+  return events;
+}
+
+// Point-in-time snapshot: every employee's full state as of a date, via the
+// effective-dated as-of query. Reads employee_name off the row so deleted staff
+// still appear. Salary column omitted entirely for non-holders.
+function buildSnapshot(db, { asof, canSalary = false }) {
+  const rows = db.prepare(
+    `SELECT t.employee_id, t.employee_name, t.designation, t.department, t.status,
+            t.roster, t.salary, t.effective_from
+       FROM employee_timeline t
+      WHERE t.effective_from <= :d
+        AND (t.effective_to IS NULL OR t.effective_to > :d)
+      ORDER BY t.employee_name COLLATE NOCASE`
+  ).all({ d: asof });
+  return rows.map((r) => {
+    const base = {
+      employee: r.employee_name, designation: r.designation || '', department: r.department || '',
+      status: r.status || '', roster: r.roster || '', as_of: asof, since: r.effective_from,
+    };
+    if (canSalary) base.salary = r.salary;
+    return base;
+  });
+}
+
+// ── Backfill from audit_log — admin-only, non-destructive, idempotent ─────────
+// Thin wrapper; the reconstruction lives in lib/employeeTimeline (unit-testable).
+router.post('/employee-timeline/backfill-from-audit', adminOnly, (req, res) => {
+  try {
+    res.json(backfillFromAudit(getDb()));
+  } catch (e) {
+    console.error('[hr] backfill failed:', e.message);
+    res.status(500).json({ error: 'Backfill failed: ' + e.message });
+  }
+});
+
+// One employee's full change history (newest first) — for the drawer.
+router.get('/employees/:id/history', requirePermission('employees', 'view'), (req, res) => {
+  const db = getDb();
+  const events = buildChangeEvents(db, { employeeId: Number(req.params.id), includeInitial: true, canSalary: canSeeSalary(req) });
+  events.reverse(); // newest first
+  res.json(events);
+});
+
+// Change Log — per-field diffs across a date range (+ optional action/field filter).
+function filterEvents(events, { from, to, action, field }) {
+  return events.filter((ev) => {
+    if (from && ev.effective < from) return false;
+    if (to && ev.effective > to) return false;
+    if (action && ev.action !== action) return false;
+    if (field && ev.field !== field) return false;
+    return true;
+  });
+}
+router.get('/changes', requirePermission('employees', 'view'), (req, res) => {
+  const db = getDb();
+  const all = buildChangeEvents(db, { includeInitial: false, canSalary: canSeeSalary(req) });
+  res.json(filterEvents(all, req.query));
+});
+
+// As-of Snapshot — every employee's state on a given date (default today).
+router.get('/snapshot', requirePermission('employees', 'view'), (req, res) => {
+  const db = getDb();
+  const asof = (String(req.query.asof || '').match(/^\d{4}-\d{2}-\d{2}$/) || [])[0]
+    || new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  res.json({ asof, rows: buildSnapshot(db, { asof, canSalary: canSeeSalary(req) }) });
+});
+
+// ── Excel exports (styled, mirror snags.js) ──────────────────────────────────
+function styleHeader(ws) {
+  const head = ws.getRow(1); head.height = 22;
+  head.eachCell((cell) => {
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  });
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+}
+router.get('/changes/export.xlsx', requirePermission('employees', 'view'), async (req, res) => {
+  try {
+    const db = getDb();
+    const canSalary = canSeeSalary(req);
+    const events = filterEvents(buildChangeEvents(db, { includeInitial: false, canSalary }), req.query);
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Secured Engineers Pvt Ltd';
+    const ws = wb.addWorksheet('Change Log');
+    ws.columns = [
+      { header: 'Employee', key: 'employee_name', width: 24 },
+      { header: 'Action', key: 'action', width: 16 },
+      { header: 'Field', key: 'label', width: 16 },
+      { header: 'From', key: 'from', width: 20 },
+      { header: 'To', key: 'to', width: 20 },
+      { header: 'Effective', key: 'effective', width: 13 },
+      { header: 'Recorded', key: 'recorded', width: 19 },
+      { header: 'Reason code', key: 'reason_code', width: 18 },
+      { header: 'Reason', key: 'reason', width: 40 },
+      { header: 'By', key: 'by', width: 18 },
+    ];
+    styleHeader(ws);
+    events.forEach((e) => ws.addRow(e));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="employee-change-log-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.end(Buffer.from(await wb.xlsx.writeBuffer()));
+  } catch (err) { console.error('[hr] change-log export failed:', err.message); res.status(500).json({ error: err.message }); }
+});
+router.get('/snapshot/export.xlsx', requirePermission('employees', 'view'), async (req, res) => {
+  try {
+    const db = getDb();
+    const canSalary = canSeeSalary(req);
+    const asof = (String(req.query.asof || '').match(/^\d{4}-\d{2}-\d{2}$/) || [])[0]
+      || new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+    const rows = buildSnapshot(db, { asof, canSalary });
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Secured Engineers Pvt Ltd';
+    const ws = wb.addWorksheet(`As-of ${asof}`);
+    const cols = [
+      { header: 'Employee', key: 'employee', width: 24 },
+      { header: 'Designation', key: 'designation', width: 22 },
+      { header: 'Department', key: 'department', width: 18 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Roster', key: 'roster', width: 12 },
+    ];
+    if (canSalary) cols.push({ header: 'Salary', key: 'salary', width: 12 });
+    cols.push({ header: 'As of', key: 'as_of', width: 13 });
+    ws.columns = cols;
+    styleHeader(ws);
+    rows.forEach((r) => ws.addRow(r));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="employee-snapshot-${asof}.xlsx"`);
+    res.end(Buffer.from(await wb.xlsx.writeBuffer()));
+  } catch (err) { console.error('[hr] snapshot export failed:', err.message); res.status(500).json({ error: err.message }); }
 });
 
 // Delete an employee. Robust like the user delete (auth.js): a bare

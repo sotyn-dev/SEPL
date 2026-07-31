@@ -4435,22 +4435,32 @@ function initializeDatabase() {
       -- Effective-dated employee history spine (HRIS EFFDT/EFFSEQ pattern).
       -- Wired for dept/designation/manager now; salary/roster/ot/status columns
       -- are provisioned + snapshotted so later modules link with no schema change.
+      -- employee_id is NULLABLE with ON DELETE SET NULL (NOT the RESTRICT that a
+      -- bare "NOT NULL REFERENCES" gives under foreign_keys=ON): once the change
+      -- ledger has rows, a hard employee delete must NOT be blocked — the link
+      -- nulls out and the row survives under the denormalized employee_name so the
+      -- audit trail outlives the record. (Existing DBs are reshaped to this below.)
       CREATE TABLE IF NOT EXISTS employee_timeline (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        employee_id    INTEGER NOT NULL REFERENCES employees(id),
+        employee_id    INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+        employee_name  TEXT,                  -- denormalized name snapshot (survives delete)
         department_id  INTEGER REFERENCES org_departments(id),
         designation_id INTEGER REFERENCES org_designations(id),
+        department     TEXT,                  -- free-text dept snapshot now (department_id fills when org resumes)
+        designation    TEXT,                  -- free-text title snapshot now
         manager_id     INTEGER,               -- snapshot of users.manager_id (live source stays users; no FK)
         salary         REAL,                  -- mirrors employees.salary (read-gate with employee_salary.can_view)
         salary_exempt  INTEGER,               -- mirrors employees.salary_exempt
         roster         TEXT,                  -- mirrors employees.roster
         ot_eligible    INTEGER,               -- mirrors employees.ot_eligible
         status         TEXT,                  -- mirrors employees.status
-        effective_from TEXT NOT NULL,         -- date this state became true (date-level)
+        effective_from TEXT NOT NULL,         -- date this state became true (date-level, YYYY-MM-DD)
         effective_seq  INTEGER DEFAULT 0,     -- EFFSEQ: tiebreaker for >1 change the same day
         effective_to   TEXT,                  -- NULL = the current open row
+        action_code    TEXT,                  -- Hired | Promotion | Pay Revision | ... | Other
+        reason_code    TEXT,                  -- optional coded turnover reason (inactive/terminated)
         reason         TEXT,
-        source         TEXT,                  -- org | payroll | roster | manual
+        source         TEXT,                  -- hr | payroll | roster | backfill | manual
         changed_by     INTEGER,               -- acting user (soft ref, no FK)
         changed_at     DATETIME DEFAULT CURRENT_TIMESTAMP
       );
@@ -4470,6 +4480,89 @@ function initializeDatabase() {
     // (e.g. "ASM · Region 2"). Idempotent guarded ALTER (house pattern, line 4368).
     try { db.exec(`ALTER TABLE employees ADD COLUMN role_subtitle TEXT`); } catch (_) { /* already exists */ }
   } catch (e) { console.error('[schema] org_structure tables create failed:', e.message); }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Employee Change-History activation (plan: magical-wibbling-orbit).
+  // Reshape the (empty) employee_timeline shipped above to its final ledger shape:
+  //   1. add the change-ledger columns (employee_name/department/designation/
+  //      action_code/reason_code) if an OLD-shape table already exists;
+  //   2. rebuild the table when employee_id is still the RESTRICT-y
+  //      "NOT NULL REFERENCES employees(id)" — flip it to nullable + ON DELETE SET
+  //      NULL so a hard employee delete never breaks (history survives orphaned).
+  // Idempotent: CREATE-IF-NOT-EXISTS already emits the final shape on fresh DBs, so
+  // this only fires on DBs carrying the earlier org-structure table. Preserves any
+  // rows (currently none) via a copy, so it is safe even after a backfill.
+  try {
+    const etCols = db.prepare(`PRAGMA table_info(employee_timeline)`).all().map(c => c.name);
+    const addCol = (name, decl) => {
+      if (!etCols.includes(name)) { try { db.exec(`ALTER TABLE employee_timeline ADD COLUMN ${decl}`); } catch (_) {} }
+    };
+    addCol('employee_name', 'employee_name TEXT');
+    addCol('department',    'department TEXT');
+    addCol('designation',   'designation TEXT');
+    addCol('action_code',   'action_code TEXT');
+    addCol('reason_code',   'reason_code TEXT');
+
+    // Does employee_id still block deletes? PRAGMA foreign_key_list → on_delete.
+    const fks = db.prepare(`PRAGMA foreign_key_list(employee_timeline)`).all();
+    const empFk = fks.find(f => f.from === 'employee_id');
+    const needsReshape = !empFk || String(empFk.on_delete).toUpperCase() !== 'SET NULL';
+    if (needsReshape) {
+      db.pragma('foreign_keys = OFF');
+      const cols = `id, employee_id, employee_name, department_id, designation_id, department,
+        designation, manager_id, salary, salary_exempt, roster, ot_eligible, status,
+        effective_from, effective_seq, effective_to, action_code, reason_code, reason,
+        source, changed_by, changed_at`;
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE employee_timeline__new (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id    INTEGER REFERENCES employees(id) ON DELETE SET NULL,
+            employee_name  TEXT,
+            department_id  INTEGER REFERENCES org_departments(id),
+            designation_id INTEGER REFERENCES org_designations(id),
+            department     TEXT,
+            designation    TEXT,
+            manager_id     INTEGER,
+            salary         REAL,
+            salary_exempt  INTEGER,
+            roster         TEXT,
+            ot_eligible    INTEGER,
+            status         TEXT,
+            effective_from TEXT NOT NULL,
+            effective_seq  INTEGER DEFAULT 0,
+            effective_to   TEXT,
+            action_code    TEXT,
+            reason_code    TEXT,
+            reason         TEXT,
+            source         TEXT,
+            changed_by     INTEGER,
+            changed_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          INSERT INTO employee_timeline__new (${cols}) SELECT ${cols} FROM employee_timeline;
+          DROP TABLE employee_timeline;
+          ALTER TABLE employee_timeline__new RENAME TO employee_timeline;
+          CREATE UNIQUE INDEX IF NOT EXISTS uniq_emp_timeline_open
+            ON employee_timeline(employee_id) WHERE effective_to IS NULL;
+          CREATE INDEX IF NOT EXISTS idx_emp_timeline_asof
+            ON employee_timeline(employee_id, effective_from, effective_seq);
+          CREATE INDEX IF NOT EXISTS idx_emp_timeline_dept_open
+            ON employee_timeline(department_id) WHERE effective_to IS NULL;
+          CREATE INDEX IF NOT EXISTS idx_emp_timeline_desig_open
+            ON employee_timeline(designation_id) WHERE effective_to IS NULL;
+        `);
+      })();
+      db.pragma('foreign_keys = ON');
+      console.log('[schema] employee_timeline reshaped → employee_id ON DELETE SET NULL');
+    }
+
+    // Last-modified stamp on employees (HR-form writes bump it; NULL until first edit
+    // or a backfill seed). Plain guarded ALTER — house pattern.
+    try { db.exec(`ALTER TABLE employees ADD COLUMN updated_at TEXT`); } catch (_) { /* already exists */ }
+  } catch (e) {
+    console.error('[schema] employee_timeline change-history reshape failed:', e.message);
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+  }
 
   // Case-INSENSITIVE uniqueness for the designation catalog (dme 2026-07-28:
   // "md | MD | Md | Managing Director | managing director — all compared in
