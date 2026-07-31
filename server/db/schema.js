@@ -3210,6 +3210,10 @@ function initializeDatabase() {
     ['indent_items', 'is_foc INTEGER DEFAULT 0'],  // free-of-cost flag
     ['indent_items', 'is_tool INTEGER DEFAULT 0'], // tools vs materials flag
     // Indent-level fields shown on the physical indent form
+    // SPOS emergency indents (mam 2026-07-29): off-day (non-Wed/Sat) indents
+    // carry a mandatory reason and count toward the <5% emergency KPI.
+    ['indents', 'is_emergency INTEGER DEFAULT 0'],
+    ['indents', 'emergency_reason TEXT'],
     ['indents', 'client_name TEXT'],   // kept for backward compat (superseded by site_name)
     ['indents', 'location TEXT'],      // kept for backward compat (now derived from site)
     ['indents', 'lead_no TEXT'],       // kept for backward compat (removed from UI)
@@ -3299,6 +3303,12 @@ function initializeDatabase() {
     ['vendor_pos', 'file_path TEXT'],
     ['vendor_pos', 'remarks TEXT'],
     ['vendor_pos', 'expected_receipt_date DATE'],
+    // SPOS Procurement Tracker (mam 2026-07-29): logged reason when material
+    // arrives (or is running) later than expected_receipt_date. Delay itself
+    // is computed live (received/today − expected), no column needed.
+    ['vendor_pos', 'delay_reason TEXT'],
+    ['vendor_pos', 'delay_reason_by INTEGER REFERENCES users(id)'],
+    ['vendor_pos', 'delay_reason_at DATETIME'],
     // ─── Payment-before-material tracker (mam 2026-05-27) ───
     // Between PO sent → vendor ships → bill uploaded, there's a gap where
     // payment terms control whether the vendor will release material.

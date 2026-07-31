@@ -135,6 +135,33 @@ function dprCanSeeAll(db, user) {
   return !!r?.ok;
 }
 
+// Reusable engineer-scope fragment — the SAME rule GET /sites applies
+// (audit 2026-07-31: the new SPOS endpoints must not leak other sites'
+// plans/stock to a scoped engineer).
+function siteScopeSql(alias) {
+  return `(${alias}.site_engineer_id = ? OR EXISTS (
+      SELECT 1 FROM purchase_orders po
+      WHERE (po.id = ${alias}.po_id OR po.business_book_id = ${alias}.business_book_id)
+        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?
+          OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+          OR (',' || COALESCE(po.supervisor_ids,'') || ',') LIKE ?)))`;
+}
+function siteScopeParams(uid) { return [uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`]; }
+function userOwnsSite(db, user, siteId) {
+  if (dprCanSeeAll(db, user)) return true;
+  const row = db.prepare(`SELECT 1 ok FROM sites s WHERE s.id = ? AND ${siteScopeSql('s')}`)
+    .get(siteId, ...siteScopeParams(user.id));
+  return !!row;
+}
+
+// IST business date (UTC+5:30) — same conversion as procurement.js
+// indentRaiseWindow. Audit 2026-07-31: the SPOS cutoff/late guards used
+// the UTC date, misjudging everything between 00:00 and 05:30 IST.
+function istTodayIso() {
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  return `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
+}
+
 // Build a normalized "site key" for grouping — strips ALL whitespace
 // (incl. non-breaking space CHAR(160), tabs, CR/LF) and quotes, then
 // uppercases. This way 'M/s X Pvt. Ltd', '"""M/s X Pvt. Ltd"""' and
@@ -689,12 +716,118 @@ try {
      WHERE is_planned_template = 1 AND (planned_cost_b IS NULL OR planned_cost_b = 0) AND grand_total_b > 0`
   ).run();
 } catch (_) {}
+// SPOS core loop (mam 2026-07-29, SPOS PDF): the 7-day plan gets a PM-approval
+// header per (site, week). Approving it runs the automatic stock check against
+// the site store and auto-raises a Material indent for the shortfall, so all
+// routine procurement originates from the approved weekly plan.
+// SPOS site-store daily cycle (mam 2026-07-31): the JR. site engineer owns
+// the site store. Morning — Sr. engineer draws material against a numbered
+// ISSUE slip (ISU/YYYY/####, stock OUT at issue time). Evening — unused
+// material comes back against a RETURN slip (RTN/YYYY/####, stock IN).
+// Net consumption (issued − returned) auto-fills the DPR — the engineer
+// never types stock numbers ("GRN bill" both ways, SPOS zero manual calc).
+try { getDb().exec(`
+  CREATE TABLE IF NOT EXISTS site_store_slips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slip_number TEXT UNIQUE,
+    slip_type TEXT NOT NULL CHECK(slip_type IN ('issue','return')),
+    site_id INTEGER NOT NULL REFERENCES sites(id),
+    warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+    slip_date DATE NOT NULL,
+    issued_to TEXT,
+    notes TEXT,
+    created_by INTEGER REFERENCES users(id),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`); } catch (_) {}
+try { getDb().exec(`
+  CREATE TABLE IF NOT EXISTS site_store_slip_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slip_id INTEGER NOT NULL REFERENCES site_store_slips(id) ON DELETE CASCADE,
+    item_master_id INTEGER NOT NULL REFERENCES item_master(id),
+    item_name TEXT,
+    unit TEXT,
+    quantity REAL NOT NULL,
+    rate REAL DEFAULT 0
+  )
+`); } catch (_) {}
+try { getDb().exec(`
+  CREATE TABLE IF NOT EXISTS weekly_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id INTEGER NOT NULL REFERENCES sites(id),
+    week_start DATE NOT NULL,
+    status TEXT DEFAULT 'submitted' CHECK(status IN ('submitted','approved','rejected')),
+    submitted_by INTEGER REFERENCES users(id),
+    submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    submitted_late INTEGER DEFAULT 0,
+    approved_by INTEGER REFERENCES users(id),
+    approved_at DATETIME,
+    rejected_by INTEGER REFERENCES users(id),
+    rejected_at DATETIME,
+    rejection_reason TEXT,
+    auto_indent_id INTEGER REFERENCES indents(id),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(site_id, week_start)
+  )
+`); } catch (_) {}
 
 // Returns Mon-Sun (or any 7 consecutive days starting at week_start)
 // for one site, blending planned + actual fields.  Multi-item per
 // day comes back as `items: [{ id, po_item_id, description, unit,
 // planned_qty, actual_qty }]` so the UI can render the full plan.
 // Mam, 2026-05-16: "in one day multiple boq item have".
+// SPOS daily compliance grid (mam 2026-07-29): per active site — morning
+// punch by 09:00, DPR by 20:00 cutoff, photos, weekly plan approved.
+// Same compute as the 18:30 exception-report cron (lib/sposCompliance).
+router.get('/spos-compliance', requirePermission('dpr', 'view'), (req, res) => {
+  const date = String(req.query.date || istTodayIso()).slice(0, 10);
+  try {
+    const db = getDb();
+    const { computeSposCompliance } = require('../lib/sposCompliance');
+    const result = computeSposCompliance(db, date);
+    // Scope: a plain engineer sees only their own sites' rows (audit).
+    if (!dprCanSeeAll(db, req.user)) {
+      const owned = new Set(db.prepare(`SELECT s.id FROM sites s WHERE ${siteScopeSql('s')}`)
+        .all(...siteScopeParams(req.user.id)).map(r => r.id));
+      result.sites = result.sites.filter(r => (r.site_ids || [r.site_id]).some(id => owned.has(id)));
+      const n = result.sites.length || 1;
+      result.summary = {
+        sites: result.sites.length,
+        punch_pct: Math.round(result.sites.filter(r => r.punch_done).length / n * 100),
+        dpr_pct: Math.round(result.sites.filter(r => r.dpr_done).length / n * 100),
+        photos_pct: Math.round(result.sites.filter(r => r.photos_done).length / n * 100),
+        plan_approved_pct: Math.round(result.sites.filter(r => r.plan_status === 'approved').length / n * 100),
+      };
+    }
+    res.json(result);
+  } catch (e) {
+    console.error('[dpr/spos-compliance]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// SPOS auto-DPR prefill (mam 2026-07-29): live site-store stock feeds the
+// "Material Consumed Today" section of the Submit DPR form — the engineer
+// only types the consumed qty; the stock OUT happens automatically at
+// submit (zero manual stock calculations).
+router.get('/sites/:site_id/store-stock', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  if (!userOwnsSite(db, req.user, req.params.site_id)) return res.status(403).json({ error: 'Not your site' });
+  const store = db.prepare(
+    "SELECT id, name FROM warehouses WHERE site_id = ? AND type = 'site_store' AND COALESCE(active,1) = 1 LIMIT 1"
+  ).get(req.params.site_id);
+  if (!store) return res.json({ store: null, items: [] });
+  const items = db.prepare(`
+    SELECT sb.item_master_id, sb.quantity AS stock_qty,
+           im.item_name, im.uom, im.specification, im.size
+      FROM stock_balance sb
+      JOIN item_master im ON im.id = sb.item_master_id
+     WHERE sb.warehouse_id = ? AND sb.quantity > 0
+     ORDER BY im.item_name
+  `).all(store.id);
+  res.json({ store: { id: store.id, name: store.name }, items });
+});
+
 router.get('/week-view', requirePermission('dpr', 'view'), (req, res) => {
   const { site_id, week_start } = req.query;
   if (!site_id || !week_start) return res.status(400).json({ error: 'site_id and week_start required' });
@@ -733,9 +866,25 @@ router.get('/week-view', requirePermission('dpr', 'view'), (req, res) => {
     });
   }
   const byDate = Object.fromEntries(rows.map(r => [r.report_date, { ...r, items: itemsByDpr[r.id] || [] }]));
+  // SPOS approval header for this (site, week) — null when the plan was never
+  // saved (or predates the approval flow).
+  let plan = null;
+  try {
+    plan = db.prepare(`
+      SELECT wp.*, su.name AS submitted_by_name, au.name AS approved_by_name,
+             rj.name AS rejected_by_name, ai.indent_number AS auto_indent_number
+        FROM weekly_plans wp
+        LEFT JOIN users su ON su.id = wp.submitted_by
+        LEFT JOIN users au ON au.id = wp.approved_by
+        LEFT JOIN users rj ON rj.id = wp.rejected_by
+        LEFT JOIN indents ai ON ai.id = wp.auto_indent_id
+       WHERE wp.site_id = ? AND wp.week_start = ?
+    `).get(site_id, week_start) || null;
+  } catch (_) {}
   res.json({
     site_id: +site_id,
     week_start,
+    plan,
     days: days.map(date => byDate[date] || { report_date: date, is_planned_template: 0, site_id: +site_id, items: [] }),
   });
 });
@@ -744,12 +893,43 @@ router.get('/week-view', requirePermission('dpr', 'view'), (req, res) => {
 // row exists for (site_id, date), UPDATE its planned_* fields.
 // Otherwise INSERT a stub row with is_planned_template=1.  The
 // daily actuals get filled in later via PUT /api/dpr/:id.
+// The Friday-before-the-week cutoff (SPOS: "Weekly Plan Submitted every
+// Friday"). week_start is the Monday, so minus 3 days = that Friday.
+// Submitting after Friday is allowed but flagged late; once the week has
+// STARTED only an admin may create/edit the plan.
+function fridayCutoffFor(weekStartIso) {
+  const d = new Date(weekStartIso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 3);
+  return d.toISOString().slice(0, 10);
+}
+
 router.post('/plan-week', requirePermission('dpr', 'create'), (req, res) => {
   const { site_id, week_start, days } = req.body || {};
   if (!site_id || !week_start || !Array.isArray(days) || days.length === 0) {
     return res.status(400).json({ error: 'site_id, week_start, and days[] are required' });
   }
   const db = getDb();
+
+  // ── SPOS guards (mam 2026-07-29 · reworked after audit 2026-07-31) ──
+  // week_start must be a Monday: every compliance/KPI consumer looks the
+  // plan up by mondayOf(date), so an off-Monday key would make an approved
+  // plan invisible to the grid, the 18:30 report and KPI-1.
+  if (new Date(week_start + 'T00:00:00Z').getUTCDay() !== 1) {
+    return res.status(400).json({ error: 'Week Starting must be a Monday — the SPOS week runs Mon–Sun.' });
+  }
+  const isAdminUser = req.user.role === 'admin';
+  const todayIso = istTodayIso();
+  const existingPlanHdr = db.prepare('SELECT * FROM weekly_plans WHERE site_id = ? AND week_start = ?').get(site_id, week_start);
+  // Only an APPROVED plan is locked (admin can still edit → re-approval).
+  // The audit killed the old blanket "week already started" 403: it dead-
+  // ended rejected-plan resubmits and stopped engineers creating a missing
+  // current-week plan at all. Discipline now rides the LATE flag + the
+  // compliance grid / 18:30 report instead of a hard block.
+  if (existingPlanHdr && existingPlanHdr.status === 'approved' && !isAdminUser) {
+    return res.status(403).json({ error: 'This week plan is already PM-approved and locked. Ask an admin to change it (re-approval will be needed).' });
+  }
+  const submittedLate = todayIso > fridayCutoffFor(week_start) ? 1 : 0;
+
   const out = { created: 0, updated: 0, dates: [] };
 
   const findRow  = db.prepare(`SELECT id FROM dpr WHERE site_id = ? AND report_date = ?`);
@@ -835,10 +1015,500 @@ router.post('/plan-week', requirePermission('dpr', 'create'), (req, res) => {
     }
   });
   try {
-    txn();
+    // Header upsert runs INSIDE the same transaction as the day stubs
+    // (audit 2026-07-31: a failed header used to be swallowed → the plan
+    // never reached the PM queue while the engineer saw a success toast).
+    const all = db.transaction(() => {
+      txn();
+      if (existingPlanHdr) {
+        db.prepare(`UPDATE weekly_plans
+                       SET status = 'submitted', submitted_by = ?, submitted_at = CURRENT_TIMESTAMP,
+                           submitted_late = ?, rejection_reason = NULL, rejected_by = NULL, rejected_at = NULL
+                     WHERE id = ?`)
+          .run(req.user.id, submittedLate, existingPlanHdr.id);
+      } else {
+        db.prepare(`INSERT INTO weekly_plans (site_id, week_start, status, submitted_by, submitted_late)
+                    VALUES (?, ?, 'submitted', ?, ?)`)
+          .run(site_id, week_start, req.user.id, submittedLate);
+      }
+    });
+    all();
+    // Best-effort in-app nudge to everyone who can approve DPR plans, so a
+    // submitted plan never sits invisible until the 18:30 report (audit).
+    try {
+      const siteName = db.prepare('SELECT name FROM sites WHERE id = ?').get(site_id)?.name || `site #${site_id}`;
+      const approvers = db.prepare(`
+        SELECT DISTINCT ur.user_id id FROM user_roles ur
+        JOIN role_permissions rp ON rp.role_id = ur.role_id
+        WHERE rp.module = 'dpr' AND rp.can_approve = 1
+        UNION SELECT id FROM users WHERE role = 'admin' AND active = 1`).all();
+      const dedupe = `plan_submit:${site_id}:${week_start}:${todayIso}`;
+      const ins = db.prepare(`INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+                              VALUES (?,?,?,?,?,?,?)`);
+      for (const a of approvers) {
+        if (a.id === req.user.id) continue;
+        const seen = db.prepare('SELECT id FROM notifications WHERE user_id = ? AND dedupe_key = ?').get(a.id, dedupe);
+        if (!seen) ins.run(a.id, 'weekly_plan', `📅 Weekly plan awaiting approval — ${siteName}`,
+          `${req.user.name || 'Engineer'} submitted the plan for week ${week_start}${submittedLate ? ' (LATE)' : ''}. Approve to run the stock check + auto-indent.`,
+          '/dpr?tab=reports', 'in_app', dedupe);
+      }
+    } catch (e) { console.warn('[dpr/plan-week] approver notify failed:', e.message); }
+    out.plan_status = 'submitted';
+    out.submitted_late = submittedLate;
     res.json(out);
   } catch (e) {
     console.error('[dpr/plan-week]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── SPOS Weekly-Plan approval + auto-indent (mam 2026-07-29) ─────────
+// The core SPOS loop: Friday plan → PM approval → automatic stock check
+// (site store + open indent pipeline) → auto-raise a Material indent for
+// the shortfall. The auto-indent enters the normal L1/L2 approval queue.
+
+// Requirement per BOQ line across the 7 planned days, checked against:
+//   site_stock  — the site's site_store stock_balance (via po_items.item_master_id)
+//   pipeline    — qty already on open indents (submitted/approved/po_sent/
+//                 dispatched) for the same BOQ line, so re-approving a plan
+//                 or overlapping weeks never double-indents
+//   boq cap     — same rule as Raise Indent: total non-FOC/RGP indented qty
+//                 must stay within po_items.quantity
+function computeWeeklyShortfall(db, plan) {
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(plan.week_start + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  const ph = days.map(() => '?').join(',');
+  // Only PLAN rows (actual_qty empty) count as requirement: the daily
+  // submit INSERTS actual rows with planned_qty = actual qty alongside the
+  // plan-week rows, so an unfiltered SUM doubles every executed day
+  // (audit 2026-07-31 — inflated auto-indents on mid-week approvals).
+  const rows = db.prepare(`
+    SELECT wi.po_item_id, SUM(wi.planned_qty) AS planned_qty,
+           MAX(COALESCE(pi.description, wi.description)) AS description,
+           MAX(COALESCE(pi.unit, wi.unit)) AS unit,
+           MAX(pi.item_master_id) AS item_master_id,
+           MAX(pi.quantity) AS boq_qty
+      FROM dpr d
+      JOIN dpr_work_items wi ON wi.dpr_id = d.id
+      LEFT JOIN po_items pi ON pi.id = wi.po_item_id
+     WHERE d.site_id = ? AND d.report_date IN (${ph})
+       AND wi.po_item_id IS NOT NULL AND wi.planned_qty > 0
+       AND COALESCE(wi.actual_qty, 0) = 0
+     GROUP BY wi.po_item_id
+  `).all(plan.site_id, ...days);
+
+  const store = db.prepare(
+    "SELECT id FROM warehouses WHERE site_id = ? AND type = 'site_store' AND COALESCE(active,1) = 1 LIMIT 1"
+  ).get(plan.site_id);
+  const stockStmt = db.prepare('SELECT COALESCE(quantity,0) q FROM stock_balance WHERE warehouse_id = ? AND item_master_id = ?');
+  // Open pipeline = every not-yet-received indent qty. Includes the L1/L2
+  // parking statuses ('l1_approved', 'crm_approved') — omitting them let a
+  // parked auto-indent double-raise (audit 2026-07-31).
+  const pipelineStmt = db.prepare(`
+    SELECT COALESCE(SUM(ii.quantity),0) q
+      FROM indent_items ii JOIN indents i ON i.id = ii.indent_id
+     WHERE ii.po_item_id = ? AND COALESCE(ii.item_type,'') NOT IN ('FOC','RGP')
+       AND i.status IN ('submitted','l1_approved','crm_approved','approved','po_sent','dispatched')`);
+  // Material already RECEIVED against those indents' POs sits in stock_
+  // balance AND still counts in the pipeline (indents.status only advances
+  // to 'received' via the manual IndentFMS button) — subtract it so the
+  // same quantity is never counted twice (audit 2026-07-31: systematic
+  // under-indent from the second cycle).
+  const receivedStmt = db.prepare(`
+    SELECT COALESCE(SUM(vpi.quantity),0) q
+      FROM vendor_po_items vpi
+      JOIN vendor_pos vp ON vp.id = vpi.vendor_po_id
+      JOIN indent_items ii ON ii.id = vpi.indent_item_id
+     WHERE ii.po_item_id = ? AND COALESCE(vp.cancelled,0) = 0
+       AND COALESCE(ii.item_type,'') NOT IN ('FOC','RGP')
+       AND EXISTS (SELECT 1 FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id AND dn.status = 'received')`);
+  const alreadyStmt = db.prepare(`
+    SELECT COALESCE(SUM(ii.quantity),0) q
+      FROM indent_items ii JOIN indents i ON i.id = ii.indent_id
+     WHERE ii.po_item_id = ? AND COALESCE(ii.item_type,'') NOT IN ('FOC','RGP')
+       AND i.status <> 'rejected'`);
+
+  const lines = rows.map(r => {
+    const stock = (store && r.item_master_id) ? +(stockStmt.get(store.id, r.item_master_id)?.q || 0) : 0;
+    const openQty = +pipelineStmt.get(r.po_item_id).q;
+    const receivedQty = +receivedStmt.get(r.po_item_id).q;
+    const pipeline = Math.max(0, openQty - receivedQty);
+    const already = +alreadyStmt.get(r.po_item_id).q;
+    const boqQty = +r.boq_qty || 0;
+    const boqRemaining = boqQty > 0 ? Math.max(0, boqQty - already) : null;   // null = no cap known
+    const need = Math.max(0, +r.planned_qty - stock - pipeline);
+    const toIndent = +(boqRemaining === null ? need : Math.min(need, boqRemaining)).toFixed(3);
+    return {
+      po_item_id: r.po_item_id, description: r.description, unit: r.unit,
+      item_master_id: r.item_master_id || null,
+      planned_qty: +(+r.planned_qty).toFixed(3),
+      site_stock: +stock.toFixed(3), pipeline_qty: +pipeline.toFixed(3),
+      boq_qty: boqQty, boq_remaining: boqRemaining,
+      to_indent: toIndent,
+      capped: boqRemaining !== null && need > boqRemaining,
+      no_master: !r.item_master_id,
+    };
+  });
+  return { lines, has_store: !!store };
+}
+
+// Create the auto Material indent for the shortfall lines. Mirrors Raise
+// Indent (procurement.js POST /indents): same IND- sequence, two_level
+// policy with the L2 on/off switch, tracker seed, and item_master-
+// authoritative unit/type per line. Runs inside the caller's transaction.
+function createAutoIndentFromPlan(db, plan, lines, approver) {
+  const { nextSequence } = require('../db/nextSequence');
+  let l2On = false;
+  try { l2On = !!require('../utils/indentToDispatchGates').effectiveEnabled(db, 'l2'); } catch (_) {}
+  const indentNum = nextSequence(db, 'indents', 'indent_number', 'IND-', { startFrom: 0, pad: 4 });
+  let planningId = null;
+  if (plan.business_book_id) {
+    planningId = db.prepare('SELECT id FROM order_planning WHERE business_book_id = ? ORDER BY id DESC LIMIT 1')
+      .get(plan.business_book_id)?.id || null;
+  }
+  const submitter = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(plan.submitted_by) || {};
+  const r = db.prepare(`
+    INSERT INTO indents
+      (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
+       approval_policy, l1_status, l2_status, indent_category, crm_status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    planningId, indentNum, 'submitted',
+    `Auto-raised from Weekly Plan · ${plan.site_name} · week of ${plan.week_start} (SPOS). Plan approved by ${approver.name || 'PM'}.`,
+    plan.site_name || '', `${submitter.name || 'Weekly Plan'} · auto`, plan.site_name || '',
+    plan.submitted_by || approver.id, 'two_level', 'pending', l2On ? 'pending' : null, 'material', 'n/a'
+  );
+  try {
+    db.prepare('INSERT INTO indent_tracker (indent_id, stage, updated_by, notes) VALUES (?,?,?,?)')
+      .run(r.lastInsertRowid, 'approval_pending', approver.id, 'Awaiting approval (auto from weekly plan)');
+  } catch (_) { /* tracker is best-effort */ }
+
+  const getPoItem = db.prepare('SELECT description, unit, item_master_id FROM po_items WHERE id = ?');
+  const getMaster = db.prepare('SELECT item_name, uom, type, make, weight_per_meter FROM item_master WHERE id = ?');
+  const ins = db.prepare(`
+    INSERT INTO indent_items
+      (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount,
+       item_type, is_foc, is_tool, required_date, is_extra_schedule, is_extra_non_schedule, weight_per_meter)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?)
+  `);
+  for (const l of lines) {
+    const p = getPoItem.get(l.po_item_id) || {};
+    let desc = p.description || l.description || '';
+    let unit = p.unit || l.unit || 'nos';
+    let masterId = p.item_master_id || l.item_master_id || null;
+    let make = '', itemType = null, wpm = null;
+    if (masterId) {
+      const m = getMaster.get(masterId);
+      if (m) {
+        itemType = m.type || null;
+        make = m.make || '';
+        if (m.uom) unit = m.uom;                 // master UOM is authoritative
+        if (m.weight_per_meter > 0) wpm = +m.weight_per_meter;
+      }
+    }
+    const foc = String(itemType || '').toUpperCase() === 'FOC' ? 1 : 0;
+    const tool = String(itemType || '').toUpperCase() === 'RGP' ? 1 : 0;
+    ins.run(r.lastInsertRowid, l.po_item_id, masterId, desc, make, l.to_indent, unit, 0, 0,
+            itemType, foc, tool, plan.week_start, wpm);
+  }
+  return { id: r.lastInsertRowid, indent_number: indentNum, line_count: lines.length, raiser_email: submitter.email || null };
+}
+
+// List plan headers — feeds the PM's "pending approvals" badge/list.
+// Scoped: a plain site engineer sees only their own sites' plans (same
+// rule as GET /sites); See-All / approvers / admin see everything.
+router.get('/weekly-plans', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  const { status, site_id } = req.query;
+  let sql = `
+    SELECT wp.*, s.name AS site_name, su.name AS submitted_by_name,
+           au.name AS approved_by_name, ai.indent_number AS auto_indent_number
+      FROM weekly_plans wp
+      JOIN sites s ON s.id = wp.site_id
+      LEFT JOIN users su ON su.id = wp.submitted_by
+      LEFT JOIN users au ON au.id = wp.approved_by
+      LEFT JOIN indents ai ON ai.id = wp.auto_indent_id
+     WHERE 1=1`;
+  const params = [];
+  if (!dprCanSeeAll(db, req.user)) {
+    sql += ` AND ${siteScopeSql('s')}`;
+    params.push(...siteScopeParams(req.user.id));
+  }
+  if (status) { sql += ' AND wp.status = ?'; params.push(status); }
+  if (site_id) { sql += ' AND wp.site_id = ?'; params.push(site_id); }
+  sql += ' ORDER BY wp.week_start DESC, s.name LIMIT 200';
+  res.json(db.prepare(sql).all(...params));
+});
+
+// Shortfall preview — what the PM sees before approving.
+router.get('/weekly-plans/:id/shortfall', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  const plan = db.prepare(`
+    SELECT wp.*, s.name AS site_name, s.business_book_id
+      FROM weekly_plans wp JOIN sites s ON s.id = wp.site_id
+     WHERE wp.id = ?`).get(req.params.id);
+  if (!plan) return res.status(404).json({ error: 'Weekly plan not found' });
+  if (!userOwnsSite(db, req.user, plan.site_id)) return res.status(403).json({ error: 'Not your site' });
+  try {
+    const { lines, has_store } = computeWeeklyShortfall(db, plan);
+    res.json({ plan_id: plan.id, site_id: plan.site_id, site_name: plan.site_name,
+               week_start: plan.week_start, has_store, lines });
+  } catch (e) {
+    console.error('[dpr/weekly-plans/shortfall]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PM approves the plan → auto-indent the shortfall (if any).
+router.post('/weekly-plans/:id/approve', requirePermission('dpr', 'approve'), (req, res) => {
+  const db = getDb();
+  const plan = db.prepare(`
+    SELECT wp.*, s.name AS site_name, s.business_book_id
+      FROM weekly_plans wp JOIN sites s ON s.id = wp.site_id
+     WHERE wp.id = ?`).get(req.params.id);
+  if (!plan) return res.status(404).json({ error: 'Weekly plan not found' });
+  if (plan.status === 'approved') return res.status(400).json({ error: 'Plan is already approved' });
+
+  let result;
+  try {
+    const { lines } = computeWeeklyShortfall(db, plan);
+    const shortLines = lines.filter(l => l.to_indent > 0);
+    let indentInfo = null;
+    const txn = db.transaction(() => {
+      if (shortLines.length) indentInfo = createAutoIndentFromPlan(db, plan, shortLines, req.user);
+      db.prepare(`UPDATE weekly_plans
+                     SET status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP,
+                         rejection_reason = NULL, rejected_by = NULL, rejected_at = NULL,
+                         auto_indent_id = COALESCE(?, auto_indent_id)
+                   WHERE id = ?`)
+        .run(req.user.id, indentInfo?.id || null, plan.id);
+    });
+    txn();
+    result = { status: 'approved', lines, auto_indent: indentInfo,
+               message: indentInfo
+                 ? `Plan approved — indent ${indentInfo.indent_number} auto-raised for ${indentInfo.line_count} short item(s)`
+                 : 'Plan approved — site stock + open indents already cover the full requirement, nothing to indent' };
+  } catch (e) {
+    console.error('[dpr/weekly-plans/approve]', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+  // "Indent raised" email — same event key as Raise Indent; fire-and-forget.
+  if (result.auto_indent) {
+    try {
+      const { fireEmailEvent } = require('../lib/emailRules');
+      fireEmailEvent('indent.raised', {
+        indent_no: result.auto_indent.indent_number,
+        category: 'material',
+        site: plan.site_name,
+        amount: '0',
+        raised_by: 'Weekly Plan (auto)',
+        date: new Date().toISOString().slice(0, 10),
+        raiser_email: result.auto_indent.raiser_email,
+      });
+    } catch (_) {}
+  }
+  res.json(result);
+});
+
+// PM rejects the plan — reason mandatory; engineer edits + resaves to resubmit.
+// Rejecting an already-APPROVED plan also withdraws its auto-raised indent
+// (audit 2026-07-31: the indent used to keep marching through L1/L2 toward
+// a PO for a plan that no longer exists) — unless a vendor PO already
+// hangs off it, in which case we leave it and tell the PM to handle it.
+router.post('/weekly-plans/:id/reject', requirePermission('dpr', 'approve'), (req, res) => {
+  const reason = String(req.body?.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'Rejection reason is required' });
+  const db = getDb();
+  const plan = db.prepare('SELECT * FROM weekly_plans WHERE id = ?').get(req.params.id);
+  if (!plan) return res.status(404).json({ error: 'Weekly plan not found' });
+  let indentNote = '';
+  try {
+    const txn = db.transaction(() => {
+      db.prepare(`UPDATE weekly_plans
+                     SET status = 'rejected', rejected_by = ?, rejected_at = CURRENT_TIMESTAMP, rejection_reason = ?
+                   WHERE id = ?`)
+        .run(req.user.id, reason, plan.id);
+      if (plan.auto_indent_id) {
+        const ind = db.prepare('SELECT id, indent_number, status FROM indents WHERE id = ?').get(plan.auto_indent_id);
+        const hasPo = ind && db.prepare('SELECT 1 FROM vendor_pos WHERE indent_id = ? AND COALESCE(cancelled,0) = 0 LIMIT 1').get(ind.id);
+        if (ind && !hasPo && ['submitted', 'l1_approved', 'crm_approved', 'approved'].includes(ind.status)) {
+          db.prepare(`UPDATE indents SET status = 'rejected', rejected_by = ?, rejected_at = CURRENT_TIMESTAMP,
+                        rejection_reason = ? WHERE id = ?`)
+            .run(req.user.id, `Weekly plan rejected by ${req.user.name || 'PM'} — auto-indent withdrawn (${reason})`, ind.id);
+          indentNote = ` Auto-indent ${ind.indent_number} withdrawn.`;
+        } else if (ind && hasPo) {
+          indentNote = ` NOTE: auto-indent ${ind.indent_number} already has a Vendor PO — review it in Procurement.`;
+        }
+      }
+    });
+    txn();
+  } catch (e) {
+    console.error('[dpr/weekly-plans/reject]', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+  res.json({ status: 'rejected', message: `Plan rejected — the site engineer can edit and resubmit.${indentNote}` });
+});
+
+// ─── SPOS site-store Issue / Return slips (mam 2026-07-31) ────────────
+// The Jr. site engineer's counter: material leaves the site store only on
+// an ISSUE slip and comes back only on a RETURN slip. Stock moves at slip
+// time; the DPR then just reads net consumption.
+
+// Per-item movement summary for one site + date: issued / returned / net.
+function siteConsumptionFor(db, siteId, dateIso) {
+  const rows = db.prepare(`
+    SELECT si.item_master_id,
+           MAX(si.item_name) AS item_name, MAX(si.unit) AS unit,
+           SUM(CASE WHEN s.slip_type = 'issue'  THEN si.quantity ELSE 0 END) AS issued,
+           SUM(CASE WHEN s.slip_type = 'return' THEN si.quantity ELSE 0 END) AS returned
+      FROM site_store_slip_items si
+      JOIN site_store_slips s ON s.id = si.slip_id
+     WHERE s.site_id = ? AND s.slip_date = ?
+     GROUP BY si.item_master_id
+  `).all(siteId, dateIso);
+  return rows.map(r => ({
+    ...r,
+    issued: +(+r.issued).toFixed(3),
+    returned: +(+r.returned).toFixed(3),
+    net_consumed: +(( +r.issued) - (+r.returned)).toFixed(3),
+  }));
+}
+
+// Create a slip. Issue: qty capped at live store stock (stock goes OUT).
+// Return: qty capped at today's issued − already returned (stock comes IN).
+router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
+  const { site_id, slip_type, slip_date, issued_to, notes, items } = req.body || {};
+  if (!site_id || !['issue', 'return'].includes(slip_type)) {
+    return res.status(400).json({ error: 'site_id and slip_type (issue/return) are required' });
+  }
+  const clean = (Array.isArray(items) ? items : [])
+    .map(i => ({ item_master_id: +i.item_master_id, quantity: +i.quantity }))
+    .filter(i => i.item_master_id > 0 && i.quantity > 0);
+  if (!clean.length) return res.status(400).json({ error: 'At least one item with a quantity is required' });
+  if (!String(issued_to || '').trim()) {
+    return res.status(400).json({ error: slip_type === 'issue' ? 'Issued To (who is taking the material) is required' : 'Returned By (who is bringing it back) is required' });
+  }
+  const db = getDb();
+  if (!userOwnsSite(db, req.user, site_id)) return res.status(403).json({ error: 'Not your site' });
+  const store = db.prepare("SELECT id, name FROM warehouses WHERE site_id = ? AND type = 'site_store' AND COALESCE(active,1) = 1 LIMIT 1").get(site_id);
+  if (!store) return res.status(400).json({ error: 'This site has no site store yet — create one in Inventory → Warehouses first.' });
+  const dateIso = String(slip_date || istTodayIso()).slice(0, 10);
+
+  const getBal = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id = ? AND item_master_id = ?');
+  const getMaster = db.prepare('SELECT item_name, specification, size, uom FROM item_master WHERE id = ?');
+  const consumedToday = slip_type === 'return' ? siteConsumptionFor(db, site_id, dateIso) : [];
+
+  // Validate every line BEFORE writing anything.
+  for (const it of clean) {
+    const m = getMaster.get(it.item_master_id);
+    if (!m) return res.status(400).json({ error: `Unknown item #${it.item_master_id}` });
+    const name = [m.item_name, m.specification, m.size].filter(Boolean).join(' ');
+    if (slip_type === 'issue') {
+      const bal = +(getBal.get(store.id, it.item_master_id)?.quantity || 0);
+      if (it.quantity > bal) {
+        return res.status(400).json({ error: `${name}: only ${bal} in the site store — cannot issue ${it.quantity}.` });
+      }
+    } else {
+      const c = consumedToday.find(x => x.item_master_id === it.item_master_id);
+      const outstanding = c ? +(c.issued - c.returned).toFixed(3) : 0;
+      if (it.quantity > outstanding) {
+        return res.status(400).json({ error: `${name}: only ${outstanding} issued-and-not-returned today — cannot return ${it.quantity}.` });
+      }
+    }
+  }
+
+  const { nextSequence } = require('../db/nextSequence');
+  const year = new Date().getFullYear();
+  const prefix = slip_type === 'issue' ? `ISU/${year}/` : `RTN/${year}/`;
+  let slipId, slipNumber;
+  try {
+    const txn = db.transaction(() => {
+      slipNumber = nextSequence(db, 'site_store_slips', 'slip_number', prefix, { pad: 4 });
+      const r = db.prepare(`
+        INSERT INTO site_store_slips (slip_number, slip_type, site_id, warehouse_id, slip_date, issued_to, notes, created_by)
+        VALUES (?,?,?,?,?,?,?,?)`)
+        .run(slipNumber, slip_type, site_id, store.id, dateIso, String(issued_to).trim(), notes || null, req.user.id);
+      slipId = r.lastInsertRowid;
+      const insItem = db.prepare('INSERT INTO site_store_slip_items (slip_id, item_master_id, item_name, unit, quantity, rate) VALUES (?,?,?,?,?,?)');
+      const upBal = db.prepare('UPDATE stock_balance SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+      const insBal = db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)');
+      const insMv = db.prepare(`
+        INSERT INTO stock_movements (warehouse_id, item_master_id, type, quantity, rate, total_value, reference_type, reference_id, site_id, notes, created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+      for (const it of clean) {
+        const m = getMaster.get(it.item_master_id);
+        const name = [m.item_name, m.specification, m.size].filter(Boolean).join(' ');
+        const bal = getBal.get(store.id, it.item_master_id);
+        const rate = +(bal?.avg_rate || 0);
+        insItem.run(slipId, it.item_master_id, name, m.uom || 'nos', it.quantity, rate);
+        const delta = slip_type === 'issue' ? -it.quantity : it.quantity;
+        if (bal) upBal.run(delta, bal.id);
+        else insBal.run(store.id, it.item_master_id, Math.max(0, delta), rate);
+        insMv.run(store.id, it.item_master_id, slip_type === 'issue' ? 'OUT' : 'IN',
+                  it.quantity, rate, it.quantity * rate,
+                  slip_type === 'issue' ? 'SITE_ISSUE' : 'SITE_RETURN', slipNumber, site_id,
+                  `${slip_type === 'issue' ? 'Issued to' : 'Returned by'} ${String(issued_to).trim()} (${slipNumber})`,
+                  req.user.id);
+      }
+    });
+    txn();
+  } catch (e) {
+    console.error('[dpr/site-slips]', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+  res.status(201).json({ id: slipId, slip_number: slipNumber, slip_type, line_count: clean.length });
+});
+
+// Slips for one site + date (register + reprint links).
+router.get('/site-slips', requirePermission('dpr', 'view'), (req, res) => {
+  const { site_id, date } = req.query;
+  if (!site_id) return res.status(400).json({ error: 'site_id required' });
+  const db = getDb();
+  if (!userOwnsSite(db, req.user, site_id)) return res.status(403).json({ error: 'Not your site' });
+  let sql = `SELECT s.*, u.name AS created_by_name, w.name AS store_name
+               FROM site_store_slips s
+               LEFT JOIN users u ON u.id = s.created_by
+               LEFT JOIN warehouses w ON w.id = s.warehouse_id
+              WHERE s.site_id = ?`;
+  const params = [site_id];
+  if (date) { sql += ' AND s.slip_date = ?'; params.push(String(date).slice(0, 10)); }
+  sql += ' ORDER BY s.id DESC LIMIT 100';
+  const slips = db.prepare(sql).all(...params);
+  const items = slips.length
+    ? db.prepare(`SELECT * FROM site_store_slip_items WHERE slip_id IN (${slips.map(() => '?').join(',')})`).all(...slips.map(s => s.id))
+    : [];
+  res.json(slips.map(s => ({ ...s, items: items.filter(i => i.slip_id === s.id) })));
+});
+
+// One slip with everything the print page needs.
+router.get('/site-slips/:id', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  const slip = db.prepare(`
+    SELECT s.*, u.name AS created_by_name, w.name AS store_name, st.name AS site_name
+      FROM site_store_slips s
+      LEFT JOIN users u ON u.id = s.created_by
+      LEFT JOIN warehouses w ON w.id = s.warehouse_id
+      LEFT JOIN sites st ON st.id = s.site_id
+     WHERE s.id = ?`).get(req.params.id);
+  if (!slip) return res.status(404).json({ error: 'Slip not found' });
+  slip.items = db.prepare('SELECT * FROM site_store_slip_items WHERE slip_id = ?').all(slip.id);
+  res.json(slip);
+});
+
+// Net consumption + live stock for one site + date — feeds the DPR's
+// "Material Consumed Today" section (read-only when slips exist).
+router.get('/sites/:site_id/consumption', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  if (!userOwnsSite(db, req.user, req.params.site_id)) return res.status(403).json({ error: 'Not your site' });
+  const dateIso = String(req.query.date || istTodayIso()).slice(0, 10);
+  try {
+    res.json({ date: dateIso, lines: siteConsumptionFor(db, req.params.site_id, dateIso) });
+  } catch (e) {
+    console.error('[dpr/consumption]', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -894,6 +1564,15 @@ router.post('/', (req, res) => {
         safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks,
         existing.id);
     dprId = existing.id;
+    // Resubmit hygiene (audit 2026-07-31): the child inserts below used to
+    // APPEND on every resubmit — duplicate rows and a second stock cut per
+    // material. Clear the previous actuals first. Plan-week rows in
+    // dpr_work_items (actual_qty empty) are the WEEK PLAN — keep those.
+    db.prepare('DELETE FROM dpr_work_items WHERE dpr_id = ? AND COALESCE(actual_qty, 0) > 0').run(dprId);
+    db.prepare('DELETE FROM dpr_material WHERE dpr_id = ?').run(dprId);
+    db.prepare('DELETE FROM dpr_manpower WHERE dpr_id = ?').run(dprId);
+    db.prepare('DELETE FROM dpr_machinery WHERE dpr_id = ?').run(dprId);
+    db.prepare('DELETE FROM dpr_contractors WHERE dpr_id = ?').run(dprId);
   } else {
     const r = db.prepare(`INSERT INTO dpr (site_id, report_date, submitted_by, submission_time, weather, overall_status,
       shift, contractor_name, contractor_manpower, mb_sheet_no, grand_total_a, grand_total_b, profit_loss,
@@ -986,13 +1665,35 @@ router.post('/', (req, res) => {
     const matName = m.material_name || '';
     if (!matName && !m.item_master_id && !m.po_item_id) continue;
     const validPoItemId = m.po_item_id ? (db.prepare('SELECT id FROM po_items WHERE id=?').get(m.po_item_id) ? m.po_item_id : null) : null;
+    // cumulative = prior days' consumption for this item at this site +
+    // today (audit 2026-07-31: the client was sending today's qty as the
+    // "cumulative", understating consumed-to-date in every report).
+    let cumulative = +m.cumulative_consumed || consumed;
+    if (m.item_master_id) {
+      try {
+        const prior = db.prepare(`
+          SELECT COALESCE(SUM(dm.consumed_today), 0) q
+            FROM dpr_material dm JOIN dpr d2 ON d2.id = dm.dpr_id
+           WHERE d2.site_id = ? AND dm.item_master_id = ? AND d2.report_date < ? AND dm.dpr_id <> ?`)
+          .get(site_id, m.item_master_id, report_date, dprId).q;
+        cumulative = +(+prior + consumed).toFixed(3);
+      } catch (_) {}
+    }
     insertMat.run(
       dprId, validPoItemId, m.item_master_id || null, matName, m.unit || 'nos',
-      +m.boq_qty || 0, consumed, +m.cumulative_consumed || consumed,
+      +m.boq_qty || 0, consumed, cumulative,
       +m.balance_qty || 0, m.remarks || null,
     );
-    // Auto-OUT only if we know the item AND a site store exists AND qty > 0
-    if (consumed > 0 && m.item_master_id && siteStore?.id) {
+    // Auto-OUT only if we know the item AND a site store exists AND qty > 0.
+    // Rows sourced from Issue/Return slips (from_slips) already moved stock
+    // at slip time — cutting again here would double-count (mam 2026-07-31).
+    // Idempotency (audit): a resubmit must never cut the same DPR's stock
+    // twice — skip when a DPR_CONSUMPTION movement for this DPR + item
+    // already exists (qty corrections on resubmit need a manual adjust).
+    const alreadyCut = (consumed > 0 && m.item_master_id) ? db.prepare(
+      `SELECT 1 FROM stock_movements WHERE reference_type='DPR_CONSUMPTION' AND reference_id=? AND item_master_id=? LIMIT 1`
+    ).get(`DPR-${dprId}`, m.item_master_id) : null;
+    if (consumed > 0 && m.item_master_id && siteStore?.id && !m.from_slips && !alreadyCut) {
       try {
         const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(siteStore.id, m.item_master_id);
         const prevQty = cur ? +cur.quantity : 0;

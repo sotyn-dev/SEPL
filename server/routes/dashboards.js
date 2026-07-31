@@ -171,4 +171,115 @@ router.get('/cmd-detail', adminOnly, (req, res) => {
   }
 });
 
+// GET /api/dashboards/spos-kpis?days=N — the 7 SPOS target KPIs
+// (mam 2026-07-29, SPOS PDF p.20). Daily KPIs average over the window
+// (default 7 days, Sundays excluded); Weekly Plan Completion looks at the
+// CURRENT week. Renders as the "SPOS Execution KPIs" strip on the TOC view.
+router.get('/spos-kpis', adminOnly, (req, res) => {
+  try {
+    const db = getDb();
+    const days = Math.max(1, Math.min(90, +req.query.days || 7));
+    // IST business date (audit 2026-07-31): with UTC, Monday 00:00–05:30
+    // IST reported LAST week's plans as the current week.
+    const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const todayIso = `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, '0')}-${String(istNow.getDate()).padStart(2, '0')}`;
+    const fromIso = new Date(new Date(todayIso + 'T00:00:00Z').getTime() - (days - 1) * 86400000).toISOString().slice(0, 10);
+    const { mondayOf } = require('../lib/sposCompliance');
+    const weekStart = mondayOf(todayIso);
+
+    // Working dates (Sundays off — SEPL runs a 6-day week) in the window.
+    const workDates = [];
+    for (let i = 0; i < days; i++) {
+      const d = new Date(new Date(fromIso + 'T00:00:00Z').getTime() + i * 86400000);
+      if (d.getUTCDay() !== 0) workDates.push(d.toISOString().slice(0, 10));
+    }
+    const nWork = workDates.length || 1;
+    const activeSites = db.prepare("SELECT COUNT(*) c FROM sites WHERE status='active'").get().c;
+    const pct = (num, den) => den > 0 ? Math.round(num / den * 100) : null;
+
+    // 1 · Weekly Plan Completion — approved plans for the CURRENT week / active sites
+    const planApproved = db.prepare("SELECT COUNT(*) c FROM weekly_plans WHERE week_start = ? AND status = 'approved'").get(weekStart).c;
+    const planOnTime = db.prepare("SELECT COUNT(*) c FROM weekly_plans WHERE week_start = ? AND status = 'approved' AND submitted_late = 0").get(weekStart).c;
+
+    // 2 · Material Available Before Work — approved plans in window whose stock
+    // check found NOTHING to indent (auto_indent_id IS NULL = fully covered)
+    const planWin = db.prepare("SELECT COUNT(*) c FROM weekly_plans WHERE status='approved' AND date(approved_at) >= ?").get(fromIso).c;
+    const planCovered = db.prepare("SELECT COUNT(*) c FROM weekly_plans WHERE status='approved' AND date(approved_at) >= ? AND auto_indent_id IS NULL").get(fromIso).c;
+
+    // 3 · Emergency Indents % — flagged emergencies / all indents in window
+    const indTotal = db.prepare("SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ? AND status <> 'rejected'").get(fromIso).c;
+    const indEmg = db.prepare("SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ? AND status <> 'rejected' AND COALESCE(is_emergency,0) = 1").get(fromIso).c;
+
+    // 4 · Labour Attendance Submitted — avg daily % of sites with a morning punch
+    const punchByDay = Object.fromEntries(db.prepare(
+      'SELECT attendance_date d, COUNT(DISTINCT site_id) c FROM contractor_attendance WHERE attendance_date >= ? GROUP BY attendance_date'
+    ).all(fromIso).map(r => [r.d, r.c]));
+    const punchAvg = activeSites > 0
+      ? Math.round(workDates.reduce((s, d) => s + Math.min(1, (punchByDay[d] || 0) / activeSites), 0) / nWork * 100)
+      : null;
+
+    // 5 · Inventory Accuracy — DPR consumption rows actually backed by a
+    // stock OUT movement (unbacked rows = the ledger drifted from reality)
+    const matTotal = db.prepare(`
+      SELECT COUNT(*) c FROM dpr_material dm JOIN dpr d ON d.id = dm.dpr_id
+       WHERE d.report_date >= ? AND dm.item_master_id IS NOT NULL AND dm.consumed_today > 0`).get(fromIso).c;
+    const matBacked = db.prepare(`
+      SELECT COUNT(*) c FROM dpr_material dm JOIN dpr d ON d.id = dm.dpr_id
+       WHERE d.report_date >= ? AND dm.item_master_id IS NOT NULL AND dm.consumed_today > 0
+         AND EXISTS (SELECT 1 FROM stock_movements sm
+                      WHERE sm.reference_type = 'DPR_CONSUMPTION'
+                        AND sm.reference_id = 'DPR-' || d.id
+                        AND sm.item_master_id = dm.item_master_id)`).get(fromIso).c;
+
+    // 6 · DPR Submission — avg daily % of active sites with a submitted DPR
+    const dprByDay = Object.fromEntries(db.prepare(
+      'SELECT report_date d, COUNT(DISTINCT site_id) c FROM dpr WHERE report_date >= ? AND submission_time IS NOT NULL GROUP BY report_date'
+    ).all(fromIso).map(r => [r.d, r.c]));
+    const dprAvg = activeSites > 0
+      ? Math.round(workDates.reduce((s, d) => s + Math.min(1, (dprByDay[d] || 0) / activeSites), 0) / nWork * 100)
+      : null;
+
+    // 7 · Procurement On-Time Delivery — received vs expected date (POs
+    // carrying an expected date only; others have nothing to be late against)
+    const otd = db.prepare(`
+      SELECT COUNT(*) c,
+             SUM(CASE WHEN date(dn.received_at) <= vp.expected_receipt_date THEN 1 ELSE 0 END) ok
+        FROM delivery_notes dn JOIN vendor_pos vp ON vp.id = dn.vendor_po_id
+       WHERE dn.status = 'received' AND date(dn.received_at) >= ?
+         AND vp.expected_receipt_date IS NOT NULL`).get(fromIso);
+
+    const kpis = [
+      { key: 'plan_completion', label: 'Weekly Plan Completion', unit: '%', target: 100, dir: '>=',
+        value: pct(planApproved, activeSites),
+        detail: `${planApproved}/${activeSites} sites approved for week ${weekStart} · ${planOnTime} by Friday` },
+      { key: 'material_ready', label: 'Material Available Before Work', unit: '%', target: 95, dir: '>=',
+        value: pct(planCovered, planWin),
+        detail: `${planCovered}/${planWin} approved plans fully covered by stock + pipeline` },
+      { key: 'emergency_indents', label: 'Emergency Material Indents', unit: '%', target: 5, dir: '<=',
+        value: pct(indEmg, indTotal),
+        detail: `${indEmg}/${indTotal} indents flagged emergency in ${days}d` },
+      { key: 'attendance', label: 'Labour Attendance Submitted', unit: '%', target: 100, dir: '>=',
+        value: punchAvg,
+        detail: `avg over ${nWork} working days · ${activeSites} active sites` },
+      { key: 'inventory_accuracy', label: 'Inventory Accuracy', unit: '%', target: 98, dir: '>=',
+        value: pct(matBacked, matTotal),
+        detail: `${matBacked}/${matTotal} DPR consumptions backed by a stock movement` },
+      { key: 'dpr_rate', label: 'DPR Submission Rate', unit: '%', target: 90, dir: '>=',
+        value: dprAvg,
+        detail: `avg over ${nWork} working days · ${activeSites} active sites` },
+      { key: 'otd', label: 'Procurement On-Time Delivery', unit: '%', target: 95, dir: '>=',
+        value: pct(+otd.ok || 0, +otd.c || 0),
+        detail: `${+otd.ok || 0}/${+otd.c || 0} receipts on/before the PO's expected date` },
+    ].map(k => ({
+      ...k,
+      ok: k.value === null ? null : (k.dir === '<=' ? k.value <= k.target : k.value >= k.target),
+    }));
+
+    res.json({ window_days: days, from: fromIso, week_start: weekStart, active_sites: activeSites, kpis });
+  } catch (e) {
+    console.error('[dashboards/spos-kpis] failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

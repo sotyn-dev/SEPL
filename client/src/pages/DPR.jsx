@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -7,9 +7,20 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera, FiList } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera, FiList, FiPackage } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import EngineerPerformance from '../components/EngineerPerformance';
+
+// IST calendar date + Monday snap — SPOS rules run on India wall-clock
+// (audit 2026-07-31: UTC dates misjudged everything between 00:00 and
+// 05:30 IST, and a non-Monday week_start made plans invisible to the
+// compliance grid / KPI lookups which key on Mondays).
+const istTodayIso = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+const mondayOfIso = (iso) => {
+  const d = new Date((iso || istTodayIso()) + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+};
 
 // Mam (2026-05-30): the PO/BOQ rate is the FULL SITC value (Supply +
 // Installation + Testing & Commissioning) and already includes labour.
@@ -70,11 +81,12 @@ export default function DPR() {
   const [planModal, setPlanModal] = useState(false);
   const [planSiteId, setPlanSiteId] = useState('');
   const [planWeekStart, setPlanWeekStart] = useState(() => {
-    // Default to next Monday so today's plan stays untouched.
-    const d = new Date();
-    const day = d.getDay();             // 0=Sun, 1=Mon, …, 6=Sat
-    const daysUntilMon = day === 0 ? 1 : (8 - day);
-    d.setDate(d.getDate() + daysUntilMon);
+    // Default to NEXT Monday (IST) so today's plan stays untouched. The old
+    // local-time + toISOString combo could land on a Sunday for IST users
+    // between midnight and 05:30 (audit 2026-07-31).
+    const d = new Date(istTodayIso() + 'T00:00:00Z');
+    const day = d.getUTCDay();          // 0=Sun, 1=Mon, …, 6=Sat
+    d.setUTCDate(d.getUTCDate() + (day === 0 ? 1 : (8 - day)));
     return d.toISOString().slice(0, 10);
   });
   const [planDays, setPlanDays] = useState([]); // 7-row array
@@ -85,14 +97,96 @@ export default function DPR() {
   // items + planned quantity.
   const [planBoqItems, setPlanBoqItems] = useState([]);
 
+  // SPOS approval flow (mam 2026-07-29): saving a week plan submits it for
+  // PM approval; approving runs the site-store stock check and auto-raises
+  // a Material indent for the shortfall.
+  const [planHeader, setPlanHeader] = useState(null);        // weekly_plans row for the open (site, week)
+  const [planShortfall, setPlanShortfall] = useState(null);  // PM preview: planned vs stock vs to-indent
+  const [planActing, setPlanActing] = useState(false);
+  const [pendingPlans, setPendingPlans] = useState([]);      // status='submitted' headers for the badge
+  const [pendingPlansModal, setPendingPlansModal] = useState(false);
+
+  // Friday cutoff = 3 days before the Monday week-start (SPOS: plan is
+  // finalized every Friday). After it, saves are flagged LATE server-side.
+  const planFridayCutoff = (weekStartIso) => {
+    if (!weekStartIso) return '';
+    const d = new Date(weekStartIso + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() - 3);
+    return d.toISOString().slice(0, 10);
+  };
+  const planIsLate = planWeekStart && istTodayIso() > planFridayCutoff(planWeekStart);
+
+  const loadPendingPlans = async () => {
+    if (!canApprove('dpr')) return;
+    try {
+      const r = await api.get('/dpr/weekly-plans', { params: { status: 'submitted' } });
+      setPendingPlans(Array.isArray(r.data) ? r.data : []);
+    } catch { setPendingPlans([]); }
+  };
+  useEffect(() => { loadPendingPlans(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Monotonic request id — openPlanWeek/loadPlanShortfall drop responses
+  // that arrive after the PM has switched site/week, so a slow response
+  // can never paint Site A's plan under Site B's selection (audit).
+  const planReqSeq = useRef(0);
+  const [planShortfallErr, setPlanShortfallErr] = useState(false);
+  const loadPlanShortfall = async (planId, seq) => {
+    setPlanShortfallErr(false);
+    try {
+      const r = await api.get(`/dpr/weekly-plans/${planId}/shortfall`);
+      if (seq !== undefined && seq !== planReqSeq.current) return;
+      setPlanShortfall(r.data);
+    } catch {
+      if (seq !== undefined && seq !== planReqSeq.current) return;
+      setPlanShortfall(null);
+      setPlanShortfallErr(true);
+    }
+  };
+
+  const approveWeeklyPlan = async () => {
+    if (!planHeader?.id) return;
+    setPlanActing(true);
+    try {
+      const r = await api.post(`/dpr/weekly-plans/${planHeader.id}/approve`);
+      toast.success(r.data?.message || 'Plan approved');
+      await openPlanWeek(planSiteId, planWeekStart);   // refresh header + banner
+      loadPendingPlans();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Approve failed');
+    } finally { setPlanActing(false); }
+  };
+
+  const rejectWeeklyPlan = async () => {
+    if (!planHeader?.id) return;
+    const reason = window.prompt('Rejection reason (the site engineer will see this):');
+    if (!reason || !reason.trim()) return;
+    setPlanActing(true);
+    try {
+      await api.post(`/dpr/weekly-plans/${planHeader.id}/reject`, { reason: reason.trim() });
+      toast.success('Plan rejected');
+      await openPlanWeek(planSiteId, planWeekStart);
+      loadPendingPlans();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Reject failed');
+    } finally { setPlanActing(false); }
+  };
+
   // Rebuild the 7-row scaffold whenever the week-start changes.
   // Pre-loads any existing planned values via the week-view endpoint
   // so re-opening the modal shows what's already saved.
   const openPlanWeek = async (siteId, weekStartIso) => {
+    // Snap to Monday — the server now rejects non-Monday week starts, and
+    // every compliance/KPI lookup keys on the Monday (audit 2026-07-31).
+    const week = mondayOfIso(weekStartIso || planWeekStart);
+    const seq = ++planReqSeq.current;
     setPlanSiteId(siteId || '');
-    setPlanWeekStart(weekStartIso || planWeekStart);
+    setPlanWeekStart(week);
     setPlanModal(true);
     setPlanBoqItems([]);
+    setPlanHeader(null);
+    setPlanShortfall(null);
+    setPlanShortfallErr(false);
+    weekStartIso = week;   // downstream code uses weekStartIso || planWeekStart
     // Build 7 day slots.  `items` is the per-day list of BOQ
     // line plans (multi-item, mam 2026-05-16: "in one day multiple
     // boq item have").  Each entry: { po_item_id, planned_qty }.
@@ -108,12 +202,18 @@ export default function DPR() {
       // Load BOQ items for this site so each row can pick from them.
       try {
         const r = await api.get(`/dpr/sites/${siteId}/po-items`);
+        if (seq !== planReqSeq.current) return;   // selection changed mid-flight
         const items = Array.isArray(r.data) ? r.data : (r.data?.items || []);
         setPlanBoqItems(items);
       } catch { setPlanBoqItems([]); }
       // Pre-fill existing planned values for the week.
       try {
         const r = await api.get('/dpr/week-view', { params: { site_id: siteId, week_start: weekStartIso || planWeekStart } });
+        if (seq !== planReqSeq.current) return;   // selection changed mid-flight
+        // SPOS approval header + PM shortfall preview
+        const hdr = r.data?.plan || null;
+        setPlanHeader(hdr);
+        if (hdr && hdr.status === 'submitted' && canApprove('dpr')) loadPlanShortfall(hdr.id, seq);
         const byDate = Object.fromEntries((r.data?.days || []).map(d => [d.report_date, d]));
         setPlanDays(slots.map(s => {
           const existing = byDate[s.date];
@@ -149,9 +249,10 @@ export default function DPR() {
     setPlanSaving(true);
     try {
       const r = await api.post('/dpr/plan-week', { site_id: planSiteId, week_start: planWeekStart, days: planDays });
-      toast.success(`Week plan saved · ${r.data.created} created, ${r.data.updated} updated`);
+      toast.success(`Week plan saved — sent for PM approval${r.data.submitted_late ? ' (flagged LATE — after Friday cutoff)' : ''}`);
       setPlanModal(false);
       load();
+      loadPendingPlans();
     } catch (e) {
       toast.error(e.response?.data?.error || 'Save failed');
     } finally {
@@ -179,6 +280,110 @@ export default function DPR() {
     { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
   ]);
   const [machinery, setMachinery] = useState([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
+  // SPOS (mam 2026-07-29): materials consumed today, auto-loaded from the
+  // site store. Engineer only types the consumed qty; submit auto-OUTs the
+  // stock (dpr_material + stock_movements DPR_CONSUMPTION, server-side).
+  const [dprMaterials, setDprMaterials] = useState([]);
+  const [dprStoreName, setDprStoreName] = useState(null);
+  const [dprStoreErr, setDprStoreErr] = useState(false);
+  // Merges live store stock with today's Issue/Return slip totals (mam
+  // 2026-07-31): items with slips get consumed = issued − returned,
+  // READ-ONLY (from_slips) — the jr. engineer's slips are the source of
+  // truth, nobody re-types stock numbers.
+  const loadStoreStock = (siteId, dateIso) => {
+    if (!siteId) { setDprMaterials([]); setDprStoreName(null); setDprStoreErr(false); return; }
+    setDprStoreErr(false);
+    const date = dateIso || form.report_date || filterDate;
+    Promise.all([
+      api.get(`/dpr/sites/${siteId}/store-stock`),
+      api.get(`/dpr/sites/${siteId}/consumption`, { params: { date } }).catch(() => ({ data: { lines: [] } })),
+    ]).then(([r, c]) => {
+      setDprStoreName(r.data?.store?.name || null);
+      const byId = new Map();
+      (r.data?.items || []).forEach(it => byId.set(it.item_master_id, {
+        item_master_id: it.item_master_id,
+        material_name: [it.item_name, it.specification, it.size].filter(Boolean).join(' '),
+        unit: it.uom || 'nos',
+        stock_qty: +it.stock_qty || 0,
+        issued_today: 0, returned_today: 0, consumed_today: 0, from_slips: false,
+      }));
+      (c.data?.lines || []).forEach(l => {
+        const row = byId.get(l.item_master_id) || {
+          item_master_id: l.item_master_id,
+          material_name: l.item_name || `Item #${l.item_master_id}`,
+          unit: l.unit || 'nos', stock_qty: 0,
+          issued_today: 0, returned_today: 0, consumed_today: 0, from_slips: false,
+        };
+        row.issued_today = l.issued;
+        row.returned_today = l.returned;
+        if (l.issued > 0) { row.consumed_today = l.net_consumed; row.from_slips = true; }
+        byId.set(l.item_master_id, row);
+      });
+      setDprMaterials([...byId.values()]);
+    }).catch(() => { setDprMaterials([]); setDprStoreName(null); setDprStoreErr(true); });
+  };
+
+  // ── Site-store Issue / Return slip modal (jr. site engineer's counter) ──
+  const [slipModal, setSlipModal] = useState(false);
+  const [slipType, setSlipType] = useState('issue');
+  const [slipSite, setSlipSite] = useState('');
+  const [slipDate, setSlipDate] = useState(istTodayIso());
+  const [slipTo, setSlipTo] = useState('');
+  const [slipNotes, setSlipNotes] = useState('');
+  const [slipRows, setSlipRows] = useState([]);      // {item_master_id, name, unit, cap, qty}
+  const [slipBusy, setSlipBusy] = useState(false);
+  const [slipsToday, setSlipsToday] = useState([]);  // register for the picked site+date
+
+  const loadSlipRows = async (siteId, type, dateIso) => {
+    if (!siteId) { setSlipRows([]); setSlipsToday([]); return; }
+    try {
+      if (type === 'issue') {
+        // Issue caps = live store stock
+        const r = await api.get(`/dpr/sites/${siteId}/store-stock`);
+        setSlipRows((r.data?.items || []).map(it => ({
+          item_master_id: it.item_master_id,
+          name: [it.item_name, it.specification, it.size].filter(Boolean).join(' '),
+          unit: it.uom || 'nos', cap: +it.stock_qty || 0, qty: '',
+        })));
+      } else {
+        // Return caps = issued today − already returned
+        const r = await api.get(`/dpr/sites/${siteId}/consumption`, { params: { date: dateIso } });
+        setSlipRows((r.data?.lines || [])
+          .filter(l => (l.issued - l.returned) > 0)
+          .map(l => ({
+            item_master_id: l.item_master_id, name: l.item_name || `Item #${l.item_master_id}`,
+            unit: l.unit || 'nos', cap: +(l.issued - l.returned).toFixed(3), qty: '',
+          })));
+      }
+      const sl = await api.get('/dpr/site-slips', { params: { site_id: siteId, date: dateIso } });
+      setSlipsToday(sl.data || []);
+    } catch { setSlipRows([]); setSlipsToday([]); }
+  };
+  const openSlipModal = (siteId) => {
+    const today = istTodayIso();
+    setSlipModal(true); setSlipType('issue'); setSlipSite(siteId || '');
+    setSlipDate(today); setSlipTo(''); setSlipNotes(''); setSlipRows([]); setSlipsToday([]);
+    if (siteId) loadSlipRows(siteId, 'issue', today);
+  };
+  const saveSlip = async () => {
+    const items = slipRows.filter(r => +r.qty > 0).map(r => ({ item_master_id: r.item_master_id, quantity: +r.qty }));
+    if (!slipSite) return toast.error('Pick a site first');
+    if (!items.length) return toast.error('Enter a quantity on at least one item');
+    if (!slipTo.trim()) return toast.error(slipType === 'issue' ? 'Issued To is required — who is taking the material?' : 'Returned By is required');
+    const over = slipRows.find(r => +r.qty > 0 && +r.qty > r.cap);
+    if (over) return toast.error(`${over.name}: max ${over.cap} ${slipType === 'issue' ? 'in stock' : 'outstanding'}`);
+    setSlipBusy(true);
+    try {
+      const r = await api.post('/dpr/site-slips', { site_id: slipSite, slip_type: slipType, slip_date: slipDate, issued_to: slipTo.trim(), notes: slipNotes, items });
+      toast.success(`${r.data.slip_number} saved — opening print`);
+      window.open(`/site-slip/${r.data.id}/print`, '_blank');
+      loadSlipRows(slipSite, slipType, slipDate);
+      setSlipTo(''); setSlipNotes('');
+      if (String(form.site_id || '') === String(slipSite)) loadStoreStock(slipSite);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to save slip');
+    } finally { setSlipBusy(false); }
+  };
   // Mam: 'AT LEAST OPTION OF 5 CONTRACTOR' — start with 5 blank rows; "+ Add"
   // appends more, "×" removes (only when more than 5). Empty rows are
   // dropped server-side so we never save junk.
@@ -329,7 +534,10 @@ export default function DPR() {
             ? prev
             : rows.map(x => ({ name: x.contractor_name, manpower: x.manpower }))));
         }).catch(() => {});
-    } else { setPoItemsForSite([]); setPoItemsDiag(null); }
+      // SPOS: auto-load the site store so Material Consumed is pick-a-number,
+      // not free-typing (keeps the stock ledger honest).
+      loadStoreStock(siteId);
+    } else { setPoItemsForSite([]); setPoItemsDiag(null); setDprMaterials([]); setDprStoreName(null); }
   };
 
   // ── Morning Manpower (contractor attendance) handlers ──────────────────
@@ -542,12 +750,30 @@ export default function DPR() {
 
   const submitDpr = async (e) => {
     e.preventDefault();
+    // Over-stock guard (audit 2026-07-31): the server silently skips the
+    // stock cut when consumed > stock — block it here so the ledger and
+    // the DPR never diverge without the engineer knowing.
+    const over = dprMaterials.find(m => !m.from_slips && +m.consumed_today > 0 && +m.consumed_today > +m.stock_qty);
+    if (over) return toast.error(`${over.material_name}: consumed ${over.consumed_today} is more than the ${over.stock_qty} in store. Correct the qty, or record the extra material IN first.`);
     try {
       await api.post('/dpr', {
         ...form,
         work_items: workItems.filter(w => w.po_item_id || w.description),
         manpower: costs.filter(c => c.qty > 0 || c.amount > 0),
         machinery: machinery.filter(m => m.equipment),
+        // SPOS: only rows the engineer actually consumed; server auto-OUTs
+        // the site-store stock per row (DPR_CONSUMPTION movements).
+        materials: dprMaterials.filter(m => +m.consumed_today > 0).map(m => ({
+          item_master_id: m.item_master_id,
+          material_name: m.material_name,
+          unit: m.unit,
+          consumed_today: +m.consumed_today,
+          cumulative_consumed: +m.consumed_today,
+          // Slip rows: stock already moved at issue/return time — the flag
+          // tells the server NOT to auto-OUT again (double-count guard).
+          from_slips: m.from_slips ? 1 : 0,
+          balance_qty: m.from_slips ? (+m.stock_qty || 0) : Math.max(0, (+m.stock_qty || 0) - (+m.consumed_today || 0)),
+        })),
         contractors: contractors.filter(c => (c.name && c.name.trim()) || c.manpower > 0),
         grand_total_a: grandTotalA,
         grand_total_b: grandTotalB,
@@ -580,6 +806,16 @@ export default function DPR() {
     <div className="space-y-6">
       <div className="sticky-toolbar">
         <div className="flex gap-2 flex-wrap">
+          {/* SPOS: PM's pending-approvals badge lives beside the tabs so it's
+              visible on EVERY tab — the page defaults to Dashboard and a
+              reports-tab-only badge went unseen (audit 2026-07-31). */}
+          {canApprove('dpr') && pendingPlans.length > 0 && (
+            <button onClick={() => setPendingPlansModal(true)}
+              className="btn btn-secondary flex items-center gap-2 !border-amber-400 !text-amber-700 order-last">
+              <FiCalendar /> Plan Approvals
+              <span className="bg-amber-500 text-white rounded-full px-1.5 text-[10px] font-bold">{pendingPlans.length}</span>
+            </button>
+          )}
           {['dashboard', 'reports', 'compliance', 'sites', 'losses', 'responsible'].map(t => (
             <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
               {t === 'dashboard' ? 'Dashboard'
@@ -604,7 +840,7 @@ export default function DPR() {
           Reports AND under HR System → Performance.  Same shared
           component drives both — single source of truth. */}
       {tab === 'losses' && <LossReasonsTab />}
-      {tab === 'compliance' && <EngineerPerformance />}
+      {tab === 'compliance' && <><SposComplianceGrid /><EngineerPerformance /></>}
       {tab === 'responsible' && <ResponsibilityTab module="dpr" title="DPR" />}
 
       {tab === 'dashboard' && (
@@ -760,12 +996,16 @@ export default function DPR() {
               {/* Morning Manpower — contractor attendance punch (mam 2026-06-22) */}
               <button onClick={openMorningManpower}
                 className="btn btn-secondary flex items-center gap-2"><FiUsers /> Morning Manpower</button>
+              {/* Site-store Issue/Return slips — the jr. engineer's GRN counter (mam 2026-07-31) */}
+              <button onClick={() => openSlipModal(form.site_id || '')}
+                className="btn btn-secondary flex items-center gap-2"><FiPackage /> Store Issue/Return</button>
               {/* Attendance Records — register of all saved morning manpower (mam 2026-06-24) */}
               <button onClick={openAttendanceRecords}
                 className="btn btn-secondary flex items-center gap-2"><FiList /> Attendance Records</button>
               <button onClick={() => {
                 setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
                 setWorkItems([]); setPoItemsForSite([]);
+                setDprMaterials([]); setDprStoreName(null);
                 setCosts([
                   { type: 'Skilled Manpower', qty: 0, rate: 800, amount: 0, fixed: true },
                   { type: 'Helper', qty: 0, rate: 500, amount: 0, fixed: true },
@@ -1375,6 +1615,65 @@ export default function DPR() {
             <button type="button" onClick={() => setMachinery([...machinery, { equipment: '', quantity: 1, hours_used: 0, condition: 'working' }])} className="text-xs text-cyan-700 hover:underline">+ Add Equipment</button>
           </div>
 
+          {/* SPOS (mam 2026-07-29): Material Consumed — auto-loaded from the
+              site store; consumed qty auto-reduces stock at submit. */}
+          <div className="border rounded-lg p-3 bg-indigo-50">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+              <h5 className="font-semibold text-sm text-indigo-700">Material Consumed Today {dprStoreName ? <span className="font-normal text-indigo-500">· {dprStoreName}</span> : ''}</h5>
+              <button type="button" onClick={() => loadStoreStock(form.site_id)} className="text-xs text-indigo-700 hover:underline">↻ Reload stock</button>
+            </div>
+            {dprStoreErr ? (
+              <div className="text-xs text-red-600">
+                Could not load the site store (network/server error) — <button type="button" className="underline font-semibold" onClick={() => loadStoreStock(form.site_id)}>tap to retry</button>. Don't assume the store is empty.
+              </div>
+            ) : dprMaterials.length === 0 ? (
+              <div className="text-xs text-gray-500">
+                No live stock in this site's store yet. Stock arrives automatically when a PO is <b>Received</b> into the site store (Dispatch &amp; Receiving → pick the site warehouse), or via a store issue from office.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-gray-500 border-b">
+                      <th className="text-left py-1 pr-2">Material</th>
+                      <th className="text-right py-1 px-2 whitespace-nowrap">In Store</th>
+                      <th className="text-right py-1 px-2 whitespace-nowrap">Issued</th>
+                      <th className="text-right py-1 px-2 whitespace-nowrap">Returned</th>
+                      <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">Consumed Today</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dprMaterials.map((m, i) => (
+                      <tr key={m.item_master_id} className="border-b border-indigo-100">
+                        <td className="py-1 pr-2">{m.material_name} <span className="text-gray-400">({m.unit})</span></td>
+                        <td className="py-1 px-2 text-right tabular-nums">{m.stock_qty}</td>
+                        <td className="py-1 px-2 text-right tabular-nums">{m.issued_today > 0 ? m.issued_today : <span className="text-gray-300">—</span>}</td>
+                        <td className="py-1 px-2 text-right tabular-nums">{m.returned_today > 0 ? m.returned_today : <span className="text-gray-300">—</span>}</td>
+                        <td className="py-1 pl-2 text-right">
+                          {m.from_slips ? (
+                            <span className="font-semibold text-indigo-800 tabular-nums" title="Auto from issue/return slips — the jr. engineer's GRN slips are the source of truth">
+                              {m.consumed_today} <span className="text-[9px] font-normal text-indigo-500">auto·slips</span>
+                            </span>
+                          ) : (
+                            <input type="number" min="0" max={m.stock_qty} step="0.01"
+                              className={`input text-xs text-right w-full ${+m.consumed_today > +m.stock_qty ? '!border-red-400 bg-red-50' : ''}`}
+                              value={m.consumed_today || ''}
+                              placeholder="0"
+                              onChange={e => { const n = [...dprMaterials]; n[i] = { ...m, consumed_today: e.target.value }; setDprMaterials(n); }} />
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  Items with Issue/Return slips are <b>auto-computed</b> (issued − returned) and locked — use <b>Store Issue/Return</b> to correct them.
+                  Items without slips can be typed directly and auto-reduce store stock on submit. SPOS: zero manual stock calculations.
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* Safety */}
           <div className="border rounded-lg p-3 bg-red-50">
             <h5 className="font-semibold text-sm text-red-700 mb-2">Safety & Compliance</h5>
@@ -1717,6 +2016,103 @@ export default function DPR() {
             </div>
           </div>
 
+          {/* ── SPOS approval status banner (mam 2026-07-29) ── */}
+          {planHeader?.status === 'submitted' && (
+            <div className="bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-2">
+              <span className="font-semibold">⏳ Pending PM approval</span>
+              <span>submitted by {planHeader.submitted_by_name || '—'}</span>
+              {!!planHeader.submitted_late && <span className="bg-amber-500 text-white rounded px-1.5 py-0.5 text-[10px] font-bold">LATE</span>}
+            </div>
+          )}
+          {planHeader?.status === 'approved' && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-[11px] text-emerald-900 flex flex-wrap items-center gap-2">
+              <span className="font-semibold">✓ Approved by {planHeader.approved_by_name || 'PM'}</span>
+              {planHeader.auto_indent_number
+                ? <span>· auto-indent <span className="font-mono font-semibold">{planHeader.auto_indent_number}</span> raised for the material shortfall</span>
+                : <span>· stock covered the full requirement — no indent needed</span>}
+            </div>
+          )}
+          {planHeader?.status === 'rejected' && (
+            <div className="bg-red-50 border border-red-200 rounded p-2 text-[11px] text-red-900">
+              <span className="font-semibold">✗ Rejected by {planHeader.rejected_by_name || 'PM'}</span>
+              {planHeader.rejection_reason ? <> — {planHeader.rejection_reason}</> : null}
+              <span className="text-red-700"> · edit the plan and Save to resubmit.</span>
+            </div>
+          )}
+          {planIsLate && (!planHeader || planHeader.status !== 'approved') && (
+            <div className="bg-amber-50 border border-amber-300 rounded p-2 text-[11px] text-amber-800">
+              Friday cutoff ({planFridayCutoff(planWeekStart)}) has passed — this plan {planHeader ? 'is' : 'will be'} flagged <strong>LATE</strong>.
+              Plans must be finalised by Friday for the following week (SPOS rule).
+            </div>
+          )}
+
+          {/* ── PM approval panel: stock check + auto-indent preview ── */}
+          {canApprove('dpr') && planHeader?.status === 'submitted' && (
+            <div className="border border-blue-300 bg-blue-50/60 rounded p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-blue-900">PM Approval — automatic stock check &amp; shortfall indent</div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={rejectWeeklyPlan} disabled={planActing}
+                          className="btn btn-danger text-xs py-1">Reject</button>
+                  {/* Approve stays disabled until the stock-check preview
+                      actually loaded — no blind approvals (audit). */}
+                  <button type="button" onClick={approveWeeklyPlan} disabled={planActing || !planShortfall}
+                          title={!planShortfall ? 'Wait for the stock check to load' : ''}
+                          className="btn btn-success text-xs py-1">{planActing ? 'Working…' : 'Approve & Auto-Indent'}</button>
+                </div>
+              </div>
+              {planShortfall ? (
+                planShortfall.lines.length === 0 ? (
+                  <div className="text-[11px] text-gray-600">No BOQ items with planned quantities in this week — approving will not raise any indent.</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr className="text-gray-500 border-b">
+                          <th className="text-left py-1 pr-2">BOQ Item</th>
+                          <th className="text-right py-1 px-2">Planned</th>
+                          <th className="text-right py-1 px-2">Site Stock</th>
+                          <th className="text-right py-1 px-2">In Pipeline</th>
+                          <th className="text-right py-1 pl-2 font-semibold">To Indent</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {planShortfall.lines.map(l => (
+                          <tr key={l.po_item_id} className="border-b border-blue-100">
+                            <td className="py-1 pr-2">{l.description}{l.unit ? ` (${l.unit})` : ''}</td>
+                            <td className="py-1 px-2 text-right">{l.planned_qty}</td>
+                            <td className="py-1 px-2 text-right">{l.site_stock}</td>
+                            <td className="py-1 px-2 text-right">{l.pipeline_qty}</td>
+                            <td className={`py-1 pl-2 text-right font-semibold ${l.to_indent > 0 || l.capped ? 'text-red-700' : 'text-emerald-700'}`}>
+                              {l.to_indent > 0 ? l.to_indent
+                                : l.capped ? 'SHORT — BOQ cap reached'
+                                : '✓ covered'}
+                              {l.capped && l.to_indent > 0 && <span title="Clamped to remaining BOQ cap" className="ml-1 text-amber-600">⚠BOQ cap</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!planShortfall.has_store && (
+                      <div className="text-[10px] text-amber-700 mt-1">No site store found for this site — stock counted as 0. Create one in Inventory → Warehouses for real stock checks.</div>
+                    )}
+                    <div className="text-[10px] text-gray-500 mt-1">
+                      To Indent = Planned − Site Stock − qty already on open indents (capped to remaining BOQ). Approving raises ONE Material indent into the normal L1/L2 queue.
+                    </div>
+                  </div>
+                )
+              ) : planShortfallErr ? (
+                <div className="text-[11px] text-red-600 flex items-center gap-2">
+                  Stock check failed to load — Approve stays disabled.
+                  <button type="button" className="text-blue-700 hover:underline font-medium"
+                          onClick={() => planHeader?.id && loadPlanShortfall(planHeader.id)}>↻ Retry</button>
+                </div>
+              ) : (
+                <div className="text-[11px] text-gray-500">Loading stock check…</div>
+              )}
+            </div>
+          )}
+
           <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-gray-700">
             Pick a BOQ item from the site's PO and the quantity planned for that day.
             Manpower + budgeted cost are filled alongside. The site engineer updates the
@@ -1826,14 +2222,255 @@ export default function DPR() {
             </span>
           </div>
 
-          <div className="flex justify-end gap-2 pt-2 border-t">
+          <div className="flex flex-wrap justify-end items-center gap-2 pt-2 border-t">
+            {planHeader?.status === 'approved' && !isAdmin() && (
+              <div className="text-[11px] text-gray-500 mr-auto">✓ Approved &amp; locked — ask an admin to change this week (re-approval needed).</div>
+            )}
             <button onClick={() => setPlanModal(false)} className="btn btn-secondary">Cancel</button>
-            <button onClick={savePlanWeek} disabled={planSaving || !planSiteId} className="btn btn-primary">
-              {planSaving ? 'Saving…' : 'Save Week Plan'}
+            {(planHeader?.status !== 'approved' || isAdmin()) && (
+              <button onClick={savePlanWeek} disabled={planSaving || !planSiteId} className="btn btn-primary">
+                {planSaving ? 'Saving…' : planHeader ? 'Save & Resubmit for Approval' : 'Save Week Plan'}
+              </button>
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* Site-store Issue/Return slip counter (mam 2026-07-31): jr. site
+          engineer issues material on a numbered ISU slip (stock OUT now),
+          takes back the evening balance on an RTN slip (stock IN). Net
+          consumption auto-fills the DPR. Every slip prints as a GRN bill. */}
+      <Modal isOpen={slipModal} onClose={() => setSlipModal(false)} title="Site Store — Material Issue / Return (GRN Slip)" wide>
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="label">Site *</label>
+              <select className="select" value={slipSite}
+                      onChange={e => { setSlipSite(e.target.value); loadSlipRows(e.target.value, slipType, slipDate); }}>
+                <option value="">— Pick site —</option>
+                {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Type *</label>
+              <div className="flex rounded border overflow-hidden">
+                <button type="button" onClick={() => { setSlipType('issue'); loadSlipRows(slipSite, 'issue', slipDate); }}
+                        className={`flex-1 py-2 text-xs font-semibold ${slipType === 'issue' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>
+                  🌅 Morning Issue
+                </button>
+                <button type="button" onClick={() => { setSlipType('return'); loadSlipRows(slipSite, 'return', slipDate); }}
+                        className={`flex-1 py-2 text-xs font-semibold ${slipType === 'return' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600'}`}>
+                  🌇 Evening Return
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="label">Date</label>
+              <input type="date" className="input" value={slipDate}
+                     onChange={e => { setSlipDate(e.target.value); loadSlipRows(slipSite, slipType, e.target.value); }} />
+            </div>
+          </div>
+
+          <div>
+            <label className="label">{slipType === 'issue' ? 'Issued To (Sr. Site Engineer / team) *' : 'Returned By *'}</label>
+            <input className="input" list="slip-person-suggestions" placeholder="Type a name or pick from the team…"
+                   value={slipTo} onChange={e => setSlipTo(e.target.value)} />
+            <datalist id="slip-person-suggestions">
+              {(users || []).map(u => <option key={u.id} value={u.name} />)}
+            </datalist>
+          </div>
+
+          {slipSite && slipRows.length === 0 && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+              {slipType === 'issue'
+                ? 'No stock in this site\'s store. Stock arrives when a PO is Received into the site store, or via an office store issue.'
+                : 'Nothing outstanding to return — no material issued (and not yet returned) on this date.'}
+            </div>
+          )}
+          {slipRows.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500 border-b">
+                    <th className="text-left py-1 pr-2">Material</th>
+                    <th className="text-right py-1 px-2 whitespace-nowrap">{slipType === 'issue' ? 'In Store' : 'Outstanding'}</th>
+                    <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">{slipType === 'issue' ? 'Issue Qty' : 'Return Qty'}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {slipRows.map((r, i) => (
+                    <tr key={r.item_master_id} className="border-b">
+                      <td className="py-1 pr-2">{r.name} <span className="text-gray-400">({r.unit})</span></td>
+                      <td className="py-1 px-2 text-right tabular-nums">{r.cap}</td>
+                      <td className="py-1 pl-2 text-right">
+                        <input type="number" min="0" max={r.cap} step="0.01"
+                               className={`input text-xs text-right w-full ${+r.qty > r.cap ? '!border-red-400 bg-red-50' : ''}`}
+                               value={r.qty} placeholder="0"
+                               onChange={e => setSlipRows(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div>
+            <label className="label">Notes</label>
+            <input className="input" value={slipNotes} onChange={e => setSlipNotes(e.target.value)} placeholder="Optional — e.g. 3rd floor riser work" />
+          </div>
+
+          {/* Today's register — reprint any slip */}
+          {slipsToday.length > 0 && (
+            <div className="bg-gray-50 border rounded p-2">
+              <div className="text-[11px] font-semibold text-gray-600 mb-1">Slips on {slipDate}</div>
+              {slipsToday.map(s => (
+                <div key={s.id} className="flex flex-wrap items-center gap-2 text-[11px] py-0.5">
+                  <span className={`font-mono font-semibold ${s.slip_type === 'issue' ? 'text-red-700' : 'text-emerald-700'}`}>{s.slip_number}</span>
+                  <span className="text-gray-500">{s.slip_type === 'issue' ? 'Issue →' : 'Return ←'} {s.issued_to}</span>
+                  <span className="text-gray-400">· {(s.items || []).length} item(s)</span>
+                  <a className="text-blue-700 hover:underline font-medium" href={`/site-slip/${s.id}/print`} target="_blank" rel="noreferrer">Print</a>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <button onClick={() => setSlipModal(false)} className="btn btn-secondary">Close</button>
+            <button onClick={saveSlip} disabled={slipBusy || !slipSite} className="btn btn-primary">
+              {slipBusy ? 'Saving…' : slipType === 'issue' ? 'Save Issue Slip & Print' : 'Save Return Slip & Print'}
             </button>
           </div>
         </div>
       </Modal>
+
+      {/* SPOS (mam 2026-07-29): PM's queue of weekly plans awaiting approval */}
+      <Modal isOpen={pendingPlansModal} onClose={() => setPendingPlansModal(false)} title="Weekly Plans — Pending PM Approval">
+        <div className="space-y-2">
+          {pendingPlans.length === 0 && <div className="text-sm text-gray-500">Nothing pending — all weekly plans are approved.</div>}
+          {pendingPlans.map(p => (
+            <div key={p.id} className="border rounded p-2 flex flex-wrap items-center gap-2 text-xs">
+              <div className="flex-1 min-w-[160px]">
+                <div className="font-semibold">{p.site_name}</div>
+                <div className="text-gray-500">
+                  week of {p.week_start} · by {p.submitted_by_name || '—'}
+                  {!!p.submitted_late && <span className="ml-1 bg-amber-500 text-white rounded px-1 text-[10px] font-bold">LATE</span>}
+                </div>
+              </div>
+              <button className="btn btn-primary text-xs py-1"
+                      onClick={() => { setPendingPlansModal(false); openPlanWeek(String(p.site_id), p.week_start); }}>
+                Open &amp; Review
+              </button>
+            </div>
+          ))}
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// SposComplianceGrid — SPOS Daily Compliance (mam 2026-07-29, SPOS PDF).
+// One row per active site, four checks from the SPOS HR checklist:
+// morning punch by 09:00 · DPR by evening cutoff · site photos · weekly
+// plan approved. Renders above the Engineer Compliance analytics; the
+// same data feeds the 18:30 Exception Report email to management.
+function SposComplianceGrid() {
+  const [date, setDate] = useState(istTodayIso());
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    setLoading(true);
+    api.get('/dpr/spos-compliance', { params: { date } })
+      .then(r => setData(r.data)).catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [date]);
+
+  const fmtT = (ts) => {
+    if (!ts) return '';
+    try {
+      return new Date(String(ts).replace(' ', 'T') + 'Z')
+        .toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+    } catch { return ''; }
+  };
+  const Chip = ({ tone, children }) => {
+    const cls = tone === 'ok' ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+      : tone === 'warn' ? 'bg-amber-50 text-amber-700 border-amber-300'
+      : tone === 'bad' ? 'bg-red-50 text-red-700 border-red-300'
+      : 'bg-gray-50 text-gray-400 border-gray-200';
+    return <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap ${cls}`}>{children}</span>;
+  };
+  const Pct = ({ v, label }) => (
+    <div className="text-center px-3">
+      <div className={`text-xl font-bold ${v >= 90 ? 'text-emerald-600' : v >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{v}%</div>
+      <div className="text-[10px] text-gray-500 uppercase">{label}</div>
+    </div>
+  );
+
+  return (
+    <div className="card p-4 mb-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="font-semibold text-gray-800">SPOS Daily Compliance</h3>
+          <p className="text-xs text-gray-500">Per site: morning punch by 9 AM · DPR by evening cutoff · photos · weekly plan approved. Gaps go to management in the 6:30 PM Exception Report.</p>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          {data && <>
+            <Pct v={data.summary.punch_pct} label="Punch" />
+            <Pct v={data.summary.dpr_pct} label="DPR" />
+            <Pct v={data.summary.photos_pct} label="Photos" />
+            <Pct v={data.summary.plan_approved_pct} label="Plan ✓" />
+          </>}
+          <input type="date" className="input text-xs w-36" value={date} onChange={e => setDate(e.target.value)} />
+        </div>
+      </div>
+      {loading ? <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>
+        : !data ? <div className="text-sm text-red-500 py-4 text-center">Could not load compliance data.</div>
+        : data.sites.length === 0 ? <div className="text-sm text-gray-400 py-4 text-center">No active sites.</div>
+        : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-500 border-b text-left">
+                <th className="py-1.5 pr-2">Site</th>
+                <th className="py-1.5 px-2">Engineer</th>
+                <th className="py-1.5 px-2">Morning Punch</th>
+                <th className="py-1.5 px-2">DPR</th>
+                <th className="py-1.5 px-2">Photos</th>
+                <th className="py-1.5 pl-2">Week Plan</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.sites.map(r => (
+                <tr key={r.site_id} className="border-b hover:bg-gray-50">
+                  <td className="py-1.5 pr-2 font-medium">{r.site}</td>
+                  <td className="py-1.5 px-2 text-gray-600">{r.engineer || <span className="text-gray-300">—</span>}</td>
+                  <td className="py-1.5 px-2">
+                    {!r.punch_done ? <Chip tone="bad">✗ missing</Chip>
+                      : r.punch_by_9 ? <Chip tone="ok">✓ {fmtT(r.punch_at)}</Chip>
+                      : <Chip tone="warn">⚠ after 9 · {fmtT(r.punch_at)}</Chip>}
+                  </td>
+                  <td className="py-1.5 px-2">
+                    {!r.dpr_done ? <Chip tone="bad">✗ missing</Chip>
+                      : r.dpr_by_cutoff ? <Chip tone="ok">✓ {fmtT(r.dpr_at)}</Chip>
+                      : <Chip tone="warn">⚠ late · {fmtT(r.dpr_at)}</Chip>}
+                  </td>
+                  <td className="py-1.5 px-2">
+                    {r.photos_done ? <Chip tone="ok">✓</Chip>
+                      : r.dpr_done ? <Chip tone="bad">✗ none</Chip>
+                      : <Chip tone="none">—</Chip>}
+                  </td>
+                  <td className="py-1.5 pl-2">
+                    {r.plan_status === 'approved' ? <Chip tone="ok">✓ approved{r.plan_late ? ' (late)' : ''}</Chip>
+                      : r.plan_status === 'submitted' ? <Chip tone="warn">⏳ pending PM</Chip>
+                      : r.plan_status === 'rejected' ? <Chip tone="bad">✗ rejected</Chip>
+                      : <Chip tone="bad">✗ no plan</Chip>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

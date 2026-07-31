@@ -68,6 +68,8 @@ export default function DashboardCMDToc() {
   const [data, setData] = useState(null);
   const [days, setDays] = useState(90);
   const [loading, setLoading] = useState(false);
+  // SPOS Execution KPIs strip (mam 2026-07-29, SPOS PDF p.20) — 7-day window.
+  const [spos, setSpos] = useState(null);
 
   const load = async (d = days) => {
     setLoading(true);
@@ -75,7 +77,10 @@ export default function DashboardCMDToc() {
     catch (e) { toast.error(e.response?.data?.error || 'Failed to load'); }
     finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get('/dashboards/spos-kpis?days=7').then(r => setSpos(r.data)).catch(() => setSpos(null));
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!data) {
     return (
@@ -157,6 +162,22 @@ export default function DashboardCMDToc() {
           <KpiTile label="Revenue per FTE" value={pulse.revenue_per_fte_monthly != null ? `${fmtINR(pulse.revenue_per_fte_monthly)}/mo` : '—'} accent="violet"
             sub={`${people.active_fte} active employees`} />
         </Row>
+
+        {/* ========== SPOS EXECUTION KPIs (mam 2026-07-29, SPOS PDF) ========== */}
+        {spos && (
+          <>
+            <SectionHead>SPOS · Execution readiness — 7 target KPIs (last {spos.window_days} days)</SectionHead>
+            <Row cols="strip">
+              {spos.kpis.map(k => (
+                <KpiTile key={k.key}
+                  label={k.label}
+                  value={k.value === null ? '—' : `${k.value}%`}
+                  accent={k.ok === null ? 'amber' : k.ok ? 'green' : 'red'}
+                  sub={`target ${k.dir === '<=' ? '<' : '≥'} ${k.target}% · ${k.detail}`} />
+              ))}
+            </Row>
+          </>
+        )}
 
         {/* ========== BINDING CONSTRAINT ========== */}
         <SectionHead>Identify · Today's binding constraint</SectionHead>
