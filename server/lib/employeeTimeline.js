@@ -30,7 +30,15 @@ function toYMD(v) {
 }
 
 const SNAPSHOT_COLS =
-  'id, name, status, salary, salary_exempt, designation, department, roster, ot_eligible';
+  'id, name, phone, email, user_id, status, salary, salary_exempt, designation, department, roster, ot_eligible, join_date';
+
+// "Name (username/email)" snapshot of the linked login, or null — denormalized
+// so history reads correctly even if the user is later renamed/deleted.
+function linkedUserLabel(db, userId) {
+  if (!userId) return null;
+  const u = db.prepare('SELECT name, username, email FROM users WHERE id=?').get(userId);
+  return u ? `${u.name} (${u.username || u.email})` : null;
+}
 
 // The effective_from of the employee's current OPEN row, or null if none yet.
 function currentOpenFrom(db, employeeId) {
@@ -57,6 +65,7 @@ function recordEmployeeChange(db, opts) {
     reason = null,
     source = 'hr',
     changedBy = null,
+    changedAt = null, // explicit wall-clock stamp (e.g. shared with a same-save doc event); defaults to CURRENT_TIMESTAMP
     allowBackdateBefore = false, // backfill sets true (it controls its own ordering)
   } = opts || {};
 
@@ -90,21 +99,38 @@ function recordEmployeeChange(db, opts) {
   // Open the new full-snapshot row. department_id/designation_id/manager_id stay
   // NULL — org-structure is parked; the free-text department/designation carry the
   // history now and the *_id columns fill in with zero rework when it resumes.
-  const info = db
-    .prepare(
-      `INSERT INTO employee_timeline
-         (employee_id, employee_name, department, designation, manager_id,
-          salary, salary_exempt, roster, ot_eligible, status,
-          effective_from, effective_seq, effective_to,
-          action_code, reason_code, reason, source, changed_by)
-       VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?,?,?)`
-    )
-    .run(
-      emp.id, emp.name, emp.department, emp.designation, null,
-      emp.salary, emp.salary_exempt, emp.roster, emp.ot_eligible, emp.status,
-      eff, seq, null,
-      actionCode, reasonCode, reason, source, changedBy
-    );
+  const linkedLabel = linkedUserLabel(db, emp.user_id);
+  const info = changedAt
+    ? db
+        .prepare(
+          `INSERT INTO employee_timeline
+             (employee_id, employee_name, phone, email, linked_user_label, department, designation, manager_id,
+              salary, salary_exempt, roster, ot_eligible, status, join_date,
+              effective_from, effective_seq, effective_to,
+              action_code, reason_code, reason, source, changed_by, changed_at)
+           VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?, ?,?,?,?,?,?)`
+        )
+        .run(
+          emp.id, emp.name, emp.phone, emp.email, linkedLabel, emp.department, emp.designation, null,
+          emp.salary, emp.salary_exempt, emp.roster, emp.ot_eligible, emp.status, emp.join_date,
+          eff, seq, null,
+          actionCode, reasonCode, reason, source, changedBy, changedAt
+        )
+    : db
+        .prepare(
+          `INSERT INTO employee_timeline
+             (employee_id, employee_name, phone, email, linked_user_label, department, designation, manager_id,
+              salary, salary_exempt, roster, ot_eligible, status, join_date,
+              effective_from, effective_seq, effective_to,
+              action_code, reason_code, reason, source, changed_by)
+           VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?, ?,?,?,?,?)`
+        )
+        .run(
+          emp.id, emp.name, emp.phone, emp.email, linkedLabel, emp.department, emp.designation, null,
+          emp.salary, emp.salary_exempt, emp.roster, emp.ot_eligible, emp.status, emp.join_date,
+          eff, seq, null,
+          actionCode, reasonCode, reason, source, changedBy
+        );
   return info.lastInsertRowid;
 }
 
@@ -134,7 +160,7 @@ function seedHiredRow(db, opts) {
 // NULL updated_at. Skips any employee that already has a timeline row. Pure (db
 // injected) so it is unit-testable against a copy. Caller wraps in a transaction.
 function backfillFromAudit(db) {
-  const TRACK = ['status', 'salary', 'designation', 'department', 'roster'];
+  const TRACK = ['status', 'salary', 'designation', 'department', 'roster', 'join_date'];
   const trackedKey = (o) => TRACK.map((k) => String(o[k] ?? '')).join('|');
   const toISO = (v) => { const m = String(v || '').match(/^(\d{4}-\d{2}-\d{2})/); return m ? m[1] : null; };
   const nowStamp = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().replace('T', ' ').slice(0, 19);
@@ -160,9 +186,9 @@ function backfillFromAudit(db) {
   const insertOpen = db.prepare(
     `INSERT INTO employee_timeline
        (employee_id, employee_name, department, designation, salary, salary_exempt, roster, ot_eligible,
-        status, effective_from, effective_seq, effective_to, action_code, reason_code, reason, source, changed_at)
+        status, join_date, effective_from, effective_seq, effective_to, action_code, reason_code, reason, source, changed_at)
      VALUES (@employee_id,@employee_name,@department,@designation,@salary,@salary_exempt,@roster,@ot_eligible,
-        @status,@effective_from,@effective_seq,NULL,@action_code,NULL,@reason,'backfill',@at)`
+        @status,@join_date,@effective_from,@effective_seq,NULL,@action_code,NULL,@reason,'backfill',@at)`
   );
   const closePrev = db.prepare('UPDATE employee_timeline SET effective_to=? WHERE employee_id=? AND effective_to IS NULL');
   const seqFor = db.prepare('SELECT COALESCE(MAX(effective_seq),-1)+1 AS s FROM employee_timeline WHERE employee_id=? AND effective_from=?');
@@ -182,12 +208,12 @@ function backfillFromAudit(db) {
       for (const s of snaps) {
         const b = s.body;
         const snap = { status: b.status, salary: b.salary, designation: b.designation, department: b.department,
-          roster: b.roster, salary_exempt: b.salary_exempt, ot_eligible: b.ot_eligible, name: b.name };
+          roster: b.roster, salary_exempt: b.salary_exempt, ot_eligible: b.ot_eligible, join_date: b.join_date, name: b.name };
         const k = trackedKey(snap);
         if (k !== lastKey) { states.push({ from: toISO(s.at) || toISO(e.created_at), snap }); lastKey = k; }
       }
       const liveSnap = { status: e.status, salary: e.salary, designation: e.designation, department: e.department,
-        roster: e.roster, salary_exempt: e.salary_exempt, ot_eligible: e.ot_eligible, name: e.name };
+        roster: e.roster, salary_exempt: e.salary_exempt, ot_eligible: e.ot_eligible, join_date: e.join_date, name: e.name };
 
       const anchorFrom = (snaps.length ? toISO(snaps[snaps.length - 1].at) : null)
         || toISO(e.join_date) || toISO(e.created_at) || istToday();
@@ -210,6 +236,7 @@ function backfillFromAudit(db) {
           roster: st.snap.roster ?? null,
           ot_eligible: st.snap.ot_eligible ?? null,
           status: st.snap.status ?? null,
+          join_date: st.snap.join_date ?? null,
           effective_from: from,
           effective_seq: seq,
           action_code: i === 0 ? (snaps.length ? 'Reconstructed' : 'Hired') : 'Reconstructed',

@@ -44,7 +44,9 @@ const Rentals = lazy(() => import('./pages/Rentals'));
 const Snags = lazy(() => import('./pages/Snags'));
 const CompanyAssets = lazy(() => import('./pages/CompanyAssets'));
 const Employees = lazy(() => import('./pages/Employees'));
-const OrgStructure = lazy(() => import('./pages/hr/OrgStructure'));
+// Org Structure parked (dme 2026-07-31) — page kept dormant, route renders
+// ParkedModule instead. Uncomment this import + the route below to un-park.
+// const OrgStructure = lazy(() => import('./pages/hr/OrgStructure'));
 const Expenses = lazy(() => import('./pages/Expenses'));
 const Checklists = lazy(() => import('./pages/Checklists'));
 const CashFlow = lazy(() => import('./pages/CashFlow'));
@@ -118,6 +120,19 @@ function ModuleRoute({ module, children }) {
     </div>
   );
   return children;
+}
+
+// Parked-module placeholder (dme 2026-07-31) — shown instead of a real page
+// for modules kept in the code but intentionally inaccessible. Reversible:
+// swap the route's rendered child back to the real page to un-park it.
+function ParkedModule({ name }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-96 text-gray-400">
+      <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      <h3 className="text-lg font-medium text-gray-500">{name} is paused</h3>
+      <p className="text-sm mt-1">This module is temporarily parked. Contact your admin for details.</p>
+    </div>
+  );
 }
 
 export default function App() {
@@ -221,7 +236,11 @@ export default function App() {
         <Route path="tools" element={<ModuleRoute module="tools"><Tools /></ModuleRoute>} />
         <Route path="rentals" element={<ModuleRoute module="rentals"><Rentals /></ModuleRoute>} />
         <Route path="employees" element={<ModuleRoute module="employees"><Employees /></ModuleRoute>} />
-        <Route path="org-structure" element={<ModuleRoute module="org_structure"><OrgStructure /></ModuleRoute>} />
+        {/* Org Structure parked (dme 2026-07-31) — real page kept dormant
+            (see the commented import above); this renders a paused placeholder
+            instead, regardless of permission, so direct navigation doesn't
+            expose the module. Swap back to <OrgStructure /> to un-park. */}
+        <Route path="org-structure" element={<ParkedModule name="Org Structure" />} />
         <Route path="expenses" element={<ModuleRoute module="expenses"><Expenses /></ModuleRoute>} />
         <Route path="checklists" element={<ModuleRoute module="checklists"><Checklists /></ModuleRoute>} />
         {/* Admin Routes */}

@@ -4,12 +4,11 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import EmployeeChangeCard from '../components/EmployeeChangeCard';
-import EmployeeHistoryDrawer from '../components/EmployeeHistoryDrawer';
 import { computeChanges } from '../constants/employeeChangeCodes';
-import { fmtDate, timeAgo } from '../utils/datetime';
+import { fmtDate, fmtDateTime } from '../utils/datetime';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2, FiClock, FiRotateCcw, FiFileText, FiRefreshCw } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2, FiRotateCcw, FiFileText, FiRefreshCw, FiLock, FiUnlock } from 'react-icons/fi';
 
 // IST calendar date (caps the effective-date picker; matches the server).
 const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
@@ -26,20 +25,33 @@ export default function Employees() {
   const [form, setForm] = useState({});
   const [original, setOriginal] = useState(null);   // snapshot at edit-open, for the live diff
   const [changeMeta, setChangeMeta] = useState({ action_code: '', reason_code: '', reason: '', effective_date: '' });
-  const [historyEmp, setHistoryEmp] = useState(null); // employee whose history drawer is open
+  // Join Date is LOCKED by default once an employee already has one on file —
+  // it's a tracked field (dme 2026-08-01), so changing it needs a deliberate
+  // unlock + a reason, not an accidental edit. Nothing to lock when it's blank.
+  const [joinDateLocked, setJoinDateLocked] = useState(false);
   const [search, setSearch] = useState('');
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
   const [rosterAudit, setRosterAudit] = useState({ backlog: [], guests: [] });
   const [view, setView] = useState('directory'); // 'directory' | 'review' | 'history'
-  // History & Reports tab state
-  const [reportMode, setReportMode] = useState('changelog'); // 'changelog' | 'snapshot'
-  const [changeLog, setChangeLog] = useState([]);
-  const [snapshot, setSnapshot] = useState({ asof: istToday(), rows: [] });
-  const [rangeFrom, setRangeFrom] = useState('');
-  const [rangeTo, setRangeTo] = useState('');
-  const [asof, setAsof] = useState(istToday());
+  // History & Reports tab state — grouped HR events, not raw field diffs.
+  const [historyEmpId, setHistoryEmpId] = useState(null); // employee driving both the History and Vault tabs
+  const [historyTab, setHistoryTab] = useState('events'); // 'events' | 'vault'
+  const [events, setEvents] = useState([]);
+  const [vault, setVault] = useState(null);
+  const [reportMonth, setReportMonth] = useState(istToday().slice(0, 7)); // org-wide monthly report — independent of historyEmpId
   const [syncing, setSyncing] = useState(false);
+  const [confirmBox, setConfirmBox] = useState(null); // { message, onYes } — in-app confirm (org-structure pattern: window.confirm is blocked in the embedded preview iframe, silently returning false)
+
+  const EVENT_BADGE = {
+    Joined: 'bg-purple-100 text-purple-800',
+    'Status Change': 'bg-amber-100 text-amber-800',
+    Promotion: 'bg-emerald-100 text-emerald-800',
+    Transfer: 'bg-blue-100 text-blue-800',
+    'Salary Revision': 'bg-teal-100 text-teal-800',
+    'Documents Updated': 'bg-orange-100 text-orange-800',
+    Correction: 'bg-gray-100 text-gray-700',
+  };
   const fileRef = useRef(null);
 
   const load = () => {
@@ -86,52 +98,60 @@ export default function Employees() {
   };
 
   // ── History & Reports ──────────────────────────────────────────────────────
-  const changeQuery = () => {
-    const p = new URLSearchParams();
-    if (rangeFrom) p.set('from', rangeFrom);
-    if (rangeTo) p.set('to', rangeTo);
-    return p.toString();
-  };
-  const loadChangeLog = () => api.get(`/hr/changes?${changeQuery()}`).then(r => setChangeLog(r.data || [])).catch(() => setChangeLog([]));
-  const loadSnapshot = () => api.get(`/hr/snapshot?asof=${asof}`).then(r => setSnapshot(r.data || { asof, rows: [] })).catch(() => setSnapshot({ asof, rows: [] }));
+  // No default selection — the employee panel starts empty until HR picks one.
+  const loadEvents = (id) => api.get(`/hr/employees/${id}/events`)
+    .then(r => setEvents(r.data || [])).catch(() => setEvents([]));
+  const loadVault = (id) => api.get(`/hr/employees/${id}/vault`)
+    .then(r => setVault(r.data)).catch(() => setVault(null));
 
-  // Load report data whenever the History tab / mode / filters change.
+  // Load whichever tab's data whenever the selected employee or tab changes.
   useEffect(() => {
-    if (view !== 'history') return;
-    if (reportMode === 'changelog') loadChangeLog(); else loadSnapshot();
+    if (view !== 'history' || !historyEmpId) return;
+    if (historyTab === 'events') loadEvents(historyEmpId); else loadVault(historyEmpId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, reportMode, rangeFrom, rangeTo, asof]);
+  }, [view, historyTab, historyEmpId]);
 
   // Admin: reconstruct history from the audit log. Run ONCE, right after deploy,
   // before any edits — employees already having timeline rows are skipped.
-  const runSync = async () => {
-    if (!confirm(
-      'Reconstruct employee history from the audit log?\n\n' +
-      'Safe: it never changes any current value, only fills in past changes for employees ' +
-      'who have no history yet. Best run once, before editing employees.'
-    )) return;
+  const doSync = async () => {
     setSyncing(true);
     try {
       const r = await api.post('/hr/employee-timeline/backfill-from-audit');
       const d = r.data || {};
       toast.success(`Synced — ${d.processed} employees, ${d.changes} changes reconstructed, ${d.skipped} already had history`);
-      loadChangeLog(); load();
+      if (historyEmpId) loadEvents(historyEmpId);
+      load();
     } catch (e) { toast.error(e.response?.data?.error || 'Sync failed'); }
     finally { setSyncing(false); }
   };
+  const runSync = () => setConfirmBox({
+    title: 'Sync from audit log',
+    message: 'Reconstruct employee history from the audit log? Safe: it never changes any current value, only fills in past changes for employees who have no history yet. Best run once, before editing employees.',
+    confirmLabel: 'Sync',
+    onYes: doSync,
+  });
 
-  // Download a styled .xlsx report (blob, like UserManagement export).
-  const exportReport = async () => {
+  // Download a styled .xlsx report (blob) — shared pattern for both exports.
+  const downloadXlsx = async (url, filename) => {
     try {
-      const url = reportMode === 'changelog' ? `/hr/changes/export.xlsx?${changeQuery()}` : `/hr/snapshot/export.xlsx?asof=${asof}`;
       const r = await api.get(url, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(r.data);
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(r.data);
-      a.download = reportMode === 'changelog' ? `employee-change-log-${istToday()}.xlsx` : `employee-snapshot-${asof}.xlsx`;
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
       a.click();
+      a.remove();
+      URL.revokeObjectURL(blobUrl);
       toast.success('Exported to Excel');
     } catch { toast.error('Export failed'); }
   };
+  const exportThisEmployee = () => historyEmpId && downloadXlsx(
+    `/hr/employees/${historyEmpId}/events/export.xlsx`, `hr-history-${istToday()}.xlsx`
+  );
+  const exportMonthlyReport = () => downloadXlsx(
+    `/hr/employees/history/export.xlsx?month=${reportMonth}`, `hr-monthly-report-${reportMonth}.xlsx`
+  );
 
   // Auto-link employees to users by matching email — for existing records
   const autoLink = async () => {
@@ -167,14 +187,17 @@ export default function Employees() {
     setForm(emp);
     setOriginal(emp);
     setChangeMeta({ action_code: '', reason_code: '', reason: '', effective_date: istToday() });
+    setJoinDateLocked(!!emp.join_date); // locked only when there's an existing date to protect
     setModal(true);
   };
-  // Open the modal to CREATE — no before-state, so no change card / reason.
+  // Open the modal to CREATE — no before-state, so no change card / reason /
+  // lock (there's nothing yet to protect).
   const openCreate = () => {
     setEditing(null);
     setOriginal(null);
     setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' });
     setChangeMeta({ action_code: '', reason_code: '', reason: '', effective_date: istToday() });
+    setJoinDateLocked(false);
     setModal(true);
   };
 
@@ -220,9 +243,11 @@ export default function Employees() {
       if (!payload.pan_file)           return toast.error('Upload PAN card');
       if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
     }
-    // A tracked change requires an action + reason (the server enforces this too).
+    // A tracked change requires a REASON (the server enforces this too). Action is
+    // auto-derived by the Change Card — a single-field edit lets HR refine it via
+    // its dropdown, but a multi-field edit is always sent as whatever the card
+    // resolved ("Multiple changes"), never a stale single-action pick.
     if (editing && changes.length > 0) {
-      if (!changeMeta.action_code) return toast.error('Select an action for this change');
       if (!changeMeta.reason?.trim()) return toast.error('Add a reason for this change');
       payload.action_code = changeMeta.action_code;
       payload.reason_code = changeMeta.reason_code || null;
@@ -241,11 +266,11 @@ export default function Employees() {
   const exportCSV = () => {
     if (employees.length === 0) return toast.error('No data');
     const headers = canSeeSalary
-      ? ['Name', 'Phone', 'Email', 'Designation', 'Department', 'Join Date', 'Salary', 'Status']
-      : ['Name', 'Phone', 'Email', 'Designation', 'Department', 'Join Date', 'Status'];
+      ? ['Name', 'Phone', 'Email', 'Designation', 'Department', 'Join Date', 'Salary', 'Status', 'Last Updated']
+      : ['Name', 'Phone', 'Email', 'Designation', 'Department', 'Join Date', 'Status', 'Last Updated'];
     const rows = employees.map(e => canSeeSalary
-      ? [e.name, e.phone, e.email, e.designation, e.department, e.join_date, e.salary, e.status]
-      : [e.name, e.phone, e.email, e.designation, e.department, e.join_date, e.status]);
+      ? [e.name, e.phone, e.email, e.designation, e.department, e.join_date, e.salary, e.status, fmtDateTime(e.updated_at)]
+      : [e.name, e.phone, e.email, e.designation, e.department, e.join_date, e.status, fmtDateTime(e.updated_at)]);
     const csv = [headers, ...rows].map(r => r.map(c => `"${(c ?? '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -408,7 +433,6 @@ export default function Employees() {
               </td>
               <td><div className="flex gap-1">
                 <button onClick={() => openEdit(e)} className="p-1.5 hover:bg-red-50 rounded text-red-600" title="Edit"><FiEdit2 size={15} /></button>
-                <button onClick={() => setHistoryEmp(e)} className="p-1.5 hover:bg-gray-100 rounded text-gray-500" title="Change history"><FiClock size={15} /></button>
                 {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
               </div></td>
             </tr>
@@ -475,9 +499,6 @@ export default function Employees() {
             <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
               <button onClick={() => openEdit(e)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
                 <FiEdit2 size={11} /> Edit
-              </button>
-              <button onClick={() => setHistoryEmp(e)} className="text-gray-500 hover:underline flex items-center gap-1 font-semibold">
-                <FiClock size={11} /> History
               </button>
               {canDelete('employees') && (
                 <button onClick={() => deleteEmployee(e)} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
@@ -546,90 +567,141 @@ export default function Employees() {
       )}
 
       {view === 'history' && (
-        <div className="space-y-4">
-          {/* Toolbar: mode toggle + admin sync + export */}
-          <div className="flex flex-wrap items-center gap-2 justify-between">
-            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
-              <button onClick={() => setReportMode('changelog')} className={`px-3 py-1.5 text-sm font-semibold ${reportMode === 'changelog' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>Change Log</button>
-              <button onClick={() => setReportMode('snapshot')} className={`px-3 py-1.5 text-sm font-semibold ${reportMode === 'snapshot' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>As-of Snapshot</button>
-            </div>
-            <div className="flex gap-2">
-              {isAdmin() && (
-                <button onClick={runSync} disabled={syncing} className="btn btn-secondary text-sm flex items-center gap-2 disabled:opacity-50" title="Reconstruct history from the audit log (admin, non-destructive)">
-                  <FiRefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing…' : 'Sync from audit log'}
-                </button>
-              )}
-              <button onClick={exportReport} className="btn btn-primary text-sm flex items-center gap-2"><FiDownload size={14} /> Export Excel</button>
+        <div className="space-y-3">
+          {/* Page-level utility strip — org-wide, not tied to any employee.
+              Deliberately NOT a card matching the employee panel below, so it
+              reads as a separate toolbar rather than a sibling control. The
+              month picker + its report button are grouped as ONE widget so
+              the pairing (which control drives which action) is unambiguous;
+              Sync is a distinct, unrelated action set off by a divider. */}
+          <div className="flex flex-wrap items-end gap-3 justify-start bg-gray-50 rounded-lg py-2 text-sm">
+            <h4 className='font-semibold text-base mr-auto md:text-lg'>
+              Employee Record History & Details
+            </h4>
+            {isAdmin() && (
+              <button onClick={runSync} disabled={syncing} className="btn btn-secondary !py-1.5 text-sm flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap border-l border-gray-200 pl-3" title="Reconstruct history from the audit log for every employee (admin, non-destructive)">
+                <FiRefreshCw size={12} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing…' : 'Sync from audit log'}
+              </button>
+            )}
+            <div className="pl-3 md:border-l-2 border-gray-6200">
+              <span className="text-[11px] text-gray-400">Org-wide Monthly report — all employees</span>
+              <div className="flex items-center gap-1.5 mt-1">
+                <input type="month" className="text-sm !outline-none !w-32 h-8 p-2 rounded !border border-gray-200" max={istToday().slice(0, 7)} value={reportMonth} onChange={e => setReportMonth(e.target.value)} />
+                <button onClick={exportMonthlyReport} className="btn btn-primary text-sm flex items-center gap-2 whitespace-nowrap !py-1.5"><FiDownload size={14} /> Get Report</button>
+              </div>
             </div>
           </div>
 
-          {/* Change Log */}
-          {reportMode === 'changelog' && (
-            <>
-              <div className="flex flex-wrap items-end gap-3">
-                <div><label className="label">From</label><input type="date" className="input" max={istToday()} value={rangeFrom} onChange={e => setRangeFrom(e.target.value)} /></div>
-                <div><label className="label">To</label><input type="date" className="input" max={istToday()} value={rangeTo} onChange={e => setRangeTo(e.target.value)} /></div>
-                {(rangeFrom || rangeTo) && <button onClick={() => { setRangeFrom(''); setRangeTo(''); }} className="btn btn-secondary text-sm">Clear</button>}
-                <div className="text-xs text-gray-400 ml-auto">{changeLog.length} change{changeLog.length === 1 ? '' : 's'}</div>
-              </div>
-              <div className="card p-0 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead><tr className="text-left text-gray-500 border-b bg-gray-50">
-                    <th className="px-3 py-2">Employee</th><th className="px-3 py-2">Action</th><th className="px-3 py-2">Field</th>
-                    <th className="px-3 py-2">From</th><th className="px-3 py-2">To</th><th className="px-3 py-2">Effective</th>
-                    <th className="px-3 py-2">Reason</th><th className="px-3 py-2">By</th>
-                  </tr></thead>
-                  <tbody>
-                    {changeLog.map((ev, i) => (
-                      <tr key={i} className="border-b border-gray-50">
-                        <td className="px-3 py-2 font-medium">{ev.employee_name}</td>
-                        <td className="px-3 py-2">{ev.action}{ev.source === 'backfill' && <span className="ml-1 text-[9px] uppercase bg-gray-100 text-gray-500 rounded px-1">recon</span>}</td>
-                        <td className="px-3 py-2 text-gray-600">{ev.label}</td>
-                        <td className="px-3 py-2 text-gray-500">{ev.from || '—'}</td>
-                        <td className="px-3 py-2 font-semibold">{ev.to || '—'}</td>
-                        <td className="px-3 py-2 text-gray-600">{fmtDate(ev.effective)}</td>
-                        <td className="px-3 py-2 text-gray-600 max-w-[240px] truncate" title={ev.reason}>{ev.reason}{ev.reason_code ? ` (${ev.reason_code})` : ''}</td>
-                        <td className="px-3 py-2 text-gray-500">{ev.by}</td>
-                      </tr>
-                    ))}
-                    {changeLog.length === 0 && <tr><td colSpan={8} className="text-center py-8 text-gray-400">No changes in this range. If history looks empty, an admin can <span className="font-semibold">Sync from audit log</span>.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
+          {/* Everything below is scoped to ONE employee — selector, tabs,
+              export, and content all live inside this single card. */}
+          <div className="mt-6">
+            <div className="mb-4 max-w-full w-96">
+              <label className="label">Viewing employee</label>
+              <SearchableSelect
+                options={employees.map(e => ({ ...e, label: `${e.name} — ${e.designation || 'No designation'}${e.department ? `, ${e.department}` : ''}` }))}
+                value={historyEmpId}
+                valueKey="id"
+                displayKey="label"
+                placeholder="Search by name, designation, department…"
+                onChange={(e) => setHistoryEmpId(e?.id || null)}
+              />
+            </div>
 
-          {/* As-of Snapshot */}
-          {reportMode === 'snapshot' && (
-            <>
-              <div className="flex flex-wrap items-end gap-3">
-                <div><label className="label">State as of</label><input type="date" className="input" max={istToday()} value={asof} onChange={e => setAsof(e.target.value)} /></div>
-                <div className="text-xs text-gray-400 ml-auto">{snapshot.rows.length} employees</div>
+            {!historyEmpId && (
+              <div className="min-h-[320px] flex items-center justify-center text-gray-400 text-sm border-t border-gray-200">
+                Select an employee above to view their history and documents.
               </div>
-              <div className="card p-0 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead><tr className="text-left text-gray-500 border-b bg-gray-50">
-                    <th className="px-3 py-2">Employee</th><th className="px-3 py-2">Designation</th><th className="px-3 py-2">Department</th>
-                    <th className="px-3 py-2">Status</th><th className="px-3 py-2">Roster</th>{canSeeSalary && <th className="px-3 py-2">Salary</th>}<th className="px-3 py-2">Since</th>
-                  </tr></thead>
-                  <tbody>
-                    {snapshot.rows.map((r, i) => (
-                      <tr key={i} className="border-b border-gray-50">
-                        <td className="px-3 py-2 font-medium">{r.employee}</td>
-                        <td className="px-3 py-2 text-gray-600">{r.designation || '—'}</td>
-                        <td className="px-3 py-2 text-gray-600">{r.department || '—'}</td>
-                        <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
-                        <td className="px-3 py-2 text-gray-600">{r.roster || '—'}</td>
-                        {canSeeSalary && <td className="px-3 py-2">Rs {(r.salary || 0).toLocaleString('en-IN')}</td>}
-                        <td className="px-3 py-2 text-gray-500">{fmtDate(r.since)}</td>
-                      </tr>
-                    ))}
-                    {snapshot.rows.length === 0 && <tr><td colSpan={canSeeSalary ? 7 : 6} className="text-center py-8 text-gray-400">No snapshot for this date. History may need a <span className="font-semibold">Sync from audit log</span> first.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
+            )}
+
+            {historyEmpId && (
+              <>
+                <div className="flex items-center justify-between border-b border-gray-200 mb-4">
+                  <div className="flex gap-1">
+                    <button onClick={() => setHistoryTab('events')} className={`px-3 py-2 text-sm font-semibold border-b-2 ${historyTab === 'events' ? 'border-red-600 text-red-700' : 'border-transparent text-gray-500'}`}>History</button>
+                    <button onClick={() => setHistoryTab('vault')} className={`px-3 py-2 text-sm font-semibold border-b-2 ${historyTab === 'vault' ? 'border-red-600 text-red-700' : 'border-transparent text-gray-500'}`}>Employee vault</button>
+                  </div>
+                  {historyTab === 'events' && (
+                    <button onClick={exportThisEmployee} className="btn btn-secondary text-xs flex items-center gap-1.5 mb-1.5 !px-2.5">
+                      <FiDownload size={12} /> Employee's history (Excel)
+                    </button>
+                  )}
+                </div>
+
+                <div className="min-h-[280px]">
+                  {/* History — vertical timeline of grouped HR events */}
+                  {historyTab === 'events' && (
+                    <div className="relative pl-6">
+                      <div className="absolute left-[9px] top-5 bottom-1.5 w-0.5 bg-gray-200"></div>
+                      {events.map((g, gi) => (
+                        <div key={gi} className="relative mb-4">
+                          <div className="absolute -left-[19px] top-5 w-2.5 h-2.5 rounded-full bg-gray-400"></div>
+                          <div className="border border-gray-200 rounded-lg p-4 bg-white">
+                            <div className="flex justify-between items-baseline mb-2">
+                              <span className="text-xs text-gray-500">{fmtDate(g.effective)}</span>
+                              <span className={`text-xs px-2.5 py-0.5 rounded-full font-semibold ${EVENT_BADGE[g.event_type] || 'bg-gray-100 text-gray-700'}`}>{g.event_type}</span>
+                            </div>
+                            <table className="w-full text-sm mb-2">
+                              <tbody>
+                                {g.fields.map((f, fi) => {
+                                  const fmtField = (v) => (f.label === 'Salary' && v && /^\d+$/.test(String(v))) ? `Rs ${Number(v).toLocaleString('en-IN')}` : v;
+                                  return (
+                                    <tr key={fi}>
+                                      <td className="text-gray-500 py-0.5 pr-3 w-32 align-top">{f.label}</td>
+                                      <td className="py-0.5">{f.from ? <>{fmtField(f.from)} <span className="text-gray-400">→</span> <span className="font-semibold">{fmtField(f.to) || '—'}</span></> : <span className="font-semibold">{fmtField(f.to) || '—'}</span>}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                            <div className="border-t border-gray-100 pt-2 flex justify-between text-xs text-gray-500">
+                              <span>Reason: {g.reason || '—'}</span>
+                              <span>By {g.by || '—'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {events.length === 0 && <div className="border border-gray-200 rounded-lg text-center py-8 text-gray-400">No history yet for this employee. An admin can <span className="font-semibold">Sync from audit log</span>.</div>}
+                    </div>
+                  )}
+
+                  {/* Employee vault — read-only current details + mandatory documents.
+                      No export/report control here, deliberately kept separate. */}
+                  {historyTab === 'vault' && vault && (
+                    <div className="space-y-4">
+                      <div className="border border-gray-200 rounded-lg p-4 bg-white">
+                        <div className="text-xs text-gray-400 mb-2">Current details (read only)</div>
+                        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                          <div><span className="text-gray-500">Name</span><br /><span className="font-semibold">{vault.employee.name}</span></div>
+                          <div><span className="text-gray-500">Status</span><br /><StatusBadge status={vault.employee.status} /></div>
+                          <div><span className="text-gray-500">Phone</span><br />{vault.employee.phone || '—'}</div>
+                          <div><span className="text-gray-500">Email</span><br />{vault.employee.email || '—'}</div>
+                          <div><span className="text-gray-500">Designation</span><br />{vault.employee.designation || '—'}</div>
+                          <div><span className="text-gray-500">Department</span><br />{vault.employee.department || '—'}</div>
+                          <div><span className="text-gray-500">Join date</span><br />{vault.employee.join_date ? fmtDate(vault.employee.join_date) : '—'}</div>
+                          <div><span className="text-gray-500">Roster</span><br />{vault.employee.roster || '—'}</div>
+                          {canSeeSalary && <div><span className="text-gray-500">Salary</span><br />Rs {(vault.employee.salary || 0).toLocaleString('en-IN')}</div>}
+                          <div><span className="text-gray-500">OT eligible</span><br />{vault.employee.ot_eligible ? 'Yes' : 'No'}</div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-gray-400">Documents</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {vault.documents.map(d => (
+                          <div key={d.doc_type} className="border border-gray-200 rounded-lg p-4 bg-white">
+                            <div className="font-semibold text-sm mb-2">{d.label}</div>
+                            <div className="text-[11px] text-gray-400 mb-2">{d.file_url ? (d.updated_at ? `Updated ${fmtDate(d.updated_at)}` : 'Uploaded') : 'Not uploaded'}</div>
+                            <div className="flex gap-2">
+                              <a href={d.file_url || undefined} target="_blank" rel="noreferrer" className={`btn btn-secondary text-xs flex-1 text-center ${!d.file_url ? 'opacity-40 pointer-events-none' : ''}`}>View</a>
+                              <a href={d.file_url || undefined} download target="_blank" rel="noreferrer" className={`btn btn-secondary text-xs flex-1 text-center ${!d.file_url ? 'opacity-40 pointer-events-none' : ''}`}><FiDownload size={12} className="inline" /></a>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -637,14 +709,42 @@ export default function Employees() {
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Employee' : 'Add Employee'}>
         <form onSubmit={save} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
-            <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
-            <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /></div>
+            <div className={`col-span-2 ${trackAccent('name')}`}><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /><WasHint k="name" /></div>
+            <div className={trackAccent('phone')}><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /><WasHint k="phone" /></div>
+            <div className={trackAccent('email')}><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /><WasHint k="email" /></div>
             <div className={trackAccent('designation')}><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({...form, designation: e.target.value})} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist><WasHint k="designation" /></div>
             <div className={trackAccent('department')}><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({...form, department: e.target.value})} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist><WasHint k="department" /></div>
-            <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({...form, join_date: e.target.value})} /></div>
-            {canSeeSalary && <div className={trackAccent('salary')}><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /><WasHint k="salary" fmt={(v) => `₹${Number(v || 0).toLocaleString('en-IN')}`} /></div>}
+            <div className="col-span-2 my-2 border-t border-dashed border-gray-300"></div>
+            <div className={trackAccent('join_date')}>
+              <div className="flex items-start justify-start gap-1">
+                <label className="label">Join Date</label>
+                { editing ?
+                  <button
+                    type="button"
+                    onClick={() => setJoinDateLocked(!joinDateLocked)}
+                    className="border-px border-gray-200 size-4 leading-none relative -top-0.5"
+                    title={joinDateLocked ?
+                      'Unlock to correct/edit the join date'
+                      : 'Lock to stop edit the join date'
+                    }
+                  >
+                    {joinDateLocked ?
+                      <FiLock size={10} className="inline text-gray-400" />
+                      : <FiUnlock size={10} className="inline text-blue-600" />
+                    }
+                  </button>
+                  : null
+                }
+              </div>
+              {editing && joinDateLocked ? (
+                <input className="input bg-gray-100 text-gray-500 cursor-not-allowed" type="date" value={form.join_date || ''} disabled />
+              ) : (
+                <input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({...form, join_date: e.target.value})} />
+              )}
+              <WasHint k="join_date" fmt={(v) => fmtDate(v) || '—'} />
+            </div>
             {editing && <div className={trackAccent('status')}><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['active','training','inactive','terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select><WasHint k="status" /></div>}
+            {canSeeSalary && <div className={trackAccent('salary')}><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /><WasHint k="salary" fmt={(v) => `₹${Number(v || 0).toLocaleString('en-IN')}`} /></div>}
             <div className={trackAccent('roster')}>
               <label className="label">Roster / Shift</label>
               <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
@@ -653,7 +753,7 @@ export default function Employees() {
               </select>
               <WasHint k="roster" />
             </div>
-            <div className="col-span-2">
+            <div className={`col-span-2 mt-4 ${trackAccent('user_id')}`}>
               <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
               <SearchableSelect
                 options={users.map(u => ({ ...u, label: `${u.name} (${u.username || u.email})` }))}
@@ -664,27 +764,15 @@ export default function Employees() {
                 onChange={(u) => setForm({ ...form, user_id: u?.id || null })}
               />
               <p className="text-[10px] text-gray-500 mt-0.5">If left blank and email matches a user, it will auto-link on save.</p>
+              <WasHint k="user_id" fmt={(id) => { const u = users.find(u => u.id === id); return u ? `"${u.name}"` : '"Not linked"'; }} />
             </div>
-
-            {/* Contextual Change Card — appears only when a tracked field moved.
-                Single surface (no popup), full width, right after the grid. */}
-            {editing && (
-              <EmployeeChangeCard
-                changes={changes}
-                statusTo={form.status}
-                meta={changeMeta}
-                setMeta={setChangeMeta}
-                canSeeSalary={canSeeSalary}
-                today={istToday()}
-              />
-            )}
           </div>
 
           {/* Mandatory KYC docs for new employees. When editing, the inputs
               show "Existing: view file" if a doc URL is already on file —
               uploading a new one replaces it. Three docs: Aadhar, PAN,
               Highest qualification certificate. */}
-          <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400 space-y-3">
+          <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400 space-y-3 !shadow-none">
             <div className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Mandatory documents{editing ? '' : ' *'}</div>
             {[
               { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card *' },
@@ -711,11 +799,26 @@ export default function Employees() {
             ))}
           </div>
 
+          {/* Contextual Change Card — appears only when a tracked field moved.
+              Placed right above the footer, next to the Save button it gates,
+              instead of mid-form where it used to push everything else down. */}
+          {editing && (
+            <EmployeeChangeCard
+              changes={changes}
+              statusTo={form.status}
+              meta={changeMeta}
+              setMeta={setChangeMeta}
+              canSeeSalary={canSeeSalary}
+              today={istToday()}
+              users={users}
+            />
+          )}
+
           <div className="flex justify-end gap-3">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
             <button
               type="submit"
-              disabled={uploading || (editing && changes.length > 0 && (!changeMeta.action_code || !changeMeta.reason?.trim()))}
+              disabled={uploading || (editing && changes.length > 0 && !changeMeta.reason?.trim())}
               title={editing && changes.length > 0 && !changeMeta.reason?.trim() ? 'Add a reason to save' : ''}
               className="btn btn-primary disabled:opacity-50">
               {uploading ? 'Uploading…' : (editing ? 'Update' : 'Create')}
@@ -723,10 +826,6 @@ export default function Employees() {
           </div>
         </form>
       </Modal>
-
-      {/* Change history drawer — opened from a directory row only (never over the
-          Edit modal, so the two modals can't stack). */}
-      <EmployeeHistoryDrawer isOpen={!!historyEmp} onClose={() => setHistoryEmp(null)} employee={historyEmp} />
 
       {/* Bulk Import Modal */}
       <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Import Employees" wide>
@@ -785,6 +884,29 @@ export default function Employees() {
           </div>
         </div>
       </Modal>
+
+      {/* In-app confirm (window.confirm is blocked in the embedded preview
+          iframe — silently returns false, so a native confirm() would make
+          Sync from audit log a dead button here). Same pattern as OrgStructure.jsx. */}
+      {confirmBox && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setConfirmBox(null)}>
+          <div className="w-full max-w-[360px] bg-white rounded-xl shadow-xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-2.5 border-b border-gray-100">
+              <h3 className="text-[13px] font-semibold text-gray-800">{confirmBox.title || 'Confirm'}</h3>
+            </div>
+            <div className="px-4 py-3">
+              <p className="text-[13px] leading-snug text-gray-600">{confirmBox.message}</p>
+            </div>
+            <div className="flex justify-end gap-2 px-4 pb-3">
+              <button type="button" onClick={() => setConfirmBox(null)}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Cancel</button>
+              <button type="button" onClick={() => { const fn = confirmBox.onYes; setConfirmBox(null); fn?.(); }}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700">{confirmBox.confirmLabel || 'Confirm'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

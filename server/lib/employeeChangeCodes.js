@@ -8,6 +8,11 @@
 // two in sync. The server is the source of truth for validation.
 
 // The change action. "Other" is always present so the picker can never block a save.
+// 'Multiple changes' is SERVER-COMPUTED ONLY (never a dropdown choice) — see
+// resolveActionCode below: when >1 tracked field moves in one edit, forcing a
+// single human-picked label (e.g. "Status Change") silently mislabels the OTHER
+// fields that also changed (dme 2026-08-01: changed roster, forgot to flip the
+// dropdown off "Status Change" — the roster change would have recorded wrong).
 const ACTIONS = [
   'Hired',
   'Promotion',
@@ -18,6 +23,7 @@ const ACTIONS = [
   'Correction',
   'Other',
 ];
+const MULTI_ACTION = 'Multiple changes';
 
 // System-only actions (never chosen by a human on the HR form).
 const SYSTEM_ACTIONS = ['Payroll Update', 'Reconstructed'];
@@ -39,10 +45,15 @@ const TURNOVER_REASONS = [
 // The fields whose change opens a reason-required ledger row (the HR edit form's
 // tracked set). salary_exempt/ot_eligible are payroll-owned — snapshotted but never
 // reason-prompted here (ot_eligible gets a silent system row from payroll instead).
-const TRACKED_FIELDS = ['status', 'salary', 'designation', 'department', 'roster'];
+// join_date is tracked too (2026-08-01): it's a locked field in the UI — changing
+// it after the fact is a correction, and HR wants that correction on record.
+// name/phone/email/user_id joined the tracked set 2026-07-31 — HR wants contact-info
+// and linked-login corrections on record too ("how can we forget" — dme).
+const TRACKED_FIELDS = ['status', 'salary', 'designation', 'department', 'roster', 'join_date', 'name', 'phone', 'email', 'user_id'];
 
-// Auto-suggest an action from what actually changed. Human can override to any of
-// ACTIONS (incl. "Other"). Order = precedence when several fields changed at once.
+// Auto-suggest an action from what actually changed — used ONLY as the UI's
+// starting value when exactly one tracked field changed. Human may override to
+// any single-field ACTIONS entry (incl. "Other"). Never called for >1 field.
 function suggestAction(changedFields) {
   const s = new Set(changedFields || []);
   if (s.has('status')) return 'Status Change';
@@ -52,14 +63,57 @@ function suggestAction(changedFields) {
   return 'Correction';
 }
 
+// The SERVER-AUTHORITATIVE action_code for a save. This is the fix for the
+// "stray dropdown" bug: a human-picked action_code is honored ONLY when exactly
+// one tracked field changed (they were choosing a label for that one thing). The
+// moment 2+ fields move together, whatever the dropdown says is IGNORED and the
+// row is stamped 'Multiple changes' — so a leftover "Status Change" pick can never
+// misrepresent a roster/salary field that changed alongside it.
+function resolveActionCode(changedFields, clientActionCode) {
+  const n = (changedFields || []).length;
+  if (n > 1) return MULTI_ACTION;
+  if (n === 1) {
+    const picked = String(clientActionCode || '').trim();
+    return (picked && ACTIONS.includes(picked)) ? picked : suggestAction(changedFields);
+  }
+  return null; // no tracked change — caller shouldn't be recording a row at all
+}
+
 // Statuses that count as an "exit" → the turnover reason dropdown appears.
 const EXIT_STATUSES = ['inactive', 'terminated'];
+
+// ── HR History event-type classification (read-time only) ──────────────────
+// Independent of action_code/resolveActionCode above (that's the write-time,
+// human-picked label kept for the ledger). This decides the HR-facing "event
+// type" shown on the History timeline and in the Excel reports, from the set
+// of field keys that changed together in one save. Fixed priority order so a
+// grouped save always gets exactly one label — never a raw "multiple changes"
+// bucket. No manual override (dme 2026-07-31: auto-classification is final).
+const HR_EVENT_TYPES = [
+  'Joined', 'Status Change', 'Promotion', 'Transfer',
+  'Salary Revision', 'Documents Updated', 'Correction',
+];
+function classifyEvent({ isFirst = false, changedKeys = [] } = {}) {
+  if (isFirst) return 'Joined';
+  const s = new Set(changedKeys);
+  if (s.has('status')) return 'Status Change';
+  if (s.has('designation') && s.has('salary')) return 'Promotion';
+  if (s.has('designation') || s.has('department')) return 'Transfer';
+  if (s.has('salary')) return 'Salary Revision';
+  const nonDoc = changedKeys.filter((k) => !String(k).startsWith('doc_'));
+  if (nonDoc.length === 0 && changedKeys.length > 0) return 'Documents Updated';
+  return 'Correction';
+}
 
 module.exports = {
   ACTIONS,
   SYSTEM_ACTIONS,
+  MULTI_ACTION,
   TURNOVER_REASONS,
   TRACKED_FIELDS,
   EXIT_STATUSES,
+  HR_EVENT_TYPES,
   suggestAction,
+  resolveActionCode,
+  classifyEvent,
 };

@@ -9,7 +9,7 @@ const { logAuditEvent } = require('../middleware/audit');
 const { parseResume } = require('../utils/resumeParser');
 const { normalizeRoster } = require('../lib/roster');
 const { recordEmployeeChange, seedHiredRow, backfillFromAudit, toYMD, istToday } = require('../lib/employeeTimeline');
-const { TRACKED_FIELDS, ACTIONS, suggestAction } = require('../lib/employeeChangeCodes');
+const { TRACKED_FIELDS, ACTIONS, suggestAction, resolveActionCode, classifyEvent } = require('../lib/employeeChangeCodes');
 // Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
 // date-level effective_from). Server clock is UTC on the VPS.
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -846,16 +846,19 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
 
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
-          aadhar_file, pan_file, qualification_file, roster,
+          aadhar_file, pan_file, qualification_file, roster, join_date,
           action_code, reason_code, reason, effective_date } = req.body;
   const db = getDb();
 
   // ── Change-history: diff the TRACKED fields against the current row ──────────
-  // Tracked = status, salary, designation, department, roster (the HR-form fields).
-  // A change in any of them opens a reason-required timeline row; name/phone/email/
-  // KYC edits are untracked (just bump updated_at). Read BEFORE the UPDATE.
+  // Tracked = status, salary, designation, department, roster, join_date, name,
+  // phone, email, linked user (join_date is locked-by-default in the UI — an
+  // unlock is required to change it, and once changed it goes through this same
+  // reason-required path, dme 2026-08-01; name/phone/email/linked-user joined the
+  // tracked set 2026-07-31 — HR wants those corrections on record too). A change
+  // in any of them opens a reason-required timeline row. Read BEFORE the UPDATE.
   const before = db.prepare(
-    'SELECT status, salary, designation, department, roster FROM employees WHERE id=?'
+    'SELECT name, phone, email, user_id, status, salary, designation, department, roster, join_date, aadhar_file, pan_file, qualification_file FROM employees WHERE id=?'
   ).get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
 
@@ -867,34 +870,67 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   if (norm(designation)   !== norm(before.designation))   changed.push('designation');
   if (norm(department)    !== norm(before.department))     changed.push('department');
   if (norm(newRoster)     !== norm(before.roster))         changed.push('roster');
+  if (norm(join_date)     !== norm(before.join_date))      changed.push('join_date');
+  if (norm(name)           !== norm(before.name))            changed.push('name');
+  if (norm(phone)          !== norm(before.phone))           changed.push('phone');
+  if (norm(email)          !== norm(before.email))           changed.push('email');
+  if (Number(user_id || 0) !== Number(before.user_id || 0)) changed.push('user_id');
 
-  // Reason + action are mandatory the moment a tracked field moves. Effective date
-  // defaults to today and may not be in the future (backdate/same-day only for now).
+  // Document re-uploads — tracked separately from the tracked-field ledger
+  // (employee_document_events, not employee_timeline — see schema.js). Only a
+  // NEWLY uploaded file counts as a change (frontend omits the field entirely
+  // when no new file was picked, and the UPDATE below COALESCEs it away).
+  const changedDocs = [];
+  if (aadhar_file        && norm(aadhar_file)        !== norm(before.aadhar_file))        changedDocs.push({ doc_type: 'aadhar',        file_url: aadhar_file });
+  if (pan_file           && norm(pan_file)           !== norm(before.pan_file))           changedDocs.push({ doc_type: 'pan',           file_url: pan_file });
+  if (qualification_file && norm(qualification_file) !== norm(before.qualification_file)) changedDocs.push({ doc_type: 'qualification', file_url: qualification_file });
+
+  // Only the REASON is mandatory the moment a tracked field moves. The action
+  // label is SERVER-COMPUTED (resolveActionCode) rather than trusted from the
+  // client dropdown — a human-picked single-field action (e.g. "Status Change")
+  // left stale after also editing roster used to get recorded onto BOTH fields.
+  // Now: 1 field changed → the picked/suggested single action; 2+ → the server
+  // always stamps 'Multiple changes', so a stray dropdown choice can't mislabel.
   const effFrom = toYMD(effective_date);
+  const resolvedAction = resolveActionCode(changed, action_code);
   if (changed.length > 0) {
-    if (!norm(action_code)) return res.status(400).json({ error: 'Select an action to record this change.' });
     if (!norm(reason))      return res.status(400).json({ error: 'A reason is required to record this change.' });
     if (effFrom > istToday()) return res.status(400).json({ error: 'Effective date cannot be in the future.' });
   }
 
   // One transaction: the employee UPDATE, the login active-sync, the updated_at
-  // stamp, and the timeline row all commit together (or roll back together).
+  // stamp, the timeline row, and any document events all commit together (or
+  // roll back together). Shared timestamp so a doc swap saved alongside a
+  // tracked-field change groups into the same History event (same recorded time).
   try {
+    const now = istNow();
     const applyEdit = db.transaction(() => {
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
   // upload — frontend can edit other fields without re-uploading docs.
   db.prepare(`
     UPDATE employees
-       SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?,
+       SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?, join_date=?,
            roster = COALESCE(?, roster),
            aadhar_file        = COALESCE(?, aadhar_file),
            pan_file           = COALESCE(?, pan_file),
            qualification_file = COALESCE(?, qualification_file),
            updated_at = ?
      WHERE id=?
-  `).run(name, phone, email, designation, department, salary, status, user_id || null,
+  `).run(name, phone, email, designation, department, salary, status, user_id || null, join_date || null,
         roster ? normalizeRoster(roster) : null,
-        aadhar_file || null, pan_file || null, qualification_file || null, istNow(), req.params.id);
+        aadhar_file || null, pan_file || null, qualification_file || null, now, req.params.id);
+
+  // Log each re-uploaded document as its own event — no reason gate (optional,
+  // per dme 2026-07-31: doc re-uploads stay frictionless).
+  if (changedDocs.length > 0) {
+    const insDoc = db.prepare(
+      `INSERT INTO employee_document_events (employee_id, doc_type, file_url, reason, changed_by, changed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    for (const d of changedDocs) {
+      insDoc.run(Number(req.params.id), d.doc_type, d.file_url, norm(reason) || null, req.user && req.user.id, now);
+    }
+  }
 
   // Sync the linked login's `active` flag to the employee's on-roll status.
   // Attendance strength counts users.active, but HR only edits employees.status —
@@ -932,11 +968,12 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         recordEmployeeChange(db, {
           employeeId: Number(req.params.id),
           effectiveFrom: effFrom,
-          actionCode: norm(action_code),
+          actionCode: resolvedAction,
           reasonCode: norm(reason_code) || null,
           reason: norm(reason),
           source: 'hr',
           changedBy: req.user && req.user.id,
+          changedAt: now,
         });
       }
     });
@@ -951,8 +988,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Employee change-history — backfill, history drawer, Change Log + As-of reports.
-// (plan: magical-wibbling-orbit)
+// Employee change-history — backfill + the raw per-field diff engine that
+// feeds the HR History timeline, Employee Vault, and event reports below.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const canSeeSalary = (req) => !!getUserPermissions(req.user.id)['employee_salary']?.can_view;
@@ -964,7 +1001,12 @@ const CHANGE_FIELDS = [
   { key: 'designation', label: 'Designation' },
   { key: 'department',  label: 'Department' },
   { key: 'roster',      label: 'Roster' },
+  { key: 'join_date',   label: 'Join date' },
   { key: 'ot_eligible', label: 'OT eligible', bool: true },
+  { key: 'employee_name',      label: 'Name' },
+  { key: 'phone',              label: 'Phone' },
+  { key: 'email',              label: 'Email' },
+  { key: 'linked_user_label',  label: 'Linked user' },
 ];
 const fmtVal = (f, v) => {
   if (v == null || v === '') return '';
@@ -972,11 +1014,12 @@ const fmtVal = (f, v) => {
   return String(v);
 };
 
-// Walk each employee's ordered rows and emit per-field change events (old→new).
-// includeInitial=true also emits the opening "Hired/initial" row (for the drawer);
-// the Change Log report omits it (it isn't a change). Salary is masked for callers
-// without employee_salary.can_view — the event shows, the figure doesn't.
-function buildChangeEvents(db, { employeeId = null, includeInitial = false, canSalary = false } = {}) {
+// Walk each employee's ordered rows and emit per-field change events (old→new)
+// for every row EXCEPT the first (the opening/"Joined" row has nothing to diff
+// against — buildJoinedEvents below handles that one separately). Salary is
+// masked for callers without employee_salary.can_view — the event shows, the
+// figure doesn't.
+function buildChangeEvents(db, { employeeId = null, canSalary = false } = {}) {
   const where = employeeId ? 'WHERE t.employee_id = ?' : '';
   const rows = db.prepare(
     `SELECT t.*, u.name AS by_name
@@ -988,22 +1031,19 @@ function buildChangeEvents(db, { employeeId = null, includeInitial = false, canS
   const events = [];
   let prev = null, prevEmp = null;
   for (const r of rows) {
-    const first = r.employee_id !== prevEmp || r.employee_id == null && prevEmp !== null;
     if (r.employee_id !== prevEmp) { prev = null; prevEmp = r.employee_id; }
-    const base = {
-      employee_id: r.employee_id,
-      employee_name: r.employee_name,
-      action: r.action_code || '',
-      effective: r.effective_from,
-      recorded: r.changed_at,
-      reason_code: r.reason_code || '',
-      reason: r.reason || '',
-      by: r.by_name || '',
-      source: r.source || '',
-    };
-    if (!prev) {
-      if (includeInitial) events.push({ ...base, field: '', label: 'Record created', from: '', to: '' });
-    } else {
+    if (prev) {
+      const base = {
+        employee_id: r.employee_id,
+        employee_name: r.employee_name,
+        action: r.action_code || '',
+        effective: r.effective_from,
+        recorded: r.changed_at,
+        reason_code: r.reason_code || '',
+        reason: r.reason || '',
+        by: r.by_name || '',
+        source: r.source || '',
+      };
       for (const f of CHANGE_FIELDS) {
         const a = r[f.key], b = prev[f.key];
         if (String(a ?? '') === String(b ?? '')) continue;
@@ -1019,26 +1059,106 @@ function buildChangeEvents(db, { employeeId = null, includeInitial = false, canS
   return events;
 }
 
-// Point-in-time snapshot: every employee's full state as of a date, via the
-// effective-dated as-of query. Reads employee_name off the row so deleted staff
-// still appear. Salary column omitted entirely for non-holders.
-function buildSnapshot(db, { asof, canSalary = false }) {
+// ═══════════════════════════════════════════════════════════════════════════
+// HR History — grouped events (retires the Change Log / As-of Snapshot pair
+// above: buildChangeEvents' raw per-field diffs stay internal plumbing, but
+// HR now only ever sees one row per real event: Joined / Status Change /
+// Promotion / Transfer / Salary Revision / Documents Updated / Correction).
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DOC_LABELS = { aadhar: 'Aadhar card', pan: 'PAN card', qualification: 'Qualification certificate' };
+
+// The opening "Joined" event per employee — buildChangeEvents only diffs from
+// the 2nd timeline row onward, so the first row's snapshot (what they were
+// hired AS) needs its own query rather than a diff against nothing.
+function buildJoinedEvents(db, { employeeId = null, canSalary = false } = {}) {
+  const where = employeeId ? 'WHERE t.employee_id = ?' : '';
   const rows = db.prepare(
-    `SELECT t.employee_id, t.employee_name, t.designation, t.department, t.status,
-            t.roster, t.salary, t.effective_from
-       FROM employee_timeline t
-      WHERE t.effective_from <= :d
-        AND (t.effective_to IS NULL OR t.effective_to > :d)
-      ORDER BY t.employee_name COLLATE NOCASE`
-  ).all({ d: asof });
+    `SELECT * FROM (
+       SELECT t.*, u.name AS by_name,
+              ROW_NUMBER() OVER (PARTITION BY t.employee_id ORDER BY t.effective_from, t.effective_seq, t.id) AS rn
+         FROM employee_timeline t LEFT JOIN users u ON u.id = t.changed_by
+         ${where}
+     ) WHERE rn = 1`
+  ).all(...(employeeId ? [employeeId] : []));
   return rows.map((r) => {
-    const base = {
-      employee: r.employee_name, designation: r.designation || '', department: r.department || '',
-      status: r.status || '', roster: r.roster || '', as_of: asof, since: r.effective_from,
+    const fields = [];
+    for (const f of CHANGE_FIELDS) {
+      const v = r[f.key];
+      if (v == null || v === '') continue;
+      fields.push(f.money && !canSalary
+        ? { key: f.key, label: 'Compensation', from: '', to: '••' }
+        : { key: f.key, label: f.label, from: '', to: fmtVal(f, v) });
+    }
+    return {
+      employee_id: r.employee_id, employee_name: r.employee_name,
+      event_type: 'Joined', effective: r.effective_from, recorded: r.changed_at,
+      reason: r.reason || 'New hire', reason_code: r.reason_code || '', by: r.by_name || '',
+      fields,
     };
-    if (canSalary) base.salary = r.salary;
-    return base;
   });
+}
+
+// employee_document_events, shaped like a buildChangeEvents row so it can
+// merge into the same per-save grouping (same employee_id + recorded key).
+function docFieldRows(db, { employeeId = null } = {}) {
+  const where = employeeId ? 'WHERE d.employee_id = ?' : '';
+  const rows = db.prepare(
+    `SELECT d.*, e.name AS employee_name, u.name AS by_name
+       FROM employee_document_events d
+       JOIN employees e ON e.id = d.employee_id
+       LEFT JOIN users u ON u.id = d.changed_by
+       ${where}
+      ORDER BY d.employee_id, d.changed_at`
+  ).all(...(employeeId ? [employeeId] : []));
+  return rows.map((r) => {
+    const label = DOC_LABELS[r.doc_type] || r.doc_type;
+    return {
+      employee_id: r.employee_id, employee_name: r.employee_name,
+      field: `doc_${r.doc_type}`, label, from: '', to: r.reason ? r.reason : `${label} re-uploaded`,
+      effective: (r.changed_at || '').slice(0, 10), recorded: r.changed_at,
+      reason: r.reason || '', reason_code: '', by: r.by_name || '',
+    };
+  });
+}
+
+// The one function backing the History tab, the per-employee export, and the
+// monthly export: merges field-diff events + document events, groups every
+// save into a single HR event, and classifies it via classifyEvent().
+function buildHrEvents(db, { employeeId = null, canSalary = false } = {}) {
+  const joined = buildJoinedEvents(db, { employeeId, canSalary });
+  const diffs = buildChangeEvents(db, { employeeId, canSalary });
+  const docs = docFieldRows(db, { employeeId });
+
+  const map = new Map();
+  for (const ev of [...diffs, ...docs]) {
+    const key = `${ev.employee_id}|${ev.recorded}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        employee_id: ev.employee_id, employee_name: ev.employee_name,
+        effective: ev.effective, recorded: ev.recorded,
+        reason: ev.reason, reason_code: ev.reason_code, by: ev.by,
+        fields: [],
+      });
+    }
+    map.get(key).fields.push({ key: ev.field, label: ev.label, from: ev.from, to: ev.to });
+  }
+
+  const groups = [...joined, ...map.values()].map((g) => {
+    const event_type = g.event_type || classifyEvent({ changedKeys: g.fields.map((f) => f.key) });
+    const summary = event_type === 'Joined'
+      ? `Hired as ${g.fields.map((f) => f.to).filter(Boolean).join(', ') || '—'}`
+      : `${g.fields.map((f) => f.label).join(', ')} ${g.fields.length > 1 ? 'changed' : 'updated'}`;
+    return { ...g, event_type, summary };
+  });
+
+  // Sort by the business-meaningful effective date shown on each card — NOT
+  // recorded (the internal audit timestamp), which can diverge from it for
+  // backfilled/reconstructed or backdated-correction rows. recorded is only
+  // the tiebreaker for same-day events, to preserve entry order within a day.
+  groups.sort((a, b) => (a.effective < b.effective ? -1 : a.effective > b.effective ? 1
+    : (a.recorded < b.recorded ? -1 : a.recorded > b.recorded ? 1 : 0)));
+  return groups;
 }
 
 // ── Backfill from audit_log — admin-only, non-destructive, idempotent ─────────
@@ -1052,39 +1172,33 @@ router.post('/employee-timeline/backfill-from-audit', adminOnly, (req, res) => {
   }
 });
 
-// One employee's full change history (newest first) — for the drawer.
-router.get('/employees/:id/history', requirePermission('employees', 'view'), (req, res) => {
+// One employee's grouped HR event history (newest first) — the History tab.
+router.get('/employees/:id/events', requirePermission('employees', 'view'), (req, res) => {
   const db = getDb();
-  const events = buildChangeEvents(db, { employeeId: Number(req.params.id), includeInitial: true, canSalary: canSeeSalary(req) });
+  const events = buildHrEvents(db, { employeeId: Number(req.params.id), canSalary: canSeeSalary(req) });
   events.reverse(); // newest first
   res.json(events);
 });
 
-// Change Log — per-field diffs across a date range (+ optional action/field filter).
-function filterEvents(events, { from, to, action, field }) {
-  return events.filter((ev) => {
-    if (from && ev.effective < from) return false;
-    if (to && ev.effective > to) return false;
-    if (action && ev.action !== action) return false;
-    if (field && ev.field !== field) return false;
-    return true;
-  });
-}
-router.get('/changes', requirePermission('employees', 'view'), (req, res) => {
+// Current profile + mandatory documents — the read-only Employee Vault tab.
+router.get('/employees/:id/vault', requirePermission('employees', 'view'), (req, res) => {
   const db = getDb();
-  const all = buildChangeEvents(db, { includeInitial: false, canSalary: canSeeSalary(req) });
-  res.json(filterEvents(all, req.query));
+  const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found' });
+  if (!canSeeSalary(req)) delete emp.salary;
+  const latest = db.prepare(
+    `SELECT doc_type, MAX(changed_at) AS at FROM employee_document_events WHERE employee_id=? GROUP BY doc_type`
+  ).all(req.params.id);
+  const latestAt = Object.fromEntries(latest.map((r) => [r.doc_type, r.at]));
+  const documents = [
+    { doc_type: 'aadhar', label: DOC_LABELS.aadhar, file_url: emp.aadhar_file || null },
+    { doc_type: 'pan', label: DOC_LABELS.pan, file_url: emp.pan_file || null },
+    { doc_type: 'qualification', label: DOC_LABELS.qualification, file_url: emp.qualification_file || null },
+  ].map((d) => ({ ...d, updated_at: latestAt[d.doc_type] || emp.created_at || null }));
+  res.json({ employee: emp, documents });
 });
 
-// As-of Snapshot — every employee's state on a given date (default today).
-router.get('/snapshot', requirePermission('employees', 'view'), (req, res) => {
-  const db = getDb();
-  const asof = (String(req.query.asof || '').match(/^\d{4}-\d{2}-\d{2}$/) || [])[0]
-    || new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
-  res.json({ asof, rows: buildSnapshot(db, { asof, canSalary: canSeeSalary(req) }) });
-});
-
-// ── Excel exports (styled, mirror snags.js) ──────────────────────────────────
+// ── Excel exports (styled, mirror snags.js) — one row per HR event ──────────
 function styleHeader(ws) {
   const head = ws.getRow(1); head.height = 22;
   head.eachCell((cell) => {
@@ -1094,61 +1208,56 @@ function styleHeader(ws) {
   });
   ws.views = [{ state: 'frozen', ySplit: 1 }];
 }
-router.get('/changes/export.xlsx', requirePermission('employees', 'view'), async (req, res) => {
+async function sendHrEventsExcel(res, events, filenameBase) {
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Secured Engineers Pvt Ltd';
+  const ws = wb.addWorksheet('HR History');
+  ws.columns = [
+    { header: 'Employee', key: 'employee_name', width: 24 },
+    { header: 'Event Date', key: 'event_date', width: 13 },
+    { header: 'Event Type', key: 'event_type', width: 16 },
+    { header: 'Summary', key: 'summary', width: 40 },
+    { header: 'Changes (Old to New)', key: 'changes', width: 55 },
+    { header: 'Effective Date', key: 'effective_date', width: 13 },
+    { header: 'Reason', key: 'reason', width: 32 },
+    { header: 'Changed By', key: 'by', width: 18 },
+  ];
+  styleHeader(ws);
+  events.forEach((e) => ws.addRow({
+    employee_name: e.employee_name,
+    event_date: (e.recorded || '').slice(0, 10),
+    event_type: e.event_type,
+    summary: e.summary,
+    changes: e.fields.map((f) => `${f.label}: ${f.from || '—'} -> ${f.to || '—'}`).join('; '),
+    effective_date: e.effective,
+    reason: e.reason,
+    by: e.by,
+  }));
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+  res.end(Buffer.from(await wb.xlsx.writeBuffer()));
+}
+
+// "Export this employee" — full HR history for one employee.
+router.get('/employees/:id/events/export.xlsx', requirePermission('employees', 'view'), async (req, res) => {
   try {
     const db = getDb();
-    const canSalary = canSeeSalary(req);
-    const events = filterEvents(buildChangeEvents(db, { includeInitial: false, canSalary }), req.query);
-    const ExcelJS = require('exceljs');
-    const wb = new ExcelJS.Workbook();
-    wb.creator = 'Secured Engineers Pvt Ltd';
-    const ws = wb.addWorksheet('Change Log');
-    ws.columns = [
-      { header: 'Employee', key: 'employee_name', width: 24 },
-      { header: 'Action', key: 'action', width: 16 },
-      { header: 'Field', key: 'label', width: 16 },
-      { header: 'From', key: 'from', width: 20 },
-      { header: 'To', key: 'to', width: 20 },
-      { header: 'Effective', key: 'effective', width: 13 },
-      { header: 'Recorded', key: 'recorded', width: 19 },
-      { header: 'Reason code', key: 'reason_code', width: 18 },
-      { header: 'Reason', key: 'reason', width: 40 },
-      { header: 'By', key: 'by', width: 18 },
-    ];
-    styleHeader(ws);
-    events.forEach((e) => ws.addRow(e));
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="employee-change-log-${new Date().toISOString().slice(0, 10)}.xlsx"`);
-    res.end(Buffer.from(await wb.xlsx.writeBuffer()));
-  } catch (err) { console.error('[hr] change-log export failed:', err.message); res.status(500).json({ error: err.message }); }
+    const events = buildHrEvents(db, { employeeId: Number(req.params.id), canSalary: canSeeSalary(req) });
+    const emp = db.prepare('SELECT name FROM employees WHERE id=?').get(req.params.id);
+    await sendHrEventsExcel(res, events, `hr-history-${(emp && emp.name) || 'employee'}`.replace(/\s+/g, '-'));
+  } catch (err) { console.error('[hr] employee history export failed:', err.message); res.status(500).json({ error: err.message }); }
 });
-router.get('/snapshot/export.xlsx', requirePermission('employees', 'view'), async (req, res) => {
+
+// "Monthly report (all employees)" — org-wide, independent of any employee selection.
+router.get('/employees/history/export.xlsx', requirePermission('employees', 'view'), async (req, res) => {
   try {
     const db = getDb();
-    const canSalary = canSeeSalary(req);
-    const asof = (String(req.query.asof || '').match(/^\d{4}-\d{2}-\d{2}$/) || [])[0]
-      || new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
-    const rows = buildSnapshot(db, { asof, canSalary });
-    const ExcelJS = require('exceljs');
-    const wb = new ExcelJS.Workbook();
-    wb.creator = 'Secured Engineers Pvt Ltd';
-    const ws = wb.addWorksheet(`As-of ${asof}`);
-    const cols = [
-      { header: 'Employee', key: 'employee', width: 24 },
-      { header: 'Designation', key: 'designation', width: 22 },
-      { header: 'Department', key: 'department', width: 18 },
-      { header: 'Status', key: 'status', width: 12 },
-      { header: 'Roster', key: 'roster', width: 12 },
-    ];
-    if (canSalary) cols.push({ header: 'Salary', key: 'salary', width: 12 });
-    cols.push({ header: 'As of', key: 'as_of', width: 13 });
-    ws.columns = cols;
-    styleHeader(ws);
-    rows.forEach((r) => ws.addRow(r));
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="employee-snapshot-${asof}.xlsx"`);
-    res.end(Buffer.from(await wb.xlsx.writeBuffer()));
-  } catch (err) { console.error('[hr] snapshot export failed:', err.message); res.status(500).json({ error: err.message }); }
+    const month = (String(req.query.month || '').match(/^\d{4}-\d{2}$/) || [])[0];
+    let events = buildHrEvents(db, { employeeId: null, canSalary: canSeeSalary(req) });
+    if (month) events = events.filter((e) => (e.effective || '').startsWith(month));
+    await sendHrEventsExcel(res, events, `hr-monthly-report${month ? '-' + month : ''}`);
+  } catch (err) { console.error('[hr] monthly report export failed:', err.message); res.status(500).json({ error: err.message }); }
 });
 
 // Delete an employee. Robust like the user delete (auth.js): a bare

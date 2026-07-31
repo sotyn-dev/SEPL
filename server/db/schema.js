@@ -4444,6 +4444,9 @@ function initializeDatabase() {
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         employee_id    INTEGER REFERENCES employees(id) ON DELETE SET NULL,
         employee_name  TEXT,                  -- denormalized name snapshot (survives delete)
+        phone          TEXT,                  -- mirrors employees.phone (tracked: contact-info edits need a reason)
+        email          TEXT,                  -- mirrors employees.email
+        linked_user_label TEXT,               -- denormalized "Name (username/email)" snapshot of the linked login, or NULL
         department_id  INTEGER REFERENCES org_departments(id),
         designation_id INTEGER REFERENCES org_designations(id),
         department     TEXT,                  -- free-text dept snapshot now (department_id fills when org resumes)
@@ -4454,6 +4457,7 @@ function initializeDatabase() {
         roster         TEXT,                  -- mirrors employees.roster
         ot_eligible    INTEGER,               -- mirrors employees.ot_eligible
         status         TEXT,                  -- mirrors employees.status
+        join_date      TEXT,                  -- mirrors employees.join_date (tracked: corrections need a reason)
         effective_from TEXT NOT NULL,         -- date this state became true (date-level, YYYY-MM-DD)
         effective_seq  INTEGER DEFAULT 0,     -- EFFSEQ: tiebreaker for >1 change the same day
         effective_to   TEXT,                  -- NULL = the current open row
@@ -4502,6 +4506,10 @@ function initializeDatabase() {
     addCol('designation',   'designation TEXT');
     addCol('action_code',   'action_code TEXT');
     addCol('reason_code',   'reason_code TEXT');
+    addCol('join_date',     'join_date TEXT');
+    addCol('phone',             'phone TEXT');
+    addCol('email',             'email TEXT');
+    addCol('linked_user_label', 'linked_user_label TEXT');
 
     // Does employee_id still block deletes? PRAGMA foreign_key_list → on_delete.
     const fks = db.prepare(`PRAGMA foreign_key_list(employee_timeline)`).all();
@@ -4509,8 +4517,8 @@ function initializeDatabase() {
     const needsReshape = !empFk || String(empFk.on_delete).toUpperCase() !== 'SET NULL';
     if (needsReshape) {
       db.pragma('foreign_keys = OFF');
-      const cols = `id, employee_id, employee_name, department_id, designation_id, department,
-        designation, manager_id, salary, salary_exempt, roster, ot_eligible, status,
+      const cols = `id, employee_id, employee_name, phone, email, linked_user_label, department_id, designation_id, department,
+        designation, manager_id, salary, salary_exempt, roster, ot_eligible, status, join_date,
         effective_from, effective_seq, effective_to, action_code, reason_code, reason,
         source, changed_by, changed_at`;
       db.transaction(() => {
@@ -4519,6 +4527,9 @@ function initializeDatabase() {
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             employee_id    INTEGER REFERENCES employees(id) ON DELETE SET NULL,
             employee_name  TEXT,
+            phone          TEXT,
+            email          TEXT,
+            linked_user_label TEXT,
             department_id  INTEGER REFERENCES org_departments(id),
             designation_id INTEGER REFERENCES org_designations(id),
             department     TEXT,
@@ -4529,6 +4540,7 @@ function initializeDatabase() {
             roster         TEXT,
             ot_eligible    INTEGER,
             status         TEXT,
+            join_date      TEXT,
             effective_from TEXT NOT NULL,
             effective_seq  INTEGER DEFAULT 0,
             effective_to   TEXT,
@@ -4563,6 +4575,29 @@ function initializeDatabase() {
     console.error('[schema] employee_timeline change-history reshape failed:', e.message);
     try { db.pragma('foreign_keys = ON'); } catch (_) {}
   }
+
+  // Employee document re-upload events (HR History redesign, dme 2026-07-31).
+  // Aadhar/PAN/Qualification files are plain employees columns, silently
+  // overwritten on edit with no ledger trace. Rather than mirroring 3 file
+  // columns into employee_timeline (which asserts "state as of a date" — not
+  // true of a document swap), these are logged as their own lightweight event
+  // table and merged into the HR History timeline at read time alongside
+  // employee_timeline's field-change events.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS employee_document_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
+        doc_type    TEXT NOT NULL,   -- 'aadhar' | 'pan' | 'qualification'
+        file_url    TEXT,
+        reason      TEXT,            -- optional — no reason gate on doc re-uploads
+        changed_by  INTEGER,         -- soft ref, no FK (matches employee_timeline.changed_by)
+        changed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_emp_doc_events_emp
+        ON employee_document_events(employee_id, changed_at);
+    `);
+  } catch (e) { console.error('[schema] employee_document_events create failed:', e.message); }
 
   // Case-INSENSITIVE uniqueness for the designation catalog (dme 2026-07-28:
   // "md | MD | Md | Managing Director | managing director — all compared in
