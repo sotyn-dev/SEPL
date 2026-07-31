@@ -1628,7 +1628,8 @@ export default function DPR() {
               </div>
             ) : dprMaterials.length === 0 ? (
               <div className="text-xs text-gray-500">
-                No live stock in this site's store yet. Stock arrives automatically when a PO is <b>Received</b> into the site store (Dispatch &amp; Receiving → pick the site warehouse), or via a store issue from office.
+                No live stock in this site's store yet — item names appear here from the site store's inventory.
+                Fill it via <b>Inventory → Opening Stock</b> (material already at site), an <b>office → site transfer</b>, or by <b>receiving a PO into the site store</b> (Dispatch &amp; Receiving → pick the site warehouse).
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -2282,9 +2283,16 @@ export default function DPR() {
 
           {slipSite && slipRows.length === 0 && (
             <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-              {slipType === 'issue'
-                ? 'No stock in this site\'s store. Stock arrives when a PO is Received into the site store, or via an office store issue.'
-                : 'Nothing outstanding to return — no material issued (and not yet returned) on this date.'}
+              {slipType === 'issue' ? (
+                <>
+                  <b>This site's store has no stock yet</b> — item names appear here from the site store's inventory. Fill it in any of 3 ways (Inventory module):
+                  <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                    <li><b>Opening Stock (item-wise)</b> — record material already lying at site.</li>
+                    <li><b>Issue / Transfer (OUT)</b> — move stock office store → this site's store.</li>
+                    <li><b>Receive a PO</b> into this site's store warehouse (Dispatch &amp; Receiving → Mark Received → pick the site warehouse).</li>
+                  </ul>
+                </>
+              ) : 'Nothing outstanding to return — no material issued (and not yet returned) on this date.'}
             </div>
           )}
           {slipRows.length > 0 && (
