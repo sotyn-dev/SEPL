@@ -845,26 +845,29 @@ export default function DPR() {
 
       {tab === 'dashboard' && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* 2-up on mobile/tablet (was 1-up, wasting width) — tighter
+              padding/font through md so 4 tiles don't feel oversized below
+              desktop; full size returns at lg (mam 2026-08-01). */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 lg:gap-4">
             <button type="button" onClick={() => { setReportFilter(''); setTab('sites'); }}
-              className="card text-center border-l-4 border-red-500 text-left hover:shadow-md transition-shadow cursor-pointer">
-              <div className="text-3xl font-bold text-red-600">{summary ? summary.activeSites : '—'}</div>
-              <div className="text-sm text-gray-500">Active Sites <span className="text-[10px] text-red-600 font-semibold">→ view</span></div>
+              className="card text-center border-l-4 border-red-500 hover:shadow-md transition-shadow cursor-pointer p-3 lg:p-4">
+              <div className="text-xl lg:text-3xl font-bold text-red-600">{summary ? summary.activeSites : '—'}</div>
+              <div className="text-xs lg:text-sm text-gray-500">Active Sites <span className="text-[10px] text-red-600 font-semibold">→ view</span></div>
             </button>
             <button type="button" onClick={() => { setFilterDate(new Date().toISOString().split('T')[0]); setDateTouched(true); setReportFilter(''); setTab('reports'); }}
-              className="card text-center border-l-4 border-emerald-500 text-left hover:shadow-md transition-shadow cursor-pointer">
-              <div className="text-3xl font-bold text-emerald-600">{summary ? summary.todaySubmissions : '—'}</div>
-              <div className="text-sm text-gray-500">DPR Today <span className="text-[10px] text-emerald-600 font-semibold">→ view</span></div>
+              className="card text-center border-l-4 border-emerald-500 hover:shadow-md transition-shadow cursor-pointer p-3 lg:p-4">
+              <div className="text-xl lg:text-3xl font-bold text-emerald-600">{summary ? summary.todaySubmissions : '—'}</div>
+              <div className="text-xs lg:text-sm text-gray-500">DPR Today <span className="text-[10px] text-emerald-600 font-semibold">→ view</span></div>
             </button>
             <button type="button" onClick={() => { setDateTouched(false); setReportFilter('pending'); setTab('reports'); }}
-              className="card text-center border-l-4 border-amber-500 text-left hover:shadow-md transition-shadow cursor-pointer">
-              <div className="text-3xl font-bold text-amber-600">{summary ? summary.pendingApproval : '—'}</div>
-              <div className="text-sm text-gray-500">Pending Approval <span className="text-[10px] text-amber-600 font-semibold">→ view</span></div>
+              className="card text-center border-l-4 border-amber-500 hover:shadow-md transition-shadow cursor-pointer p-3 lg:p-4">
+              <div className="text-xl lg:text-3xl font-bold text-amber-600">{summary ? summary.pendingApproval : '—'}</div>
+              <div className="text-xs lg:text-sm text-gray-500">Pending Approval <span className="text-[10px] text-amber-600 font-semibold">→ view</span></div>
             </button>
             <button type="button" onClick={() => { setDateTouched(false); setReportFilter('billing'); setTab('reports'); }}
-              className="card text-center border-l-4 border-purple-500 text-left hover:shadow-md transition-shadow cursor-pointer">
-              <div className="text-3xl font-bold text-purple-600">{summary ? summary.billingReady : '—'}</div>
-              <div className="text-sm text-gray-500">Billing Ready <span className="text-[10px] text-purple-600 font-semibold">→ view</span></div>
+              className="card text-center border-l-4 border-purple-500 hover:shadow-md transition-shadow cursor-pointer p-3 lg:p-4">
+              <div className="text-xl lg:text-3xl font-bold text-purple-600">{summary ? summary.billingReady : '—'}</div>
+              <div className="text-xs lg:text-sm text-gray-500">Billing Ready <span className="text-[10px] text-purple-600 font-semibold">→ view</span></div>
             </button>
           </div>
           {summary && summary.missingSites.length > 0 && (
