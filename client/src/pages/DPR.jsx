@@ -1831,6 +1831,56 @@ export default function DPR() {
               <div><h5 className="font-semibold text-sm mb-2">Machinery/Tools</h5><table className="text-xs"><thead><tr><th>Equipment</th><th>Qty</th><th>Hours</th><th>Condition</th></tr></thead>
                 <tbody>{selectedDpr.machinery.map(m => (<tr key={m.id}><td>{m.equipment}</td><td>{m.quantity}</td><td>{m.hours_used}h</td><td>{m.condition}</td></tr>))}</tbody></table></div>
             )}
+
+            {/* SPOS (mam 2026-07-31): the report shows the day's site-store
+                cycle item-wise — Issued (morning slips) / Returned (evening
+                slips) / Consumed — merged from the GRN slips + dpr_material. */}
+            {(() => {
+              const moves = selectedDpr.store_movements || [];
+              const mats = selectedDpr.materials || [];
+              if (!moves.length && !mats.length) return null;
+              const byKey = new Map();
+              moves.forEach(mv => byKey.set(mv.item_master_id || mv.item_name, {
+                name: mv.item_name || `Item #${mv.item_master_id}`, unit: mv.unit || '',
+                issued: mv.issued, returned: mv.returned, consumed: mv.net_consumed, balance: null,
+              }));
+              mats.forEach(m => {
+                const k = m.item_master_id || m.material_name;
+                const row = byKey.get(k) || { name: m.material_name, unit: m.unit || '', issued: 0, returned: 0, consumed: 0, balance: null };
+                row.consumed = +m.consumed_today || row.consumed;
+                row.balance = m.balance_qty;
+                byKey.set(k, row);
+              });
+              const rows = [...byKey.values()];
+              return (
+                <div>
+                  <h5 className="font-semibold text-sm mb-2">Material — Site Store (item-wise)</h5>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead><tr className="text-gray-500 border-b text-left">
+                        <th className="py-1 pr-2">Material</th>
+                        <th className="py-1 px-2 text-right">Issued</th>
+                        <th className="py-1 px-2 text-right">Returned</th>
+                        <th className="py-1 px-2 text-right">Consumed</th>
+                        <th className="py-1 pl-2 text-right">Store Balance</th>
+                      </tr></thead>
+                      <tbody>
+                        {rows.map((r, i) => (
+                          <tr key={i} className="border-b">
+                            <td className="py-1 pr-2">{r.name} {r.unit ? <span className="text-gray-400">({r.unit})</span> : null}</td>
+                            <td className="py-1 px-2 text-right tabular-nums">{r.issued > 0 ? r.issued : '—'}</td>
+                            <td className="py-1 px-2 text-right tabular-nums">{r.returned > 0 ? r.returned : '—'}</td>
+                            <td className="py-1 px-2 text-right tabular-nums font-semibold">{r.consumed > 0 ? r.consumed : '—'}</td>
+                            <td className="py-1 pl-2 text-right tabular-nums">{r.balance != null ? r.balance : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <p className="text-[10px] text-gray-400 mt-1">Issued/Returned come from the jr. engineer's GRN slips (ISU/RTN); Consumed = issued − returned (or typed when no slips).</p>
+                  </div>
+                </div>
+              );
+            })()}
             {selectedDpr.safety_toolbox_talk !== undefined && (
               <div className="flex gap-4 text-sm">
                 <span className={selectedDpr.safety_toolbox_talk ? 'text-emerald-600 font-bold' : 'text-red-500'}>TBT: {selectedDpr.safety_toolbox_talk ? 'Done' : 'Not Done'}</span>
