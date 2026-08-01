@@ -27,7 +27,7 @@ import {
 import {
   C, fmtINR, fmtNum, fmtPct,
   PageHeader, SectionHead, KpiTile, Card, MiniStat, Pill,
-  TicksList, HBar, Row, ConstraintBanner, TocStep, StageTabs, DataGap,
+  TicksList, HBar, Row, ConstraintBanner, TocStep, StageTabs, DataGap, FunnelBar,
 } from '../components/cmdDashboardUi';
 import { fmtDateTime } from '../utils/datetime';
 
@@ -131,7 +131,7 @@ export default function DashboardCMDToc() {
   }));
 
   return (
-    <div style={{ background: C.bg, color: C.ink, margin: -8, minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif', fontSize: 12 }}>
+    <div className="cmd-dark-table" style={{ background: C.bg, color: C.ink, margin: -8, minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif', fontSize: 12 }}>
       <PageHeader
         title="SEPL Operating Console" tag="CMD · TOC v3"
         subtitle={`Secured Engineers Pvt Ltd · MEPF + Solar EPC · ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`}
@@ -316,7 +316,10 @@ export default function DashboardCMDToc() {
           <Card title="Lead → PO funnel" meta={`${days} days`}>
             {/* Mam (2026-05-22 audit fix): widths now derived from
                 actual stage counts (% of Leads), not hardcoded
-                100/78/54/41/22.  See sibling fix in DashboardCMD.jsx. */}
+                100/78/54/41/22.  See sibling fix in DashboardCMD.jsx.
+                Renders via the shared FunnelBar (cmdDashboardUi.jsx) — was
+                a hand-rolled copy that duplicated its label-overlap bug
+                (mam 2026-08-01 fix, same pass as DashboardCMD.jsx). */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>
               {(() => {
                 const stages = [
@@ -331,15 +334,7 @@ export default function DashboardCMDToc() {
                   const w = topVal > 0 ? Math.max(2, Math.round((val / topVal) * 100)) : 0;
                   const prev = i > 0 ? stages[i - 1][1] : null;
                   const drop = prev > 0 && val < prev ? `−${Math.round((1 - val / prev) * 100)}%` : '·';
-                  return (
-                  <div key={lbl} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 50px', gap: 8, alignItems: 'center', fontSize: 11 }}>
-                    <div style={{ height: 18, background: C.panel2, borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ width: `${w}%`, height: '100%', background: color, borderRadius: 3, display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: 10, fontWeight: 600, color: txt || '#000' }}>{lbl}</div>
-                    </div>
-                    <div style={{ textAlign: 'right', fontWeight: 600, fontSize: 11.5 }}>{val}</div>
-                    <div style={{ textAlign: 'right', fontSize: 10, color: C.red }}>{drop}</div>
-                  </div>
-                );
+                  return <FunnelBar key={lbl} label={lbl} value={val} drop={drop} width={w} color={color} textColor={txt || '#000'} />;
                 });
               })()}
             </div>
