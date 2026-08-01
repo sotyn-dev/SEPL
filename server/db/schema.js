@@ -4590,7 +4590,7 @@ function initializeDatabase() {
         employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
         doc_type    TEXT NOT NULL,   -- 'aadhar' | 'pan' | 'qualification'
         file_url    TEXT,
-        reason      TEXT,            -- optional — no reason gate on doc re-uploads
+        reason      TEXT,            -- required by the route layer (hr.js PUT /employees/:id)
         changed_by  INTEGER,         -- soft ref, no FK (matches employee_timeline.changed_by)
         changed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
       );

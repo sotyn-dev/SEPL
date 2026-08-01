@@ -1,12 +1,16 @@
 import { useEffect } from 'react';
-import { FiArrowRight, FiAlertTriangle, FiClock, FiInfo, FiLock } from 'react-icons/fi';
+import { FiArrowRight, FiClock, FiInfo, FiLock } from 'react-icons/fi';
 import { ACTIONS, TURNOVER_REASONS, EXIT_STATUSES, resolveAction } from '../constants/employeeChangeCodes';
 import { fmtDate } from '../utils/datetime';
 
 // The Contextual Change Card — the editor's single reason-capture surface.
-// Renders ONLY when a tracked field has moved. No modal, no popup: everything
-// (what changed, how weighty, the action, the reason, the effective date) lives
-// inline in the Edit modal right after the field grid.
+// Renders whenever a tracked field moved AND/OR a KYC doc was replaced. No
+// modal, no popup: everything (what changed, the action, the reason, the
+// effective date) lives inline in the Edit modal right after the field grid.
+//
+// One fixed header/color always (dme 2026-08-01: the old per-scenario
+// red/amber/green/blue/slate + reworded title was a jarring permutation
+// matrix — same box every time is calmer and just as informative via chips).
 //
 // Props:
 //   changes      [{key,label,money,from,to}]  — the live diff (already computed)
@@ -16,7 +20,11 @@ import { fmtDate } from '../utils/datetime';
 //   canSeeSalary bool — masks the pay figure for non-holders
 //   today        'YYYY-MM-DD' — caps the effective date
 //   users        [{id,name,username,email}] — resolves the Linked user chip from an id to a name
-export default function EmployeeChangeCard({ changes, statusTo, meta, setMeta, canSeeSalary, today, users = [] }) {
+//   docLabels    [string] — KYC docs replaced alongside this edit (display-only:
+//                a doc swap isn't a tracked field, so it never drives the
+//                action logic below — just shown so the one shared Reason is
+//                visibly known to cover it too)
+export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, meta, setMeta, canSeeSalary, today, users = [] }) {
   const changedKeys = changes.map((c) => c.key);
   const isExit = changedKeys.includes('status') && EXIT_STATUSES.includes(String(statusTo || '').toLowerCase());
 
@@ -24,7 +32,9 @@ export default function EmployeeChangeCard({ changes, statusTo, meta, setMeta, c
   // has moved (server enforces this too — see resolveActionCode). This is the
   // fix for picking "Status Change" then also editing roster and forgetting to
   // update the dropdown, which used to silently mislabel the roster change.
-  // Only a true single-field edit gets an editable dropdown.
+  // Only a true single-field edit gets an editable dropdown. A doc-only edit
+  // (no tracked field) has no action concept — the whole Action/Effective-date
+  // row is skipped for it below.
   const { locked, value: derivedAction } = resolveAction(changedKeys);
 
   // Keep meta.action_code in sync with the derived value whenever the change
@@ -40,43 +50,8 @@ export default function EmployeeChangeCard({ changes, statusTo, meta, setMeta, c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changedKeys.join('|'), locked, derivedAction]);
 
-  if (!changes.length) return null;
+  if (!changes.length && !docLabels.length) return null;
 
-  // ── Context-aware header, by dominant action (severity order) ───────────────
-  const st = String(statusTo || '').toLowerCase();
-  let tone, Icon, title, subtitle;
-  if (changedKeys.includes('status') && st === 'terminated') {
-    tone = 'red'; Icon = FiAlertTriangle; title = 'Terminating this employee';
-    subtitle = 'Their login will be disabled.';
-  } else if (changedKeys.includes('status') && st === 'inactive') {
-    tone = 'amber'; Icon = FiAlertTriangle; title = 'Marking this employee inactive';
-    subtitle = 'Their login will be disabled.';
-  } else if (changedKeys.includes('status') && (st === 'active' || st === 'training')) {
-    tone = 'green'; Icon = FiInfo; title = 'Reactivating this employee';
-    subtitle = 'Their login will be re-enabled.';
-  } else if (changedKeys.length === 1 && changedKeys[0] === 'salary') {
-    tone = 'blue'; Icon = FiInfo; title = 'Revising compensation';
-  } else if (changedKeys.length === 1 && changedKeys[0] === 'join_date') {
-    tone = 'blue'; Icon = FiInfo; title = 'Correcting the join date';
-  } else if (changedKeys.every((k) => k === 'designation' || k === 'department')) {
-    tone = 'blue'; Icon = FiInfo; title = 'Changing role / department';
-  } else if (changes.length > 1) {
-    tone = 'slate'; Icon = FiInfo; title = `Recording ${changes.length} changes together`;
-  } else {
-    tone = 'slate'; Icon = FiInfo; title = 'Recording this change';
-  }
-
-  const TONES = {
-    red:   'border-red-400 bg-red-50',
-    amber: 'border-amber-400 bg-amber-50',
-    green: 'border-emerald-400 bg-emerald-50',
-    blue:  'border-blue-400 bg-blue-50',
-    slate: 'border-slate-300 bg-slate-50',
-  };
-  const HEAD = {
-    red: 'text-red-700', amber: 'text-amber-800', green: 'text-emerald-700',
-    blue: 'text-blue-700', slate: 'text-slate-700',
-  };
   const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
   const fmtChip = (c) => {
     if (c.money) return canSeeSalary
@@ -95,13 +70,13 @@ export default function EmployeeChangeCard({ changes, statusTo, meta, setMeta, c
   };
 
   return (
-    <div className={`rounded-xl border border-l-4 p-3 space-y-3 ${TONES[tone]}`} role="region" aria-label="Change details">
-      {/* Header */}
-      <div className={`flex items-start gap-2 font-semibold ${HEAD[tone]}`}>
-        <Icon className="mt-0.5 shrink-0" size={16} />
+    <div className="rounded-xl border border-l-4 border-blue-400 bg-blue-50 p-3 space-y-3" role="region" aria-label="Change details">
+      {/* Header — fixed, same every time (see file header note) */}
+      <div className="flex items-start gap-2 font-semibold text-blue-700">
+        <FiInfo className="mt-0.5 shrink-0" size={16} />
         <div>
-          <div className="text-sm">{title}</div>
-          {subtitle && <div className="text-[11px] font-normal opacity-80">{subtitle}</div>}
+          <div className="text-sm">Recording this change</div>
+          {isExit && <div className="text-[11px] font-normal opacity-80">Their login will be disabled.</div>}
         </div>
       </div>
 
@@ -118,34 +93,46 @@ export default function EmployeeChangeCard({ changes, statusTo, meta, setMeta, c
             </span>
           );
         })}
+        {docLabels.map((label) => (
+          <span key={label} className="inline-flex items-center gap-1.5 bg-white/70 border border-black/5 rounded-full px-2.5 py-1 text-[11px]">
+            <span className="font-semibold text-gray-500 uppercase tracking-wide text-[9px]">{label}</span>
+            <span className="font-semibold text-gray-800">Replaced</span>
+          </span>
+        ))}
       </div>
 
-      {/* Inputs — Action · (Turnover reason) · Reason · Effective date */}
+      {/* Inputs — Action · (Turnover reason) · Reason · Effective date. Action/
+          Effective-date only apply when a tracked field actually moved — a
+          doc-only edit has no timeline row, so no action/effective concept. */}
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="label">Action</label>
-          {locked ? (
-            <div className="input flex items-center gap-1.5 bg-gray-100 text-gray-600 cursor-not-allowed" title="Multiple fields changed — the action is recorded per field, not as one label">
-              <FiLock size={11} className="text-gray-400" /> {meta.action_code || derivedAction}
+        {changes.length > 0 && (
+          <>
+            <div>
+              <label className="label">Action</label>
+              {locked ? (
+                <div className="input flex items-center gap-1.5 bg-gray-100 text-gray-600 cursor-not-allowed" title="Multiple fields changed — the action is recorded per field, not as one label">
+                  <FiLock size={11} className="text-gray-400" /> {meta.action_code || derivedAction}
+                </div>
+              ) : (
+                <select className="select" value={meta.action_code || ''} onChange={(e) => setMeta((m) => ({ ...m, action_code: e.target.value }))}>
+                  {!meta.action_code && <option value="">Select…</option>}
+                  {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              )}
             </div>
-          ) : (
-            <select className="select" value={meta.action_code || ''} onChange={(e) => setMeta((m) => ({ ...m, action_code: e.target.value }))}>
-              {!meta.action_code && <option value="">Select…</option>}
-              {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          )}
-        </div>
-        <div>
-          <label className="label flex items-center gap-1"><FiClock size={11} /> Effective date</label>
-          <input
-            className="input"
-            type="date"
-            max={today}
-            value={meta.effective_date || today}
-            onChange={(e) => setMeta((m) => ({ ...m, effective_date: e.target.value }))}
-          />
-          <p className="text-[10px] text-gray-500 mt-0.5">{(meta.effective_date || today) === today ? '(today)' : '(backdated)'}</p>
-        </div>
+            <div>
+              <label className="label flex items-center gap-1"><FiClock size={11} /> Effective date</label>
+              <input
+                className="input"
+                type="date"
+                max={today}
+                value={meta.effective_date || today}
+                onChange={(e) => setMeta((m) => ({ ...m, effective_date: e.target.value }))}
+              />
+              <p className="text-[10px] text-gray-500 mt-0.5">{(meta.effective_date || today) === today ? '(today)' : '(backdated)'}</p>
+            </div>
+          </>
+        )}
 
         {isExit && (
           <div>
@@ -157,7 +144,7 @@ export default function EmployeeChangeCard({ changes, statusTo, meta, setMeta, c
           </div>
         )}
 
-        <div className={isExit ? '' : 'col-span-2'}>
+        <div className={'col-span-2'}>
           <label className="label">Reason <span className="text-red-500">*</span></label>
           <textarea
             className="input"

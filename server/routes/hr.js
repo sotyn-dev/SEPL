@@ -891,11 +891,15 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // left stale after also editing roster used to get recorded onto BOTH fields.
   // Now: 1 field changed → the picked/suggested single action; 2+ → the server
   // always stamps 'Multiple changes', so a stray dropdown choice can't mislabel.
+  // A KYC doc replace ALSO requires a reason (dme 2026-08-01 — reverses the
+  // 2026-07-31 "frictionless" call), even when no tracked field moved.
   const effFrom = toYMD(effective_date);
   const resolvedAction = resolveActionCode(changed, action_code);
-  if (changed.length > 0) {
-    if (!norm(reason))      return res.status(400).json({ error: 'A reason is required to record this change.' });
-    if (effFrom > istToday()) return res.status(400).json({ error: 'Effective date cannot be in the future.' });
+  if (changed.length > 0 || changedDocs.length > 0) {
+    if (!norm(reason)) return res.status(400).json({ error: 'A reason is required to record this change.' });
+  }
+  if (changed.length > 0 && effFrom > istToday()) {
+    return res.status(400).json({ error: 'Effective date cannot be in the future.' });
   }
 
   // One transaction: the employee UPDATE, the login active-sync, the updated_at
@@ -920,8 +924,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         roster ? normalizeRoster(roster) : null,
         aadhar_file || null, pan_file || null, qualification_file || null, now, req.params.id);
 
-  // Log each re-uploaded document as its own event — no reason gate (optional,
-  // per dme 2026-07-31: doc re-uploads stay frictionless).
+  // Log each re-uploaded document as its own event — reason is required (see
+  // the gate above; dme 2026-08-01 reversed the 07-31 "frictionless" call).
   if (changedDocs.length > 0) {
     const insDoc = db.prepare(
       `INSERT INTO employee_document_events (employee_id, doc_type, file_url, reason, changed_by, changed_at)

@@ -40,6 +40,10 @@ export default function Employees() {
   const [view, setView] = useState(() => sessionStorage.getItem('employees_view') || 'directory'); // 'directory' | 'review' | 'history'
   useEffect(() => { sessionStorage.setItem('employees_view', view); }, [view]);
   useEffect(() => () => sessionStorage.removeItem('employees_view'), []);
+  // Leaving History & Reports for another tab clears the selected employee, so
+  // coming back always starts at "no employee selected" rather than wherever
+  // you last left off (dme 2026-08-01).
+  useEffect(() => { if (view !== 'history') setHistoryEmpId(null); }, [view]);
   const [tabMenuOpen, setTabMenuOpen] = useState(false); // mobile 3-dot tab menu
   // History & Reports tab state — grouped HR events, not raw field diffs.
   const [historyEmpId, setHistoryEmpId] = useState(null); // employee driving both the History and Vault tabs
@@ -111,12 +115,15 @@ export default function Employees() {
   const loadVault = (id) => api.get(`/hr/employees/${id}/vault`)
     .then(r => setVault(r.data)).catch(() => setVault(null));
 
-  // Load whichever tab's data whenever the selected employee or tab changes.
+  // Load BOTH panels whenever the selected employee changes — desktop shows
+  // Vault + History side by side at once, so gating the fetch on historyTab
+  // (the mobile-only tab toggle) left the non-active panel stale/empty there.
   useEffect(() => {
     if (view !== 'history' || !historyEmpId) return;
-    if (historyTab === 'events') loadEvents(historyEmpId); else loadVault(historyEmpId);
+    loadEvents(historyEmpId);
+    loadVault(historyEmpId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, historyTab, historyEmpId]);
+  }, [view, historyEmpId]);
 
   // Admin: reconstruct history from the audit log. Run ONCE, right after deploy,
   // before any edits — employees already having timeline rows are skipped.
@@ -138,8 +145,13 @@ export default function Employees() {
     onYes: doSync,
   });
 
+  // null | 'employee' | 'monthly' — which export (if any) is in flight. Disables
+  // its triggering button + swaps the label while fetching: a slow report with
+  // no feedback used to get double-clicked into two downloads (dme 2026-08-01).
+  const [exportingKey, setExportingKey] = useState(null);
   // Download a styled .xlsx report (blob) — shared pattern for both exports.
-  const downloadXlsx = async (url, filename) => {
+  const downloadXlsx = async (url, filename, key) => {
+    setExportingKey(key);
     try {
       const r = await api.get(url, { responseType: 'blob' });
       const blobUrl = URL.createObjectURL(r.data);
@@ -152,12 +164,13 @@ export default function Employees() {
       URL.revokeObjectURL(blobUrl);
       toast.success('Exported to Excel');
     } catch { toast.error('Export failed'); }
+    finally { setExportingKey(null); }
   };
   const exportThisEmployee = () => historyEmpId && downloadXlsx(
-    `/hr/employees/${historyEmpId}/events/export.xlsx`, `hr-history-${istToday()}.xlsx`
+    `/hr/employees/${historyEmpId}/events/export.xlsx`, `hr-history-${istToday()}.xlsx`, 'employee'
   );
   const exportMonthlyReport = () => downloadXlsx(
-    `/hr/employees/history/export.xlsx?month=${reportMonth}`, `hr-monthly-report-${reportMonth}.xlsx`
+    `/hr/employees/history/export.xlsx?month=${reportMonth}`, `hr-monthly-report-${reportMonth}.xlsx`, 'monthly'
   );
 
   // Auto-link employees to users by matching email — for existing records
@@ -211,6 +224,18 @@ export default function Employees() {
   // Live diff of the tracked fields (edit only) — drives the field accents + card.
   const changes = editing && original ? computeChanges(original, form) : [];
   const changedSet = new Set(changes.map((c) => c.key));
+  // A KYC doc replace also requires a reason (dme 2026-08-01) — tracked
+  // separately from `changes` since docs aren't part of the timeline ledger.
+  // Named individually (not just a bool) so a combined edit's Change Card can
+  // show a chip per replaced doc — otherwise one shared reason silently covers
+  // a doc swap the card never mentions.
+  const DOC_SLOTS = [
+    { slot: '_aadhar_file', label: 'Aadhar Card' },
+    { slot: '_pan_file', label: 'PAN Card' },
+    { slot: '_qualification_file', label: 'Qualification Certificate' },
+  ];
+  const changedDocLabels = DOC_SLOTS.filter((d) => form[d.slot]).map((d) => d.label);
+  const docsChanged = changedDocLabels.length > 0;
   const revertField = (key) => setForm((f) => ({ ...f, [key]: original[key] }));
   const trackAccent = (key) => (changedSet.has(key) ? 'border-l-4 border-amber-400 pl-2' : '');
 
@@ -250,15 +275,19 @@ export default function Employees() {
       if (!payload.pan_file)           return toast.error('Upload PAN card');
       if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
     }
-    // A tracked change requires a REASON (the server enforces this too). Action is
-    // auto-derived by the Change Card — a single-field edit lets HR refine it via
-    // its dropdown, but a multi-field edit is always sent as whatever the card
-    // resolved ("Multiple changes"), never a stale single-action pick.
-    if (editing && changes.length > 0) {
+    // A tracked change OR a KYC doc replace requires a REASON (the server
+    // enforces this too). Action is auto-derived by the Change Card — a
+    // single-field edit lets HR refine it via its dropdown, but a multi-field
+    // edit is always sent as whatever the card resolved ("Multiple changes"),
+    // never a stale single-action pick. Doc-only edits skip the action/effective
+    // date (no timeline row for a pure doc swap) but still need the reason text.
+    if (editing && (changes.length > 0 || docsChanged)) {
       if (!changeMeta.reason?.trim()) return toast.error('Add a reason for this change');
+      payload.reason = changeMeta.reason.trim();
+    }
+    if (editing && changes.length > 0) {
       payload.action_code = changeMeta.action_code;
       payload.reason_code = changeMeta.reason_code || null;
-      payload.reason = changeMeta.reason.trim();
       payload.effective_date = changeMeta.effective_date || istToday();
     }
     try {
@@ -639,9 +668,11 @@ export default function Employees() {
                 </button>
               )}
               <div className="pl-3 border-l-2 border-gray-6200">
-                <div className="flex items-center gap-1.5 mb-1">
+                <div className="flex items-center gap-1.5 mb-0.5">
                   <input type="month" className="!text-sm !outline-none !w-32 h-8 p-2 rounded !border border-gray-200" max={istToday().slice(0, 7)} value={reportMonth} onChange={e => setReportMonth(e.target.value)} />
-                  <button onClick={exportMonthlyReport} className="btn btn-primary text-sm flex items-center gap-2 whitespace-nowrap !py-1.5"><FiDownload size={14} /> Get Report</button>
+                  <button onClick={exportMonthlyReport} disabled={!!exportingKey} className="btn btn-primary text-sm flex items-center gap-2 whitespace-nowrap !py-1.5 disabled:opacity-50">
+                    <FiDownload size={14} className={exportingKey === 'monthly' ? 'animate-pulse' : ''} /> {exportingKey === 'monthly' ? 'Exporting…' : 'Get Report'}
+                  </button>
                 </div>
                 <span className="text-[11px] text-gray-400">Org-wide Monthly report — all employees</span>
               </div>
@@ -702,7 +733,7 @@ export default function Employees() {
                       </div>
                     </div>
                   ))}
-                  {events.length === 0 && <div className="bg-white border border-gray-200 rounded-lg text-center py-8 px-3 text-gray-400 text-sm">No history yet for this employee. An admin can <span className="font-semibold">Sync from audit log</span>.</div>}
+                  {events.length === 0 && <div className="bg-white border border-gray-200 rounded-lg text-center py-8 px-3 text-gray-400 text-sm">No history yet for this employee. An admin can <span className="font-semibold inline-block">Sync from audit log</span>.</div>}
                 </div>
               );
 
@@ -741,8 +772,8 @@ export default function Employees() {
               );
 
               const exportBtn = (
-                <button onClick={exportThisEmployee} className="btn btn-secondary text-xs flex items-center gap-1.5 !px-2.5">
-                  <FiDownload size={12} /> Employee's history (Excel)
+                <button onClick={exportThisEmployee} disabled={!!exportingKey} className="btn btn-secondary text-xs flex items-center gap-1.5 !px-2.5 disabled:opacity-50">
+                  <FiDownload size={12} className={exportingKey === 'employee' ? 'animate-pulse' : ''} /> {exportingKey === 'employee' ? 'Exporting…' : "Employee's history (Excel)"}
                 </button>
               );
 
@@ -852,7 +883,7 @@ export default function Employees() {
               { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card *' },
               { key: 'qualification_file', slot: '_qualification_file', label: 'Highest Qualification Certificate *' },
             ].map(({ key, slot, label }) => (
-              <div key={key}>
+              <div key={key} className={form[slot] ? 'border-l-4 border-blue-400 pl-2' : ''}>
                 <label className="label">{label} <span className="text-gray-400 font-normal text-[10px]">(PDF / JPG / PNG, max 10 MB)</span></label>
                 <input
                   className="input"
@@ -867,17 +898,26 @@ export default function Employees() {
                     Existing: <a href={form[key]} target="_blank" rel="noreferrer" className="underline">view file</a> · upload to replace
                   </p>
                 )}
-                {form[slot] && <p className="text-[10px] text-blue-600 mt-0.5">Selected: {form[slot].name}</p>}
+                {/* Selected + revert — same "was X · revert" pattern as tracked fields */}
+                {form[slot] && (
+                  <p className="text-[10px] text-blue-600 mt-0.5 flex items-center gap-1.5">
+                    Selected: {form[slot].name}
+                    <button type="button" onClick={() => setForm({ ...form, [slot]: null })} className="underline hover:text-blue-900">revert</button>
+                  </p>
+                )}
               </div>
             ))}
           </div>
 
-          {/* Contextual Change Card — appears only when a tracked field moved.
-              Placed right above the footer, next to the Save button it gates,
-              instead of mid-form where it used to push everything else down. */}
-          {editing && (
+          {/* Contextual Change Card — one fixed look every time, whether a
+              tracked field moved, a doc got replaced, or both (dme 2026-08-01:
+              the old split (this card vs. a separate ad hoc doc-only box) plus
+              per-scenario colors/titles was a jarring permutation matrix).
+              Placed right above the footer, next to the Save button it gates. */}
+          {editing && (changes.length > 0 || docsChanged) && (
             <EmployeeChangeCard
               changes={changes}
+              docLabels={changedDocLabels}
               statusTo={form.status}
               meta={changeMeta}
               setMeta={setChangeMeta}
@@ -891,8 +931,8 @@ export default function Employees() {
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
             <button
               type="submit"
-              disabled={uploading || (editing && changes.length > 0 && !changeMeta.reason?.trim())}
-              title={editing && changes.length > 0 && !changeMeta.reason?.trim() ? 'Add a reason to save' : ''}
+              disabled={uploading || (editing && (changes.length > 0 || docsChanged) && !changeMeta.reason?.trim())}
+              title={editing && (changes.length > 0 || docsChanged) && !changeMeta.reason?.trim() ? 'Add a reason to save' : ''}
               className="btn btn-primary disabled:opacity-50">
               {uploading ? 'Uploading…' : (editing ? 'Update' : 'Create')}
             </button>
