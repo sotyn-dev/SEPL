@@ -8,7 +8,7 @@ import { computeChanges } from '../constants/employeeChangeCodes';
 import { fmtDate, fmtDateTime } from '../utils/datetime';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2, FiRotateCcw, FiFileText, FiRefreshCw, FiLock, FiUnlock } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2, FiRotateCcw, FiFileText, FiRefreshCw, FiLock, FiUnlock, FiMoreVertical } from 'react-icons/fi';
 
 // IST calendar date (caps the effective-date picker; matches the server).
 const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
@@ -33,10 +33,17 @@ export default function Employees() {
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
   const [rosterAudit, setRosterAudit] = useState({ backlog: [], guests: [] });
-  const [view, setView] = useState('directory'); // 'directory' | 'review' | 'history'
+  // Tab survives an in-page refresh via sessionStorage (no URL/query-param
+  // routing), but navigating away to another route and back should land on
+  // Directory again — so the stored value is cleared on unmount, not just left
+  // to expire naturally like localStorage would.
+  const [view, setView] = useState(() => sessionStorage.getItem('employees_view') || 'directory'); // 'directory' | 'review' | 'history'
+  useEffect(() => { sessionStorage.setItem('employees_view', view); }, [view]);
+  useEffect(() => () => sessionStorage.removeItem('employees_view'), []);
+  const [tabMenuOpen, setTabMenuOpen] = useState(false); // mobile 3-dot tab menu
   // History & Reports tab state — grouped HR events, not raw field diffs.
   const [historyEmpId, setHistoryEmpId] = useState(null); // employee driving both the History and Vault tabs
-  const [historyTab, setHistoryTab] = useState('events'); // 'events' | 'vault'
+  const [historyTab, setHistoryTab] = useState('vault'); // 'events' | 'vault' — mobile/medium tab state only; large screens show both as a split view
   const [events, setEvents] = useState([]);
   const [vault, setVault] = useState(null);
   const [reportMonth, setReportMonth] = useState(istToday().slice(0, 7)); // org-wide monthly report — independent of historyEmpId
@@ -374,30 +381,68 @@ export default function Employees() {
 
       {/* Tabs — keep the roster-reconciliation flags off the main directory
           (in production the flag lists can be long and clutter the table).
-          They live in their own "Roster Review" tab as a listed view. */}
-      <div className="flex gap-2 border-b border-gray-200">
-        <button
-          onClick={() => setView('directory')}
-          className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${view === 'directory' ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          Directory
-        </button>
-        <button
-          onClick={() => setView('review')}
-          className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px flex items-center gap-1.5 ${view === 'review' ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          Roster Review
-          {(rosterAudit.backlog.length + rosterAudit.guests.length) > 0 && (
-            <span className="text-[10px] font-bold bg-amber-500 text-white rounded-full px-1.5 py-0.5 leading-none">{rosterAudit.backlog.length + rosterAudit.guests.length}</span>
-          )}
-        </button>
-        <button
-          onClick={() => setView('history')}
-          className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px flex items-center gap-1.5 ${view === 'history' ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          <FiFileText size={14} /> History &amp; Reports
-        </button>
-      </div>
+          They live in their own "Roster Review" tab as a listed view.
+          One TABS array drives both the desktop strip and the mobile dropdown —
+          only the wrapping classes/layout differ, not the link content. */}
+      {(() => {
+        const rosterFlags = rosterAudit.backlog.length + rosterAudit.guests.length;
+        const TABS = [
+          { id: 'directory', content: 'Directory' },
+          { id: 'history', content: <><FiFileText size={14} /> History &amp; Reports</> },
+          {
+            id: 'review',
+            content: (
+              <>
+                Roster Review
+                {rosterFlags > 0 && (
+                  <span className="text-[10px] font-bold bg-amber-500 text-white rounded-full px-1.5 py-0.5 leading-none">{rosterFlags}</span>
+                )}
+              </>
+            ),
+          },
+        ];
+        return (
+          <div className="border-b border-gray-200">
+            {/* Desktop/tablet — full tab strip */}
+            <div className="hidden sm:flex gap-2">
+              {TABS.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setView(t.id)}
+                  className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px flex items-center gap-1.5 ${view === t.id ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                  {t.content}
+                </button>
+              ))}
+            </div>
+
+            {/* Mobile — 3-dot menu; all tabs move into the dropdown */}
+            <div className="sm:hidden relative">
+              <button onClick={() => setTabMenuOpen(o => !o)} className="absolute top-1 right-0 p-1.5 text-gray-500 hover:bg-gray-50" aria-label="Tabs menu">
+                <FiMoreVertical size={18} />
+              </button>
+              {tabMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setTabMenuOpen(false)} />
+                  <div className="absolute right-0 top-full w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1 overflow-hidden">
+                    {TABS.map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => { setView(t.id); setTabMenuOpen(false); }}
+                        className={`w-full text-left px-3 py-2.5 text-sm font-semibold flex items-center gap-1.5 ${view === t.id ? 'text-red-600 bg-red-50' : 'text-gray-700 hover:bg-gray-50'}`}>
+                        {t.content}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {view === 'directory' && (
       <>
+      <h5 className="font-semibold text-sm md:text-base">Directory</h5>
       {/* Search */}
       <div className="relative">
         <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -514,6 +559,12 @@ export default function Employees() {
 
       {view === 'review' && (
         <div className="space-y-4">
+          <h5 className="font-semibold text-sm md:text-base">
+            <span className="inline-block mr-2">Roster Review</span>
+            {(rosterAudit.backlog.length + rosterAudit.guests.length) > 0 && (
+              <span className="md:hidden text-[10px] font-bold bg-amber-500 text-white rounded-full px-1.5 py-0.5 leading-none">{rosterAudit.backlog.length + rosterAudit.guests.length}</span>
+            )}
+          </h5>
           {rosterAudit.backlog.length === 0 && rosterAudit.guests.length === 0 && (
             <div className="card p-8 text-center text-gray-400 text-sm">Nothing to review — every active login maps to an on-roll employee.</div>
           )}
@@ -574,20 +625,25 @@ export default function Employees() {
               month picker + its report button are grouped as ONE widget so
               the pairing (which control drives which action) is unambiguous;
               Sync is a distinct, unrelated action set off by a divider. */}
-          <div className="flex flex-wrap items-end gap-3 justify-start bg-gray-50 rounded-lg py-2 text-sm">
-            <h4 className='font-semibold text-base mr-auto md:text-lg'>
-              Employee Record History & Details
-            </h4>
-            {isAdmin() && (
-              <button onClick={runSync} disabled={syncing} className="btn btn-secondary !py-1.5 text-sm flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap border-l border-gray-200 pl-3" title="Reconstruct history from the audit log for every employee (admin, non-destructive)">
-                <FiRefreshCw size={12} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing…' : 'Sync from audit log'}
-              </button>
-            )}
-            <div className="pl-3 md:border-l-2 border-gray-6200">
-              <span className="text-[11px] text-gray-400">Org-wide Monthly report — all employees</span>
-              <div className="flex items-center gap-1.5 mt-1">
-                <input type="month" className="text-sm !outline-none !w-32 h-8 p-2 rounded !border border-gray-200" max={istToday().slice(0, 7)} value={reportMonth} onChange={e => setReportMonth(e.target.value)} />
-                <button onClick={exportMonthlyReport} className="btn btn-primary text-sm flex items-center gap-2 whitespace-nowrap !py-1.5"><FiDownload size={14} /> Get Report</button>
+          <div className="flex flex-wrap items-start gap-3 justify-start bg-gray-50 rounded-lg pb-2 text-sm border-b border-gray-200">
+            <div className="mr-auto max-md:w-full">
+              <h4 className='font-semibold text-sm md:text-base'>
+                History & Reports
+              </h4>
+              <p className="text-gray-400 mt-1 text-xs">View Employee Record History & Details</p>
+            </div>
+            <div className="flex flex-wrap items-start gap-3">
+              {isAdmin() && (
+                <button onClick={runSync} disabled={syncing} className="btn btn-secondary !py-1.5 text-sm flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap border-l border-gray-200 pl-3" title="Reconstruct history from the audit log for every employee (admin, non-destructive)">
+                  <FiRefreshCw size={12} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing…' : 'Sync from audit log'}
+                </button>
+              )}
+              <div className="pl-3 border-l-2 border-gray-6200">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <input type="month" className="!text-sm !outline-none !w-32 h-8 p-2 rounded !border border-gray-200" max={istToday().slice(0, 7)} value={reportMonth} onChange={e => setReportMonth(e.target.value)} />
+                  <button onClick={exportMonthlyReport} className="btn btn-primary text-sm flex items-center gap-2 whitespace-nowrap !py-1.5"><FiDownload size={14} /> Get Report</button>
+                </div>
+                <span className="text-[11px] text-gray-400">Org-wide Monthly report — all employees</span>
               </div>
             </div>
           </div>
@@ -613,94 +669,111 @@ export default function Employees() {
               </div>
             )}
 
-            {historyEmpId && (
-              <>
-                <div className="flex items-center justify-between border-b border-gray-200 mb-4">
-                  <div className="flex gap-1">
-                    <button onClick={() => setHistoryTab('events')} className={`px-3 py-2 text-sm font-semibold border-b-2 ${historyTab === 'events' ? 'border-red-600 text-red-700' : 'border-transparent text-gray-500'}`}>History</button>
-                    <button onClick={() => setHistoryTab('vault')} className={`px-3 py-2 text-sm font-semibold border-b-2 ${historyTab === 'vault' ? 'border-red-600 text-red-700' : 'border-transparent text-gray-500'}`}>Employee vault</button>
+            {historyEmpId && (() => {
+              // Sleeker timeline — smaller paddings/text so it reads well squeezed into a half-width column on large screens.
+              const eventsPanel = (
+                <div className="relative pl-5">
+                  <div className="absolute left-[7px] top-4 bottom-1 w-0.5 bg-gray-200"></div>
+                  {events.map((g, gi) => (
+                    <div key={gi} className="relative mb-3">
+                      <div className="absolute -left-[16px] top-4 w-2 h-2 rounded-full bg-gray-400"></div>
+                      <div className="border border-gray-200 rounded-lg p-3 bg-white">
+                        <div className="flex justify-between items-baseline mb-1.5">
+                          <span className="text-[11px] text-gray-500">{fmtDate(g.effective)}</span>
+                          <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${EVENT_BADGE[g.event_type] || 'bg-gray-100 text-gray-700'}`}>{g.event_type}</span>
+                        </div>
+                        <table className="w-full text-xs mb-1.5">
+                          <tbody>
+                            {g.fields.map((f, fi) => {
+                              const fmtField = (v) => (f.label === 'Salary' && v && /^\d+$/.test(String(v))) ? `Rs ${Number(v).toLocaleString('en-IN')}` : v;
+                              return (
+                                <tr key={fi}>
+                                  <td className="text-gray-500 py-0.5 pr-2 w-28 align-top">{f.label}</td>
+                                  <td className="py-0.5">{f.from ? <>{fmtField(f.from)} <span className="text-gray-400">→</span> <span className="font-semibold">{fmtField(f.to) || '—'}</span></> : <span className="font-semibold">{fmtField(f.to) || '—'}</span>}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        <div className="border-t border-gray-100 pt-1.5 flex justify-between text-[11px] text-gray-500">
+                          <span>Reason: {g.reason || '—'}</span>
+                          <span>By {g.by || '—'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {events.length === 0 && <div className="bg-white border border-gray-200 rounded-lg text-center py-8 px-3 text-gray-400 text-sm">No history yet for this employee. An admin can <span className="font-semibold">Sync from audit log</span>.</div>}
+                </div>
+              );
+
+              // Employee vault — read-only current details + mandatory documents.
+              const vaultPanel = vault && (
+                <div className="space-y-4">
+                  <div className="border border-gray-200 rounded-lg p-4 bg-white">
+                    <div className="text-xs text-gray-400 mb-2">Current details (read only)</div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm break-words md:gap-x-6">
+                      <div><span className="text-gray-500">Name</span><br /><span className="font-semibold">{vault.employee.name}</span></div>
+                      <div><span className="text-gray-500">Status</span><br /><StatusBadge status={vault.employee.status} /></div>
+                      <div><span className="text-gray-500">Phone</span><br />{vault.employee.phone || '—'}</div>
+                      <div><span className="text-gray-500">Email</span><br />{vault.employee.email || '—'}</div>
+                      <div><span className="text-gray-500">Designation</span><br />{vault.employee.designation || '—'}</div>
+                      <div><span className="text-gray-500">Department</span><br />{vault.employee.department || '—'}</div>
+                      <div><span className="text-gray-500">Join date</span><br />{vault.employee.join_date ? fmtDate(vault.employee.join_date) : '—'}</div>
+                      <div><span className="text-gray-500">Roster</span><br />{vault.employee.roster || '—'}</div>
+                      {canSeeSalary && <div><span className="text-gray-500">Salary</span><br />Rs {(vault.employee.salary || 0).toLocaleString('en-IN')}</div>}
+                      <div><span className="text-gray-500">OT eligible</span><br />{vault.employee.ot_eligible ? 'Yes' : 'No'}</div>
+                    </div>
                   </div>
-                  {historyTab === 'events' && (
-                    <button onClick={exportThisEmployee} className="btn btn-secondary text-xs flex items-center gap-1.5 mb-1.5 !px-2.5">
-                      <FiDownload size={12} /> Employee's history (Excel)
-                    </button>
-                  )}
-                </div>
-
-                <div className="min-h-[280px]">
-                  {/* History — vertical timeline of grouped HR events */}
-                  {historyTab === 'events' && (
-                    <div className="relative pl-6">
-                      <div className="absolute left-[9px] top-5 bottom-1.5 w-0.5 bg-gray-200"></div>
-                      {events.map((g, gi) => (
-                        <div key={gi} className="relative mb-4">
-                          <div className="absolute -left-[19px] top-5 w-2.5 h-2.5 rounded-full bg-gray-400"></div>
-                          <div className="border border-gray-200 rounded-lg p-4 bg-white">
-                            <div className="flex justify-between items-baseline mb-2">
-                              <span className="text-xs text-gray-500">{fmtDate(g.effective)}</span>
-                              <span className={`text-xs px-2.5 py-0.5 rounded-full font-semibold ${EVENT_BADGE[g.event_type] || 'bg-gray-100 text-gray-700'}`}>{g.event_type}</span>
-                            </div>
-                            <table className="w-full text-sm mb-2">
-                              <tbody>
-                                {g.fields.map((f, fi) => {
-                                  const fmtField = (v) => (f.label === 'Salary' && v && /^\d+$/.test(String(v))) ? `Rs ${Number(v).toLocaleString('en-IN')}` : v;
-                                  return (
-                                    <tr key={fi}>
-                                      <td className="text-gray-500 py-0.5 pr-3 w-32 align-top">{f.label}</td>
-                                      <td className="py-0.5">{f.from ? <>{fmtField(f.from)} <span className="text-gray-400">→</span> <span className="font-semibold">{fmtField(f.to) || '—'}</span></> : <span className="font-semibold">{fmtField(f.to) || '—'}</span>}</td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                            <div className="border-t border-gray-100 pt-2 flex justify-between text-xs text-gray-500">
-                              <span>Reason: {g.reason || '—'}</span>
-                              <span>By {g.by || '—'}</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                      {events.length === 0 && <div className="border border-gray-200 rounded-lg text-center py-8 text-gray-400">No history yet for this employee. An admin can <span className="font-semibold">Sync from audit log</span>.</div>}
-                    </div>
-                  )}
-
-                  {/* Employee vault — read-only current details + mandatory documents.
-                      No export/report control here, deliberately kept separate. */}
-                  {historyTab === 'vault' && vault && (
-                    <div className="space-y-4">
-                      <div className="border border-gray-200 rounded-lg p-4 bg-white">
-                        <div className="text-xs text-gray-400 mb-2">Current details (read only)</div>
-                        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                          <div><span className="text-gray-500">Name</span><br /><span className="font-semibold">{vault.employee.name}</span></div>
-                          <div><span className="text-gray-500">Status</span><br /><StatusBadge status={vault.employee.status} /></div>
-                          <div><span className="text-gray-500">Phone</span><br />{vault.employee.phone || '—'}</div>
-                          <div><span className="text-gray-500">Email</span><br />{vault.employee.email || '—'}</div>
-                          <div><span className="text-gray-500">Designation</span><br />{vault.employee.designation || '—'}</div>
-                          <div><span className="text-gray-500">Department</span><br />{vault.employee.department || '—'}</div>
-                          <div><span className="text-gray-500">Join date</span><br />{vault.employee.join_date ? fmtDate(vault.employee.join_date) : '—'}</div>
-                          <div><span className="text-gray-500">Roster</span><br />{vault.employee.roster || '—'}</div>
-                          {canSeeSalary && <div><span className="text-gray-500">Salary</span><br />Rs {(vault.employee.salary || 0).toLocaleString('en-IN')}</div>}
-                          <div><span className="text-gray-500">OT eligible</span><br />{vault.employee.ot_eligible ? 'Yes' : 'No'}</div>
+                  <div className="text-xs text-gray-400">Documents</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {vault.documents.map(d => (
+                      <div key={d.doc_type} className="border border-gray-200 rounded-lg p-4 bg-white">
+                        <div className="font-semibold text-sm mb-2">{d.label}</div>
+                        <div className="text-[11px] text-gray-400 mb-2">{d.file_url ? (d.updated_at ? `Updated ${fmtDate(d.updated_at)}` : 'Uploaded') : 'Not uploaded'}</div>
+                        <div className="flex gap-2">
+                          <a href={d.file_url || undefined} target="_blank" rel="noreferrer" className={`btn btn-secondary text-xs flex-1 text-center ${!d.file_url ? 'opacity-40 pointer-events-none' : ''}`}>View</a>
+                          <a href={d.file_url || undefined} download target="_blank" rel="noreferrer" className={`btn btn-secondary text-xs flex-1 text-center ${!d.file_url ? 'opacity-40 pointer-events-none' : ''}`}><FiDownload size={12} className="inline" /></a>
                         </div>
                       </div>
-                      <div className="text-xs text-gray-400">Documents</div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        {vault.documents.map(d => (
-                          <div key={d.doc_type} className="border border-gray-200 rounded-lg p-4 bg-white">
-                            <div className="font-semibold text-sm mb-2">{d.label}</div>
-                            <div className="text-[11px] text-gray-400 mb-2">{d.file_url ? (d.updated_at ? `Updated ${fmtDate(d.updated_at)}` : 'Uploaded') : 'Not uploaded'}</div>
-                            <div className="flex gap-2">
-                              <a href={d.file_url || undefined} target="_blank" rel="noreferrer" className={`btn btn-secondary text-xs flex-1 text-center ${!d.file_url ? 'opacity-40 pointer-events-none' : ''}`}>View</a>
-                              <a href={d.file_url || undefined} download target="_blank" rel="noreferrer" className={`btn btn-secondary text-xs flex-1 text-center ${!d.file_url ? 'opacity-40 pointer-events-none' : ''}`}><FiDownload size={12} className="inline" /></a>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                    ))}
+                  </div>
                 </div>
-              </>
-            )}
+              );
+
+              const exportBtn = (
+                <button onClick={exportThisEmployee} className="btn btn-secondary text-xs flex items-center gap-1.5 !px-2.5">
+                  <FiDownload size={12} /> Employee's history (Excel)
+                </button>
+              );
+
+              // Single mount for each panel — mobile/desktop switch by CSS display
+              // toggles (tab-state class + an lg: override), not by mounting the
+              // panel twice in the tree. Heavy content (docs grid, timeline) only
+              // ever exists once in the DOM.
+              return (
+                <div>
+                  {/* Mobile/medium tab switcher — collapses away on large screens */}
+                  <div className="lg:hidden flex gap-1 border-b border-gray-200 mb-4">
+                    <button onClick={() => setHistoryTab('vault')} className={`px-3 py-2 text-sm font-semibold border-b-2 ${historyTab === 'vault' ? 'border-red-600 text-red-700' : 'border-transparent text-gray-500'}`}>Employee vault</button>
+                    <button onClick={() => setHistoryTab('events')} className={`px-3 py-2 text-sm font-semibold border-b-2 ${historyTab === 'events' ? 'border-red-600 text-red-700' : 'border-transparent text-gray-500'}`}>History</button>
+                  </div>
+
+                  <div className="lg:grid lg:grid-cols-5 lg:gap-6">
+                    <div className={`${historyTab === 'vault' ? 'block' : 'hidden'} lg:block lg:col-span-3 lg:mt-3`}>
+                      <h5 className="hidden lg:block font-semibold text-sm mb-3">Employee Vault</h5>
+                      {vaultPanel}
+                    </div>
+                    <div className={`${historyTab === 'events' ? 'block' : 'hidden'} lg:block lg:col-span-2`}>
+                      <div className="flex items-end justify-between mb-3 ml-5 lg:ml-0">
+                        <h5 className="hidden lg:block font-semibold text-sm">History</h5>
+                        {exportBtn}
+                      </div>
+                      {eventsPanel}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
