@@ -2299,6 +2299,11 @@ router.get('/:id', (req, res) => {
   dpr.materials = db.prepare('SELECT * FROM dpr_material WHERE dpr_id=?').all(req.params.id);
   dpr.machinery = db.prepare('SELECT * FROM dpr_machinery WHERE dpr_id=?').all(req.params.id);
   dpr.contractors = db.prepare('SELECT id, name, manpower FROM dpr_contractors WHERE dpr_id=? ORDER BY id').all(req.params.id);
+  // SPOS (mam 2026-07-31): the report shows the full site-store cycle for
+  // the day — item-wise ISSUED (morning slips) / RETURNED (evening slips)
+  // — alongside the consumed rows, so the DPR reads like the store ledger.
+  try { dpr.store_movements = siteConsumptionFor(db, dpr.site_id, dpr.report_date); }
+  catch (_) { dpr.store_movements = []; }
   res.json(dpr);
 });
 
