@@ -4458,6 +4458,10 @@ function initializeDatabase() {
         ot_eligible    INTEGER,               -- mirrors employees.ot_eligible
         status         TEXT,                  -- mirrors employees.status
         join_date      TEXT,                  -- mirrors employees.join_date (tracked: corrections need a reason)
+        salary_effective_from TEXT,           -- salary's OWN effective date, isolated from effective_from's noise
+        status_effective_from TEXT,           -- status's OWN effective date, isolated likewise
+        salary_action  TEXT,                  -- 'revision' | 'correction' — set only when salary changed
+        salary_reason_code TEXT,              -- one of SALARY_REASON_CODES — set only when salary_action='revision'
         effective_from TEXT NOT NULL,         -- date this state became true (date-level, YYYY-MM-DD)
         effective_seq  INTEGER DEFAULT 0,     -- EFFSEQ: tiebreaker for >1 change the same day
         effective_to   TEXT,                  -- NULL = the current open row
@@ -4510,6 +4514,10 @@ function initializeDatabase() {
     addCol('phone',             'phone TEXT');
     addCol('email',             'email TEXT');
     addCol('linked_user_label', 'linked_user_label TEXT');
+    addCol('salary_effective_from', 'salary_effective_from TEXT');
+    addCol('status_effective_from', 'status_effective_from TEXT');
+    addCol('salary_action',         'salary_action TEXT');
+    addCol('salary_reason_code',    'salary_reason_code TEXT');
 
     // Does employee_id still block deletes? PRAGMA foreign_key_list → on_delete.
     const fks = db.prepare(`PRAGMA foreign_key_list(employee_timeline)`).all();
@@ -4519,6 +4527,7 @@ function initializeDatabase() {
       db.pragma('foreign_keys = OFF');
       const cols = `id, employee_id, employee_name, phone, email, linked_user_label, department_id, designation_id, department,
         designation, manager_id, salary, salary_exempt, roster, ot_eligible, status, join_date,
+        salary_effective_from, status_effective_from, salary_action, salary_reason_code,
         effective_from, effective_seq, effective_to, action_code, reason_code, reason,
         source, changed_by, changed_at`;
       db.transaction(() => {
@@ -4541,6 +4550,10 @@ function initializeDatabase() {
             ot_eligible    INTEGER,
             status         TEXT,
             join_date      TEXT,
+            salary_effective_from TEXT,
+            status_effective_from TEXT,
+            salary_action  TEXT,
+            salary_reason_code TEXT,
             effective_from TEXT NOT NULL,
             effective_seq  INTEGER DEFAULT 0,
             effective_to   TEXT,

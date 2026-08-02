@@ -1,7 +1,22 @@
-import { useEffect } from 'react';
-import { FiArrowRight, FiClock, FiInfo, FiLock } from 'react-icons/fi';
-import { ACTIONS, TURNOVER_REASONS, EXIT_STATUSES, resolveAction } from '../constants/employeeChangeCodes';
+import { useEffect, useState } from 'react';
+import { FiAlertTriangle, FiArrowRight, FiClock, FiInfo, FiLock } from 'react-icons/fi';
+import { ACTIONS, TURNOVER_REASONS, EXIT_STATUSES, SALARY_REASON_CODES, resolveAction } from '../constants/employeeChangeCodes';
 import { fmtDate } from '../utils/datetime';
+import api from '../api';
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const monthLabel = (m) => { if (!m) return ''; const [y, mo] = m.split('-'); return `${MONTH_NAMES[Number(mo) - 1]} ${y}`; };
+
+// ONE fixed warning-box style, always — same principle as the card's own fixed
+// header/color (see file note below): only the wording changes per scenario,
+// never the container tone. A per-scenario amber/red split was tried and
+// rejected for this same card once already (dme 2026-08-01).
+const LockWarning = ({ children }) => (
+  <div className="flex items-start gap-1.5 text-[11px] bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2 py-1.5">
+    <FiAlertTriangle size={12} className="mt-0.5 shrink-0" />
+    <span>{children}</span>
+  </div>
+);
 
 // The Contextual Change Card — the editor's single reason-capture surface.
 // Renders whenever a tracked field moved AND/OR a KYC doc was replaced. No
@@ -15,40 +30,73 @@ import { fmtDate } from '../utils/datetime';
 // Props:
 //   changes      [{key,label,money,from,to}]  — the live diff (already computed)
 //   statusTo     the new status value (for exit-reason gating)
-//   meta         { action_code, reason_code, reason, effective_date }
+//   meta         { action_code, reason_code, reason, effective_date,
+//                  salary_effective_date, salary_action, salary_reason_code,
+//                  status_effective_date }
 //   setMeta      updater
 //   canSeeSalary bool — masks the pay figure for non-holders
 //   today        'YYYY-MM-DD' — caps the effective date
 //   users        [{id,name,username,email}] — resolves the Linked user chip from an id to a name
+//   employeeId   the employee being edited — drives the payroll-lock-check calls below
 //   docLabels    [string] — KYC docs replaced alongside this edit (display-only:
 //                a doc swap isn't a tracked field, so it never drives the
 //                action logic below — just shown so the one shared Reason is
 //                visibly known to cover it too)
-export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, meta, setMeta, canSeeSalary, today, users = [] }) {
+export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, meta, setMeta, canSeeSalary, today, users = [], employeeId }) {
   const changedKeys = changes.map((c) => c.key);
   const isExit = changedKeys.includes('status') && EXIT_STATUSES.includes(String(statusTo || '').toLowerCase());
 
-  // The Action control: LOCKED to "Multiple changes" the moment >1 tracked field
-  // has moved (server enforces this too — see resolveActionCode). This is the
-  // fix for picking "Status Change" then also editing roster and forgetting to
-  // update the dropdown, which used to silently mislabel the roster change.
-  // Only a true single-field edit gets an editable dropdown. A doc-only edit
-  // (no tracked field) has no action concept — the whole Action/Effective-date
-  // row is skipped for it below.
-  const { locked, value: derivedAction } = resolveAction(changedKeys);
+  // Salary AND status each get their own isolated block (below) — both
+  // excluded from the shared Action's field count, so e.g. a promotion
+  // (designation+salary) doesn't swallow salary's own revision/correction
+  // distinction into "Multiple changes", and a status+salary edit with
+  // nothing else doesn't need the shared Action block at all.
+  const sharedActionKeys = changedKeys.filter((k) => k !== 'salary' && k !== 'status');
+
+  // The Action control: LOCKED to "Multiple changes" the moment >1 (shared)
+  // tracked field has moved (server enforces this too — see resolveActionCode).
+  // This is the fix for picking a single action then also editing roster and
+  // forgetting to update the dropdown, which used to silently mislabel the
+  // roster change. Only a true single-field edit gets an editable dropdown.
+  const { locked, value: derivedAction } = resolveAction(sharedActionKeys);
 
   // Keep meta.action_code in sync with the derived value whenever the change
   // SHAPE moves between single-field and multi-field (or between which single
   // field), so a stale pick from a moment ago never lingers into a new shape.
   useEffect(() => {
-    if (!changes.length) return;
+    if (!sharedActionKeys.length) return;
     if (locked) {
       setMeta((m) => (m.action_code === derivedAction ? m : { ...m, action_code: derivedAction }));
     } else if (!meta.action_code) {
       setMeta((m) => ({ ...m, action_code: derivedAction }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [changedKeys.join('|'), locked, derivedAction]);
+  }, [sharedActionKeys.join('|'), locked, derivedAction]);
+
+  // Payroll-lock check — debounced, informational only, never blocks Save.
+  // Fires whenever the isolated salary/status effective date changes.
+  const [salaryLock, setSalaryLock] = useState(null);
+  const [statusLock, setStatusLock] = useState(null);
+  useEffect(() => {
+    if (!employeeId || !changedKeys.includes('salary')) { setSalaryLock(null); return undefined; }
+    const date = meta.salary_effective_date || today;
+    const t = setTimeout(() => {
+      api.get(`/hr/employees/${employeeId}/payroll-lock-check`, { params: { date } })
+        .then((r) => setSalaryLock(r.data)).catch(() => setSalaryLock(null));
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeeId, changedKeys.includes('salary'), meta.salary_effective_date, today]);
+  useEffect(() => {
+    if (!employeeId || !changedKeys.includes('status')) { setStatusLock(null); return undefined; }
+    const date = meta.status_effective_date || today;
+    const t = setTimeout(() => {
+      api.get(`/hr/employees/${employeeId}/payroll-lock-check`, { params: { date } })
+        .then((r) => setStatusLock(r.data)).catch(() => setStatusLock(null));
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeeId, changedKeys.includes('status'), meta.status_effective_date, today]);
 
   if (!changes.length && !docLabels.length) return null;
 
@@ -101,11 +149,85 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
         ))}
       </div>
 
+      {/* Salary — its own isolated date + Pay Revision/Correction classifier.
+          Payroll is the only thing that reads employees.salary unconditionally
+          (even for salary_exempt employees — they still get the full flat
+          figure every month), so its timing gets absolute, always-visible
+          treatment rather than sharing the generic Effective date below. */}
+      {changedKeys.includes('salary') && (
+        <div className="bg-white/70 border border-black/5 rounded-lg p-2.5 space-y-2">
+          <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+            <div className="w-full font-semibold text-sm">
+              Salary Change
+            </div>
+            <div className="w-1/2">
+              <label className="label flex items-center gap-1"><FiClock size={11} /> Effective from</label>
+              <input
+                className="input"
+                type="date"
+                max={today}
+                value={meta.salary_effective_date || today}
+                onChange={(e) => setMeta((m) => ({ ...m, salary_effective_date: e.target.value }))}
+              />
+            </div>
+            <div className="w-[45%]">
+              <label className="label">Reason</label>
+              <select
+                className="select"
+                value={meta.salary_action === 'correction' ? 'correction' : (meta.salary_reason_code || '')}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) setMeta((m) => ({ ...m, salary_action: '', salary_reason_code: '' }));
+                  else if (v === 'correction') setMeta((m) => ({ ...m, salary_action: 'correction', salary_reason_code: '' }));
+                  else setMeta((m) => ({ ...m, salary_action: 'revision', salary_reason_code: v }));
+                }}>
+                <option value="">Select…</option>
+                {SALARY_REASON_CODES.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+                <option value="correction">Correction</option>
+              </select>
+            </div>
+          </div>
+          {salaryLock?.finalised && (
+            <LockWarning>
+              {meta.salary_action === 'correction'
+                ? <>{monthLabel(salaryLock.month)} payroll is already finalised at the old salary — this correction won't reflect there unless that month is unlocked and re-run.</>
+                : <>{monthLabel(salaryLock.month)} payroll is already finalised — this raise will apply from the next open month instead.</>}
+            </LockWarning>
+          )}
+        </div>
+      )}
+
+      {/* Status — its own isolated date. finalise() only ever selects
+          status='active' employees, so this date decides which month an
+          employee drops out of/into a payroll run. No action-type control
+          here — unlike salary, status's action is already unambiguous. */}
+      {changedKeys.includes('status') && (
+        <div className="bg-white/70 border border-black/5 rounded-lg p-2.5 space-y-2">
+          <div className="w-full font-semibold text-sm">
+              Status Change
+          </div>
+          <div>
+            <label className="label flex items-center gap-1"><FiClock size={11} /> Effective from</label>
+            <input
+              className="input"
+              type="date"
+              max={today}
+              value={meta.status_effective_date || today}
+              onChange={(e) => setMeta((m) => ({ ...m, status_effective_date: e.target.value }))}
+            />
+          </div>
+          {statusLock?.finalised && (
+            <LockWarning>{monthLabel(statusLock.month)} payroll is already finalised — this status change won't affect who was included that month.</LockWarning>
+          )}
+        </div>
+      )}
+
       {/* Inputs — Action · (Turnover reason) · Reason · Effective date. Action/
-          Effective-date only apply when a tracked field actually moved — a
-          doc-only edit has no timeline row, so no action/effective concept. */}
+          Effective-date cover everything EXCEPT salary/status (their own
+          blocks above) — only rendered when some other field changed too.
+          A doc-only edit has no timeline row, so no action/effective concept either. */}
       <div className="grid grid-cols-2 gap-3">
-        {changes.length > 0 && (
+        {sharedActionKeys.length > 0 && (
           <>
             <div>
               <label className="label">Action</label>
@@ -121,7 +243,9 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
               )}
             </div>
             <div>
-              <label className="label flex items-center gap-1"><FiClock size={11} /> Effective date</label>
+              <label className="label flex items-center gap-1" title={changedKeys.includes('salary') || changedKeys.includes('status') ? 'Effective date for changes other than salary/status' : 'Effective date'}>
+                <FiClock size={11} /> Effective date
+              </label>
               <input
                 className="input"
                 type="date"

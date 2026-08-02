@@ -9,7 +9,7 @@ const { logAuditEvent } = require('../middleware/audit');
 const { parseResume } = require('../utils/resumeParser');
 const { normalizeRoster } = require('../lib/roster');
 const { recordEmployeeChange, seedHiredRow, backfillFromAudit, toYMD, istToday } = require('../lib/employeeTimeline');
-const { TRACKED_FIELDS, ACTIONS, suggestAction, resolveActionCode, classifyEvent } = require('../lib/employeeChangeCodes');
+const { TRACKED_FIELDS, ACTIONS, suggestAction, resolveActionCode, classifyEvent, SALARY_ACTIONS, SALARY_REASON_CODES, SALARY_REASON_LABELS } = require('../lib/employeeChangeCodes');
 // Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
 // date-level effective_from). Server clock is UTC on the VPS.
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -777,6 +777,10 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   if (!aadhar_file)        return res.status(400).json({ error: 'Aadhar card is required' });
   if (!pan_file)           return res.status(400).json({ error: 'PAN card is required' });
   if (!qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
+  // Unenforced before this plan — a $0/blank salary saved silently, then never
+  // appeared in any payroll run (payroll.js's active-employee query requires
+  // salary > 0). Same "silently wrong" shape as everything else this plan closes.
+  if (!(Number(salary) > 0)) return res.status(400).json({ error: 'Salary must be greater than 0' });
   // Insert the employee, stamp updated_at, and seed the opening "Hired" timeline
   // row — one transaction so the ledger can never be left without its anchor row.
   const createEmp = db.transaction(() => {
@@ -847,8 +851,12 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
           aadhar_file, pan_file, qualification_file, roster, join_date,
-          action_code, reason_code, reason, effective_date } = req.body;
+          action_code, reason_code, reason, effective_date,
+          salary_effective_date, status_effective_date, salary_action, salary_reason_code } = req.body;
   const db = getDb();
+
+  // Unenforced before this plan — see the matching check on POST /employees.
+  if (!(Number(salary) > 0)) return res.status(400).json({ error: 'Salary must be greater than 0' });
 
   // ── Change-history: diff the TRACKED fields against the current row ──────────
   // Tracked = status, salary, designation, department, roster, join_date, name,
@@ -894,12 +902,37 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // A KYC doc replace ALSO requires a reason (dme 2026-08-01 — reverses the
   // 2026-07-31 "frictionless" call), even when no tracked field moved.
   const effFrom = toYMD(effective_date);
-  const resolvedAction = resolveActionCode(changed, action_code);
+  // Salary AND status are excluded from the shared Action's field count — both
+  // get their own isolated block (salary_action / isolated dates below), so a
+  // salary+status+designation edit resolves the shared Action from
+  // [designation] alone, not all three.
+  const resolvedAction = resolveActionCode(changed.filter((k) => k !== 'salary' && k !== 'status'), action_code);
+
+  // Isolated salary/status effective dates — only derived (and only ever
+  // persisted) when that field actually moved; a stray value for an unchanged
+  // field is dropped. Falls back to the shared effective_date when blank.
+  const salaryEffFrom = changed.includes('salary') ? toYMD(salary_effective_date || effective_date) : null;
+  const statusEffFrom = changed.includes('status') ? toYMD(status_effective_date || effective_date) : null;
+  const salaryActionVal = changed.includes('salary') && SALARY_ACTIONS.includes(salary_action) ? salary_action : null;
+  const salaryReasonVal = salaryActionVal === 'revision' && SALARY_REASON_CODES.includes(salary_reason_code) ? salary_reason_code : null;
+
   if (changed.length > 0 || changedDocs.length > 0) {
     if (!norm(reason)) return res.status(400).json({ error: 'A reason is required to record this change.' });
   }
+  if (changed.includes('salary') && !salaryActionVal) {
+    return res.status(400).json({ error: 'Pick Pay Revision or Correction for this salary change.' });
+  }
+  if (salaryActionVal === 'revision' && !salaryReasonVal) {
+    return res.status(400).json({ error: 'Pick a reason for this pay revision.' });
+  }
   if (changed.length > 0 && effFrom > istToday()) {
     return res.status(400).json({ error: 'Effective date cannot be in the future.' });
+  }
+  if (salaryEffFrom && salaryEffFrom > istToday()) {
+    return res.status(400).json({ error: 'Salary effective date cannot be in the future.' });
+  }
+  if (statusEffFrom && statusEffFrom > istToday()) {
+    return res.status(400).json({ error: 'Status effective date cannot be in the future.' });
   }
 
   // One transaction: the employee UPDATE, the login active-sync, the updated_at
@@ -978,6 +1011,10 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
           source: 'hr',
           changedBy: req.user && req.user.id,
           changedAt: now,
+          salaryEffectiveFrom: salaryEffFrom,
+          statusEffectiveFrom: statusEffFrom,
+          salaryAction: salaryActionVal,
+          salaryReasonCode: salaryReasonVal,
         });
       }
     });
@@ -989,6 +1026,23 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   }
 
   res.json({ message: 'Updated', recorded: changed });
+});
+
+// Is this employee's month already finalised? Advisory-only — a live snapshot
+// at query time, not a mutex against a concurrent Finalise click (see plan:
+// isolated salary/status effective-date + payroll-lock warning). Gated under
+// employees.edit (same as the PUT above that triggers this check), not a
+// payroll permission — hr.js already reads payroll_runs directly under
+// employees.edit for the delete guard, same precedent. Amount-free response —
+// safe for anyone who can edit the employee.
+router.get('/employees/:id/payroll-lock-check', requirePermission('employees', 'edit'), (req, res) => {
+  const db = getDb();
+  const date = String(req.query.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD required' });
+  const month = date.slice(0, 7);
+  const row = db.prepare('SELECT status, finalised_at FROM payroll_runs WHERE month=? AND employee_id=?')
+    .get(month, req.params.id);
+  res.json({ month, finalised: !!(row && row.status === 'finalised'), finalised_at: row ? row.finalised_at : null });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1047,6 +1101,12 @@ function buildChangeEvents(db, { employeeId = null, canSalary = false } = {}) {
         reason: r.reason || '',
         by: r.by_name || '',
         source: r.source || '',
+        // Masked the same way the money value itself is — the reason/type of a
+        // salary change is still salary information; someone who can't see the
+        // figure ("Compensation change" / "••") shouldn't see "Annual Increment"
+        // sitting right next to it either.
+        salary_action: canSalary ? (r.salary_action || '') : '',
+        salary_reason_code: canSalary ? (r.salary_reason_code || '') : '',
       };
       for (const f of CHANGE_FIELDS) {
         const a = r[f.key], b = prev[f.key];
@@ -1142,6 +1202,7 @@ function buildHrEvents(db, { employeeId = null, canSalary = false } = {}) {
         employee_id: ev.employee_id, employee_name: ev.employee_name,
         effective: ev.effective, recorded: ev.recorded,
         reason: ev.reason, reason_code: ev.reason_code, by: ev.by,
+        salary_action: ev.salary_action || '', salary_reason_code: ev.salary_reason_code || '',
         fields: [],
       });
     }
@@ -1149,10 +1210,15 @@ function buildHrEvents(db, { employeeId = null, canSalary = false } = {}) {
   }
 
   const groups = [...joined, ...map.values()].map((g) => {
-    const event_type = g.event_type || classifyEvent({ changedKeys: g.fields.map((f) => f.key) });
-    const summary = event_type === 'Joined'
+    const event_type = g.event_type || classifyEvent({ changedKeys: g.fields.map((f) => f.key), salaryAction: g.salary_action || null });
+    const base = event_type === 'Joined'
       ? `Hired as ${g.fields.map((f) => f.to).filter(Boolean).join(', ') || '—'}`
       : `${g.fields.map((f) => f.label).join(', ')} ${g.fields.length > 1 ? 'changed' : 'updated'}`;
+    // Salary Revision gets its reason spelled out right in the summary — the
+    // reason code is otherwise invisible on the History card/export.
+    const salaryReasonLabel = g.salary_action === 'revision' && g.salary_reason_code
+      ? SALARY_REASON_LABELS[g.salary_reason_code] : null;
+    const summary = salaryReasonLabel ? `${base} — ${salaryReasonLabel}` : base;
     return { ...g, event_type, summary };
   });
 
@@ -1224,6 +1290,8 @@ async function sendHrEventsExcel(res, events, filenameBase) {
     { header: 'Summary', key: 'summary', width: 40 },
     { header: 'Changes (Old to New)', key: 'changes', width: 55 },
     { header: 'Effective Date', key: 'effective_date', width: 13 },
+    { header: 'Salary Type', key: 'salary_action', width: 14 },
+    { header: 'Salary Reason', key: 'salary_reason', width: 22 },
     { header: 'Reason', key: 'reason', width: 32 },
     { header: 'Changed By', key: 'by', width: 18 },
   ];
@@ -1235,6 +1303,8 @@ async function sendHrEventsExcel(res, events, filenameBase) {
     summary: e.summary,
     changes: e.fields.map((f) => `${f.label}: ${f.from || '—'} -> ${f.to || '—'}`).join('; '),
     effective_date: e.effective,
+    salary_action: e.salary_action ? (e.salary_action === 'revision' ? 'Revision' : 'Correction') : '',
+    salary_reason: e.salary_reason_code ? (SALARY_REASON_LABELS[e.salary_reason_code] || e.salary_reason_code) : '',
     reason: e.reason,
     by: e.by,
   }));

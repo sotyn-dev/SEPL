@@ -1,9 +1,11 @@
 // Client mirror of server/lib/employeeChangeCodes.js — keep in sync.
 // The vocabulary + diff helpers for the employee change-history Change Card.
 
+// Status is isolated (own effective date/block, mirrors salary) — no longer a
+// pickable shared Action. Keep in sync with server/lib/employeeChangeCodes.js.
 export const ACTIONS = [
   'Hired', 'Promotion', 'Pay Revision', 'Transfer',
-  'Roster Change', 'Status Change', 'Correction', 'Other',
+  'Roster Change', 'Correction', 'Other',
 ];
 
 export const TURNOVER_REASONS = [
@@ -29,6 +31,24 @@ export const TRACKED_FIELDS = [
 ];
 
 export const EXIT_STATUSES = ['inactive', 'terminated'];
+
+// Salary's own action classifier — isolated from ACTIONS above. Binary,
+// always-visible choice whenever salary changed. Demotion is still
+// 'revision' — nothing was wrong before, still forward-looking pay.
+export const SALARY_ACTIONS = ['revision', 'correction'];
+
+// Full structured salary-change-reason taxonomy — shown only when
+// salary_action === 'revision'. Keep in sync with server/lib/employeeChangeCodes.js.
+export const SALARY_REASON_CODES = [
+  { code: 'annual_increment',      label: 'Annual Increment' },
+  { code: 'promotion',             label: 'Promotion' },
+  { code: 'market_adjustment',     label: 'Market Adjustment' },
+  { code: 'retention',             label: 'Retention' },
+  { code: 'statutory',             label: 'Statutory' },
+  { code: 'probation_confirmation', label: 'Probation Confirmation' },
+  { code: 'demotion',              label: 'Demotion' },
+  { code: 'other',                 label: 'Other' },
+];
 
 // Server-computed-only label for a multi-field edit (never a dropdown choice —
 // see resolveAction below). Keep in sync with server/lib/employeeChangeCodes.js.

@@ -4,7 +4,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import EmployeeChangeCard from '../components/EmployeeChangeCard';
-import { computeChanges } from '../constants/employeeChangeCodes';
+import { computeChanges, SALARY_REASON_CODES } from '../constants/employeeChangeCodes';
 import { fmtDate, fmtDateTime } from '../utils/datetime';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -24,7 +24,11 @@ export default function Employees() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});
   const [original, setOriginal] = useState(null);   // snapshot at edit-open, for the live diff
-  const [changeMeta, setChangeMeta] = useState({ action_code: '', reason_code: '', reason: '', effective_date: '' });
+  const [changeMeta, setChangeMeta] = useState({
+    action_code: '', reason_code: '', reason: '', effective_date: '',
+    salary_effective_date: '', salary_action: '', salary_reason_code: '',
+    status_effective_date: '',
+  });
   // Join Date is LOCKED by default once an employee already has one on file —
   // it's a tracked field (dme 2026-08-01), so changing it needs a deliberate
   // unlock + a reason, not an accidental edit. Nothing to lock when it's blank.
@@ -63,6 +67,9 @@ export default function Employees() {
     'Documents Updated': 'bg-orange-100 text-orange-800',
     Correction: 'bg-gray-100 text-gray-700',
   };
+  // code -> human label, for the small reason line under a Salary Revision card
+  // (the event JSON carries salary_reason_code, but the card never showed it).
+  const SALARY_REASON_LABEL = Object.fromEntries(SALARY_REASON_CODES.map((r) => [r.code, r.label]));
   const fileRef = useRef(null);
 
   const load = () => {
@@ -206,7 +213,11 @@ export default function Employees() {
     setEditing(emp);
     setForm(emp);
     setOriginal(emp);
-    setChangeMeta({ action_code: '', reason_code: '', reason: '', effective_date: istToday() });
+    setChangeMeta({
+      action_code: '', reason_code: '', reason: '', effective_date: istToday(),
+      salary_effective_date: '', salary_action: '', salary_reason_code: '',
+      status_effective_date: '',
+    });
     setJoinDateLocked(!!emp.join_date); // locked only when there's an existing date to protect
     setModal(true);
   };
@@ -216,7 +227,11 @@ export default function Employees() {
     setEditing(null);
     setOriginal(null);
     setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' });
-    setChangeMeta({ action_code: '', reason_code: '', reason: '', effective_date: istToday() });
+    setChangeMeta({
+      action_code: '', reason_code: '', reason: '', effective_date: istToday(),
+      salary_effective_date: '', salary_action: '', salary_reason_code: '',
+      status_effective_date: '',
+    });
     setJoinDateLocked(false);
     setModal(true);
   };
@@ -275,6 +290,11 @@ export default function Employees() {
       if (!payload.pan_file)           return toast.error('Upload PAN card');
       if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
     }
+    // Mandatory, non-zero — an employee saved with salary=0/blank silently
+    // never appears in any payroll run (payroll.js's active-employee query
+    // requires salary > 0). Checked for BOTH create and edit — today an
+    // existing employee's salary can be edited down to 0 with nothing stopping it.
+    if (!(Number(payload.salary) > 0)) return toast.error('Salary must be greater than 0');
     // A tracked change OR a KYC doc replace requires a REASON (the server
     // enforces this too). Action is auto-derived by the Change Card — a
     // single-field edit lets HR refine it via its dropdown, but a multi-field
@@ -289,6 +309,20 @@ export default function Employees() {
       payload.action_code = changeMeta.action_code;
       payload.reason_code = changeMeta.reason_code || null;
       payload.effective_date = changeMeta.effective_date || istToday();
+    }
+    // Salary/status get their own isolated effective dates — salary also needs
+    // its Pay Revision/Correction classifier (and a reason code for a revision).
+    if (editing && changedSet.has('salary')) {
+      if (!changeMeta.salary_action) return toast.error('Pick Pay Revision or Correction for this salary change');
+      if (changeMeta.salary_action === 'revision' && !changeMeta.salary_reason_code) {
+        return toast.error('Pick a reason for this pay revision');
+      }
+      payload.salary_effective_date = changeMeta.salary_effective_date || istToday();
+      payload.salary_action = changeMeta.salary_action;
+      payload.salary_reason_code = changeMeta.salary_action === 'revision' ? changeMeta.salary_reason_code : null;
+    }
+    if (editing && changedSet.has('status')) {
+      payload.status_effective_date = changeMeta.status_effective_date || istToday();
     }
     try {
       if (editing) { await api.put(`/hr/employees/${editing.id}`, payload); }
@@ -711,7 +745,12 @@ export default function Employees() {
                       <div className="border border-gray-200 rounded-lg p-3 bg-white">
                         <div className="flex justify-between items-baseline mb-1.5">
                           <span className="text-[11px] text-gray-500">{fmtDate(g.effective)}</span>
-                          <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${EVENT_BADGE[g.event_type] || 'bg-gray-100 text-gray-700'}`}>{g.event_type}</span>
+                          <span className="flex items-center gap-1.5">
+                            {g.salary_action === 'revision' && g.salary_reason_code && (
+                              <span className="text-[10px] text-gray-500">Pay: {SALARY_REASON_LABEL[g.salary_reason_code] || g.salary_reason_code}</span>
+                            )}
+                            <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${EVENT_BADGE[g.event_type] || 'bg-gray-100 text-gray-700'}`}>{g.event_type}</span>
+                          </span>
                         </div>
                         <table className="w-full text-xs mb-1.5">
                           <tbody>
@@ -848,7 +887,7 @@ export default function Employees() {
               <WasHint k="join_date" fmt={(v) => fmtDate(v) || '—'} />
             </div>
             {editing && <div className={trackAccent('status')}><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['active','training','inactive','terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select><WasHint k="status" /></div>}
-            {canSeeSalary && <div className={trackAccent('salary')}><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /><WasHint k="salary" fmt={(v) => `₹${Number(v || 0).toLocaleString('en-IN')}`} /></div>}
+            {canSeeSalary && <div className={trackAccent('salary')}><label className="label">Salary (Rs) *</label><input className="input" type="number" min="1" required value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /><WasHint k="salary" fmt={(v) => `₹${Number(v || 0).toLocaleString('en-IN')}`} /></div>}
             <div className={trackAccent('roster')}>
               <label className="label">Roster / Shift</label>
               <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
@@ -924,18 +963,30 @@ export default function Employees() {
               canSeeSalary={canSeeSalary}
               today={istToday()}
               users={users}
+              employeeId={editing?.id}
             />
           )}
 
           <div className="flex justify-end gap-3">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
-            <button
-              type="submit"
-              disabled={uploading || (editing && (changes.length > 0 || docsChanged) && !changeMeta.reason?.trim())}
-              title={editing && (changes.length > 0 || docsChanged) && !changeMeta.reason?.trim() ? 'Add a reason to save' : ''}
-              className="btn btn-primary disabled:opacity-50">
-              {uploading ? 'Uploading…' : (editing ? 'Update' : 'Create')}
-            </button>
+            {(() => {
+              const missingReason = editing && (changes.length > 0 || docsChanged) && !changeMeta.reason?.trim();
+              const missingSalaryAction = editing && changedSet.has('salary') && !changeMeta.salary_action;
+              const missingSalaryReason = editing && changeMeta.salary_action === 'revision' && !changeMeta.salary_reason_code;
+              const blockedTitle = missingReason ? 'Add a reason to save'
+                : missingSalaryAction ? 'Pick Pay Revision or Correction to save'
+                : missingSalaryReason ? 'Pick a reason for this pay revision to save'
+                : '';
+              return (
+                <button
+                  type="submit"
+                  disabled={uploading || !!blockedTitle}
+                  title={blockedTitle}
+                  className="btn btn-primary disabled:opacity-50">
+                  {uploading ? 'Uploading…' : (editing ? 'Update' : 'Create')}
+                </button>
+              );
+            })()}
           </div>
         </form>
       </Modal>

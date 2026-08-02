@@ -16,6 +16,8 @@
 // MUST be called AFTER the employees row is written, so the snapshot reads the new
 // (post-edit) live state. MUST run inside the same transaction as that write.
 
+const { SALARY_REASON_CODES } = require('./employeeChangeCodes');
+
 // IST calendar date (server clock is UTC on the VPS). Matches istToday() elsewhere.
 function istToday() {
   return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
@@ -67,12 +69,27 @@ function recordEmployeeChange(db, opts) {
     changedBy = null,
     changedAt = null, // explicit wall-clock stamp (e.g. shared with a same-save doc event); defaults to CURRENT_TIMESTAMP
     allowBackdateBefore = false, // backfill sets true (it controls its own ordering)
+    // Salary/status isolation metadata (plan: isolated salary/status effective
+    // dates + payroll-lock warning). Purely descriptive — NOT part of the SCD
+    // chain (no backdating-chain check against these), just carried on the row
+    // for the payroll-lock-check endpoint to read. Caller decides the fallback
+    // to effectiveFrom when a field wasn't isolated — this is a generic append
+    // primitive (also used by seedHiredRow/backfill) that doesn't know which
+    // fields changed.
+    salaryEffectiveFrom = null,
+    statusEffectiveFrom = null,
+    salaryAction = null, // 'revision' | 'correction'
+    salaryReasonCode = null, // one of SALARY_REASON_CODES, only when salaryAction='revision'
   } = opts || {};
 
   const emp = db.prepare(`SELECT ${SNAPSHOT_COLS} FROM employees WHERE id=?`).get(employeeId);
   if (!emp) return null; // employee vanished mid-txn — nothing to record
 
   const eff = toYMD(effectiveFrom);
+  const salaryEff = salaryEffectiveFrom ? toYMD(salaryEffectiveFrom) : null;
+  const statusEff = statusEffectiveFrom ? toYMD(statusEffectiveFrom) : null;
+  const salaryActionVal = ['revision', 'correction'].includes(salaryAction) ? salaryAction : null;
+  const salaryReasonVal = salaryActionVal === 'revision' && SALARY_REASON_CODES.includes(salaryReasonCode) ? salaryReasonCode : null;
 
   const openFrom = currentOpenFrom(db, employeeId);
   if (!allowBackdateBefore && openFrom && eff < openFrom) {
@@ -106,13 +123,15 @@ function recordEmployeeChange(db, opts) {
           `INSERT INTO employee_timeline
              (employee_id, employee_name, phone, email, linked_user_label, department, designation, manager_id,
               salary, salary_exempt, roster, ot_eligible, status, join_date,
+              salary_effective_from, status_effective_from, salary_action, salary_reason_code,
               effective_from, effective_seq, effective_to,
               action_code, reason_code, reason, source, changed_by, changed_at)
-           VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?, ?,?,?,?,?,?)`
+           VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?,?)`
         )
         .run(
           emp.id, emp.name, emp.phone, emp.email, linkedLabel, emp.department, emp.designation, null,
           emp.salary, emp.salary_exempt, emp.roster, emp.ot_eligible, emp.status, emp.join_date,
+          salaryEff, statusEff, salaryActionVal, salaryReasonVal,
           eff, seq, null,
           actionCode, reasonCode, reason, source, changedBy, changedAt
         )
@@ -121,13 +140,15 @@ function recordEmployeeChange(db, opts) {
           `INSERT INTO employee_timeline
              (employee_id, employee_name, phone, email, linked_user_label, department, designation, manager_id,
               salary, salary_exempt, roster, ot_eligible, status, join_date,
+              salary_effective_from, status_effective_from, salary_action, salary_reason_code,
               effective_from, effective_seq, effective_to,
               action_code, reason_code, reason, source, changed_by)
-           VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?, ?,?,?,?,?)`
+           VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?)`
         )
         .run(
           emp.id, emp.name, emp.phone, emp.email, linkedLabel, emp.department, emp.designation, null,
           emp.salary, emp.salary_exempt, emp.roster, emp.ot_eligible, emp.status, emp.join_date,
+          salaryEff, statusEff, salaryActionVal, salaryReasonVal,
           eff, seq, null,
           actionCode, reasonCode, reason, source, changedBy
         );
