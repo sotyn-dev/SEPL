@@ -528,7 +528,11 @@ router.get('/sites/:site_id/po-items', (req, res) => {
            im.specification AS master_specification, im.size AS master_size,
            im.type AS master_type, im.make AS master_make,
            im.gst AS master_gst, im.uom AS master_uom,
-           bb.lead_no, bb.po_number AS bb_po_number, bb.project_name
+           bb.lead_no, bb.po_number AS bb_po_number, bb.project_name,
+           -- "Total Balance" for the Hinglish planning screen (mam's UX
+           -- spec): BOQ qty − executed-to-date across all DPR actuals.
+           (SELECT COALESCE(SUM(wi.actual_qty), 0) FROM dpr_work_items wi
+             WHERE wi.po_item_id = pi.id AND COALESCE(wi.actual_qty, 0) > 0) AS executed_qty
       FROM po_items pi
       LEFT JOIN item_master im ON im.id = pi.item_master_id
       LEFT JOIN business_book bb ON bb.id = pi.business_book_id
@@ -740,6 +744,18 @@ try { getDb().exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `); } catch (_) {}
+// Shift tag on slips (mam 2026-07-31: three-shift method — Morning 9-6 /
+// Evening 6-10 / Night 10-2). Auto-picked from IST time, overridable.
+try { getDb().exec(`ALTER TABLE site_store_slips ADD COLUMN shift TEXT DEFAULT 'day'`); } catch (_) {}
+// Three-shift DPR (mam 2026-08-03: "make three time dpr method … or suggest
+// something more innovative"): ONE daily DPR per site, but every child row
+// is shift-tagged and submissions are ADDITIVE per shift — morning submit +
+// evening submit + night submit each replace only THEIR OWN shift's rows,
+// never each other's. Header totals become the day's sum across shifts.
+try { getDb().exec(`ALTER TABLE dpr_work_items ADD COLUMN shift TEXT DEFAULT 'day'`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE dpr_material ADD COLUMN shift TEXT DEFAULT 'day'`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE dpr_manpower ADD COLUMN shift TEXT DEFAULT 'day'`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE dpr_machinery ADD COLUMN shift TEXT DEFAULT 'day'`); } catch (_) {}
 try { getDb().exec(`
   CREATE TABLE IF NOT EXISTS site_store_slip_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -819,12 +835,21 @@ router.get('/sites/:site_id/store-stock', requirePermission('dpr', 'view'), (req
   if (!store) return res.json({ store: null, items: [] });
   const items = db.prepare(`
     SELECT sb.item_master_id, sb.quantity AS stock_qty,
-           im.item_name, im.uom, im.specification, im.size
+           im.item_name, im.uom, im.specification, im.size,
+           (SELECT MAX(sm.created_at) FROM stock_movements sm
+             WHERE sm.warehouse_id = sb.warehouse_id AND sm.item_master_id = sb.item_master_id AND sm.type = 'IN') AS last_in
       FROM stock_balance sb
       JOIN item_master im ON im.id = sb.item_master_id
      WHERE sb.warehouse_id = ? AND sb.quantity > 0
      ORDER BY im.item_name
   `).all(store.id);
+  // Inventory ageing (mam 2026-07-31): days since last IN — 15 allowed, 30 max.
+  const now = Date.now();
+  for (const it of items) {
+    const lastIn = it.last_in ? new Date(String(it.last_in).replace(' ', 'T') + 'Z') : null;
+    it.age_days = lastIn ? Math.floor((now - lastIn.getTime()) / 86400000) : null;
+    it.age_status = it.age_days === null ? 'unknown' : it.age_days > 30 ? 'red' : it.age_days > 15 ? 'orange' : 'ok';
+  }
   res.json({ store: { id: store.id, name: store.name }, items });
 });
 
@@ -1353,6 +1378,160 @@ router.post('/weekly-plans/:id/reject', requirePermission('dpr', 'approve'), (re
   res.json({ status: 'rejected', message: `Plan rejected — the site engineer can edit and resubmit.${indentNote}` });
 });
 
+// ─── SPOS labour-based P/L + today-plan + weather + ageing (mam 2026-07-31) ──
+// P/L RULE (mam): "calculate always labour rates from data, boq rates are
+// not valid. loss/profit is only labour rates × labour work — no material."
+// Labour rate per BOQ line = po_items.labour_rate when filled (the real
+// collected rate), else the agreed 11%-of-SITC placeholder.
+const LABOUR_RATE_SQL = `CASE WHEN COALESCE(pi.labour_rate, 0) > 0 THEN pi.labour_rate ELSE COALESCE(pi.rate, 0) * 0.11 END`;
+
+// Aggregated planned vs actual labour P/L for one site over [from, to].
+function plRange(db, siteId, fromIso, toIso) {
+  // Planned A = Σ planned_qty × labour rate (plan rows only, actual_qty=0)
+  const plannedA = +db.prepare(`
+    SELECT COALESCE(SUM(wi.planned_qty * ${LABOUR_RATE_SQL}), 0) v
+      FROM dpr d JOIN dpr_work_items wi ON wi.dpr_id = d.id
+      LEFT JOIN po_items pi ON pi.id = wi.po_item_id
+     WHERE d.site_id = ? AND d.report_date BETWEEN ? AND ?
+       AND wi.po_item_id IS NOT NULL AND wi.planned_qty > 0 AND COALESCE(wi.actual_qty, 0) = 0
+  `).get(siteId, fromIso, toIso).v;
+  const agg = db.prepare(`
+    SELECT COALESCE(SUM(planned_cost_b), 0) planned_b,
+           COALESCE(SUM(CASE WHEN submission_time IS NOT NULL THEN grand_total_a ELSE 0 END), 0) actual_a,
+           COALESCE(SUM(CASE WHEN submission_time IS NOT NULL THEN grand_total_b ELSE 0 END), 0) actual_b,
+           SUM(CASE WHEN submission_time IS NOT NULL THEN 1 ELSE 0 END) submitted_days
+      FROM dpr WHERE site_id = ? AND report_date BETWEEN ? AND ?
+  `).get(siteId, fromIso, toIso);
+  const r2 = (x) => Math.round(x * 100) / 100;
+  return {
+    from: fromIso, to: toIso,
+    planned: { a: r2(plannedA), b: r2(+agg.planned_b), pl: r2(plannedA - agg.planned_b) },
+    actual: { a: r2(+agg.actual_a), b: r2(+agg.actual_b), pl: r2(agg.actual_a - agg.actual_b), days: +agg.submitted_days },
+  };
+}
+
+// Daily / weekly / monthly labour P/L, planned vs actual (mam: "loss/profit
+// logic through dpr — daily, weekly, monthly").
+router.get('/pl-summary', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  const siteId = +req.query.site_id;
+  if (!siteId) return res.status(400).json({ error: 'site_id required' });
+  if (!userOwnsSite(db, req.user, siteId)) return res.status(403).json({ error: 'Not your site' });
+  const date = String(req.query.date || istTodayIso()).slice(0, 10);
+  const { mondayOf } = require('../lib/sposCompliance');
+  const weekStart = mondayOf(date);
+  const weekEnd = new Date(new Date(weekStart + 'T00:00:00Z').getTime() + 6 * 86400000).toISOString().slice(0, 10);
+  const monthStart = date.slice(0, 8) + '01';
+  const monthEnd = new Date(Date.UTC(+date.slice(0, 4), +date.slice(5, 7), 0)).toISOString().slice(0, 10);
+  try {
+    res.json({
+      site_id: siteId, date,
+      daily: plRange(db, siteId, date, date),
+      weekly: plRange(db, siteId, weekStart, weekEnd),
+      monthly: plRange(db, siteId, monthStart, monthEnd),
+    });
+  } catch (e) {
+    console.error('[dpr/pl-summary]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Today's plan for a site — feeds "Aaj Ka Kaam" and the suggested morning
+// issue list: planned activities + qty + labour rate, mapped to catalogue
+// items with live store stock and what's already been issued today.
+router.get('/sites/:site_id/today-plan', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  const siteId = +req.params.site_id;
+  if (!userOwnsSite(db, req.user, siteId)) return res.status(403).json({ error: 'Not your site' });
+  const date = String(req.query.date || istTodayIso()).slice(0, 10);
+  try {
+    const stub = db.prepare('SELECT id, planned_manpower, planned_cost_b, planned_description FROM dpr WHERE site_id = ? AND report_date = ?').get(siteId, date);
+    const acts = db.prepare(`
+      SELECT wi.po_item_id, COALESCE(pi.description, wi.description) description,
+             COALESCE(pi.unit, wi.unit) unit, wi.planned_qty,
+             pi.item_master_id, ${LABOUR_RATE_SQL} labour_rate,
+             im.item_name, im.specification, im.size, im.uom
+        FROM dpr d
+        JOIN dpr_work_items wi ON wi.dpr_id = d.id
+        LEFT JOIN po_items pi ON pi.id = wi.po_item_id
+        LEFT JOIN item_master im ON im.id = pi.item_master_id
+       WHERE d.site_id = ? AND d.report_date = ?
+         AND wi.po_item_id IS NOT NULL AND wi.planned_qty > 0 AND COALESCE(wi.actual_qty, 0) = 0
+    `).all(siteId, date);
+    const consumption = siteConsumptionFor(db, siteId, date);
+    const store = db.prepare("SELECT id FROM warehouses WHERE site_id = ? AND type = 'site_store' AND COALESCE(active,1) = 1 LIMIT 1").get(siteId);
+    const stockStmt = store ? db.prepare('SELECT COALESCE(quantity,0) q FROM stock_balance WHERE warehouse_id = ? AND item_master_id = ?') : null;
+    const items = acts.map(a => {
+      const cons = a.item_master_id ? consumption.find(c => c.item_master_id === a.item_master_id) : null;
+      return {
+        ...a,
+        material_name: a.item_master_id ? [a.item_name, a.specification, a.size].filter(Boolean).join(' ') : null,
+        stock_qty: (a.item_master_id && stockStmt) ? +(stockStmt.get(store.id, a.item_master_id)?.q || 0) : null,
+        issued_today: cons ? cons.issued : 0,
+        returned_today: cons ? cons.returned : 0,
+      };
+    });
+    const punch = db.prepare('SELECT COALESCE(SUM(manpower),0) men, COUNT(*) rows FROM contractor_attendance WHERE site_id = ? AND attendance_date = ?').get(siteId, date);
+    // Which shifts already submitted today (three-shift method) — union of
+    // shift-tagged actual work rows + material rows for this site+date.
+    const shiftsDone = db.prepare(`
+      SELECT DISTINCT COALESCE(wi.shift, 'day') s
+        FROM dpr d JOIN dpr_work_items wi ON wi.dpr_id = d.id
+       WHERE d.site_id = ? AND d.report_date = ? AND COALESCE(wi.actual_qty, 0) > 0
+      UNION
+      SELECT DISTINCT COALESCE(dm.shift, 'day') s
+        FROM dpr d2 JOIN dpr_material dm ON dm.dpr_id = d2.id
+       WHERE d2.site_id = ? AND d2.report_date = ?`).all(siteId, date, siteId, date).map(r => r.s);
+    res.json({
+      date, site_id: siteId,
+      planned_manpower: stub?.planned_manpower || 0,
+      planned_cost_b: stub?.planned_cost_b || 0,
+      planned_description: stub?.planned_description || null,
+      punched_manpower: +punch.men, punch_rows: +punch.rows,
+      shifts_submitted: shiftsDone,
+      items,
+    });
+  } catch (e) {
+    console.error('[dpr/today-plan]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Live site weather + 7-day forecast (Open-Meteo, cached 30 min).
+router.get('/sites/:site_id/weather', requirePermission('dpr', 'view'), async (req, res) => {
+  try {
+    const { weatherForSite } = require('../lib/weather');
+    const w = await weatherForSite(+req.params.site_id);
+    if (!w) return res.json({ available: false });
+    res.json({ available: true, ...w });
+  } catch (e) {
+    res.json({ available: false, error: e.message });
+  }
+});
+
+// SPOS inventory ageing (mam 2026-07-31): "sr. engineer is responsible for
+// inventory ageing, 15 days allowed, maximum 30 — make it live."
+// Age = days since the item's LAST stock-IN into that site store (a fresh
+// receipt resets the clock). >15d = orange, >30d = red.
+router.get('/site-store-ageing', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  try {
+    const { computeStoreAgeing } = require('../lib/sposCompliance');
+    let rows = computeStoreAgeing(db);
+    if (req.query.site_id) rows = rows.filter(r => r.site_id === +req.query.site_id);
+    if (!dprCanSeeAll(db, req.user)) {
+      const owned = new Set(db.prepare(`SELECT s.id FROM sites s WHERE ${siteScopeSql('s')}`)
+        .all(...siteScopeParams(req.user.id)).map(r => r.id));
+      rows = rows.filter(r => owned.has(r.site_id));
+    }
+    const flagged = rows.filter(r => r.status === 'orange' || r.status === 'red');
+    res.json({ rows, flagged_count: flagged.length, red_count: rows.filter(r => r.status === 'red').length });
+  } catch (e) {
+    console.error('[dpr/site-store-ageing]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── SPOS site-store Issue / Return slips (mam 2026-07-31) ────────────
 // The Jr. site engineer's counter: material leaves the site store only on
 // an ISSUE slip and comes back only on a RETURN slip. Stock moves at slip
@@ -1428,10 +1607,17 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
   try {
     const txn = db.transaction(() => {
       slipNumber = nextSequence(db, 'site_store_slips', 'slip_number', prefix, { pad: 4 });
+      // Shift tag (mam 2026-07-31): sent by the client selector, else
+      // auto from IST clock — 9-18 day, 18-22 evening, 22-2 night.
+      let shift = ['day', 'evening', 'night'].includes(req.body.shift) ? req.body.shift : null;
+      if (!shift) {
+        const h = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })).getHours();
+        shift = (h >= 9 && h < 18) ? 'day' : (h >= 18 && h < 22) ? 'evening' : 'night';
+      }
       const r = db.prepare(`
-        INSERT INTO site_store_slips (slip_number, slip_type, site_id, warehouse_id, slip_date, issued_to, notes, created_by)
-        VALUES (?,?,?,?,?,?,?,?)`)
-        .run(slipNumber, slip_type, site_id, store.id, dateIso, String(issued_to).trim(), notes || null, req.user.id);
+        INSERT INTO site_store_slips (slip_number, slip_type, site_id, warehouse_id, slip_date, issued_to, notes, created_by, shift)
+        VALUES (?,?,?,?,?,?,?,?,?)`)
+        .run(slipNumber, slip_type, site_id, store.id, dateIso, String(issued_to).trim(), notes || null, req.user.id, shift);
       slipId = r.lastInsertRowid;
       const insItem = db.prepare('INSERT INTO site_store_slip_items (slip_id, item_master_id, item_name, unit, quantity, rate) VALUES (?,?,?,?,?,?)');
       const upBal = db.prepare('UPDATE stock_balance SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
@@ -1519,6 +1705,21 @@ router.post('/', (req, res) => {
     floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
     next_day_plan, hindrances, hindrance_category, remarks, grand_total_a, grand_total_b, profit_loss,
     work_items, manpower, machinery, materials, contractors } = req.body;
+  // Three-shift method (mam 2026-08-03): every submission belongs to ONE
+  // shift — day (9-6) / evening (6-10) / night (10-2) — and only replaces
+  // that shift's child rows. Unknown/legacy values normalise to 'day'.
+  const shiftVal = ['day', 'evening', 'night'].includes(shift) ? shift : 'day';
+  // Site photos (mam 2026-07-31, Aaj Ka Update): stored as a JSON array of
+  // /uploads URLs — first real writer of dpr.site_photos; feeds the SPOS
+  // photos compliance check.
+  let sitePhotosJson = null;
+  if (req.body.site_photos !== undefined) {
+    try {
+      const arr = Array.isArray(req.body.site_photos) ? req.body.site_photos : JSON.parse(req.body.site_photos || '[]');
+      const clean = arr.filter(u => typeof u === 'string' && u.trim()).slice(0, 20);
+      sitePhotosJson = clean.length ? JSON.stringify(clean) : null;
+    } catch (_) { sitePhotosJson = null; }
+  }
 
   if (!site_id || !report_date) return res.status(400).json({ error: 'Site and date required' });
 
@@ -1544,7 +1745,16 @@ router.post('/', (req, res) => {
   // (mam, 2026-05-16: "actual per day according to that").  Otherwise
   // INSERT a fresh row.  Either way, dprId is the row we just wrote.
   let dprId;
-  const existing = db.prepare(`SELECT id, is_planned_template FROM dpr WHERE site_id = ? AND report_date = ?`).get(site_id, report_date);
+  const existing = db.prepare(`SELECT id, is_planned_template, site_photos FROM dpr WHERE site_id = ? AND report_date = ?`).get(site_id, report_date);
+  // Multi-shift photo MERGE: evening's photos join morning's instead of
+  // replacing them (union, capped at 30).
+  if (existing && sitePhotosJson) {
+    try {
+      const old = JSON.parse(existing.site_photos || '[]');
+      const merged = [...new Set([...old, ...JSON.parse(sitePhotosJson)])].slice(0, 30);
+      sitePhotosJson = JSON.stringify(merged);
+    } catch (_) {}
+  }
   if (existing) {
     db.prepare(`UPDATE dpr SET
         submitted_by = ?, submission_time = CURRENT_TIMESTAMP, weather = ?, overall_status = ?,
@@ -1552,6 +1762,7 @@ router.post('/', (req, res) => {
         grand_total_a = ?, grand_total_b = ?, profit_loss = ?,
         floor_zone = ?, system_type = ?, safety_toolbox_talk = ?, safety_ppe_compliance = ?,
         safety_incidents = ?, next_day_plan = ?, hindrances = ?, hindrance_category = ?, remarks = ?,
+        site_photos = COALESCE(?, site_photos),
         is_planned_template = 0,
         -- Rates sent by the app are already the labour portion (11% of SITC),
         -- so flag this DPR as converted — the labour-pct backfill skips it.
@@ -1562,27 +1773,29 @@ router.post('/', (req, res) => {
         grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
         floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
         safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks,
+        sitePhotosJson,
         existing.id);
     dprId = existing.id;
-    // Resubmit hygiene (audit 2026-07-31): the child inserts below used to
-    // APPEND on every resubmit — duplicate rows and a second stock cut per
-    // material. Clear the previous actuals first. Plan-week rows in
-    // dpr_work_items (actual_qty empty) are the WEEK PLAN — keep those.
-    db.prepare('DELETE FROM dpr_work_items WHERE dpr_id = ? AND COALESCE(actual_qty, 0) > 0').run(dprId);
-    db.prepare('DELETE FROM dpr_material WHERE dpr_id = ?').run(dprId);
-    db.prepare('DELETE FROM dpr_manpower WHERE dpr_id = ?').run(dprId);
-    db.prepare('DELETE FROM dpr_machinery WHERE dpr_id = ?').run(dprId);
+    // Resubmit hygiene (audit 2026-07-31) + three-shift additive (mam
+    // 2026-08-03): clear only THIS SHIFT's previous rows — morning's data
+    // survives the evening submit, evening's survives night's. Plan-week
+    // rows in dpr_work_items (actual_qty empty) are the WEEK PLAN — kept.
+    // Contractors stay day-level (morning punch) — full replace.
+    db.prepare("DELETE FROM dpr_work_items WHERE dpr_id = ? AND COALESCE(actual_qty, 0) > 0 AND COALESCE(shift,'day') = ?").run(dprId, shiftVal);
+    db.prepare("DELETE FROM dpr_material WHERE dpr_id = ? AND COALESCE(shift,'day') = ?").run(dprId, shiftVal);
+    db.prepare("DELETE FROM dpr_manpower WHERE dpr_id = ? AND COALESCE(shift,'day') = ?").run(dprId, shiftVal);
+    db.prepare("DELETE FROM dpr_machinery WHERE dpr_id = ? AND COALESCE(shift,'day') = ?").run(dprId, shiftVal);
     db.prepare('DELETE FROM dpr_contractors WHERE dpr_id = ?').run(dprId);
   } else {
     const r = db.prepare(`INSERT INTO dpr (site_id, report_date, submitted_by, submission_time, weather, overall_status,
       shift, contractor_name, contractor_manpower, mb_sheet_no, grand_total_a, grand_total_b, profit_loss,
       floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
-      next_day_plan, hindrances, hindrance_category, remarks, labour_pct_applied) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`)
+      next_day_plan, hindrances, hindrance_category, remarks, site_photos, labour_pct_applied) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`)
       .run(site_id, report_date, req.user.id, weather || 'clear', overall_status || 'on_track',
         shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
         grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
         floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
-        safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks);
+        safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks, sitePhotosJson);
     dprId = r.lastInsertRowid;
   }
 
@@ -1606,8 +1819,8 @@ router.post('/', (req, res) => {
     `INSERT INTO dpr_work_items
         (dpr_id, po_item_id, work_order_id, description, unit, floor_zone,
          boq_qty, rate, amount, planned_qty, actual_qty,
-         cumulative_qty, variance_pct, remarks)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         cumulative_qty, variance_pct, remarks, shift)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const w of (work_items || [])) {
     if (!w.description && !w.po_item_id) continue;
@@ -1625,24 +1838,24 @@ router.post('/', (req, res) => {
       : null;
     insertWork.run(
       dprId, validPoItemId, validWoId, w.description, w.unit, w.location || w.floor_zone,
-      w.boq_qty || 0, rate, amount, qty, qty, w.cumulative_qty || 0, 0, w.remarks,
+      w.boq_qty || 0, rate, amount, qty, qty, w.cumulative_qty || 0, 0, w.remarks, shiftVal,
     );
   }
 
   // Table B: Costs (stored in manpower table - trade=type, required=qty, deployed=rate, shortage=amount)
-  const insertCost = db.prepare('INSERT INTO dpr_manpower (dpr_id, trade, required, deployed, shortage) VALUES (?,?,?,?,?)');
+  const insertCost = db.prepare('INSERT INTO dpr_manpower (dpr_id, trade, required, deployed, shortage, shift) VALUES (?,?,?,?,?,?)');
   for (const c of (manpower || [])) {
     const costType = c.type || c.trade || '';
     const qty = c.qty || c.required || 0;
     const rate = c.rate || c.deployed || 0;
     const amount = c.amount || c.shortage || (qty * rate);
-    if (costType) insertCost.run(dprId, costType, qty, rate, amount);
+    if (costType) insertCost.run(dprId, costType, qty, rate, amount, shiftVal);
   }
 
   // Machinery/Tools
-  const insertMach = db.prepare('INSERT INTO dpr_machinery (dpr_id, equipment, quantity, hours_used, condition, remarks) VALUES (?,?,?,?,?,?)');
+  const insertMach = db.prepare('INSERT INTO dpr_machinery (dpr_id, equipment, quantity, hours_used, condition, remarks, shift) VALUES (?,?,?,?,?,?,?)');
   for (const mc of (machinery || [])) {
-    if (mc.equipment) insertMach.run(dprId, mc.equipment, mc.quantity || 1, mc.hours_used || 0, mc.condition || 'working', mc.remarks);
+    if (mc.equipment) insertMach.run(dprId, mc.equipment, mc.quantity || 1, mc.hours_used || 0, mc.condition || 'working', mc.remarks, shiftVal);
   }
 
   // Materials consumed today — write to dpr_material AND auto-OUT from
@@ -1652,8 +1865,8 @@ router.post('/', (req, res) => {
   // the stock decrement.
   const insertMat = db.prepare(
     `INSERT INTO dpr_material (dpr_id, po_item_id, item_master_id, material_name, unit, boq_qty,
-       consumed_today, cumulative_consumed, balance_qty, remarks)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`
+       consumed_today, cumulative_consumed, balance_qty, remarks, shift)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
   );
   let stockOuts = 0;
   // Resolve the site's site_store warehouse once (auto-OUT FROM here)
@@ -1682,7 +1895,7 @@ router.post('/', (req, res) => {
     insertMat.run(
       dprId, validPoItemId, m.item_master_id || null, matName, m.unit || 'nos',
       +m.boq_qty || 0, consumed, cumulative,
-      +m.balance_qty || 0, m.remarks || null,
+      +m.balance_qty || 0, m.remarks || null, shiftVal,
     );
     // Auto-OUT only if we know the item AND a site store exists AND qty > 0.
     // Rows sourced from Issue/Return slips (from_slips) already moved stock
@@ -1690,9 +1903,11 @@ router.post('/', (req, res) => {
     // Idempotency (audit): a resubmit must never cut the same DPR's stock
     // twice — skip when a DPR_CONSUMPTION movement for this DPR + item
     // already exists (qty corrections on resubmit need a manual adjust).
+    // Per-shift reference (DPR-<id>-<shift>) so an evening consumption of
+    // the same item still cuts stock while a same-shift resubmit doesn't.
     const alreadyCut = (consumed > 0 && m.item_master_id) ? db.prepare(
-      `SELECT 1 FROM stock_movements WHERE reference_type='DPR_CONSUMPTION' AND reference_id=? AND item_master_id=? LIMIT 1`
-    ).get(`DPR-${dprId}`, m.item_master_id) : null;
+      `SELECT 1 FROM stock_movements WHERE reference_type='DPR_CONSUMPTION' AND reference_id IN (?, ?) AND item_master_id=? LIMIT 1`
+    ).get(`DPR-${dprId}-${shiftVal}`, shiftVal === 'day' ? `DPR-${dprId}` : `DPR-${dprId}-${shiftVal}`, m.item_master_id) : null;
     if (consumed > 0 && m.item_master_id && siteStore?.id && !m.from_slips && !alreadyCut) {
       try {
         const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(siteStore.id, m.item_master_id);
@@ -1707,8 +1922,8 @@ router.post('/', (req, res) => {
                reference_type, reference_id, site_id, notes, created_by)
              VALUES (?,?,?,?,?,?,?,?,?,?,?)`
           ).run(siteStore.id, m.item_master_id, 'OUT', consumed, rate, consumed * rate,
-                'DPR_CONSUMPTION', `DPR-${dprId}`, site_id,
-                `Consumed in DPR #${dprId} on ${report_date}`, req.user.id);
+                'DPR_CONSUMPTION', `DPR-${dprId}-${shiftVal}`, site_id,
+                `Consumed in DPR #${dprId} (${shiftVal} shift) on ${report_date}`, req.user.id);
           stockOuts += 1;
         } else {
           // Insufficient stock — log but don't fail the DPR submission.
@@ -1721,15 +1936,28 @@ router.post('/', (req, res) => {
     }
   }
 
+  // Three-shift totals (mam 2026-08-03): the day's header = SUM across all
+  // shifts' rows, so morning + evening + night accumulate into ONE daily
+  // DPR. A/B/PL recomputed server-side from the children (authoritative).
+  let dayPl = +profit_loss || 0;
+  try {
+    const sums = db.prepare(`
+      SELECT (SELECT COALESCE(SUM(amount), 0) FROM dpr_work_items WHERE dpr_id = ? AND COALESCE(actual_qty, 0) > 0) a,
+             (SELECT COALESCE(SUM(shortage), 0) FROM dpr_manpower WHERE dpr_id = ?) b`).get(dprId, dprId);
+    dayPl = Math.round((sums.a - sums.b) * 100) / 100;
+    db.prepare('UPDATE dpr SET grand_total_a = ?, grand_total_b = ?, profit_loss = ? WHERE id = ?')
+      .run(Math.round(sums.a * 100) / 100, Math.round(sums.b * 100) / 100, dayPl, dprId);
+  } catch (e) { console.warn('[dpr] shift-sum recompute failed:', e.message); }
+
   // Fire-and-forget: if this DPR is a loss, check whether the site now
   // has 3+ consecutive loss days and email director@securedengineers.com
   // (mam's spec). Email failures must not break the DPR save itself.
-  if ((+profit_loss || 0) < 0) {
+  if (dayPl < 0) {
     setImmediate(() => checkConsecutiveLossAndAlert(dprId, site_id).catch(e =>
       console.warn('[dpr] loss-streak alert failed:', e.message)));
   }
 
-  res.status(201).json({ id: dprId, message: 'DPR submitted', stock_outs: stockOuts });
+  res.status(201).json({ id: dprId, message: 'DPR submitted', stock_outs: stockOuts, shift: shiftVal, day_profit_loss: dayPl });
   } catch (err) {
     console.error('DPR submit error:', err.message);
     res.status(500).json({ error: err.message || 'Failed to submit DPR' });

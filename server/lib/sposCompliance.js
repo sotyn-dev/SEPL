@@ -100,4 +100,37 @@ function computeSposCompliance(db, dateIso) {
   return { date: dateIso, week_start: weekStart, sites: rows, summary };
 }
 
-module.exports = { computeSposCompliance, mondayOf };
+// Site-store inventory ageing (mam 2026-08-03): "sr. engineer is
+// responsible for inventory ageing, 15 days is allowed only, maximum 30
+// days — make it live." Age = days since the item's LAST stock-IN into
+// that site store (fresh receipt resets the clock).
+//   ok ≤ 15d · orange 16-30d · red > 30d
+// Single source of truth — used by GET /dpr/site-store-ageing (dashboard
+// widget + slip chips) AND the 18:30 exception report.
+function computeStoreAgeing(db) {
+  const now = Date.now();
+  return db.prepare(`
+    SELECT s.id site_id, s.name site_name, u.name engineer_name, w.id warehouse_id,
+           sb.item_master_id, sb.quantity, sb.avg_rate,
+           im.item_name, im.specification, im.size, im.uom,
+           (SELECT MAX(sm.created_at) FROM stock_movements sm
+             WHERE sm.warehouse_id = w.id AND sm.item_master_id = sb.item_master_id AND sm.type = 'IN') last_in
+      FROM stock_balance sb
+      JOIN warehouses w ON w.id = sb.warehouse_id AND w.type = 'site_store' AND COALESCE(w.active,1) = 1
+      JOIN sites s ON s.id = w.site_id
+      LEFT JOIN users u ON u.id = s.site_engineer_id
+      JOIN item_master im ON im.id = sb.item_master_id
+     WHERE sb.quantity > 0
+  `).all().map(r => {
+    const lastIn = r.last_in ? new Date(String(r.last_in).replace(' ', 'T') + 'Z') : null;
+    const age = lastIn ? Math.floor((now - lastIn.getTime()) / 86400000) : null;
+    return {
+      ...r,
+      material_name: [r.item_name, r.specification, r.size].filter(Boolean).join(' '),
+      age_days: age,
+      status: age === null ? 'unknown' : age > 30 ? 'red' : age > 15 ? 'orange' : 'ok',
+    };
+  }).sort((a, b) => (b.age_days || 0) - (a.age_days || 0));
+}
+
+module.exports = { computeSposCompliance, mondayOf, computeStoreAgeing };

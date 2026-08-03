@@ -23,12 +23,29 @@ async function runOnce() {
 
   const db = getDb();
   const today = todayIso();
-  const { computeSposCompliance } = require('../lib/sposCompliance');
+  const { computeSposCompliance, computeStoreAgeing } = require('../lib/sposCompliance');
   const { sites, summary } = computeSposCompliance(db, today);
+
+  // Inventory ageing violations (mam 2026-08-03): Sr. Engineer is
+  // responsible — 15 days allowed, 30 max. RED (30+) items go straight to
+  // management in this report, grouped per site.
+  let ageingLines = [];
+  try {
+    const aged = computeStoreAgeing(db).filter(r => r.status === 'red' || r.status === 'orange');
+    const bySite = new Map();
+    for (const r of aged) {
+      const g = bySite.get(r.site_id) || { site: r.site_name, engineer: r.engineer_name, red: [], orange: 0 };
+      if (r.status === 'red') g.red.push(`${r.material_name} ${r.quantity} ${r.uom || ''} — ${r.age_days} din`);
+      else g.orange += 1;
+      bySite.set(r.site_id, g);
+    }
+    ageingLines = [...bySite.values()].map(g =>
+      `${g.site}${g.engineer ? ` (Sr. Eng: ${g.engineer})` : ''} — ${g.red.length ? `RED 30+ din: ${g.red.join('; ')}` : ''}${g.red.length && g.orange ? ' · ' : ''}${g.orange ? `${g.orange} item 15+ din (orange)` : ''}`);
+  } catch (e) { console.warn('[spos-report] ageing calc failed:', e.message); }
 
   const misses = sites.filter(r =>
     !r.punch_done || !r.dpr_done || !r.photos_done || r.plan_status !== 'approved');
-  if (misses.length === 0) {
+  if (misses.length === 0 && ageingLines.length === 0) {
     console.log(`[spos-report] ${today} 18:30 — all ${sites.length} active sites fully compliant, no report sent`);
     return;
   }
@@ -47,7 +64,10 @@ async function runOnce() {
     return `${r.site}${r.engineer ? ` (${r.engineer})` : ''} — ${parts.join(', ')}`;
   };
   const lines = misses.map(missLine);
-  const title = `📋 SPOS Exception Report — ${misses.length}/${sites.length} site(s) with gaps`;
+  if (ageingLines.length) {
+    lines.push('', '🕰 INVENTORY AGEING (15 din allowed · 30 max — Sr. Engineer responsible):', ...ageingLines);
+  }
+  const title = `📋 SPOS Exception Report — ${misses.length}/${sites.length} site(s) with gaps${ageingLines.length ? ` · ${ageingLines.length} site(s) with aged inventory` : ''}`;
   const body = `Attendance ${summary.punch_pct}% · DPR ${summary.dpr_pct}% · Photos ${summary.photos_pct}% · Plans approved ${summary.plan_approved_pct}%\n\n${lines.join('\n')}`;
 
   // 1) In-app notification to admins — same dedupe pattern as hrAutomationsCron.

@@ -102,6 +102,7 @@ export default function DPR() {
   // a Material indent for the shortfall.
   const [planHeader, setPlanHeader] = useState(null);        // weekly_plans row for the open (site, week)
   const [planShortfall, setPlanShortfall] = useState(null);  // PM preview: planned vs stock vs to-indent
+  const [planWeather, setPlanWeather] = useState(null);      // 7-day forecast strip (mam 2026-07-31)
   const [planActing, setPlanActing] = useState(false);
   const [pendingPlans, setPendingPlans] = useState([]);      // status='submitted' headers for the badge
   const [pendingPlansModal, setPendingPlansModal] = useState(false);
@@ -206,6 +207,12 @@ export default function DPR() {
         const items = Array.isArray(r.data) ? r.data : (r.data?.items || []);
         setPlanBoqItems(items);
       } catch { setPlanBoqItems([]); }
+      // 7-day weather forecast (mam 2026-07-31): barish wale din indoor
+      // kaam plan karo. Best-effort — the strip hides on failure.
+      setPlanWeather(null);
+      api.get(`/dpr/sites/${siteId}/weather`)
+        .then(r => { if (seq === planReqSeq.current) setPlanWeather(r.data?.available ? r.data : null); })
+        .catch(() => setPlanWeather(null));
       // Pre-fill existing planned values for the week.
       try {
         const r = await api.get('/dpr/week-view', { params: { site_id: siteId, week_start: weekStartIso || planWeekStart } });
@@ -338,13 +345,55 @@ export default function DPR() {
     if (!siteId) { setSlipRows([]); setSlipsToday([]); return; }
     try {
       if (type === 'issue') {
-        // Issue caps = live store stock
-        const r = await api.get(`/dpr/sites/${siteId}/store-stock`);
-        setSlipRows((r.data?.items || []).map(it => ({
-          item_master_id: it.item_master_id,
-          name: [it.item_name, it.specification, it.size].filter(Boolean).join(' '),
-          unit: it.uom || 'nos', cap: +it.stock_qty || 0, qty: '',
-        })));
+        // Issue caps = live store stock. Suggested qty = today's PLANNED
+        // requirement minus what's already issued (mam 2026-07-31: "jr.
+        // engineer simply issues the suggested material"). Age chips show
+        // the 15/30-day inventory ageing rule.
+        const [r, tp, boq] = await Promise.all([
+          api.get(`/dpr/sites/${siteId}/store-stock`),
+          api.get(`/dpr/sites/${siteId}/today-plan`, { params: { date: dateIso } }).catch(() => ({ data: { items: [] } })),
+          api.get(`/dpr/sites/${siteId}/po-items`).catch(() => ({ data: [] })),
+        ]);
+        const plannedByItem = new Map();
+        (tp.data?.items || []).forEach(p => {
+          if (!p.item_master_id) return;
+          const prev = plannedByItem.get(p.item_master_id) || { planned: 0, issued: 0 };
+          prev.planned += +p.planned_qty || 0;
+          prev.issued = Math.max(prev.issued, +p.issued_today || 0);
+          plannedByItem.set(p.item_master_id, prev);
+        });
+        const rows = new Map();
+        (r.data?.items || []).forEach(it => {
+          const sug = plannedByItem.get(it.item_master_id);
+          const remaining = sug ? Math.max(0, sug.planned - sug.issued) : 0;
+          const suggest = Math.min(remaining, +it.stock_qty || 0);
+          rows.set(it.item_master_id, {
+            item_master_id: it.item_master_id,
+            name: [it.item_name, it.specification, it.size].filter(Boolean).join(' '),
+            unit: it.uom || 'nos', cap: +it.stock_qty || 0,
+            planned_today: sug ? +(sug.planned).toFixed(3) : 0,
+            age_days: it.age_days, age_status: it.age_status,
+            qty: suggest > 0 ? +suggest.toFixed(3) : '',
+          });
+        });
+        // Mam (2026-08-03, "where is items and qty with unit"): the item
+        // list must ALWAYS be visible — BOQ-mapped items with zero stock
+        // show as "0 in store" (input disabled) instead of hiding the
+        // whole table behind an empty-store message.
+        const boqItems = Array.isArray(boq.data) ? boq.data : (boq.data?.items || []);
+        boqItems.forEach(b => {
+          if (!b.item_master_id || rows.has(b.item_master_id)) return;
+          const sug = plannedByItem.get(b.item_master_id);
+          rows.set(b.item_master_id, {
+            item_master_id: b.item_master_id,
+            name: [b.master_name, b.master_specification, b.master_size].filter(Boolean).join(' ') || b.description,
+            unit: b.master_uom || b.unit || 'nos', cap: 0,
+            planned_today: sug ? +(sug.planned).toFixed(3) : 0,
+            age_days: null, age_status: 'unknown',
+            qty: '',
+          });
+        });
+        setSlipRows([...rows.values()].sort((a, b) => (b.cap - a.cap) || a.name.localeCompare(b.name)));
       } else {
         // Return caps = issued today − already returned
         const r = await api.get(`/dpr/sites/${siteId}/consumption`, { params: { date: dateIso } });
@@ -359,10 +408,16 @@ export default function DPR() {
       setSlipsToday(sl.data || []);
     } catch { setSlipRows([]); setSlipsToday([]); }
   };
+  const [slipShift, setSlipShift] = useState('day');
+  const autoSlipShift = () => {
+    const h = +new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', hour12: false });
+    return (h >= 9 && h < 18) ? 'day' : (h >= 18 && h < 22) ? 'evening' : 'night';
+  };
   const openSlipModal = (siteId) => {
     const today = istTodayIso();
     setSlipModal(true); setSlipType('issue'); setSlipSite(siteId || '');
     setSlipDate(today); setSlipTo(''); setSlipNotes(''); setSlipRows([]); setSlipsToday([]);
+    setSlipShift(autoSlipShift());
     if (siteId) loadSlipRows(siteId, 'issue', today);
   };
   const saveSlip = async () => {
@@ -374,7 +429,7 @@ export default function DPR() {
     if (over) return toast.error(`${over.name}: max ${over.cap} ${slipType === 'issue' ? 'in stock' : 'outstanding'}`);
     setSlipBusy(true);
     try {
-      const r = await api.post('/dpr/site-slips', { site_id: slipSite, slip_type: slipType, slip_date: slipDate, issued_to: slipTo.trim(), notes: slipNotes, items });
+      const r = await api.post('/dpr/site-slips', { site_id: slipSite, slip_type: slipType, slip_date: slipDate, issued_to: slipTo.trim(), notes: slipNotes, shift: slipShift, items });
       toast.success(`${r.data.slip_number} saved — opening print`);
       window.open(`/site-slip/${r.data.id}/print`, '_blank');
       loadSlipRows(slipSite, slipType, slipDate);
@@ -816,9 +871,10 @@ export default function DPR() {
               <span className="bg-amber-500 text-white rounded-full px-1.5 text-[10px] font-bold">{pendingPlans.length}</span>
             </button>
           )}
-          {['dashboard', 'reports', 'compliance', 'sites', 'losses', 'responsible'].map(t => (
+          {['dashboard', 'aaj', 'reports', 'compliance', 'sites', 'losses', 'responsible'].map(t => (
             <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
               {t === 'dashboard' ? 'Dashboard'
+                : t === 'aaj' ? '🏗️ Aaj Ka Update'
                 : t === 'reports' ? 'Daily Reports'
                 : t === 'compliance' ? 'Engineer Compliance'
                 : t === 'sites' ? 'Sites'
@@ -840,11 +896,14 @@ export default function DPR() {
           Reports AND under HR System → Performance.  Same shared
           component drives both — single source of truth. */}
       {tab === 'losses' && <LossReasonsTab />}
+      {tab === 'aaj' && <AajKaUpdate />}
       {tab === 'compliance' && <><SposComplianceGrid /><EngineerPerformance /></>}
       {tab === 'responsible' && <ResponsibilityTab module="dpr" title="DPR" />}
 
       {tab === 'dashboard' && (
         <>
+          {/* SPOS live inventory ageing (mam 2026-07-31) — Sr. Engineer's watch */}
+          <AgeingWidget />
           {/* 2-up on mobile/tablet (was 1-up, wasting width) — tighter
               padding/font through md so 4 tiles don't feel oversized below
               desktop; full size returns at lg (mam 2026-08-01). */}
@@ -1772,7 +1831,7 @@ export default function DPR() {
               <div className="border-2 border-red-300 rounded-lg p-3">
                 <h5 className="font-bold text-red-800 mb-2">TABLE A: Installation Work</h5>
                 <table className="text-xs"><thead><tr><th>BOQ Item</th><th>Qty</th><th>Location</th><th>Rate</th><th>Amount</th></tr></thead>
-                  <tbody>{selectedDpr.work_items.map(w => (<tr key={w.id}><td>{w.description}</td><td className="font-bold">{w.actual_qty || w.planned_qty}</td><td>{w.floor_zone || '-'}</td><td>Rs {(w.rate || 0).toLocaleString()}</td><td className="font-bold text-emerald-600">Rs {(w.amount || 0).toLocaleString()}</td></tr>))}</tbody>
+                  <tbody>{selectedDpr.work_items.map(w => (<tr key={w.id}><td>{w.shift === 'evening' ? '🌆 ' : w.shift === 'night' ? '🌙 ' : ''}{w.description}</td><td className="font-bold">{w.actual_qty || w.planned_qty}</td><td>{w.floor_zone || '-'}</td><td>Rs {(w.rate || 0).toLocaleString()}</td><td className="font-bold text-emerald-600">Rs {(w.amount || 0).toLocaleString()}</td></tr>))}</tbody>
                 </table>
                 <div className="text-right font-bold text-red-800 mt-2">Grand Total (A): Rs {selectedDpr.work_items.reduce((s, w) => s + (w.amount || 0), 0).toLocaleString()}</div>
               </div>
@@ -2167,6 +2226,23 @@ export default function DPR() {
             </div>
           )}
 
+          {/* 7-day weather guide (mam 2026-07-31) */}
+          {planWeather?.days?.length > 0 && (
+            <div className="bg-sky-50 border border-sky-200 rounded p-2">
+              <div className="text-[10px] font-semibold text-sky-800 mb-1">🌤 Agle 7 din ka mausam — {planWeather.place} <span className="font-normal text-sky-600">(barish wale din indoor kaam plan karo)</span></div>
+              <div className="flex gap-1 overflow-x-auto">
+                {planWeather.days.map(d => (
+                  <div key={d.date} className={`flex-1 min-w-[64px] text-center rounded border px-1 py-1 ${d.key === 'rainy' ? 'bg-red-50 border-red-200' : 'bg-white border-sky-100'}`}>
+                    <div className="text-[9px] text-gray-500">{new Date(d.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit' })}</div>
+                    <div className="text-base leading-5">{d.emoji}</div>
+                    <div className="text-[9px] font-semibold text-gray-700">{d.tmax}°/{d.tmin}°</div>
+                    {d.rain_prob != null && d.rain_prob >= 40 && <div className="text-[8px] font-bold text-red-600">☔ {d.rain_prob}%</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-gray-700">
             Pick a BOQ item from the site's PO and the quantity planned for that day.
             Manpower + budgeted cost are filled alongside. The site engineer updates the
@@ -2267,14 +2343,41 @@ export default function DPR() {
             })}
           </div>
 
-          <div className="bg-gray-50 border rounded px-3 py-2 text-xs font-semibold flex justify-between">
-            <span>Week Totals</span>
-            <span>
-              {planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days
-              {'  ·  Rs '}
-              {planDays.reduce((s, d) => s + (+d.planned_grand_total_b || 0), 0).toLocaleString('en-IN')}
-            </span>
-          </div>
+          {/* Week totals + planned labour P/L (mam 2026-07-31: "weekly &
+              daily profit/loss in planning & actual both" — labour rates
+              from data, NOT BOQ SITC; 11% fallback until rates collected). */}
+          {(() => {
+            const rateOf = (poItemId) => {
+              const it = planBoqItems.find(b => +b.id === +poItemId);
+              if (!it) return 0;
+              return +it.labour_rate > 0 ? +it.labour_rate : (+it.rate || 0) * 0.11;
+            };
+            const dayA = (d) => (d.items || []).reduce((s, it) => s + (+it.planned_qty || 0) * rateOf(it.po_item_id), 0);
+            const totalA = planDays.reduce((s, d) => s + dayA(d), 0);
+            const totalB = planDays.reduce((s, d) => s + (+d.planned_grand_total_b || 0), 0);
+            const totalPl = totalA - totalB;
+            return (
+              <div className="bg-gray-50 border rounded px-3 py-2 text-xs space-y-1">
+                <div className="flex justify-between font-semibold">
+                  <span>Week Totals</span>
+                  <span>{planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days · Labour Value (A) ₹{Math.round(totalA).toLocaleString('en-IN')} · Cost (B) ₹{Math.round(totalB).toLocaleString('en-IN')}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Plan P/L (labour rates se — BOQ rate nahi)</span>
+                  <span className={`font-bold ${totalPl >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                    {totalPl >= 0 ? 'PROFIT' : 'LOSS'} ₹{Math.abs(Math.round(totalPl)).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-500 flex flex-wrap gap-x-3">
+                  {planDays.map((d, i) => {
+                    const a = dayA(d), b = +d.planned_grand_total_b || 0, p = a - b;
+                    if (!a && !b) return null;
+                    return <span key={i}>{new Date(d.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' })}: <b className={p >= 0 ? 'text-emerald-700' : 'text-red-600'}>₹{Math.round(p).toLocaleString('en-IN')}</b></span>;
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
           <div className="flex flex-wrap justify-end items-center gap-2 pt-2 border-t">
             {planHeader?.status === 'approved' && !isAdmin() && (
@@ -2325,6 +2428,15 @@ export default function DPR() {
             </div>
           </div>
 
+          {/* Shift tag (mam 2026-07-31: 3-shift method) — auto from IST clock */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-gray-500 font-semibold">Shift:</span>
+            {[['day', '🌅 Morning 9–6'], ['evening', '🌆 Evening 6–10'], ['night', '🌙 Night 10–2']].map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setSlipShift(k)}
+                className={`text-[11px] px-2 py-1 rounded border font-semibold ${slipShift === k ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300'}`}>{l}</button>
+            ))}
+          </div>
+
           <div>
             <label className="label">{slipType === 'issue' ? 'Issued To (Sr. Site Engineer / team) *' : 'Returned By *'}</label>
             <input className="input" list="slip-person-suggestions" placeholder="Type a name or pick from the team…"
@@ -2355,17 +2467,25 @@ export default function DPR() {
                   <tr className="text-gray-500 border-b">
                     <th className="text-left py-1 pr-2">Material</th>
                     <th className="text-right py-1 px-2 whitespace-nowrap">{slipType === 'issue' ? 'In Store' : 'Outstanding'}</th>
-                    <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">{slipType === 'issue' ? 'Issue Qty' : 'Return Qty'}</th>
+                    {slipType === 'issue' && <th className="text-right py-1 px-2 whitespace-nowrap">Aaj Ka Plan</th>}
+                    <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">{slipType === 'issue' ? 'Issue Qty (suggested)' : 'Return Qty'}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {slipRows.map((r, i) => (
                     <tr key={r.item_master_id} className="border-b">
-                      <td className="py-1 pr-2">{r.name} <span className="text-gray-400">({r.unit})</span></td>
+                      <td className="py-1 pr-2">
+                        {r.name} <span className="text-gray-400">({r.unit})</span>
+                        {r.age_status === 'orange' && <span title={`${r.age_days} din se store mein pada hai (15 allowed)`} className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300">🟠 {r.age_days}d</span>}
+                        {r.age_status === 'red' && <span title={`${r.age_days} din se store mein pada hai (max 30!)`} className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-red-50 text-red-700 border-red-300">🔴 {r.age_days}d</span>}
+                      </td>
                       <td className="py-1 px-2 text-right tabular-nums">{r.cap}</td>
+                      {slipType === 'issue' && <td className="py-1 px-2 text-right tabular-nums text-blue-700">{r.planned_today > 0 ? r.planned_today : <span className="text-gray-300">—</span>}</td>}
                       <td className="py-1 pl-2 text-right">
                         <input type="number" min="0" max={r.cap} step="0.01"
-                               className={`input text-xs text-right w-full ${+r.qty > r.cap ? '!border-red-400 bg-red-50' : ''}`}
+                               disabled={slipType === 'issue' && r.cap <= 0}
+                               title={slipType === 'issue' && r.cap <= 0 ? 'Store mein 0 hai — pehle stock lao (Opening Stock / transfer / PO receive)' : ''}
+                               className={`input text-xs text-right w-full ${slipType === 'issue' && r.cap <= 0 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''} ${+r.qty > r.cap ? '!border-red-400 bg-red-50' : ''} ${slipType === 'issue' && +r.qty > 0 && +r.qty === +r.planned_today ? 'bg-blue-50' : ''}`}
                                value={r.qty} placeholder="0"
                                onChange={e => setSlipRows(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} />
                       </td>
@@ -2388,6 +2508,7 @@ export default function DPR() {
               {slipsToday.map(s => (
                 <div key={s.id} className="flex flex-wrap items-center gap-2 text-[11px] py-0.5">
                   <span className={`font-mono font-semibold ${s.slip_type === 'issue' ? 'text-red-700' : 'text-emerald-700'}`}>{s.slip_number}</span>
+                  <span>{s.shift === 'evening' ? '🌆' : s.shift === 'night' ? '🌙' : '🌅'}</span>
                   <span className="text-gray-500">{s.slip_type === 'issue' ? 'Issue →' : 'Return ←'} {s.issued_to}</span>
                   <span className="text-gray-400">· {(s.items || []).length} item(s)</span>
                   <a className="text-blue-700 hover:underline font-medium" href={`/site-slip/${s.id}/print`} target="_blank" rel="noreferrer">Print</a>
@@ -2426,6 +2547,372 @@ export default function DPR() {
           ))}
         </div>
       </Modal>
+    </div>
+  );
+}
+
+// AgeingWidget — SPOS inventory ageing (mam 2026-07-31): "sr. engineer is
+// responsible for inventory ageing, 15 days allowed only, maximum 30 —
+// make it live." Live read of site-store stock vs last IN date.
+function AgeingWidget() {
+  const [data, setData] = useState(null);
+  const [lastAt, setLastAt] = useState(null);
+  // LIVE (mam 2026-08-03: "make it live") — refreshes every 60s while the
+  // dashboard is open, so the ageing count is never stale.
+  useEffect(() => {
+    const pull = () => api.get('/dpr/site-store-ageing')
+      .then(r => { setData(r.data); setLastAt(new Date()); })
+      .catch(() => {});
+    pull();
+    const t = setInterval(pull, 60000);
+    return () => clearInterval(t);
+  }, []);
+  const rows = data?.rows || [];
+  const flagged = rows.filter(r => r.status === 'orange' || r.status === 'red');
+  const redCount = data?.red_count || 0;
+  return (
+    <div className={`card p-4 border-l-4 ${redCount > 0 ? 'border-red-500' : flagged.length ? 'border-amber-500' : 'border-emerald-500'}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <div>
+          <h3 className="font-semibold text-gray-800">🕰 Inventory Ageing — Site Store <span className="text-xs font-normal text-gray-500">(Sr. Site Engineer ki zimmedari)</span></h3>
+          <p className="text-xs text-gray-500">
+            SPOS RULE: material site store mein <b>15 din tak allowed</b>, <b className="text-red-600">maximum 30 din</b> — uske baad management report mein jayega.
+            Age = aakhri material IN hone ke baad ke din. {lastAt && <span className="text-gray-400">LIVE · updated {lastAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>}
+          </p>
+        </div>
+        {rows.length === 0
+          ? <span className="text-xs font-semibold text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-1">Site stores khaali hain — stock aate hi ageing yahan LIVE dikhega</span>
+          : flagged.length === 0
+          ? <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-300 rounded px-2 py-1">✓ Sab fresh hai ({rows.length} item, sab ≤ 15 din)</span>
+          : <span className={`text-xs font-bold rounded px-2 py-1 border ${redCount > 0 ? 'bg-red-50 text-red-700 border-red-300 animate-pulse' : 'bg-amber-50 text-amber-700 border-amber-300'}`}>
+              {flagged.length} item purane {redCount > 0 ? `· ${redCount} RED (30+ din!)` : ''}
+            </span>}
+      </div>
+      {flagged.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead><tr className="text-gray-500 border-b text-left">
+              <th className="py-1 pr-2">Site</th>
+              <th className="py-1 px-2">Sr. Engineer (responsible)</th>
+              <th className="py-1 px-2">Material</th>
+              <th className="py-1 px-2 text-right">Qty</th>
+              <th className="py-1 pl-2 text-right">Kitne din se pada hai</th>
+            </tr></thead>
+            <tbody>
+              {flagged.slice(0, 15).map((r, i) => (
+                <tr key={i} className="border-b">
+                  <td className="py-1 pr-2">{r.site_name}</td>
+                  <td className="py-1 px-2">{r.engineer_name || <span className="text-red-500 font-semibold">koi assign nahi!</span>}</td>
+                  <td className="py-1 px-2">{r.material_name} <span className="text-gray-400">({r.uom || 'nos'})</span></td>
+                  <td className="py-1 px-2 text-right tabular-nums">{r.quantity}</td>
+                  <td className="py-1 pl-2 text-right">
+                    <span className={`font-bold px-1.5 py-0.5 rounded border text-[10px] ${r.status === 'red' ? 'bg-red-50 text-red-700 border-red-300' : 'bg-amber-50 text-amber-700 border-amber-300'}`}>
+                      {r.age_days} din {r.status === 'red' ? '🔴' : '🟠'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-[10px] text-gray-500 mt-1">Kya karna hai: use karo (DPR consumption) · doosri site bhejo · office wapas bhejo (transfer). 30+ din wale items roz shaam 6:30 ki Exception Report mein management ko jate hain.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// AajKaUpdate — SPOS "Aaj Ka Update" (mam 2026-07-31, UX redesign prompt):
+// ek hi sawaal — "Aaj kya kaam hua?" 90% auto-filled from the approved
+// weekly plan + GRN slips + morning punch; engineer sirf "kitna hua" +
+// photos deta hai. Submit auto-builds the full DPR (labour-rate P/L —
+// BOQ SITC rates NOT used; po_items.labour_rate, else 11% fallback).
+function AajKaUpdate() {
+  const istToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const autoShift = () => {
+    const h = +new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', hour12: false });
+    return (h >= 9 && h < 18) ? 'day' : (h >= 18 && h < 22) ? 'evening' : 'night';
+  };
+  const [sites, setSites] = useState([]);
+  const [siteId, setSiteId] = useState('');
+  const date = istToday();
+  const [shift, setShift] = useState(autoShift());
+  const [plan, setPlan] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [mats, setMats] = useState([]);
+  const [men, setMen] = useState(0);
+  const [menRate, setMenRate] = useState(800);
+  const [photos, setPhotos] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [problem, setProblem] = useState('');
+  const [problemCat, setProblemCat] = useState('');
+  const [weather, setWeather] = useState(null);
+  const [pl, setPl] = useState(null);
+  const [aged, setAged] = useState([]);   // 15+/30+ din old store items (site-wise)
+  const [busy, setBusy] = useState(false);
+  const siteRef = useRef('');             // stale-response guard for async loads
+
+  useEffect(() => { api.get('/dpr/sites').then(r => setSites(r.data || [])).catch(() => {}); }, []);
+
+  const load = async (sid) => {
+    siteRef.current = String(sid || '');
+    setSiteId(sid); setPlan(null); setRows([]); setMats([]); setPhotos([]); setProblem(''); setProblemCat(''); setPl(null); setWeather(null); setAged([]);
+    if (!sid) return;
+    try {
+      const [tp, cons, pls, ag] = await Promise.all([
+        api.get(`/dpr/sites/${sid}/today-plan`, { params: { date } }),
+        api.get(`/dpr/sites/${sid}/consumption`, { params: { date } }),
+        api.get('/dpr/pl-summary', { params: { site_id: sid, date } }).catch(() => ({ data: null })),
+        api.get('/dpr/site-store-ageing', { params: { site_id: sid } }).catch(() => ({ data: { rows: [] } })),
+      ]);
+      if (siteRef.current !== String(sid)) return;   // site changed mid-flight
+      setPlan(tp.data);
+      setRows((tp.data.items || []).map(it => ({ ...it, done: '' })));
+      setMats((cons.data?.lines || []).filter(l => l.issued > 0 || l.net_consumed > 0));
+      setMen(tp.data.punched_manpower || 0);
+      setPl(pls.data);
+      setAged((ag.data?.rows || []).filter(r => r.status === 'orange' || r.status === 'red'));
+    } catch (e) { toast.error(e.response?.data?.error || 'Load fail hua'); }
+    // Weather loads in the background — a slow/blocked weather API must
+    // never delay the screen (mam 2026-08-03: "erp will not hang").
+    // Stale-response guard: drop the reply if the site changed meanwhile.
+    api.get(`/dpr/sites/${sid}/weather`)
+      .then(w => { if (siteRef.current === String(sid)) setWeather(w.data?.available ? w.data : null); })
+      .catch(() => {});
+  };
+
+  const uploadPhotos = async (files) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      for (const f of Array.from(files)) {
+        const fd = new FormData(); fd.append('file', f);
+        const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        if (up.data?.url) setPhotos(prev => [...prev, up.data.url]);
+      }
+      toast.success('Photo upload ho gayi 📸');
+    } catch { toast.error('Photo upload fail hui — dobara try karo'); }
+    finally { setUploading(false); }
+  };
+
+  const doneA = rows.reduce((s, r) => s + (+r.done || 0) * (+r.labour_rate || 0), 0);
+  const costB = (+men || 0) * (+menRate || 0);
+  const livePl = Math.round((doneA - costB) * 100) / 100;
+  const shiftsDone = plan?.shifts_submitted || [];
+  const SHIFT_META = { day: ['🌅', 'Morning 9–6'], evening: ['🌆', 'Evening 6–10'], night: ['🌙', 'Night 10–2'] };
+
+  const submit = async () => {
+    if (!siteId) return toast.error('Pehle site chuno');
+    if (!rows.some(r => +r.done > 0) && !mats.some(m => m.net_consumed > 0)) return toast.error('Kitna kaam hua — kam se kam ek activity mein qty bharo');
+    if (livePl < 0 && (!problem.trim() || !problemCat)) return toast.error('Aaj loss dikh raha hai — Problem aur category batana zaroori hai');
+    setBusy(true);
+    try {
+      await api.post('/dpr', {
+        site_id: +siteId, report_date: date, shift,
+        weather: weather?.current?.key || 'clear',
+        overall_status: livePl >= 0 ? 'on_track' : 'delayed',
+        work_items: rows.filter(r => +r.done > 0).map(r => ({
+          po_item_id: r.po_item_id, description: r.description, unit: r.unit,
+          qty: +r.done, rate: Math.round((+r.labour_rate || 0) * 100) / 100, location: '',
+        })),
+        manpower: [{ type: 'Skilled Manpower', qty: +men || 0, rate: +menRate || 0, amount: costB }],
+        machinery: [],
+        materials: mats.filter(m => m.net_consumed > 0).map(m => ({
+          item_master_id: m.item_master_id, material_name: m.item_name, unit: m.unit,
+          consumed_today: m.net_consumed, cumulative_consumed: m.net_consumed, from_slips: 1, balance_qty: 0,
+        })),
+        contractors: [],
+        site_photos: photos,
+        hindrances: problem.trim() || null,
+        hindrance_category: problemCat || null,
+        grand_total_a: Math.round(doneA * 100) / 100,
+        grand_total_b: costB,
+        profit_loss: livePl,
+      });
+      toast.success('✅ DPR ban gaya — shabash!');
+      load(siteId);
+    } catch (e) { toast.error(e.response?.data?.error || 'Submit fail hua'); }
+    finally { setBusy(false); }
+  };
+
+  const plChip = (label, v) => v && (
+    <div className="text-center px-3">
+      <div className={`text-sm font-bold ${v.actual.pl >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>₹{Math.round(v.actual.pl).toLocaleString('en-IN')}</div>
+      <div className="text-[10px] text-gray-500">{label} (plan ₹{Math.round(v.planned.pl).toLocaleString('en-IN')})</div>
+    </div>
+  );
+
+  return (
+    <div className="max-w-3xl mx-auto space-y-4">
+      <div className="card p-4">
+        <h2 className="text-lg font-bold text-gray-800">🏗️ Aaj Ka Update</h2>
+        <p className="text-xs text-gray-500">Ek hi sawaal: <b>aaj kitna kaam hua?</b> Baaki sab (plan, material, log) auto hai — 5 minute se kam lagega.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+          <select className="select text-base" value={siteId} onChange={e => load(e.target.value)}>
+            <option value="">— Apni site chuno —</option>
+            {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <div className="flex rounded border overflow-hidden">
+            {[['day', '🌅 Morning', '9–6'], ['evening', '🌆 Evening', '6–10'], ['night', '🌙 Night', '10–2']].map(([k, l, t]) => (
+              <button key={k} type="button" onClick={() => setShift(k)}
+                className={`flex-1 py-2 text-xs font-semibold ${shift === k ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>
+                {l}<span className="block text-[9px] font-normal opacity-80">{t}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        {weather?.current && (
+          <div className="mt-2 text-xs bg-sky-50 border border-sky-200 rounded px-2 py-1.5 inline-flex items-center gap-2">
+            {weather.current.emoji} <b>{weather.current.label}</b> · {weather.current.temp}°C
+            <span className="text-gray-400">· {weather.place}</span>
+            <span className="text-gray-400">(DPR mein auto bharega)</span>
+          </div>
+        )}
+        {/* Three-shift status (mam 2026-08-03): har shift ka data ADD hota
+            hai — morning ke upar evening, evening ke upar night. */}
+        {siteId && shiftsDone.length > 0 && (
+          <div className="mt-2 text-xs bg-emerald-50 border border-emerald-300 rounded px-2 py-1.5 flex flex-wrap items-center gap-2">
+            {['day', 'evening', 'night'].map(k => shiftsDone.includes(k) && (
+              <span key={k} className="font-semibold text-emerald-700">{SHIFT_META[k][0]} {SHIFT_META[k][1]} ✓</span>
+            ))}
+            <span className="text-gray-500">— ab {SHIFT_META[shift][0]} {SHIFT_META[shift][1]} bharo: data <b>add</b> hoga, pehle wali shift replace nahi hogi. (Same shift dobara bharoge to sirf usi shift ka data update hoga.)</span>
+          </div>
+        )}
+      </div>
+
+      {siteId && (
+        <>
+          {/* Inventory ageing nudge (mam 2026-08-03): purana material pehle
+              lagao — 15 din allowed, 30 max, Sr. Engineer responsible. */}
+          {aged.length > 0 && (
+            <div className={`card p-3 border-l-4 ${aged.some(a => a.status === 'red') ? 'border-red-500 bg-red-50' : 'border-amber-500 bg-amber-50'}`}>
+              <div className="text-xs font-bold text-gray-800 mb-1">🕰 Purana material store mein pada hai — pehle inko lagao! <span className="font-normal text-gray-500">(15 din allowed · 30 max)</span></div>
+              <div className="flex flex-wrap gap-1.5">
+                {aged.map((a, i) => (
+                  <span key={i} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${a.status === 'red' ? 'bg-white text-red-700 border-red-300' : 'bg-white text-amber-700 border-amber-300'}`}>
+                    {a.status === 'red' ? '🔴' : '🟠'} {a.material_name} · {a.quantity} {a.uom || ''} · {a.age_days} din
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="card p-4">
+            <h3 className="font-semibold text-sm text-gray-800 mb-1">1️⃣ Aaj Ka Kaam <span className="text-xs font-normal text-gray-400">(weekly plan se auto)</span></h3>
+            {rows.length === 0 ? (
+              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">Aaj ke liye plan mein koi activity nahi hai. Sr. Engineer se weekly plan approve karwao.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-gray-500 text-xs border-b text-left">
+                    <th className="py-1 pr-2">Kaam</th><th className="py-1 px-2 text-right">Target</th>
+                    <th className="py-1 pl-2 text-right w-28">Kitna Hua?</th>
+                  </tr></thead>
+                  <tbody>
+                    {rows.map((r, i) => (
+                      <tr key={i} className="border-b">
+                        <td className="py-2 pr-2">{r.description} <span className="text-gray-400 text-xs">({r.unit})</span></td>
+                        <td className="py-2 px-2 text-right tabular-nums text-gray-600">{r.planned_qty}</td>
+                        <td className="py-2 pl-2">
+                          <div className="flex items-center gap-1">
+                            <input type="number" min="0" step="0.01" placeholder="0"
+                              className="input text-right text-base font-semibold w-full"
+                              value={r.done}
+                              onChange={e => setRows(prev => prev.map((x, j) => j === i ? { ...x, done: e.target.value } : x))} />
+                            {/* One-tap confirm: "target jitna hua" — deliberate
+                                tap, not auto-fill, so 100% days stay honest */}
+                            <button type="button" title="Target jitna hua — ek tap"
+                              onClick={() => setRows(prev => prev.map((x, j) => j === i ? { ...x, done: String(x.planned_qty) } : x))}
+                              className={`text-[10px] font-semibold border rounded px-1.5 py-1 whitespace-nowrap ${+r.done === +r.planned_qty && +r.done > 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'text-emerald-700 border-emerald-300 hover:bg-emerald-50'}`}>
+                              ✓ full
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="card p-4">
+            <h3 className="font-semibold text-sm text-gray-800 mb-1">2️⃣ Material <span className="text-xs font-normal text-gray-400">(GRN slips se auto — kuch nahi bharna)</span></h3>
+            {mats.length === 0
+              ? <div className="text-xs text-gray-500">Aaj koi material issue nahi hua. Store se material lena ho to <b>Daily Reports → Store Issue/Return</b> se slip banao.</div>
+              : (
+                <table className="w-full text-xs">
+                  <thead><tr className="text-gray-500 border-b text-left"><th className="py-1 pr-2">Material</th><th className="py-1 px-2 text-right">Issue</th><th className="py-1 px-2 text-right">Wapas</th><th className="py-1 pl-2 text-right">Laga (auto)</th></tr></thead>
+                  <tbody>{mats.map((m, i) => (
+                    <tr key={i} className="border-b">
+                      <td className="py-1 pr-2">{m.item_name} <span className="text-gray-400">({m.unit})</span></td>
+                      <td className="py-1 px-2 text-right tabular-nums">{m.issued}</td>
+                      <td className="py-1 px-2 text-right tabular-nums">{m.returned}</td>
+                      <td className="py-1 pl-2 text-right tabular-nums font-bold text-indigo-700">{m.net_consumed}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+          </div>
+
+          <div className="card p-4">
+            <h3 className="font-semibold text-sm text-gray-800 mb-1">3️⃣ Kitne Log Lage? <span className="text-xs font-normal text-gray-400">(morning punch se auto — badal sakte ho)</span></h3>
+            <div className="flex items-center gap-3 flex-wrap">
+              <input type="number" min="0" className="input text-2xl font-bold text-center w-28" value={men} onChange={e => setMen(e.target.value)} />
+              <span className="text-sm text-gray-500">log</span>
+              <span className="text-xs text-gray-400">× ₹</span>
+              <input type="number" min="0" className="input text-sm w-24" value={menRate} onChange={e => setMenRate(e.target.value)} title="Per din labour rate" />
+              <span className="text-xs text-gray-400">/din = <b className="text-gray-700">₹{costB.toLocaleString('en-IN')}</b> labour cost</span>
+            </div>
+          </div>
+
+          <div className="card p-4">
+            <h3 className="font-semibold text-sm text-gray-800 mb-1">4️⃣ 📸 Site Photos</h3>
+            <label className="block border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400">
+              <input type="file" accept="image/*" multiple capture="environment" className="hidden"
+                onChange={e => { uploadPhotos(e.target.files); e.target.value = ''; }} />
+              <span className="text-sm text-gray-600">{uploading ? 'Upload ho rahi hai…' : '📷 Photo kheenchо ya chuno (multiple chalega)'}</span>
+            </label>
+            {photos.length > 0 && (
+              <div className="flex gap-2 mt-2 flex-wrap">
+                {photos.map((p, i) => (
+                  <div key={i} className="relative">
+                    <img src={p} alt="" className="w-16 h-16 object-cover rounded border" />
+                    <button type="button" onClick={() => setPhotos(prev => prev.filter((_, j) => j !== i))}
+                      className="absolute -top-1.5 -right-1.5 bg-red-600 text-white rounded-full w-4 h-4 text-[10px] leading-4">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card p-4">
+            <h3 className="font-semibold text-sm text-gray-800 mb-1">⚠ Koi Problem? <span className="text-xs font-normal text-gray-400">(optional — loss ho to zaroori)</span></h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <select className="select text-sm" value={problemCat} onChange={e => setProblemCat(e.target.value)}>
+                <option value="">— category —</option>
+                {['Money', 'Machine', 'Material', 'Manpower', 'Site Clearance'].map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <input className="input text-sm sm:col-span-2" placeholder="Kya problem aayi? (e.g. drawing nahi mili, material late)"
+                value={problem} onChange={e => setProblem(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="card p-4 flex flex-wrap items-center justify-between gap-3 sticky bottom-2 shadow-lg border-blue-200">
+            <div className="flex items-center gap-1 flex-wrap">
+              <div className="text-center px-3">
+                <div className={`text-sm font-bold ${livePl >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>₹{Math.round(livePl).toLocaleString('en-IN')}</div>
+                <div className="text-[10px] text-gray-500">Aaj ka P/L (₹{Math.round(doneA).toLocaleString('en-IN')} − ₹{costB.toLocaleString('en-IN')})</div>
+              </div>
+              {plChip('Is hafte', pl?.weekly)}
+              {plChip('Is mahine', pl?.monthly)}
+            </div>
+            <button onClick={submit} disabled={busy || uploading}
+              className="btn btn-primary text-base font-bold px-6 py-3">
+              {busy ? 'Ban raha hai…' : '✅ DPR SUBMIT KARO'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -200,6 +200,20 @@ export default function Login() {
               <p className="text-white/90 text-sm max-w-xs mx-auto">
                 Every site, every order, every rupee — visible end-to-end.
               </p>
+              {/* SEPL Mission (mam 2026-07-31, SPOS UX prompt) — shown on the
+                  login page so every user reads WHY this software exists. */}
+              <div className="mt-6 mx-auto max-w-sm text-left bg-white/10 border border-white/20 rounded-xl p-4 backdrop-blur-sm">
+                <div className="text-white font-bold text-xs uppercase tracking-wider mb-1.5">SEPL Mission</div>
+                <p className="text-white/90 text-[12px] leading-relaxed">
+                  "Ham software isliye nahi bana rahe ki aur data bharna pade.<br />
+                  Ham software isliye bana rahe hain taki <b>site par kaam bina rukawat chale</b>.<br />
+                  Planning pehle hogi. Material pehle site par pahunchega.<br />
+                  Engineer ko roz WhatsApp par follow-up nahi karna padega.<br />
+                  <b>Har Friday planning hogi. Har Monday site ready hogi.</b><br />
+                  Hamari priority software nahi hai —<br />
+                  hamari priority <b>smooth execution aur profit</b> hai."
+                </p>
+              </div>
             </div>
           </div>
         </div>

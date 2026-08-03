@@ -228,7 +228,7 @@ router.get('/spos-kpis', adminOnly, (req, res) => {
        WHERE d.report_date >= ? AND dm.item_master_id IS NOT NULL AND dm.consumed_today > 0
          AND EXISTS (SELECT 1 FROM stock_movements sm
                       WHERE sm.reference_type = 'DPR_CONSUMPTION'
-                        AND sm.reference_id = 'DPR-' || d.id
+                        AND (sm.reference_id = 'DPR-' || d.id OR sm.reference_id LIKE 'DPR-' || d.id || '-%')
                         AND sm.item_master_id = dm.item_master_id)`).get(fromIso).c;
 
     // 6 · DPR Submission — avg daily % of active sites with a submitted DPR

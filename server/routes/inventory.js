@@ -417,6 +417,12 @@ router.put('/reorder/:warehouse_id/:item_master_id', requirePermission('inventor
 // a paper trail (rate=newRate, qty=0 is illegal in applyMovement,
 // so we skip the movement when qty is unchanged).
 router.patch('/stock/:id', requirePermission('inventory', 'edit'), (req, res) => {
+  // SPOS rule (mam 2026-07-31): no manual stock editing — every change
+  // must ride a movement (Receive / Issue / Transfer / Return / DPR
+  // consumption). Admin keeps the override for genuine corrections.
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Manual stock edit band hai (SPOS) — stock sirf Receive / Issue / Transfer / Return se badlega. Correction ke liye admin se bolo.' });
+  }
   const db = getDb();
   const id = +req.params.id;
   const newQty = req.body?.quantity != null ? +req.body.quantity : null;
@@ -482,6 +488,10 @@ router.patch('/stock/:id', requirePermission('inventory', 'edit'), (req, res) =>
 // Zero out a stock_balance row and record a final OUT ADJUST movement
 // for the audit trail. The balance row is then physically removed.
 router.delete('/stock/:id', requirePermission('inventory', 'delete'), (req, res) => {
+  // SPOS rule (mam 2026-07-31): same as PATCH — admin-only correction.
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Manual stock delete band hai (SPOS) — admin se bolo.' });
+  }
   const db = getDb();
   const id = +req.params.id;
   const sb = db.prepare('SELECT * FROM stock_balance WHERE id=?').get(id);
@@ -503,6 +513,75 @@ router.delete('/stock/:id', requirePermission('inventory', 'delete'), (req, res)
     res.json({ message: 'Stock row deleted' });
   } catch (e) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+// ---------- SPOS STOCK EQUATION (mam 2026-07-31) ----------
+// Live, per-item, movement-derived:
+//   Opening + Received + Returned − Issued − Consumed ± Adjust = Closing
+// Nothing here is typed by anyone — pure read of stock_movements, which is
+// why manual stock edits are locked to admin above.
+router.get('/equation', requirePermission('inventory', 'view'), (req, res) => {
+  const db = getDb();
+  const warehouseId = +req.query.warehouse_id;
+  if (!warehouseId) return res.status(400).json({ error: 'warehouse_id required' });
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const todayIso = `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
+  const from = String(req.query.from || todayIso.slice(0, 8) + '01').slice(0, 10);
+  const to = String(req.query.to || todayIso).slice(0, 10);
+  try {
+    const rows = db.prepare(`
+      SELECT im.id item_master_id, im.item_name, im.specification, im.size, im.uom,
+        COALESCE((SELECT SUM(CASE WHEN sm.type='IN' THEN sm.quantity ELSE -sm.quantity END)
+           FROM stock_movements sm WHERE sm.warehouse_id=? AND sm.item_master_id=im.id
+            AND date(sm.created_at) < ?), 0) opening,
+        COALESCE((SELECT SUM(sm.quantity) FROM stock_movements sm
+           WHERE sm.warehouse_id=? AND sm.item_master_id=im.id AND sm.type='IN'
+            AND COALESCE(sm.reference_type,'') NOT IN ('SITE_RETURN','ADJUST')
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) received,
+        COALESCE((SELECT SUM(sm.quantity) FROM stock_movements sm
+           WHERE sm.warehouse_id=? AND sm.item_master_id=im.id AND sm.type='IN'
+            AND sm.reference_type='SITE_RETURN'
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) returned,
+        COALESCE((SELECT SUM(sm.quantity) FROM stock_movements sm
+           WHERE sm.warehouse_id=? AND sm.item_master_id=im.id AND sm.type='OUT'
+            AND COALESCE(sm.reference_type,'') NOT IN ('DPR_CONSUMPTION','ADJUST')
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) issued,
+        COALESCE((SELECT SUM(sm.quantity) FROM stock_movements sm
+           WHERE sm.warehouse_id=? AND sm.item_master_id=im.id AND sm.type='OUT'
+            AND sm.reference_type='DPR_CONSUMPTION'
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) consumed,
+        COALESCE((SELECT SUM(CASE WHEN sm.type='IN' THEN sm.quantity ELSE -sm.quantity END)
+           FROM stock_movements sm WHERE sm.warehouse_id=? AND sm.item_master_id=im.id
+            AND sm.reference_type='ADJUST'
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) adjust,
+        COALESCE((SELECT sb.quantity FROM stock_balance sb
+           WHERE sb.warehouse_id=? AND sb.item_master_id=im.id), 0) live_balance
+      FROM item_master im
+      WHERE EXISTS (SELECT 1 FROM stock_movements sm2
+                     WHERE sm2.warehouse_id=? AND sm2.item_master_id=im.id)
+      ORDER BY im.item_name
+    `).all(warehouseId, from, warehouseId, from, to, warehouseId, from, to,
+           warehouseId, from, to, warehouseId, from, to, warehouseId, from, to,
+           warehouseId, warehouseId);
+    const r2 = (x) => Math.round(x * 1000) / 1000;
+    res.json({
+      warehouse_id: warehouseId, from, to,
+      rows: rows.map(r => {
+        const closing = r.opening + r.received + r.returned - r.issued - r.consumed + r.adjust;
+        return {
+          ...r,
+          material_name: [r.item_name, r.specification, r.size].filter(Boolean).join(' '),
+          opening: r2(r.opening), received: r2(r.received), returned: r2(r.returned),
+          issued: r2(r.issued), consumed: r2(r.consumed), adjust: r2(r.adjust),
+          closing: r2(closing), live_balance: r2(r.live_balance),
+          matches: Math.abs(closing - r.live_balance) < 0.001,
+        };
+      }),
+    });
+  } catch (e) {
+    console.error('[inventory/equation]', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

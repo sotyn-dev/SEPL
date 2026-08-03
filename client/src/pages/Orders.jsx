@@ -576,9 +576,35 @@ export default function Orders() {
 
           {/* 4. BOQ Items Table */}
           <div className="border rounded-lg p-3 bg-white">
-            <div className="flex justify-between items-center mb-3">
+            <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
               <h4 className="font-semibold text-sm text-gray-700">BOQ Items ({poItems.filter(i => i.description).length} items)</h4>
-              <button type="button" onClick={addItem} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Item</button>
+              <div className="flex gap-2">
+                {/* Auto-map (mam 2026-08-03): match unmapped BOQ lines against
+                    Item Master server-side; fills ONLY when confidence ≥ 95%
+                    (sizes/numbers must match exactly). Manual mappings and
+                    ambiguous matches are never touched. */}
+                {editingPO && poItems.some(i => i.description && !i.item_master_id) && (
+                  <button type="button" className="btn btn-secondary text-xs flex items-center gap-1 !border-violet-300 !text-violet-700"
+                    onClick={async () => {
+                      try {
+                        const r = await api.post(`/orders/po/${editingPO.id}/auto-map-items`);
+                        const { mapped, total_unmapped, results } = r.data;
+                        if (mapped > 0) {
+                          toast.success(`🪄 ${mapped}/${total_unmapped} items auto-mapped (95%+ match)`);
+                          const fresh = await api.get(`/orders/po/${editingPO.id}/items`);
+                          setPoItems(fresh.data.map(i => ({ ...i, item_master_id: i.item_master_id || '' })));
+                          setPoItemsDirty(false);   // server already saved the mappings
+                        } else {
+                          const amb = (results || []).filter(x => x.outcome === 'ambiguous').length;
+                          toast(`Koi 95%+ sure match nahi mila (${total_unmapped} unmapped${amb ? `, ${amb} ambiguous` : ''}) — inko manually map karo`, { icon: 'ℹ️' });
+                        }
+                      } catch (e) { toast.error(e.response?.data?.error || 'Auto-map failed'); }
+                    }}>
+                    🪄 Auto-Map Items (95%+)
+                  </button>
+                )}
+                <button type="button" onClick={addItem} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Item</button>
+              </div>
             </div>
             <div className="space-y-2">
               {/* PO modal shows ONLY SITC fields. Labour Rate is captured

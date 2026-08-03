@@ -461,6 +461,88 @@ router.get('/po/:id/items', (req, res) => {
 // bcs after labour rate add this happen". Used when a labour rate sheet
 // was applied to the wrong PO or with a wrong-shape sheet; mam can
 // reset and re-upload cleanly. Idempotent and scoped by business_book_id.
+// ─── Auto-map BOQ items → Item Master (mam 2026-08-03) ────────────────
+// "In old order-to-planning data it's difficult to fill Map Item — match
+// from item master; if probability > 95% then fill."
+// Scoring: an item-master candidate's tokens (name + specification + size)
+// must appear in the BOQ description. Numeric/size tokens (15, NB, 63, MM,
+// 2.5, SQMM…) are MANDATORY — one missing number = no match, because a
+// wrong size mapped is worse than an empty mapping. Only rows with NO
+// existing mapping are touched; ambiguous ties are skipped.
+function amNormTokens(s) {
+  return [...new Set(String(s || '')
+    .toUpperCase()
+    .replace(/([A-Z])(\d)/g, '$1 $2')     // PIPE15 → PIPE 15
+    .replace(/(\d)([A-Z])/g, '$1 $2')     // 63MM  → 63 MM
+    .replace(/[^A-Z0-9.]+/g, ' ')
+    .split(/\s+/)
+    .filter(t => t && (t.length > 1 || /\d/.test(t))))];
+}
+function amScore(descSet, masterTokens) {
+  if (!masterTokens.length) return 0;
+  let got = 0, total = 0;
+  for (const t of masterTokens) {
+    const isNum = /\d/.test(t);
+    const w = isNum ? 2 : 1;
+    total += w;
+    if (descSet.has(t)) got += w;
+    else if (isNum) return 0;             // size/number mismatch → hard fail
+  }
+  return got / total;
+}
+router.post('/po/:id/auto-map-items', requirePermission('orders', 'edit'), (req, res) => {
+  const db = getDb();
+  const THRESHOLD = 0.95;
+  try {
+    // Same scoping as GET /po/:id/items — the PO's business_book lines.
+    const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id = ?').get(+req.params.id);
+    if (!po?.business_book_id) return res.json({ total_unmapped: 0, mapped: 0, results: [] });
+    const rows = db.prepare(`
+      SELECT id, description FROM po_items
+      WHERE business_book_id = ? AND item_master_id IS NULL AND COALESCE(description,'') <> ''
+    `).all(po.business_book_id);
+    const masters = db.prepare(`
+      SELECT id, item_name, specification, size, uom FROM item_master
+      WHERE COALESCE(item_name,'') <> ''
+    `).all().map(m => ({
+      ...m,
+      tokens: amNormTokens([m.item_name, m.specification, m.size].filter(Boolean).join(' ')),
+      label: [m.item_name, m.specification, m.size].filter(Boolean).join(' '),
+    })).filter(m => m.tokens.length >= 2);   // 1-token masters match everything — too risky
+
+    const setMap = db.prepare('UPDATE po_items SET item_master_id = ? WHERE id = ? AND item_master_id IS NULL');
+    const results = [];
+    let mapped = 0;
+    for (const r of rows) {
+      const descSet = new Set(amNormTokens(r.description));
+      const cands = masters
+        .map(m => ({ m, score: amScore(descSet, m.tokens) }))
+        .filter(c => c.score >= THRESHOLD)
+        .sort((a, b) => (b.m.tokens.length - a.m.tokens.length) || (b.score - a.score));
+      let outcome = 'no_match';
+      if (cands.length) {
+        const best = cands[0];
+        const rival = cands[1];
+        // Ambiguity guard: another candidate just as specific → don't guess.
+        if (rival && rival.m.tokens.length === best.m.tokens.length && rival.m.id !== best.m.id) {
+          outcome = 'ambiguous';
+        } else {
+          setMap.run(best.m.id, r.id);
+          mapped += 1;
+          outcome = 'mapped';
+          results.push({ po_item_id: r.id, description: String(r.description).slice(0, 80), matched: best.m.label, uom: best.m.uom, score: Math.round(best.score * 100), outcome });
+          continue;
+        }
+      }
+      results.push({ po_item_id: r.id, description: String(r.description).slice(0, 80), matched: null, score: cands[0] ? Math.round(cands[0].score * 100) : 0, outcome });
+    }
+    res.json({ total_unmapped: rows.length, mapped, results });
+  } catch (e) {
+    console.error('[orders/auto-map]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/po/:id/labour-rates/reset', requirePermission('orders', 'edit'), (req, res) => {
   const db = getDb();
   const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
