@@ -11,6 +11,7 @@ const { normalizeRoster } = require('../lib/roster');
 const { recordEmployeeChange, seedHiredRow, backfillFromAudit, toYMD, istToday } = require('../lib/employeeTimeline');
 const { TRACKED_FIELDS, ACTIONS, suggestAction, resolveActionCode, classifyEvent, SALARY_ACTIONS, SALARY_REASON_CODES, SALARY_REASON_LABELS } = require('../lib/employeeChangeCodes');
 const { diffTracked, changeFields: registryChangeFields } = require('../lib/employeeFields');
+const { validateEmployee } = require('../lib/employeeValidation');
 // Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
 // date-level effective_from). Server clock is UTC on the VPS.
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -774,7 +775,13 @@ router.get('/roster-audit', (req, res) => {
 
 router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
   const { name, phone, email, designation, department, join_date, salary,
-          aadhar_file, pan_file, qualification_file, roster } = req.body;
+          aadhar_file, pan_file, qualification_file, roster,
+          // Mandatory Field Spec — HR pack (Phase 2, 17 new fields).
+          reports_to_employee_id, employment_type, grade, probation_end_date,
+          confirmation_status, notice_period_days, date_of_birth, gender,
+          father_spouse_name, permanent_address, permanent_pincode,
+          current_address, current_pincode, emergency_contact_name,
+          emergency_contact_phone, blood_group, photo_url } = req.body;
   let { user_id } = req.body;
   const db = getDb();
   // Auto-link by email if user_id wasn't explicitly set
@@ -791,15 +798,32 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   // appeared in any payroll run (payroll.js's active-employee query requires
   // salary > 0). Same "silently wrong" shape as everything else this plan closes.
   if (!(Number(salary) > 0)) return res.status(400).json({ error: 'Salary must be greater than 0' });
+
+  // Mandatory Field Spec — HR pack (Phase 2): all 17 new fields are required
+  // at hire (mode:'create'), format/enum/graph-checked. See employeeValidation.js.
+  const errors = validateEmployee(req.body, { mode: 'create', db });
+  if (errors.length) return res.status(400).json({ error: errors[0].message, errors });
+
   // Insert the employee, stamp updated_at, and seed the opening "Hired" timeline
   // row — one transaction so the ledger can never be left without its anchor row.
   const createEmp = db.transaction(() => {
     const r = db.prepare(`
       INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
-                             aadhar_file, pan_file, qualification_file, roster, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             aadhar_file, pan_file, qualification_file, roster,
+                             reports_to_employee_id, employment_type, grade, probation_end_date,
+                             confirmation_status, notice_period_days, date_of_birth, gender,
+                             father_spouse_name, permanent_address, permanent_pincode,
+                             current_address, current_pincode, emergency_contact_name,
+                             emergency_contact_phone, blood_group, photo_url, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
-          aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster), istNow());
+          aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
+          reports_to_employee_id || null, employment_type || null, grade || null, probation_end_date || null,
+          confirmation_status || null, notice_period_days ? Number(notice_period_days) : null,
+          date_of_birth || null, gender || null, father_spouse_name || null,
+          permanent_address || null, permanent_pincode || null, current_address || null,
+          current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
+          blood_group || null, photo_url || null, istNow());
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
       effectiveFrom: join_date || istToday(),
@@ -862,7 +886,15 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   const { name, phone, email, designation, department, salary, status, user_id,
           aadhar_file, pan_file, qualification_file, roster, join_date,
           action_code, reason_code, reason, effective_date,
-          salary_effective_date, status_effective_date, salary_action, salary_reason_code } = req.body;
+          salary_effective_date, status_effective_date, salary_action, salary_reason_code,
+          // Mandatory Field Spec — HR pack (Phase 2, 17 new fields). Undefined
+          // (not sent) is normal here — see employeeValidation.js's mode:'edit'
+          // semantics: only fields actually supplied get validated/written.
+          reports_to_employee_id, employment_type, grade, probation_end_date,
+          confirmation_status, notice_period_days, date_of_birth, gender,
+          father_spouse_name, permanent_address, permanent_pincode,
+          current_address, current_pincode, emergency_contact_name,
+          emergency_contact_phone, blood_group, photo_url } = req.body;
   const db = getDb();
 
   // Unenforced before this plan — see the matching check on POST /employees.
@@ -879,6 +911,12 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     'SELECT name, phone, email, user_id, status, salary, designation, department, roster, join_date, aadhar_file, pan_file, qualification_file FROM employees WHERE id=?'
   ).get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
+
+  // Mandatory Field Spec — HR pack (Phase 2): mode:'edit' validates only the
+  // fields this request actually supplied — an old employee with 17 blank HR
+  // fields can still get a phone-number fix through. See employeeValidation.js.
+  const hrErrors = validateEmployee(req.body, { mode: 'edit', db, employeeId: Number(req.params.id), before });
+  if (hrErrors.length) return res.status(400).json({ error: hrErrors[0].message, errors: hrErrors });
 
   const newRoster = roster ? normalizeRoster(roster) : before.roster;
   const norm = (v) => (v == null ? '' : String(v).trim());
@@ -963,7 +1001,10 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     const now = istNow();
     const applyEdit = db.transaction(() => {
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
-  // upload — frontend can edit other fields without re-uploading docs.
+  // upload — frontend can edit other fields without re-uploading docs. The 17
+  // HR-pack fields follow the same pattern (Phase 2): none of them are sent
+  // yet (Phase 3/4 UI hasn't shipped), so COALESCE-to-existing is a no-op
+  // today and becomes real partial-save behaviour once the form does.
   db.prepare(`
     UPDATE employees
        SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?, join_date=?,
@@ -971,11 +1012,34 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            aadhar_file        = COALESCE(?, aadhar_file),
            pan_file           = COALESCE(?, pan_file),
            qualification_file = COALESCE(?, qualification_file),
+           reports_to_employee_id  = COALESCE(?, reports_to_employee_id),
+           employment_type         = COALESCE(?, employment_type),
+           grade                   = COALESCE(?, grade),
+           probation_end_date      = COALESCE(?, probation_end_date),
+           confirmation_status     = COALESCE(?, confirmation_status),
+           notice_period_days      = COALESCE(?, notice_period_days),
+           date_of_birth           = COALESCE(?, date_of_birth),
+           gender                  = COALESCE(?, gender),
+           father_spouse_name      = COALESCE(?, father_spouse_name),
+           permanent_address       = COALESCE(?, permanent_address),
+           permanent_pincode       = COALESCE(?, permanent_pincode),
+           current_address         = COALESCE(?, current_address),
+           current_pincode         = COALESCE(?, current_pincode),
+           emergency_contact_name  = COALESCE(?, emergency_contact_name),
+           emergency_contact_phone = COALESCE(?, emergency_contact_phone),
+           blood_group             = COALESCE(?, blood_group),
+           photo_url               = COALESCE(?, photo_url),
            updated_at = ?
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null, join_date || null,
         roster ? normalizeRoster(roster) : null,
-        aadhar_file || null, pan_file || null, qualification_file || null, now, req.params.id);
+        aadhar_file || null, pan_file || null, qualification_file || null,
+        reports_to_employee_id || null, employment_type || null, grade || null, probation_end_date || null,
+        confirmation_status || null, notice_period_days ? Number(notice_period_days) : null,
+        date_of_birth || null, gender || null, father_spouse_name || null,
+        permanent_address || null, permanent_pincode || null, current_address || null,
+        current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
+        blood_group || null, photo_url || null, now, req.params.id);
 
   // Log each re-uploaded document as its own event — reason is required (see
   // the gate above; dme 2026-08-01 reversed the 07-31 "frictionless" call).
