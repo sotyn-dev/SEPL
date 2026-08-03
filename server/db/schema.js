@@ -3664,6 +3664,13 @@ function initializeDatabase() {
     // Freeze the roster used when this month was finalised so a later roster
     // change on the employee can't retro-shift a locked month's late marks.
     ['payroll_runs', "roster TEXT DEFAULT 'general'"],
+    // att/sun breakdown persistence fix (SEPL 2026-08): present_days and
+    // sunday_worked_pay were computed every calc but never saved into the
+    // finalised snapshot, so a finalised month always showed "att 0 · sun 0"
+    // on the breakdown tooltip. Cosmetic only — paid_days/net_pay were
+    // unaffected — but real since the fields were added (9 June 2026).
+    ['payroll_runs', 'present_days REAL DEFAULT 0'],
+    ['payroll_runs', 'sunday_worked_pay REAL DEFAULT 0'],
     // Sales Billing — 4-type sequential bill flow (mam 2026-06-13).  Added to
     // the existing sales_bills table so legacy delivery-note rows (bill_type
     // NULL) are untouched; the new module only handles bill_type 1-4.
