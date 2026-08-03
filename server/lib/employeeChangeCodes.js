@@ -7,6 +7,8 @@
 // Mirrored on the client in client/src/constants/employeeChangeCodes.js — keep the
 // two in sync. The server is the source of truth for validation.
 
+const { trackedKeys } = require('./employeeFields');
+
 // The change action. "Other" is always present so the picker can never block a save.
 // 'Multiple changes' is SERVER-COMPUTED ONLY (never a dropdown choice) — see
 // resolveActionCode below: when >1 tracked field moves in one edit, forcing a
@@ -54,7 +56,11 @@ const TURNOVER_REASONS = [
 // it after the fact is a correction, and HR wants that correction on record.
 // name/phone/email/user_id joined the tracked set 2026-07-31 — HR wants contact-info
 // and linked-login corrections on record too ("how can we forget" — dme).
-const TRACKED_FIELDS = ['status', 'salary', 'designation', 'department', 'roster', 'join_date', 'name', 'phone', 'email', 'user_id'];
+//
+// Derived from the field registry (lib/employeeFields.js) rather than hand-listed —
+// the same source that feeds the hr.js diff, SNAPSHOT_COLS and CHANGE_FIELDS, so a
+// new tracked field cannot land in one of them and silently miss the others.
+const TRACKED_FIELDS = trackedKeys();
 
 // Auto-suggest an action from what actually changed — used ONLY as the UI's
 // starting value when exactly one tracked field changed. Human may override to

@@ -17,6 +17,7 @@
 // (post-edit) live state. MUST run inside the same transaction as that write.
 
 const { SALARY_REASON_CODES } = require('./employeeChangeCodes');
+const { SNAPSHOT_SELECT, snapshotTimelineCols, snapshotValues } = require('./employeeFields');
 
 // IST calendar date (server clock is UTC on the VPS). Matches istToday() elsewhere.
 function istToday() {
@@ -31,8 +32,9 @@ function toYMD(v) {
   return m ? m[1] : istToday();
 }
 
-const SNAPSHOT_COLS =
-  'id, name, phone, email, user_id, status, salary, salary_exempt, designation, department, roster, ot_eligible, join_date';
+// Derived from the field registry (lib/employeeFields.js) — adding a `snapshot: true`
+// field there is now enough; this no longer needs a matching hand-edit.
+const SNAPSHOT_COLS = SNAPSHOT_SELECT;
 
 // "Name (username/email)" snapshot of the linked login, or null — denormalized
 // so history reads correctly even if the user is later renamed/deleted.
@@ -113,45 +115,34 @@ function recordEmployeeChange(db, opts) {
     'UPDATE employee_timeline SET effective_to=? WHERE employee_id=? AND effective_to IS NULL'
   ).run(eff, employeeId);
 
-  // Open the new full-snapshot row. department_id/designation_id/manager_id stay
-  // NULL — org-structure is parked; the free-text department/designation carry the
-  // history now and the *_id columns fill in with zero rework when it resumes.
+  // Open the new full-snapshot row. Snapshot columns + values come from the field
+  // registry (lib/employeeFields.js) — a new `snapshot: true` field there is now
+  // enough to appear here, no second hand-edit. department_id/designation_id stay
+  // NULL — org-structure carries only the free-text department/designation for
+  // now; the *_id columns fill in once the employee write path resolves them.
+  // manager_id likewise stays NULL until reports_to_employee_id is wired (HR pack
+  // Phase 4) — it is not part of the registry because nothing populates it yet.
   const linkedLabel = linkedUserLabel(db, emp.user_id);
-  const info = changedAt
-    ? db
-        .prepare(
-          `INSERT INTO employee_timeline
-             (employee_id, employee_name, phone, email, linked_user_label, department, designation, manager_id,
-              salary, salary_exempt, roster, ot_eligible, status, join_date,
-              salary_effective_from, status_effective_from, salary_action, salary_reason_code,
-              effective_from, effective_seq, effective_to,
-              action_code, reason_code, reason, source, changed_by, changed_at)
-           VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?,?)`
-        )
-        .run(
-          emp.id, emp.name, emp.phone, emp.email, linkedLabel, emp.department, emp.designation, null,
-          emp.salary, emp.salary_exempt, emp.roster, emp.ot_eligible, emp.status, emp.join_date,
-          salaryEff, statusEff, salaryActionVal, salaryReasonVal,
-          eff, seq, null,
-          actionCode, reasonCode, reason, source, changedBy, changedAt
-        )
-    : db
-        .prepare(
-          `INSERT INTO employee_timeline
-             (employee_id, employee_name, phone, email, linked_user_label, department, designation, manager_id,
-              salary, salary_exempt, roster, ot_eligible, status, join_date,
-              salary_effective_from, status_effective_from, salary_action, salary_reason_code,
-              effective_from, effective_seq, effective_to,
-              action_code, reason_code, reason, source, changed_by)
-           VALUES (?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?)`
-        )
-        .run(
-          emp.id, emp.name, emp.phone, emp.email, linkedLabel, emp.department, emp.designation, null,
-          emp.salary, emp.salary_exempt, emp.roster, emp.ot_eligible, emp.status, emp.join_date,
-          salaryEff, statusEff, salaryActionVal, salaryReasonVal,
-          eff, seq, null,
-          actionCode, reasonCode, reason, source, changedBy
-        );
+  const cols = [
+    'employee_id', ...snapshotTimelineCols(), 'manager_id',
+    'salary_effective_from', 'status_effective_from', 'salary_action', 'salary_reason_code',
+    'effective_from', 'effective_seq', 'effective_to',
+    'action_code', 'reason_code', 'reason', 'source', 'changed_by',
+  ];
+  const vals = [
+    emp.id, ...snapshotValues(emp, { linkedUserLabel: linkedLabel }), null,
+    salaryEff, statusEff, salaryActionVal, salaryReasonVal,
+    eff, seq, null,
+    actionCode, reasonCode, reason, source, changedBy,
+  ];
+  // Explicit changed_at only when the caller wants to share a wall-clock stamp
+  // with another write in the same transaction (e.g. a same-save doc event) —
+  // otherwise the column is omitted so its DEFAULT CURRENT_TIMESTAMP applies.
+  if (changedAt) { cols.push('changed_at'); vals.push(changedAt); }
+  const placeholders = vals.map(() => '?').join(',');
+  const info = db
+    .prepare(`INSERT INTO employee_timeline (${cols.join(', ')}) VALUES (${placeholders})`)
+    .run(...vals);
   return info.lastInsertRowid;
 }
 

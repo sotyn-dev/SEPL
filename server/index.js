@@ -417,11 +417,12 @@ app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
 app.use('/api/site-chat', require('./routes/siteChat'));
 // Org Structure (Phase B) — department tree + designation catalog + openings.
-// Parked (dme 2026-07-31): the real router is kept intact in routes/orgStructure.js
-// (untouched, reversible) but not mounted — every request under this prefix gets
-// a clear 503 instead of reaching it. Swap the app.use line below back in to un-park.
-// app.use('/api/org-structure', require('./routes/orgStructure'));
-app.use('/api/org-structure', (req, res) => res.status(503).json({ error: 'Org Structure is currently parked' }));
+// Un-parked (dme 2026-08-03, Mandatory Field Spec HR pack): org_departments/
+// org_designations are the spec's dept master (HR-3) and Role Master (HR-2),
+// so the Employee form needs live dropdowns backed by them. Openings stays
+// hidden client-side (client/src/pages/hr/OrgStructure.jsx) — its endpoints
+// are reachable here but nothing on the page calls them anymore.
+app.use('/api/org-structure', require('./routes/orgStructure'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 

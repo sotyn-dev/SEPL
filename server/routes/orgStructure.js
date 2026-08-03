@@ -298,6 +298,150 @@ router.delete('/departments/:id/designations/:designationId', requirePermission(
   res.json({ ok: true });
 });
 
+// ─── Template reset (Mandatory Field Spec HR-2/HR-3 draft catalog) ──────────
+// "Start over, cleanly" — wipes the designation catalog and any department
+// outside root + the 5 function nodes + the spec's 11 leaves, then reseeds
+// from db/orgTemplate.js (dme 2026-08-03: the pre-parking test data — a mock
+// "MOCK Ravi Kumar" as head, typo'd/duplicate titles like "Staffs" and
+// "Managing Director1" — isn't real data worth preserving; a clean template
+// is more useful than perpetuating it). Destructive BY DESIGN, gated behind
+// requirePermission(M,'delete') and a confirm dialog on the client naming
+// exactly what will be removed. Re-runnable: edit orgTemplate.js when the
+// real Role Master Sheet 03 arrives, click again, it applies with no deploy.
+//
+// Safe today specifically because employee_timeline.department_id/
+// designation_id are still NULL — nothing has wired the Employee form to
+// them yet (later phase), so no employee history references any row this
+// deletes. Revisit this endpoint's safety once that wiring lands.
+
+// Read-only: which departments WOULD be removed, and the resulting counts —
+// shared by /template/preview (GET, no mutation) and /template/load (POST,
+// actually applies it) so the two can never disagree about what "applying
+// the template" means. Same bottom-up traversal as the delete path, but
+// collecting ids into a Set instead of deleting them. `tpl` is one entry
+// from db/orgTemplate.js's TEMPLATES list — every caller resolves it via
+// getTemplate(id) first so an unknown id is rejected before this runs.
+function computeTemplateDiff(db, tpl) {
+  const { SPEC_DEPARTMENTS } = require('../db/orgTemplate');
+  const root = db.prepare('SELECT id FROM org_departments WHERE parent_id IS NULL ORDER BY id LIMIT 1').get();
+  if (!root) return null;
+  const fnNodes = db.prepare('SELECT id, name FROM org_departments WHERE parent_id=?').all(root.id);
+  const keepIds = new Set([root.id, ...fnNodes.map((n) => n.id)]);
+  fnNodes.forEach((n) => {
+    (SPEC_DEPARTMENTS[n.name] || []).forEach((leafName) => {
+      const row = db.prepare('SELECT id FROM org_departments WHERE parent_id=? AND LOWER(name)=LOWER(?)').get(n.id, leafName);
+      if (row) keepIds.add(row.id);
+    });
+  });
+
+  const allDepts = db.prepare('SELECT id, parent_id, name FROM org_departments').all();
+  const byId = new Map(allDepts.map((d) => [d.id, d]));
+  const removedIds = new Set();
+  let progress = true;
+  while (progress) {
+    progress = false;
+    for (const d of allDepts) {
+      if (keepIds.has(d.id) || removedIds.has(d.id)) continue;
+      const hasSurvivingChild = allDepts.some((c) => c.parent_id === d.id && !removedIds.has(c.id));
+      if (!hasSurvivingChild) { removedIds.add(d.id); progress = true; }
+    }
+  }
+
+  const newDesignationCount = tpl.companyTitles.length + Object.values(tpl.departmentTitles).reduce((n, list) => n + list.length, 0);
+  return {
+    root, fnNodes, keepIds,
+    departmentsToRemove: [...removedIds].map((id) => ({ id, name: byId.get(id).name })),
+    currentDesignationCount: db.prepare('SELECT COUNT(*) c FROM org_designations').get().c,
+    newDesignationCount,
+  };
+}
+
+// List available templates — populates the client's dropdown. Add a new
+// template by editing db/orgTemplate.js's TEMPLATES list; nothing else
+// needs to change for it to show up here.
+router.get('/templates', requirePermission(M, 'view'), (req, res) => {
+  const { TEMPLATES } = require('../db/orgTemplate');
+  res.json(TEMPLATES.map((t) => ({ id: t.id, name: t.name, description: t.description })));
+});
+
+// Preview only — computes the diff, mutates nothing. requirePermission(M,
+// 'view') rather than 'delete': looking is not the destructive part.
+router.get('/template/preview', requirePermission(M, 'view'), (req, res) => {
+  const db = getDb();
+  const { getTemplate } = require('../db/orgTemplate');
+  const tpl = getTemplate(req.query.id);
+  if (!tpl) return res.status(400).json({ error: 'Unknown template' });
+  const diff = computeTemplateDiff(db, tpl);
+  if (!diff) return res.status(400).json({ error: 'No root department — org structure was never seeded' });
+  res.json({
+    departmentsToRemove: diff.departmentsToRemove.map((d) => d.name),
+    currentDesignationCount: diff.currentDesignationCount,
+    newDesignationCount: diff.newDesignationCount,
+  });
+});
+
+router.post('/template/load', requirePermission(M, 'delete'), (req, res) => {
+  const db = getDb();
+  const { getTemplate } = require('../db/orgTemplate');
+  const { ensureSpecDepartments } = require('../db/orgSchema');
+  const tpl = getTemplate((req.body || {}).id);
+  if (!tpl) return res.status(400).json({ error: 'Unknown template' });
+
+  try {
+    const result = db.transaction(() => {
+      // Compute the SAME diff /template/preview would show, then apply it —
+      // guarantees preview and apply can never drift apart.
+      const diff = computeTemplateDiff(db, tpl);
+      if (!diff) throw new Error('No root department — org structure was never seeded');
+      const { root, fnNodes, departmentsToRemove, currentDesignationCount } = diff;
+
+      const designationsRemoved = currentDesignationCount;
+      db.prepare('DELETE FROM org_designations').run(); // junction rows cascade
+
+      departmentsToRemove.forEach((d) => db.prepare('DELETE FROM org_departments WHERE id=?').run(d.id));
+      const departmentsRemoved = departmentsToRemove.length;
+
+      // Clear stale test heads (e.g. a mock employee) on whatever survives.
+      db.prepare('UPDATE org_departments SET head_employee_id=NULL').run();
+
+      // Reseed the 11 spec leaves (idempotent — safe even freshly cleared).
+      ensureSpecDepartments(db);
+
+      const insDesig = db.prepare('INSERT INTO org_designations (name, tag_name, singleton, status) VALUES (?,?,?,?)');
+      const attach = db.prepare('INSERT OR IGNORE INTO org_department_designations (department_id, designation_id) VALUES (?,?)');
+      const fnByName = Object.fromEntries(db.prepare('SELECT id, name FROM org_departments WHERE parent_id=?').all(root.id).map((n) => [n.name, n.id]));
+
+      let designationsAdded = 0;
+      tpl.companyTitles.forEach((t) => {
+        const info = insDesig.run(t.name, t.tagName || null, 1, 'present');
+        designationsAdded++;
+        const deptId = t.attachTo ? fnByName[t.attachTo] : root.id;
+        if (deptId) attach.run(deptId, info.lastInsertRowid);
+      });
+
+      const leafByName = {};
+      fnNodes.forEach((n) => {
+        db.prepare('SELECT id, name FROM org_departments WHERE parent_id=?').all(n.id).forEach((l) => { leafByName[l.name] = l.id; });
+      });
+      Object.entries(tpl.departmentTitles).forEach(([deptName, titles]) => {
+        const deptId = leafByName[deptName];
+        if (!deptId) return;
+        titles.forEach((title) => {
+          const info = insDesig.run(title, null, 0, 'present');
+          designationsAdded++;
+          attach.run(deptId, info.lastInsertRowid);
+        });
+      });
+
+      return { departmentsRemoved, designationsRemoved, designationsAdded };
+    })();
+
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Openings (decoupled vacancy board) ──────────────────────────────────────
 
 router.get('/openings', requirePermission(M, 'view'), (req, res) => {

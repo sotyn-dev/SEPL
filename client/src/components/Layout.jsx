@@ -151,11 +151,10 @@ const SIDEBAR_GROUPS = [
     { path: '/attendance',      label: 'Attendance',                icon: FiCalendar,   module: 'attendance' },
     { path: '/payroll',         label: 'Payroll',                   icon: FiDollarSign, module: 'payroll' },
     { path: '/employees',       label: 'Employees',                 icon: FiAtSign,     module: 'employees' },
-    // Org Structure parked (dme 2026-07-31) — removed from the menu, same
-    // pattern as Expenses above. Route + page kept dormant (App.jsx renders a
-    // "paused" placeholder instead) and the API mount replies 503 (server/
-    // index.js), so it's fully reversible without touching OrgStructure.jsx.
-    // { path: '/org-structure', label: 'Org Structure',             icon: FiShare2,     module: 'org_structure' },
+    // Org Structure un-parked (dme 2026-08-03, Mandatory Field Spec HR pack) —
+    // org_departments/org_designations are HR-2/HR-3's masters; the Employee
+    // form needs live dropdowns backed by them.
+    { path: '/org-structure', label: 'Org Structure',             icon: FiShare2,     module: 'org_structure' },
     // Mam (2026-05-30): "performance is under HRMS" — moved from
     // the Tasks group so the scorecard sits with the rest of HR.
     { path: '/scorecard',       label: 'Performance',               icon: FiAward,      module: 'scoring' },

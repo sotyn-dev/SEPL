@@ -44,9 +44,9 @@ const Rentals = lazy(() => import('./pages/Rentals'));
 const Snags = lazy(() => import('./pages/Snags'));
 const CompanyAssets = lazy(() => import('./pages/CompanyAssets'));
 const Employees = lazy(() => import('./pages/Employees'));
-// Org Structure parked (dme 2026-07-31) — page kept dormant, route renders
-// ParkedModule instead. Uncomment this import + the route below to un-park.
-// const OrgStructure = lazy(() => import('./pages/hr/OrgStructure'));
+// Org Structure un-parked (dme 2026-08-03, Mandatory Field Spec HR pack) —
+// see server/index.js and Layout.jsx for the matching reversions.
+const OrgStructure = lazy(() => import('./pages/hr/OrgStructure'));
 const Expenses = lazy(() => import('./pages/Expenses'));
 const Checklists = lazy(() => import('./pages/Checklists'));
 const CashFlow = lazy(() => import('./pages/CashFlow'));
@@ -236,11 +236,10 @@ export default function App() {
         <Route path="tools" element={<ModuleRoute module="tools"><Tools /></ModuleRoute>} />
         <Route path="rentals" element={<ModuleRoute module="rentals"><Rentals /></ModuleRoute>} />
         <Route path="employees" element={<ModuleRoute module="employees"><Employees /></ModuleRoute>} />
-        {/* Org Structure parked (dme 2026-07-31) — real page kept dormant
-            (see the commented import above); this renders a paused placeholder
-            instead, regardless of permission, so direct navigation doesn't
-            expose the module. Swap back to <OrgStructure /> to un-park. */}
-        <Route path="org-structure" element={<ParkedModule name="Org Structure" />} />
+        {/* Org Structure un-parked (dme 2026-08-03, Mandatory Field Spec HR
+            pack) — gated by org_structure like every other ModuleRoute below;
+            that permission key was already seeded deny-by-default while parked. */}
+        <Route path="org-structure" element={<ModuleRoute module="org_structure"><OrgStructure /></ModuleRoute>} />
         <Route path="expenses" element={<ModuleRoute module="expenses"><Expenses /></ModuleRoute>} />
         <Route path="checklists" element={<ModuleRoute module="checklists"><Checklists /></ModuleRoute>} />
         {/* Admin Routes */}

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  FiPlus, FiEdit2, FiTrash2, FiChevronRight, FiCornerDownRight,
-  FiUserPlus, FiStar, FiSlash, FiCheckCircle, FiMoreVertical, FiX, FiHelpCircle,
+  FiPlus, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCornerDownRight,
+  FiUserPlus, FiStar, FiSlash, FiCheckCircle, FiMoreVertical, FiX, FiHelpCircle, FiRefreshCw, FiLayers,
 } from 'react-icons/fi';
 import api from '../../api';
 import toast from 'react-hot-toast';
+import { useAuth } from '../../context/AuthContext';
 import Modal from '../../components/Modal';
 import PeoplePicker from '../../components/PeoplePicker';
 import DepartmentPicker from '../../components/DepartmentPicker';
@@ -31,6 +32,8 @@ const errMsg = (e, fallback) => e?.response?.data?.error || fallback;
 const clean = (s) => (s || '').trim();   // single source of truth for input trimming
 
 export default function OrgStructure() {
+  const { isAdmin, canDelete } = useAuth();
+  const canLoadTemplate = isAdmin() || canDelete('org_structure');
   const [view, setView] = useState('departments'); // departments | designations | openings
   const [tree, setTree] = useState([]);
   const [designations, setDesignations] = useState([]);
@@ -39,6 +42,17 @@ export default function OrgStructure() {
   const [modal, setModal] = useState(null); // { kind, ...ctx }
   const [confirmBox, setConfirmBox] = useState(null); // { message, onYes }
   const [guideOpen, setGuideOpen] = useState(false);
+  // Load Template — a LIST of catalogs (db/orgTemplate.js TEMPLATES), all
+  // picked inside one self-contained "Pick Template" popover (list + footer
+  // actions live together, per dme 2026-08-03 — see TemplatePicker below).
+  // Adding a second/third template needs no UI change, just another entry in
+  // orgTemplate.js. Preview is optional (Set works without it) and, once
+  // fetched, feeds Set's confirm dialog with real numbers instead of a
+  // generic warning.
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templatePreview, setTemplatePreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const emp = usePeopleOptions('employee');
   const usr = usePeopleOptions('user');
@@ -59,10 +73,21 @@ export default function OrgStructure() {
     }).catch(e => toast.error(errMsg(e, 'Failed to load departments'))), []);
   const loadDesig = useCallback(() => api.get('/org-structure/designations')
     .then(r => setDesignations(r.data)).catch(e => toast.error(errMsg(e, 'Failed to load designations'))), []);
+  // Openings — recruitment planning, not a mandatory field. Tab hidden below
+  // (Mandatory Field Spec HR pack, plan: keep-confirmation-status-separate-
+  // elegant-beacon). The endpoints stay mounted with the router; nothing on
+  // this page calls them anymore, so `openings` stays [] and loadOpenings is
+  // kept (unused) only so re-enabling the tab later is a one-line revert.
+  // eslint-disable-next-line no-unused-vars
   const loadOpenings = useCallback(() => api.get('/org-structure/openings')
     .then(r => setOpenings(r.data)).catch(e => toast.error(errMsg(e, 'Failed to load openings'))), []);
 
-  useEffect(() => { loadTree(); loadDesig(); loadOpenings(); }, [loadTree, loadDesig, loadOpenings]);
+  useEffect(() => { loadTree(); loadDesig(); }, [loadTree, loadDesig]);
+  useEffect(() => {
+    if (!canLoadTemplate) return;
+    api.get('/org-structure/templates').then(r => setTemplates(r.data)).catch(e => toast.error(errMsg(e, 'Failed to load templates')));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canLoadTemplate]);
 
   const toggleOpen = (id) => setOpenIds(prev => {
     const next = new Set(prev);
@@ -81,7 +106,60 @@ export default function OrgStructure() {
     confirm(message, () => doDelete().then(() => { toast.success('Deleted'); after?.(); }).catch(e => toast.error(errMsg(e, 'Failed'))), { title: 'Delete', confirmLabel: 'Delete' });
   }, [confirm]);
 
-  const afterDeptChange = useCallback(() => { loadTree(); loadOpenings(); invalidateDepartments(); }, [loadTree, loadOpenings]);
+  const afterDeptChange = useCallback(() => { loadTree(); invalidateDepartments(); }, [loadTree]);
+
+  // Selecting a template in the picker drops any stale preview from
+  // whichever one was previously selected.
+  const chooseTemplate = useCallback((id) => {
+    setSelectedTemplateId(id);
+    setTemplatePreview(null);
+  }, []);
+  // Closing the picker without applying anything — reset to a blank slate so
+  // reopening it always starts at the list, never a stale preview.
+  const closeTemplatePicker = useCallback(() => {
+    setSelectedTemplateId('');
+    setTemplatePreview(null);
+  }, []);
+
+  // "Preview" — read-only, mutates nothing (GET /template/preview for the
+  // SELECTED template). Optional: Set works fine without ever calling this.
+  // When present, its numbers feed Set's confirm dialog instead of a generic
+  // warning.
+  const previewTemplate = useCallback(() => {
+    if (!selectedTemplateId) return;
+    setPreviewLoading(true);
+    api.get('/org-structure/template/preview', { params: { id: selectedTemplateId } })
+      .then((r) => setTemplatePreview(r.data))
+      .catch((e) => toast.error(errMsg(e, 'Failed to preview template')))
+      .finally(() => setPreviewLoading(false));
+  }, [selectedTemplateId]);
+
+  // "Set" — resets the designation catalog and any department outside the
+  // standard 11 to the SELECTED template (server/db/orgTemplate.js), for when
+  // the current data is test/placeholder rather than something worth
+  // preserving. Destructive; server also gates it behind delete permission —
+  // this confirm is the client-side warning, not the guard.
+  const setTemplate = useCallback(() => {
+    if (!selectedTemplateId) return;
+    const tplName = templates.find((t) => t.id === selectedTemplateId)?.name || 'this template';
+    const p = templatePreview;
+    const detail = p
+      ? `This will remove ${p.departmentsToRemove.length} department${p.departmentsToRemove.length === 1 ? '' : 's'}${p.departmentsToRemove.length ? ` (${p.departmentsToRemove.join(', ')})` : ''} and replace all ${p.currentDesignationCount} designation(s) with ${p.newDesignationCount} from “${tplName}”. This cannot be undone.`
+      : `This replaces the entire designation catalog and removes any department outside the standard 5 groups + 11 with “${tplName}”. This cannot be undone.`;
+    confirm(
+      detail,
+      () => mutate(
+        api.post('/org-structure/template/load', { id: selectedTemplateId }).then((r) => {
+          const { departmentsRemoved, designationsRemoved, designationsAdded } = r.data;
+          toast.success(`“${tplName}” loaded — removed ${departmentsRemoved} department(s), replaced ${designationsRemoved} designation(s) with ${designationsAdded}`);
+          setTemplatePreview(null);
+          setSelectedTemplateId('');
+        }),
+        () => { loadTree(); loadDesig(); invalidateDepartments(); },
+      ),
+      { title: 'Load Template', confirmLabel: 'Set' },
+    );
+  }, [selectedTemplateId, templates, templatePreview, confirm, mutate, loadTree, loadDesig]);
 
   // name → tag/short-code lookup, so a head's designation can show as its alias
   // (e.g. "MD") with the full title on hover. Custom/legacy titles with no catalog
@@ -92,22 +170,34 @@ export default function OrgStructure() {
     return m;
   }, [designations]);
 
+  // Openings tab hidden (see loadOpenings comment above) — recruitment
+  // planning is out of scope for the Mandatory Field Spec HR pack.
   const tabs = [
     ['departments', 'Departments'],
     ['designations', 'Designations'],
-    ['openings', `Openings${openings.filter(o => o.status === 'open').length ? ' · ' + openings.filter(o => o.status === 'open').length : ''}`],
   ];
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-3 max-md:flex-col">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Org Structure</h1>
           <p className="text-sm text-gray-500">Departments, the designation catalog, and open positions.</p>
         </div>
-        <button className="btn btn-secondary text-sm flex-shrink-0" onClick={() => setGuideOpen(true)}>
-          <FiHelpCircle className="inline -mt-0.5 mr-1" />Guide
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button className="btn btn-secondary text-sm" onClick={() => setGuideOpen(true)}>
+            <FiHelpCircle className="inline -mt-0.5 mr-1" />Guide
+          </button>
+          {/* Rightmost — its popover opens right-anchored (right-0), so being
+              the last/right-most trigger keeps the panel from having to
+              reach left past other controls on narrow screens. */}
+          {canLoadTemplate && (
+            <TemplatePicker
+              templates={templates} selectedId={selectedTemplateId} onSelect={chooseTemplate} onClose={closeTemplatePicker}
+              preview={templatePreview} previewLoading={previewLoading} onPreview={previewTemplate} onSet={setTemplate}
+            />
+          )}
+        </div>
       </div>
 
       <div className="flex gap-2 border-b border-gray-200">
@@ -173,6 +263,81 @@ export default function OrgStructure() {
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700">{confirmBox.confirmLabel || 'Confirm'}</button>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── "Pick Template" popover — ONE self-contained surface: trigger → list of
+// templates (single-select) → footer (Preview / Set), all inside the same
+// panel. Clicking Preview swaps the list for a diff message in place, with
+// Close/Apply right there — no action ever lives outside the surface it
+// affects (dme 2026-08-03: a page-header dropdown + a separate page-footer
+// action bar was the wrong shape — this replaces it). Adding a second
+// template to db/orgTemplate.js needs no change here, it's just another row.
+function TemplatePicker({ templates, selectedId, onSelect, onClose, preview, previewLoading, onPreview, onSet }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) { setOpen(false); onClose(); } };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [onClose]);
+  // Trigger label is STATIC — "Pick Template" never swaps to the selected
+  // template's name. Swapping it made the button (and everything right of
+  // it) resize the instant an option was picked; a fixed label keeps the
+  // header still. Which template is selected shows inside the panel (the
+  // checked radio), not on the trigger.
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button type="button" className="btn btn-secondary text-sm" onClick={() => setOpen(o => !o)}>
+        <FiLayers className="inline -mt-0.5 mr-1.5" />Pick Template
+        <FiChevronDown className={`inline -mt-0.5 ml-1.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 z-20 w-60 max-w-[calc(100vw-1.5rem)] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+          {preview ? (
+            <div className="p-2.5 space-y-2">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
+                <span className="font-semibold">Preview — nothing applied yet.</span>{' '}
+                {preview.departmentsToRemove.length ? (
+                  <>Would remove {preview.departmentsToRemove.length} department(s): {preview.departmentsToRemove.join(', ')}. </>
+                ) : (
+                  <>No departments would be removed. </>
+                )}
+                Designations: {preview.currentDesignationCount} → {preview.newDesignationCount}.
+              </div>
+              <div className="flex justify-end gap-2">
+                <button type="button" className="btn btn-secondary text-xs" onClick={() => { setOpen(false); onClose(); }}>Close</button>
+                <button type="button" className="btn btn-primary text-xs" onClick={() => { setOpen(false); onSet(); }}>Apply</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="max-h-56 overflow-y-auto p-1">
+                {templates.length === 0 && <div className="text-xs text-gray-400 p-3 text-center">No templates yet.</div>}
+                {templates.map(t => (
+                  <label key={t.id} className="flex items-start gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-gray-50">
+                    <input type="radio" name="org-template" className="mt-0.5" checked={selectedId === t.id} onChange={() => onSelect(t.id)} />
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-gray-800">{t.name}</div>
+                      {t.description && <div className="text-[10px] leading-snug text-gray-400">{t.description}</div>}
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <div className="flex justify-end gap-2 border-t border-gray-100 px-2.5 py-2">
+                <button type="button" className="btn btn-secondary text-xs" disabled={!selectedId || previewLoading} onClick={onPreview}
+                  title="See what Set would change, without applying it">
+                  <FiRefreshCw className="inline -mt-0.5 mr-1" />{previewLoading ? 'Loading…' : 'Preview'}
+                </button>
+                <button type="button" className="btn btn-primary text-xs" disabled={!selectedId} onClick={() => { setOpen(false); onSet(); }}>
+                  Set
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -10,6 +10,7 @@ const { parseResume } = require('../utils/resumeParser');
 const { normalizeRoster } = require('../lib/roster');
 const { recordEmployeeChange, seedHiredRow, backfillFromAudit, toYMD, istToday } = require('../lib/employeeTimeline');
 const { TRACKED_FIELDS, ACTIONS, suggestAction, resolveActionCode, classifyEvent, SALARY_ACTIONS, SALARY_REASON_CODES, SALARY_REASON_LABELS } = require('../lib/employeeChangeCodes');
+const { diffTracked, changeFields: registryChangeFields } = require('../lib/employeeFields');
 // Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
 // date-level effective_from). Server clock is UTC on the VPS.
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -687,6 +688,15 @@ router.get('/candidates/stats', (req, res) => {
   res.json({ total: total.count, byStatus, bySource });
 });
 
+// Grade/Band master (Mandatory Field Spec HR-6) — read-only lookup for the
+// employee form's Grade dropdown. Non-sensitive reference data; no permission
+// gate beyond the router's own authMiddleware. CRUD lives in Org Structure's
+// Grades tab (server/routes/orgStructure.js) once that module is un-parked.
+router.get('/grades', (req, res) => {
+  const db = getDb();
+  res.json(db.prepare('SELECT id, code, label FROM org_grades WHERE active=1 ORDER BY sort_order').all());
+});
+
 // Employees — salary is confidential; the salary field ships only to callers
 // holding employee_salary.can_view (admin included — getUserPermissions grants
 // admin every action). Everyone else gets the row with salary stripped. The DPR
@@ -872,17 +882,14 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
 
   const newRoster = roster ? normalizeRoster(roster) : before.roster;
   const norm = (v) => (v == null ? '' : String(v).trim());
-  const changed = [];
-  if (norm(status)        !== norm(before.status))        changed.push('status');
-  if (Number(salary || 0) !== Number(before.salary || 0)) changed.push('salary');
-  if (norm(designation)   !== norm(before.designation))   changed.push('designation');
-  if (norm(department)    !== norm(before.department))     changed.push('department');
-  if (norm(newRoster)     !== norm(before.roster))         changed.push('roster');
-  if (norm(join_date)     !== norm(before.join_date))      changed.push('join_date');
-  if (norm(name)           !== norm(before.name))            changed.push('name');
-  if (norm(phone)          !== norm(before.phone))           changed.push('phone');
-  if (norm(email)          !== norm(before.email))           changed.push('email');
-  if (Number(user_id || 0) !== Number(before.user_id || 0)) changed.push('user_id');
+  // Diffed via the field registry (lib/employeeFields.js) — this used to be ten
+  // hand-written comparisons that TRACKED_FIELDS (imported above) didn't even
+  // drive, so a field added to that list alone would silently never diff: it
+  // would save with no reason prompt and no History row. A field now only has
+  // to be marked `tracked: true` in the registry to diff correctly here.
+  const changed = diffTracked(before, {
+    status, salary, designation, department, roster: newRoster, join_date, name, phone, email, user_id,
+  });
 
   // Document re-uploads — tracked separately from the tracked-field ledger
   // (employee_document_events, not employee_timeline — see schema.js). Only a
@@ -1108,19 +1115,11 @@ router.get('/employees/:id/payroll-lock-info', requirePermission('employees', 'e
 const canSeeSalary = (req) => !!getUserPermissions(req.user.id)['employee_salary']?.can_view;
 
 // The fields surfaced in change events (tracked + payroll-driven ot_eligible).
-const CHANGE_FIELDS = [
-  { key: 'status',      label: 'Status' },
-  { key: 'salary',      label: 'Salary', money: true },
-  { key: 'designation', label: 'Designation' },
-  { key: 'department',  label: 'Department' },
-  { key: 'roster',      label: 'Roster' },
-  { key: 'join_date',   label: 'Join date' },
-  { key: 'ot_eligible', label: 'OT eligible', bool: true },
-  { key: 'employee_name',      label: 'Name' },
-  { key: 'phone',              label: 'Phone' },
-  { key: 'email',              label: 'Email' },
-  { key: 'linked_user_label',  label: 'Linked user' },
-];
+// Derived from the field registry (lib/employeeFields.js) — a field marked
+// `changeField: true` there now appears on the History timeline, the Employee
+// Vault and the Excel reports automatically; it used to need this list hand-kept
+// in sync too, and a miss here meant a real change was recorded but invisible.
+const CHANGE_FIELDS = registryChangeFields();
 const fmtVal = (f, v) => {
   if (v == null || v === '') return '';
   if (f.bool) return v ? 'Yes' : 'No';

@@ -3033,6 +3033,10 @@ function initializeDatabase() {
     // 'general' (9:30, default) and 'early' (9:00). Drives roster-aware late /
     // half-day cutoffs in payroll + punch. See server/lib/roster.js.
     ['employees', "roster TEXT DEFAULT 'general'"],
+    // Mandatory Field Spec — HR pack's 17 new employees columns moved to
+    // hrSchema.js's own guarded loop (EMPLOYEE_COLUMNS), scoped to that
+    // module instead of interleaved here with ~300 unrelated entries for
+    // other modules. See runHrMigrations() below.
     // can_see_all on role_permissions: explicit per-role-per-module toggle
     // for "scope = ALL records" vs "scope = OWN only". Decoupled from
     // can_approve so admin can grant a role full visibility without giving
@@ -4368,283 +4372,21 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Org Structure (Phase B) — hybrid model: department tree + flat designation
-  // catalog + M:N mapping + openings + an effective-dated employee_timeline.
-  // Design: plans/moonlit-puzzling-dawn.md. Built to be migration-proof later:
-  //   · CREATE TABLE / INDEX IF NOT EXISTS → re-running boot is a no-op.
-  //   · NO CHECK constraints on the status columns. A CHECK can only be relaxed
-  //     by a full copy-table rebuild (see the indents.status pain at ~line 4340);
-  //     statuses are validated in the route layer instead, so adding a new status
-  //     value never forces a schema migration.
-  //   · FKs only on STRUCTURAL ids (tree parent, junction, timeline dept/desig/
-  //     employee). Display-only / snapshot refs (head, reports-to, filled-by,
-  //     manager, changed-by) are plain INTEGER — no FK — so they never raise
-  //     "FOREIGN KEY constraint failed" when an unrelated employee/user is removed.
-  //   · Fully reversible: DROP these tables + the one nullable employees column
-  //     and the DB is byte-for-byte as before (nothing else references them).
+  // Organizational Management (departments/designations/grades/openings) and
+  // Personnel Administration (employees columns, employee_timeline, document
+  // events) — self-contained modules, extracted to their own files for
+  // readability (plan: keep-confirmation-status-separate-elegant-beacon).
+  // Same non-fatal try/catch idiom as fireNocSchema.js/rentalToolsSchema.js
+  // below. ORDER MATTERS: org must run first — employee_timeline's
+  // department_id/designation_id carry FKs into the org tables.
   try {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS org_departments (
-        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-        parent_id        INTEGER REFERENCES org_departments(id),   -- NULL = root
-        name             TEXT NOT NULL,
-        alias            TEXT,                                      -- common/site name, e.g. "(Sales & Tendering)"
-        head_employee_id INTEGER,                                  -- DISPLAY ONLY (soft ref, no FK; grants nothing)
-        sort_order       INTEGER DEFAULT 0,
-        active           INTEGER DEFAULT 1,
-        created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(parent_id, name)
-      );
-
-      CREATE TABLE IF NOT EXISTS org_designations (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        name       TEXT NOT NULL UNIQUE,        -- full title, e.g. "Managing Director"
-        tag_name   TEXT,                        -- short chip/code, e.g. "MD"
-        singleton  INTEGER DEFAULT 0,           -- 1 = HARD cap: only ONE active holder (MD/COO/CFO)
-        status     TEXT DEFAULT 'present',      -- present | not_wanted | planned  (validated in routes)
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-      -- Partial UNIQUE: tag_name is unique only when present (most titles omit it).
-      CREATE UNIQUE INDEX IF NOT EXISTS uniq_org_desig_tag
-        ON org_designations(tag_name) WHERE tag_name IS NOT NULL;
-
-      CREATE TABLE IF NOT EXISTS org_department_designations (
-        department_id  INTEGER NOT NULL REFERENCES org_departments(id)  ON DELETE CASCADE,
-        designation_id INTEGER NOT NULL REFERENCES org_designations(id) ON DELETE CASCADE,
-        PRIMARY KEY (department_id, designation_id)
-      );
-      -- Reverse lookup (depts-of-a-title); the forward direction is the PK itself.
-      CREATE INDEX IF NOT EXISTS idx_org_dd_designation
-        ON org_department_designations(designation_id);
-
-      CREATE TABLE IF NOT EXISTS org_openings (
-        id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-        department_id          INTEGER REFERENCES org_departments(id),
-        designation_id         INTEGER REFERENCES org_designations(id),
-        headcount              INTEGER DEFAULT 1,
-        reports_to_employee_id INTEGER,               -- soft ref (no FK)
-        status                 TEXT DEFAULT 'open',   -- open | filled | on_hold | closed (validated in routes)
-        filled_employee_id     INTEGER,               -- soft ref (no FK)
-        notes                  TEXT,
-        created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
-        closed_at              DATETIME
-      );
-      CREATE INDEX IF NOT EXISTS idx_org_openings_status ON org_openings(status);
-
-      -- Effective-dated employee history spine (HRIS EFFDT/EFFSEQ pattern).
-      -- Wired for dept/designation/manager now; salary/roster/ot/status columns
-      -- are provisioned + snapshotted so later modules link with no schema change.
-      -- employee_id is NULLABLE with ON DELETE SET NULL (NOT the RESTRICT that a
-      -- bare "NOT NULL REFERENCES" gives under foreign_keys=ON): once the change
-      -- ledger has rows, a hard employee delete must NOT be blocked — the link
-      -- nulls out and the row survives under the denormalized employee_name so the
-      -- audit trail outlives the record. (Existing DBs are reshaped to this below.)
-      CREATE TABLE IF NOT EXISTS employee_timeline (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        employee_id    INTEGER REFERENCES employees(id) ON DELETE SET NULL,
-        employee_name  TEXT,                  -- denormalized name snapshot (survives delete)
-        phone          TEXT,                  -- mirrors employees.phone (tracked: contact-info edits need a reason)
-        email          TEXT,                  -- mirrors employees.email
-        linked_user_label TEXT,               -- denormalized "Name (username/email)" snapshot of the linked login, or NULL
-        department_id  INTEGER REFERENCES org_departments(id),
-        designation_id INTEGER REFERENCES org_designations(id),
-        department     TEXT,                  -- free-text dept snapshot now (department_id fills when org resumes)
-        designation    TEXT,                  -- free-text title snapshot now
-        manager_id     INTEGER,               -- snapshot of users.manager_id (live source stays users; no FK)
-        salary         REAL,                  -- mirrors employees.salary (read-gate with employee_salary.can_view)
-        salary_exempt  INTEGER,               -- mirrors employees.salary_exempt
-        roster         TEXT,                  -- mirrors employees.roster
-        ot_eligible    INTEGER,               -- mirrors employees.ot_eligible
-        status         TEXT,                  -- mirrors employees.status
-        join_date      TEXT,                  -- mirrors employees.join_date (tracked: corrections need a reason)
-        salary_effective_from TEXT,           -- salary's OWN effective date, isolated from effective_from's noise
-        status_effective_from TEXT,           -- status's OWN effective date, isolated likewise
-        salary_action  TEXT,                  -- 'revision' | 'correction' — set only when salary changed
-        salary_reason_code TEXT,              -- one of SALARY_REASON_CODES — set only when salary_action='revision'
-        effective_from TEXT NOT NULL,         -- date this state became true (date-level, YYYY-MM-DD)
-        effective_seq  INTEGER DEFAULT 0,     -- EFFSEQ: tiebreaker for >1 change the same day
-        effective_to   TEXT,                  -- NULL = the current open row
-        action_code    TEXT,                  -- Hired | Promotion | Pay Revision | ... | Other
-        reason_code    TEXT,                  -- optional coded turnover reason (inactive/terminated)
-        reason         TEXT,
-        source         TEXT,                  -- hr | payroll | roster | backfill | manual
-        changed_by     INTEGER,               -- acting user (soft ref, no FK)
-        changed_at     DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-      -- Exactly ONE open row per employee — an invariant the employees table lacks.
-      CREATE UNIQUE INDEX IF NOT EXISTS uniq_emp_timeline_open
-        ON employee_timeline(employee_id) WHERE effective_to IS NULL;
-      -- As-of range lookups.
-      CREATE INDEX IF NOT EXISTS idx_emp_timeline_asof
-        ON employee_timeline(employee_id, effective_from, effective_seq);
-      -- Current headcount rollups by dept / title (only the open rows).
-      CREATE INDEX IF NOT EXISTS idx_emp_timeline_dept_open
-        ON employee_timeline(department_id) WHERE effective_to IS NULL;
-      CREATE INDEX IF NOT EXISTS idx_emp_timeline_desig_open
-        ON employee_timeline(designation_id) WHERE effective_to IS NULL;
-    `);
-    // One nullable string column on employees — optional finer sub-title label
-    // (e.g. "ASM · Region 2"). Idempotent guarded ALTER (house pattern, line 4368).
-    try { db.exec(`ALTER TABLE employees ADD COLUMN role_subtitle TEXT`); } catch (_) { /* already exists */ }
-  } catch (e) { console.error('[schema] org_structure tables create failed:', e.message); }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Employee Change-History activation (plan: magical-wibbling-orbit).
-  // Reshape the (empty) employee_timeline shipped above to its final ledger shape:
-  //   1. add the change-ledger columns (employee_name/department/designation/
-  //      action_code/reason_code) if an OLD-shape table already exists;
-  //   2. rebuild the table when employee_id is still the RESTRICT-y
-  //      "NOT NULL REFERENCES employees(id)" — flip it to nullable + ON DELETE SET
-  //      NULL so a hard employee delete never breaks (history survives orphaned).
-  // Idempotent: CREATE-IF-NOT-EXISTS already emits the final shape on fresh DBs, so
-  // this only fires on DBs carrying the earlier org-structure table. Preserves any
-  // rows (currently none) via a copy, so it is safe even after a backfill.
+    const { runOrgStructureMigrations } = require('./orgSchema');
+    runOrgStructureMigrations(db);
+  } catch (e) { console.warn('[org_structure] migrations skipped (non-fatal):', e.message); }
   try {
-    const etCols = db.prepare(`PRAGMA table_info(employee_timeline)`).all().map(c => c.name);
-    const addCol = (name, decl) => {
-      if (!etCols.includes(name)) { try { db.exec(`ALTER TABLE employee_timeline ADD COLUMN ${decl}`); } catch (_) {} }
-    };
-    addCol('employee_name', 'employee_name TEXT');
-    addCol('department',    'department TEXT');
-    addCol('designation',   'designation TEXT');
-    addCol('action_code',   'action_code TEXT');
-    addCol('reason_code',   'reason_code TEXT');
-    addCol('join_date',     'join_date TEXT');
-    addCol('phone',             'phone TEXT');
-    addCol('email',             'email TEXT');
-    addCol('linked_user_label', 'linked_user_label TEXT');
-    addCol('salary_effective_from', 'salary_effective_from TEXT');
-    addCol('status_effective_from', 'status_effective_from TEXT');
-    addCol('salary_action',         'salary_action TEXT');
-    addCol('salary_reason_code',    'salary_reason_code TEXT');
-
-    // Does employee_id still block deletes? PRAGMA foreign_key_list → on_delete.
-    const fks = db.prepare(`PRAGMA foreign_key_list(employee_timeline)`).all();
-    const empFk = fks.find(f => f.from === 'employee_id');
-    const needsReshape = !empFk || String(empFk.on_delete).toUpperCase() !== 'SET NULL';
-    if (needsReshape) {
-      db.pragma('foreign_keys = OFF');
-      const cols = `id, employee_id, employee_name, phone, email, linked_user_label, department_id, designation_id, department,
-        designation, manager_id, salary, salary_exempt, roster, ot_eligible, status, join_date,
-        salary_effective_from, status_effective_from, salary_action, salary_reason_code,
-        effective_from, effective_seq, effective_to, action_code, reason_code, reason,
-        source, changed_by, changed_at`;
-      db.transaction(() => {
-        db.exec(`
-          CREATE TABLE employee_timeline__new (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            employee_id    INTEGER REFERENCES employees(id) ON DELETE SET NULL,
-            employee_name  TEXT,
-            phone          TEXT,
-            email          TEXT,
-            linked_user_label TEXT,
-            department_id  INTEGER REFERENCES org_departments(id),
-            designation_id INTEGER REFERENCES org_designations(id),
-            department     TEXT,
-            designation    TEXT,
-            manager_id     INTEGER,
-            salary         REAL,
-            salary_exempt  INTEGER,
-            roster         TEXT,
-            ot_eligible    INTEGER,
-            status         TEXT,
-            join_date      TEXT,
-            salary_effective_from TEXT,
-            status_effective_from TEXT,
-            salary_action  TEXT,
-            salary_reason_code TEXT,
-            effective_from TEXT NOT NULL,
-            effective_seq  INTEGER DEFAULT 0,
-            effective_to   TEXT,
-            action_code    TEXT,
-            reason_code    TEXT,
-            reason         TEXT,
-            source         TEXT,
-            changed_by     INTEGER,
-            changed_at     DATETIME DEFAULT CURRENT_TIMESTAMP
-          );
-          INSERT INTO employee_timeline__new (${cols}) SELECT ${cols} FROM employee_timeline;
-          DROP TABLE employee_timeline;
-          ALTER TABLE employee_timeline__new RENAME TO employee_timeline;
-          CREATE UNIQUE INDEX IF NOT EXISTS uniq_emp_timeline_open
-            ON employee_timeline(employee_id) WHERE effective_to IS NULL;
-          CREATE INDEX IF NOT EXISTS idx_emp_timeline_asof
-            ON employee_timeline(employee_id, effective_from, effective_seq);
-          CREATE INDEX IF NOT EXISTS idx_emp_timeline_dept_open
-            ON employee_timeline(department_id) WHERE effective_to IS NULL;
-          CREATE INDEX IF NOT EXISTS idx_emp_timeline_desig_open
-            ON employee_timeline(designation_id) WHERE effective_to IS NULL;
-        `);
-      })();
-      db.pragma('foreign_keys = ON');
-      console.log('[schema] employee_timeline reshaped → employee_id ON DELETE SET NULL');
-    }
-
-    // Last-modified stamp on employees (HR-form writes bump it; NULL until first edit
-    // or a backfill seed). Plain guarded ALTER — house pattern.
-    try { db.exec(`ALTER TABLE employees ADD COLUMN updated_at TEXT`); } catch (_) { /* already exists */ }
-  } catch (e) {
-    console.error('[schema] employee_timeline change-history reshape failed:', e.message);
-    try { db.pragma('foreign_keys = ON'); } catch (_) {}
-  }
-
-  // Employee document re-upload events (HR History redesign, dme 2026-07-31).
-  // Aadhar/PAN/Qualification files are plain employees columns, silently
-  // overwritten on edit with no ledger trace. Rather than mirroring 3 file
-  // columns into employee_timeline (which asserts "state as of a date" — not
-  // true of a document swap), these are logged as their own lightweight event
-  // table and merged into the HR History timeline at read time alongside
-  // employee_timeline's field-change events.
-  try {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS employee_document_events (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
-        doc_type    TEXT NOT NULL,   -- 'aadhar' | 'pan' | 'qualification'
-        file_url    TEXT,
-        reason      TEXT,            -- required by the route layer (hr.js PUT /employees/:id)
-        changed_by  INTEGER,         -- soft ref, no FK (matches employee_timeline.changed_by)
-        changed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE INDEX IF NOT EXISTS idx_emp_doc_events_emp
-        ON employee_document_events(employee_id, changed_at);
-    `);
-  } catch (e) { console.error('[schema] employee_document_events create failed:', e.message); }
-
-  // Case-INSENSITIVE uniqueness for the designation catalog (dme 2026-07-28:
-  // "md | MD | Md | Managing Director | managing director — all compared in
-  // duplication?"). The inline UNIQUE(name) and the tag_name index are BINARY,
-  // so "MD"/"md" and "Managing Director"/"managing director" slipped through as
-  // separate rows. Add LOWER() functional unique indexes — same guarded idiom as
-  // idx_users_username (line ~3695): only swap in the stricter guard when the data
-  // has no case-collisions, so boot never crashes and a real duplicate can't leave
-  // the catalog with weaker (binary-only) protection. Routes already .trim().
-  try {
-    const dup = db.prepare("SELECT 1 FROM org_designations GROUP BY LOWER(name) HAVING COUNT(*)>1 LIMIT 1").get();
-    if (!dup) db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uniq_org_desig_name_ci ON org_designations(LOWER(name))');
-    else console.error('[schema] org_designations.name CI-uniqueness NOT hardened — case-variant titles exist; de-dupe them then restart.');
-  } catch (e) { console.error('[schema] org_desig name CI index error:', e.message); }
-  try {
-    const dup = db.prepare("SELECT 1 FROM org_designations WHERE tag_name IS NOT NULL AND tag_name<>'' GROUP BY LOWER(tag_name) HAVING COUNT(*)>1 LIMIT 1").get();
-    if (!dup) db.exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_org_desig_tag_ci ON org_designations(LOWER(tag_name)) WHERE tag_name IS NOT NULL");
-    else console.error('[schema] org_designations.tag_name CI-uniqueness NOT hardened — case-variant tags exist; de-dupe them then restart.');
-  } catch (e) { console.error('[schema] org_desig tag CI index error:', e.message); }
-
-  // Org Structure — SKELETON seed, guarded on empty: company root + the 5
-  // function nodes, nothing else. Everything is editable in the UI afterward
-  // (rename the root, restructure, add sub-departments + the designation
-  // catalog), so a different org reconfigures freely — the seed is a starting
-  // point, not a lock-in. Runs once (guarded on org_departments being empty).
-  try {
-    if (db.prepare('SELECT COUNT(*) c FROM org_departments').get().c === 0) {
-      const rootId = db.prepare('INSERT INTO org_departments (name, sort_order) VALUES (?, 0)')
-        .run('Secured Engineers Pvt Ltd').lastInsertRowid;
-      const insFn = db.prepare('INSERT INTO org_departments (parent_id, name, sort_order) VALUES (?,?,?)');
-      ['Business', 'Operation', 'Finance', 'HR & Admin', 'System & Process'].forEach((n, i) => insFn.run(rootId, n, i));
-      console.log('[schema] org_structure skeleton seeded (root + 5 function nodes)');
-    }
-  } catch (e) { console.error('[schema] org_structure seed failed:', e.message); }
+    const { runHrMigrations } = require('./hrSchema');
+    runHrMigrations(db);
+  } catch (e) { console.warn('[hr] migrations skipped (non-fatal):', e.message); }
 
   // Manpower Plan — admin override of the auto (value-slab) required manpower
   // per project (mam 2026-06-12: "admin wants to edit required manpower").
