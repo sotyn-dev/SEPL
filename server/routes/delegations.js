@@ -9,6 +9,10 @@ const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Word cap on the proof remarks the assignee submits. Mirrored in the UI
+// (client/src/pages/Delegation.jsx) — keep the two in sync if it changes.
+const REMARKS_WORD_LIMIT = 300;
+
 // ─── Voice-note → text (self-hosted, mam 2026-06-17: "give me free") ──────
 // Upload a recorded audio file; the server converts it to 16kHz mono WAV with
 // ffmpeg and runs whisper.cpp locally (no API key, no per-use cost). Paths are
@@ -475,7 +479,12 @@ router.post('/:id/submit', (req, res) => {
   if (!proof_url) return res.status(400).json({ error: 'Proof file is required' });
   // Remarks are optional — blank stays NULL so the list doesn't show an
   // empty note. Re-submitting after a rejection overwrites the old remark.
+  // The 300-WORD cap is enforced here as well as in the UI, so a stale tab
+  // or a direct API call can't slip a wall of text past it.
   const remarks = (proof_remarks || '').trim() || null;
+  if (remarks && remarks.split(/\s+/).filter(Boolean).length > REMARKS_WORD_LIMIT) {
+    return res.status(400).json({ error: `Remarks cannot exceed ${REMARKS_WORD_LIMIT} words` });
+  }
   db.prepare(
     `UPDATE delegations SET status='submitted', proof_url=?, proof_remarks=?, submitted_at=CURRENT_TIMESTAMP, reject_reason=NULL WHERE id=?`
   ).run(proof_url, remarks, req.params.id);
