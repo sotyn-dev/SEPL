@@ -285,13 +285,13 @@ export default function Snags() {
                 </td>
                 <td>
                   {s.photo_url
-                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={s.photo_url} alt="" className="w-12 h-12 object-cover rounded" /></a>
+                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={s.photo_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded" /></a>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
                 <td>
                   {s.proof_url
-                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
+                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td>
@@ -351,7 +351,7 @@ export default function Snags() {
               <label className="label">Snag Photo</label>
               {form.photo_url ? (
                 <div className="flex items-start gap-3">
-                  <img src={form.photo_url} alt="" className="w-32 h-32 object-cover rounded border" />
+                  <img src={form.photo_url} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
                   <button type="button" onClick={() => setForm(f => ({ ...f, photo_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (
@@ -418,7 +418,7 @@ export default function Snags() {
               <label className="label">Proof Photo *</label>
               {proofForm.proof_url ? (
                 <div className="flex items-start gap-3">
-                  <img src={proofForm.proof_url} alt="" className="w-32 h-32 object-cover rounded border" />
+                  <img src={proofForm.proof_url} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
                   <button type="button" onClick={() => setProofForm(f => ({ ...f, proof_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (
