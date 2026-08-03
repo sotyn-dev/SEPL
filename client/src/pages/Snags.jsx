@@ -52,8 +52,6 @@ export default function Snags() {
   const [form, setForm] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [page, setPage] = useState(1);
-  const PAGE_SIZE = 25;
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -75,17 +73,6 @@ export default function Snags() {
     }
     return s;
   }, [snags]);
-
-  // Paginate the table so we never render 300+ rows (each with two image
-  // thumbnails) at once — that was hanging the page. Cards/stats above stay
-  // on the full filtered set; only the table is sliced per page.
-  const totalPages = Math.max(1, Math.ceil(snags.length / PAGE_SIZE));
-  const pageRows = useMemo(
-    () => snags.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [snags, page],
-  );
-  // Jump back to page 1 whenever the filtered list changes.
-  useEffect(() => { setPage(1); }, [filters]);
 
   // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
   // photos embedded. CSV can't carry images, so this hits the server which
@@ -279,7 +266,7 @@ export default function Snags() {
             {snags.length === 0 && (
               <tr><td colSpan="10" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
             )}
-            {pageRows.map(s => (
+            {snags.map(s => (
               <tr key={s.id}>
                 <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
                 <td className="text-xs">
@@ -335,20 +322,6 @@ export default function Snags() {
           </tbody>
         </table>
         </div>
-        {snags.length > PAGE_SIZE && (
-          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-t text-sm">
-            <span className="text-gray-500">
-              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, snags.length)} of {snags.length}
-            </span>
-            <div className="flex items-center gap-1">
-              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page <= 1} onClick={() => setPage(1)}>« First</button>
-              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ Prev</button>
-              <span className="px-2 whitespace-nowrap">Page {page} / {totalPages}</span>
-              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>Next ›</button>
-              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page >= totalPages} onClick={() => setPage(totalPages)}>Last »</button>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* RAISE / EDIT MODAL */}
