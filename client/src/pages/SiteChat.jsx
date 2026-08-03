@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage, FiEdit2 } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiCornerUpRight, FiDownload, FiImage, FiEdit2 } from 'react-icons/fi';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
@@ -64,7 +64,7 @@ const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attach
 // component with stable props, so composer keystrokes, context refreshes, and
 // Layout re-renders DON'T redraw the whole conversation (perf pass). The @mention
 // regex and the "others" (read-receipt) set are computed ONCE here, not per row.
-const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit }) {
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit, onForward }) {
   // Current-date labels for the Today/Yesterday separators — an intentional read
   // of "now" at render time (the one impure call, isolated).
   // eslint-disable-next-line react-hooks/purity
@@ -149,6 +149,14 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                   {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
                   <div className="flex items-center justify-end gap-1.5 mt-0.5">
                     <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Reply"><FiCornerUpLeft size={11} /></button>
+                    <button onClick={() => onForward(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Forward"><FiCornerUpRight size={11} /></button>
+                    {/* Native download of the attachment. `download` works because
+                        /uploads is served from the same origin; the filename falls
+                        back to the stored name so it doesn't save as a hash. */}
+                    {m.attachment_url && (
+                      <a href={m.attachment_url} download={m.attachment_name || ''} target="_blank" rel="noreferrer"
+                        className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Download"><FiDownload size={11} /></a>
+                    )}
                     <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Message info"><FiInfo size={11} /></button>
                     {canEdit && <button onClick={() => onEdit(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Edit"><FiEdit2 size={11} /></button>}
                     {(own || isAdmin) && <button onClick={() => onDelete(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
@@ -241,6 +249,9 @@ export default function SiteChat() {
   const [renameVal, setRenameVal] = useState('');
   const [dmOpen, setDmOpen] = useState(false);     // "new direct message" picker
   const [dmSearch, setDmSearch] = useState('');
+  const [fwdMsg, setFwdMsg] = useState(null);      // message being forwarded
+  const [fwdSearch, setFwdSearch] = useState('');
+  const [fwdBusy, setFwdBusy] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newSel, setNewSel] = useState([]);
@@ -662,6 +673,30 @@ export default function SiteChat() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed to start chat'); }
   };
 
+  // Forward a message into another chat. Re-posts the same body + attachment
+  // through the normal send endpoint, so membership, rate-limiting and the
+  // socket broadcast all behave exactly as they do for a fresh message — no
+  // new API surface. The attachment is referenced by URL, not re-uploaded.
+  const forwardTo = async (target) => {
+    if (!fwdMsg || fwdBusy) return;
+    setFwdBusy(true);
+    try {
+      const r = await api.post(`/site-chat/${target.id}`, {
+        body: fwdMsg.body || null,
+        attachment_url: fwdMsg.attachment_url || null,
+        attachment_name: fwdMsg.attachment_name || null,
+      });
+      // Forwarding into the chat you're already looking at should show up
+      // immediately, same as sending.
+      if (sel && target.id === sel.id && r.data?.id) appendMsg(r.data);
+      setFwdMsg(null); setFwdSearch('');
+      toast.success(`Forwarded to ${target.name}`);
+      loadGroups();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to forward');
+    } finally { setFwdBusy(false); }
+  };
+
   const createGroup = async () => {
     if (!newName.trim()) return toast.error('Give the group a name');
     if (busy) return;                                   // guard against double-submit
@@ -799,7 +834,7 @@ export default function SiteChat() {
                       day-group spacing MessageList relies on is preserved. Keyed on
                       threadLoading only (not msgs), so new messages append without re-fading. */}
                   <div className={`space-y-1.5 transition-opacity duration-300 ${threadLoading ? 'opacity-0' : 'opacity-100 delay-150'}`}>
-                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} />
+                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={setFwdMsg} />
                   </div>
 
                   <div ref={endRef} />
@@ -943,6 +978,39 @@ export default function SiteChat() {
               </button>
             ))}
             {allUsers.filter(u => u.id !== user?.id).length === 0 && <div className="text-center text-gray-400 text-xs py-4">No other users found</div>}
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Forward ───────────────────────────────────────── */}
+      <Modal isOpen={!!fwdMsg} onClose={() => { setFwdMsg(null); setFwdSearch(''); }} title="Forward to…">
+        <div className="space-y-2 text-sm">
+          {/* Preview so you can see WHAT you're about to forward — forwarding
+              the wrong photo into the wrong group is not undoable. */}
+          {fwdMsg && (
+            <div className="rounded border bg-gray-50 px-2 py-1.5 text-xs text-gray-600">
+              {fwdMsg.attachment_url && (
+                <div className="flex items-center gap-1.5 text-blue-700 mb-0.5 truncate">
+                  <FiFile size={12} className="shrink-0" /> {fwdMsg.attachment_name || 'attachment'}
+                </div>
+              )}
+              {fwdMsg.body && <div className="line-clamp-3 whitespace-pre-wrap break-words">{fwdMsg.body}</div>}
+            </div>
+          )}
+          <input className="input" placeholder="Search chats…" value={fwdSearch} onChange={e => setFwdSearch(e.target.value)} autoFocus />
+          <div className="space-y-0.5 max-h-72 overflow-y-auto border rounded p-1">
+            {groups
+              .filter(g => !fwdSearch || (g.name || '').toLowerCase().includes(fwdSearch.toLowerCase()))
+              .map(g => (
+                <button key={g.id} onClick={() => forwardTo(g)} disabled={fwdBusy}
+                  className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-blue-50 disabled:opacity-50">
+                  <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={28} />
+                  <span className="truncate">{g.name}{sel && g.id === sel.id && <span className="text-[11px] text-gray-400"> · current chat</span>}</span>
+                </button>
+              ))}
+            {groups.filter(g => !fwdSearch || (g.name || '').toLowerCase().includes(fwdSearch.toLowerCase())).length === 0 && (
+              <div className="text-center text-gray-400 text-xs py-4">No chats match</div>
+            )}
           </div>
         </div>
       </Modal>
