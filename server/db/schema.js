@@ -3434,6 +3434,11 @@ function initializeDatabase() {
     // Optional attachment (brief / drawing / photo / doc) the creator can
     // attach when assigning the task. Stored as a /uploads/<name> URL.
     ['delegations', 'attachment_url TEXT'],
+    // Remarks the assignee types alongside the proof ("what was done", why
+    // the file looks the way it does). Distinct from followup_remarks, which
+    // the approver maintains on the list — this one travels with the
+    // submission so the reviewer reads it while checking the proof.
+    ['delegations', 'proof_remarks TEXT'],
     // Mam (2026-05-22): same upload affordance on the New PMS Task
     // modal — pick a brief / drawing / photo when raising.
     ['pms_tasks', 'attachment_url TEXT'],
