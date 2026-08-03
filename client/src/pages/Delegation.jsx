@@ -42,7 +42,7 @@ export default function Delegation() {
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
-  const [submitForm, setSubmitForm] = useState({ proof_url: '', uploading: false });
+  const [submitForm, setSubmitForm] = useState({ proof_url: '', proof_remarks: '', uploading: false });
   // Mam's MD (2026-05-21): "SOTYN.AI is hang" when raising task with photo.
   // Root cause was a silent 30-60s photo upload with no progress.  Track
   // a saving flag + percentage so the Save button reflects what's
@@ -300,9 +300,12 @@ export default function Delegation() {
     e.preventDefault();
     if (!submitForm.proof_url) return toast.error('Please upload proof first');
     try {
-      await api.post(`/delegations/${submitModal.id}/submit`, { proof_url: submitForm.proof_url });
+      await api.post(`/delegations/${submitModal.id}/submit`, {
+        proof_url: submitForm.proof_url,
+        proof_remarks: submitForm.proof_remarks,
+      });
       toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); setSubmitForm({ proof_url: '', uploading: false }); load();
+      setSubmitModal(null); setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -651,8 +654,11 @@ export default function Delegation() {
                       {t.proof_url && (
                         <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
                       )}
+                      {t.proof_remarks && (
+                        <span className="text-[10px] text-gray-500 italic line-clamp-2" title={t.proof_remarks}>{t.proof_remarks}</span>
+                      )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
+                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
                           <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
@@ -781,10 +787,13 @@ export default function Delegation() {
               {t.extension_status === 'pending' && t.requested_due_date && (
                 <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-[11px] text-amber-800 mb-2 flex items-start gap-1"><FiCalendar size={11} className="mt-0.5" /> Extension → {t.requested_due_date}</div>
               )}
+              {t.proof_remarks && (
+                <div className="text-[11px] text-gray-600 italic mb-2">{t.proof_remarks}</div>
+              )}
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -1040,6 +1049,19 @@ export default function Delegation() {
               </div>
             )}
             {submitForm.proof_url && <p className="text-xs text-emerald-600 mt-1">✓ Ready to submit</p>}
+          </div>
+          {/* Remarks travel with the proof so the approver reads what was
+              actually done instead of guessing from the file alone. */}
+          <div>
+            <label className="label">Remarks <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
+            <textarea
+              className="input"
+              rows="3"
+              maxLength={1000}
+              value={submitForm.proof_remarks}
+              onChange={e => setSubmitForm(f => ({ ...f, proof_remarks: e.target.value }))}
+              placeholder="What was done? Anything the approver should know…"
+            />
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setSubmitModal(null)} className="btn btn-secondary">Cancel</button>

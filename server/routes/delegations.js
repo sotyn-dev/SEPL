@@ -464,7 +464,7 @@ router.post('/:id/reject-extension', (req, res) => {
 // behalf of the assignee too — mam asked for this so her EA can upload
 // proof for team members who send photos/PDFs over WhatsApp.
 router.post('/:id/submit', (req, res) => {
-  const { proof_url } = req.body;
+  const { proof_url, proof_remarks } = req.body;
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
@@ -473,9 +473,12 @@ router.post('/:id/submit', (req, res) => {
     return res.status(403).json({ error: 'Only the assignee, admin or EA can submit proof' });
   }
   if (!proof_url) return res.status(400).json({ error: 'Proof file is required' });
+  // Remarks are optional — blank stays NULL so the list doesn't show an
+  // empty note. Re-submitting after a rejection overwrites the old remark.
+  const remarks = (proof_remarks || '').trim() || null;
   db.prepare(
-    `UPDATE delegations SET status='submitted', proof_url=?, submitted_at=CURRENT_TIMESTAMP, reject_reason=NULL WHERE id=?`
-  ).run(proof_url, req.params.id);
+    `UPDATE delegations SET status='submitted', proof_url=?, proof_remarks=?, submitted_at=CURRENT_TIMESTAMP, reject_reason=NULL WHERE id=?`
+  ).run(proof_url, remarks, req.params.id);
   res.json({ message: 'Proof submitted, awaiting approval' });
 });
 
