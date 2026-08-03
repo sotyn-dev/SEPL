@@ -252,7 +252,7 @@ export default function Employees() {
   const changedDocLabels = DOC_SLOTS.filter((d) => form[d.slot]).map((d) => d.label);
   const docsChanged = changedDocLabels.length > 0;
   const revertField = (key) => setForm((f) => ({ ...f, [key]: original[key] }));
-  const trackAccent = (key) => (changedSet.has(key) ? 'border-l-4 border-amber-400 pl-2' : '');
+  const trackAccent = (key) => (changedSet.has(key) ? 'shadow-[-2px_0_0_0_#c9c9c9] -mx-2 px-2' : '');
 
   // "↩ was X" hint + revert link under a changed tracked field.
   const WasHint = ({ k, fmt }) => changedSet.has(k) ? (

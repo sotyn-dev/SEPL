@@ -928,11 +928,24 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   if (changed.length > 0 && effFrom > istToday()) {
     return res.status(400).json({ error: 'Effective date cannot be in the future.' });
   }
-  if (salaryEffFrom && salaryEffFrom > istToday()) {
-    return res.status(400).json({ error: 'Salary effective date cannot be in the future.' });
-  }
-  if (statusEffFrom && statusEffFrom > istToday()) {
-    return res.status(400).json({ error: 'Status effective date cannot be in the future.' });
+  // Salary/status effective dates are NOT capped at today ("applies from the 1st"
+  // is normal HR practice) and back-dating into an OPEN month is allowed on
+  // purpose — see minEffectiveDate. The one hard rule is that they may not land
+  // inside an already-FINALISED month, whose figures are frozen forever. The
+  // client applies the same value as the input's `min`; this is the authoritative
+  // check behind it.
+  if (salaryEffFrom || statusEffFrom) {
+    const minEff = minEffectiveDate(db, req.params.id);
+    if (minEff) {
+      const lockedThrough = latestFinalisedMonth(db, req.params.id);
+      for (const [val, label] of [[salaryEffFrom, 'salary'], [statusEffFrom, 'status']]) {
+        if (val && val < minEff) {
+          return res.status(400).json({
+            error: `Payroll is already finalised through ${lockedThrough} and is never recalculated. This ${label} change must take effect on or after ${minEff}.`,
+          });
+        }
+      }
+    }
   }
 
   // One transaction: the employee UPDATE, the login active-sync, the updated_at
@@ -1028,21 +1041,63 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   res.json({ message: 'Updated', recorded: changed });
 });
 
-// Is this employee's month already finalised? Advisory-only — a live snapshot
-// at query time, not a mutex against a concurrent Finalise click (see plan:
-// isolated salary/status effective-date + payroll-lock warning). Gated under
-// employees.edit (same as the PUT above that triggers this check), not a
-// payroll permission — hr.js already reads payroll_runs directly under
-// employees.edit for the delete guard, same precedent. Amount-free response —
-// safe for anyone who can edit the employee.
-router.get('/employees/:id/payroll-lock-check', requirePermission('employees', 'edit'), (req, res) => {
+// The payroll-lock boundary for an employee: the latest month already finalised
+// for them, or null if none. Replaces the earlier per-date "is this month
+// finalised?" advisory check (dme 2026-08-03) — that one was a debounced fetch
+// painting a warning box, so a hiccuped request swallowed by .catch() left the
+// user with no signal at all. A `min` on the input can't fail that way.
+function latestFinalisedMonth(db, employeeId) {
+  const row = db.prepare(
+    "SELECT MAX(month) AS m FROM payroll_runs WHERE employee_id=? AND status='finalised'"
+  ).get(employeeId);
+  return (row && row.m) || null;
+}
+// '2026-07' → '2026-08-01' (1st of the following month).
+function firstOfNextMonth(month) {
+  const [y, mo] = month.split('-').map(Number);
+  return mo === 12 ? `${y + 1}-01-01` : `${y}-${String(mo + 1).padStart(2, '0')}-01`;
+}
+
+// Earliest date HR may set as a salary/status effective date: the 1st of the
+// month AFTER the last finalised payroll run. null = nothing finalised for this
+// employee, so any date is allowed (the normal case in production, where months
+// were never closed — dme 2026-08-03).
+//
+// A FINALISED month is barred outright: its figures are frozen and payroll never
+// recalculates, so a date inside it could never mean anything.
+//
+// Back-dating into an OPEN (non-finalised) past month is deliberately ALLOWED,
+// with eyes open (dme 2026-08-03). It is genuinely needed: increments were
+// entered in prod on 31 July but apply from 1 August, so to finalise July at the
+// pre-increment rates HR must set the old figure back, finalise July, then set
+// the new figure forward again. Blocking the date would not prevent that dance —
+// the salary VALUE is editable regardless — it would only force the ledger to
+// mislabel it.
+//
+// ACCEPTED RISK: payroll has no per-month salary, it reads the ONE live
+// employees.salary whenever Finalise runs. So a back-dated figure applies to
+// EVERY not-yet-finalised month, not just the one it names — if the "set it
+// forward again" step is forgotten, the following month silently pays the wrong
+// amount. The UI states this plainly whenever a past-month date is picked
+// (EmployeeChangeCard). The real fix is making finalise read the as-of-month
+// value from employee_timeline instead of the live field — deferred.
+function minEffectiveDate(db, employeeId) {
+  const m = latestFinalisedMonth(db, employeeId);
+  return m ? firstOfNextMonth(m) : null;
+}
+
+// The employee's payroll-lock boundary — drives the `min` on the isolated
+// salary/status date inputs so a closed month can't be picked in the first
+// place (the PUT re-checks it server-side regardless). Gated under
+// employees.edit (same as the PUT that consumes it), not a payroll permission —
+// hr.js already reads payroll_runs under employees.edit for the delete guard,
+// same precedent. Amount-free response — safe for anyone who can edit.
+router.get('/employees/:id/payroll-lock-info', requirePermission('employees', 'edit'), (req, res) => {
   const db = getDb();
-  const date = String(req.query.date || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}/.test(date)) return res.status(400).json({ error: 'date=YYYY-MM-DD required' });
-  const month = date.slice(0, 7);
-  const row = db.prepare('SELECT status, finalised_at FROM payroll_runs WHERE month=? AND employee_id=?')
-    .get(month, req.params.id);
-  res.json({ month, finalised: !!(row && row.status === 'finalised'), finalised_at: row ? row.finalised_at : null });
+  res.json({
+    finalised_through: latestFinalisedMonth(db, req.params.id),
+    min_effective_date: minEffectiveDate(db, req.params.id),
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

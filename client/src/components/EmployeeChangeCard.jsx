@@ -7,16 +7,28 @@ import api from '../api';
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const monthLabel = (m) => { if (!m) return ''; const [y, mo] = m.split('-'); return `${MONTH_NAMES[Number(mo) - 1]} ${y}`; };
 
-// ONE fixed warning-box style, always — same principle as the card's own fixed
-// header/color (see file note below): only the wording changes per scenario,
-// never the container tone. A per-scenario amber/red split was tried and
-// rejected for this same card once already (dme 2026-08-01).
-const LockWarning = ({ children }) => (
-  <div className="flex items-start gap-1.5 text-[11px] bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2 py-1.5">
-    <FiAlertTriangle size={12} className="mt-0.5 shrink-0" />
-    <span>{children}</span>
-  </div>
-);
+// Two separate things, in one fixed style (never a per-scenario colour switch —
+// that was tried on this card and rejected, dme 2026-08-01):
+//   · finalisedThrough — why earlier dates are greyed out. Quiet, informational.
+//     A finalised month is frozen, so it simply isn't selectable.
+//   · backdated — the real cost of a back-dated date, shown only once one is
+//     actually picked. Payroll has no per-month salary: it reads the single live
+//     figure whenever Finalise runs, so this amount lands on EVERY still-open
+//     month, not just the one named. Derived from values already in hand (no
+//     fetch), so unlike the check it replaced it cannot silently fail to appear.
+const LockNote = ({ finalisedThrough, backdated, field }) => {
+  if (!finalisedThrough && !backdated) return null;
+  return (
+    <div className={`flex items-start gap-1.5 text-[11px] rounded-lg ${backdated ? 'bg-amber-50 border border-amber-200 text-amber-800 px-2 py-1.5' : 'text-gray-500'}`}>
+      <FiAlertTriangle size={12} className={`mt-0.5 shrink-0 ${backdated ? '' : 'text-amber-500'}`} />
+      <span>
+        {backdated
+          ? <>This is a past month. Payroll uses one live {field} figure, so it will apply to <strong>every month not yet finalised</strong> — including the current one — until you change it back. Set it back after finalising that month.</>
+          : <>Payroll is finalised through {monthLabel(finalisedThrough)} — a closed month is never recalculated, so earlier dates can't be picked.</>}
+      </span>
+    </div>
+  );
+};
 
 // The Contextual Change Card — the editor's single reason-capture surface.
 // Renders whenever a tracked field moved AND/OR a KYC doc was replaced. No
@@ -35,9 +47,11 @@ const LockWarning = ({ children }) => (
 //                  status_effective_date }
 //   setMeta      updater
 //   canSeeSalary bool — masks the pay figure for non-holders
-//   today        'YYYY-MM-DD' — caps the effective date
+//   today        'YYYY-MM-DD' — caps the shared effective date (the isolated
+//                salary/status dates are floored at the payroll-lock boundary
+//                instead, and are allowed to be forward-dated)
 //   users        [{id,name,username,email}] — resolves the Linked user chip from an id to a name
-//   employeeId   the employee being edited — drives the payroll-lock-check calls below
+//   employeeId   the employee being edited — drives the payroll-lock-info fetch below
 //   docLabels    [string] — KYC docs replaced alongside this edit (display-only:
 //                a doc swap isn't a tracked field, so it never drives the
 //                action logic below — just shown so the one shared Reason is
@@ -73,30 +87,46 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sharedActionKeys.join('|'), locked, derivedAction]);
 
-  // Payroll-lock check — debounced, informational only, never blocks Save.
-  // Fires whenever the isolated salary/status effective date changes.
-  const [salaryLock, setSalaryLock] = useState(null);
-  const [statusLock, setStatusLock] = useState(null);
+  // The employee's payroll-lock boundary — fetched ONCE per employee (not per
+  // keystroke). Drives the `min` on both isolated date inputs below, so an
+  // already-finalised month can't be picked. Replaces an earlier debounced
+  // per-date warning that could silently fail to render if the request hiccuped.
+  const [lock, setLock] = useState(null);
   useEffect(() => {
-    if (!employeeId || !changedKeys.includes('salary')) { setSalaryLock(null); return undefined; }
-    const date = meta.salary_effective_date || today;
-    const t = setTimeout(() => {
-      api.get(`/hr/employees/${employeeId}/payroll-lock-check`, { params: { date } })
-        .then((r) => setSalaryLock(r.data)).catch(() => setSalaryLock(null));
-    }, 400);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employeeId, changedKeys.includes('salary'), meta.salary_effective_date, today]);
+    if (!employeeId) { setLock(null); return; }
+    api.get(`/hr/employees/${employeeId}/payroll-lock-info`)
+      .then((r) => setLock(r.data)).catch(() => setLock(null));
+  }, [employeeId]);
+  // The floor: only a FINALISED month is barred (frozen figures, never
+  // recalculated). undefined = nothing finalised, any date allowed — the normal
+  // case in production. Back-dating into an open past month is permitted on
+  // purpose; the caution below states what it costs. Server enforces the same
+  // rule (minEffectiveDate in hr.js).
+  const minEff = (lock && lock.min_effective_date) || undefined;
+  // Normally today. Differs only when payroll is finalised through the current
+  // month or later, pushing the floor past today.
+  const defaultEff = minEff && today < minEff ? minEff : today;
+  // Is a chosen date in a month earlier than the current one? Derived purely
+  // from values already in hand — no fetch, so it cannot fail to appear.
+  const currentMonth = today.slice(0, 7);
+  const isBackdated = (d) => !!d && d.slice(0, 7) < currentMonth;
+  // Mirror the shown value into meta so the payload matches the display, and lift
+  // any date sitting below a newly-known floor up to it.
   useEffect(() => {
-    if (!employeeId || !changedKeys.includes('status')) { setStatusLock(null); return undefined; }
-    const date = meta.status_effective_date || today;
-    const t = setTimeout(() => {
-      api.get(`/hr/employees/${employeeId}/payroll-lock-check`, { params: { date } })
-        .then((r) => setStatusLock(r.data)).catch(() => setStatusLock(null));
-    }, 400);
-    return () => clearTimeout(t);
+    const below = (d) => !d || (minEff && d < minEff);
+    setMeta((m) => {
+      const next = { ...m };
+      let dirty = false;
+      if (changedKeys.includes('salary') && below(m.salary_effective_date)) {
+        next.salary_effective_date = defaultEff; dirty = true;
+      }
+      if (changedKeys.includes('status') && below(m.status_effective_date)) {
+        next.status_effective_date = defaultEff; dirty = true;
+      }
+      return dirty ? next : m;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employeeId, changedKeys.includes('status'), meta.status_effective_date, today]);
+  }, [minEff, defaultEff, changedKeys.includes('salary'), changedKeys.includes('status')]);
 
   if (!changes.length && !docLabels.length) return null;
 
@@ -118,9 +148,9 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
   };
 
   return (
-    <div className="rounded-xl border border-l-4 border-blue-400 bg-blue-50 p-3 space-y-3" role="region" aria-label="Change details">
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3" role="region" aria-label="Change details">
       {/* Header — fixed, same every time (see file header note) */}
-      <div className="flex items-start gap-2 font-semibold text-blue-700">
+      <div className="flex items-start gap-2 font-semibold text-gray-700">
         <FiInfo className="mt-0.5 shrink-0" size={16} />
         <div>
           <div className="text-sm">Recording this change</div>
@@ -155,7 +185,7 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
           figure every month), so its timing gets absolute, always-visible
           treatment rather than sharing the generic Effective date below. */}
       {changedKeys.includes('salary') && (
-        <div className="bg-white/70 border border-black/5 rounded-lg p-2.5 space-y-2">
+        <div className="bg-white/70 border border-black/5 rounded p-2.5 space-y-2">
           <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
             <div className="w-full font-semibold text-sm">
               Salary Change
@@ -165,8 +195,8 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
               <input
                 className="input"
                 type="date"
-                max={today}
-                value={meta.salary_effective_date || today}
+                min={minEff}
+                value={meta.salary_effective_date || defaultEff}
                 onChange={(e) => setMeta((m) => ({ ...m, salary_effective_date: e.target.value }))}
               />
             </div>
@@ -187,13 +217,11 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
               </select>
             </div>
           </div>
-          {salaryLock?.finalised && (
-            <LockWarning>
-              {meta.salary_action === 'correction'
-                ? <>{monthLabel(salaryLock.month)} payroll is already finalised at the old salary — this correction won't reflect there unless that month is unlocked and re-run.</>
-                : <>{monthLabel(salaryLock.month)} payroll is already finalised — this raise will apply from the next open month instead.</>}
-            </LockWarning>
-          )}
+          <LockNote
+            finalisedThrough={lock && lock.finalised_through}
+            backdated={isBackdated(meta.salary_effective_date || defaultEff)}
+            field="salary"
+          />
         </div>
       )}
 
@@ -211,14 +239,16 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
             <input
               className="input"
               type="date"
-              max={today}
-              value={meta.status_effective_date || today}
+              min={minEff}
+              value={meta.status_effective_date || defaultEff}
               onChange={(e) => setMeta((m) => ({ ...m, status_effective_date: e.target.value }))}
             />
           </div>
-          {statusLock?.finalised && (
-            <LockWarning>{monthLabel(statusLock.month)} payroll is already finalised — this status change won't affect who was included that month.</LockWarning>
-          )}
+          <LockNote
+            finalisedThrough={lock && lock.finalised_through}
+            backdated={isBackdated(meta.status_effective_date || defaultEff)}
+            field="status"
+          />
         </div>
       )}
 
