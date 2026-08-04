@@ -136,6 +136,10 @@ function getUserPermissions(userId) {
       // recipient group (cron). Both replace the fuzzy department/role "is HR" checks.
       // attendance_grid: gates viewing the Attendance Monthly Grid tab (marking needs attendance.can_approve).
       'employee_salary','hr_team','attendance_grid',
+      // employee_statutory: gates the FULL bank account number / any future
+      // statutory reveal on GET /hr/employees + /vault (Aadhaar is always
+      // masked for everyone, no reveal exists — see cryptoFields.js).
+      'employee_statutory',
       // org_structure: department tree + designation catalog + openings (Phase B).
       'org_structure'
     ];

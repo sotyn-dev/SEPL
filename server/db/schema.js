@@ -5745,6 +5745,11 @@ in your first week. If a process feels broken, raise a Help Ticket
     //                              and the HR-alert recipient group (cron).
     //   attendance_grid.can_view → view the Attendance Monthly Grid tab (marking needs attendance.can_approve).
     'employee_salary','hr_team','attendance_grid',
+    // employee_statutory.can_view → see the FULL bank account number on
+    // GET /hr/employees + /vault (Aadhaar has no reveal at all — always
+    // masked, see server/lib/cryptoFields.js). Same fail-closed seeding as
+    // employee_salary above: nobody gains access until an admin grants it.
+    'employee_statutory',
     // Phase B: Org Structure — department tree + designation catalog + openings.
     // Fail-closed: shipping the key makes the seed loop below provision a DENY
     // (0,0,0,0,0) row for every non-admin role, so nobody gains access until an

@@ -13,6 +13,26 @@ const { TRACKED_FIELDS, ACTIONS, suggestAction, resolveActionCode, classifyEvent
 const { diffTracked, changeFields: registryChangeFields } = require('../lib/employeeFields');
 const { validateEmployee, getActivationGaps, computeCompleteness } = require('../lib/employeeValidation');
 const { SECTIONS: EMPLOYEE_SECTIONS } = require('../lib/employeeSections');
+const { encryptAadhaar, last4: aadharLast4 } = require('../lib/cryptoFields');
+
+// Statutory/Compliance pack — can the caller see the FULL bank account number
+// and (n/a for Aadhaar — that one's never shown in the clear, see cryptoFields.js
+// comment) other sensitive statutory values? Same permission-flag pattern as
+// canSeeSalary above ('employee_salary').
+const canSeeStatutory = (req) => !!getUserPermissions(req.user.id)['employee_statutory']?.can_view;
+const maskAccount = (acct) => (acct ? `${'•'.repeat(Math.max(0, String(acct).length - 4))}${String(acct).slice(-4)}` : null);
+// Applied to any employee row before it leaves the server: ciphertext never
+// ships to the client (aadhar_masked replaces it always); bank_account_number
+// ships in full only to canStatutory holders, otherwise replaced by a masked
+// display string.
+function redactStatutory(row, canStatutory) {
+  if (!row) return row;
+  const { aadhar_number, bank_account_number, ...rest } = row;
+  const out = { ...rest, aadhar_masked: row.aadhar_last4 ? `XXXXXXXX${row.aadhar_last4}` : null };
+  if (canStatutory) out.bank_account_number = bank_account_number;
+  else out.bank_account_masked = maskAccount(bank_account_number);
+  return out;
+}
 // Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
 // date-level effective_from). Server clock is UTC on the VPS.
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -699,6 +719,17 @@ router.get('/grades', (req, res) => {
   res.json(db.prepare('SELECT id, code, label FROM org_grades WHERE active=1 ORDER BY sort_order').all());
 });
 
+// Statutory/Compliance pack catalogs (PT State, Bank Name) — same read-only,
+// no-extra-permission-gate pattern as /grades above.
+router.get('/pt-states', (req, res) => {
+  const db = getDb();
+  res.json(db.prepare('SELECT id, name FROM org_pt_states WHERE active=1 ORDER BY sort_order').all());
+});
+router.get('/banks', (req, res) => {
+  const db = getDb();
+  res.json(db.prepare('SELECT id, name FROM org_banks WHERE active=1 ORDER BY sort_order').all());
+});
+
 // Employees — salary is confidential; the salary field ships only to callers
 // holding employee_salary.can_view (admin included — getUserPermissions grants
 // admin every action). Everyone else gets the row with salary stripped. The DPR
@@ -735,9 +766,12 @@ router.get('/employees', (req, res) => {
             ) AS status_since
      FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
   ).all();
-  if (getUserPermissions(req.user.id)['employee_salary']?.can_view) return res.json(rows);
-  // Redact salary for everyone else
-  res.json(rows.map(({ salary, ...rest }) => rest));
+  const canSalary = getUserPermissions(req.user.id)['employee_salary']?.can_view;
+  const canStatutory = canSeeStatutory(req);
+  res.json(rows.map((r) => {
+    const redacted = redactStatutory(r, canStatutory);
+    return canSalary ? redacted : (({ salary, ...rest }) => rest)(redacted);
+  }));
 });
 
 // Roster audit (read-only) — surfaces the two categories of active logins that
@@ -783,7 +817,10 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           father_spouse_name, permanent_address, permanent_pincode,
           current_address, current_pincode, emergency_contact_name,
           emergency_contact_phone, blood_group, photo_url,
-          aadhar_number, pan_number } = req.body;
+          aadhar_number, pan_number,
+          // Statutory/Compliance pack (Module 1)
+          uan_number, pf_number, esi_number, bank_name, bank_branch,
+          bank_account_number, ifsc_code, pt_state, form11_file, formf_file } = req.body;
   let { user_id } = req.body;
   const db = getDb();
   // Auto-link by email if user_id wasn't explicitly set
@@ -814,8 +851,11 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                              father_spouse_name, permanent_address, permanent_pincode,
                              current_address, current_pincode, emergency_contact_name,
                              emergency_contact_phone, blood_group, photo_url,
-                             aadhar_number, pan_number, onboarding_status, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             aadhar_number, aadhar_last4, pan_number,
+                             uan_number, pf_number, esi_number, bank_name, bank_branch,
+                             bank_account_number, ifsc_code, pt_state, form11_file, formf_file,
+                             onboarding_status, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(user_id || null, name, phone || null, email || null, designation || null, department || null,
           join_date || null, salary || null,
           aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
@@ -825,7 +865,12 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           permanent_address || null, permanent_pincode || null, current_address || null,
           current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
           blood_group || null, photo_url || null,
-          aadhar_number || null, pan_number ? String(pan_number).toUpperCase() : null,
+          aadhar_number ? encryptAadhaar(aadhar_number) : null, aadhar_number ? aadharLast4(aadhar_number) : null,
+          pan_number ? String(pan_number).toUpperCase() : null,
+          uan_number || null, pf_number || null, esi_number || null,
+          bank_name || null, bank_branch || null, bank_account_number || null,
+          ifsc_code ? String(ifsc_code).toUpperCase() : null, pt_state || null,
+          form11_file || null, formf_file || null,
           'draft', istNow());
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
@@ -890,7 +935,7 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
 });
 
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
-  const { aadhar_file, pan_file, qualification_file, roster,
+  const { aadhar_file, pan_file, qualification_file, form11_file, formf_file, roster,
           action_code, reason_code, reason, effective_date,
           salary_effective_date, status_effective_date, salary_action, salary_reason_code,
           confirmation_effective_date } = req.body;
@@ -912,7 +957,9 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // in any of them opens a reason-required timeline row. Read BEFORE the UPDATE.
   const before = db.prepare(
     'SELECT name, phone, email, user_id, status, salary, designation, department, roster, join_date, aadhar_file, pan_file, qualification_file, ' +
-    'grade, employment_type, probation_end_date, confirmation_status, notice_period_days, reports_to_employee_id FROM employees WHERE id=?'
+    'grade, employment_type, probation_end_date, confirmation_status, notice_period_days, reports_to_employee_id, ' +
+    'bank_name, bank_branch, bank_account_number, ifsc_code, pt_state, uan_number, pf_number, esi_number, aadhar_last4, ' +
+    'form11_file, formf_file FROM employees WHERE id=?'
   ).get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
 
@@ -945,7 +992,10 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
           father_spouse_name, permanent_address, permanent_pincode,
           current_address, current_pincode, emergency_contact_name,
           emergency_contact_phone, blood_group, photo_url,
-          aadhar_number, pan_number } = req.body;
+          aadhar_number, pan_number,
+          // Statutory/Compliance pack (Module 1)
+          uan_number, pf_number, esi_number, bank_name, bank_branch,
+          bank_account_number, ifsc_code, pt_state } = req.body;
 
   // Phase 5 — the 6 career-event fields now diff/track like designation etc.
   // above (name/phone/email/...), so they need the same "effective value"
@@ -958,6 +1008,18 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   const effProbationEnd = probation_end_date !== undefined ? probation_end_date : before.probation_end_date;
   const effConfirmationStatus = confirmation_status !== undefined ? confirmation_status : before.confirmation_status;
   const effNoticePeriod = notice_period_days !== undefined ? notice_period_days : before.notice_period_days;
+  const effBankName = bank_name !== undefined ? bank_name : before.bank_name;
+  const effBankBranch = bank_branch !== undefined ? bank_branch : before.bank_branch;
+  const effBankAccount = bank_account_number !== undefined ? bank_account_number : before.bank_account_number;
+  const effIfsc = ifsc_code !== undefined ? String(ifsc_code || '').toUpperCase() : before.ifsc_code;
+  const effPtState = pt_state !== undefined ? pt_state : before.pt_state;
+  const effUan = uan_number !== undefined ? uan_number : before.uan_number;
+  const effPf = pf_number !== undefined ? pf_number : before.pf_number;
+  const effEsi = esi_number !== undefined ? esi_number : before.esi_number;
+  // aadhar_number's diff runs against aadhar_last4 (see employeeFields.js's
+  // diffKey comment) — a freshly supplied number is reduced to its last 4
+  // digits for comparison; omitted (undefined) falls back to the stored last4.
+  const effAadharLast4 = aadhar_number !== undefined ? aadharLast4(aadhar_number) : before.aadhar_last4;
 
   // Mandatory Field Spec — HR pack (Phase 2): mode:'edit' validates only the
   // fields this request actually supplied — an old employee with 17 blank HR
@@ -977,6 +1039,9 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     grade: effGrade, employment_type: effEmploymentType, probation_end_date: effProbationEnd,
     confirmation_status: effConfirmationStatus, notice_period_days: effNoticePeriod,
     reports_to_employee_id: effReportsTo,
+    bank_name: effBankName, bank_branch: effBankBranch, bank_account_number: effBankAccount,
+    ifsc_code: effIfsc, pt_state: effPtState, uan_number: effUan, pf_number: effPf, esi_number: effEsi,
+    aadhar_last4: effAadharLast4,
   });
 
   // Document re-uploads — tracked separately from the tracked-field ledger
@@ -987,6 +1052,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   if (aadhar_file        && norm(aadhar_file)        !== norm(before.aadhar_file))        changedDocs.push({ doc_type: 'aadhar',        file_url: aadhar_file });
   if (pan_file           && norm(pan_file)           !== norm(before.pan_file))           changedDocs.push({ doc_type: 'pan',           file_url: pan_file });
   if (qualification_file && norm(qualification_file) !== norm(before.qualification_file)) changedDocs.push({ doc_type: 'qualification', file_url: qualification_file });
+  if (form11_file        && norm(form11_file)        !== norm(before.form11_file))        changedDocs.push({ doc_type: 'form11',        file_url: form11_file });
+  if (formf_file         && norm(formf_file)         !== norm(before.formf_file))         changedDocs.push({ doc_type: 'formF',         file_url: formf_file });
 
   // Only the REASON is mandatory the moment a tracked field moves. The action
   // label is SERVER-COMPUTED (resolveActionCode) rather than trusted from the
@@ -1083,7 +1150,18 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            blood_group             = COALESCE(?, blood_group),
            photo_url               = COALESCE(?, photo_url),
            aadhar_number           = COALESCE(?, aadhar_number),
+           aadhar_last4            = COALESCE(?, aadhar_last4),
            pan_number              = COALESCE(?, pan_number),
+           uan_number              = COALESCE(?, uan_number),
+           pf_number               = COALESCE(?, pf_number),
+           esi_number              = COALESCE(?, esi_number),
+           bank_name               = COALESCE(?, bank_name),
+           bank_branch             = COALESCE(?, bank_branch),
+           bank_account_number     = COALESCE(?, bank_account_number),
+           ifsc_code               = COALESCE(?, ifsc_code),
+           pt_state                = COALESCE(?, pt_state),
+           form11_file             = COALESCE(?, form11_file),
+           formf_file              = COALESCE(?, formf_file),
            updated_at = ?
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null, join_date || null,
@@ -1095,7 +1173,12 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         permanent_address || null, permanent_pincode || null, current_address || null,
         current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
         blood_group || null, photo_url || null,
-        aadhar_number || null, pan_number ? String(pan_number).toUpperCase() : null,
+        aadhar_number ? encryptAadhaar(aadhar_number) : null, aadhar_number ? aadharLast4(aadhar_number) : null,
+        pan_number ? String(pan_number).toUpperCase() : null,
+        uan_number || null, pf_number || null, esi_number || null,
+        bank_name || null, bank_branch || null, bank_account_number || null,
+        ifsc_code ? String(ifsc_code).toUpperCase() : null, pt_state || null,
+        form11_file || null, formf_file || null,
         now, req.params.id);
 
   // Log each re-uploaded document as its own event — reason is required (see
@@ -1365,7 +1448,10 @@ function buildChangeEvents(db, { employeeId = null, canSalary = false } = {}) {
 // Promotion / Transfer / Salary Revision / Documents Updated / Correction).
 // ═══════════════════════════════════════════════════════════════════════════
 
-const DOC_LABELS = { aadhar: 'Aadhar card', pan: 'PAN card', qualification: 'Qualification certificate' };
+const DOC_LABELS = {
+  aadhar: 'Aadhar card', pan: 'PAN card', qualification: 'Qualification certificate',
+  form11: 'Form 11 (PF self-declaration)', formF: 'Form F (Gratuity nomination)',
+};
 
 // The opening "Joined" event per employee — buildChangeEvents only diffs from
 // the 2nd timeline row onward, so the first row's snapshot (what they were
@@ -1499,7 +1585,7 @@ router.get('/employees/:id/events', requirePermission('employees', 'view'), (req
 // Current profile + mandatory documents — the read-only Employee Vault tab.
 router.get('/employees/:id/vault', requirePermission('employees', 'view'), (req, res) => {
   const db = getDb();
-  const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
+  let emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
   if (!emp) return res.status(404).json({ error: 'Employee not found' });
   if (!canSeeSalary(req)) delete emp.salary;
   const latest = db.prepare(
@@ -1510,7 +1596,10 @@ router.get('/employees/:id/vault', requirePermission('employees', 'view'), (req,
     { doc_type: 'aadhar', label: DOC_LABELS.aadhar, file_url: emp.aadhar_file || null },
     { doc_type: 'pan', label: DOC_LABELS.pan, file_url: emp.pan_file || null },
     { doc_type: 'qualification', label: DOC_LABELS.qualification, file_url: emp.qualification_file || null },
+    { doc_type: 'form11', label: DOC_LABELS.form11, file_url: emp.form11_file || null },
+    { doc_type: 'formF', label: DOC_LABELS.formF, file_url: emp.formf_file || null },
   ].map((d) => ({ ...d, updated_at: latestAt[d.doc_type] || emp.created_at || null }));
+  emp = redactStatutory(emp, canSeeStatutory(req));
   res.json({ employee: emp, documents });
 });
 

@@ -133,6 +133,11 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
 
   const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
   const fmtChip = (c) => {
+    // Sensitive fields (Aadhaar, Bank Account Number) never show a real
+    // before/after value here, regardless of who's looking — see
+    // server/lib/employeeFields.js's `sensitive` flag and computeChanges()'s
+    // special-casing in constants/employeeChangeCodes.js.
+    if (c.sensitive) return { label: c.label, from: '••••', to: '••••' };
     if (c.money) return canSeeSalary
       ? { label: c.label, from: money(c.from), to: money(c.to) }
       : { label: 'Compensation change', from: '••', to: '••' };

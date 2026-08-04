@@ -35,6 +35,19 @@ export const TRACKED_FIELDS = [
   { key: 'confirmation_status',      label: 'Confirmation status' },
   { key: 'notice_period_days',       label: 'Notice period' },
   { key: 'reports_to_employee_id',   label: 'Reports to' },
+  // Statutory/Compliance pack (Module 1, 2026-08-04) — mirrors
+  // server/lib/employeeFields.js. `sensitive` fields never carry a real
+  // before/after value here — see computeChanges()'s special-casing below —
+  // only whether the field was touched at all.
+  { key: 'bank_name',            label: 'Bank name' },
+  { key: 'bank_branch',          label: 'Bank branch' },
+  { key: 'ifsc_code',            label: 'IFSC code' },
+  { key: 'pt_state',             label: 'PT state' },
+  { key: 'uan_number',           label: 'UAN' },
+  { key: 'pf_number',            label: 'PF number' },
+  { key: 'esi_number',           label: 'ESI number' },
+  { key: 'bank_account_number',  label: 'Bank account number', sensitive: true },
+  { key: 'aadhar_number',        label: 'Aadhaar number',      sensitive: true },
 ];
 
 export const EXIT_STATUSES = ['inactive', 'terminated'];
@@ -96,6 +109,21 @@ export function computeChanges(original, form) {
   const norm = (v) => (v == null ? '' : String(v).trim());
   const out = [];
   for (const f of TRACKED_FIELDS) {
+    // Sensitive fields never round-trip a real value into `form[key]` directly
+    // (the server only ever sends a masked display string, see redactStatutory
+    // in server/routes/hr.js) — an edit is entered into a separate shadow key
+    // instead (`_<key>_edit`, see StatutorySection.jsx), and "changed" means
+    // "the shadow was actually typed into", not a before/after comparison.
+    // EXCEPTION: bank_account_number's real value IS sent to holders of
+    // employee_statutory.can_view — for them it behaves like any other field.
+    if (f.key === 'aadhar_number') {
+      if (form._aadhar_number_edit) out.push({ ...f, from: '••••', to: '••••' });
+      continue;
+    }
+    if (f.key === 'bank_account_number' && form.bank_account_number === undefined) {
+      if (form._bank_account_number_edit) out.push({ ...f, from: '••••', to: '••••' });
+      continue;
+    }
     const a = form[f.key], b = original[f.key];
     const changed = f.money
       ? Number(a || 0) !== Number(b || 0)

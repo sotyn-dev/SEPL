@@ -44,6 +44,12 @@ const ADDRESS_MAX_LEN = 250;
 // letter (e.g. ABCDE1234F), always uppercase.
 const AADHAR_RE = /^[0-9]{12}$/;
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+// Statutory pack — UAN is 12 digits (same shape as Aadhaar, unrelated
+// number); IFSC is 4 letters + '0' + 6 alphanumerics; bank account numbers
+// vary by bank but are always 9-18 digits in India.
+const UAN_RE = /^[0-9]{12}$/;
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const BANK_ACCOUNT_RE = /^[0-9]{9,18}$/;
 
 const ENUMS = {
   employment_type: ['Permanent', 'Contract', 'Intern', 'Vendor'],
@@ -92,6 +98,18 @@ const REQUIRED_FOR_ACTIVATION = [
   ['pan_file', 'PAN card'],
   ['pan_number', 'PAN number'],
   ['qualification_file', 'Highest qualification certificate'],
+
+  // Statutory/Compliance pack (Module 1) — all "mandatory at Hire" per spec.
+  // UAN/PF Number/ESI Number are deliberately NOT here (spec marks them
+  // mandatory 30-days-post-join / after-1st-salary, not Hire) — see
+  // employeeFields.js's registry comment for the same field set.
+  ['bank_name', 'Bank name'],
+  ['bank_branch', 'Bank branch'],
+  ['bank_account_number', 'Bank account number'],
+  ['ifsc_code', 'IFSC code'],
+  ['pt_state', 'PT state'],
+  ['form11_file', 'Form 11 (PF self-declaration)'],
+  ['formf_file', 'Form F (Gratuity nomination)'],
 ];
 
 // Walk UP the reports-to chain from `startId` (the proposed manager). If
@@ -225,6 +243,24 @@ function validateEmployee(payload, { db, employeeId, before } = {}) {
     if (!g) add('grade', 'Grade is not in the catalog');
   }
 
+  // ── Statutory/Compliance pack (Module 1) ──────────────────────────────────
+  if (has('uan_number') && !UAN_RE.test(String(payload.uan_number).trim())) {
+    add('uan_number', 'UAN must be 12 digits');
+  }
+  if (has('ifsc_code') && !IFSC_RE.test(String(payload.ifsc_code).trim().toUpperCase())) {
+    add('ifsc_code', 'IFSC code must be in the format ABCD0123456');
+  }
+  if (has('bank_account_number') && !BANK_ACCOUNT_RE.test(String(payload.bank_account_number).trim())) {
+    add('bank_account_number', 'Bank account number must be 9-18 digits');
+  }
+  // PT state — catalog membership (same pattern as grade above). Bank name is
+  // deliberately NOT enforced against org_banks — the client offers an
+  // "Other" free-text fallback, so a bank outside the seeded list is valid.
+  if (has('pt_state') && db) {
+    const s = db.prepare('SELECT 1 FROM org_pt_states WHERE name = ? AND active = 1').get(payload.pt_state);
+    if (!s) add('pt_state', 'PT state is not in the catalog');
+  }
+
   // ── Reports To — structural graph integrity (spec #4, narrowed) ──────────
   if (has('reports_to_employee_id') && db) {
     const mgrId = Number(payload.reports_to_employee_id);
@@ -283,7 +319,11 @@ function getActivationGaps(employeeRow, { db } = {}) {
   // site Phase 2 already built, just fed the persisted row instead of a
   // request body. `status` is excluded: its own check is about a PROPOSED
   // status change, meaningless when just reading the employee's current row.
-  const { status, ...correctnessPayload } = employeeRow;
+  // `aadhar_number` is also excluded: the persisted value is CIPHERTEXT
+  // (cryptoFields.js), never plaintext — format was already validated once,
+  // at write time, before it was ever encrypted; re-checking AADHAR_RE
+  // against ciphertext here would always fail.
+  const { status, aadhar_number, ...correctnessPayload } = employeeRow;
   const correctness = validateEmployee(correctnessPayload, { db, employeeId: employeeRow.id, before: employeeRow });
   for (const err of correctness) {
     if (seen.has(err.field)) continue; // already flagged as missing — don't double count

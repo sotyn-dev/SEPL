@@ -61,14 +61,100 @@ const EMPLOYEE_COLUMNS = [
   // predate this pack) — the spec wants both: the file as evidence, the
   // number as searchable/verifiable data. Format-validated in
   // employeeValidation.js, mandatory-at-activation alongside their files.
+  // aadhar_number holds an AES-256-GCM CIPHERTEXT (see server/lib/cryptoFields.js),
+  // never plaintext — aadhar_last4 is the plain last-4 digits used for ordinary
+  // masked display so most reads never need to decrypt at all.
   'aadhar_number TEXT',
+  'aadhar_last4 TEXT',
   'pan_number TEXT',
+
+  // Statutory/Compliance pack (Mandatory Field Spec, Statutory #19-28 minus
+  // PAN/Aadhaar above which already existed). UAN/PF/ESI are spec'd "mandatory
+  // at" 30-days-post-join / after-1st-salary, not Hire — so they're validated-
+  // if-present but excluded from REQUIRED_FOR_ACTIVATION (employeeValidation.js).
+  'uan_number TEXT',
+  'pf_number TEXT',
+  'esi_number TEXT',
+  // bank_account_number is plain text by deliberate decision (dme 2026-08-04) —
+  // masked to last 4 in the UI/API for holders without employee_statutory.can_view,
+  // but not encrypted at rest (unlike Aadhaar).
+  'bank_name TEXT',
+  'bank_branch TEXT',
+  'bank_account_number TEXT',
+  'ifsc_code TEXT',
+  'pt_state TEXT',
+  'form11_file TEXT',
+  'formf_file TEXT',
 ];
 
 function runHrMigrations(db) {
   for (const col of EMPLOYEE_COLUMNS) {
     try { db.exec(`ALTER TABLE employees ADD COLUMN ${col}`); } catch (e) {}
   }
+
+  // Statutory/Compliance catalogs (PT State, Bank Name) — same shape and
+  // pattern as org_grades (orgSchema.js): id/name/sort_order/active, seeded
+  // once on an empty table, CRUD deferred to Org Structure later. Bank Name's
+  // dropdown always offers "Other" client-side (not a catalog row) to fall
+  // back to free text — see StatutorySection.jsx.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS org_pt_states (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL UNIQUE,
+        sort_order INTEGER DEFAULT 0,
+        active     INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS org_banks (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL UNIQUE,
+        sort_order INTEGER DEFAULT 0,
+        active     INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    if (db.prepare('SELECT COUNT(*) c FROM org_pt_states').get().c === 0) {
+      const PT_STATES = [
+        'Andhra Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Gujarat', 'Jharkhand',
+        'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya',
+        'Mizoram', 'Nagaland', 'Odisha', 'Puducherry', 'Punjab', 'Sikkim', 'Tamil Nadu',
+        'Telangana', 'Tripura', 'West Bengal', 'Delhi', 'Not Applicable',
+      ];
+      const ins = db.prepare('INSERT INTO org_pt_states (name, sort_order) VALUES (?,?)');
+      PT_STATES.forEach((n, i) => ins.run(n, i));
+      console.log(`[schema] org_pt_states seeded (${PT_STATES.length} entries)`);
+    }
+    if (db.prepare('SELECT COUNT(*) c FROM org_banks').get().c === 0) {
+      const BANKS = [
+        'State Bank of India', 'HDFC Bank', 'ICICI Bank', 'Axis Bank', 'Punjab National Bank',
+        'Bank of Baroda', 'Kotak Mahindra Bank', 'IndusInd Bank', 'Yes Bank', 'Canara Bank',
+        'Union Bank of India', 'IDBI Bank', 'Bank of India', 'Central Bank of India',
+        'IDFC First Bank', 'Federal Bank', 'Indian Bank', 'UCO Bank', 'Bank of Maharashtra',
+        'Indian Overseas Bank',
+      ];
+      const ins = db.prepare('INSERT INTO org_banks (name, sort_order) VALUES (?,?)');
+      BANKS.forEach((n, i) => ins.run(n, i));
+      console.log(`[schema] org_banks seeded (${BANKS.length} entries)`);
+    }
+  } catch (e) { console.error('[schema] statutory catalogs create/seed failed:', e.message); }
+
+  // Aadhaar encrypt-and-mask backfill (dme 2026-08-04 fix — the field
+  // shipped earlier this session stored the full 12-digit number in the
+  // clear, a deviation from the spec's "last 4 only, masked storage" rule).
+  // One-time, guarded on looking like a raw 12-digit value (ciphertext never
+  // matches that shape) — safe to leave running on every boot.
+  try {
+    const { encryptAadhaar, last4 } = require('../lib/cryptoFields');
+    const rows = db.prepare(
+      "SELECT id, aadhar_number FROM employees WHERE aadhar_number IS NOT NULL AND aadhar_number GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'"
+    ).all();
+    if (rows.length) {
+      const upd = db.prepare('UPDATE employees SET aadhar_number=?, aadhar_last4=? WHERE id=?');
+      for (const r of rows) upd.run(encryptAadhaar(r.aadhar_number), last4(r.aadhar_number), r.id);
+      console.log(`[schema] aadhar_number: encrypted ${rows.length} plaintext value(s) in place`);
+    }
+  } catch (e) { console.error('[schema] aadhar_number encrypt-backfill failed:', e.message); }
 
   // Employee lifecycle (plan revision 2026-08-04) — Draft → sections completed
   // → Activated → payroll-eligible. A SEPARATE axis from `status` (payroll/
@@ -201,6 +287,21 @@ function runHrMigrations(db) {
     addCol('confirmation_effective_from', 'confirmation_effective_from TEXT');
     addCol('notice_period_days',          'notice_period_days INTEGER');
     addCol('manager_label',               'manager_label TEXT');
+    // Statutory/Compliance pack (Module 1, 2026-08-04) — snapshot columns for
+    // the 7 non-sensitive tracked fields (bank_name/branch/ifsc/pt_state/
+    // uan/pf/esi). aadhar_number/bank_account_number are NOT snapshotted here
+    // on purpose — see employeeFields.js's `sensitive` flag comment.
+    addCol('bank_name',   'bank_name TEXT');
+    addCol('bank_branch', 'bank_branch TEXT');
+    addCol('ifsc_code',   'ifsc_code TEXT');
+    addCol('pt_state',    'pt_state TEXT');
+    addCol('uan_number',  'uan_number TEXT');
+    addCol('pf_number',   'pf_number TEXT');
+    addCol('esi_number',  'esi_number TEXT');
+    // MASKED forms only — never the real value (see employeeFields.js's
+    // snapshotFrom comment on bank_account_number/aadhar_number).
+    addCol('bank_account_masked', 'bank_account_masked TEXT');
+    addCol('aadhar_masked',       'aadhar_masked TEXT');
     // Employee lifecycle (plan revision 2026-08-04) — snapshot of
     // employees.onboarding_status, so History/Vault reads "as of this date"
     // correctly. Not tracked (no reason prompt): Activation writes its own

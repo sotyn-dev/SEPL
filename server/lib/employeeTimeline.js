@@ -19,6 +19,11 @@
 const { SALARY_REASON_CODES } = require('./employeeChangeCodes');
 const { SNAPSHOT_SELECT, snapshotTimelineCols, snapshotValues } = require('./employeeFields');
 
+// Masked forms for the timeline snapshot (see employeeFields.js's
+// snapshotFrom comment on bank_account_number/aadhar_number) — never the
+// real value, computed the same way redactStatutory does in hr.js.
+const maskAccount = (acct) => (acct ? `${'•'.repeat(Math.max(0, String(acct).length - 4))}${String(acct).slice(-4)}` : null);
+
 // IST calendar date (server clock is UTC on the VPS). Matches istToday() elsewhere.
 function istToday() {
   return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
@@ -144,6 +149,11 @@ function recordEmployeeChange(db, opts) {
   // why the raw id and the denormalized manager_label are two separate columns.
   const linkedLabel = linkedUserLabel(db, emp.user_id);
   const managerLabelVal = managerLabel(db, emp.reports_to_employee_id);
+  // aadhar_last4 isn't a FIELDS entry (only aadhar_number, ciphertext, is) —
+  // fetched separately for the masked-snapshot ctx value below.
+  const aadharLast4Row = db.prepare('SELECT aadhar_last4 FROM employees WHERE id=?').get(emp.id);
+  const aadharMaskedVal = aadharLast4Row && aadharLast4Row.aadhar_last4 ? `XXXXXXXX${aadharLast4Row.aadhar_last4}` : null;
+  const bankAccountMaskedVal = maskAccount(emp.bank_account_number);
   const cols = [
     'employee_id', ...snapshotTimelineCols(), 'manager_id',
     'salary_effective_from', 'status_effective_from', 'salary_action', 'salary_reason_code',
@@ -152,7 +162,10 @@ function recordEmployeeChange(db, opts) {
     'action_code', 'reason_code', 'reason', 'source', 'changed_by',
   ];
   const vals = [
-    emp.id, ...snapshotValues(emp, { linkedUserLabel: linkedLabel, managerLabel: managerLabelVal }), emp.reports_to_employee_id || null,
+    emp.id, ...snapshotValues(emp, {
+      linkedUserLabel: linkedLabel, managerLabel: managerLabelVal,
+      aadharMasked: aadharMaskedVal, bankAccountMasked: bankAccountMaskedVal,
+    }), emp.reports_to_employee_id || null,
     salaryEff, statusEff, salaryActionVal, salaryReasonVal,
     confirmationEff,
     eff, seq, null,

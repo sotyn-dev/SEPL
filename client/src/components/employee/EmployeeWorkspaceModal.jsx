@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react';
-import { FiUser, FiBriefcase, FiPhone, FiFileText, FiLink, FiArrowRight } from 'react-icons/fi';
+import { FiUser, FiBriefcase, FiPhone, FiFileText, FiShield, FiLink, FiArrowRight } from 'react-icons/fi';
 import Modal from '../Modal';
 import SearchableSelect from '../SearchableSelect';
 import EmployeeChangeCard from '../EmployeeChangeCard';
 import PersonalSection from './sections/PersonalSection';
 import EmploymentSection from './sections/EmploymentSection';
 import ContactSection from './sections/ContactSection';
+import StatutorySection from './sections/StatutorySection';
 import DocumentsSection from './sections/DocumentsSection';
 
 const NAV = [
   { key: 'personal', label: 'Personal', icon: FiUser, Section: PersonalSection },
   { key: 'employment', label: 'Job', icon: FiBriefcase, Section: EmploymentSection },
   { key: 'contact', label: 'Contact', icon: FiPhone, Section: ContactSection },
+  { key: 'statutory', label: 'Statutory', icon: FiShield, Section: StatutorySection },
   { key: 'documents', label: 'Docs', icon: FiFileText, Section: DocumentsSection },
 ];
 

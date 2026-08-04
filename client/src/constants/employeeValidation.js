@@ -14,6 +14,9 @@ const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PIN_RE = /^[0-9]{6}$/;
 export const AADHAR_RE = /^[0-9]{12}$/;
 export const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+export const UAN_RE = /^[0-9]{12}$/;
+export const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+export const BANK_ACCOUNT_RE = /^[0-9]{9,18}$/;
 
 const ymd = (d) => d.toISOString().slice(0, 10);
 const addYears = (base, years) => { const d = new Date(base); d.setFullYear(d.getFullYear() + years); return d; };
@@ -56,6 +59,15 @@ export function validateEmployeeClient(form) {
   }
   if (has(form, 'pan_number') && !PAN_RE.test(String(form.pan_number).trim().toUpperCase())) {
     add('pan_number', 'PAN number must be in the format ABCDE1234F');
+  }
+  if (has(form, 'uan_number') && !UAN_RE.test(String(form.uan_number).trim())) {
+    add('uan_number', 'UAN must be 12 digits');
+  }
+  if (has(form, 'ifsc_code') && !IFSC_RE.test(String(form.ifsc_code).trim().toUpperCase())) {
+    add('ifsc_code', 'IFSC code must be in the format ABCD0123456');
+  }
+  if (has(form, 'bank_account_number') && !BANK_ACCOUNT_RE.test(String(form.bank_account_number).trim())) {
+    add('bank_account_number', 'Bank account number must be 9-18 digits');
   }
   if (has(form, 'permanent_pincode') && !PIN_RE.test(String(form.permanent_pincode).trim())) {
     add('permanent_pincode', 'PIN code must be 6 digits');

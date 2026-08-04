@@ -30,7 +30,16 @@ const SECTIONS = {
     'emergency_contact_name', 'emergency_contact_phone',
   ],
   documents: [
-    'aadhar_file', 'aadhar_number', 'pan_file', 'pan_number', 'qualification_file',
+    'qualification_file',
+  ],
+  // Statutory/Compliance pack (Mandatory Field Spec, Module 1, 2026-08-04) —
+  // KYC (Aadhar/PAN) moved here from `documents` now that a dedicated tab
+  // exists; a cleaner home than sitting next to a single unrelated upload.
+  statutory: [
+    'aadhar_file', 'aadhar_number', 'pan_file', 'pan_number',
+    'uan_number', 'pf_number', 'esi_number',
+    'bank_name', 'bank_branch', 'bank_account_number', 'ifsc_code', 'pt_state',
+    'form11_file', 'formf_file',
   ],
   // The linked ERP login is a system relationship, not a fact ABOUT the
   // employee the way every other field is — it grants access and drives

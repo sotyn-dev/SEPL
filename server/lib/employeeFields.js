@@ -90,6 +90,44 @@ const FIELDS = [
   // reason confirmation_effective_from isn't: one FIELDS entry can only
   // target one timeline column).
   { key: 'reports_to_employee_id', label: 'Reports to', tracked: true, snapshot: true, changeField: true, timelineCol: 'manager_label', compare: 'number', snapshotFrom: 'managerLabel' },
+
+  // Statutory/Compliance pack (Mandatory Field Spec, Module 1, 2026-08-04).
+  // Reuses the exact same tracked/snapshot/changeField machinery as the HR
+  // pack — a change here opens a reason-required Change Card entry and shows
+  // in History/Vault/Excel, same as designation/department above.
+  { key: 'bank_name',            label: 'Bank name',            tracked: true, snapshot: true, changeField: true },
+  { key: 'bank_branch',          label: 'Bank branch',          tracked: true, snapshot: true, changeField: true },
+  { key: 'ifsc_code',            label: 'IFSC code',            tracked: true, snapshot: true, changeField: true },
+  { key: 'pt_state',             label: 'PT state',             tracked: true, snapshot: true, changeField: true },
+
+  // "Mandatory at" 30-days-post-join / after-1st-salary, not Hire (spec) —
+  // still tracked/snapshotted for History continuity, just excluded from
+  // REQUIRED_FOR_ACTIVATION (employeeValidation.js).
+  { key: 'uan_number', label: 'UAN', tracked: true, snapshot: true, changeField: true },
+  { key: 'pf_number',  label: 'PF number', tracked: true, snapshot: true, changeField: true },
+  { key: 'esi_number', label: 'ESI number', tracked: true, snapshot: true, changeField: true },
+
+  // Sensitive — a change is tracked (reason required, shows as an event) but
+  // the VALUE is never mirrored anywhere: not snapshotted onto the timeline,
+  // and `sensitive:true` tells the Change Card / History renderers to show
+  // only "changed" (masked), never the before/after number. See
+  // client/src/components/EmployeeChangeCard.jsx's fmtChip().
+  // snapshot:true here reads the RAW column into memory for a moment (needed
+  // by the generic snapshot machinery), but `snapshotFrom` redirects what
+  // actually gets WRITTEN to employee_timeline to the masked ctx value below —
+  // the real number is never persisted a second place. This is what lets
+  // History show "Bank account number changed" (masked before/after) instead
+  // of the field being invisible on the timeline entirely.
+  { key: 'bank_account_number', label: 'Bank account number', tracked: true, snapshot: true, changeField: true, sensitive: true, timelineCol: 'bank_account_masked', snapshotFrom: 'bankAccountMasked' },
+  // aadhar_number is ciphertext at rest (server/lib/cryptoFields.js) — the RAW
+  // column is read into memory for the same reason as above, but never
+  // written anywhere; the timeline gets the masked value instead (same
+  // pattern as bank_account_number). `diffKey` redirects the CHANGE
+  // COMPARISON to aadhar_last4 — AES-GCM's random IV means two encryptions of
+  // the SAME digits never produce equal ciphertext, so comparing aadhar_number
+  // directly would report "changed" on every save regardless of whether the
+  // value moved.
+  { key: 'aadhar_number', label: 'Aadhaar number', tracked: true, snapshot: true, changeField: true, sensitive: true, diffKey: 'aadhar_last4', timelineCol: 'aadhar_masked', snapshotFrom: 'aadharMasked' },
 ];
 
 const byKey = new Map(FIELDS.map((f) => [f.key, f]));
@@ -117,6 +155,7 @@ const changeFields = () =>
     label: f.label,
     ...(f.money ? { money: true } : {}),
     ...(f.bool ? { bool: true } : {}),
+    ...(f.sensitive ? { sensitive: true } : {}),
   }));
 
 // Diff `next` (the incoming, already-normalized values) against `before` (the live
@@ -128,8 +167,9 @@ function diffTracked(before, next) {
   const changed = [];
   for (const f of FIELDS) {
     if (!f.tracked) continue;
-    const a = next[f.key];
-    const b = before[f.key];
+    const cmpKey = f.diffKey || f.key;
+    const a = next[cmpKey];
+    const b = before[cmpKey];
     const moved = f.compare === 'number'
       ? Number(a || 0) !== Number(b || 0)
       : norm(a) !== norm(b);

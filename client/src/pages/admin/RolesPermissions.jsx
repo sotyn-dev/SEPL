@@ -69,6 +69,7 @@ const ALL_MODULES = [
   { key: 'subcon_hiring', label: 'Sub-contractor Hiring' },
   { key: 'hr', label: 'HR & Hiring (legacy)' },
   { key: 'employee_salary', label: 'Employee Salary — see salary field' },
+  { key: 'employee_statutory', label: 'Employee Statutory — see full bank account number' },
   { key: 'hr_team', label: 'HR Team — member (hiring + HR alerts)' },
   { key: 'payroll', label: 'Payroll' },
   { key: 'scoring', label: 'Weekly Score' },

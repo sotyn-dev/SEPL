@@ -10,6 +10,9 @@ export const DOC_SLOTS = [
   { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card' },
   { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card' },
   { key: 'qualification_file', slot: '_qualification_file', label: 'Qualification Certificate' },
+  // Statutory/Compliance pack (Module 1, 2026-08-04)
+  { key: 'form11_file', slot: '_form11_file', label: 'Form 11 (PF Self-Declaration)' },
+  { key: 'formf_file',  slot: '_formf_file',  label: 'Form F (Gratuity Nomination)' },
 ];
 
 // photo_url is an upload field living in `personal`, not `documents` — same
@@ -19,6 +22,15 @@ export const DOC_SLOTS = [
 export const PHOTO_SLOT = { key: 'photo_url', slot: '_photo_url', label: 'Photo' };
 const UPLOAD_SLOTS = [...DOC_SLOTS, PHOTO_SLOT];
 const uploadSlotFor = (key) => UPLOAD_SLOTS.find((u) => u.key === key);
+
+// Statutory/Compliance pack sensitive fields (Aadhaar, Bank Account Number) —
+// the server never sends the real value back except bank_account_number to
+// employee_statutory.can_view holders (see redactStatutory in hr.js), so the
+// form field itself is read-only/masked; a genuine edit is typed into this
+// shadow key instead and only sent to the server when non-blank — otherwise
+// the masked display string would silently overwrite the real value on the
+// next save. Mirrors the DOC_SLOTS shadow-key mechanism above.
+const SENSITIVE_EDIT_SLOT = { aadhar_number: '_aadhar_number_edit', bank_account_number: '_bank_account_number_edit' };
 
 const freshMeta = () => ({
   action_code: '', reason_code: '', reason: '', effective_date: istToday(),
@@ -50,7 +62,7 @@ export default function useEmployeeForm({ onSaved }) {
   const [editing, setEditing] = useState(null); // the persisted employee row, or null in create mode
   const [original, setOriginal] = useState(null); // snapshot at open — the diff baseline
   const [form, setForm] = useState({});
-  const [changeMeta, setChangeMeta] = useState({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), documents: freshMeta(), access: freshMeta() });
+  const [changeMeta, setChangeMeta] = useState({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), documents: freshMeta(), access: freshMeta() });
   const [joinDateLocked, setJoinDateLocked] = useState(false);
   const [uploading, setUploading] = useState(false);
   // Activation-readiness ({overall:{total,done,pct}, sections, errors}) —
@@ -75,7 +87,7 @@ export default function useEmployeeForm({ onSaved }) {
       // fabricated). HR can still change either before saving.
       employment_type: 'Permanent', confirmation_status: 'Probation',
     });
-    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), documents: freshMeta(), access: freshMeta() });
+    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), documents: freshMeta(), access: freshMeta() });
     setJoinDateLocked(false);
     setCompleteness(null);
     setIsOpen(true);
@@ -85,7 +97,7 @@ export default function useEmployeeForm({ onSaved }) {
     setEditing(emp);
     setOriginal(emp);
     setForm(emp);
-    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), documents: freshMeta(), access: freshMeta() });
+    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), documents: freshMeta(), access: freshMeta() });
     setJoinDateLocked(!!emp.join_date);
     setCompleteness(null);
     refreshCompleteness(emp.id);
@@ -110,7 +122,14 @@ export default function useEmployeeForm({ onSaved }) {
   // `form` on every render, never blocks on presence (only the Activation
   // gate does that). `fieldError(key)` is what each section renders inline;
   // `sectionErrors(key)` is what saveSection() below gates on.
-  const clientErrors = validateEmployeeClient(form);
+  // Sensitive fields (see SENSITIVE_EDIT_SLOT) validate whatever's actually
+  // about to be SUBMITTED — the shadow edit value — not the masked display
+  // string sitting in form[key], which was never real input to begin with.
+  const clientErrors = validateEmployeeClient({
+    ...form,
+    aadhar_number: form._aadhar_number_edit || undefined,
+    bank_account_number: form._bank_account_number_edit || form.bank_account_number,
+  });
   const fieldError = (key) => clientErrors.find((e) => e.field === key)?.message || null;
   const sectionErrors = (key) => clientErrors.filter((e) => (sections[key] || []).includes(e.field));
   // Any pending (unsaved) upload belonging to a given section — drives both
@@ -177,7 +196,19 @@ export default function useEmployeeForm({ onSaved }) {
     if (errs.length) return toast.error(errs[0].message);
     const changes = sectionChanges(key);
     const fieldPayload = {};
+    const shadowUsed = new Set(); // keys whose NEW value came from a masked-field shadow edit
     for (const k of sections[key] || []) {
+      const sensSlot = SENSITIVE_EDIT_SLOT[k];
+      if (sensSlot) {
+        // A typed edit always wins. Otherwise: if the server sent this key's
+        // REAL value (privileged bank-account view), resending it unedited is
+        // harmless. If only the masked form (form[k] undefined) came back,
+        // omit the key entirely — sending the masked string would silently
+        // overwrite the real stored value with "••••1234".
+        if (form[sensSlot]) { fieldPayload[k] = form[sensSlot]; shadowUsed.add(k); }
+        else if (form[k] !== undefined) fieldPayload[k] = form[k];
+        continue;
+      }
       const upload = uploadSlotFor(k);
       if (!upload) { fieldPayload[k] = form[k]; continue; }
       // Upload field (photo_url, the 3 KYC docs): a pending file in its
@@ -222,11 +253,24 @@ export default function useEmployeeForm({ onSaved }) {
     try {
       await api.put(`/hr/employees/${editing.id}`, request);
       toast.success('Saved');
-      setOriginal((o) => ({ ...o, ...fieldPayload }));
-      setEditing((e) => ({ ...e, ...fieldPayload }));
+      // A shadow-edited sensitive field is excluded from the local merge — its
+      // masked display (aadhar_masked/bank_account_masked) only refreshes on
+      // the next list fetch (onSaved()), and merging the just-typed plaintext
+      // into local state would otherwise briefly render it unmasked. A
+      // PRIVILEGED direct edit of bank_account_number (no shadow involved) is
+      // real input already sitting in `form` — merge it normally.
+      const localPayload = { ...fieldPayload };
+      for (const k of shadowUsed) delete localPayload[k];
+      setOriginal((o) => ({ ...o, ...localPayload }));
+      setEditing((e) => ({ ...e, ...localPayload }));
       setForm((f) => {
-        const next = { ...f, ...fieldPayload };
-        for (const k of sections[key] || []) { const u = uploadSlotFor(k); if (u) next[u.slot] = null; }
+        const next = { ...f, ...localPayload };
+        for (const k of sections[key] || []) {
+          const u = uploadSlotFor(k);
+          if (u) next[u.slot] = null;
+          const s = SENSITIVE_EDIT_SLOT[k];
+          if (s) next[s] = '';
+        }
         return next;
       });
       if (fieldPayload.join_date !== undefined) setJoinDateLocked(!!fieldPayload.join_date);
