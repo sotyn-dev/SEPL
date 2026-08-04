@@ -35,6 +35,11 @@ const addYears = (base, years) => { const d = new Date(base); d.setFullYear(d.ge
 
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PIN_RE = /^[0-9]{6}$/;
+// Mirrors client/src/constants/employeeValidation.js's ADDRESS_MAX_LEN — kept
+// in sync manually (small, self-contained rule, not worth a shared module).
+// Indian addresses (flat/building, street, landmark, area, city, state)
+// routinely run 150-220 characters; 250 gives room without being unbounded.
+const ADDRESS_MAX_LEN = 250;
 
 const ENUMS = {
   employment_type: ['Permanent', 'Contract', 'Intern', 'Vendor'],
@@ -160,6 +165,16 @@ function validateEmployee(payload, { db, employeeId, before } = {}) {
   }
   if (has('current_pincode') && !PIN_RE.test(String(payload.current_pincode).trim())) {
     add('current_pincode', 'Current PIN code must be 6 digits');
+  }
+
+  // ── Address length (spec #13/#14) — the client caps the textarea at the
+  // same limit, but this is the real gate; a direct API call must not be
+  // able to stuff an unbounded string into a free-text column. ─────────────
+  if (has('permanent_address') && String(payload.permanent_address).length > ADDRESS_MAX_LEN) {
+    add('permanent_address', `Permanent address is too long (max ${ADDRESS_MAX_LEN} characters)`);
+  }
+  if (has('current_address') && String(payload.current_address).length > ADDRESS_MAX_LEN) {
+    add('current_address', `Current address is too long (max ${ADDRESS_MAX_LEN} characters)`);
   }
 
   // ── Emergency contact ≠ self (spec #15) ───────────────────────────────────

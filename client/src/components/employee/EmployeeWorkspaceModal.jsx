@@ -29,10 +29,13 @@ export default function EmployeeWorkspaceModal({ ws, employees, users, canSeeSal
   const [tab, setTab] = useState('personal');
   useEffect(() => { if (ws.isOpen) setTab('personal'); }, [ws.isOpen]);
 
-  const dirty = (key) => ws.sectionChanges(key).length > 0 || (key === 'documents' && ws.docLabels().length > 0);
+  const dirty = (key) => ws.sectionChanges(key).length > 0 || ws.sectionUploadDirty(key);
+  const subtitle = ws.editing && ws.completeness
+    ? `${ws.completeness.overall.done} of ${ws.completeness.overall.total} HR fields complete`
+    : undefined;
 
   return (
-    <Modal isOpen={ws.isOpen} onClose={ws.close} title={ws.editing ? 'Edit Employee' : 'Add Employee'} xwide={!!ws.editing}>
+    <Modal isOpen={ws.isOpen} onClose={ws.close} title={ws.editing ? 'Edit Employee' : 'Add Employee'} subtitle={subtitle} xwide={!!ws.editing}>
       {!ws.editing ? (
         <QuickCreate ws={ws} />
       ) : (
@@ -40,16 +43,21 @@ export default function EmployeeWorkspaceModal({ ws, employees, users, canSeeSal
           <UserLinkBar ws={ws} users={users} />
           <div className="flex flex-col lg:flex-row gap-4">
             <div className="flex lg:flex-col gap-1 lg:w-40 flex-shrink-0 overflow-x-auto lg:overflow-visible border-b lg:border-b-0 lg:border-r border-gray-200 pb-2 lg:pb-0 lg:pr-3">
-              {NAV.map((n) => (
-                <button
-                  key={n.key}
-                  type="button"
-                  onClick={() => setTab(n.key)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${tab === n.key ? 'bg-red-50 text-red-700' : 'text-gray-600 hover:bg-gray-50'}`}>
-                  <n.icon size={14} />{n.label}
-                  {dirty(n.key) && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 ml-1" title="Unsaved changes" />}
-                </button>
-              ))}
+              {NAV.map((n) => {
+                const errCount = ws.sectionErrors(n.key).length;
+                return (
+                  <button
+                    key={n.key}
+                    type="button"
+                    onClick={() => setTab(n.key)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${tab === n.key ? 'bg-red-50 text-red-700' : 'text-gray-600 hover:bg-gray-50'}`}>
+                    <n.icon size={14} />{n.label}
+                    {errCount > 0 ? (
+                      <span className="text-[9px] font-bold text-white bg-red-500 rounded-full w-3.5 h-3.5 flex items-center justify-center leading-none ml-1" title={`${errCount} field error${errCount === 1 ? '' : 's'}`}>{errCount}</span>
+                    ) : dirty(n.key) && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 ml-1" title="Unsaved changes" />}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex-1 min-w-0 space-y-4">
@@ -131,6 +139,7 @@ function SectionFooter({ ws, sectionKey, users, canSeeSalary }) {
   const changes = ws.sectionChanges(sectionKey);
   const docLabels = sectionKey === 'documents' ? ws.docLabels() : [];
   const meta = ws.changeMeta[sectionKey];
+  const hasErrors = ws.sectionErrors(sectionKey).length > 0;
 
   return (
     <>
@@ -151,7 +160,8 @@ function SectionFooter({ ws, sectionKey, users, canSeeSalary }) {
         <button
           type="button"
           onClick={() => ws.saveSection(sectionKey)}
-          disabled={ws.uploading}
+          disabled={ws.uploading || hasErrors}
+          title={hasErrors ? 'Fix the highlighted field(s) before saving' : undefined}
           className="btn btn-primary disabled:opacity-50">
           {ws.uploading ? 'Uploading…' : 'Save section'}
         </button>

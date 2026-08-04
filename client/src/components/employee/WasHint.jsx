@@ -14,3 +14,13 @@ export default function WasHint({ k, fmt, changedSet, original, revertField }) {
 }
 
 export const trackAccent = (changedSet, key) => (changedSet.has(key) ? 'shadow-[-2px_0_0_0_#c9c9c9] -mx-2 px-2' : '');
+
+// Inline client-side format-error message under a field (see
+// constants/employeeValidation.js) — shown regardless of dirty state, since
+// a pre-existing bad value (e.g. a legacy 5-digit PIN) should read as wrong
+// even before it's touched, not just after an edit.
+export function FieldError({ k, ws }) {
+  const msg = ws.fieldError(k);
+  if (!msg) return null;
+  return <p className="text-[10px] text-red-600 mt-0.5">{msg}</p>;
+}
