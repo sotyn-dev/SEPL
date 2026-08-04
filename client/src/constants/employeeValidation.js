@@ -32,6 +32,10 @@ export const JOIN_DATE_MAX = ymd(new Date());
 // room without being an effectively-unbounded textarea.
 export const ADDRESS_MAX_LEN = 250;
 
+// Compensation pack (Module 2) — mirrors server/lib/employeeValidation.js.
+export const CTC_ANNUAL_MIN = 150000;
+export const LAST_INCREMENT_MAX = ymd(new Date());
+
 const norm = (v) => String(v || '').trim().toLowerCase();
 const has = (form, k) => form[k] !== undefined && form[k] !== null && String(form[k]).trim() !== '';
 
@@ -86,6 +90,17 @@ export function validateEmployeeClient(form) {
   }
   if (has(form, 'current_address') && String(form.current_address).length > ADDRESS_MAX_LEN) {
     add('current_address', `Address is too long (max ${ADDRESS_MAX_LEN} characters)`);
+  }
+  if (has(form, 'ctc_annual') && !(Number(form.ctc_annual) >= CTC_ANNUAL_MIN)) {
+    add('ctc_annual', `CTC annual must be at least ₹${CTC_ANNUAL_MIN.toLocaleString('en-IN')}`);
+  }
+  if (has(form, 'bonus_target_pct')) {
+    const pct = Number(form.bonus_target_pct);
+    if (!(pct >= 0 && pct <= 100)) add('bonus_target_pct', 'Bonus/variable target % must be between 0 and 100');
+  }
+  if (has(form, 'last_increment_date')) {
+    const lid = String(form.last_increment_date).slice(0, 10);
+    if (YMD_RE.test(lid) && lid > LAST_INCREMENT_MAX) add('last_increment_date', 'Last increment date cannot be in the future');
   }
   return errors;
 }

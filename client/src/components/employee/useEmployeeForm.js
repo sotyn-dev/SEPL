@@ -62,7 +62,7 @@ export default function useEmployeeForm({ onSaved }) {
   const [editing, setEditing] = useState(null); // the persisted employee row, or null in create mode
   const [original, setOriginal] = useState(null); // snapshot at open — the diff baseline
   const [form, setForm] = useState({});
-  const [changeMeta, setChangeMeta] = useState({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), documents: freshMeta(), access: freshMeta() });
+  const [changeMeta, setChangeMeta] = useState({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), documents: freshMeta(), access: freshMeta() });
   const [joinDateLocked, setJoinDateLocked] = useState(false);
   const [uploading, setUploading] = useState(false);
   // Activation-readiness ({overall:{total,done,pct}, sections, errors}) —
@@ -87,7 +87,7 @@ export default function useEmployeeForm({ onSaved }) {
       // fabricated). HR can still change either before saving.
       employment_type: 'Permanent', confirmation_status: 'Probation',
     });
-    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), documents: freshMeta(), access: freshMeta() });
+    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), documents: freshMeta(), access: freshMeta() });
     setJoinDateLocked(false);
     setCompleteness(null);
     setIsOpen(true);
@@ -97,7 +97,7 @@ export default function useEmployeeForm({ onSaved }) {
     setEditing(emp);
     setOriginal(emp);
     setForm(emp);
-    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), documents: freshMeta(), access: freshMeta() });
+    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), documents: freshMeta(), access: freshMeta() });
     setJoinDateLocked(!!emp.join_date);
     setCompleteness(null);
     refreshCompleteness(emp.id);

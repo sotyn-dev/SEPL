@@ -57,7 +57,13 @@ const ENUMS = {
   gender: ['Male', 'Female', 'Other'],
   blood_group: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
   notice_period_days: [30, 60, 90],
+  // Compensation pack (Module 2) — no catalog table (small fixed set), see
+  // hrSchema.js's comment on salary_review_cycle.
+  salary_review_cycle: ['Apr-Mar', 'Anniversary'],
 };
+// Compensation pack — CTC floor (spec: hire-mandatory figure, must be a real
+// annual cost, not a placeholder zero/near-zero value).
+const CTC_ANNUAL_MIN = 150000;
 
 // [payload key, human label, optional custom check(value)]. `check` defaults
 // to "not blank" — only overridden where presence alone is the wrong test
@@ -110,6 +116,23 @@ const REQUIRED_FOR_ACTIVATION = [
   ['pt_state', 'PT state'],
   ['form11_file', 'Form 11 (PF self-declaration)'],
   ['formf_file', 'Form F (Gratuity nomination)'],
+
+  // Compensation pack (Module 2) — all "mandatory at Hire" per spec, EXCEPT
+  // TDS Estimated Annual (needs post-hire Form 12BB declarations) and Last
+  // Increment Date (spec says "Annual", not Hire) — same validated-if-
+  // present-but-not-activation-blocking treatment UAN/PF/ESI got in Module 1.
+  ['ctc_annual', 'CTC annual', (v) => Number(v) >= CTC_ANNUAL_MIN],
+  ['fixed_monthly_gross', 'Fixed monthly gross'],
+  ['variable_bonus', 'Variable / bonus'],
+  ['basic_pay', 'Basic pay'],
+  ['hra', 'HRA'],
+  ['special_allowance', 'Special allowance'],
+  ['pf_deduction', 'PF deduction'],
+  ['esi_deduction', 'ESI deduction'],
+  ['professional_tax', 'Professional tax'],
+  ['reimbursements', 'Reimbursements'],
+  ['bonus_target_pct', 'Bonus/variable target %'],
+  ['salary_review_cycle', 'Salary review cycle'],
 ];
 
 // Walk UP the reports-to chain from `startId` (the proposed manager). If
@@ -259,6 +282,23 @@ function validateEmployee(payload, { db, employeeId, before } = {}) {
   if (has('pt_state') && db) {
     const s = db.prepare('SELECT 1 FROM org_pt_states WHERE name = ? AND active = 1').get(payload.pt_state);
     if (!s) add('pt_state', 'PT state is not in the catalog');
+  }
+
+  // ── Compensation pack (Module 2) ──────────────────────────────────────────
+  if (has('ctc_annual') && !(Number(payload.ctc_annual) >= CTC_ANNUAL_MIN)) {
+    add('ctc_annual', `CTC annual must be at least ₹${CTC_ANNUAL_MIN.toLocaleString('en-IN')}`);
+  }
+  if (has('bonus_target_pct')) {
+    const pct = Number(payload.bonus_target_pct);
+    if (!(pct >= 0 && pct <= 100)) add('bonus_target_pct', 'Bonus/variable target % must be between 0 and 100');
+  }
+  if (has('salary_review_cycle') && !ENUMS.salary_review_cycle.includes(payload.salary_review_cycle)) {
+    add('salary_review_cycle', 'Invalid salary review cycle');
+  }
+  if (has('last_increment_date')) {
+    const lid = String(payload.last_increment_date).slice(0, 10);
+    if (!YMD_RE.test(lid)) add('last_increment_date', 'Last increment date is invalid');
+    else if (lid > ymd(new Date())) add('last_increment_date', 'Last increment date cannot be in the future');
   }
 
   // ── Reports To — structural graph integrity (spec #4, narrowed) ──────────

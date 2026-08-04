@@ -33,6 +33,32 @@ function redactStatutory(row, canStatutory) {
   else out.bank_account_masked = maskAccount(bank_account_number);
   return out;
 }
+// Compensation pack (Module 2) — the whole tab is gated behind
+// employee_salary.can_view (no new permission key, see the plan) — same
+// audience that already sees employees.salary. Unlike redactStatutory, this
+// isn't a per-field mask: without the permission none of the 14 fields ship
+// at all, mirroring how `salary` itself is stripped for non-holders below.
+const COMPENSATION_FIELDS = [
+  'ctc_annual', 'fixed_monthly_gross', 'variable_bonus',
+  'basic_pay', 'hra', 'special_allowance',
+  'pf_deduction', 'esi_deduction', 'professional_tax', 'tds_estimated_annual',
+  'reimbursements', 'bonus_target_pct', 'last_increment_date', 'salary_review_cycle',
+];
+function redactCompensation(row, canSalary) {
+  if (!row || canSalary) return row;
+  const out = { ...row };
+  for (const k of COMPENSATION_FIELDS) delete out[k];
+  return out;
+}
+// Unlike `salary` (which the codebase's usual `x || null` idiom treats safely,
+// since a real salary is never 0), several Compensation figures — ESI
+// deduction, Variable/Bonus, TDS, Reimbursements — are LEGITIMATELY 0 (e.g. an
+// employee above the ESI wage ceiling). Plain `x || null` would silently drop
+// a genuine 0 to NULL both on INSERT and, worse, on UPDATE's
+// `COALESCE(?, col)` — where a dropped 0 means "keep the old value" instead of
+// "set it to zero". This helper is used for all 14 Compensation columns
+// specifically for that reason; nothing else in this file needs it.
+const numOrNull = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
 // Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
 // date-level effective_from). Server clock is UTC on the VPS.
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -769,7 +795,7 @@ router.get('/employees', (req, res) => {
   const canSalary = getUserPermissions(req.user.id)['employee_salary']?.can_view;
   const canStatutory = canSeeStatutory(req);
   res.json(rows.map((r) => {
-    const redacted = redactStatutory(r, canStatutory);
+    const redacted = redactCompensation(redactStatutory(r, canStatutory), canSalary);
     return canSalary ? redacted : (({ salary, ...rest }) => rest)(redacted);
   }));
 });
@@ -820,7 +846,11 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           aadhar_number, pan_number,
           // Statutory/Compliance pack (Module 1)
           uan_number, pf_number, esi_number, bank_name, bank_branch,
-          bank_account_number, ifsc_code, pt_state, form11_file, formf_file } = req.body;
+          bank_account_number, ifsc_code, pt_state, form11_file, formf_file,
+          // Compensation pack (Module 2)
+          ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance,
+          pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements,
+          bonus_target_pct, last_increment_date, salary_review_cycle } = req.body;
   let { user_id } = req.body;
   const db = getDb();
   // Auto-link by email if user_id wasn't explicitly set
@@ -854,8 +884,11 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                              aadhar_number, aadhar_last4, pan_number,
                              uan_number, pf_number, esi_number, bank_name, bank_branch,
                              bank_account_number, ifsc_code, pt_state, form11_file, formf_file,
+                             ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance,
+                             pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements,
+                             bonus_target_pct, last_increment_date, salary_review_cycle,
                              onboarding_status, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES (${Array(58).fill('?').join(',')})
     `).run(user_id || null, name, phone || null, email || null, designation || null, department || null,
           join_date || null, salary || null,
           aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
@@ -871,6 +904,10 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           bank_name || null, bank_branch || null, bank_account_number || null,
           ifsc_code ? String(ifsc_code).toUpperCase() : null, pt_state || null,
           form11_file || null, formf_file || null,
+          numOrNull(ctc_annual), numOrNull(fixed_monthly_gross), numOrNull(variable_bonus),
+          numOrNull(basic_pay), numOrNull(hra), numOrNull(special_allowance),
+          numOrNull(pf_deduction), numOrNull(esi_deduction), numOrNull(professional_tax), numOrNull(tds_estimated_annual),
+          numOrNull(reimbursements), numOrNull(bonus_target_pct), last_increment_date || null, salary_review_cycle || null,
           'draft', istNow());
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
@@ -959,7 +996,11 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     'SELECT name, phone, email, user_id, status, salary, designation, department, roster, join_date, aadhar_file, pan_file, qualification_file, ' +
     'grade, employment_type, probation_end_date, confirmation_status, notice_period_days, reports_to_employee_id, ' +
     'bank_name, bank_branch, bank_account_number, ifsc_code, pt_state, uan_number, pf_number, esi_number, aadhar_last4, ' +
-    'form11_file, formf_file FROM employees WHERE id=?'
+    'form11_file, formf_file, ' +
+    'ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance, ' +
+    'pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements, ' +
+    'bonus_target_pct, last_increment_date, salary_review_cycle ' +
+    'FROM employees WHERE id=?'
   ).get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
 
@@ -995,7 +1036,11 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
           aadhar_number, pan_number,
           // Statutory/Compliance pack (Module 1)
           uan_number, pf_number, esi_number, bank_name, bank_branch,
-          bank_account_number, ifsc_code, pt_state } = req.body;
+          bank_account_number, ifsc_code, pt_state,
+          // Compensation pack (Module 2)
+          ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance,
+          pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements,
+          bonus_target_pct, last_increment_date, salary_review_cycle } = req.body;
 
   // Phase 5 — the 6 career-event fields now diff/track like designation etc.
   // above (name/phone/email/...), so they need the same "effective value"
@@ -1020,6 +1065,24 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // diffKey comment) — a freshly supplied number is reduced to its last 4
   // digits for comparison; omitted (undefined) falls back to the stored last4.
   const effAadharLast4 = aadhar_number !== undefined ? aadharLast4(aadhar_number) : before.aadhar_last4;
+  // Compensation pack (Module 2) — same partial-save fallback pattern as the
+  // Statutory fields above; none of these 14 have isolation quirks (no own
+  // effective date, no diffKey/sensitive redirect), so they diff on their
+  // raw value like grade/designation.
+  const effCtcAnnual = ctc_annual !== undefined ? ctc_annual : before.ctc_annual;
+  const effFixedMonthlyGross = fixed_monthly_gross !== undefined ? fixed_monthly_gross : before.fixed_monthly_gross;
+  const effVariableBonus = variable_bonus !== undefined ? variable_bonus : before.variable_bonus;
+  const effBasicPay = basic_pay !== undefined ? basic_pay : before.basic_pay;
+  const effHra = hra !== undefined ? hra : before.hra;
+  const effSpecialAllowance = special_allowance !== undefined ? special_allowance : before.special_allowance;
+  const effPfDeduction = pf_deduction !== undefined ? pf_deduction : before.pf_deduction;
+  const effEsiDeduction = esi_deduction !== undefined ? esi_deduction : before.esi_deduction;
+  const effProfessionalTax = professional_tax !== undefined ? professional_tax : before.professional_tax;
+  const effTdsEstimatedAnnual = tds_estimated_annual !== undefined ? tds_estimated_annual : before.tds_estimated_annual;
+  const effReimbursements = reimbursements !== undefined ? reimbursements : before.reimbursements;
+  const effBonusTargetPct = bonus_target_pct !== undefined ? bonus_target_pct : before.bonus_target_pct;
+  const effLastIncrementDate = last_increment_date !== undefined ? last_increment_date : before.last_increment_date;
+  const effSalaryReviewCycle = salary_review_cycle !== undefined ? salary_review_cycle : before.salary_review_cycle;
 
   // Mandatory Field Spec — HR pack (Phase 2): mode:'edit' validates only the
   // fields this request actually supplied — an old employee with 17 blank HR
@@ -1042,6 +1105,12 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     bank_name: effBankName, bank_branch: effBankBranch, bank_account_number: effBankAccount,
     ifsc_code: effIfsc, pt_state: effPtState, uan_number: effUan, pf_number: effPf, esi_number: effEsi,
     aadhar_last4: effAadharLast4,
+    ctc_annual: effCtcAnnual, fixed_monthly_gross: effFixedMonthlyGross, variable_bonus: effVariableBonus,
+    basic_pay: effBasicPay, hra: effHra, special_allowance: effSpecialAllowance,
+    pf_deduction: effPfDeduction, esi_deduction: effEsiDeduction, professional_tax: effProfessionalTax,
+    tds_estimated_annual: effTdsEstimatedAnnual, reimbursements: effReimbursements,
+    bonus_target_pct: effBonusTargetPct, last_increment_date: effLastIncrementDate,
+    salary_review_cycle: effSalaryReviewCycle,
   });
 
   // Document re-uploads — tracked separately from the tracked-field ledger
@@ -1162,6 +1231,20 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            pt_state                = COALESCE(?, pt_state),
            form11_file             = COALESCE(?, form11_file),
            formf_file              = COALESCE(?, formf_file),
+           ctc_annual              = COALESCE(?, ctc_annual),
+           fixed_monthly_gross     = COALESCE(?, fixed_monthly_gross),
+           variable_bonus          = COALESCE(?, variable_bonus),
+           basic_pay               = COALESCE(?, basic_pay),
+           hra                     = COALESCE(?, hra),
+           special_allowance       = COALESCE(?, special_allowance),
+           pf_deduction            = COALESCE(?, pf_deduction),
+           esi_deduction           = COALESCE(?, esi_deduction),
+           professional_tax        = COALESCE(?, professional_tax),
+           tds_estimated_annual    = COALESCE(?, tds_estimated_annual),
+           reimbursements          = COALESCE(?, reimbursements),
+           bonus_target_pct        = COALESCE(?, bonus_target_pct),
+           last_increment_date     = COALESCE(?, last_increment_date),
+           salary_review_cycle     = COALESCE(?, salary_review_cycle),
            updated_at = ?
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null, join_date || null,
@@ -1179,6 +1262,10 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         bank_name || null, bank_branch || null, bank_account_number || null,
         ifsc_code ? String(ifsc_code).toUpperCase() : null, pt_state || null,
         form11_file || null, formf_file || null,
+        numOrNull(ctc_annual), numOrNull(fixed_monthly_gross), numOrNull(variable_bonus),
+        numOrNull(basic_pay), numOrNull(hra), numOrNull(special_allowance),
+        numOrNull(pf_deduction), numOrNull(esi_deduction), numOrNull(professional_tax), numOrNull(tds_estimated_annual),
+        numOrNull(reimbursements), numOrNull(bonus_target_pct), last_increment_date || null, salary_review_cycle || null,
         now, req.params.id);
 
   // Log each re-uploaded document as its own event — reason is required (see
@@ -1588,6 +1675,7 @@ router.get('/employees/:id/vault', requirePermission('employees', 'view'), (req,
   let emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
   if (!emp) return res.status(404).json({ error: 'Employee not found' });
   if (!canSeeSalary(req)) delete emp.salary;
+  emp = redactCompensation(emp, canSeeSalary(req));
   const latest = db.prepare(
     `SELECT doc_type, MAX(changed_at) AS at FROM employee_document_events WHERE employee_id=? GROUP BY doc_type`
   ).all(req.params.id);

@@ -48,6 +48,24 @@ export const TRACKED_FIELDS = [
   { key: 'esi_number',           label: 'ESI number' },
   { key: 'bank_account_number',  label: 'Bank account number', sensitive: true },
   { key: 'aadhar_number',        label: 'Aadhaar number',      sensitive: true },
+  // Compensation pack (Module 2, 2026-08-04) — mirrors
+  // server/lib/employeeFields.js. None are `sensitive`: gated at the tab
+  // level via canSeeSalary instead (see fmtChip's `money` masking below,
+  // reused as-is for these 11 money fields).
+  { key: 'ctc_annual',           label: 'CTC annual',              money: true },
+  { key: 'fixed_monthly_gross',  label: 'Fixed monthly gross',     money: true },
+  { key: 'variable_bonus',       label: 'Variable / bonus',        money: true },
+  { key: 'basic_pay',            label: 'Basic pay',               money: true },
+  { key: 'hra',                  label: 'HRA',                     money: true },
+  { key: 'special_allowance',    label: 'Special allowance',       money: true },
+  { key: 'pf_deduction',         label: 'PF deduction',            money: true },
+  { key: 'esi_deduction',        label: 'ESI deduction',           money: true },
+  { key: 'professional_tax',     label: 'Professional tax',        money: true },
+  { key: 'tds_estimated_annual', label: 'TDS estimated annual',    money: true },
+  { key: 'reimbursements',       label: 'Reimbursements',          money: true },
+  { key: 'bonus_target_pct',     label: 'Bonus/variable target %' },
+  { key: 'last_increment_date',  label: 'Last increment date' },
+  { key: 'salary_review_cycle',  label: 'Salary review cycle' },
 ];
 
 export const EXIT_STATUSES = ['inactive', 'terminated'];

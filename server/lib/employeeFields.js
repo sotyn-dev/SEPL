@@ -128,6 +128,29 @@ const FIELDS = [
   // directly would report "changed" on every save regardless of whether the
   // value moved.
   { key: 'aadhar_number', label: 'Aadhaar number', tracked: true, snapshot: true, changeField: true, sensitive: true, diffKey: 'aadhar_last4', timelineCol: 'aadhar_masked', snapshotFrom: 'aadharMasked' },
+
+  // Compensation pack (Mandatory Field Spec, Module 2, 2026-08-04). Same
+  // generic tracked/snapshot/changeField machinery as Statutory above — a
+  // change opens a reason-required Change Card entry and shows in
+  // History/Vault/Excel. None are `sensitive`: Compensation figures aren't
+  // identity/KYC data, they're gated at the tab level via the existing
+  // employee_salary.can_view permission instead (see hr.js's
+  // redactCompensation). Money-typed where the figure is a rupee amount;
+  // bonus_target_pct/last_increment_date/salary_review_cycle are not.
+  { key: 'ctc_annual',           label: 'CTC annual',            tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'fixed_monthly_gross',  label: 'Fixed monthly gross',   tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'variable_bonus',       label: 'Variable / bonus',      tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'basic_pay',            label: 'Basic pay',             tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'hra',                  label: 'HRA',                   tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'special_allowance',    label: 'Special allowance',     tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'pf_deduction',         label: 'PF deduction',          tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'esi_deduction',        label: 'ESI deduction',         tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'professional_tax',     label: 'Professional tax',      tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'tds_estimated_annual', label: 'TDS estimated annual',  tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'reimbursements',       label: 'Reimbursements',        tracked: true, snapshot: true, changeField: true, money: true, compare: 'number' },
+  { key: 'bonus_target_pct',     label: 'Bonus/variable target %', tracked: true, snapshot: true, changeField: true, compare: 'number' },
+  { key: 'last_increment_date',  label: 'Last increment date',   tracked: true, snapshot: true, changeField: true },
+  { key: 'salary_review_cycle',  label: 'Salary review cycle',   tracked: true, snapshot: true, changeField: true },
 ];
 
 const byKey = new Map(FIELDS.map((f) => [f.key, f]));

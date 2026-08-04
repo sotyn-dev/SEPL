@@ -21,8 +21,8 @@ function fetchGrades() {
   return gradesPromise;
 }
 
-// +6 months, date-string in, date-string out — used only for the probation
-// suggestion below, never written to the field until HR clicks "Use".
+// date-string in, date-string out — used only for the probation suggestion
+// below, never written to the field until HR clicks "Use".
 const plusMonths = (ymd, months) => {
   if (!ymd) return '';
   const d = new Date(ymd);
@@ -40,7 +40,13 @@ export default function EmploymentSection({ ws, employees, canSeeSalary }) {
   useEffect(() => { fetchGrades().then(setGrades); }, []);
 
   const managers = employees.filter((e) => !editing || e.id !== editing.id);
-  const suggestedProbation = form.employment_type === 'Permanent' && form.join_date ? plusMonths(form.join_date, 6) : null;
+  // Spec HR-7 says "DOJ + 3m (blue) or 6m (white)" — no blue/white collar
+  // concept exists here (or in the source data), so it's mapped to
+  // employment_type per the plan's documented decision: Permanent -> 6m
+  // (white-collar proxy), Contract/Intern/Vendor -> 3m (blue-collar proxy).
+  // Suggestion only, never enforced — HR can always override.
+  const probationMonths = form.employment_type === 'Permanent' ? 6 : 3;
+  const suggestedProbation = form.employment_type && form.join_date ? plusMonths(form.join_date, probationMonths) : null;
 
   return (
     <div className="space-y-4">
@@ -118,7 +124,7 @@ export default function EmploymentSection({ ws, employees, canSeeSalary }) {
             <input className="input" type="date" value={form.probation_end_date || ''} onChange={(e) => setForm({ ...form, probation_end_date: e.target.value })} />
             {!form.probation_end_date && suggestedProbation && (
               <p className="text-[10px] text-gray-400 mt-0.5">
-                Suggested from {form.employment_type}, +6 months ({fmtDate(suggestedProbation)}) —{' '}
+                Suggested from {form.employment_type}, +{probationMonths} months ({fmtDate(suggestedProbation)}) —{' '}
                 <button type="button" onClick={() => setForm({ ...form, probation_end_date: suggestedProbation })} className="underline hover:text-gray-600">use</button>
               </p>
             )}

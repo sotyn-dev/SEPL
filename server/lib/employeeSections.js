@@ -54,6 +54,20 @@ const SECTIONS = {
   access: [
     'user_id',
   ],
+  // Compensation pack (Mandatory Field Spec, Module 2, 2026-08-04) — the 14
+  // columns behind the Compensation tab, in Business Grouping & UX order
+  // (Salary Structure -> Salary Components -> Statutory Deductions ->
+  // Review & Growth -> Other Compensation; see the module's plan). `salary`
+  // itself stays in `employment` — it's the live payroll field, this tab is
+  // explicitly informational-only. Gated client-side behind canSeeSalary,
+  // same as `salary` (see EmployeeWorkspaceModal.jsx's NAV).
+  compensation: [
+    'ctc_annual', 'fixed_monthly_gross', 'variable_bonus',
+    'basic_pay', 'hra', 'special_allowance',
+    'pf_deduction', 'esi_deduction', 'professional_tax', 'tds_estimated_annual',
+    'bonus_target_pct', 'last_increment_date', 'salary_review_cycle',
+    'reimbursements',
+  ],
 };
 
 const SECTION_BY_FIELD = new Map(

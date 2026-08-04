@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FiUser, FiBriefcase, FiPhone, FiFileText, FiShield, FiLink, FiArrowRight } from 'react-icons/fi';
+import { FiUser, FiBriefcase, FiPhone, FiFileText, FiShield, FiDollarSign, FiLink, FiArrowRight } from 'react-icons/fi';
 import Modal from '../Modal';
 import SearchableSelect from '../SearchableSelect';
 import EmployeeChangeCard from '../EmployeeChangeCard';
@@ -7,12 +7,19 @@ import PersonalSection from './sections/PersonalSection';
 import EmploymentSection from './sections/EmploymentSection';
 import ContactSection from './sections/ContactSection';
 import StatutorySection from './sections/StatutorySection';
+import CompensationSection from './sections/CompensationSection';
 import DocumentsSection from './sections/DocumentsSection';
 
-const NAV = [
+// Compensation (Module 2, 2026-08-04) is entirely gated behind
+// employee_salary.can_view (no new permission — reuses the same flag that
+// already gates the `salary` field itself, see the plan's "Decisions locked
+// in" section) — a holder-less viewer never even sees the tab, rather than
+// seeing an empty/error-prone one whose 14 fields the server always strips.
+const BASE_NAV = [
   { key: 'personal', label: 'Personal', icon: FiUser, Section: PersonalSection },
   { key: 'employment', label: 'Job', icon: FiBriefcase, Section: EmploymentSection },
   { key: 'contact', label: 'Contact', icon: FiPhone, Section: ContactSection },
+  { key: 'compensation', label: 'Compensation', icon: FiDollarSign, Section: CompensationSection },
   { key: 'statutory', label: 'Statutory', icon: FiShield, Section: StatutorySection },
   { key: 'documents', label: 'Docs', icon: FiFileText, Section: DocumentsSection },
 ];
@@ -30,6 +37,7 @@ const NAV = [
 export default function EmployeeWorkspaceModal({ ws, employees, users, canSeeSalary }) {
   const [tab, setTab] = useState('personal');
   useEffect(() => { if (ws.isOpen) setTab('personal'); }, [ws.isOpen]);
+  const NAV = BASE_NAV.filter((n) => n.key !== 'compensation' || canSeeSalary);
 
   const dirty = (key) => ws.sectionChanges(key).length > 0 || ws.sectionUploadDirty(key);
   const subtitle = ws.editing && ws.completeness

@@ -85,6 +85,29 @@ const EMPLOYEE_COLUMNS = [
   'pt_state TEXT',
   'form11_file TEXT',
   'formf_file TEXT',
+
+  // Compensation pack (Mandatory Field Spec, Module 2, 2026-08-04) — 12 spec
+  // items / 14 columns (#29-40). Pure informational/reference data, entered
+  // once and tracked for History — `employees.salary` remains the SOLE
+  // payroll input, untouched by this pack (see employeeFields.js registry
+  // comment). Gated behind the existing employee_salary.can_view permission,
+  // same audience that already sees `salary` today — no new permission key.
+  // basic_pay/hra/special_allowance are the composite split of
+  // fixed_monthly_gross (spec item #32, rendered as one row on the client).
+  'ctc_annual REAL',
+  'fixed_monthly_gross REAL',
+  'variable_bonus REAL',
+  'basic_pay REAL',
+  'hra REAL',
+  'special_allowance REAL',
+  'pf_deduction REAL',
+  'esi_deduction REAL',
+  'professional_tax REAL',
+  'tds_estimated_annual REAL',
+  'reimbursements REAL',
+  'bonus_target_pct REAL',
+  'last_increment_date DATE',
+  'salary_review_cycle TEXT',
 ];
 
 function runHrMigrations(db) {
@@ -307,6 +330,27 @@ function runHrMigrations(db) {
     // correctly. Not tracked (no reason prompt): Activation writes its own
     // dedicated event through its own code path (hr.js POST .../activate).
     addCol('onboarding_status', 'onboarding_status TEXT');
+    // Compensation pack (Module 2, 2026-08-04) — plain current-value snapshot
+    // columns for all 14 fields, same generic mechanism as the Statutory
+    // fields above. Deliberately NOT extended with an effective-dating/
+    // reason-taxonomy pair like salary_effective_from/salary_action — see
+    // the plan's "Future extensibility" section: a dedicated Compensation
+    // History module can layer that on top of these columns later without
+    // needing to rip anything out here.
+    addCol('ctc_annual',           'ctc_annual REAL');
+    addCol('fixed_monthly_gross',  'fixed_monthly_gross REAL');
+    addCol('variable_bonus',       'variable_bonus REAL');
+    addCol('basic_pay',            'basic_pay REAL');
+    addCol('hra',                  'hra REAL');
+    addCol('special_allowance',    'special_allowance REAL');
+    addCol('pf_deduction',         'pf_deduction REAL');
+    addCol('esi_deduction',        'esi_deduction REAL');
+    addCol('professional_tax',     'professional_tax REAL');
+    addCol('tds_estimated_annual', 'tds_estimated_annual REAL');
+    addCol('reimbursements',       'reimbursements REAL');
+    addCol('bonus_target_pct',     'bonus_target_pct REAL');
+    addCol('last_increment_date',  'last_increment_date TEXT');
+    addCol('salary_review_cycle',  'salary_review_cycle TEXT');
 
     // Does employee_id still block deletes? PRAGMA foreign_key_list → on_delete.
     const fks = db.prepare(`PRAGMA foreign_key_list(employee_timeline)`).all();
