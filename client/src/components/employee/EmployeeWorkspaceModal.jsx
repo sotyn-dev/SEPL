@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FiUser, FiBriefcase, FiPhone, FiFileText, FiShield, FiDollarSign, FiLink, FiArrowRight } from 'react-icons/fi';
+import { FiUser, FiBriefcase, FiPhone, FiFileText, FiShield, FiDollarSign, FiLink, FiArrowRight, FiCpu } from 'react-icons/fi';
 import Modal from '../Modal';
 import SearchableSelect from '../SearchableSelect';
 import EmployeeChangeCard from '../EmployeeChangeCard';
@@ -9,6 +9,7 @@ import ContactSection from './sections/ContactSection';
 import StatutorySection from './sections/StatutorySection';
 import CompensationSection from './sections/CompensationSection';
 import DocumentsSection from './sections/DocumentsSection';
+import AssetsSection from './sections/AssetsSection';
 
 // Compensation (Module 2, 2026-08-04) is entirely gated behind
 // employee_salary.can_view (no new permission — reuses the same flag that
@@ -22,6 +23,10 @@ const BASE_NAV = [
   { key: 'compensation', label: 'Compensation', icon: FiDollarSign, Section: CompensationSection },
   { key: 'statutory', label: 'Statutory', icon: FiShield, Section: StatutorySection },
   { key: 'documents', label: 'Docs', icon: FiFileText, Section: DocumentsSection },
+  // Assets pack (Module 3, 2026-08-04) — no permission filter (unlike
+  // Compensation above): the 4 flat tag fields are inert equipment data, not
+  // sensitive/statutory, visible to anyone who can open the Workspace at all.
+  { key: 'assets', label: 'Assets', icon: FiCpu, Section: AssetsSection },
 ];
 
 // The Employee Workspace shell (plan: keep-confirmation-status-separate-

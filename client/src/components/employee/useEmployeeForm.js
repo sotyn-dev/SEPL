@@ -6,20 +6,27 @@ import { validateEmployeeClient } from '../../constants/employeeValidation';
 
 const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
 
+// `docType` tags every Employee Workspace upload (photo + KYC docs) so the
+// server's shared /api/upload endpoint (server/index.js) can route it into
+// the dedicated data/uploads/employees/ folder and name it
+// <timestamp>-<employeeId>-<docType>.ext, without disturbing any other
+// module's uploads (they never send employee_id/doc_type at all).
 export const DOC_SLOTS = [
-  { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card' },
-  { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card' },
-  { key: 'qualification_file', slot: '_qualification_file', label: 'Qualification Certificate' },
+  { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card',                  docType: 'aadhar' },
+  { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card',                      docType: 'pan' },
+  { key: 'qualification_file', slot: '_qualification_file', label: 'Qualification Certificate',     docType: 'qualification' },
   // Statutory/Compliance pack (Module 1, 2026-08-04)
-  { key: 'form11_file', slot: '_form11_file', label: 'Form 11 (PF Self-Declaration)' },
-  { key: 'formf_file',  slot: '_formf_file',  label: 'Form F (Gratuity Nomination)' },
+  { key: 'form11_file', slot: '_form11_file', label: 'Form 11 (PF Self-Declaration)', docType: 'form11' },
+  { key: 'formf_file',  slot: '_formf_file',  label: 'Form F (Gratuity Nomination)',  docType: 'formf' },
 ];
 
 // photo_url is an upload field living in `personal`, not `documents` — same
 // "pick a file, hold it in a shadow `_slot` key until Save" mechanism as
 // DOC_SLOTS, generalized below (Phase 4) so saveSection() doesn't need to
-// special-case which section owns an upload.
-export const PHOTO_SLOT = { key: 'photo_url', slot: '_photo_url', label: 'Photo' };
+// special-case which section owns an upload. `purpose: 'photo'` additionally
+// triggers the server's <=2MB check (Mandatory Field Spec #49) — no other
+// upload slot sets `purpose`, so that check never fires for them.
+export const PHOTO_SLOT = { key: 'photo_url', slot: '_photo_url', label: 'Photo', docType: 'photo', purpose: 'photo' };
 const UPLOAD_SLOTS = [...DOC_SLOTS, PHOTO_SLOT];
 const uploadSlotFor = (key) => UPLOAD_SLOTS.find((u) => u.key === key);
 
@@ -62,7 +69,7 @@ export default function useEmployeeForm({ onSaved }) {
   const [editing, setEditing] = useState(null); // the persisted employee row, or null in create mode
   const [original, setOriginal] = useState(null); // snapshot at open — the diff baseline
   const [form, setForm] = useState({});
-  const [changeMeta, setChangeMeta] = useState({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), documents: freshMeta(), access: freshMeta() });
+  const [changeMeta, setChangeMeta] = useState({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), assets: freshMeta(), documents: freshMeta(), access: freshMeta() });
   const [joinDateLocked, setJoinDateLocked] = useState(false);
   const [uploading, setUploading] = useState(false);
   // Activation-readiness ({overall:{total,done,pct}, sections, errors}) —
@@ -87,7 +94,7 @@ export default function useEmployeeForm({ onSaved }) {
       // fabricated). HR can still change either before saving.
       employment_type: 'Permanent', confirmation_status: 'Probation',
     });
-    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), documents: freshMeta(), access: freshMeta() });
+    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), assets: freshMeta(), documents: freshMeta(), access: freshMeta() });
     setJoinDateLocked(false);
     setCompleteness(null);
     setIsOpen(true);
@@ -97,7 +104,7 @@ export default function useEmployeeForm({ onSaved }) {
     setEditing(emp);
     setOriginal(emp);
     setForm(emp);
-    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), documents: freshMeta(), access: freshMeta() });
+    setChangeMeta({ personal: freshMeta(), employment: freshMeta(), contact: freshMeta(), statutory: freshMeta(), compensation: freshMeta(), assets: freshMeta(), documents: freshMeta(), access: freshMeta() });
     setJoinDateLocked(!!emp.join_date);
     setCompleteness(null);
     refreshCompleteness(emp.id);
@@ -143,15 +150,21 @@ export default function useEmployeeForm({ onSaved }) {
   const setSectionMeta = (key, updater) =>
     setChangeMeta((m) => ({ ...m, [key]: typeof updater === 'function' ? updater(m[key]) : updater }));
 
-  const uploadFile = async (file) => {
+  const uploadFile = async (file, docType, purpose) => {
     if (!file) return null;
     setUploading(true);
     try {
       const fd = new FormData();
+      // employee_id/doc_type must be appended BEFORE file — multer/busboy
+      // parses multipart fields in stream order, so server/index.js's
+      // destination()/filename() see these in req.body by the time they run.
+      if (editing?.id) fd.append('employee_id', editing.id);
+      if (docType) fd.append('doc_type', docType);
+      if (purpose) fd.append('purpose', purpose);
       fd.append('file', file);
       const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       return r.data?.url || null;
-    } catch { toast.error('Upload failed'); return null; }
+    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); return null; }
     finally { setUploading(false); }
   };
 
@@ -215,7 +228,7 @@ export default function useEmployeeForm({ onSaved }) {
       // shadow `_slot` key gets uploaded now; otherwise keep the existing
       // stored URL untouched, whichever section owns the field.
       if (form[upload.slot]) {
-        const url = await uploadFile(form[upload.slot]);
+        const url = await uploadFile(form[upload.slot], upload.docType, upload.purpose);
         if (!url) return;
         fieldPayload[k] = url;
       } else {

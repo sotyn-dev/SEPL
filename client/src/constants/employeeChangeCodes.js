@@ -66,6 +66,12 @@ export const TRACKED_FIELDS = [
   { key: 'bonus_target_pct',     label: 'Bonus/variable target %' },
   { key: 'last_increment_date',  label: 'Last increment date' },
   { key: 'salary_review_cycle',  label: 'Salary review cycle' },
+  // Assets pack (Module 3, 2026-08-04) — mirrors server/lib/employeeFields.js.
+  // Plain equipment tags, no money/sensitive flags.
+  { key: 'laptop_asset_tag', label: 'Laptop asset tag' },
+  { key: 'mobile_asset_tag', label: 'Mobile asset tag' },
+  { key: 'vehicle_allotted', label: 'Vehicle allotted' },
+  { key: 'sim_card_number',  label: 'SIM card number' },
 ];
 
 export const EXIT_STATUSES = ['inactive', 'terminated'];

@@ -151,6 +151,15 @@ const FIELDS = [
   { key: 'bonus_target_pct',     label: 'Bonus/variable target %', tracked: true, snapshot: true, changeField: true, compare: 'number' },
   { key: 'last_increment_date',  label: 'Last increment date',   tracked: true, snapshot: true, changeField: true },
   { key: 'salary_review_cycle',  label: 'Salary review cycle',   tracked: true, snapshot: true, changeField: true },
+
+  // Assets pack (Mandatory Field Spec, Module 3, 2026-08-04). Plain free-text
+  // equipment tags — no `money`/`sensitive` flags, no compare override
+  // (trimmed-string equality is fine). Independent of the pre-existing
+  // company_assets register (keyed to users); see hrSchema.js's comment.
+  { key: 'laptop_asset_tag', label: 'Laptop asset tag', tracked: true, snapshot: true, changeField: true },
+  { key: 'mobile_asset_tag', label: 'Mobile asset tag', tracked: true, snapshot: true, changeField: true },
+  { key: 'vehicle_allotted', label: 'Vehicle allotted', tracked: true, snapshot: true, changeField: true },
+  { key: 'sim_card_number',  label: 'SIM card number',  tracked: true, snapshot: true, changeField: true },
 ];
 
 const byKey = new Map(FIELDS.map((f) => [f.key, f]));

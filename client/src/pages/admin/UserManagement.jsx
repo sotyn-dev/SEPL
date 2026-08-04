@@ -375,6 +375,12 @@ export default function UserManagement() {
               <label className="label">Username</label>
               <input className="input font-mono" value={form.username || ''} onChange={e => setForm({...form, username: e.target.value.replace(/\s+/g, '.')})} placeholder="e.g. Monika.devi" />
               <p className="text-[10px] text-gray-400 mt-0.5">Staff will log in with this. Leave blank to use email only.</p>
+              {/* Mandatory Field Spec #45 (ERP Username) — format hint, only shown for a
+                  genuinely NEW/changed value (never on an untouched legacy username that
+                  predates this rule — see server/routes/auth.js's USERNAME_RE comment). */}
+              {form.username && form.username !== (editing?.username || '') && !/^[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+$/.test(form.username) && (
+                <p className="text-[10px] text-amber-600 mt-0.5">Should be firstname.lastname (e.g. monika.devi)</p>
+              )}
             </div>
             <div><label className="label">Email *</label><input className="input" type="email" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} required /></div>
             <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>

@@ -68,6 +68,14 @@ const SECTIONS = {
     'bonus_target_pct', 'last_increment_date', 'salary_review_cycle',
     'reimbursements',
   ],
+  // Assets pack (Mandatory Field Spec, Module 3, 2026-08-04) — 4 free-text
+  // equipment tags, "mandatory at Issued" not Hire, excluded from
+  // REQUIRED_FOR_ACTIVATION. Independent of the pre-existing company_assets
+  // register; the Assets tab additionally shows a read-only mirror of that
+  // register, but it is not part of this section's editable fields.
+  assets: [
+    'laptop_asset_tag', 'mobile_asset_tag', 'vehicle_allotted', 'sim_card_number',
+  ],
 };
 
 const SECTION_BY_FIELD = new Map(

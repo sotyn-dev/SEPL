@@ -108,6 +108,18 @@ const EMPLOYEE_COLUMNS = [
   'bonus_target_pct REAL',
   'last_increment_date DATE',
   'salary_review_cycle TEXT',
+
+  // Assets pack (Mandatory Field Spec, Module 3, 2026-08-04) — 4 spec items
+  // (#41-44). Plain free-text tags, no format regex, "mandatory at Issued"
+  // (a post-hire event) not Hire — same precedent as UAN/PF/ESI, excluded
+  // from REQUIRED_FOR_ACTIVATION (employeeValidation.js). Independent of the
+  // pre-existing company_assets/company_asset_movements register (keyed to
+  // users, not employees) — the Assets tab additionally shows a read-only
+  // mirror of that register, but never reads/writes these 4 columns.
+  'laptop_asset_tag TEXT',
+  'mobile_asset_tag TEXT',
+  'vehicle_allotted TEXT',
+  'sim_card_number TEXT',
 ];
 
 function runHrMigrations(db) {
@@ -351,6 +363,12 @@ function runHrMigrations(db) {
     addCol('bonus_target_pct',     'bonus_target_pct REAL');
     addCol('last_increment_date',  'last_increment_date TEXT');
     addCol('salary_review_cycle',  'salary_review_cycle TEXT');
+    // Assets pack (Module 3, 2026-08-04) — plain current-value snapshot
+    // columns for the 4 fields, same generic mechanism as Compensation above.
+    addCol('laptop_asset_tag', 'laptop_asset_tag TEXT');
+    addCol('mobile_asset_tag', 'mobile_asset_tag TEXT');
+    addCol('vehicle_allotted', 'vehicle_allotted TEXT');
+    addCol('sim_card_number',  'sim_card_number TEXT');
 
     // Does employee_id still block deletes? PRAGMA foreign_key_list → on_delete.
     const fks = db.prepare(`PRAGMA foreign_key_list(employee_timeline)`).all();

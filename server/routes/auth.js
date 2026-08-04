@@ -4,6 +4,24 @@ const { getDb } = require('../db/schema');
 const { generateToken, authMiddleware, adminOnly, getUserPermissions } = require('../middleware/auth');
 const router = express.Router();
 
+// Mandatory Field Spec — Asset+KPI pack #45 "ERP Username": UNIQUE (already
+// enforced above/below via the case-insensitive index + pre-checks) + format
+// firstname.lastname. Deliberately LENIENT (letters/digits/hyphens on either
+// side of exactly one dot, either case) rather than the strict lowercase-only
+// reading of the spec — this prod DB already has usernames that don't fit
+// ANY dot-separated shape at all ('admin', 'backup-admin', 'testmember',
+// 'Aanchal'), so a strict regex would need a disruptive one-time rename pass.
+// Enforced ONLY on a genuinely NEW/CHANGED value (see the `uname !== before`
+// guards at each call site) — an admin editing an unrelated field (phone,
+// department, role...) on a legacy non-conforming account is never blocked;
+// the format rule only bites the moment someone actually types a new
+// username. Deliberately not required at all (dme 2026-08-04: username stays
+// optional company-wide, per "Leave blank to use email only") — see the
+// Employee Assets module plan's shipped note for why "mandatory at Hire" was
+// left unimplemented.
+const USERNAME_RE = /^[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+$/;
+const USERNAME_FORMAT_MSG = 'Username must be firstname.lastname (letters/digits/hyphens on each side of one dot)';
+
 router.post('/login', (req, res) => {
   // Accept either `username` or `email` as the identifier. Historical clients
   // send `email`; the new login UI sends `username` which may actually be a
@@ -88,6 +106,11 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
   }
   if (uname && db.prepare('SELECT id FROM users WHERE LOWER(username)=LOWER(?)').get(uname)) {
     return res.status(409).json({ error: 'Username already taken' });
+  }
+  // A brand-new username has no "existing legacy value" to grandfather in —
+  // format-check it unconditionally (see USERNAME_RE's comment above).
+  if (uname && !USERNAME_RE.test(uname)) {
+    return res.status(400).json({ error: USERNAME_FORMAT_MSG });
   }
   try {
     const hash = bcrypt.hashSync(password, 10);
@@ -306,6 +329,15 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
     if (uname) {
       const clash = db.prepare('SELECT id FROM users WHERE LOWER(username)=LOWER(?) AND id<>?').get(uname, req.params.id);
       if (clash) return res.status(409).json({ error: 'Username already taken' });
+    }
+    // Format-check only a GENUINELY new value (see USERNAME_RE's comment
+    // above) — re-saving an unrelated field (phone/department/role...) on an
+    // existing legacy non-conforming username must never be blocked by this.
+    if (uname) {
+      const before = db.prepare('SELECT username FROM users WHERE id=?').get(req.params.id);
+      if (uname !== before?.username && !USERNAME_RE.test(uname)) {
+        return res.status(400).json({ error: USERNAME_FORMAT_MSG });
+      }
     }
     if (uname !== undefined) {
       if (password) {

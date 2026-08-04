@@ -850,7 +850,9 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           // Compensation pack (Module 2)
           ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance,
           pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements,
-          bonus_target_pct, last_increment_date, salary_review_cycle } = req.body;
+          bonus_target_pct, last_increment_date, salary_review_cycle,
+          // Assets pack (Module 3)
+          laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number } = req.body;
   let { user_id } = req.body;
   const db = getDb();
   // Auto-link by email if user_id wasn't explicitly set
@@ -887,8 +889,9 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                              ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance,
                              pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements,
                              bonus_target_pct, last_increment_date, salary_review_cycle,
+                             laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number,
                              onboarding_status, updated_at)
-      VALUES (${Array(58).fill('?').join(',')})
+      VALUES (${Array(62).fill('?').join(',')})
     `).run(user_id || null, name, phone || null, email || null, designation || null, department || null,
           join_date || null, salary || null,
           aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
@@ -908,6 +911,7 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           numOrNull(basic_pay), numOrNull(hra), numOrNull(special_allowance),
           numOrNull(pf_deduction), numOrNull(esi_deduction), numOrNull(professional_tax), numOrNull(tds_estimated_annual),
           numOrNull(reimbursements), numOrNull(bonus_target_pct), last_increment_date || null, salary_review_cycle || null,
+          laptop_asset_tag || null, mobile_asset_tag || null, vehicle_allotted || null, sim_card_number || null,
           'draft', istNow());
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
@@ -999,7 +1003,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     'form11_file, formf_file, ' +
     'ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance, ' +
     'pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements, ' +
-    'bonus_target_pct, last_increment_date, salary_review_cycle ' +
+    'bonus_target_pct, last_increment_date, salary_review_cycle, ' +
+    'laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number ' +
     'FROM employees WHERE id=?'
   ).get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
@@ -1040,7 +1045,9 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
           // Compensation pack (Module 2)
           ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance,
           pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements,
-          bonus_target_pct, last_increment_date, salary_review_cycle } = req.body;
+          bonus_target_pct, last_increment_date, salary_review_cycle,
+          // Assets pack (Module 3)
+          laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number } = req.body;
 
   // Phase 5 — the 6 career-event fields now diff/track like designation etc.
   // above (name/phone/email/...), so they need the same "effective value"
@@ -1083,6 +1090,12 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   const effBonusTargetPct = bonus_target_pct !== undefined ? bonus_target_pct : before.bonus_target_pct;
   const effLastIncrementDate = last_increment_date !== undefined ? last_increment_date : before.last_increment_date;
   const effSalaryReviewCycle = salary_review_cycle !== undefined ? salary_review_cycle : before.salary_review_cycle;
+  // Assets pack (Module 3) — same partial-save fallback pattern; plain
+  // string diff, no isolation quirks.
+  const effLaptopTag = laptop_asset_tag !== undefined ? laptop_asset_tag : before.laptop_asset_tag;
+  const effMobileTag = mobile_asset_tag !== undefined ? mobile_asset_tag : before.mobile_asset_tag;
+  const effVehicleAllotted = vehicle_allotted !== undefined ? vehicle_allotted : before.vehicle_allotted;
+  const effSimCard = sim_card_number !== undefined ? sim_card_number : before.sim_card_number;
 
   // Mandatory Field Spec — HR pack (Phase 2): mode:'edit' validates only the
   // fields this request actually supplied — an old employee with 17 blank HR
@@ -1111,6 +1124,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     tds_estimated_annual: effTdsEstimatedAnnual, reimbursements: effReimbursements,
     bonus_target_pct: effBonusTargetPct, last_increment_date: effLastIncrementDate,
     salary_review_cycle: effSalaryReviewCycle,
+    laptop_asset_tag: effLaptopTag, mobile_asset_tag: effMobileTag,
+    vehicle_allotted: effVehicleAllotted, sim_card_number: effSimCard,
   });
 
   // Document re-uploads — tracked separately from the tracked-field ledger
@@ -1245,6 +1260,10 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            bonus_target_pct        = COALESCE(?, bonus_target_pct),
            last_increment_date     = COALESCE(?, last_increment_date),
            salary_review_cycle     = COALESCE(?, salary_review_cycle),
+           laptop_asset_tag        = COALESCE(?, laptop_asset_tag),
+           mobile_asset_tag        = COALESCE(?, mobile_asset_tag),
+           vehicle_allotted        = COALESCE(?, vehicle_allotted),
+           sim_card_number         = COALESCE(?, sim_card_number),
            updated_at = ?
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null, join_date || null,
@@ -1266,6 +1285,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         numOrNull(basic_pay), numOrNull(hra), numOrNull(special_allowance),
         numOrNull(pf_deduction), numOrNull(esi_deduction), numOrNull(professional_tax), numOrNull(tds_estimated_annual),
         numOrNull(reimbursements), numOrNull(bonus_target_pct), last_increment_date || null, salary_review_cycle || null,
+        laptop_asset_tag || null, mobile_asset_tag || null, vehicle_allotted || null, sim_card_number || null,
         now, req.params.id);
 
   // Log each re-uploaded document as its own event — reason is required (see
@@ -1689,6 +1709,27 @@ router.get('/employees/:id/vault', requirePermission('employees', 'view'), (req,
   ].map((d) => ({ ...d, updated_at: latestAt[d.doc_type] || emp.created_at || null }));
   emp = redactStatutory(emp, canSeeStatutory(req));
   res.json({ employee: emp, documents });
+});
+
+// Assets pack (Module 3) — read-only mirror of the pre-existing Company
+// Assets register (company_assets, keyed to users) for the Workspace Assets
+// tab's "Currently Issued" reference block. Purely informational: never
+// written to, never joined into the 4 flat employee columns above. Gated by
+// the SAME permission the standalone Company Assets page already uses — no
+// new permission key. A caller without it gets the normal 403 from
+// requirePermission; the client swallows that silently (see AssetsSection.jsx).
+router.get('/employees/:id/company-assets', requirePermission('company_assets', 'view'), (req, res) => {
+  const db = getDb();
+  const emp = db.prepare('SELECT user_id FROM employees WHERE id=?').get(req.params.id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found' });
+  if (!emp.user_id) return res.json([]);
+  const rows = db.prepare(
+    `SELECT id, asset_no, category, name, brand, model, serial_no, mobile_number, issued_at
+       FROM company_assets
+      WHERE current_user_id = ? AND status = 'issued'
+      ORDER BY issued_at DESC`
+  ).all(emp.user_id);
+  res.json(rows);
 });
 
 // ── Excel exports (styled, mirror snags.js) — one row per HR event ──────────

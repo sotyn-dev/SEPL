@@ -59,9 +59,26 @@ const multer = require('multer');
 const fs = require('fs');
 const uploadsDir = path.join(__dirname, '..', 'data', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+// Mandatory Field Spec (Photo #49 + KYC docs) — dedicated flat subfolder for
+// Employee Workspace uploads, kept alongside (not replacing) the generic
+// flat root every other module's /api/upload call still uses. Only requests
+// that tag themselves with employee_id are routed here; everyone else's
+// destination/filename shape below is completely unchanged.
+const employeesUploadsDir = path.join(uploadsDir, 'employees');
+if (!fs.existsSync(employeesUploadsDir)) fs.mkdirSync(employeesUploadsDir, { recursive: true });
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`)
+  destination: (req, file, cb) => {
+    cb(null, req.body.employee_id ? employeesUploadsDir : uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const empId = req.body.employee_id;
+    if (empId && /^\d+$/.test(String(empId))) {
+      const ext = path.extname(file.originalname || '') || '';
+      const docType = (req.body.doc_type || 'file').replace(/[^a-zA-Z0-9_-]/g, '');
+      return cb(null, `${Date.now()}-${empId}-${docType}${ext}`);
+    }
+    cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`);
+  }
 });
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -438,7 +455,15 @@ app.use('/audit', require('./routes/auditReport'));
 const { authMiddleware } = require('./middleware/auth');
 app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ url: `/uploads/${req.file.filename}`, filename: req.file.originalname, size: req.file.size });
+  // Mandatory Field Spec #49 (Photo, passport size, max 2MB) — scoped to
+  // purpose=photo only (set by the Employee Workspace's Photo field);
+  // every other upload through this shared endpoint is unaffected.
+  if (req.body.purpose === 'photo' && req.file.size > 2 * 1024 * 1024) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: 'Photo must be 2MB or smaller' });
+  }
+  const relPath = path.relative(uploadsDir, req.file.path).split(path.sep).join('/');
+  res.json({ url: `/uploads/${relPath}`, filename: req.file.originalname, size: req.file.size });
 });
 
 // Serve uploaded files
