@@ -71,6 +71,11 @@ function suggestAction(changedFields) {
   if (s.has('salary')) return 'Pay Revision';
   if (s.has('designation') || s.has('department')) return 'Transfer';
   if (s.has('roster')) return 'Roster Change';
+  // user_id (linked login) is isolated the same way (own Workspace section,
+  // see employeeSections.js's 'access') — one field, one unambiguous label,
+  // no human pick needed. Not added to ACTIONS: like 'Status Change', it's a
+  // computed-only label, never a dropdown choice (see resolveActionCode).
+  if (s.has('user_id')) return 'Access Change';
   return 'Correction';
 }
 
@@ -133,7 +138,7 @@ const SALARY_REASON_LABELS = {
 // bucket. No manual override (dme 2026-07-31: auto-classification is final).
 const HR_EVENT_TYPES = [
   'Joined', 'Activated', 'Status Change', 'Promotion', 'Transfer',
-  'Salary Revision', 'Documents Updated', 'Correction',
+  'Salary Revision', 'Documents Updated', 'Access Change', 'Correction',
 ];
 // salaryAction ('revision'|'correction'|null) only matters for the
 // salary-alone branch — a salary CORRECTION reads as the existing generic
@@ -149,6 +154,15 @@ function classifyEvent({ isFirst = false, changedKeys = [], salaryAction = null 
   if (s.has('designation') && s.has('salary')) return 'Promotion';
   if (s.has('designation') || s.has('department')) return 'Transfer';
   if (s.has('salary')) return salaryAction === 'correction' ? 'Correction' : 'Salary Revision';
+  // Linked login (own Workspace section — employeeSections.js's 'access') is
+  // always saved alone, so this is unambiguous the same way onboarding_status
+  // is above — no risk of masking a co-occurring field change. Checked by its
+  // TIMELINE column name, not the raw employees column: classifyEvent is fed
+  // event field keys (buildHrEvents' `g.fields.map((f) => f.key)`), which are
+  // already remapped through employeeFields.js's timelineCol (user_id →
+  // linked_user_label) — unlike resolveActionCode/suggestAction above, which
+  // see the raw diffTracked() keys straight off the employees columns.
+  if (s.has('linked_user_label')) return 'Access Change';
   const nonDoc = changedKeys.filter((k) => !String(k).startsWith('doc_'));
   if (nonDoc.length === 0 && changedKeys.length > 0) return 'Documents Updated';
   return 'Correction';

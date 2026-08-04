@@ -3,12 +3,13 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
-import EmployeeChangeCard from '../components/EmployeeChangeCard';
-import { computeChanges, SALARY_REASON_CODES } from '../constants/employeeChangeCodes';
+import useEmployeeForm from '../components/employee/useEmployeeForm';
+import EmployeeWorkspaceModal from '../components/employee/EmployeeWorkspaceModal';
+import { SALARY_REASON_CODES } from '../constants/employeeChangeCodes';
 import { fmtDate, fmtDateTime } from '../utils/datetime';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2, FiRotateCcw, FiFileText, FiRefreshCw, FiLock, FiUnlock, FiMoreVertical } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2, FiFileText, FiRefreshCw, FiMoreVertical } from 'react-icons/fi';
 
 // IST calendar date (caps the effective-date picker; matches the server).
 const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
@@ -19,20 +20,7 @@ export default function Employees() {
   const canSeeSalary = isAdmin() || canView('employee_salary');
   const [employees, setEmployees] = useState([]);
   const [users, setUsers] = useState([]);
-  const [modal, setModal] = useState(false);
   const [bulkModal, setBulkModal] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({});
-  const [original, setOriginal] = useState(null);   // snapshot at edit-open, for the live diff
-  const [changeMeta, setChangeMeta] = useState({
-    action_code: '', reason_code: '', reason: '', effective_date: '',
-    salary_effective_date: '', salary_action: '', salary_reason_code: '',
-    status_effective_date: '',
-  });
-  // Join Date is LOCKED by default once an employee already has one on file —
-  // it's a tracked field (dme 2026-08-01), so changing it needs a deliberate
-  // unlock + a reason, not an accidental edit. Nothing to lock when it's blank.
-  const [joinDateLocked, setJoinDateLocked] = useState(false);
   const [search, setSearch] = useState('');
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
@@ -65,6 +53,7 @@ export default function Employees() {
     Transfer: 'bg-blue-100 text-blue-800',
     'Salary Revision': 'bg-teal-100 text-teal-800',
     'Documents Updated': 'bg-orange-100 text-orange-800',
+    'Access Change': 'bg-indigo-100 text-indigo-800',
     Correction: 'bg-gray-100 text-gray-700',
   };
   // code -> human label, for the small reason line under a Salary Revision card
@@ -78,6 +67,11 @@ export default function Employees() {
     api.get('/hr/roster-audit').then(r => setRosterAudit(r.data || { backlog: [], guests: [] })).catch(() => {});
   };
   useEffect(() => { load(); }, []);
+  // Add/Edit Workspace — extracted out of this page (Phase 3, plan:
+  // keep-confirmation-status-separate-elegant-beacon). This page owns none
+  // of the form state anymore; it just opens the workspace and reloads the
+  // list when it reports a save.
+  const workspace = useEmployeeForm({ onSaved: load });
 
   // Delete an employee — surfaces WHY it's blocked instead of a bare "Delete
   // failed" (mam 2026-07-06). Payroll history → server 400 tells her to
@@ -189,149 +183,6 @@ export default function Employees() {
     } catch { toast.error('Auto-link failed'); }
   };
 
-  const [uploading, setUploading] = useState(false);
-
-  // Generic file uploader — same pattern as HR.jsx / Inventory.jsx. Posts to
-  // /upload, returns the served URL we can stash on the form.
-  const uploadFile = async (file) => {
-    if (!file) return null;
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      return r.data?.url || null;
-    } catch {
-      toast.error('Upload failed');
-      return null;
-    } finally { setUploading(false); }
-  };
-
-  // Open the modal to EDIT — snapshot the row for the live diff and reset the
-  // change-capture meta (effective date defaults to today).
-  const openEdit = (emp) => {
-    setEditing(emp);
-    setForm(emp);
-    setOriginal(emp);
-    setChangeMeta({
-      action_code: '', reason_code: '', reason: '', effective_date: istToday(),
-      salary_effective_date: '', salary_action: '', salary_reason_code: '',
-      status_effective_date: '',
-    });
-    setJoinDateLocked(!!emp.join_date); // locked only when there's an existing date to protect
-    setModal(true);
-  };
-  // Open the modal to CREATE — no before-state, so no change card / reason /
-  // lock (there's nothing yet to protect).
-  const openCreate = () => {
-    setEditing(null);
-    setOriginal(null);
-    setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' });
-    setChangeMeta({
-      action_code: '', reason_code: '', reason: '', effective_date: istToday(),
-      salary_effective_date: '', salary_action: '', salary_reason_code: '',
-      status_effective_date: '',
-    });
-    setJoinDateLocked(false);
-    setModal(true);
-  };
-
-  // Live diff of the tracked fields (edit only) — drives the field accents + card.
-  const changes = editing && original ? computeChanges(original, form) : [];
-  const changedSet = new Set(changes.map((c) => c.key));
-  // A KYC doc replace also requires a reason (dme 2026-08-01) — tracked
-  // separately from `changes` since docs aren't part of the timeline ledger.
-  // Named individually (not just a bool) so a combined edit's Change Card can
-  // show a chip per replaced doc — otherwise one shared reason silently covers
-  // a doc swap the card never mentions.
-  const DOC_SLOTS = [
-    { slot: '_aadhar_file', label: 'Aadhar Card' },
-    { slot: '_pan_file', label: 'PAN Card' },
-    { slot: '_qualification_file', label: 'Qualification Certificate' },
-  ];
-  const changedDocLabels = DOC_SLOTS.filter((d) => form[d.slot]).map((d) => d.label);
-  const docsChanged = changedDocLabels.length > 0;
-  const revertField = (key) => setForm((f) => ({ ...f, [key]: original[key] }));
-  const trackAccent = (key) => (changedSet.has(key) ? 'shadow-[-2px_0_0_0_#c9c9c9] -mx-2 px-2' : '');
-
-  // "↩ was X" hint + revert link under a changed tracked field.
-  const WasHint = ({ k, fmt }) => changedSet.has(k) ? (
-    <p className="text-[10px] text-amber-700 mt-0.5 flex items-center gap-1.5">
-      <FiRotateCcw size={10} /> was {fmt ? fmt(original[k]) : `“${original[k] ?? '—'}”`}
-      <button type="button" onClick={() => revertField(k)} className="underline hover:text-amber-900">revert</button>
-    </p>
-  ) : null;
-
-  const save = async (e) => {
-    e.preventDefault();
-    // Upload any newly-attached document files first, then save the URLs
-    // alongside the rest of the employee fields. Existing URLs (when
-    // editing) stay untouched if no new file is picked.
-    const payload = { ...form };
-    delete payload._aadhar_file;
-    delete payload._pan_file;
-    delete payload._qualification_file;
-    if (form._aadhar_file) {
-      const url = await uploadFile(form._aadhar_file); if (!url) return;
-      payload.aadhar_file = url;
-    }
-    if (form._pan_file) {
-      const url = await uploadFile(form._pan_file); if (!url) return;
-      payload.pan_file = url;
-    }
-    if (form._qualification_file) {
-      const url = await uploadFile(form._qualification_file); if (!url) return;
-      payload.qualification_file = url;
-    }
-    // Required-on-create — backend will also reject, but checking here lets
-    // mam see the error before the upload spinner spins.
-    if (!editing) {
-      if (!payload.aadhar_file)        return toast.error('Upload Aadhar card');
-      if (!payload.pan_file)           return toast.error('Upload PAN card');
-      if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
-    }
-    // Mandatory, non-zero — an employee saved with salary=0/blank silently
-    // never appears in any payroll run (payroll.js's active-employee query
-    // requires salary > 0). Checked for BOTH create and edit — today an
-    // existing employee's salary can be edited down to 0 with nothing stopping it.
-    if (!(Number(payload.salary) > 0)) return toast.error('Salary must be greater than 0');
-    // A tracked change OR a KYC doc replace requires a REASON (the server
-    // enforces this too). Action is auto-derived by the Change Card — a
-    // single-field edit lets HR refine it via its dropdown, but a multi-field
-    // edit is always sent as whatever the card resolved ("Multiple changes"),
-    // never a stale single-action pick. Doc-only edits skip the action/effective
-    // date (no timeline row for a pure doc swap) but still need the reason text.
-    if (editing && (changes.length > 0 || docsChanged)) {
-      if (!changeMeta.reason?.trim()) return toast.error('Add a reason for this change');
-      payload.reason = changeMeta.reason.trim();
-    }
-    if (editing && changes.length > 0) {
-      payload.action_code = changeMeta.action_code;
-      payload.reason_code = changeMeta.reason_code || null;
-      payload.effective_date = changeMeta.effective_date || istToday();
-    }
-    // Salary/status get their own isolated effective dates — salary also needs
-    // its Pay Revision/Correction classifier (and a reason code for a revision).
-    if (editing && changedSet.has('salary')) {
-      if (!changeMeta.salary_action) return toast.error('Pick Pay Revision or Correction for this salary change');
-      if (changeMeta.salary_action === 'revision' && !changeMeta.salary_reason_code) {
-        return toast.error('Pick a reason for this pay revision');
-      }
-      payload.salary_effective_date = changeMeta.salary_effective_date || istToday();
-      payload.salary_action = changeMeta.salary_action;
-      payload.salary_reason_code = changeMeta.salary_action === 'revision' ? changeMeta.salary_reason_code : null;
-    }
-    if (editing && changedSet.has('status')) {
-      payload.status_effective_date = changeMeta.status_effective_date || istToday();
-    }
-    try {
-      if (editing) { await api.put(`/hr/employees/${editing.id}`, payload); }
-      else { await api.post('/hr/employees', payload); }
-      toast.success(editing ? 'Updated' : 'Created');
-      setModal(false); load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-
   // Export CSV — never include salary for non-HR/non-admin users
   const exportCSV = () => {
     if (employees.length === 0) return toast.error('No data');
@@ -438,7 +289,7 @@ export default function Employees() {
           <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export CSV</button>
           <button onClick={autoLink} className="btn btn-secondary flex items-center gap-2 text-sm" title="Link unlinked employees to users by matching email"><FiLink2 size={15} /> Auto-Link by Email</button>
           <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>
-          <button onClick={openCreate} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
+          <button onClick={workspace.openCreate} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
         </div>
       </div>
 
@@ -527,8 +378,8 @@ export default function Employees() {
               <td>{e.designation}</td><td>{e.department}</td><td>{e.join_date}</td>
               <td>
                 {e.linked_user_name
-                  ? <span className="badge badge-green text-[10px] flex items-center gap-1 w-fit"><FiLink size={10} /> {e.linked_user_name}</span>
-                  : <span className="badge badge-red text-[10px]">Not linked</span>}
+                  ? <span className="badge badge-green text-[10px] flex items-center gap-1 w-fit leading-none"><FiLink size={10} /> {e.linked_user_name}</span>
+                  : <span className="badge badge-red text-[10px] leading-none">Not linked</span>}
               </td>
               {canSeeSalary && <td className="font-medium">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
               <td>
@@ -540,7 +391,7 @@ export default function Employees() {
                 )}
               </td>
               <td><div className="flex gap-1">
-                <button onClick={() => openEdit(e)} className="p-1.5 hover:bg-red-50 rounded text-red-600" title="Edit"><FiEdit2 size={15} /></button>
+                <button onClick={() => workspace.openEdit(e)} className="p-1.5 hover:bg-red-50 rounded text-red-600" title="Edit"><FiEdit2 size={15} /></button>
                 {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
               </div></td>
             </tr>
@@ -605,7 +456,7 @@ export default function Employees() {
                 : <span className="text-[11px] font-semibold text-red-600">Not linked — DPR Staff Cost won't include this employee</span>}
             </div>
             <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-              <button onClick={() => openEdit(e)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+              <button onClick={() => workspace.openEdit(e)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
                 <FiEdit2 size={11} /> Edit
               </button>
               {canDelete('employees') && (
@@ -848,148 +699,8 @@ export default function Employees() {
         </div>
       )}
 
-      {/* Add/Edit Modal */}
-      <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Employee' : 'Add Employee'}>
-        <form onSubmit={save} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className={`col-span-2 ${trackAccent('name')}`}><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /><WasHint k="name" /></div>
-            <div className={trackAccent('phone')}><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /><WasHint k="phone" /></div>
-            <div className={trackAccent('email')}><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /><WasHint k="email" /></div>
-            <div className={trackAccent('designation')}><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({...form, designation: e.target.value})} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist><WasHint k="designation" /></div>
-            <div className={trackAccent('department')}><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({...form, department: e.target.value})} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist><WasHint k="department" /></div>
-            <div className="col-span-2 my-2 border-t border-dashed border-gray-300"></div>
-            <div className={trackAccent('join_date')}>
-              <div className="flex items-start justify-start gap-1">
-                <label className="label">Join Date</label>
-                { editing ?
-                  <button
-                    type="button"
-                    onClick={() => setJoinDateLocked(!joinDateLocked)}
-                    className="border-px border-gray-200 size-4 leading-none relative -top-0.5"
-                    title={joinDateLocked ?
-                      'Unlock to correct/edit the join date'
-                      : 'Lock to stop edit the join date'
-                    }
-                  >
-                    {joinDateLocked ?
-                      <FiLock size={10} className="inline text-gray-400" />
-                      : <FiUnlock size={10} className="inline text-blue-600" />
-                    }
-                  </button>
-                  : null
-                }
-              </div>
-              {editing && joinDateLocked ? (
-                <input className="input bg-gray-100 text-gray-500 cursor-not-allowed" type="date" value={form.join_date || ''} disabled />
-              ) : (
-                <input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({...form, join_date: e.target.value})} />
-              )}
-              <WasHint k="join_date" fmt={(v) => fmtDate(v) || '—'} />
-            </div>
-            {editing && <div className={trackAccent('status')}><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['active','training','inactive','terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select><WasHint k="status" /></div>}
-            {canSeeSalary && <div className={trackAccent('salary')}><label className="label">Salary (Rs) *</label><input className="input" type="number" min="1" required value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /><WasHint k="salary" fmt={(v) => `₹${Number(v || 0).toLocaleString('en-IN')}`} /></div>}
-            <div className={trackAccent('roster')}>
-              <label className="label">Roster / Shift</label>
-              <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
-                <option value="general">General — 9:30 AM to 6:30 PM</option>
-                <option value="early">Early — 9:00 AM to 6:00 PM</option>
-              </select>
-              <WasHint k="roster" />
-            </div>
-            <div className={`col-span-2 mt-4 ${trackAccent('user_id')}`}>
-              <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
-              <SearchableSelect
-                options={users.map(u => ({ ...u, label: `${u.name} (${u.username || u.email})` }))}
-                value={form.user_id || null}
-                valueKey="id"
-                displayKey="label"
-                placeholder="Search by name, username or email…"
-                onChange={(u) => setForm({ ...form, user_id: u?.id || null })}
-              />
-              <p className="text-[10px] text-gray-500 mt-0.5">If left blank and email matches a user, it will auto-link on save.</p>
-              <WasHint k="user_id" fmt={(id) => { const u = users.find(u => u.id === id); return u ? `"${u.name}"` : '"Not linked"'; }} />
-            </div>
-          </div>
-
-          {/* Mandatory KYC docs for new employees. When editing, the inputs
-              show "Existing: view file" if a doc URL is already on file —
-              uploading a new one replaces it. Three docs: Aadhar, PAN,
-              Highest qualification certificate. */}
-          <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400 space-y-3 !shadow-none">
-            <div className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Mandatory documents{editing ? '' : ' *'}</div>
-            {[
-              { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card *' },
-              { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card *' },
-              { key: 'qualification_file', slot: '_qualification_file', label: 'Highest Qualification Certificate *' },
-            ].map(({ key, slot, label }) => (
-              <div key={key} className={form[slot] ? 'border-l-4 border-blue-400 pl-2' : ''}>
-                <label className="label">{label} <span className="text-gray-400 font-normal text-[10px]">(PDF / JPG / PNG, max 10 MB)</span></label>
-                <input
-                  className="input"
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  required={!editing && !form[key]}
-                  onChange={e => setForm({ ...form, [slot]: e.target.files?.[0] || null })}
-                />
-                {/* Existing URL link when editing */}
-                {editing && form[key] && !form[slot] && (
-                  <p className="text-[10px] text-emerald-600 mt-0.5">
-                    Existing: <a href={form[key]} target="_blank" rel="noreferrer" className="underline">view file</a> · upload to replace
-                  </p>
-                )}
-                {/* Selected + revert — same "was X · revert" pattern as tracked fields */}
-                {form[slot] && (
-                  <p className="text-[10px] text-blue-600 mt-0.5 flex items-center gap-1.5">
-                    Selected: {form[slot].name}
-                    <button type="button" onClick={() => setForm({ ...form, [slot]: null })} className="underline hover:text-blue-900">revert</button>
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Contextual Change Card — one fixed look every time, whether a
-              tracked field moved, a doc got replaced, or both (dme 2026-08-01:
-              the old split (this card vs. a separate ad hoc doc-only box) plus
-              per-scenario colors/titles was a jarring permutation matrix).
-              Placed right above the footer, next to the Save button it gates. */}
-          {editing && (changes.length > 0 || docsChanged) && (
-            <EmployeeChangeCard
-              changes={changes}
-              docLabels={changedDocLabels}
-              statusTo={form.status}
-              meta={changeMeta}
-              setMeta={setChangeMeta}
-              canSeeSalary={canSeeSalary}
-              today={istToday()}
-              users={users}
-              employeeId={editing?.id}
-            />
-          )}
-
-          <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
-            {(() => {
-              const missingReason = editing && (changes.length > 0 || docsChanged) && !changeMeta.reason?.trim();
-              const missingSalaryAction = editing && changedSet.has('salary') && !changeMeta.salary_action;
-              const missingSalaryReason = editing && changeMeta.salary_action === 'revision' && !changeMeta.salary_reason_code;
-              const blockedTitle = missingReason ? 'Add a reason to save'
-                : missingSalaryAction ? 'Pick Pay Revision or Correction to save'
-                : missingSalaryReason ? 'Pick a reason for this pay revision to save'
-                : '';
-              return (
-                <button
-                  type="submit"
-                  disabled={uploading || !!blockedTitle}
-                  title={blockedTitle}
-                  className="btn btn-primary disabled:opacity-50">
-                  {uploading ? 'Uploading…' : (editing ? 'Update' : 'Create')}
-                </button>
-              );
-            })()}
-          </div>
-        </form>
-      </Modal>
+      {/* Add/Edit Workspace — extracted to components/employee/, see Phase 3 */}
+      <EmployeeWorkspaceModal ws={workspace} employees={employees} users={users} canSeeSalary={canSeeSalary} />
 
       {/* Bulk Import Modal */}
       <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Import Employees" wide>

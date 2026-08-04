@@ -12,6 +12,7 @@ const { recordEmployeeChange, seedHiredRow, backfillFromAudit, toYMD, istToday }
 const { TRACKED_FIELDS, ACTIONS, suggestAction, resolveActionCode, classifyEvent, SALARY_ACTIONS, SALARY_REASON_CODES, SALARY_REASON_LABELS } = require('../lib/employeeChangeCodes');
 const { diffTracked, changeFields: registryChangeFields } = require('../lib/employeeFields');
 const { validateEmployee, getActivationGaps, computeCompleteness } = require('../lib/employeeValidation');
+const { SECTIONS: EMPLOYEE_SECTIONS } = require('../lib/employeeSections');
 // Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
 // date-level effective_from). Server clock is UTC on the VPS.
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -1177,6 +1178,14 @@ router.post('/employees/:id/activate', requirePermission('employees', 'edit'), (
   }
 
   res.json({ message: 'Activated' });
+});
+
+// Field → Workspace-section membership, verbatim from employeeSections.js —
+// the single source of truth. The Workspace fetches this once (not per
+// employee) and uses it to slice its shared form state into each section's
+// own PUT payload; no client-side copy of this grouping exists.
+router.get('/employees/meta/sections', requirePermission('employees', 'view'), (req, res) => {
+  res.json(EMPLOYEE_SECTIONS);
 });
 
 // Read-only reshape of the SAME getActivationGaps() computation Activation

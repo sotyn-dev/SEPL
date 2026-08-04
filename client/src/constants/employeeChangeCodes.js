@@ -62,6 +62,9 @@ export function suggestAction(changedKeys) {
   if (s.has('salary')) return 'Pay Revision';
   if (s.has('designation') || s.has('department')) return 'Transfer';
   if (s.has('roster')) return 'Roster Change';
+  // Mirrors server/lib/employeeChangeCodes.js — user_id (linked login) is
+  // its own Workspace section, always saved alone, one unambiguous label.
+  if (s.has('user_id')) return 'Access Change';
   return 'Correction';
 }
 

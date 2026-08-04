@@ -26,6 +26,8 @@
 // at all (see the plan) — reports-to graph integrity (active, not self, no
 // cycle) is enforced instead, below.
 
+const { SECTION_BY_FIELD } = require('./employeeSections');
+
 const isBlank = (v) => v === undefined || v === null || String(v).trim() === '';
 const norm = (v) => String(v || '').trim().toLowerCase();
 const ymd = (d) => d.toISOString().slice(0, 10);
@@ -42,40 +44,44 @@ const ENUMS = {
   notice_period_days: [30, 60, 90],
 };
 
-// [payload key, human label, Workspace section, optional custom check(value)].
-// `check` defaults to "not blank" — only overridden where presence alone is
-// the wrong test (salary: `0`/blank both mean "not set", but `isBlank(0)` is
-// false). This list feeds BOTH the Activation gate and the completeness
-// reshape below — one list, two readers, never two rule sets to keep in sync.
+// [payload key, human label, optional custom check(value)]. `check` defaults
+// to "not blank" — only overridden where presence alone is the wrong test
+// (salary: `0`/blank both mean "not set", but `isBlank(0)` is false). This
+// list feeds BOTH the Activation gate and the completeness reshape below —
+// one list, two readers, never two rule sets to keep in sync. Section
+// membership is NOT hardcoded here — it's looked up from
+// employeeSections.js's SECTION_BY_FIELD, the single source of truth the
+// Workspace client also reads (via GET /employees/meta/sections), so this
+// list and the Workspace's screen layout can never disagree about which
+// section a field lives in.
 //
 // Includes fields that predate this spec (salary, the 3 KYC docs) — they used
 // to be required at CREATE (hand-written checks in hr.js's old POST); the
 // 2026-08-04 lifecycle revision moves that requirement here instead, so a
 // Draft employee genuinely only needs a name to exist.
 const REQUIRED_FOR_ACTIVATION = [
-  ['reports_to_employee_id', 'Reports to', 'employment'],
-  ['employment_type', 'Employment type', 'employment'],
-  ['grade', 'Grade', 'employment'],
-  ['probation_end_date', 'Probation end date', 'employment'],
-  ['confirmation_status', 'Confirmation status', 'employment'],
-  ['notice_period_days', 'Notice period', 'employment'],
-  ['salary', 'Salary', 'employment', (v) => Number(v) > 0],
-  ['date_of_birth', 'Date of birth', 'personal'],
-  ['gender', 'Gender', 'personal'],
-  ['father_spouse_name', "Father's / Spouse's name", 'personal'],
-  ['blood_group', 'Blood group', 'personal'],
-  ['photo_url', 'Photo', 'personal'],
-  ['permanent_address', 'Permanent address', 'contact'],
-  ['permanent_pincode', 'Permanent PIN code', 'contact'],
-  ['current_address', 'Current address', 'contact'],
-  ['current_pincode', 'Current PIN code', 'contact'],
-  ['emergency_contact_name', 'Emergency contact name', 'contact'],
-  ['emergency_contact_phone', 'Emergency contact phone', 'contact'],
-  ['aadhar_file', 'Aadhar card', 'documents'],
-  ['pan_file', 'PAN card', 'documents'],
-  ['qualification_file', 'Highest qualification certificate', 'documents'],
+  ['reports_to_employee_id', 'Reports to'],
+  ['employment_type', 'Employment type'],
+  ['grade', 'Grade'],
+  ['probation_end_date', 'Probation end date'],
+  ['confirmation_status', 'Confirmation status'],
+  ['notice_period_days', 'Notice period'],
+  ['salary', 'Salary', (v) => Number(v) > 0],
+  ['date_of_birth', 'Date of birth'],
+  ['gender', 'Gender'],
+  ['father_spouse_name', "Father's / Spouse's name"],
+  ['blood_group', 'Blood group'],
+  ['photo_url', 'Photo'],
+  ['permanent_address', 'Permanent address'],
+  ['permanent_pincode', 'Permanent PIN code'],
+  ['current_address', 'Current address'],
+  ['current_pincode', 'Current PIN code'],
+  ['emergency_contact_name', 'Emergency contact name'],
+  ['emergency_contact_phone', 'Emergency contact phone'],
+  ['aadhar_file', 'Aadhar card'],
+  ['pan_file', 'PAN card'],
+  ['qualification_file', 'Highest qualification certificate'],
 ];
-const SECTION_BY_FIELD = new Map(REQUIRED_FOR_ACTIVATION.map(([key, , section]) => [key, section]));
 
 // Walk UP the reports-to chain from `startId` (the proposed manager). If
 // `employeeId` is ever reached, appointing startId as employeeId's manager
@@ -235,9 +241,9 @@ function getActivationGaps(employeeRow, { db } = {}) {
   const seen = new Set();
 
   // 1. Presence / custom check, from REQUIRED_FOR_ACTIVATION.
-  for (const [key, label, section, check] of REQUIRED_FOR_ACTIVATION) {
+  for (const [key, label, check] of REQUIRED_FOR_ACTIVATION) {
     const ok = check ? check(employeeRow[key]) : !isBlank(employeeRow[key]);
-    if (!ok) { gaps.push({ field: key, section, message: `${label} is required` }); seen.add(key); }
+    if (!ok) { gaps.push({ field: key, section: SECTION_BY_FIELD.get(key) || null, message: `${label} is required` }); seen.add(key); }
   }
 
   // 2. Re-run the SAME per-field correctness rules already used on every
@@ -267,7 +273,8 @@ function computeCompleteness(employeeRow, { db } = {}) {
   const gapFields = new Set(gaps.map((g) => g.field));
 
   const sections = {};
-  for (const [key, , section] of REQUIRED_FOR_ACTIVATION) {
+  for (const [key] of REQUIRED_FOR_ACTIVATION) {
+    const section = SECTION_BY_FIELD.get(key) || 'other';
     sections[section] ||= { total: 0, done: 0 };
     sections[section].total++;
     if (!gapFields.has(key)) sections[section].done++;
