@@ -14,6 +14,7 @@ const { diffTracked, changeFields: registryChangeFields } = require('../lib/empl
 const { validateEmployee, getActivationGaps, computeCompleteness } = require('../lib/employeeValidation');
 const { SECTIONS: EMPLOYEE_SECTIONS } = require('../lib/employeeSections');
 const { encryptAadhaar, last4: aadharLast4 } = require('../lib/cryptoFields');
+const { getEmployeeFull, FULL_SELECT_LIST, FULL_JOIN_SQL, STATUTORY_COLS, COMPENSATION_COLS } = require('../lib/employeeQuery');
 
 // Statutory/Compliance pack — can the caller see the FULL bank account number
 // and (n/a for Aadhaar — that one's never shown in the clear, see cryptoFields.js
@@ -783,14 +784,14 @@ router.get('/employees', (req, res) => {
   // effective_from, which moves on ANY tracked change). Null until the timeline is
   // populated (backfill / first edit). Also expose updated_at via e.*.
   const rows = db.prepare(
-    `SELECT e.*, u.name as linked_user_name, u.username as linked_username,
+    `SELECT ${FULL_SELECT_LIST}, u.name as linked_user_name, u.username as linked_username,
             (SELECT MIN(t.effective_from) FROM employee_timeline t
               WHERE t.employee_id = e.id AND t.status IS e.status
                 AND t.effective_from > COALESCE(
                   (SELECT MAX(d.effective_from) FROM employee_timeline d
                     WHERE d.employee_id = e.id AND d.status IS NOT e.status), '0000-00-00')
             ) AS status_since
-     FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
+     FROM employees e ${FULL_JOIN_SQL} LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
   ).all();
   const canSalary = getUserPermissions(req.user.id)['employee_salary']?.can_view;
   const canStatutory = canSeeStatutory(req);
@@ -872,8 +873,11 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   const errors = validateEmployee(req.body, { db });
   if (errors.length) return res.status(400).json({ error: errors[0].message, errors });
 
-  // Insert the employee, stamp updated_at, and seed the opening "Hired" timeline
-  // row — one transaction so the ledger can never be left without its anchor row.
+  // Insert the employee, stamp updated_at, seed employee_statutory/
+  // employee_compensation satellite rows (dme 2026-08-04 split — see
+  // hrSchema.js), and seed the opening "Hired" timeline row — one
+  // transaction so the ledger/satellites can never be left without their
+  // anchor rows.
   const createEmp = db.transaction(() => {
     const r = db.prepare(`
       INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
@@ -883,15 +887,10 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                              father_spouse_name, permanent_address, permanent_pincode,
                              current_address, current_pincode, emergency_contact_name,
                              emergency_contact_phone, blood_group, photo_url,
-                             aadhar_number, aadhar_last4, pan_number,
-                             uan_number, pf_number, esi_number, bank_name, bank_branch,
-                             bank_account_number, ifsc_code, pt_state, form11_file, formf_file,
-                             ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance,
-                             pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements,
-                             bonus_target_pct, last_increment_date, salary_review_cycle,
+                             form11_file, formf_file,
                              laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number,
                              onboarding_status, updated_at)
-      VALUES (${Array(62).fill('?').join(',')})
+      VALUES (${Array(37).fill('?').join(',')})
     `).run(user_id || null, name, phone || null, email || null, designation || null, department || null,
           join_date || null, salary || null,
           aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
@@ -901,18 +900,34 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           permanent_address || null, permanent_pincode || null, current_address || null,
           current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
           blood_group || null, photo_url || null,
+          form11_file || null, formf_file || null,
+          laptop_asset_tag || null, mobile_asset_tag || null, vehicle_allotted || null, sim_card_number || null,
+          'draft', istNow());
+
+    db.prepare(`
+      INSERT INTO employee_statutory (employee_id, aadhar_number, aadhar_last4, pan_number,
+                                      uan_number, pf_number, esi_number, bank_name, bank_branch,
+                                      bank_account_number, ifsc_code, pt_state)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(r.lastInsertRowid,
           aadhar_number ? encryptAadhaar(aadhar_number) : null, aadhar_number ? aadharLast4(aadhar_number) : null,
           pan_number ? String(pan_number).toUpperCase() : null,
           uan_number || null, pf_number || null, esi_number || null,
           bank_name || null, bank_branch || null, bank_account_number || null,
-          ifsc_code ? String(ifsc_code).toUpperCase() : null, pt_state || null,
-          form11_file || null, formf_file || null,
+          ifsc_code ? String(ifsc_code).toUpperCase() : null, pt_state || null);
+
+    db.prepare(`
+      INSERT INTO employee_compensation (employee_id, ctc_annual, fixed_monthly_gross, variable_bonus,
+                                         basic_pay, hra, special_allowance, pf_deduction, esi_deduction,
+                                         professional_tax, tds_estimated_annual, reimbursements,
+                                         bonus_target_pct, last_increment_date, salary_review_cycle)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(r.lastInsertRowid,
           numOrNull(ctc_annual), numOrNull(fixed_monthly_gross), numOrNull(variable_bonus),
           numOrNull(basic_pay), numOrNull(hra), numOrNull(special_allowance),
           numOrNull(pf_deduction), numOrNull(esi_deduction), numOrNull(professional_tax), numOrNull(tds_estimated_annual),
-          numOrNull(reimbursements), numOrNull(bonus_target_pct), last_increment_date || null, salary_review_cycle || null,
-          laptop_asset_tag || null, mobile_asset_tag || null, vehicle_allotted || null, sim_card_number || null,
-          'draft', istNow());
+          numOrNull(reimbursements), numOrNull(bonus_target_pct), last_increment_date || null, salary_review_cycle || null);
+
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
       effectiveFrom: join_date || istToday(),
@@ -951,6 +966,13 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
   // not new hires being onboarded section-by-section. Draft-state bulk
   // import is a possible later addition, not built now.
   const insert = db.prepare('INSERT INTO employees (name,phone,email,designation,department,join_date,salary,onboarding_status,updated_at) VALUES (?,?,?,?,?,?,?,?,?)');
+  // Bulk import doesn't collect statutory/compensation fields, but every
+  // employee needs a satellite row (dme 2026-08-04 split — see hrSchema.js)
+  // so the PUT path's plain UPDATE (no upsert) always has a row to hit.
+  // All-NULL rows, filled in later via the Workspace's Statutory/Compensation
+  // tabs same as any other employee.
+  const insStatutory = db.prepare('INSERT INTO employee_statutory (employee_id) VALUES (?)');
+  const insCompensation = db.prepare('INSERT INTO employee_compensation (employee_id) VALUES (?)');
   // Each row is its OWN transaction: the insert + its opening "Hired" timeline row
   // commit together (no employee left without an anchor row), while a bad row rolls
   // back only itself — preserving the existing partial-import UX (skip + report).
@@ -959,6 +981,8 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
       e.name.trim(), e.phone?.trim() || '', e.email?.trim() || '', e.designation?.trim() || '',
       e.department?.trim() || '', e.join_date || '', e.salary || 0, 'complete', istNow()
     );
+    insStatutory.run(r.lastInsertRowid);
+    insCompensation.run(r.lastInsertRowid);
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
       effectiveFrom: e.join_date || istToday(),
@@ -996,17 +1020,10 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // reason-required path, dme 2026-08-01; name/phone/email/linked-user joined the
   // tracked set 2026-07-31 — HR wants those corrections on record too). A change
   // in any of them opens a reason-required timeline row. Read BEFORE the UPDATE.
-  const before = db.prepare(
-    'SELECT name, phone, email, user_id, status, salary, designation, department, roster, join_date, aadhar_file, pan_file, qualification_file, ' +
-    'grade, employment_type, probation_end_date, confirmation_status, notice_period_days, reports_to_employee_id, ' +
-    'bank_name, bank_branch, bank_account_number, ifsc_code, pt_state, uan_number, pf_number, esi_number, aadhar_last4, ' +
-    'form11_file, formf_file, ' +
-    'ctc_annual, fixed_monthly_gross, variable_bonus, basic_pay, hra, special_allowance, ' +
-    'pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements, ' +
-    'bonus_target_pct, last_increment_date, salary_review_cycle, ' +
-    'laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number ' +
-    'FROM employees WHERE id=?'
-  ).get(req.params.id);
+  // Was a hand-picked column list; now a superset via getEmployeeFull (joins
+  // employee_statutory/employee_compensation back in) — the extra columns on
+  // `before` beyond what this block used to select are harmless.
+  const before = getEmployeeFull(db, req.params.id);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
 
   // Employee lifecycle (plan revision 2026-08-04): a Workspace section save
@@ -1233,33 +1250,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            emergency_contact_phone = COALESCE(?, emergency_contact_phone),
            blood_group             = COALESCE(?, blood_group),
            photo_url               = COALESCE(?, photo_url),
-           aadhar_number           = COALESCE(?, aadhar_number),
-           aadhar_last4            = COALESCE(?, aadhar_last4),
-           pan_number              = COALESCE(?, pan_number),
-           uan_number              = COALESCE(?, uan_number),
-           pf_number               = COALESCE(?, pf_number),
-           esi_number              = COALESCE(?, esi_number),
-           bank_name               = COALESCE(?, bank_name),
-           bank_branch             = COALESCE(?, bank_branch),
-           bank_account_number     = COALESCE(?, bank_account_number),
-           ifsc_code               = COALESCE(?, ifsc_code),
-           pt_state                = COALESCE(?, pt_state),
            form11_file             = COALESCE(?, form11_file),
            formf_file              = COALESCE(?, formf_file),
-           ctc_annual              = COALESCE(?, ctc_annual),
-           fixed_monthly_gross     = COALESCE(?, fixed_monthly_gross),
-           variable_bonus          = COALESCE(?, variable_bonus),
-           basic_pay               = COALESCE(?, basic_pay),
-           hra                     = COALESCE(?, hra),
-           special_allowance       = COALESCE(?, special_allowance),
-           pf_deduction            = COALESCE(?, pf_deduction),
-           esi_deduction           = COALESCE(?, esi_deduction),
-           professional_tax        = COALESCE(?, professional_tax),
-           tds_estimated_annual    = COALESCE(?, tds_estimated_annual),
-           reimbursements          = COALESCE(?, reimbursements),
-           bonus_target_pct        = COALESCE(?, bonus_target_pct),
-           last_increment_date     = COALESCE(?, last_increment_date),
-           salary_review_cycle     = COALESCE(?, salary_review_cycle),
            laptop_asset_tag        = COALESCE(?, laptop_asset_tag),
            mobile_asset_tag        = COALESCE(?, mobile_asset_tag),
            vehicle_allotted        = COALESCE(?, vehicle_allotted),
@@ -1275,18 +1267,59 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         permanent_address || null, permanent_pincode || null, current_address || null,
         current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
         blood_group || null, photo_url || null,
+        form11_file || null, formf_file || null,
+        laptop_asset_tag || null, mobile_asset_tag || null, vehicle_allotted || null, sim_card_number || null,
+        now, req.params.id);
+
+  // employee_statutory / employee_compensation (dme 2026-08-04 split) — same
+  // COALESCE-on-omitted semantics as the employees UPDATE above, just against
+  // the satellite tables. Every employee already has a row in both (seeded on
+  // create/bulk-import), so a plain UPDATE (no upsert) is safe.
+  db.prepare(`
+    UPDATE employee_statutory
+       SET aadhar_number       = COALESCE(?, aadhar_number),
+           aadhar_last4        = COALESCE(?, aadhar_last4),
+           pan_number          = COALESCE(?, pan_number),
+           uan_number          = COALESCE(?, uan_number),
+           pf_number           = COALESCE(?, pf_number),
+           esi_number          = COALESCE(?, esi_number),
+           bank_name           = COALESCE(?, bank_name),
+           bank_branch         = COALESCE(?, bank_branch),
+           bank_account_number = COALESCE(?, bank_account_number),
+           ifsc_code           = COALESCE(?, ifsc_code),
+           pt_state            = COALESCE(?, pt_state)
+     WHERE employee_id=?
+  `).run(
         aadhar_number ? encryptAadhaar(aadhar_number) : null, aadhar_number ? aadharLast4(aadhar_number) : null,
         pan_number ? String(pan_number).toUpperCase() : null,
         uan_number || null, pf_number || null, esi_number || null,
         bank_name || null, bank_branch || null, bank_account_number || null,
         ifsc_code ? String(ifsc_code).toUpperCase() : null, pt_state || null,
-        form11_file || null, formf_file || null,
+        req.params.id);
+
+  db.prepare(`
+    UPDATE employee_compensation
+       SET ctc_annual           = COALESCE(?, ctc_annual),
+           fixed_monthly_gross  = COALESCE(?, fixed_monthly_gross),
+           variable_bonus       = COALESCE(?, variable_bonus),
+           basic_pay            = COALESCE(?, basic_pay),
+           hra                  = COALESCE(?, hra),
+           special_allowance    = COALESCE(?, special_allowance),
+           pf_deduction         = COALESCE(?, pf_deduction),
+           esi_deduction        = COALESCE(?, esi_deduction),
+           professional_tax     = COALESCE(?, professional_tax),
+           tds_estimated_annual = COALESCE(?, tds_estimated_annual),
+           reimbursements       = COALESCE(?, reimbursements),
+           bonus_target_pct     = COALESCE(?, bonus_target_pct),
+           last_increment_date  = COALESCE(?, last_increment_date),
+           salary_review_cycle  = COALESCE(?, salary_review_cycle)
+     WHERE employee_id=?
+  `).run(
         numOrNull(ctc_annual), numOrNull(fixed_monthly_gross), numOrNull(variable_bonus),
         numOrNull(basic_pay), numOrNull(hra), numOrNull(special_allowance),
         numOrNull(pf_deduction), numOrNull(esi_deduction), numOrNull(professional_tax), numOrNull(tds_estimated_annual),
         numOrNull(reimbursements), numOrNull(bonus_target_pct), last_increment_date || null, salary_review_cycle || null,
-        laptop_asset_tag || null, mobile_asset_tag || null, vehicle_allotted || null, sim_card_number || null,
-        now, req.params.id);
+        req.params.id);
 
   // Log each re-uploaded document as its own event — reason is required (see
   // the gate above; dme 2026-08-01 reversed the 07-31 "frictionless" call).
@@ -1368,7 +1401,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
 router.post('/employees/:id/activate', requirePermission('employees', 'edit'), (req, res) => {
   const db = getDb();
   const id = Number(req.params.id);
-  const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(id);
+  const emp = getEmployeeFull(db, id);
   if (!emp) return res.status(404).json({ error: 'Employee not found' });
   if (emp.onboarding_status === 'complete') return res.status(400).json({ error: 'This employee is already active' });
 
@@ -1414,7 +1447,7 @@ router.get('/employees/meta/sections', requirePermission('employees', 'view'), (
 // Activation actually enforces (they're reading the same function).
 router.get('/employees/:id/completeness', requirePermission('employees', 'view'), (req, res) => {
   const db = getDb();
-  const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
+  const emp = getEmployeeFull(db, req.params.id);
   if (!emp) return res.status(404).json({ error: 'Employee not found' });
   res.json(computeCompleteness(emp, { db }));
 });
@@ -1692,7 +1725,7 @@ router.get('/employees/:id/events', requirePermission('employees', 'view'), (req
 // Current profile + mandatory documents — the read-only Employee Vault tab.
 router.get('/employees/:id/vault', requirePermission('employees', 'view'), (req, res) => {
   const db = getDb();
-  let emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
+  let emp = getEmployeeFull(db, req.params.id);
   if (!emp) return res.status(404).json({ error: 'Employee not found' });
   if (!canSeeSalary(req)) delete emp.salary;
   emp = redactCompensation(emp, canSeeSalary(req));

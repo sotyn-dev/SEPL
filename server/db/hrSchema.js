@@ -57,57 +57,18 @@ const EMPLOYEE_COLUMNS = [
   'emergency_contact_phone TEXT',
   'blood_group TEXT',
   'photo_url TEXT',
-  // The KYC ID NUMBERS, not the uploaded proof files (aadhar_file/pan_file
-  // predate this pack) — the spec wants both: the file as evidence, the
-  // number as searchable/verifiable data. Format-validated in
-  // employeeValidation.js, mandatory-at-activation alongside their files.
-  // aadhar_number holds an AES-256-GCM CIPHERTEXT (see server/lib/cryptoFields.js),
-  // never plaintext — aadhar_last4 is the plain last-4 digits used for ordinary
-  // masked display so most reads never need to decrypt at all.
-  'aadhar_number TEXT',
-  'aadhar_last4 TEXT',
-  'pan_number TEXT',
-
-  // Statutory/Compliance pack (Mandatory Field Spec, Statutory #19-28 minus
-  // PAN/Aadhaar above which already existed). UAN/PF/ESI are spec'd "mandatory
-  // at" 30-days-post-join / after-1st-salary, not Hire — so they're validated-
-  // if-present but excluded from REQUIRED_FOR_ACTIVATION (employeeValidation.js).
-  'uan_number TEXT',
-  'pf_number TEXT',
-  'esi_number TEXT',
-  // bank_account_number is plain text by deliberate decision (dme 2026-08-04) —
-  // masked to last 4 in the UI/API for holders without employee_statutory.can_view,
-  // but not encrypted at rest (unlike Aadhaar).
-  'bank_name TEXT',
-  'bank_branch TEXT',
-  'bank_account_number TEXT',
-  'ifsc_code TEXT',
-  'pt_state TEXT',
+  // Statutory/Compliance pack (aadhar_number/aadhar_last4/pan_number/
+  // uan_number/pf_number/esi_number/bank_name/bank_branch/
+  // bank_account_number/ifsc_code/pt_state) and Compensation pack
+  // (ctc_annual...salary_review_cycle, 14 cols) used to be ALTERed onto
+  // `employees` here. Moved out (dme 2026-08-04, "so many columns in
+  // employee table" architecture review) into their own 1:1 satellite
+  // tables — see the employee_statutory / employee_compensation block
+  // further down in runHrMigrations(), which also does the one-time
+  // backfill-copy + DROP COLUMN off `employees`. Kept OUT of this array so
+  // a fresh boot never re-ADDs a column that block has already dropped.
   'form11_file TEXT',
   'formf_file TEXT',
-
-  // Compensation pack (Mandatory Field Spec, Module 2, 2026-08-04) — 12 spec
-  // items / 14 columns (#29-40). Pure informational/reference data, entered
-  // once and tracked for History — `employees.salary` remains the SOLE
-  // payroll input, untouched by this pack (see employeeFields.js registry
-  // comment). Gated behind the existing employee_salary.can_view permission,
-  // same audience that already sees `salary` today — no new permission key.
-  // basic_pay/hra/special_allowance are the composite split of
-  // fixed_monthly_gross (spec item #32, rendered as one row on the client).
-  'ctc_annual REAL',
-  'fixed_monthly_gross REAL',
-  'variable_bonus REAL',
-  'basic_pay REAL',
-  'hra REAL',
-  'special_allowance REAL',
-  'pf_deduction REAL',
-  'esi_deduction REAL',
-  'professional_tax REAL',
-  'tds_estimated_annual REAL',
-  'reimbursements REAL',
-  'bonus_target_pct REAL',
-  'last_increment_date DATE',
-  'salary_review_cycle TEXT',
 
   // Assets pack (Mandatory Field Spec, Module 3, 2026-08-04) — 4 spec items
   // (#41-44). Plain free-text tags, no format regex, "mandatory at Issued"
@@ -178,18 +139,130 @@ function runHrMigrations(db) {
   // shipped earlier this session stored the full 12-digit number in the
   // clear, a deviation from the spec's "last 4 only, masked storage" rule).
   // One-time, guarded on looking like a raw 12-digit value (ciphertext never
-  // matches that shape) — safe to leave running on every boot.
+  // matches that shape) — safe to leave running on every boot. Also guarded
+  // on the column still living on `employees` — once the satellite split
+  // below has dropped it, this becomes a no-op rather than an error (the
+  // aadhar_number column now lives on employee_statutory; nothing here needs
+  // to re-run against it since the split's own backfill already carried
+  // across whatever this block had already encrypted).
   try {
-    const { encryptAadhaar, last4 } = require('../lib/cryptoFields');
-    const rows = db.prepare(
-      "SELECT id, aadhar_number FROM employees WHERE aadhar_number IS NOT NULL AND aadhar_number GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'"
-    ).all();
-    if (rows.length) {
-      const upd = db.prepare('UPDATE employees SET aadhar_number=?, aadhar_last4=? WHERE id=?');
-      for (const r of rows) upd.run(encryptAadhaar(r.aadhar_number), last4(r.aadhar_number), r.id);
-      console.log(`[schema] aadhar_number: encrypted ${rows.length} plaintext value(s) in place`);
+    if (db.prepare('PRAGMA table_info(employees)').all().some((c) => c.name === 'aadhar_number')) {
+      const { encryptAadhaar, last4 } = require('../lib/cryptoFields');
+      const rows = db.prepare(
+        "SELECT id, aadhar_number FROM employees WHERE aadhar_number IS NOT NULL AND aadhar_number GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'"
+      ).all();
+      if (rows.length) {
+        const upd = db.prepare('UPDATE employees SET aadhar_number=?, aadhar_last4=? WHERE id=?');
+        for (const r of rows) upd.run(encryptAadhaar(r.aadhar_number), last4(r.aadhar_number), r.id);
+        console.log(`[schema] aadhar_number: encrypted ${rows.length} plaintext value(s) in place`);
+      }
     }
   } catch (e) { console.error('[schema] aadhar_number encrypt-backfill failed:', e.message); }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Statutory + Compensation satellite tables (dme 2026-08-04 architecture
+  // review: "so many columns in employee table, can some relational linked
+  // sub tables make efficient for us?"). 1:1 with employees, employee_id as
+  // the PK (no surrogate id needed — this is a vertical partition, not a new
+  // entity). Only two clusters qualify: Statutory has a real security
+  // boundary (employee_statutory.can_view already gates it end-to-end) and a
+  // stable, fully-known shape (no history ever needed); Compensation's
+  // effective-dating already lives safely in employee_timeline's snapshot
+  // mechanism regardless of which physical table these columns sit in, so
+  // moving them carries no risk of guessing a future shape wrong. Every
+  // other HR-pack field stays flat — no security/lifecycle boundary of its
+  // own to justify the join cost.
+  //
+  // ONE-SHOT cutover, no dual-write phase: nothing outside the Employee
+  // Workspace stack (hr.js / employeeFields.js / employeeTimeline.js /
+  // employeeValidation.js) touches these columns on `employees` (verified),
+  // so there is no benefit to running old-and-new in parallel — that would
+  // just let the old columns go stale the moment the new write path lands.
+  // Create → backfill-copy → drop, all inside this single boot sequence,
+  // shipped in the same commit as the hr.js/employeeTimeline.js read/write
+  // changes that stop touching these columns on `employees`.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS employee_statutory (
+        employee_id         INTEGER PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+        aadhar_number        TEXT,   -- ciphertext (see cryptoFields.js) — same as employees column was
+        aadhar_last4         TEXT,
+        pan_number           TEXT,
+        uan_number           TEXT,
+        pf_number            TEXT,
+        esi_number           TEXT,
+        bank_name            TEXT,
+        bank_branch          TEXT,
+        bank_account_number  TEXT,
+        ifsc_code            TEXT,
+        pt_state             TEXT
+      );
+      CREATE TABLE IF NOT EXISTS employee_compensation (
+        employee_id             INTEGER PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+        ctc_annual              REAL,
+        fixed_monthly_gross     REAL,
+        variable_bonus          REAL,
+        basic_pay               REAL,
+        hra                     REAL,
+        special_allowance       REAL,
+        pf_deduction            REAL,
+        esi_deduction           REAL,
+        professional_tax        REAL,
+        tds_estimated_annual    REAL,
+        reimbursements          REAL,
+        bonus_target_pct        REAL,
+        last_increment_date     DATE,
+        salary_review_cycle     TEXT
+      );
+    `);
+
+    // Backfill — ADDITIVE, per-employee, idempotent (guarded on NOT IN, not a
+    // count gate) so it only ever copies rows that don't have a satellite row
+    // yet. Runs BEFORE the DROP COLUMNs below so the source columns are still
+    // there to read. Safe to leave running every boot — a no-op once every
+    // employee has been copied.
+    const statutoryCols = ['employee_id', 'aadhar_number', 'aadhar_last4', 'pan_number', 'uan_number',
+      'pf_number', 'esi_number', 'bank_name', 'bank_branch', 'bank_account_number', 'ifsc_code', 'pt_state'];
+    const empColsNow = db.prepare('PRAGMA table_info(employees)').all().map((c) => c.name);
+    if (empColsNow.includes('aadhar_number')) {
+      const srcCols = statutoryCols.map((c) => (c === 'employee_id' ? 'id' : c)).join(', ');
+      const info = db.prepare(`
+        INSERT INTO employee_statutory (${statutoryCols.join(', ')})
+        SELECT ${srcCols} FROM employees WHERE id NOT IN (SELECT employee_id FROM employee_statutory)
+      `).run();
+      if (info.changes) console.log(`[schema] employee_statutory: backfilled ${info.changes} row(s) from employees`);
+    }
+
+    const compensationCols = ['employee_id', 'ctc_annual', 'fixed_monthly_gross', 'variable_bonus',
+      'basic_pay', 'hra', 'special_allowance', 'pf_deduction', 'esi_deduction', 'professional_tax',
+      'tds_estimated_annual', 'reimbursements', 'bonus_target_pct', 'last_increment_date', 'salary_review_cycle'];
+    if (empColsNow.includes('ctc_annual')) {
+      const srcCols = compensationCols.map((c) => (c === 'employee_id' ? 'id' : c)).join(', ');
+      const info = db.prepare(`
+        INSERT INTO employee_compensation (${compensationCols.join(', ')})
+        SELECT ${srcCols} FROM employees WHERE id NOT IN (SELECT employee_id FROM employee_compensation)
+      `).run();
+      if (info.changes) console.log(`[schema] employee_compensation: backfilled ${info.changes} row(s) from employees`);
+    }
+
+    // Drop the now-migrated columns off employees — one ALTER per column
+    // (better-sqlite3 ^11 bundles SQLite ≥3.35, which supports DROP COLUMN
+    // natively; no table-rebuild dance needed). Each guarded individually so
+    // a partially-migrated DB (or a column already dropped by a prior boot)
+    // never throws — re-running boot after the first successful drop is a
+    // total no-op.
+    const empColsAfterBackfill = db.prepare('PRAGMA table_info(employees)').all().map((c) => c.name);
+    const toDrop = statutoryCols.concat(compensationCols).filter((c) => c !== 'employee_id');
+    let dropped = 0;
+    toDrop.forEach((col) => {
+      if (empColsAfterBackfill.includes(col)) {
+        try { db.exec(`ALTER TABLE employees DROP COLUMN ${col}`); dropped++; } catch (e) {
+          console.error(`[schema] employees.${col} DROP COLUMN failed (leaving in place):`, e.message);
+        }
+      }
+    });
+    if (dropped) console.log(`[schema] employees: dropped ${dropped} column(s) now owned by employee_statutory/employee_compensation`);
+  } catch (e) { console.error('[schema] employee_statutory/employee_compensation split failed:', e.message); }
 
   // Employee lifecycle (plan revision 2026-08-04) — Draft → sections completed
   // → Activated → payroll-eligible. A SEPARATE axis from `status` (payroll/

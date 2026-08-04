@@ -17,7 +17,13 @@
 // (post-edit) live state. MUST run inside the same transaction as that write.
 
 const { SALARY_REASON_CODES } = require('./employeeChangeCodes');
-const { SNAPSHOT_SELECT, snapshotTimelineCols, snapshotValues } = require('./employeeFields');
+const { snapshotTimelineCols, snapshotValues } = require('./employeeFields');
+// Several snapshot: true fields (bank_account_number, aadhar_number,
+// ctc_annual, ...) now live on the employee_statutory/employee_compensation
+// satellite tables (dme 2026-08-04 split), not on `employees` directly —
+// getEmployeeFull joins them back into one flat row so this file's reads
+// keep resolving emp.bank_account_number / emp.ctc_annual etc. unchanged.
+const { getEmployeeFull } = require('./employeeQuery');
 
 // Masked forms for the timeline snapshot (see employeeFields.js's
 // snapshotFrom comment on bank_account_number/aadhar_number) — never the
@@ -36,10 +42,6 @@ function toYMD(v) {
   const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : istToday();
 }
-
-// Derived from the field registry (lib/employeeFields.js) — adding a `snapshot: true`
-// field there is now enough; this no longer needs a matching hand-edit.
-const SNAPSHOT_COLS = SNAPSHOT_SELECT;
 
 // "Name (username/email)" snapshot of the linked login, or null — denormalized
 // so history reads correctly even if the user is later renamed/deleted.
@@ -107,7 +109,11 @@ function recordEmployeeChange(db, opts) {
     confirmationEffectiveFrom = null,
   } = opts || {};
 
-  const emp = db.prepare(`SELECT ${SNAPSHOT_COLS} FROM employees WHERE id=?`).get(employeeId);
+  // Was `SELECT ${SNAPSHOT_COLS} FROM employees WHERE id=?` — SNAPSHOT_COLS
+  // names some columns that now live on the satellite tables, so this reads
+  // the joined superset instead; snapshotValues() below still only pulls the
+  // keys it actually wants off the object.
+  const emp = getEmployeeFull(db, employeeId);
   if (!emp) return null; // employee vanished mid-txn — nothing to record
 
   const eff = toYMD(effectiveFrom);
@@ -150,9 +156,8 @@ function recordEmployeeChange(db, opts) {
   const linkedLabel = linkedUserLabel(db, emp.user_id);
   const managerLabelVal = managerLabel(db, emp.reports_to_employee_id);
   // aadhar_last4 isn't a FIELDS entry (only aadhar_number, ciphertext, is) —
-  // fetched separately for the masked-snapshot ctx value below.
-  const aadharLast4Row = db.prepare('SELECT aadhar_last4 FROM employees WHERE id=?').get(emp.id);
-  const aadharMaskedVal = aadharLast4Row && aadharLast4Row.aadhar_last4 ? `XXXXXXXX${aadharLast4Row.aadhar_last4}` : null;
+  // already on `emp` via getEmployeeFull's join, no separate fetch needed.
+  const aadharMaskedVal = emp.aadhar_last4 ? `XXXXXXXX${emp.aadhar_last4}` : null;
   const bankAccountMaskedVal = maskAccount(emp.bank_account_number);
   const cols = [
     'employee_id', ...snapshotTimelineCols(), 'manager_id',
