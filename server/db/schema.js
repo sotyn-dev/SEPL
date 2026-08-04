@@ -3439,6 +3439,9 @@ function initializeDatabase() {
     // the approver maintains on the list — this one travels with the
     // submission so the reviewer reads it while checking the proof.
     ['delegations', 'proof_remarks TEXT'],
+    // Help ticket target date. Nullable so every existing ticket stays valid
+    // and simply renders "Not Assigned" until someone sets one.
+    ['support_tickets', 'deadline_date DATE'],
     // Mam (2026-05-22): same upload affordance on the New PMS Task
     // modal — pick a brief / drawing / photo when raising.
     ['pms_tasks', 'attachment_url TEXT'],

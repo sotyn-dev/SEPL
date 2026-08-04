@@ -5,6 +5,23 @@ const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
 const stUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const stDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
+// Deadline date validation, shared by POST and PUT.
+// Returns: null when the field is absent/blank (deadline is optional — every
+// legacy ticket has none), the YYYY-MM-DD string when it's a real calendar
+// date, or INVALID_DATE so the caller can 400. The calendar round-trip check
+// rejects 2026-02-30 and 2025-02-29, which a regex alone would let through.
+const INVALID_DATE = Symbol('invalid-date');
+function normalizeDeadline(value) {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return INVALID_DATE;
+  const [y, m, d] = raw.split('-').map(Number);
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) return INVALID_DATE;
+  return raw;
+}
+
 // Admin OR the help_tickets follow-up role (can_see_all / can_approve) may
 // triage any ticket — approve/reject proof, submit on behalf of an
 // unassigned ticket. Mirrors the inline canFollowAll checks in GET / PUT.
@@ -134,14 +151,16 @@ router.get('/stats', (req, res) => {
 // POST new ticket. `assigned_to` is optional; when set, that user sees the
 // ticket on their dashboard + can respond to it.
 router.post('/', (req, res) => {
-  const { subject, description, category, priority, attachment_link, module, assigned_to } = req.body;
+  const { subject, description, category, priority, attachment_link, module, assigned_to, deadline_date } = req.body;
   if (!subject || !description) return res.status(400).json({ error: 'Subject and description required' });
+  const deadline = normalizeDeadline(deadline_date);
+  if (deadline === INVALID_DATE) return res.status(400).json({ error: 'Deadline must be a valid date (YYYY-MM-DD)' });
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
   const ticketNo = nextSequence(db, 'support_tickets', 'ticket_no', 'TK-', { startFrom: 1000, pad: 5 });
   const r = db.prepare(
-    'INSERT INTO support_tickets (ticket_no, user_id, subject, description, category, priority, attachment_link, module, assigned_to) VALUES (?,?,?,?,?,?,?,?,?)'
-  ).run(ticketNo, req.user.id, subject, description, category || 'bug', priority || 'medium', attachment_link, module, assigned_to ? +assigned_to : null);
+    'INSERT INTO support_tickets (ticket_no, user_id, subject, description, category, priority, attachment_link, module, assigned_to, deadline_date) VALUES (?,?,?,?,?,?,?,?,?,?)'
+  ).run(ticketNo, req.user.id, subject, description, category || 'bug', priority || 'medium', attachment_link, module, assigned_to ? +assigned_to : null, deadline);
   // Push to assignee (or every admin if unassigned)
   try {
     const { notify, notifyMany } = require('../lib/push');
@@ -184,7 +203,12 @@ router.post('/', (req, res) => {
 //   - Assignee  (assigned_to == current user) -> can mark in_progress and
 //                add a response; CANNOT close (only the raiser/admin can).
 router.put('/:id', (req, res) => {
-  const { status, admin_response, priority, assigned_to } = req.body;
+  const { status, admin_response, priority, assigned_to, deadline_date } = req.body;
+  // Only touch the deadline when the caller actually sent the key, so a
+  // status-only update can't wipe an existing date.
+  const deadlineSent = deadline_date !== undefined;
+  const deadline = deadlineSent ? normalizeDeadline(deadline_date) : null;
+  if (deadline === INVALID_DATE) return res.status(400).json({ error: 'Deadline must be a valid date (YYYY-MM-DD)' });
   const db = getDb();
   const user = db.prepare('SELECT role FROM users WHERE id=?').get(req.user.id);
   const ticket = db.prepare('SELECT * FROM support_tickets WHERE id=?').get(req.params.id);
@@ -222,6 +246,7 @@ router.put('/:id', (req, res) => {
        admin_response = COALESCE(?, admin_response),
        priority = COALESCE(?, priority),
        assigned_to = ${canFollowAll && assigned_to !== undefined ? '?' : 'assigned_to'},
+       deadline_date = ${deadlineSent ? '?' : 'deadline_date'},
        resolved_by = ?,
        resolved_at = ?,
        updated_at = CURRENT_TIMESTAMP
@@ -229,6 +254,7 @@ router.put('/:id', (req, res) => {
   ).run(
     status, admin_response, priority,
     ...(canFollowAll && assigned_to !== undefined ? [assigned_to ? +assigned_to : null] : []),
+    ...(deadlineSent ? [deadline] : []),
     resolvedBy, resolvedAt, req.params.id
   );
   if (closing) {
