@@ -97,10 +97,22 @@ export default function HelpTickets() {
     setRejecting(false); setRejectReason('');
   };
 
+  // Summary cards. Counts come from the server (one GROUP BY over the whole
+  // table) rather than from `tickets`, which is only the current scope/filter
+  // slice — otherwise the cards would change every time a tab or status filter
+  // was clicked.
+  const [stats, setStats] = useState(null);
+  const loadStats = () => {
+    api.get('/support/stats').then(r => setStats(r.data)).catch(() => setStats(null));
+  };
+
   const load = () => {
     const params = new URLSearchParams({ scope });
     if (statusFilter) params.set('status', statusFilter);
     api.get('/support?' + params.toString()).then(r => setTickets(r.data || [])).catch(() => setTickets([]));
+    // Every create / status change / delete already calls load(), so hanging
+    // the stats refresh here keeps the cards in step with no extra wiring.
+    loadStats();
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [scope, statusFilter]);
   useEffect(() => {
@@ -226,6 +238,25 @@ export default function HelpTickets() {
           <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Raise New Ticket</button>
         </div>
       </div>
+
+      {/* Summary cards — same `card p-3 border-l-4` treatment the Snags and
+          Inventory pages use, so the three modules read alike. Counts are
+          whole-table totals, independent of the tab / status filter below. */}
+      {stats && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {[
+            { key: 'open', label: 'Open Tickets', sub: 'Total Open Tickets', value: stats.open, bar: 'border-emerald-500', text: 'text-emerald-600' },
+            { key: 'processing', label: 'In Processing', sub: 'Being worked on / awaiting approval', value: stats.processing, bar: 'border-amber-500', text: 'text-amber-600' },
+            { key: 'closed', label: 'Closed Tickets', sub: 'Resolved & closed', value: stats.closed, bar: 'border-gray-400', text: 'text-gray-600' },
+          ].map(c => (
+            <div key={c.key} className={`card p-3 border-l-4 ${c.bar}`}>
+              <p className="text-xs text-gray-500">{c.label}</p>
+              <p className={`text-2xl font-bold ${c.text}`}>{c.value}</p>
+              <p className="text-[10px] text-gray-400">{c.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-2">

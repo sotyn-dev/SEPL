@@ -93,15 +93,42 @@ router.get('/mine', (req, res) => {
   res.json({ active: active.c, recent });
 });
 
-// GET stats (admin dashboard)
+// GET stats (summary cards + admin dashboard)
+//
+// One GROUP BY instead of the four separate COUNT(*) scans this used to run —
+// same numbers, a single pass over the table.
+//
+// The page shows THREE cards but the workflow has six statuses, so they are
+// bucketed. The buckets are exhaustive on purpose: open + processing + closed
+// always equals total, so a ticket can never go missing from the summary.
+//   open       → open
+//   processing → in_progress, submitted (proof awaiting approval), rejected
+//                (sent back, still being worked)
+//   closed     → resolved, closed
+// 'resolved' MUST count as closed: the table's "Close" button sets
+// status='resolved', so counting only status='closed' would show 0 for tickets
+// the user just closed.
 router.get('/stats', (req, res) => {
   const db = getDb();
-  const total = db.prepare('SELECT COUNT(*) as c FROM support_tickets').get();
-  const open = db.prepare("SELECT COUNT(*) as c FROM support_tickets WHERE status='open'").get();
-  const inProgress = db.prepare("SELECT COUNT(*) as c FROM support_tickets WHERE status='in_progress'").get();
-  const resolved = db.prepare("SELECT COUNT(*) as c FROM support_tickets WHERE status='resolved'").get();
-  const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM support_tickets GROUP BY category").all();
-  res.json({ total: total.c, open: open.c, inProgress: inProgress.c, resolved: resolved.c, byCategory });
+  const rows = db.prepare('SELECT status, COUNT(*) AS c FROM support_tickets GROUP BY status').all();
+  const by = Object.fromEntries(rows.map(r => [r.status || 'open', r.c]));
+  const n = (...keys) => keys.reduce((sum, k) => sum + (by[k] || 0), 0);
+
+  const open = n('open');
+  const processing = n('in_progress', 'submitted', 'rejected');
+  const closed = n('resolved', 'closed');
+  const byCategory = db.prepare('SELECT category, COUNT(*) as count FROM support_tickets GROUP BY category').all();
+
+  res.json({
+    open,
+    processing,
+    closed,
+    total: rows.reduce((s, r) => s + r.c, 0),
+    // Legacy keys kept so nothing that already reads this endpoint breaks.
+    inProgress: n('in_progress'),
+    resolved: n('resolved'),
+    byCategory,
+  });
 });
 
 // POST new ticket. `assigned_to` is optional; when set, that user sees the
