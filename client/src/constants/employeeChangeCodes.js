@@ -28,6 +28,13 @@ export const TRACKED_FIELDS = [
   { key: 'phone',       label: 'Phone' },
   { key: 'email',       label: 'Email' },
   { key: 'user_id',     label: 'Linked user' },
+  // Phase 5 — career-event fields, mirrors server/lib/employeeFields.js.
+  { key: 'grade',                    label: 'Grade' },
+  { key: 'employment_type',          label: 'Employment type' },
+  { key: 'probation_end_date',       label: 'Probation end date' },
+  { key: 'confirmation_status',      label: 'Confirmation status' },
+  { key: 'notice_period_days',       label: 'Notice period' },
+  { key: 'reports_to_employee_id',   label: 'Reports to' },
 ];
 
 export const EXIT_STATUSES = ['inactive', 'terminated'];
@@ -62,6 +69,8 @@ export function suggestAction(changedKeys) {
   if (s.has('salary')) return 'Pay Revision';
   if (s.has('designation') || s.has('department')) return 'Transfer';
   if (s.has('roster')) return 'Roster Change';
+  // Mirrors server/lib/employeeChangeCodes.js's Phase 5 widening.
+  if (s.has('grade')) return 'Promotion';
   // Mirrors server/lib/employeeChangeCodes.js — user_id (linked login) is
   // its own Workspace section, always saved alone, one unambiguous label.
   if (s.has('user_id')) return 'Access Change';

@@ -51,21 +51,22 @@ const LockNote = ({ finalisedThrough, backdated, field }) => {
 //                salary/status dates are floored at the payroll-lock boundary
 //                instead, and are allowed to be forward-dated)
 //   users        [{id,name,username,email}] — resolves the Linked user chip from an id to a name
+//   employees    [{id,name,designation}] — resolves the Reports To chip from an id to a name
 //   employeeId   the employee being edited — drives the payroll-lock-info fetch below
 //   docLabels    [string] — KYC docs replaced alongside this edit (display-only:
 //                a doc swap isn't a tracked field, so it never drives the
 //                action logic below — just shown so the one shared Reason is
 //                visibly known to cover it too)
-export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, meta, setMeta, canSeeSalary, today, users = [], employeeId }) {
+export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, meta, setMeta, canSeeSalary, today, users = [], employees = [], employeeId }) {
   const changedKeys = changes.map((c) => c.key);
   const isExit = changedKeys.includes('status') && EXIT_STATUSES.includes(String(statusTo || '').toLowerCase());
 
-  // Salary AND status each get their own isolated block (below) — both
-  // excluded from the shared Action's field count, so e.g. a promotion
-  // (designation+salary) doesn't swallow salary's own revision/correction
-  // distinction into "Multiple changes", and a status+salary edit with
-  // nothing else doesn't need the shared Action block at all.
-  const sharedActionKeys = changedKeys.filter((k) => k !== 'salary' && k !== 'status');
+  // Salary, status AND confirmation_status each get their own isolated block
+  // (below) — all excluded from the shared Action's field count, so e.g. a
+  // promotion (designation+salary) doesn't swallow salary's own revision/
+  // correction distinction into "Multiple changes", and a status+salary edit
+  // with nothing else doesn't need the shared Action block at all.
+  const sharedActionKeys = changedKeys.filter((k) => k !== 'salary' && k !== 'status' && k !== 'confirmation_status');
 
   // The Action control: LOCKED to "Multiple changes" the moment >1 (shared)
   // tracked field has moved (server enforces this too — see resolveActionCode).
@@ -141,6 +142,14 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
     }
     if (c.key === 'user_id') {
       const show = (x) => { const u = users.find((u) => u.id === x); return u ? u.name : '—'; };
+      return { label: c.label, from: show(c.from), to: show(c.to) };
+    }
+    if (c.key === 'reports_to_employee_id') {
+      const show = (x) => { const e = employees.find((e) => e.id === x); return e ? e.name : '—'; };
+      return { label: c.label, from: show(c.from), to: show(c.to) };
+    }
+    if (c.key === 'probation_end_date') {
+      const show = (x) => (x ? fmtDate(x) : '—');
       return { label: c.label, from: show(c.from), to: show(c.to) };
     }
     const show = (x) => (x == null || x === '' ? '—' : String(x));
@@ -249,6 +258,28 @@ export default function EmployeeChangeCard({ changes, docLabels = [], statusTo, 
             backdated={isBackdated(meta.status_effective_date || defaultEff)}
             field="status"
           />
+        </div>
+      )}
+
+      {/* Confirmation — its own isolated date, unlike salary/status NOT capped
+          at today and NOT floored against the payroll lock (probation
+          confirmations are routinely dated forward — "confirmed w.e.f. the
+          1st" — and this doesn't drive payroll figures, so there's nothing
+          to lock against). */}
+      {changedKeys.includes('confirmation_status') && (
+        <div className="bg-white/70 border border-black/5 rounded-lg p-2.5 space-y-2">
+          <div className="w-full font-semibold text-sm">
+              Confirmation Change
+          </div>
+          <div>
+            <label className="label flex items-center gap-1"><FiClock size={11} /> Effective from</label>
+            <input
+              className="input"
+              type="date"
+              value={meta.confirmation_effective_date || today}
+              onChange={(e) => setMeta((m) => ({ ...m, confirmation_effective_date: e.target.value }))}
+            />
+          </div>
         </div>
       )}
 

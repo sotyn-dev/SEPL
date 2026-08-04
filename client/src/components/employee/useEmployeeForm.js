@@ -23,7 +23,7 @@ const uploadSlotFor = (key) => UPLOAD_SLOTS.find((u) => u.key === key);
 const freshMeta = () => ({
   action_code: '', reason_code: '', reason: '', effective_date: istToday(),
   salary_effective_date: '', salary_action: '', salary_reason_code: '',
-  status_effective_date: '',
+  status_effective_date: '', confirmation_effective_date: '',
 });
 
 // Field → Workspace-section membership is fetched once from the server
@@ -214,6 +214,9 @@ export default function useEmployeeForm({ onSaved }) {
     }
     if (changedKeys.has('status')) {
       request.status_effective_date = meta.status_effective_date || istToday();
+    }
+    if (changedKeys.has('confirmation_status')) {
+      request.confirmation_effective_date = meta.confirmation_effective_date || istToday();
     }
 
     try {

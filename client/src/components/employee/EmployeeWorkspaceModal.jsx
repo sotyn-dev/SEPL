@@ -64,7 +64,7 @@ export default function EmployeeWorkspaceModal({ ws, employees, users, canSeeSal
               {NAV.map(({ key, Section }) => (
                 <div key={key} className={tab === key ? 'flex flex-col items-stretch min-h-[150px] space-y-4' : 'hidden'}>
                   <Section ws={ws} employees={employees} users={users} canSeeSalary={canSeeSalary} />
-                  <SectionFooter ws={ws} sectionKey={key} users={users} canSeeSalary={canSeeSalary} />
+                  <SectionFooter ws={ws} sectionKey={key} users={users} employees={employees} canSeeSalary={canSeeSalary} />
                 </div>
               ))}
             </div>
@@ -135,7 +135,7 @@ function UserLinkBar({ ws, users }) {
   );
 }
 
-function SectionFooter({ ws, sectionKey, users, canSeeSalary }) {
+function SectionFooter({ ws, sectionKey, users, employees, canSeeSalary }) {
   const changes = ws.sectionChanges(sectionKey);
   const docLabels = sectionKey === 'documents' ? ws.docLabels() : [];
   const meta = ws.changeMeta[sectionKey];
@@ -153,6 +153,7 @@ function SectionFooter({ ws, sectionKey, users, canSeeSalary }) {
           canSeeSalary={canSeeSalary}
           today={ws.today}
           users={users}
+          employees={employees}
           employeeId={ws.editing?.id}
         />
       )}

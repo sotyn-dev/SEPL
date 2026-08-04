@@ -71,6 +71,10 @@ function suggestAction(changedFields) {
   if (s.has('salary')) return 'Pay Revision';
   if (s.has('designation') || s.has('department')) return 'Transfer';
   if (s.has('roster')) return 'Roster Change';
+  // grade-only move (Phase 5) — mirrors classifyEvent's widened Promotion
+  // rule below, so the write-time suggestion and the read-time History label
+  // agree when grade is the only thing that changed.
+  if (s.has('grade')) return 'Promotion';
   // user_id (linked login) is isolated the same way (own Workspace section,
   // see employeeSections.js's 'access') — one field, one unambiguous label,
   // no human pick needed. Not added to ACTIONS: like 'Status Change', it's a
@@ -138,12 +142,16 @@ const SALARY_REASON_LABELS = {
 // bucket. No manual override (dme 2026-07-31: auto-classification is final).
 const HR_EVENT_TYPES = [
   'Joined', 'Activated', 'Status Change', 'Promotion', 'Transfer',
-  'Salary Revision', 'Documents Updated', 'Access Change', 'Correction',
+  'Salary Revision', 'Confirmed', 'Probation Extended', 'Conversion',
+  'Documents Updated', 'Access Change', 'Correction',
 ];
 // salaryAction ('revision'|'correction'|null) only matters for the
 // salary-alone branch — a salary CORRECTION reads as the existing generic
 // 'Correction' bucket instead of 'Salary Revision', no new event type needed.
-function classifyEvent({ isFirst = false, changedKeys = [], salaryAction = null } = {}) {
+// employmentType is the NEW value employment_type moved to (Phase 5) — needed
+// only to tell a Conversion (→ Permanent) from any other employment_type
+// edit; every other branch here needs no value, just which keys changed.
+function classifyEvent({ isFirst = false, changedKeys = [], salaryAction = null, employmentType = null } = {}) {
   if (isFirst) return 'Joined';
   const s = new Set(changedKeys);
   // Employee lifecycle (plan revision 2026-08-04) — Activation writes only
@@ -151,9 +159,19 @@ function classifyEvent({ isFirst = false, changedKeys = [], salaryAction = null 
   // same way 'Joined' does above.
   if (s.has('onboarding_status')) return 'Activated';
   if (s.has('status')) return 'Status Change';
-  if (s.has('designation') && s.has('salary')) return 'Promotion';
+  // Promotion widened (Phase 5) to also fire on a grade-only move — it used
+  // to require designation+salary together, which mislabelled a grade-only
+  // promotion as a plain Correction.
+  if ((s.has('designation') && s.has('salary')) || s.has('grade')) return 'Promotion';
   if (s.has('designation') || s.has('department')) return 'Transfer';
   if (s.has('salary')) return salaryAction === 'correction' ? 'Correction' : 'Salary Revision';
+  // Confirmation/probation/conversion (Phase 5) — each isolated the same way
+  // status is above: whenever the field moves at all, regardless of
+  // direction, it gets its own unambiguous label. Checked before the generic
+  // 'Correction' fallback but after the higher-priority combos above.
+  if (s.has('confirmation_status')) return 'Confirmed';
+  if (s.has('probation_end_date')) return 'Probation Extended';
+  if (s.has('employment_type')) return employmentType === 'Permanent' ? 'Conversion' : 'Correction';
   // Linked login (own Workspace section — employeeSections.js's 'access') is
   // always saved alone, so this is unambiguous the same way onboarding_status
   // is above — no risk of masking a co-occurring field change. Checked by its

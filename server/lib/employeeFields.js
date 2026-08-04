@@ -62,6 +62,34 @@ const FIELDS = [
   // Activation (hr.js POST /employees/:id/activate) writes its own row
   // through its own code path, not through the generic reason-required diff.
   { key: 'onboarding_status', label: 'Onboarding status', snapshot: true, changeField: true },
+
+  // Mandatory Field Spec — HR pack career-event fields (Phase 5, 2026-08-04):
+  // these 4 have no isolation quirks, so they slot into the shared diff/
+  // History path exactly like designation/department/roster above.
+  { key: 'grade',              label: 'Grade',              tracked: true, snapshot: true, changeField: true },
+  { key: 'employment_type',    label: 'Employment type',    tracked: true, snapshot: true, changeField: true },
+  { key: 'probation_end_date', label: 'Probation end date', tracked: true, snapshot: true, changeField: true },
+  { key: 'notice_period_days', label: 'Notice period',      tracked: true, snapshot: true, changeField: true },
+
+  // confirmation_status gets its OWN isolated effective date (like salary and
+  // status) — the shared effective_date is hard-capped at today (hr.js), and
+  // probation confirmations are routinely dated forward ("confirmed w.e.f.
+  // the 1st"). Still tracked/diffed/shown in History the same as any other
+  // field — only its SAVE-TIME date is isolated (confirmation_effective_from,
+  // handled directly in employeeTimeline.js/hr.js, same as
+  // salary_effective_from/status_effective_from — NOT part of this registry,
+  // since it isn't an `employees` column, only an `employee_timeline` one).
+  { key: 'confirmation_status', label: 'Confirmation status', tracked: true, snapshot: true, changeField: true },
+
+  // Diffed/edited on the raw manager id (compare:'number', like user_id
+  // above), but the value actually SNAPSHOTTED into history is the
+  // denormalized manager NAME — same reasoning as linked_user_label, so
+  // History stays readable after a manager is renamed or removed. The raw id
+  // also lands in employee_timeline.manager_id, but that's populated
+  // directly in employeeTimeline.js (not through this registry, for the same
+  // reason confirmation_effective_from isn't: one FIELDS entry can only
+  // target one timeline column).
+  { key: 'reports_to_employee_id', label: 'Reports to', tracked: true, snapshot: true, changeField: true, timelineCol: 'manager_label', compare: 'number', snapshotFrom: 'managerLabel' },
 ];
 
 const byKey = new Map(FIELDS.map((f) => [f.key, f]));

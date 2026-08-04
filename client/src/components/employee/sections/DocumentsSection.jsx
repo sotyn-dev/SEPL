@@ -14,7 +14,7 @@ const NUMBER_FIELD = {
 export default function DocumentsSection({ ws }) {
   const { form, setForm } = ws;
   return (
-    <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400 space-y-3 !shadow-none">
+    <div className="border rounded-md px-3 py-4 bg-amber-50/40 border-amber-400 space-y-4 !shadow-none">
       <div className="text-xs font-semibold text-amber-800 uppercase tracking-wide">KYC documents</div>
       {DOC_SLOTS.map(({ key, slot, label }) => {
         const numberField = NUMBER_FIELD[key];

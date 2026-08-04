@@ -892,7 +892,8 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { aadhar_file, pan_file, qualification_file, roster,
           action_code, reason_code, reason, effective_date,
-          salary_effective_date, status_effective_date, salary_action, salary_reason_code } = req.body;
+          salary_effective_date, status_effective_date, salary_action, salary_reason_code,
+          confirmation_effective_date } = req.body;
   const db = getDb();
 
   // Employee lifecycle (plan revision 2026-08-04): salary>0 used to be a hard
@@ -910,7 +911,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // tracked set 2026-07-31 — HR wants those corrections on record too). A change
   // in any of them opens a reason-required timeline row. Read BEFORE the UPDATE.
   const before = db.prepare(
-    'SELECT name, phone, email, user_id, status, salary, designation, department, roster, join_date, aadhar_file, pan_file, qualification_file FROM employees WHERE id=?'
+    'SELECT name, phone, email, user_id, status, salary, designation, department, roster, join_date, aadhar_file, pan_file, qualification_file, ' +
+    'grade, employment_type, probation_end_date, confirmation_status, notice_period_days, reports_to_employee_id FROM employees WHERE id=?'
   ).get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
 
@@ -945,6 +947,18 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
           emergency_contact_phone, blood_group, photo_url,
           aadhar_number, pan_number } = req.body;
 
+  // Phase 5 — the 6 career-event fields now diff/track like designation etc.
+  // above (name/phone/email/...), so they need the same "effective value"
+  // fallback: undefined (field not sent this save) must read as "unchanged",
+  // not as "cleared". The RAW destructured vars above are still what the
+  // COALESCE-based UPDATE below uses; these are only for the diff.
+  const effReportsTo = reports_to_employee_id !== undefined ? reports_to_employee_id : before.reports_to_employee_id;
+  const effEmploymentType = employment_type !== undefined ? employment_type : before.employment_type;
+  const effGrade = grade !== undefined ? grade : before.grade;
+  const effProbationEnd = probation_end_date !== undefined ? probation_end_date : before.probation_end_date;
+  const effConfirmationStatus = confirmation_status !== undefined ? confirmation_status : before.confirmation_status;
+  const effNoticePeriod = notice_period_days !== undefined ? notice_period_days : before.notice_period_days;
+
   // Mandatory Field Spec — HR pack (Phase 2): mode:'edit' validates only the
   // fields this request actually supplied — an old employee with 17 blank HR
   // fields can still get a phone-number fix through. See employeeValidation.js.
@@ -960,6 +974,9 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // to be marked `tracked: true` in the registry to diff correctly here.
   const changed = diffTracked(before, {
     status, salary, designation, department, roster: newRoster, join_date, name, phone, email, user_id,
+    grade: effGrade, employment_type: effEmploymentType, probation_end_date: effProbationEnd,
+    confirmation_status: effConfirmationStatus, notice_period_days: effNoticePeriod,
+    reports_to_employee_id: effReportsTo,
   });
 
   // Document re-uploads — tracked separately from the tracked-field ledger
@@ -980,17 +997,20 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // A KYC doc replace ALSO requires a reason (dme 2026-08-01 — reverses the
   // 2026-07-31 "frictionless" call), even when no tracked field moved.
   const effFrom = toYMD(effective_date);
-  // Salary AND status are excluded from the shared Action's field count — both
-  // get their own isolated block (salary_action / isolated dates below), so a
-  // salary+status+designation edit resolves the shared Action from
-  // [designation] alone, not all three.
-  const resolvedAction = resolveActionCode(changed.filter((k) => k !== 'salary' && k !== 'status'), action_code);
+  // Salary, status AND confirmation_status are excluded from the shared
+  // Action's field count — each gets its own isolated block (salary_action /
+  // isolated dates below), so a salary+status+designation edit resolves the
+  // shared Action from [designation] alone, not all three.
+  const resolvedAction = resolveActionCode(changed.filter((k) => k !== 'salary' && k !== 'status' && k !== 'confirmation_status'), action_code);
 
-  // Isolated salary/status effective dates — only derived (and only ever
-  // persisted) when that field actually moved; a stray value for an unchanged
-  // field is dropped. Falls back to the shared effective_date when blank.
+  // Isolated salary/status/confirmation effective dates — only derived (and
+  // only ever persisted) when that field actually moved; a stray value for an
+  // unchanged field is dropped. Salary/status fall back to the shared
+  // effective_date when blank; confirmation has no future cap so it falls
+  // back the same way but is never floored against payroll lock below.
   const salaryEffFrom = changed.includes('salary') ? toYMD(salary_effective_date || effective_date) : null;
   const statusEffFrom = changed.includes('status') ? toYMD(status_effective_date || effective_date) : null;
+  const confirmationEffFrom = changed.includes('confirmation_status') ? toYMD(confirmation_effective_date || effective_date) : null;
   const salaryActionVal = changed.includes('salary') && SALARY_ACTIONS.includes(salary_action) ? salary_action : null;
   const salaryReasonVal = salaryActionVal === 'revision' && SALARY_REASON_CODES.includes(salary_reason_code) ? salary_reason_code : null;
 
@@ -1136,6 +1156,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
           statusEffectiveFrom: statusEffFrom,
           salaryAction: salaryActionVal,
           salaryReasonCode: salaryReasonVal,
+          confirmationEffectiveFrom: confirmationEffFrom,
         });
       }
     });
@@ -1424,7 +1445,16 @@ function buildHrEvents(db, { employeeId = null, canSalary = false } = {}) {
   }
 
   const groups = [...joined, ...map.values()].map((g) => {
-    const event_type = g.event_type || classifyEvent({ changedKeys: g.fields.map((f) => f.key), salaryAction: g.salary_action || null });
+    // employmentType: the field's own "to" value, already carried on g.fields
+    // (buildChangeEvents formats it off the persisted employee_timeline row) —
+    // classifyEvent needs the actual value here (not just that the key moved)
+    // to tell a Conversion (→ Permanent) from any other employment_type edit.
+    const employmentTypeField = g.fields.find((f) => f.key === 'employment_type');
+    const event_type = g.event_type || classifyEvent({
+      changedKeys: g.fields.map((f) => f.key),
+      salaryAction: g.salary_action || null,
+      employmentType: employmentTypeField ? employmentTypeField.to : null,
+    });
     const base = event_type === 'Joined'
       ? `Hired as ${g.fields.map((f) => f.to).filter(Boolean).join(', ') || '—'}`
       : event_type === 'Activated'

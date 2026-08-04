@@ -44,6 +44,19 @@ function linkedUserLabel(db, userId) {
   return u ? `${u.name} (${u.username || u.email})` : null;
 }
 
+// "Name (designation)" snapshot of the reports-to employee, or null —
+// denormalized for the same reason as linkedUserLabel: history must stay
+// readable after the manager is renamed, promoted, or removed. Looks up
+// `employees`, NOT `users` — reports_to_employee_id is an employees.id, an
+// entirely separate concept from the pre-existing users.manager_id (the War
+// Room hierarchy feature); employee_timeline.manager_id is being repurposed
+// here to snapshot the former, not the latter.
+function managerLabel(db, managerId) {
+  if (!managerId) return null;
+  const m = db.prepare('SELECT name, designation FROM employees WHERE id=?').get(managerId);
+  return m ? `${m.name}${m.designation ? ` (${m.designation})` : ''}` : null;
+}
+
 // The effective_from of the employee's current OPEN row, or null if none yet.
 function currentOpenFrom(db, employeeId) {
   const row = db
@@ -82,6 +95,11 @@ function recordEmployeeChange(db, opts) {
     statusEffectiveFrom = null,
     salaryAction = null, // 'revision' | 'correction'
     salaryReasonCode = null, // one of SALARY_REASON_CODES, only when salaryAction='revision'
+    // confirmation_status's own isolated date (Phase 5) — same reasoning and
+    // same "generic append primitive, caller decides the fallback" contract
+    // as salary/status above. No future cap, no payroll-lock floor (doesn't
+    // drive money) — hr.js passes it through unchecked.
+    confirmationEffectiveFrom = null,
   } = opts || {};
 
   const emp = db.prepare(`SELECT ${SNAPSHOT_COLS} FROM employees WHERE id=?`).get(employeeId);
@@ -90,6 +108,7 @@ function recordEmployeeChange(db, opts) {
   const eff = toYMD(effectiveFrom);
   const salaryEff = salaryEffectiveFrom ? toYMD(salaryEffectiveFrom) : null;
   const statusEff = statusEffectiveFrom ? toYMD(statusEffectiveFrom) : null;
+  const confirmationEff = confirmationEffectiveFrom ? toYMD(confirmationEffectiveFrom) : null;
   const salaryActionVal = ['revision', 'correction'].includes(salaryAction) ? salaryAction : null;
   const salaryReasonVal = salaryActionVal === 'revision' && SALARY_REASON_CODES.includes(salaryReasonCode) ? salaryReasonCode : null;
 
@@ -120,18 +139,22 @@ function recordEmployeeChange(db, opts) {
   // enough to appear here, no second hand-edit. department_id/designation_id stay
   // NULL — org-structure carries only the free-text department/designation for
   // now; the *_id columns fill in once the employee write path resolves them.
-  // manager_id likewise stays NULL until reports_to_employee_id is wired (HR pack
-  // Phase 4) — it is not part of the registry because nothing populates it yet.
+  // manager_id (Phase 5) is populated straight off the snapshot's
+  // reports_to_employee_id — see the FIELDS registry comment on that entry for
+  // why the raw id and the denormalized manager_label are two separate columns.
   const linkedLabel = linkedUserLabel(db, emp.user_id);
+  const managerLabelVal = managerLabel(db, emp.reports_to_employee_id);
   const cols = [
     'employee_id', ...snapshotTimelineCols(), 'manager_id',
     'salary_effective_from', 'status_effective_from', 'salary_action', 'salary_reason_code',
+    'confirmation_effective_from',
     'effective_from', 'effective_seq', 'effective_to',
     'action_code', 'reason_code', 'reason', 'source', 'changed_by',
   ];
   const vals = [
-    emp.id, ...snapshotValues(emp, { linkedUserLabel: linkedLabel }), null,
+    emp.id, ...snapshotValues(emp, { linkedUserLabel: linkedLabel, managerLabel: managerLabelVal }), emp.reports_to_employee_id || null,
     salaryEff, statusEff, salaryActionVal, salaryReasonVal,
+    confirmationEff,
     eff, seq, null,
     actionCode, reasonCode, reason, source, changedBy,
   ];
