@@ -1,13 +1,22 @@
 // Mandatory Field Spec — HR pack validation (plan: keep-confirmation-status-
-// separate-elegant-beacon, Phase 2). The SERVER rule here is the real one;
-// client-side checks (Phase 3/4) are UX only and bypassable.
+// separate-elegant-beacon, Phase 2 + the 2026-08-04 lifecycle revision). The
+// SERVER rule here is the real one; client-side checks (Phase 3/4) are UX
+// only and bypassable.
 //
-// "Required on create, never blocking on edit" — see the plan's "The rule
-// that makes or breaks this": every employee alive today has all 17 of
-// these fields blank. REQUIRED_AT_CREATE only fires for mode:'create'; on
-// mode:'edit' a field is validated ONLY when the caller actually supplied
-// it, so fixing a phone number on a five-year employee is never blocked by
-// their missing blood group.
+// Two distinct concerns, kept deliberately separate:
+//   - validateEmployee()      — is a SUPPLIED value valid? Runs on every
+//                                POST/PUT, unconditionally, on whatever keys
+//                                are present. Never checks presence itself.
+//   - REQUIRED_FOR_ACTIVATION / getActivationGaps() — IS the record complete
+//                                enough to go operational? Checked only at
+//                                the Activation business action (hr.js POST
+//                                /employees/:id/activate), never at create,
+//                                never blocking on an ordinary edit.
+//
+// getActivationGaps() is a PURE calculation — no writes, no Timeline events,
+// no state transitions. Those live in the business endpoints that call it
+// (activate, and later: Workspace progress, reports, bulk validation) so
+// this one function stays safely reusable across all of them.
 //
 // Deliberately NOT validated here: designation/department catalog
 // membership, and "reports-to must hold a manager role". Both are tied to
@@ -33,26 +42,40 @@ const ENUMS = {
   notice_period_days: [30, 60, 90],
 };
 
-// [payload key, human label] — every "Hire" field in the spec's HR pack.
-const REQUIRED_AT_CREATE = [
-  ['reports_to_employee_id', 'Reports to'],
-  ['employment_type', 'Employment type'],
-  ['grade', 'Grade'],
-  ['probation_end_date', 'Probation end date'],
-  ['confirmation_status', 'Confirmation status'],
-  ['notice_period_days', 'Notice period'],
-  ['date_of_birth', 'Date of birth'],
-  ['gender', 'Gender'],
-  ['father_spouse_name', "Father's / Spouse's name"],
-  ['permanent_address', 'Permanent address'],
-  ['permanent_pincode', 'Permanent PIN code'],
-  ['current_address', 'Current address'],
-  ['current_pincode', 'Current PIN code'],
-  ['emergency_contact_name', 'Emergency contact name'],
-  ['emergency_contact_phone', 'Emergency contact phone'],
-  ['blood_group', 'Blood group'],
-  ['photo_url', 'Photo'],
+// [payload key, human label, Workspace section, optional custom check(value)].
+// `check` defaults to "not blank" — only overridden where presence alone is
+// the wrong test (salary: `0`/blank both mean "not set", but `isBlank(0)` is
+// false). This list feeds BOTH the Activation gate and the completeness
+// reshape below — one list, two readers, never two rule sets to keep in sync.
+//
+// Includes fields that predate this spec (salary, the 3 KYC docs) — they used
+// to be required at CREATE (hand-written checks in hr.js's old POST); the
+// 2026-08-04 lifecycle revision moves that requirement here instead, so a
+// Draft employee genuinely only needs a name to exist.
+const REQUIRED_FOR_ACTIVATION = [
+  ['reports_to_employee_id', 'Reports to', 'employment'],
+  ['employment_type', 'Employment type', 'employment'],
+  ['grade', 'Grade', 'employment'],
+  ['probation_end_date', 'Probation end date', 'employment'],
+  ['confirmation_status', 'Confirmation status', 'employment'],
+  ['notice_period_days', 'Notice period', 'employment'],
+  ['salary', 'Salary', 'employment', (v) => Number(v) > 0],
+  ['date_of_birth', 'Date of birth', 'personal'],
+  ['gender', 'Gender', 'personal'],
+  ['father_spouse_name', "Father's / Spouse's name", 'personal'],
+  ['blood_group', 'Blood group', 'personal'],
+  ['photo_url', 'Photo', 'personal'],
+  ['permanent_address', 'Permanent address', 'contact'],
+  ['permanent_pincode', 'Permanent PIN code', 'contact'],
+  ['current_address', 'Current address', 'contact'],
+  ['current_pincode', 'Current PIN code', 'contact'],
+  ['emergency_contact_name', 'Emergency contact name', 'contact'],
+  ['emergency_contact_phone', 'Emergency contact phone', 'contact'],
+  ['aadhar_file', 'Aadhar card', 'documents'],
+  ['pan_file', 'PAN card', 'documents'],
+  ['qualification_file', 'Highest qualification certificate', 'documents'],
 ];
+const SECTION_BY_FIELD = new Map(REQUIRED_FOR_ACTIVATION.map(([key, , section]) => [key, section]));
 
 // Walk UP the reports-to chain from `startId` (the proposed manager). If
 // `employeeId` is ever reached, appointing startId as employeeId's manager
@@ -76,24 +99,34 @@ function findReportsToCycle(db, startId, employeeId) {
   return null;
 }
 
-// payload  — req.body, raw.
-// opts.mode        — 'create' | 'edit'.
-// opts.db           — better-sqlite3 handle, needed for grade/reports-to/
-//                      deactivation-guard lookups.
-// opts.employeeId   — the employee being edited (undefined on create).
-// opts.before       — the employee's current row (edit only), used as the
-//                      fallback for "own phone/name" when the field wasn't
-//                      resubmitted this save.
+// Is a SUPPLIED value valid? Never checks presence — that's
+// REQUIRED_FOR_ACTIVATION's job, checked only at Activation. Runs
+// unconditionally on POST (whatever's optionally supplied at create) and PUT
+// (whatever a section save touches), so an old employee with 17 blank HR
+// fields can still get a same-day phone-number fix through.
+//
+// payload  — req.body, or a full persisted employee row (getActivationGaps
+//            re-runs this against the row itself — every populated column
+//            is then "supplied").
+// opts.db          — better-sqlite3 handle, needed for grade/reports-to/
+//                     deactivation-guard lookups.
+// opts.employeeId  — the employee being edited (undefined on create).
+// opts.before      — the employee's current row (edit only), used as the
+//                     fallback for "own phone/name" when the field wasn't
+//                     resubmitted this save.
 // Returns [{ field, message }] — empty array means valid.
-function validateEmployee(payload, { mode, db, employeeId, before } = {}) {
+function validateEmployee(payload, { db, employeeId, before } = {}) {
   const errors = [];
   const add = (field, message) => errors.push({ field, message });
   const has = (key) => !isBlank(payload[key]);
 
-  if (mode === 'create') {
-    for (const [key, label] of REQUIRED_AT_CREATE) {
-      if (isBlank(payload[key])) add(key, `${label} is required`);
-    }
+  // ── Salary — must be positive whenever explicitly supplied. Predates this
+  // plan (used to be a standalone hard gate on every POST/PUT); requiring it
+  // to EXIST moved to Activation (REQUIRED_FOR_ACTIVATION below) — this only
+  // checks a SUPPLIED value's format, so an unrelated section save that
+  // never touches salary is never blocked by it. ────────────────────────────
+  if (has('salary') && !(Number(payload.salary) > 0)) {
+    add('salary', 'Salary must be greater than 0');
   }
 
   // ── Join date window (spec #1 — existing field, tightened) ───────────────
@@ -187,4 +220,79 @@ function validateEmployee(payload, { mode, db, employeeId, before } = {}) {
   return errors;
 }
 
-module.exports = { validateEmployee, ENUMS, REQUIRED_AT_CREATE };
+// PURE — reads the DB (grade/reports-to lookups) but never writes anything.
+// No Timeline events, no state transitions, no UPDATEs. This is deliberate:
+// it's the one function Activation, Workspace progress, reports and any
+// future bulk-validation all call — a side effect here would make every one
+// of those callers unsafe to call it from. State changes belong in the
+// business endpoints that call this, not in this function.
+//
+// employeeRow — a full row from `employees` (e.g. `SELECT * FROM employees
+//               WHERE id=?`), not a partial request payload.
+// Returns [{ field, section, message }] — empty array means ready to activate.
+function getActivationGaps(employeeRow, { db } = {}) {
+  const gaps = [];
+  const seen = new Set();
+
+  // 1. Presence / custom check, from REQUIRED_FOR_ACTIVATION.
+  for (const [key, label, section, check] of REQUIRED_FOR_ACTIVATION) {
+    const ok = check ? check(employeeRow[key]) : !isBlank(employeeRow[key]);
+    if (!ok) { gaps.push({ field: key, section, message: `${label} is required` }); seen.add(key); }
+  }
+
+  // 2. Re-run the SAME per-field correctness rules already used on every
+  // PUT, against the row itself — catches a populated-but-malformed field
+  // (bad PIN, invalid enum, a stale self-referential reports_to, etc.) that
+  // presence alone would miss. No new rule logic — this is the exact call
+  // site Phase 2 already built, just fed the persisted row instead of a
+  // request body. `status` is excluded: its own check is about a PROPOSED
+  // status change, meaningless when just reading the employee's current row.
+  const { status, ...correctnessPayload } = employeeRow;
+  const correctness = validateEmployee(correctnessPayload, { db, employeeId: employeeRow.id, before: employeeRow });
+  for (const err of correctness) {
+    if (seen.has(err.field)) continue; // already flagged as missing — don't double count
+    gaps.push({ field: err.field, section: SECTION_BY_FIELD.get(err.field) || null, message: err.message });
+    seen.add(err.field);
+  }
+
+  return gaps;
+}
+
+// Reshapes getActivationGaps() into progress counts for the Workspace's
+// completeness indicators. Purely a VIEW over the same computation — adds no
+// validation logic of its own, so it can never drift from what Activation
+// actually enforces.
+function computeCompleteness(employeeRow, { db } = {}) {
+  const gaps = getActivationGaps(employeeRow, { db });
+  const gapFields = new Set(gaps.map((g) => g.field));
+
+  const sections = {};
+  for (const [key, , section] of REQUIRED_FOR_ACTIVATION) {
+    sections[section] ||= { total: 0, done: 0 };
+    sections[section].total++;
+    if (!gapFields.has(key)) sections[section].done++;
+  }
+  for (const s of Object.keys(sections)) {
+    sections[s].pct = sections[s].total ? Math.round((sections[s].done / sections[s].total) * 100) : 100;
+  }
+
+  // NOTE: gapFields can include fields outside REQUIRED_FOR_ACTIVATION (e.g. a
+  // malformed join_date) — those affect Activation (getActivationGaps returns
+  // them) but must NOT skew the completeness percentage, which is scoped to
+  // the 21-field checklist only.
+  const total = REQUIRED_FOR_ACTIVATION.length;
+  const done = total - REQUIRED_FOR_ACTIVATION.filter(([key]) => gapFields.has(key)).length;
+  return {
+    overall: { total, done, pct: total ? Math.round((done / total) * 100) : 100 },
+    sections,
+    errors: gaps,
+  };
+}
+
+module.exports = {
+  validateEmployee,
+  getActivationGaps,
+  computeCompleteness,
+  ENUMS,
+  REQUIRED_FOR_ACTIVATION,
+};

@@ -600,13 +600,23 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance, roster FROM employees WHERE status='active' AND salary > 0`).all();
+    // Employee lifecycle (plan revision 2026-08-04): payroll eligibility also
+    // requires onboarding_status='complete' — a Draft employee (profile still
+    // being assembled) is never payroll-eligible, activated or not. Attendance
+    // is deliberately NOT gated the same way (resolved decision, plan).
+    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance, roster FROM employees WHERE status='active' AND salary > 0 AND onboarding_status='complete'`).all();
     // Active employees with NO salary set are silently excluded from payroll —
     // surface them so admin knows who's missing and why (mam 2026-06-12:
     // "X not in payroll even they present").  Salary, not attendance, gates
     // inclusion.
     const excludedNoSalary = db.prepare(
       `SELECT id, name FROM employees WHERE status='active' AND (salary IS NULL OR salary <= 0) ORDER BY name COLLATE NOCASE`
+    ).all();
+    // Same "why am I not seeing them" transparency for the newer gate — an
+    // active, salaried employee who's still a Draft (see hr.js POST
+    // /employees/:id/activate) is just as invisible to payroll otherwise.
+    const excludedDraft = db.prepare(
+      `SELECT id, name FROM employees WHERE status='active' AND salary > 0 AND onboarding_status != 'complete' ORDER BY name COLLATE NOCASE`
     ).all();
 
     // If a run is finalised for this month, return saved snapshots; else live-calc
@@ -619,7 +629,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
       return calculateForEmployee(db, settings, emp, month);
     });
 
-    res.json({ month, settings, employees: out, excluded_no_salary: excludedNoSalary });
+    res.json({ month, settings, employees: out, excluded_no_salary: excludedNoSalary, excluded_draft: excludedDraft });
   } catch (err) {
     console.error('payroll calc error', err);
     res.status(500).json({ error: err.message });
@@ -656,7 +666,9 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
     const alreadyFinal = db.prepare('SELECT COUNT(*) AS c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
     if (alreadyFinal > 0) return res.status(409).json({ error: `${month} is already finalised. Unlock it first if you really need to re-finalise.` });
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT * FROM employees WHERE status='active' AND salary > 0`).all();
+    // Same gate as /calculate above — a Draft employee is never finalised into
+    // a payroll run, activated or not.
+    const employees = db.prepare(`SELECT * FROM employees WHERE status='active' AND salary > 0 AND onboarding_status='complete'`).all();
 
     const ins = db.prepare(`INSERT OR REPLACE INTO payroll_runs (
       month, employee_id, employee_name, base_salary, working_days, paid_days, half_days,

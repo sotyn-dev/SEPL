@@ -55,6 +55,13 @@ const FIELDS = [
   // id — so history still reads correctly after the user is renamed or deleted.
   // The diff, however, compares the raw numeric id.
   { key: 'user_id',       label: 'Linked user',  tracked: true, snapshot: true, changeField: true, timelineCol: 'linked_user_label', compare: 'number', snapshotFrom: 'linkedUserLabel' },
+
+  // Employee lifecycle (plan revision 2026-08-04) — snapshotted so History
+  // reads "as of this date" correctly, and shown as its own event on the
+  // timeline (see employeeChangeCodes.js's classifyEvent). NOT tracked:
+  // Activation (hr.js POST /employees/:id/activate) writes its own row
+  // through its own code path, not through the generic reason-required diff.
+  { key: 'onboarding_status', label: 'Onboarding status', snapshot: true, changeField: true },
 ];
 
 const byKey = new Map(FIELDS.map((f) => [f.key, f]));

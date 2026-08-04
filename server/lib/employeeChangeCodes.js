@@ -33,7 +33,7 @@ const ACTIONS = [
 const MULTI_ACTION = 'Multiple changes';
 
 // System-only actions (never chosen by a human on the HR form).
-const SYSTEM_ACTIONS = ['Payroll Update', 'Reconstructed'];
+const SYSTEM_ACTIONS = ['Payroll Update', 'Reconstructed', 'Activated'];
 
 // Optional coded turnover reason — shown only when a Status Change moves an
 // employee to inactive/terminated. Feeds attrition analytics later.
@@ -132,7 +132,7 @@ const SALARY_REASON_LABELS = {
 // grouped save always gets exactly one label — never a raw "multiple changes"
 // bucket. No manual override (dme 2026-07-31: auto-classification is final).
 const HR_EVENT_TYPES = [
-  'Joined', 'Status Change', 'Promotion', 'Transfer',
+  'Joined', 'Activated', 'Status Change', 'Promotion', 'Transfer',
   'Salary Revision', 'Documents Updated', 'Correction',
 ];
 // salaryAction ('revision'|'correction'|null) only matters for the
@@ -141,6 +141,10 @@ const HR_EVENT_TYPES = [
 function classifyEvent({ isFirst = false, changedKeys = [], salaryAction = null } = {}) {
   if (isFirst) return 'Joined';
   const s = new Set(changedKeys);
+  // Employee lifecycle (plan revision 2026-08-04) — Activation writes only
+  // onboarding_status, so this branch is unambiguous and takes priority the
+  // same way 'Joined' does above.
+  if (s.has('onboarding_status')) return 'Activated';
   if (s.has('status')) return 'Status Change';
   if (s.has('designation') && s.has('salary')) return 'Promotion';
   if (s.has('designation') || s.has('department')) return 'Transfer';

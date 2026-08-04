@@ -11,7 +11,7 @@ const { normalizeRoster } = require('../lib/roster');
 const { recordEmployeeChange, seedHiredRow, backfillFromAudit, toYMD, istToday } = require('../lib/employeeTimeline');
 const { TRACKED_FIELDS, ACTIONS, suggestAction, resolveActionCode, classifyEvent, SALARY_ACTIONS, SALARY_REASON_CODES, SALARY_REASON_LABELS } = require('../lib/employeeChangeCodes');
 const { diffTracked, changeFields: registryChangeFields } = require('../lib/employeeFields');
-const { validateEmployee } = require('../lib/employeeValidation');
+const { validateEmployee, getActivationGaps, computeCompleteness } = require('../lib/employeeValidation');
 // Full IST wall-clock stamp for employees.updated_at (date-time, unlike the
 // date-level effective_from). Server clock is UTC on the VPS.
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
@@ -789,19 +789,16 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
     const u = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
     if (u) user_id = u.id;
   }
-  // Mandatory documents for NEW employees (not enforced on bulk import or
-  // legacy edits — those keep working without docs).
-  if (!aadhar_file)        return res.status(400).json({ error: 'Aadhar card is required' });
-  if (!pan_file)           return res.status(400).json({ error: 'PAN card is required' });
-  if (!qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
-  // Unenforced before this plan — a $0/blank salary saved silently, then never
-  // appeared in any payroll run (payroll.js's active-employee query requires
-  // salary > 0). Same "silently wrong" shape as everything else this plan closes.
-  if (!(Number(salary) > 0)) return res.status(400).json({ error: 'Salary must be greater than 0' });
 
-  // Mandatory Field Spec — HR pack (Phase 2): all 17 new fields are required
-  // at hire (mode:'create'), format/enum/graph-checked. See employeeValidation.js.
-  const errors = validateEmployee(req.body, { mode: 'create', db });
+  // Employee lifecycle (plan revision 2026-08-04): creating a Draft employee
+  // needs only a name — everything else (incl. the docs + salary>0 checks
+  // that used to gate this endpoint) moved to Activation. See "Employee
+  // lifecycle & Workspace architecture" in the plan and hr.js's POST
+  // /employees/:id/activate below. Whatever else IS optionally supplied here
+  // still gets format-checked (a badly-formed grade shouldn't be accepted
+  // just because nothing requires it yet).
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
+  const errors = validateEmployee(req.body, { db });
   if (errors.length) return res.status(400).json({ error: errors[0].message, errors });
 
   // Insert the employee, stamp updated_at, and seed the opening "Hired" timeline
@@ -814,16 +811,17 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                              confirmation_status, notice_period_days, date_of_birth, gender,
                              father_spouse_name, permanent_address, permanent_pincode,
                              current_address, current_pincode, emergency_contact_name,
-                             emergency_contact_phone, blood_group, photo_url, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
+                             emergency_contact_phone, blood_group, photo_url, onboarding_status, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(user_id || null, name, phone || null, email || null, designation || null, department || null,
+          join_date || null, salary || null,
           aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
           reports_to_employee_id || null, employment_type || null, grade || null, probation_end_date || null,
           confirmation_status || null, notice_period_days ? Number(notice_period_days) : null,
           date_of_birth || null, gender || null, father_spouse_name || null,
           permanent_address || null, permanent_pincode || null, current_address || null,
           current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
-          blood_group || null, photo_url || null, istNow());
+          blood_group || null, photo_url || null, 'draft', istNow());
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
       effectiveFrom: join_date || istToday(),
@@ -857,14 +855,18 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
     return res.status(400).json({ error: 'No employee data provided' });
   }
   const db = getDb();
-  const insert = db.prepare('INSERT INTO employees (name,phone,email,designation,department,join_date,salary,updated_at) VALUES (?,?,?,?,?,?,?,?)');
+  // onboarding_status='complete' (resolved decision, plan revision
+  // 2026-08-04): bulk import represents existing staff being migrated in,
+  // not new hires being onboarded section-by-section. Draft-state bulk
+  // import is a possible later addition, not built now.
+  const insert = db.prepare('INSERT INTO employees (name,phone,email,designation,department,join_date,salary,onboarding_status,updated_at) VALUES (?,?,?,?,?,?,?,?,?)');
   // Each row is its OWN transaction: the insert + its opening "Hired" timeline row
   // commit together (no employee left without an anchor row), while a bad row rolls
   // back only itself — preserving the existing partial-import UX (skip + report).
   const importRow = db.transaction((e) => {
     const r = insert.run(
       e.name.trim(), e.phone?.trim() || '', e.email?.trim() || '', e.designation?.trim() || '',
-      e.department?.trim() || '', e.join_date || '', e.salary || 0, istNow()
+      e.department?.trim() || '', e.join_date || '', e.salary || 0, 'complete', istNow()
     );
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
@@ -883,22 +885,17 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
 });
 
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
-  const { name, phone, email, designation, department, salary, status, user_id,
-          aadhar_file, pan_file, qualification_file, roster, join_date,
+  const { aadhar_file, pan_file, qualification_file, roster,
           action_code, reason_code, reason, effective_date,
-          salary_effective_date, status_effective_date, salary_action, salary_reason_code,
-          // Mandatory Field Spec — HR pack (Phase 2, 17 new fields). Undefined
-          // (not sent) is normal here — see employeeValidation.js's mode:'edit'
-          // semantics: only fields actually supplied get validated/written.
-          reports_to_employee_id, employment_type, grade, probation_end_date,
-          confirmation_status, notice_period_days, date_of_birth, gender,
-          father_spouse_name, permanent_address, permanent_pincode,
-          current_address, current_pincode, emergency_contact_name,
-          emergency_contact_phone, blood_group, photo_url } = req.body;
+          salary_effective_date, status_effective_date, salary_action, salary_reason_code } = req.body;
   const db = getDb();
 
-  // Unenforced before this plan — see the matching check on POST /employees.
-  if (!(Number(salary) > 0)) return res.status(400).json({ error: 'Salary must be greater than 0' });
+  // Employee lifecycle (plan revision 2026-08-04): salary>0 used to be a hard
+  // gate on every PUT regardless of what the payload actually touched — which
+  // would have blocked a Draft employee's Personal-tab save the moment
+  // Workspace section saves stop resending every field. `validateEmployee`
+  // below now checks salary's format only when it's actually supplied;
+  // requiring it to exist at all moved to Activation.
 
   // ── Change-history: diff the TRACKED fields against the current row ──────────
   // Tracked = status, salary, designation, department, roster, join_date, name,
@@ -912,10 +909,40 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   ).get(req.params.id);
   if (!before) return res.status(404).json({ error: 'Employee not found' });
 
+  // Employee lifecycle (plan revision 2026-08-04): a Workspace section save
+  // sends ONLY the fields on its tab — these 9 core fields predate that model
+  // and used to be read directly off req.body, so an omitted one read as
+  // `undefined`, which diffTracked (and the UPDATE below) treated as "cleared
+  // to blank": a Personal-only save would have wiped the name, quietly
+  // failed with "reason required" for a phantom name change, or (had the
+  // reason been supplied) actually blanked it in the DB. Falling back to
+  // `before.X` when a field wasn't sent makes this exactly as tolerant of a
+  // partial payload as roster/the docs/the 17 HR fields already are — for
+  // TODAY's UI, which always resends the whole form, `req.body.X` is never
+  // undefined, so this changes nothing yet.
+  const name = req.body.name !== undefined ? req.body.name : before.name;
+  const phone = req.body.phone !== undefined ? req.body.phone : before.phone;
+  const email = req.body.email !== undefined ? req.body.email : before.email;
+  const designation = req.body.designation !== undefined ? req.body.designation : before.designation;
+  const department = req.body.department !== undefined ? req.body.department : before.department;
+  const salary = req.body.salary !== undefined ? req.body.salary : before.salary;
+  const status = req.body.status !== undefined ? req.body.status : before.status;
+  const user_id = req.body.user_id !== undefined ? req.body.user_id : before.user_id;
+  const join_date = req.body.join_date !== undefined ? req.body.join_date : before.join_date;
+  // Mandatory Field Spec — HR pack fields (Phase 2, 17 new fields). Undefined
+  // (not sent) is normal here — see employeeValidation.js's presence-agnostic
+  // semantics: only fields actually supplied get validated/written, and the
+  // UPDATE below COALESCEs each one to its existing value when omitted.
+  const { reports_to_employee_id, employment_type, grade, probation_end_date,
+          confirmation_status, notice_period_days, date_of_birth, gender,
+          father_spouse_name, permanent_address, permanent_pincode,
+          current_address, current_pincode, emergency_contact_name,
+          emergency_contact_phone, blood_group, photo_url } = req.body;
+
   // Mandatory Field Spec — HR pack (Phase 2): mode:'edit' validates only the
   // fields this request actually supplied — an old employee with 17 blank HR
   // fields can still get a phone-number fix through. See employeeValidation.js.
-  const hrErrors = validateEmployee(req.body, { mode: 'edit', db, employeeId: Number(req.params.id), before });
+  const hrErrors = validateEmployee(req.body, { db, employeeId: Number(req.params.id), before });
   if (hrErrors.length) return res.status(400).json({ error: hrErrors[0].message, errors: hrErrors });
 
   const newRoster = roster ? normalizeRoster(roster) : before.roster;
@@ -1110,6 +1137,57 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   }
 
   res.json({ message: 'Updated', recorded: changed });
+});
+
+// Employee lifecycle (plan revision 2026-08-04) — a business action, not a
+// field edit: moves a Draft employee to Complete once every REQUIRED_FOR_
+// ACTIVATION field on the PERSISTED row checks out. No reason required (this
+// is a system-computed pass/fail gate, not a judgment call like a salary
+// revision). One-way — no path back to Draft (resolved decision, plan).
+router.post('/employees/:id/activate', requirePermission('employees', 'edit'), (req, res) => {
+  const db = getDb();
+  const id = Number(req.params.id);
+  const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found' });
+  if (emp.onboarding_status === 'complete') return res.status(400).json({ error: 'This employee is already active' });
+
+  const gaps = getActivationGaps(emp, { db });
+  if (gaps.length) return res.status(400).json({ error: gaps[0].message, errors: gaps });
+
+  try {
+    const now = istNow();
+    const tx = db.transaction(() => {
+      db.prepare('UPDATE employees SET onboarding_status=?, updated_at=? WHERE id=?').run('complete', now, id);
+      // MUST run after the UPDATE above — recordEmployeeChange snapshots the
+      // employee's CURRENT (post-update) row, so onboarding_status='complete'
+      // is what lands in the ledger, not the stale 'draft' it was a line ago.
+      recordEmployeeChange(db, {
+        employeeId: id,
+        effectiveFrom: istToday(),
+        actionCode: 'Activated',
+        source: 'hr',
+        changedBy: req.user && req.user.id,
+        changedAt: now,
+      });
+    });
+    tx();
+  } catch (e) {
+    console.error('[hr] activation failed:', e.message);
+    return res.status(500).json({ error: 'Activation failed' });
+  }
+
+  res.json({ message: 'Activated' });
+});
+
+// Read-only reshape of the SAME getActivationGaps() computation Activation
+// itself gates on, into per-section + overall progress counts — so the
+// Workspace's completeness indicators can never disagree with what
+// Activation actually enforces (they're reading the same function).
+router.get('/employees/:id/completeness', requirePermission('employees', 'view'), (req, res) => {
+  const db = getDb();
+  const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found' });
+  res.json(computeCompleteness(emp, { db }));
 });
 
 // The payroll-lock boundary for an employee: the latest month already finalised
@@ -1331,7 +1409,9 @@ function buildHrEvents(db, { employeeId = null, canSalary = false } = {}) {
     const event_type = g.event_type || classifyEvent({ changedKeys: g.fields.map((f) => f.key), salaryAction: g.salary_action || null });
     const base = event_type === 'Joined'
       ? `Hired as ${g.fields.map((f) => f.to).filter(Boolean).join(', ') || '—'}`
-      : `${g.fields.map((f) => f.label).join(', ')} ${g.fields.length > 1 ? 'changed' : 'updated'}`;
+      : event_type === 'Activated'
+        ? 'Profile completed — employee activated'
+        : `${g.fields.map((f) => f.label).join(', ')} ${g.fields.length > 1 ? 'changed' : 'updated'}`;
     // Salary Revision gets its reason spelled out right in the summary — the
     // reason code is otherwise invisible on the History card/export.
     const salaryReasonLabel = g.salary_action === 'revision' && g.salary_reason_code

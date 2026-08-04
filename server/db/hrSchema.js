@@ -64,6 +64,26 @@ function runHrMigrations(db) {
     try { db.exec(`ALTER TABLE employees ADD COLUMN ${col}`); } catch (e) {}
   }
 
+  // Employee lifecycle (plan revision 2026-08-04) — Draft → sections completed
+  // → Activated → payroll-eligible. A SEPARATE axis from `status` (payroll/
+  // attendance eligibility) — see server/lib/employeeValidation.js and
+  // hr.js's POST /employees/:id/activate. No DB default (same reasoning as
+  // EMPLOYEE_COLUMNS above): a default would stamp 'draft' onto every real,
+  // long-serving employee the moment this ALTER runs. Instead: add the bare
+  // column, then explicitly backfill every EXISTING row to 'complete' — new
+  // rows are written 'draft' at the application layer (hr.js POST /employees).
+  // Backfill is a WHERE-guarded no-op after the first boot (every row has a
+  // value by then), so it's safe to leave running on every startup.
+  try {
+    db.exec(`ALTER TABLE employees ADD COLUMN onboarding_status TEXT`);
+  } catch (e) { /* already exists */ }
+  try {
+    const backfilled = db.prepare(
+      "UPDATE employees SET onboarding_status = 'complete' WHERE onboarding_status IS NULL"
+    ).run().changes;
+    if (backfilled) console.log(`[schema] employees.onboarding_status: backfilled ${backfilled} existing row(s) to 'complete'`);
+  } catch (e) { console.error('[schema] onboarding_status backfill failed:', e.message); }
+
   // reports_to_employee_id: the derived "does this employee have active
   // direct reports" query and the deactivation guard (block setting a
   // manager inactive while people report to them) both hit this on every save.
@@ -175,6 +195,11 @@ function runHrMigrations(db) {
     addCol('confirmation_effective_from', 'confirmation_effective_from TEXT');
     addCol('notice_period_days',          'notice_period_days INTEGER');
     addCol('manager_label',               'manager_label TEXT');
+    // Employee lifecycle (plan revision 2026-08-04) — snapshot of
+    // employees.onboarding_status, so History/Vault reads "as of this date"
+    // correctly. Not tracked (no reason prompt): Activation writes its own
+    // dedicated event through its own code path (hr.js POST .../activate).
+    addCol('onboarding_status', 'onboarding_status TEXT');
 
     // Does employee_id still block deletes? PRAGMA foreign_key_list → on_delete.
     const fks = db.prepare(`PRAGMA foreign_key_list(employee_timeline)`).all();
