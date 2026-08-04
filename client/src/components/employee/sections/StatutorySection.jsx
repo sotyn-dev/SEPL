@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FiExternalLink } from 'react-icons/fi';
+import { FiEdit, FiEdit2, FiExternalLink } from 'react-icons/fi';
 import api from '../../../api';
 import WasHint, { FieldError, trackAccent } from '../WasHint';
 
@@ -48,22 +48,57 @@ function DocLink({ ws, fileKey, label }) {
 // redactStatutory in server/routes/hr.js).
 function SensitiveField({ ws, label, maskedKey, editKey, maxLength, errorKey }) {
   const { form, setForm } = ws;
+  const [editing, setEditing] = useState(false);
+  const cancelEdit = () => {
+    setForm({
+      ...form,
+      [editKey]: '',
+    });
+    setEditing(false);
+  };
+
   return (
     <div>
       <label className="label">{label}</label>
-      <div className="flex items-center gap-2">
-        <input className="input bg-gray-50 text-gray-500 flex-1" value={form[maskedKey] || 'Not set'} disabled />
-        <span className="text-gray-300 text-xs shrink-0">→</span>
+      <div className="flex items-center gap-2 flex-wrap">
         <input
-          className="input flex-1 max-sm:max-w-[40%]"
-          placeholder="New number…"
-          maxLength={maxLength}
-          value={form[editKey] || ''}
-          onChange={(e) => setForm({ ...form, [editKey]: e.target.value.replace(/\D/g, '').slice(0, maxLength) })}
+          className="py-2 bg-transparent border-0 text-gray-500 !text-sm font-semibold w-[120px]"
+          value={form[maskedKey] || 'Not set'}
+          disabled
         />
+        {!editing ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-xs p-1.5 rounded-md border border-gray-200 hover:bg-gray-50"
+            onClick={() => setEditing(true)}
+          >
+            <FiEdit2 width={16} /> Edit
+          </button>
+        ) : null }
+        { editing ? (
+          <div className="flex items-center gap-1 max-md:w-full max-md:mb-1">
+            <span className="text-gray-500 text-xs shrink-0 max-md:hidden">→</span>
+            <input
+              className="input !h-9 w-[160px]"
+              placeholder="New number…"
+              maxLength={maxLength}
+              value={form[editKey] || ''}
+              onChange={(e) => setForm({ ...form, [editKey]: e.target.value.replace(/\D/g, '').slice(0, maxLength) })}
+            />
+            <button
+              type="button"
+              className="text-xs p-1.5 rounded-md border border-gray-200 hover:bg-gray-50"
+              onClick={cancelEdit}
+            >
+              Cancel
+            </button>
+          </div>
+        ): null }
       </div>
-      <p className="text-[10px] text-gray-400 mt-0.5">Current value shown masked on the left; type a replacement on the right to change it.</p>
       {errorKey && <FieldError k={errorKey} ws={ws} />}
+      {editing && (
+        <p className="text-[10px] text-gray-400 mt-0.5">Current value shown masked on the left; type a replacement on the right to change it.</p>
+      )}
     </div>
   );
 }
