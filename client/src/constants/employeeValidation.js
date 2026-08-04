@@ -17,6 +17,12 @@ export const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 export const UAN_RE = /^[0-9]{12}$/;
 export const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 export const BANK_ACCOUNT_RE = /^[0-9]{9,18}$/;
+// PF Number — EPFO's standard 22-char shape (2-letter region code / 3-letter
+// office code / 7-digit establishment code / 3-digit extension / 7-digit
+// account number). ESI (IP) Number is the 17-digit ESIC number.
+export const PF_NUMBER_RE = /^[A-Z]{2}\/[A-Z]{3}\/[0-9]{7}\/[0-9]{3}\/[0-9]{7}$/;
+export const ESI_NUMBER_RE = /^[0-9]{17}$/;
+export const ESI_GROSS_CEILING = 21000;
 
 const ymd = (d) => d.toISOString().slice(0, 10);
 const addYears = (base, years) => { const d = new Date(base); d.setFullYear(d.getFullYear() + years); return d; };
@@ -72,6 +78,16 @@ export function validateEmployeeClient(form) {
   }
   if (has(form, 'bank_account_number') && !BANK_ACCOUNT_RE.test(String(form.bank_account_number).trim())) {
     add('bank_account_number', 'Bank account number must be 9-18 digits');
+  }
+  if (has(form, 'pf_number') && !PF_NUMBER_RE.test(String(form.pf_number).trim().toUpperCase())) {
+    add('pf_number', 'PF number must be in the format RR/OOO/1234567/000/1234567');
+  }
+  if (has(form, 'esi_number')) {
+    if (!ESI_NUMBER_RE.test(String(form.esi_number).trim())) {
+      add('esi_number', 'ESI number must be 17 digits');
+    } else if (has(form, 'fixed_monthly_gross') && Number(form.fixed_monthly_gross) > ESI_GROSS_CEILING) {
+      add('esi_number', `ESI is not applicable — fixed monthly gross exceeds ₹${ESI_GROSS_CEILING.toLocaleString('en-IN')}`);
+    }
   }
   if (has(form, 'permanent_pincode') && !PIN_RE.test(String(form.permanent_pincode).trim())) {
     add('permanent_pincode', 'PIN code must be 6 digits');

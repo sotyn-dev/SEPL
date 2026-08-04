@@ -146,13 +146,15 @@ export default function StatutorySection({ ws }) {
           </div>
           <div className={trackAccent(changedSet, 'pf_number')}>
             <label className="label">PF Number</label>
-            <input className="input" value={form.pf_number || ''} onChange={(e) => setForm({ ...form, pf_number: e.target.value })} />
+            <input className="input" value={form.pf_number || ''} onChange={(e) => setForm({ ...form, pf_number: e.target.value.toUpperCase() })} placeholder="RR/OOO/1234567/000/1234567" />
             <WasHint k="pf_number" changedSet={changedSet} original={original} revertField={revertField} />
+            <FieldError k="pf_number" ws={ws} />
           </div>
           <div className={trackAccent(changedSet, 'esi_number')}>
             <label className="label">ESI Number</label>
-            <input className="input" value={form.esi_number || ''} onChange={(e) => setForm({ ...form, esi_number: e.target.value })} />
+            <input className="input" maxLength={17} value={form.esi_number || ''} onChange={(e) => setForm({ ...form, esi_number: e.target.value.replace(/\D/g, '').slice(0, 17) })} placeholder="17-digit number" />
             <WasHint k="esi_number" changedSet={changedSet} original={original} revertField={revertField} />
+            <FieldError k="esi_number" ws={ws} />
           </div>
           <div className={trackAccent(changedSet, 'pt_state')}>
             <label className="label">PT State</label>

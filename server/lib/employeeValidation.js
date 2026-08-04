@@ -50,6 +50,16 @@ const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const UAN_RE = /^[0-9]{12}$/;
 const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const BANK_ACCOUNT_RE = /^[0-9]{9,18}$/;
+// PF Number — EPFO's standard 22-char shape: 2-letter region code (this is
+// the "state-wise" part of spec #20) / 3-letter office code / 7-digit
+// establishment code / 3-digit extension / 7-digit account number, e.g.
+// "MH/BAN/0012345/000/1234567". ESI (IP) Number is the 17-digit ESIC number
+// (spec #21).
+const PF_NUMBER_RE = /^[A-Z]{2}\/[A-Z]{3}\/[0-9]{7}\/[0-9]{3}\/[0-9]{7}$/;
+const ESI_NUMBER_RE = /^[0-9]{17}$/;
+// ESI eligibility ceiling (spec #21 — "If gross ≤ ₹21000"). Compared against
+// fixed_monthly_gross, the same field the Compensation tab's ESI hint uses.
+const ESI_GROSS_CEILING = 21000;
 
 const ENUMS = {
   employment_type: ['Permanent', 'Contract', 'Intern', 'Vendor'],
@@ -284,6 +294,23 @@ function validateEmployee(payload, { db, employeeId, before } = {}) {
     if (!s) add('pt_state', 'PT state is not in the catalog');
   }
 
+  // ── PF Number format (spec #20) ───────────────────────────────────────────
+  if (has('pf_number') && !PF_NUMBER_RE.test(String(payload.pf_number).trim().toUpperCase())) {
+    add('pf_number', 'PF number must be in the format RR/OOO/1234567/000/1234567');
+  }
+
+  // ── ESI Number — format + gross-ceiling eligibility (spec #21) ───────────
+  if (has('esi_number')) {
+    if (!ESI_NUMBER_RE.test(String(payload.esi_number).trim())) {
+      add('esi_number', 'ESI number must be 17 digits');
+    } else {
+      const grossVal = has('fixed_monthly_gross') ? payload.fixed_monthly_gross : before?.fixed_monthly_gross;
+      if (grossVal !== undefined && grossVal !== null && grossVal !== '' && Number(grossVal) > ESI_GROSS_CEILING) {
+        add('esi_number', `ESI is not applicable — fixed monthly gross exceeds ₹${ESI_GROSS_CEILING.toLocaleString('en-IN')}`);
+      }
+    }
+  }
+
   // ── Compensation pack (Module 2) ──────────────────────────────────────────
   if (has('ctc_annual') && !(Number(payload.ctc_annual) >= CTC_ANNUAL_MIN)) {
     add('ctc_annual', `CTC annual must be at least ₹${CTC_ANNUAL_MIN.toLocaleString('en-IN')}`);
@@ -412,4 +439,7 @@ module.exports = {
   computeCompleteness,
   ENUMS,
   REQUIRED_FOR_ACTIVATION,
+  PF_NUMBER_RE,
+  ESI_NUMBER_RE,
+  ESI_GROSS_CEILING,
 };
