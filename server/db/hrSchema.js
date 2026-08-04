@@ -57,6 +57,12 @@ const EMPLOYEE_COLUMNS = [
   'emergency_contact_phone TEXT',
   'blood_group TEXT',
   'photo_url TEXT',
+  // The KYC ID NUMBERS, not the uploaded proof files (aadhar_file/pan_file
+  // predate this pack) — the spec wants both: the file as evidence, the
+  // number as searchable/verifiable data. Format-validated in
+  // employeeValidation.js, mandatory-at-activation alongside their files.
+  'aadhar_number TEXT',
+  'pan_number TEXT',
 ];
 
 function runHrMigrations(db) {

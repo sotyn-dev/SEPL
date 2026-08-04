@@ -40,6 +40,10 @@ const PIN_RE = /^[0-9]{6}$/;
 // Indian addresses (flat/building, street, landmark, area, city, state)
 // routinely run 150-220 characters; 250 gives room without being unbounded.
 const ADDRESS_MAX_LEN = 250;
+// Standard formats — Aadhar is 12 digits; PAN is 5 letters, 4 digits, 1
+// letter (e.g. ABCDE1234F), always uppercase.
+const AADHAR_RE = /^[0-9]{12}$/;
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 const ENUMS = {
   employment_type: ['Permanent', 'Contract', 'Intern', 'Vendor'],
@@ -84,7 +88,9 @@ const REQUIRED_FOR_ACTIVATION = [
   ['emergency_contact_name', 'Emergency contact name'],
   ['emergency_contact_phone', 'Emergency contact phone'],
   ['aadhar_file', 'Aadhar card'],
+  ['aadhar_number', 'Aadhar number'],
   ['pan_file', 'PAN card'],
+  ['pan_number', 'PAN number'],
   ['qualification_file', 'Highest qualification certificate'],
 ];
 
@@ -165,6 +171,15 @@ function validateEmployee(payload, { db, employeeId, before } = {}) {
   }
   if (has('current_pincode') && !PIN_RE.test(String(payload.current_pincode).trim())) {
     add('current_pincode', 'Current PIN code must be 6 digits');
+  }
+
+  // ── Aadhar / PAN numbers — standard formats. PAN is case-normalized to
+  // upper before the check (matches how it's always printed/typed). ────────
+  if (has('aadhar_number') && !AADHAR_RE.test(String(payload.aadhar_number).trim())) {
+    add('aadhar_number', 'Aadhar number must be 12 digits');
+  }
+  if (has('pan_number') && !PAN_RE.test(String(payload.pan_number).trim().toUpperCase())) {
+    add('pan_number', 'PAN number must be in the format ABCDE1234F');
   }
 
   // ── Address length (spec #13/#14) — the client caps the textarea at the

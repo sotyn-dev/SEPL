@@ -12,6 +12,8 @@
 
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PIN_RE = /^[0-9]{6}$/;
+export const AADHAR_RE = /^[0-9]{12}$/;
+export const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 const ymd = (d) => d.toISOString().slice(0, 10);
 const addYears = (base, years) => { const d = new Date(base); d.setFullYear(d.getFullYear() + years); return d; };
@@ -48,6 +50,12 @@ export function validateEmployeeClient(form) {
       if (jd > JOIN_DATE_MAX) add('join_date', 'Join date cannot be in the future');
       else if (jd < JOIN_DATE_MIN) add('join_date', 'Join date cannot be more than 30 years ago');
     }
+  }
+  if (has(form, 'aadhar_number') && !AADHAR_RE.test(String(form.aadhar_number).trim())) {
+    add('aadhar_number', 'Aadhar number must be 12 digits');
+  }
+  if (has(form, 'pan_number') && !PAN_RE.test(String(form.pan_number).trim().toUpperCase())) {
+    add('pan_number', 'PAN number must be in the format ABCDE1234F');
   }
   if (has(form, 'permanent_pincode') && !PIN_RE.test(String(form.permanent_pincode).trim())) {
     add('permanent_pincode', 'PIN code must be 6 digits');

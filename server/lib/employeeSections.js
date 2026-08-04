@@ -30,7 +30,7 @@ const SECTIONS = {
     'emergency_contact_name', 'emergency_contact_phone',
   ],
   documents: [
-    'aadhar_file', 'pan_file', 'qualification_file',
+    'aadhar_file', 'aadhar_number', 'pan_file', 'pan_number', 'qualification_file',
   ],
   // The linked ERP login is a system relationship, not a fact ABOUT the
   // employee the way every other field is — it grants access and drives

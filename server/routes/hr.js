@@ -782,7 +782,8 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           confirmation_status, notice_period_days, date_of_birth, gender,
           father_spouse_name, permanent_address, permanent_pincode,
           current_address, current_pincode, emergency_contact_name,
-          emergency_contact_phone, blood_group, photo_url } = req.body;
+          emergency_contact_phone, blood_group, photo_url,
+          aadhar_number, pan_number } = req.body;
   let { user_id } = req.body;
   const db = getDb();
   // Auto-link by email if user_id wasn't explicitly set
@@ -812,8 +813,9 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                              confirmation_status, notice_period_days, date_of_birth, gender,
                              father_spouse_name, permanent_address, permanent_pincode,
                              current_address, current_pincode, emergency_contact_name,
-                             emergency_contact_phone, blood_group, photo_url, onboarding_status, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                             emergency_contact_phone, blood_group, photo_url,
+                             aadhar_number, pan_number, onboarding_status, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(user_id || null, name, phone || null, email || null, designation || null, department || null,
           join_date || null, salary || null,
           aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
@@ -822,7 +824,9 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           date_of_birth || null, gender || null, father_spouse_name || null,
           permanent_address || null, permanent_pincode || null, current_address || null,
           current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
-          blood_group || null, photo_url || null, 'draft', istNow());
+          blood_group || null, photo_url || null,
+          aadhar_number || null, pan_number ? String(pan_number).toUpperCase() : null,
+          'draft', istNow());
     seedHiredRow(db, {
       employeeId: r.lastInsertRowid,
       effectiveFrom: join_date || istToday(),
@@ -938,7 +942,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
           confirmation_status, notice_period_days, date_of_birth, gender,
           father_spouse_name, permanent_address, permanent_pincode,
           current_address, current_pincode, emergency_contact_name,
-          emergency_contact_phone, blood_group, photo_url } = req.body;
+          emergency_contact_phone, blood_group, photo_url,
+          aadhar_number, pan_number } = req.body;
 
   // Mandatory Field Spec — HR pack (Phase 2): mode:'edit' validates only the
   // fields this request actually supplied — an old employee with 17 blank HR
@@ -1057,6 +1062,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            emergency_contact_phone = COALESCE(?, emergency_contact_phone),
            blood_group             = COALESCE(?, blood_group),
            photo_url               = COALESCE(?, photo_url),
+           aadhar_number           = COALESCE(?, aadhar_number),
+           pan_number              = COALESCE(?, pan_number),
            updated_at = ?
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null, join_date || null,
@@ -1067,7 +1074,9 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         date_of_birth || null, gender || null, father_spouse_name || null,
         permanent_address || null, permanent_pincode || null, current_address || null,
         current_pincode || null, emergency_contact_name || null, emergency_contact_phone || null,
-        blood_group || null, photo_url || null, now, req.params.id);
+        blood_group || null, photo_url || null,
+        aadhar_number || null, pan_number ? String(pan_number).toUpperCase() : null,
+        now, req.params.id);
 
   // Log each re-uploaded document as its own event — reason is required (see
   // the gate above; dme 2026-08-01 reversed the 07-31 "frictionless" call).
