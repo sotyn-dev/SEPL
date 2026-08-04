@@ -171,6 +171,19 @@ export default function Login() {
             <p className="mt-6 text-center text-[11px] text-zinc-500">
               Contact your admin for login credentials
             </p>
+
+            {/* SEPL Mission — mobile/tablet view (the right brand panel is
+                hidden below lg, but site engineers ARE the mobile users —
+                the mission must reach them too, mam 2026-08-03). */}
+            <div className="lg:hidden mt-5 bg-blue-50 border border-blue-200 rounded-xl p-3">
+              <div className="text-blue-800 font-bold text-[10px] uppercase tracking-wider mb-1">SEPL Mission</div>
+              <p className="text-blue-900/80 text-[11px] leading-relaxed">
+                "Ham software isliye bana rahe hain taki <b>site par kaam bina rukawat chale</b>.
+                Planning pehle hogi. Material pehle site par pahunchega.<br />
+                <b>Har Friday planning hogi. Har Monday site ready hogi.</b><br />
+                Hamari priority <b>smooth execution aur profit</b> hai."
+              </p>
+            </div>
           </div>
 
           {/* ─── RIGHT — Brand panel (royal blue half, was red) ─── */}
