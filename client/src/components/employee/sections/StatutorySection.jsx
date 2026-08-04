@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
+import { FiExternalLink } from 'react-icons/fi';
 import api from '../../../api';
 import WasHint, { FieldError, trackAccent } from '../WasHint';
-import { DOC_SLOTS } from '../useEmployeeForm';
 
 // PT State / Bank Name catalogs — server data (org_pt_states / org_banks),
 // fetched once and cached at module scope. Same pattern as EmploymentSection's
@@ -19,56 +19,24 @@ function fetchBanks() {
   return banksPromise;
 }
 
-// Aadhar has NO entry here — unlike PAN, its number is sensitive/masked and
-// gets its own dedicated editor further down (the "Aadhaar" block, via
-// SensitiveField) rather than a plain inline text box next to the upload.
-const NUMBER_FIELD = {
-  pan_file: { key: 'pan_number', label: 'PAN Number', placeholder: 'ABCDE1234F', maxLength: 10, uppercase: true },
-};
-
-function UploadField({ ws, docSlot }) {
-  const { form, setForm } = ws;
-  const { key, slot, label } = docSlot;
-  const numberField = NUMBER_FIELD[key];
+// A read-only pointer to the matching upload in Documents — Statutory owns
+// the DATA, Documents owns the FILE (dme 2026-08-04), so this is a link, not
+// an upload control. `form[fileKey]` is still populated here even though
+// aadhar_file/pan_file aren't part of the `statutory` section's own field
+// list — `form` carries the whole employee row regardless of which section
+// is currently being edited.
+function DocLink({ ws, fileKey, label }) {
+  const url = ws.form[fileKey];
   return (
-    <div className={form[slot] ? 'border-l-4 border-blue-400 pl-2' : ''}>
-      {numberField && (
-        <div className="mb-2">
-          <label className="label">{numberField.label}</label>
-          <input
-            className="input"
-            maxLength={numberField.maxLength}
-            value={form[numberField.key] || ''}
-            placeholder={numberField.placeholder}
-            onChange={(e) => {
-              let v = e.target.value;
-              if (numberField.digitsOnly) v = v.replace(/\D/g, '');
-              if (numberField.uppercase) v = v.toUpperCase();
-              setForm({ ...form, [numberField.key]: v.slice(0, numberField.maxLength) });
-            }}
-          />
-          <FieldError k={numberField.key} ws={ws} />
-        </div>
+    <p className="text-[10px] text-gray-400 mt-1">
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline">
+          <FiExternalLink size={10} /> View {label} <span className="text-gray-400">(in Documents)</span>
+        </a>
+      ) : (
+        <>No {label} uploaded yet — add it in the Documents tab.</>
       )}
-      <label className="label">{label} <span className="text-gray-400 font-normal text-[10px]">(PDF / JPG / PNG, max 10 MB)</span></label>
-      <input
-        className="input"
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png"
-        onChange={(e) => setForm({ ...form, [slot]: e.target.files?.[0] || null })}
-      />
-      {form[key] && !form[slot] && (
-        <p className="text-[10px] text-emerald-600 mt-0.5">
-          Existing: <a href={form[key]} target="_blank" rel="noreferrer" className="underline">view file</a> · upload to replace
-        </p>
-      )}
-      {form[slot] && (
-        <p className="text-[10px] text-blue-600 mt-0.5 flex items-center gap-1.5">
-          Selected: {form[slot].name}
-          <button type="button" onClick={() => setForm({ ...form, [slot]: null })} className="underline hover:text-blue-900">revert</button>
-        </p>
-      )}
-    </div>
+    </p>
   );
 }
 
@@ -78,19 +46,23 @@ function UploadField({ ws, docSlot }) {
 // shows the REAL value as a normal editable input for employee_statutory.can_view
 // holders (form.bank_account_number is only ever present for them — see
 // redactStatutory in server/routes/hr.js).
-function SensitiveField({ ws, label, maskedKey, editKey, placeholder, maxLength, errorKey }) {
+function SensitiveField({ ws, label, maskedKey, editKey, maxLength, errorKey }) {
   const { form, setForm } = ws;
   return (
     <div>
       <label className="label">{label}</label>
-      <input className="input bg-gray-50 text-gray-500" value={form[maskedKey] || 'Not set'} disabled />
-      <input
-        className="input mt-1.5"
-        placeholder={`Enter new ${label.toLowerCase()} to change…`}
-        maxLength={maxLength}
-        value={form[editKey] || ''}
-        onChange={(e) => setForm({ ...form, [editKey]: e.target.value.replace(/\D/g, '').slice(0, maxLength) })}
-      />
+      <div className="flex items-center gap-2">
+        <input className="input bg-gray-50 text-gray-500 flex-1" value={form[maskedKey] || 'Not set'} disabled />
+        <span className="text-gray-300 text-xs shrink-0">→</span>
+        <input
+          className="input flex-1 max-sm:max-w-[40%]"
+          placeholder="New number…"
+          maxLength={maxLength}
+          value={form[editKey] || ''}
+          onChange={(e) => setForm({ ...form, [editKey]: e.target.value.replace(/\D/g, '').slice(0, maxLength) })}
+        />
+      </div>
+      <p className="text-[10px] text-gray-400 mt-0.5">Current value shown masked on the left; type a replacement on the right to change it.</p>
       {errorKey && <FieldError k={errorKey} ws={ws} />}
     </div>
   );
@@ -110,17 +82,27 @@ export default function StatutorySection({ ws }) {
   return (
     <div className="space-y-4">
       <div>
-        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">KYC</div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <UploadField ws={ws} docSlot={DOC_SLOTS.find((d) => d.key === 'aadhar_file')} />
-          <UploadField ws={ws} docSlot={DOC_SLOTS.find((d) => d.key === 'pan_file')} />
+        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Identity & KYC</div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="lg:col-span-2">
+            <SensitiveField ws={ws} label="Aadhaar Number" maskedKey="aadhar_masked" editKey="_aadhar_number_edit" maxLength={12} errorKey="aadhar_number" />
+            <p className="text-[10px] text-gray-400 mt-1">Aadhaar is stored encrypted; only the last 4 digits are ever shown.</p>
+            <DocLink ws={ws} fileKey="aadhar_file" label="Aadhar Card" />
+          </div>
+          <div className={trackAccent(changedSet, 'pan_number')}>
+            <label className="label">PAN Number</label>
+            <input className="input" maxLength={10} value={form.pan_number || ''} onChange={(e) => setForm({ ...form, pan_number: e.target.value.toUpperCase().slice(0, 10) })} placeholder="ABCDE1234F" />
+            <WasHint k="pan_number" changedSet={changedSet} original={original} revertField={revertField} />
+            <FieldError k="pan_number" ws={ws} />
+            <DocLink ws={ws} fileKey="pan_file" label="PAN Card" />
+          </div>
         </div>
       </div>
 
       <div className="border-t border-dashed pt-4 !mt-6">
-        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">PF / ESI</div>
+        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Government Registrations</div>
         <p className="text-[10px] text-gray-400 -mt-1 mb-2">UAN is due within 30 days of joining; PF/ESI numbers are assigned after the first salary run — none of these block Activation.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className={trackAccent(changedSet, 'uan_number')}>
             <label className="label">UAN</label>
             <input className="input" maxLength={12} value={form.uan_number || ''} onChange={(e) => setForm({ ...form, uan_number: e.target.value.replace(/\D/g, '').slice(0, 12) })} placeholder="12-digit number" />
@@ -136,6 +118,14 @@ export default function StatutorySection({ ws }) {
             <label className="label">ESI Number</label>
             <input className="input" value={form.esi_number || ''} onChange={(e) => setForm({ ...form, esi_number: e.target.value })} />
             <WasHint k="esi_number" changedSet={changedSet} original={original} revertField={revertField} />
+          </div>
+          <div className={trackAccent(changedSet, 'pt_state')}>
+            <label className="label">PT State</label>
+            <select className="select" value={form.pt_state || ''} onChange={(e) => setForm({ ...form, pt_state: e.target.value })}>
+              <option value="">Select…</option>
+              {ptStates.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+            </select>
+            <WasHint k="pt_state" changedSet={changedSet} original={original} revertField={revertField} />
           </div>
         </div>
       </div>
@@ -176,14 +166,6 @@ export default function StatutorySection({ ws }) {
             <WasHint k="ifsc_code" changedSet={changedSet} original={original} revertField={revertField} />
             <FieldError k="ifsc_code" ws={ws} />
           </div>
-          <div className={trackAccent(changedSet, 'pt_state')}>
-            <label className="label">PT State</label>
-            <select className="select" value={form.pt_state || ''} onChange={(e) => setForm({ ...form, pt_state: e.target.value })}>
-              <option value="">Select…</option>
-              {ptStates.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
-            </select>
-            <WasHint k="pt_state" changedSet={changedSet} original={original} revertField={revertField} />
-          </div>
           {canEditBankFull ? (
             <div className={trackAccent(changedSet, 'bank_account_number')}>
               <label className="label">Bank Account Number</label>
@@ -198,24 +180,6 @@ export default function StatutorySection({ ws }) {
               maxLength={18} errorKey="bank_account_number"
             />
           )}
-        </div>
-      </div>
-
-      <div className="border-t border-dashed pt-4 !mt-6">
-        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Aadhaar</div>
-        <p className="text-[10px] text-gray-400 -mt-1 mb-2">Stored encrypted; only the last 4 digits are ever shown.</p>
-        <SensitiveField
-          ws={ws} label="Aadhaar Number"
-          maskedKey="aadhar_masked" editKey="_aadhar_number_edit"
-          maxLength={12} errorKey="aadhar_number"
-        />
-      </div>
-
-      <div className="border-t border-dashed pt-4 !mt-6">
-        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">PF / Gratuity Forms</div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <UploadField ws={ws} docSlot={DOC_SLOTS.find((d) => d.key === 'form11_file')} />
-          <UploadField ws={ws} docSlot={DOC_SLOTS.find((d) => d.key === 'formf_file')} />
         </div>
       </div>
     </div>
