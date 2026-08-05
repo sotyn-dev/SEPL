@@ -49,6 +49,35 @@ function getChatDb() {
       group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, last_read_id INTEGER DEFAULT 0,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (group_id, user_id)
     );
+    -- ── Forward dialog: favourites + usage ranking ──────────────────────
+    -- Both are keyed on (owner, target_type, target_id) rather than on a
+    -- group id, because you can forward to a PERSON you've never DM'd — no
+    -- group exists for them until the first message is sent.
+    --   target_type 'group' → chat_groups.id
+    --   target_type 'user'  → users.id (the DM is created on first forward)
+    -- Per-user rows: my pins and my forward counts are mine alone.
+    CREATE TABLE IF NOT EXISTS chat_forward_favorites (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      target_type TEXT NOT NULL CHECK(target_type IN ('group','user')),
+      target_id INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, target_type, target_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cff_user ON chat_forward_favorites(user_id);
+    -- forward_count drives the "Frequently used" section. Deliberately a
+    -- running counter, not a COUNT() over history: the dialog reads it on
+    -- every open, and a counter keeps that a single indexed lookup.
+    CREATE TABLE IF NOT EXISTS chat_forward_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      target_type TEXT NOT NULL CHECK(target_type IN ('group','user')),
+      target_id INTEGER NOT NULL,
+      forward_count INTEGER NOT NULL DEFAULT 0,
+      last_forwarded_at DATETIME,
+      UNIQUE(user_id, target_type, target_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cfs_user ON chat_forward_stats(user_id, forward_count DESC);
   `);
   // is_dm marks a 1-on-1 direct message (mam 2026-06-19) — same tables as a
   // group, but exactly 2 members and shown as the other person's name.
@@ -61,6 +90,13 @@ function getChatDb() {
   try {
     const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
     if (!mcols.includes('reply_to_id')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN reply_to_id INTEGER");
+  } catch (e) { /* ignore */ }
+  // forwarded: 1 when the message arrived via the Forward dialog rather than
+  // being typed here. Drives the small "Forwarded" label above the bubble.
+  // NULL/0 on every existing message, so history is unaffected.
+  try {
+    const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
+    if (!mcols.includes('forwarded')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN forwarded INTEGER DEFAULT 0");
   } catch (e) { /* ignore */ }
   // edited_at: set when the sender edits the message body (WhatsApp-style,
   // 15-min window). NULL = never edited; drives the "edited" marker (mam 2026-07-15).
