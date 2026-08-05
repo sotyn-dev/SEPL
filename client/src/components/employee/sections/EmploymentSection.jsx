@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { FiLock, FiUnlock } from 'react-icons/fi';
 import api from '../../../api';
-import SearchableSelect from '../../SearchableSelect';
+import PeoplePicker from '../../PeoplePicker';
+import { normalizePeople } from '../../../hooks/usePeopleOptions';
 import WasHint, { FieldError, trackAccent } from '../WasHint';
 import { fmtDate } from '../../../utils/datetime';
 import { JOIN_DATE_MIN, JOIN_DATE_MAX } from '../../../constants/employeeValidation';
@@ -39,7 +40,10 @@ export default function EmploymentSection({ ws, employees, canSeeSalary }) {
   const [grades, setGrades] = useState(gradesCache || []);
   useEffect(() => { fetchGrades().then(setGrades); }, []);
 
-  const managers = employees.filter((e) => !editing || e.id !== editing.id);
+  const managerOptions = useMemo(
+    () => normalizePeople(employees, 'employee').filter((e) => !editing || e.id !== editing.id),
+    [employees, editing],
+  );
   // Spec HR-7 says "DOJ + 3m (blue) or 6m (white)" — no blue/white collar
   // concept exists here (or in the source data), so it's mapped to
   // employment_type per the plan's documented decision: Permanent -> 6m
@@ -67,13 +71,11 @@ export default function EmploymentSection({ ws, employees, canSeeSalary }) {
           </div>
           <div className={trackAccent(changedSet, 'reports_to_employee_id')}>
             <label className="label">Reports To</label>
-            <SearchableSelect
-              options={managers.map((m) => ({ ...m, label: `${m.name}${m.designation ? ` (${m.designation})` : ''}` }))}
+            <PeoplePicker
+              options={managerOptions}
               value={form.reports_to_employee_id || null}
-              valueKey="id"
-              displayKey="label"
               placeholder="Search by name…"
-              onChange={(m) => setForm({ ...form, reports_to_employee_id: m?.id || null })}
+              onChange={(id) => setForm({ ...form, reports_to_employee_id: id })}
             />
             <WasHint k="reports_to_employee_id" fmt={(v) => employees.find((e) => e.id === v)?.name || '—'} changedSet={changedSet} original={original} revertField={revertField} />
           </div>
