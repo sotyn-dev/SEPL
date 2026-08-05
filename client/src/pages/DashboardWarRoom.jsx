@@ -365,7 +365,7 @@ export default function DashboardWarRoom() {
   ];
 
   return (
-    <div style={{ background: C.bg, color: C.ink, margin: -8, minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif' }}>
+    <div className="cmd-dark-table" style={{ background: C.bg, color: C.ink, margin: -8, minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif' }}>
       <header style={headerStyle}>
         <div>
           <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '.3px' }}>SOTYN.AI — Director's War Room</h1>

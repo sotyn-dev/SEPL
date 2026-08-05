@@ -2,17 +2,36 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload, FiCalendar } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 import TimePicker from '../components/TimePicker';
-import { fmtDate, fmtTime } from '../utils/datetime';
+import { fmtDate, fmtTime, fmtDateTime, parseUTC } from '../utils/datetime';
 
 const monthNow = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+// Detects whether a month was finalised before it actually ended — derived
+// after the fact from the stored finalised_at, so the snapshot-date banner
+// can surface the July pattern (finalised on day 2, silently, nobody
+// noticed for a month) instead of just a neutral timestamp. Day-of-month is
+// read in IST to match how the rest of the app displays these timestamps.
+const finaliseEarlyInfo = (finalisedAt, targetMonth) => {
+  const d = parseUTC(finalisedAt);
+  if (!d || !targetMonth) return null;
+  const [fy, fm, fd] = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d).split('-').map(Number);
+  if (`${fy}-${String(fm).padStart(2, '0')}` !== targetMonth) return null; // finalised in a later month — not early
+  const [ty, tm] = targetMonth.split('-').map(Number);
+  const totalDays = new Date(ty, tm, 0).getDate();
+  if (fd >= totalDays) return null; // finalised on the actual last day — not early
+  return { dayFinalised: fd, totalDays, daysExcluded: totalDays - fd };
 };
 
 // Grouped settings for the rules tab — clearer than a flat list when there
@@ -104,6 +123,7 @@ export default function Payroll() {
   const [foodEdits, setFoodEdits] = useState({});       // employee_id -> draft food amount (added to net)
   const [ovEdits, setOvEdits] = useState({});           // `${employee_id}:${field}` -> draft override (paid_days|cl|late_penalty)
   const [excludedNoSalary, setExcludedNoSalary] = useState([]); // active employees with no salary → not in payroll
+  const [confirmDialog, setConfirmDialog] = useState(null); // {title, message, confirmLabel, onConfirm} | null
   // CL Leave Balances tab
   const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
   const [leaveRows, setLeaveRows] = useState([]);
@@ -257,22 +277,93 @@ export default function Payroll() {
     }
   };
 
+  // Time-aware finalise warning (SEPL 2026-08): targets Aryan's day-2 and
+  // Ishaan's day-30 early-finalise incidents. Only applies to the current
+  // in-progress month — a past month has already fully ended, same scoping
+  // as the server's own lastDay cap. First half of the month reads as "just
+  // started"; second half (but not the actual last day) reads as "hasn't
+  // ended"; the last day / a past month gets the plain message, unchanged.
   const finaliseMonth = async () => {
-    if (!confirm(`Finalise payroll for ${month}? After this, attendance edits won't change the slips for this month.`)) return;
-    try {
-      const res = await api.post('/payroll/finalise', { month });
-      toast.success(res.data.message);
-      loadMonth();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    // A second finalise on an already-finalised month always hits the
+    // server's re-finalise guard (payroll.js:655-656), no matter the day —
+    // that's a dead end, not a decision, so there's nothing to offer a
+    // "Finalise" CTA for. Info-only dialog (single OK, no Cancel/Confirm
+    // pair) instead of a two-button prompt that dangles a doomed action.
+    if (isFinalised) {
+      setConfirmDialog({
+        title: 'Already finalised',
+        message: `${month} is already finalised. Unlock it first if you really need to re-finalise.`,
+        confirmLabel: 'OK',
+        infoOnly: true,
+        onConfirm: () => setConfirmDialog(null),
+      });
+      return;
+    }
+    const [y, m] = month.split('-').map(Number);
+    const today = new Date();
+    const isCurrentMonth = y === today.getFullYear() && m === today.getMonth() + 1;
+
+    // Deep-early zone (more than 5 days left in the month, Aryan's day-2
+    // case): there's no legitimate reason to finalise this early, so it's a
+    // clean block, not a choice — same OK-only pattern as "already
+    // finalised" above, so the button never truly dead-ends silently, it
+    // just explains and stops. Near-month-end (Ishaan's day-30 case, <=5
+    // days left) sometimes IS legitimate (early close, holidays), so that
+    // stays a real Cancel/Confirm choice, warned but not blocked.
+    if (isCurrentMonth) {
+      const totalDays = new Date(y, m, 0).getDate();
+      const dayToday = today.getDate();
+      const daysLeft = totalDays - dayToday;
+      if (daysLeft > 5) {
+        setConfirmDialog({
+          title: "Can't finalise yet",
+          message: `${month} just started — day ${dayToday} of ${totalDays}. Finalising this early would exclude almost the entire month. Check back closer to month-end.`,
+          confirmLabel: 'OK',
+          infoOnly: true,
+          onConfirm: () => setConfirmDialog(null),
+        });
+        return;
+      }
+    }
+
+    let message = `Finalise payroll for ${month}? After this, attendance edits won't change the slips for this month.`;
+    if (isCurrentMonth) {
+      const totalDays = new Date(y, m, 0).getDate();
+      const dayToday = today.getDate();
+      const daysLeft = totalDays - dayToday;
+      if (daysLeft > 0) {
+        message = `${month} hasn't ended — day ${totalDays} will be excluded. Proceed anyway?`;
+      }
+    }
+    setConfirmDialog({
+      title: 'Finalise payroll?',
+      message,
+      confirmLabel: 'Finalise',
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        try {
+          const res = await api.post('/payroll/finalise', { month });
+          toast.success(res.data.message);
+          loadMonth();
+        } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+      },
+    });
   };
 
   const unlockMonth = async () => {
-    if (!confirm(`Unlock ${month}? Slips will recalc from live attendance.`)) return;
-    try {
-      await api.post('/payroll/unlock', { month });
-      toast.success('Unlocked');
-      loadMonth();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    setConfirmDialog({
+      title: 'Unlock month?',
+      message: `Unlock ${month}? Slips will recalc from live attendance.`,
+      confirmLabel: 'Unlock',
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        try {
+          await api.post('/payroll/unlock', { month });
+          toast.success('Unlocked');
+          loadMonth();
+        } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+      },
+    });
   };
 
   const viewSlip = async (employeeId) => {
@@ -283,6 +374,14 @@ export default function Payroll() {
   };
 
   const fmt = (n) => `Rs ${(Math.round(n || 0)).toLocaleString('en-IN')}`;
+  const lockTooltip = (r) => {
+    if (!r.finalised_at) return 'Finalised';
+    const when = fmtDateTime(r.finalised_at);
+    let label = r.finalised_by_name ? `Finalised ${when} by ${r.finalised_by_name}` : `Finalised ${when}`;
+    const early = finaliseEarlyInfo(r.finalised_at, month);
+    if (early) label += ` — finalised early (day ${early.dayFinalised} of ${early.totalDays}, ${early.daysExcluded} day${early.daysExcluded === 1 ? '' : 's'} excluded)`;
+    return label;
+  };
   // Per-hour OT rate for display. Older finalised snapshots stored ot_pay but
   // left ot_per_hour_rate null (column added later) — derive it from pay/hours
   // so the OT cell never shows "Rs null/hr" or a bogus "No overtime".
@@ -291,6 +390,7 @@ export default function Payroll() {
   const total = list.reduce((s, r) => s + (r.net_pay || 0), 0);
   // Disbursement tracking — only meaningful once the month is finalised.
   const isFinalised = list.some(r => r.locked);
+  const finaliseEarly = isFinalised && list[0]?.finalised_at ? finaliseEarlyInfo(list[0].finalised_at, month) : null;
   const canMarkPaid = isAdmin || (canEdit && canEdit('payroll'));
   const paidCount = list.filter(r => r.paid).length;
   const unpaidCount = list.filter(r => r.locked && !r.paid).length;
@@ -334,25 +434,6 @@ export default function Payroll() {
               <label className="label">Pay Month</label>
               <input type="month" className="input" value={month} onChange={e => setMonth(e.target.value)} />
             </div>
-            {/* Friendly notice when viewing the current month — explains why
-                paid_days is partial and absent count looks low. Saves mam
-                from doubting the engine on the 4th of any month. */}
-            {list[0]?.is_current_month && (
-              <div className="bg-amber-50 border border-amber-200 px-3 py-2 rounded text-xs text-amber-800">
-                Showing salary <strong>earned so far</strong> (day 1 to day {list[0].days_counted}). Future days aren't counted as absent. Final figures land at month-end.
-              </div>
-            )}
-            {list[0]?.is_future_month && (
-              <div className="bg-blue-50 border border-blue-200 px-3 py-2 rounded text-xs text-blue-800">
-                Future month — nothing to calculate yet.
-              </div>
-            )}
-            {excludedNoSalary.length > 0 && (
-              <div className="bg-rose-50 border border-rose-200 px-3 py-2 rounded text-xs text-rose-800 w-full">
-                ⚠ <strong>{excludedNoSalary.length} active {excludedNoSalary.length === 1 ? 'employee is' : 'employees are'} NOT in payroll</strong> because their monthly salary isn't set (attendance doesn't matter — salary does):{' '}
-                <strong>{excludedNoSalary.map(e => e.name).join(', ')}</strong>. Set their salary in <strong>HR → Employees</strong> and they'll appear here.
-              </div>
-            )}
             <div className="flex-1" />
             <button onClick={() => exportCsv(`payroll-${month}`,
               ['Employee','Dept','Paid Days','Base Pay (excl. OT)','OT Hours','OT Pay','Total Payable (Base+OT)'],
@@ -378,10 +459,50 @@ export default function Payroll() {
               </button>
             )}
             {isAdmin && (
-              <button onClick={unlockMonth} className="btn btn-secondary text-sm flex items-center gap-1">
+              <button
+                onClick={unlockMonth}
+                disabled={!isFinalised}
+                title={!isFinalised ? `${month} isn't finalised — nothing to unlock` : undefined}
+                className="btn btn-secondary text-sm flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
                 <FiUnlock size={14} /> Unlock
               </button>
             )}
+            <div className="w-full flex flex-wrap justify-start gap-3 empty:hidden">
+              {/* Snapshot-date visibility (SEPL 2026-08): surfaces when/who
+                  finalised this month so a frozen snapshot isn't mistaken for
+                  live numbers — the exact confusion that let July sit wrong
+                  for a month unnoticed. */}
+              {isFinalised && list[0]?.finalised_at && (
+                <div className={`px-3 py-1 rounded-lg text-xs border ${finaliseEarly ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+                  <FiLock size={11} className="inline mr-1" />
+                  Finalised {fmtDateTime(list[0].finalised_at)}
+                  {list[0].finalised_by_name && <> by <strong>{list[0].finalised_by_name}</strong></>}.
+                  {finaliseEarly && (
+                    <> <strong>Finalised early</strong> — day {finaliseEarly.dayFinalised} of {finaliseEarly.totalDays}, {finaliseEarly.daysExcluded} day{finaliseEarly.daysExcluded === 1 ? '' : 's'} excluded.</>
+                  )}
+                </div>
+              )}
+              {/* Friendly notice when viewing the current month — explains why
+                  paid_days is partial and absent count looks low. Saves mam
+                  from doubting the engine on the 4th of any month. */}
+              {list[0]?.is_current_month && (
+                <div className="bg-amber-50 border border-amber-200 px-3 py-1 rounded-lg text-xs text-amber-800">
+                  Showing salary <strong>earned so far</strong> (day 1 to day {list[0].days_counted}). Future days aren't counted as absent. Final figures land at month-end.
+                </div>
+              )}
+              {list[0]?.is_future_month && (
+                <div className="bg-blue-50 border border-blue-200 px-3 py-1 rounded-lg text-xs text-blue-800">
+                  Future month — nothing to calculate yet.
+                </div>
+              )}
+              {excludedNoSalary.length > 0 && (
+                <div className="bg-rose-50 border border-rose-200 px-3 py-1 rounded-lg text-xs text-rose-800 w-full">
+                  ⚠ <strong>{excludedNoSalary.length} active {excludedNoSalary.length === 1 ? 'employee is' : 'employees are'} NOT in payroll</strong> because their monthly salary isn't set (attendance doesn't matter — salary does):{' '}
+                  <strong>{excludedNoSalary.map(e => e.name).join(', ')}</strong>. Set their salary in <strong>HR → Employees</strong> and they'll appear here.
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="card p-0 hidden md:block overflow-x-auto">
@@ -413,7 +534,7 @@ export default function Payroll() {
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
                       {r.employee_name}
-                      {r.locked && <FiLock size={11} className="inline text-emerald-600 ml-1" title="Finalised" />}
+                      {r.locked && <FiLock size={11} className="inline text-emerald-600 ml-1" title={lockTooltip(r)} />}
                       {r.user_linked === false && <span className="ml-1 text-[10px] bg-amber-200 text-amber-800 px-1 py-0.5 rounded" title="No login user linked — attendance can't be looked up. Open HR → Employees and set the User for this employee.">⚠ no login</span>}
                     </td>
                     <td className="text-xs text-gray-500">{r.department || '-'}</td>
@@ -507,7 +628,7 @@ export default function Payroll() {
                     <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
                     <div className="text-lg font-bold text-gray-900 truncate flex items-center gap-1">
                       {r.employee_name}
-                      {r.locked && <FiLock size={11} className="text-emerald-600" title="Finalised" />}
+                      {r.locked && <FiLock size={11} className="text-emerald-600" title={lockTooltip(r)} />}
                     </div>
                     {r.department && <div className="text-[11px] text-gray-500">{r.department}</div>}
                     {r.user_linked === false && (
@@ -850,6 +971,16 @@ export default function Payroll() {
           </div>
         )}
       </Modal>
+
+      <ConfirmDialog
+        open={!!confirmDialog}
+        title={confirmDialog?.title}
+        message={confirmDialog?.message}
+        confirmLabel={confirmDialog?.confirmLabel}
+        infoOnly={confirmDialog?.infoOnly}
+        onConfirm={confirmDialog?.onConfirm}
+        onCancel={() => setConfirmDialog(null)}
+      />
     </div>
   );
 }

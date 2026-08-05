@@ -15,18 +15,19 @@ import { LuIndianRupee } from 'react-icons/lu';
 const CATEGORIES = ['TA/DA', 'Purchase', 'Labour', 'Transport', 'Salary', 'Compliance', 'Manpower Advance'];
 const STATUSES = ['pending', 'step1_approved', 'accounts_approved', 'dues_checked', 'velocity_checked', 'final_approved', 'rejected'];
 const STATUS_LABELS = { pending: 'Pending', step1_approved: 'Step 1 Approved', accounts_approved: 'Accounts Approved', dues_checked: 'Dues Checked', velocity_checked: 'Velocity Checked', final_approved: 'Final Approved', rejected: 'Rejected' };
-// One standard flow for every category (mam 2026-06-11):
-// L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Payment Release Aanchal.
-// Step numbers (1,2,3,5) match the server WORKFLOW exactly.
+// One standard flow for every category (mam 2026-06-11). Step numbers (1,2,3,5)
+// AND names match the server WORKFLOW exactly — names state the GATE only; the
+// person on duty is resolved server-side (next_approver_name), so a routing
+// override never contradicts the label (manager review 2026-07-30).
 const STEPS = [
   { step: 1, name: 'L1 Approval (Accountant)' },
-  { step: 2, name: 'L2 Approval (Nitin Jain)' },
-  { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)' },
-  { step: 5, name: 'Payment Release (Aanchal)' },
+  { step: 2, name: 'L2 Approval' },
+  { step: 3, name: 'L3 Approval (MD)' },
+  { step: 5, name: 'Payment Release' },
 ];
-// TA/DA gets an HR pre-approval step (mam 2026-06-17): HR (Prabhdeep Singh)
-// before L1 Accountant, for new requests from 15/06/2026.
-const TADA_STEPS = [{ step: 0, name: 'HR Approval (Prabhdeep Singh)' }, ...STEPS];
+// TA/DA gets an HR pre-approval step (mam 2026-06-17) before L1 Accountant,
+// for new requests from 15/06/2026.
+const TADA_STEPS = [{ step: 0, name: 'HR Approval' }, ...STEPS];
 
 // Canonical order of LIVE workflow stages for the dashboard tiles/chips
 // (union of the 5-step and TA/DA workflows). Mam (2026-05-30): the stage
@@ -34,7 +35,7 @@ const TADA_STEPS = [{ step: 0, name: 'HR Approval (Prabhdeep Singh)' }, ...STEPS
 // every in-flight request — so everything piled into "HR Approval" and
 // the later stages showed 0. A request's true stage is its live
 // current_step_name; terminal states fall back to status.
-const STAGE_SEQ = ['HR Approval (Prabhdeep Singh)', 'L1 Approval (Accountant)', 'L2 Approval (Nitin Jain)', 'L3 Approval (MD - Ankur Kaplesh)', 'Payment Release (Aanchal)'];
+const STAGE_SEQ = ['HR Approval', 'L1 Approval (Accountant)', 'L2 Approval', 'L3 Approval (MD)', 'Payment Release'];
 const stageOf = (r) =>
   r.status === 'final_approved' ? 'Approved'
   : r.status === 'rejected' ? 'Rejected'
@@ -655,6 +656,9 @@ export default function PaymentRequired() {
                         <div className="text-[11px] font-semibold text-emerald-700">approved {fmt(r.approved_amount)}</div>
                       )}
                       <div className="mt-1"><StatusBadge status={r.status} /></div>
+                      {(r.l3_missing || r.release_gap) && (
+                        <div className="mt-1"><span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title={r.l3_missing ? 'Released without L2/L3 approval — not properly paid.' : 'Reached Payment Release without L2/L3 sign-off.'}>{r.l3_missing ? '⚠ Not Paid' : '⚠ Needs L2/L3'}</span></div>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 text-[11px]">
@@ -786,7 +790,9 @@ export default function PaymentRequired() {
                     if (st === 'Approved') return r.l3_missing
                       ? <span className={cls + 'bg-red-100 text-red-700'} title="Released without L2 (Nitin) / L3 (MD) approval — not properly paid. Needs the L3 backfill to correct.">⚠ Not Paid</span>
                       : <span className={cls + 'bg-green-600 text-white'}>Paid</span>;
-                    if (st === 'Payment Release (Aanchal)') return <span className={cls + 'bg-emerald-100 text-emerald-700'}>Approved</span>;
+                    if (st === 'Payment Release') return r.release_gap
+                      ? <span className={cls + 'bg-red-100 text-red-700'} title="Reached Payment Release without L2/L3 sign-off (old flow). It will be routed back to the missing step on the next action.">⚠ Needs L2/L3</span>
+                      : <span className={cls + 'bg-emerald-100 text-emerald-700'} title="All approvals done — waiting for the payment to be released. Not paid yet.">Approved · awaiting release</span>;
                     // Show WHICH level it's pending at (mam 2026-06-18: status was
                     // a hotchpotch — everything just said "Pending"). Level read
                     // from the current step name (HR / L1 / L2 / L3).
@@ -1416,7 +1422,7 @@ export default function PaymentRequired() {
           {/* Approval workflow info — one standard flow for every category */}
           {form.category && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
-              <strong>Approval Flow:</strong> <span>L1 Accountant → L2 Nitin Jain → L3 MD (Ankur Kaplesh) → Payment Release Aanchal</span>
+              <strong>Approval Flow:</strong> <span>{form.category === 'TA/DA' ? 'HR Approval → ' : ''}L1 Approval (Accountant) → L2 Approval → L3 Approval (MD) → Payment Release</span>
             </div>
           )}
 
@@ -1455,10 +1461,12 @@ export default function PaymentRequired() {
         ) : (
           <div className="space-y-4">
             <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-gray-700 leading-relaxed">
-              <strong>How this works:</strong> Every category now uses one standard flow —
-              <em> L1 Accountant → L2 Nitin Jain → L3 MD (Ankur Kaplesh) → Payment Release Aanchal</em>.
-              L1 is open to anyone holding the Accountant role; L2/L3/Release are pinned to the named person.
-              Pick a specific user here to <strong>override</strong> a step — from then on only that user (or admin) can clear it.
+              <strong>How this works:</strong> Every category uses one standard flow —
+              <em> L1 Approval (Accountant) → L2 Approval → L3 Approval (MD) → Payment Release</em>
+              (TA/DA starts with an extra HR Approval step).
+              L1 is open to anyone holding the Accountant role; the other steps default to the person shown
+              in the "Default" column. Pick a specific user here to <strong>override</strong> a step — from
+              then on only that user (or admin) can clear it, and every screen shows the new person.
               Set back to "— Default —" to revert to the standard approver.
             </div>
             {Object.entries(routingMatrix).map(([category, steps]) => (
@@ -1581,7 +1589,7 @@ export default function PaymentRequired() {
                             : (s.at ? fmtISTPair(s.at).date : '');
                           return (
                             <div key={j} className={`text-[10px] px-2 py-1 rounded border ${s.late_hours > 0 ? 'bg-rose-50 border-rose-300 text-rose-800' : s.status === 'done' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : s.status === 'current' ? 'bg-amber-50 border-amber-400 text-amber-800 font-semibold' : 'bg-gray-50 border-gray-200 text-gray-400'}`} title={tip}>
-                              <div>{s.status === 'done' ? '✓ ' : s.status === 'current' ? '⏳ ' : '○ '}{s.name}{s.by_name ? ` · ${s.by_name}` : ''}</div>
+                              <div>{s.status === 'done' ? '✓ ' : s.status === 'current' ? '⏳ ' : '○ '}{s.name}{s.by_name ? ` · ${s.by_name}` : s.who ? ` · ${s.who}` : ''}</div>
                               {(s.elapsed_hours != null || s.late_hours > 0 || ra?.responsible) && (
                                 <div className="flex flex-wrap gap-x-1.5 mt-0.5 leading-tight">
                                   {s.elapsed_hours != null && <span className="text-[9px] text-gray-500">⏱ {s.elapsed_hours}h</span>}

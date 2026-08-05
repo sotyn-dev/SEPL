@@ -3210,6 +3210,10 @@ function initializeDatabase() {
     ['indent_items', 'is_foc INTEGER DEFAULT 0'],  // free-of-cost flag
     ['indent_items', 'is_tool INTEGER DEFAULT 0'], // tools vs materials flag
     // Indent-level fields shown on the physical indent form
+    // SPOS emergency indents (mam 2026-07-29): off-day (non-Wed/Sat) indents
+    // carry a mandatory reason and count toward the <5% emergency KPI.
+    ['indents', 'is_emergency INTEGER DEFAULT 0'],
+    ['indents', 'emergency_reason TEXT'],
     ['indents', 'client_name TEXT'],   // kept for backward compat (superseded by site_name)
     ['indents', 'location TEXT'],      // kept for backward compat (now derived from site)
     ['indents', 'lead_no TEXT'],       // kept for backward compat (removed from UI)
@@ -3299,6 +3303,12 @@ function initializeDatabase() {
     ['vendor_pos', 'file_path TEXT'],
     ['vendor_pos', 'remarks TEXT'],
     ['vendor_pos', 'expected_receipt_date DATE'],
+    // SPOS Procurement Tracker (mam 2026-07-29): logged reason when material
+    // arrives (or is running) later than expected_receipt_date. Delay itself
+    // is computed live (received/today − expected), no column needed.
+    ['vendor_pos', 'delay_reason TEXT'],
+    ['vendor_pos', 'delay_reason_by INTEGER REFERENCES users(id)'],
+    ['vendor_pos', 'delay_reason_at DATETIME'],
     // ─── Payment-before-material tracker (mam 2026-05-27) ───
     // Between PO sent → vendor ships → bill uploaded, there's a gap where
     // payment terms control whether the vendor will release material.
@@ -3654,6 +3664,13 @@ function initializeDatabase() {
     // Freeze the roster used when this month was finalised so a later roster
     // change on the employee can't retro-shift a locked month's late marks.
     ['payroll_runs', "roster TEXT DEFAULT 'general'"],
+    // att/sun breakdown persistence fix (SEPL 2026-08): present_days and
+    // sunday_worked_pay were computed every calc but never saved into the
+    // finalised snapshot, so a finalised month always showed "att 0 · sun 0"
+    // on the breakdown tooltip. Cosmetic only — paid_days/net_pay were
+    // unaffected — but real since the fields were added (9 June 2026).
+    ['payroll_runs', 'present_days REAL DEFAULT 0'],
+    ['payroll_runs', 'sunday_worked_pay REAL DEFAULT 0'],
     // Sales Billing — 4-type sequential bill flow (mam 2026-06-13).  Added to
     // the existing sales_bills table so legacy delivery-note rows (bill_type
     // NULL) are untouched; the new module only handles bill_type 1-4.
