@@ -2068,6 +2068,9 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">In Charge</th>
               <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Items</th>
               <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Value</th>
+              {/* Ageing of the OLDEST dated material in this store — the
+                  per-item detail stays on the Stock tab. */}
+              <th className="text-center px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Aging</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Status</th>
               <th></th>
             </tr>
@@ -2082,6 +2085,18 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
                 <td className="px-3 py-2 text-gray-600">{w.in_charge || '—'}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{fmtNum(w.item_count)}</td>
                 <td className="px-3 py-2 text-right text-gray-700 tabular-nums">{fmtMoney(w.total_value)}</td>
+                {/* Same pill as the Stock tab — server decides the band, so the
+                    60-day site / 90-day warehouse rules can't drift apart. */}
+                <td className="px-3 py-2 text-center whitespace-nowrap">
+                  {w.agingDays == null ? (
+                    <span className="text-gray-400" title="No dated material in this warehouse yet">—</span>
+                  ) : (
+                    <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold border ${AGING_PILL[w.agingColor] || ''}`}
+                      title={`Oldest material ageing since ${w.aging_start_date}${w.agingOverdue ? ` · OVERDUE (limit ${w.agingLimit} days)` : ` · limit ${w.agingLimit} days`}`}>
+                      {w.agingDays} {w.agingDays === 1 ? 'Day' : 'Days'}
+                    </span>
+                  )}
+                </td>
                 <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded ${w.active ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-500'}`}>{w.active ? 'Active' : 'Inactive'}</span></td>
                 <td className="px-3 py-2 text-right">{canEdit && <button onClick={() => open(w)} className="p-1 text-gray-400 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}</td>
               </tr>

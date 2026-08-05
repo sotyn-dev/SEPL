@@ -158,7 +158,29 @@ router.get('/warehouses', requirePermission('inventory', 'view'), (req, res) => 
        LEFT JOIN sites s ON s.id = w.site_id
       ORDER BY w.type='office' DESC, w.name`
   ).all();
-  res.json(rows);
+
+  // Warehouse-level ageing = the ageing of the OLDEST dated material sitting
+  // in that store, so the row answers "how stale is this warehouse?". One
+  // query for every warehouse (not one per row), then rolled up in JS.
+  //
+  // A warehouse with no stock — or whose stock has no start date yet — comes
+  // back null, which the UI renders as "—". A store can't age on its own; it
+  // only inherits the age of what's inside it.
+  const oldest = db.prepare(
+    `SELECT sb.warehouse_id, MIN(sb.aging_start_date) AS oldest_start
+       FROM stock_balance sb
+      WHERE sb.quantity > 0 AND sb.aging_start_date IS NOT NULL
+      GROUP BY sb.warehouse_id`
+  ).all();
+  const startBy = new Map(oldest.map(r => [r.warehouse_id, r.oldest_start]));
+
+  res.json(rows.map(w => {
+    // Reuse withAging so the warehouse pill uses the EXACT same thresholds
+    // and field names as the per-item pill on the Stock tab.
+    const { agingDays, agingColor, agingOverdue, agingLimit } =
+      withAging({ aging_start_date: startBy.get(w.id) || null, warehouse_type: w.type });
+    return { ...w, aging_start_date: startBy.get(w.id) || null, agingDays, agingColor, agingOverdue, agingLimit };
+  }));
 });
 
 router.post('/warehouses', requirePermission('inventory', 'create'), (req, res) => {
