@@ -8,3 +8,7 @@ client/node_modules/
 
 # generated sales-billing exports that land in client/public
 client/public/*.xlsx
+
+# Agent smoke/trace scripts — keep local, never commit
+server/scripts/_test_*.js
+server/scripts/_trace_*.js

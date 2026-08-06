@@ -127,12 +127,52 @@ router.get('/departments', requirePermission(M, 'view'), (req, res) => {
     }
   }
 
+  // Phase 3 — active DEPUTED labels (visibility overlay; not a second home).
+  const deputedByDept = {};
+  if (!activeOnly) {
+    try {
+      const depRows = db.prepare(`
+        SELECT dep.id AS deputation_id, dep.remarks, dep.started_on, dep.department_id,
+               e.id, e.name, e.designation, e.status,
+               e.department_id AS home_department_id,
+               hd.name AS home_department_name
+        FROM org_deputations dep
+        JOIN employees e ON e.id = dep.employee_id
+        LEFT JOIN org_departments hd ON hd.id = e.department_id
+        WHERE dep.ended_on IS NULL
+        ORDER BY CASE lower(COALESCE(e.status, ''))
+                   WHEN 'active' THEN 0
+                   WHEN 'training' THEN 1
+                   ELSE 2
+                 END,
+                 e.name COLLATE NOCASE
+      `).all();
+      for (const r of depRows) {
+        (deputedByDept[r.department_id] ||= []).push({
+          deputation_id: r.deputation_id,
+          id: r.id,
+          name: r.name,
+          designation: r.designation || null,
+          status: r.status || null,
+          remarks: r.remarks || null,
+          started_on: r.started_on || null,
+          home_department_id: r.home_department_id || null,
+          home_department_name: r.home_department_name || null,
+        });
+      }
+    } catch (e) {
+      // Table may not exist yet on a mid-boot race; tree still useful without labels.
+      if (!/no such table/i.test(e.message)) throw e;
+    }
+  }
+
   const nodes = {};
   rows.forEach(r => {
     nodes[r.id] = {
       ...r,
       designations: byDept[r.id] || [],
       home_employees: homeByDept[r.id] || [],
+      deputed_employees: deputedByDept[r.id] || [],
       children: [],
     };
   });
@@ -599,6 +639,62 @@ router.delete('/openings/:id', requirePermission(M, 'delete'), (req, res) => {
   const db = getDb();
   db.prepare('DELETE FROM org_openings WHERE id=?').run(Number(req.params.id));
   res.json({ ok: true });
+});
+
+// ─── Deputations (Phase 3 — visibility labels only; never writes employee home) ─
+
+router.post('/deputations', requirePermission(M, 'edit'), (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const employeeId = Number(b.employee_id);
+  const departmentId = Number(b.department_id);
+  if (!employeeId || !departmentId) {
+    return res.status(400).json({ error: 'employee_id and department_id are required' });
+  }
+
+  const emp = db.prepare('SELECT id, name, department_id FROM employees WHERE id=?').get(employeeId);
+  if (!emp) return res.status(400).json({ error: 'Employee not found' });
+
+  const dept = db.prepare('SELECT id, name, active FROM org_departments WHERE id=?').get(departmentId);
+  if (!dept) return res.status(400).json({ error: 'Department not found' });
+  if (!dept.active) return res.status(400).json({ error: 'Cannot depute to an inactive department' });
+
+  if (emp.department_id != null && Number(emp.department_id) === departmentId) {
+    return res.status(400).json({ error: 'Already home in that department — depute is for another department only' });
+  }
+
+  const remarks = b.remarks != null && String(b.remarks).trim() ? String(b.remarks).trim() : null;
+  const startedOn = b.started_on && String(b.started_on).trim()
+    ? String(b.started_on).trim().slice(0, 10)
+    : new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const createdBy = req.user?.id || null;
+
+  try {
+    const info = db.prepare(`
+      INSERT INTO org_deputations (employee_id, department_id, remarks, started_on, created_by)
+      VALUES (?,?,?,?,?)
+    `).run(employeeId, departmentId, remarks, startedOn, createdBy);
+    const row = db.prepare('SELECT * FROM org_deputations WHERE id=?').get(info.lastInsertRowid);
+    res.json(row);
+  } catch (e) {
+    if (/UNIQUE/i.test(e.message)) {
+      return res.status(400).json({ error: 'Already deputed to that department' });
+    }
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Soft-end: clears visibility under the target dept. Does not touch employees.*
+router.delete('/deputations/:id', requirePermission(M, 'edit'), (req, res) => {
+  const db = getDb();
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT * FROM org_deputations WHERE id=?').get(id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  if (row.ended_on) return res.json({ ok: true, alreadyEnded: true });
+
+  const endedOn = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  db.prepare('UPDATE org_deputations SET ended_on=? WHERE id=?').run(endedOn, id);
+  res.json({ ok: true, ended_on: endedOn });
 });
 
 module.exports = router;

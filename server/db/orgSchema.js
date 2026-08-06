@@ -123,6 +123,26 @@ function runOrgStructureMigrations(db) {
         closed_at              DATETIME
       );
       CREATE INDEX IF NOT EXISTS idx_org_openings_status ON org_openings(status);
+
+      -- Phase 3 — Depute as labeled visibility only (NOT a second home).
+      -- Soft employee_id (no FK); department cascades when the box is deleted.
+      -- ended_on NULL = currently visible under that department.
+      CREATE TABLE IF NOT EXISTS org_deputations (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id    INTEGER NOT NULL,
+        department_id  INTEGER NOT NULL REFERENCES org_departments(id) ON DELETE CASCADE,
+        remarks        TEXT,
+        started_on     TEXT,
+        ended_on       TEXT,
+        created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_by     INTEGER
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_org_deputation_active
+        ON org_deputations(employee_id, department_id) WHERE ended_on IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_org_deputations_dept
+        ON org_deputations(department_id);
+      CREATE INDEX IF NOT EXISTS idx_org_deputations_emp
+        ON org_deputations(employee_id);
     `);
   } catch (e) { console.error('[schema] org_structure tables create failed:', e.message); }
 

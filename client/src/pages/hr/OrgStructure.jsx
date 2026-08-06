@@ -33,9 +33,10 @@ const errMsg = (e, fallback) => e?.response?.data?.error || fallback;
 const clean = (s) => (s || '').trim();   // single source of truth for input trimming
 
 export default function OrgStructure() {
-  const { isAdmin, canDelete, canView } = useAuth();
+  const { isAdmin, canDelete, canView, canEdit } = useAuth();
   const navigate = useNavigate();
   const canLoadTemplate = isAdmin() || canDelete('org_structure');
+  const canDepute = canEdit('org_structure');
   const [view, setView] = useState('departments'); // departments | designations | openings
   const [tree, setTree] = useState([]);
   const [designations, setDesignations] = useState([]);
@@ -241,6 +242,12 @@ export default function OrgStructure() {
         <DepartmentsTab
           tree={tree} openIds={openIds} toggleOpen={toggleOpen} setModal={setModal} tagByName={tagByName}
           onOpenHomeEmployee={openHomeEmployee}
+          canDepute={canDepute}
+          onUndepute={(depId, name) => confirm(
+            `Remove deputation label for “${name}”? Their home department is unchanged.`,
+            () => mutate(api.delete(`/org-structure/deputations/${depId}`), loadTree),
+            { title: 'Undepute', confirmLabel: 'Undepute' },
+          )}
           onToggleActive={(n) => mutate(api.put(`/org-structure/departments/${n.id}`, { active: n.active ? 0 : 1 }), afterDeptChange)}
           onDelete={(n) => confirmDelete(
             `Hard-delete “${n.name}”? Prefer Deactivate if this department may be used. Linked employee history blocks delete.`,
@@ -440,12 +447,12 @@ function IconBtn({ title, onClick, children, danger }) {
 }
 
 // ─── Departments tab (recursive tree) ────────────────────────────────────────
-function DepartmentsTab({ tree, openIds, toggleOpen, setModal, onToggleActive, onDelete, onDetachRole, tagByName, onOpenHomeEmployee }) {
+function DepartmentsTab({ tree, openIds, toggleOpen, setModal, onToggleActive, onDelete, onDetachRole, tagByName, onOpenHomeEmployee, canDepute, onUndepute }) {
   return (
     <div className="card p-0">
       <div className="p-4 border-b border-gray-100">
         <h2 className="text-sm font-semibold text-gray-700">Department tree</h2>
-        <p className="text-xs text-gray-400">Home people come from Employee edit. Use ⋮ to manage structure, designations, or head.</p>
+        <p className="text-xs text-gray-400">Home from Employee edit · Depute is a visibility label only · Head is demarcation.</p>
       </div>
       <div className="p-2">
         {tree.length === 0 && (
@@ -459,21 +466,23 @@ function DepartmentsTab({ tree, openIds, toggleOpen, setModal, onToggleActive, o
         {tree.map(node => (
           <DeptNode key={node.id} node={node} depth={0} openIds={openIds} toggleOpen={toggleOpen}
             setModal={setModal} onToggleActive={onToggleActive} onDelete={onDelete} onDetachRole={onDetachRole}
-            tagByName={tagByName} onOpenHomeEmployee={onOpenHomeEmployee} />
+            tagByName={tagByName} onOpenHomeEmployee={onOpenHomeEmployee}
+            canDepute={canDepute} onUndepute={onUndepute} />
         ))}
       </div>
     </div>
   );
 }
 
-function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, onDelete, onDetachRole, tagByName, onOpenHomeEmployee }) {
+function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, onDelete, onDetachRole, tagByName, onOpenHomeEmployee, canDepute, onUndepute }) {
   const isOpen = openIds.has(node.id);
   const headTag = node.head_designation ? tagByName?.get(node.head_designation.trim().toLowerCase()) : null;
   const desigCount = (node.designations || []).length;
   const homeCount = (node.home_employees || []).length;
+  const deputedCount = (node.deputed_employees || []).length;
   const childCount = (node.children || []).length;
-  const hasBody = !!node.head_name || desigCount > 0 || homeCount > 0;
-  // A department folds if it has anything under it — head, home people,
+  const hasBody = !!node.head_name || desigCount > 0 || homeCount > 0 || deputedCount > 0;
+  // A department folds if it has anything under it — head, home, deputed,
   // designations, or sub-departments. Collapsing hides the whole body + children.
   const expandable = hasBody || childCount > 0;
   const isRoot = depth === 0;
@@ -508,6 +517,7 @@ function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, 
           <span className="text-[11px] text-gray-400 flex-shrink-0">
             {[
               homeCount && `${homeCount} home`,
+              deputedCount && `${deputedCount} dep.`,
               desigCount && `${desigCount} ${isRoot ? (desigCount > 1 ? 'roles' : 'role') : 'desig.'}`,
               childCount && `${childCount} sub`,
             ].filter(Boolean).join(' · ')}
@@ -516,8 +526,8 @@ function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, 
         <div className="ml-auto"><Menu items={menuItems} /></div>
       </div>
 
-      {/* Body — head (demarcation) + HOME people (HR-designated) + designations.
-          Read-only for people: click opens Employee edit. No inline home writes. */}
+      {/* Body — head (demarcation) + HOME + DEPUTED (visibility) + designations.
+          People rows are read-only for home facts; Depute/Undepute are labels only. */}
       {isOpen && hasBody && (
         <div className="border-l-2 border-gray-100 pl-3 my-1 space-y-1.5" style={{ marginLeft: depth * 16 + 19 }}>
           {node.head_name && (
@@ -540,11 +550,11 @@ function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, 
                 {(node.home_employees || []).map((e) => {
                   const inactive = e.status && !['active', 'training'].includes(String(e.status).toLowerCase());
                   return (
-                    <li key={e.id}>
+                    <li key={e.id} className={`flex items-center gap-1 min-w-0 ${inactive ? 'opacity-50' : ''}`}>
                       <button
                         type="button"
                         onClick={() => onOpenHomeEmployee?.(e)}
-                        className={`w-full text-left flex items-center gap-1.5 text-[12px] rounded pl-1 pr-2 py-0.5 hover:bg-emerald-50 ${inactive ? 'opacity-50' : ''}`}
+                        className="min-w-0 flex-1 text-left flex items-center gap-1.5 text-[12px] rounded pl-1 pr-1 py-0.5 hover:bg-emerald-50"
                         title="Open in Employee edit"
                       >
                         <span className="font-medium text-gray-800 truncate">{e.name}</span>
@@ -554,6 +564,64 @@ function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, 
                           <span className="ml-auto text-[10px] text-gray-400 flex-shrink-0 capitalize">{e.status}</span>
                         )}
                       </button>
+                      {canDepute && (
+                        <button
+                          type="button"
+                          onClick={() => setModal({
+                            kind: 'depute',
+                            employee: e,
+                            homeDepartmentId: node.id,
+                            homeDepartmentName: node.name,
+                          })}
+                          className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-700 hover:text-amber-900 px-1.5 py-0.5 rounded hover:bg-amber-50"
+                          title="Show under another department (visibility only)"
+                        >
+                          Depute
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+          {deputedCount > 0 && (
+            <div>
+              <div
+                className="text-[9px] font-bold uppercase tracking-wide text-amber-600 mb-1"
+                title="Deputed — visibility label only. Home department, designation, and manager are unchanged."
+              >
+                Deputed
+              </div>
+              <ul className="space-y-0.5">
+                {(node.deputed_employees || []).map((e) => {
+                  const inactive = e.status && !['active', 'training'].includes(String(e.status).toLowerCase());
+                  return (
+                    <li key={e.deputation_id} className={`flex items-center gap-1 min-w-0 ${inactive ? 'opacity-50' : ''}`}>
+                      <button
+                        type="button"
+                        onClick={() => onOpenHomeEmployee?.(e)}
+                        className="min-w-0 flex-1 text-left flex items-center gap-1.5 text-[12px] rounded pl-1 pr-1 py-0.5 hover:bg-amber-50"
+                        title={e.remarks ? `Remarks: ${e.remarks}` : 'Open in Employee edit'}
+                      >
+                        <span className="font-medium text-gray-800 truncate">{e.name}</span>
+                        {e.designation && <span className="text-gray-300 flex-shrink-0">·</span>}
+                        {e.designation && <span className="text-gray-500 truncate">{e.designation}</span>}
+                        {e.home_department_name && (
+                          <span className="text-[10px] text-gray-400 flex-shrink-0 truncate">· home {e.home_department_name}</span>
+                        )}
+                      </button>
+                      {canDepute && (
+                        <button
+                          type="button"
+                          onClick={() => onUndepute?.(e.deputation_id, e.name)}
+                          className="flex-shrink-0 text-gray-300 hover:text-red-600 p-1"
+                          title="Undepute — remove visibility label"
+                          aria-label={`Undepute ${e.name}`}
+                        >
+                          <FiX size={13} />
+                        </button>
+                      )}
                     </li>
                   );
                 })}
@@ -587,7 +655,8 @@ function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, 
       {isOpen && (node.children || []).map(child => (
         <DeptNode key={child.id} node={child} depth={depth + 1} openIds={openIds} toggleOpen={toggleOpen}
           setModal={setModal} onToggleActive={onToggleActive} onDelete={onDelete} onDetachRole={onDetachRole}
-          tagByName={tagByName} onOpenHomeEmployee={onOpenHomeEmployee} />
+          tagByName={tagByName} onOpenHomeEmployee={onOpenHomeEmployee}
+          canDepute={canDepute} onUndepute={onUndepute} />
       ))}
     </div>
   );
@@ -698,6 +767,17 @@ function OrgModals({ modal, close, setModal, tree, designations, emp, usr, after
     return <MoveForm dept={modal.dept} tree={tree} saving={saving} close={close}
       onSubmit={(parentId) => run(api.put(`/org-structure/departments/${modal.dept.id}`, { parent_id: parentId }), 'Moved').then(afterDeptChange)} />;
   }
+  if (kind === 'depute') {
+    return <DeputeForm
+      employee={modal.employee}
+      homeDepartmentId={modal.homeDepartmentId}
+      homeDepartmentName={modal.homeDepartmentName}
+      tree={tree}
+      saving={saving}
+      close={close}
+      onSubmit={(body) => run(api.post('/org-structure/deputations', body), 'Deputed').then(loadTree)}
+    />;
+  }
   if (kind === 'dept-role') {
     return <AddRoleForm dept={modal.dept} designations={designations} saving={saving} close={close}
       onCreateNew={() => setModal({ kind: 'desig-edit', desig: null, initialDeptIds: [modal.dept.id] })}
@@ -781,6 +861,54 @@ function MoveForm({ dept, tree, saving, close, onSubmit }) {
       <form onSubmit={e => { e.preventDefault(); if (parentId) onSubmit(parentId); }} className="space-y-3">
         <DepartmentPicker tree={tree} excludeId={dept.id} value={parentId} onChange={(id) => setParentId(id)} allowClear={false} placeholder="Select new parent…" />
         <Footer close={close} saving={saving} label="Move" />
+      </form>
+    </Modal>
+  );
+}
+
+// Phase 3 — visibility label only. Never changes home / designation / manager.
+function DeputeForm({ employee, homeDepartmentId, homeDepartmentName, tree, saving, close, onSubmit }) {
+  const [departmentId, setDepartmentId] = useState(null);
+  const [remarks, setRemarks] = useState('');
+  return (
+    <Modal isOpen onClose={close} title="Depute" subtitle={employee?.name} scrollOutside>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!departmentId) return;
+          onSubmit({
+            employee_id: employee.id,
+            department_id: departmentId,
+            remarks: clean(remarks) || null,
+          });
+        }}
+        className="space-y-3"
+      >
+        <p className="text-xs text-gray-500">
+          Shows <b>{employee?.name}</b> under another department as <b>Deputed</b> for visibility only.
+          Does not change home{homeDepartmentName ? ` (${homeDepartmentName})` : ''}, designation, or reporting manager.
+        </p>
+        <div>
+          <label className="label">Depute to</label>
+          <DepartmentPicker
+            tree={tree}
+            excludeId={homeDepartmentId}
+            value={departmentId}
+            onChange={(id) => setDepartmentId(id)}
+            allowClear={false}
+            placeholder="Select department…"
+          />
+        </div>
+        <div>
+          <label className="label">Remarks (optional)</label>
+          <textarea
+            className="input text-sm w-full min-h-[72px]"
+            value={remarks}
+            onChange={(e) => setRemarks(e.target.value)}
+            placeholder="Why they’re visible here…"
+          />
+        </div>
+        <Footer close={close} saving={saving} label="Depute" disabled={!departmentId} />
       </form>
     </Modal>
   );

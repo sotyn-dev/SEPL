@@ -1,0 +1,17 @@
+---
+description: Do not commit agent/smoke test scripts
+alwaysApply: true
+---
+
+# No agent test scripts in commits
+
+Never stage or commit throwaway verification/smoke scripts created during agent work.
+
+Examples (do **not** commit):
+- `server/scripts/_test_*.js`
+- `server/scripts/_trace_*.js`
+- Ad-hoc scripts named for a one-off check (phase smoke, bind probes, etc.)
+
+Keep them local for debugging, or delete when done. Prefer running checks without adding files to git.
+
+Product/migration scripts that are intentional project tooling are fine when the user asks for them explicitly.
