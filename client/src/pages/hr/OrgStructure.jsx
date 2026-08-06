@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   FiPlus, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCornerDownRight,
   FiUserPlus, FiStar, FiSlash, FiCheckCircle, FiMoreVertical, FiX, FiHelpCircle, FiRefreshCw, FiLayers,
@@ -32,7 +33,8 @@ const errMsg = (e, fallback) => e?.response?.data?.error || fallback;
 const clean = (s) => (s || '').trim();   // single source of truth for input trimming
 
 export default function OrgStructure() {
-  const { isAdmin, canDelete } = useAuth();
+  const { isAdmin, canDelete, canView } = useAuth();
+  const navigate = useNavigate();
   const canLoadTemplate = isAdmin() || canDelete('org_structure');
   const [view, setView] = useState('departments'); // departments | designations | openings
   const [tree, setTree] = useState([]);
@@ -42,6 +44,15 @@ export default function OrgStructure() {
   const [modal, setModal] = useState(null); // { kind, ...ctx }
   const [confirmBox, setConfirmBox] = useState(null); // { message, onYes }
   const [guideOpen, setGuideOpen] = useState(false);
+
+  // Phase 2 — HOME person → Employee edit (timeline/home changes live there).
+  const openHomeEmployee = useCallback((emp) => {
+    if (!canView('employees')) {
+      toast.error('You need Employees access to open this person');
+      return;
+    }
+    navigate(`/employees?edit=${emp.id}`);
+  }, [canView, navigate]);
   // Load Template — a LIST of catalogs (db/orgTemplate.js TEMPLATES), all
   // picked inside one self-contained "Pick Template" popover (list + footer
   // actions live together, per dme 2026-08-03 — see TemplatePicker below).
@@ -229,6 +240,7 @@ export default function OrgStructure() {
       {view === 'departments' && (
         <DepartmentsTab
           tree={tree} openIds={openIds} toggleOpen={toggleOpen} setModal={setModal} tagByName={tagByName}
+          onOpenHomeEmployee={openHomeEmployee}
           onToggleActive={(n) => mutate(api.put(`/org-structure/departments/${n.id}`, { active: n.active ? 0 : 1 }), afterDeptChange)}
           onDelete={(n) => confirmDelete(
             `Hard-delete “${n.name}”? Prefer Deactivate if this department may be used. Linked employee history blocks delete.`,
@@ -428,12 +440,12 @@ function IconBtn({ title, onClick, children, danger }) {
 }
 
 // ─── Departments tab (recursive tree) ────────────────────────────────────────
-function DepartmentsTab({ tree, openIds, toggleOpen, setModal, onToggleActive, onDelete, onDetachRole, tagByName }) {
+function DepartmentsTab({ tree, openIds, toggleOpen, setModal, onToggleActive, onDelete, onDetachRole, tagByName, onOpenHomeEmployee }) {
   return (
     <div className="card p-0">
       <div className="p-4 border-b border-gray-100">
         <h2 className="text-sm font-semibold text-gray-700">Department tree</h2>
-        <p className="text-xs text-gray-400">Use the ⋮ menu on any department to add a sub-department, designations, or a head.</p>
+        <p className="text-xs text-gray-400">Home people come from Employee edit. Use ⋮ to manage structure, designations, or head.</p>
       </div>
       <div className="p-2">
         {tree.length === 0 && (
@@ -446,21 +458,23 @@ function DepartmentsTab({ tree, openIds, toggleOpen, setModal, onToggleActive, o
         )}
         {tree.map(node => (
           <DeptNode key={node.id} node={node} depth={0} openIds={openIds} toggleOpen={toggleOpen}
-            setModal={setModal} onToggleActive={onToggleActive} onDelete={onDelete} onDetachRole={onDetachRole} tagByName={tagByName} />
+            setModal={setModal} onToggleActive={onToggleActive} onDelete={onDelete} onDetachRole={onDetachRole}
+            tagByName={tagByName} onOpenHomeEmployee={onOpenHomeEmployee} />
         ))}
       </div>
     </div>
   );
 }
 
-function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, onDelete, onDetachRole, tagByName }) {
+function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, onDelete, onDetachRole, tagByName, onOpenHomeEmployee }) {
   const isOpen = openIds.has(node.id);
   const headTag = node.head_designation ? tagByName?.get(node.head_designation.trim().toLowerCase()) : null;
   const desigCount = (node.designations || []).length;
+  const homeCount = (node.home_employees || []).length;
   const childCount = (node.children || []).length;
-  const hasBody = !!node.head_name || desigCount > 0;
-  // A department folds if it has anything under it — head, designations, or
-  // sub-departments. Collapsing hides the whole body + children.
+  const hasBody = !!node.head_name || desigCount > 0 || homeCount > 0;
+  // A department folds if it has anything under it — head, home people,
+  // designations, or sub-departments. Collapsing hides the whole body + children.
   const expandable = hasBody || childCount > 0;
   const isRoot = depth === 0;
 
@@ -492,15 +506,18 @@ function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, 
         <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${node.active ? 'bg-green-500' : 'bg-gray-300'}`} title={node.active ? 'active' : 'inactive'} />
         {!isOpen && expandable && (
           <span className="text-[11px] text-gray-400 flex-shrink-0">
-            {[desigCount && `${desigCount} ${isRoot ? (desigCount > 1 ? 'roles' : 'role') : 'desig.'}`, childCount && `${childCount} sub`].filter(Boolean).join(' · ')}
+            {[
+              homeCount && `${homeCount} home`,
+              desigCount && `${desigCount} ${isRoot ? (desigCount > 1 ? 'roles' : 'role') : 'desig.'}`,
+              childCount && `${childCount} sub`,
+            ].filter(Boolean).join(' · ')}
           </span>
         )}
         <div className="ml-auto"><Menu items={menuItems} /></div>
       </div>
 
-      {/* Body — this department's head + designations, grouped under one subtle
-          left guide and aligned to a single left edge so the tree reads neatly.
-          The × is ALWAYS visible (mobile has no hover) — subtle grey, red on tap. */}
+      {/* Body — head (demarcation) + HOME people (HR-designated) + designations.
+          Read-only for people: click opens Employee edit. No inline home writes. */}
       {isOpen && hasBody && (
         <div className="border-l-2 border-gray-100 pl-3 my-1 space-y-1.5" style={{ marginLeft: depth * 16 + 19 }}>
           {node.head_name && (
@@ -509,6 +526,38 @@ function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, 
               <span className="font-semibold text-gray-800 truncate">{node.head_name}</span>
               {node.head_designation && <span className="text-gray-300 flex-shrink-0">·</span>}
               {node.head_designation && <span className="text-gray-500 truncate" title={headTag ? node.head_designation : undefined}>{headTag || node.head_designation}</span>}
+            </div>
+          )}
+          {homeCount > 0 && (
+            <div>
+              <div
+                className="text-[9px] font-bold uppercase tracking-wide text-emerald-600 mb-1"
+                title="Home — employees whose HR home department is this one. Change home in Employee edit."
+              >
+                Home
+              </div>
+              <ul className="space-y-0.5">
+                {(node.home_employees || []).map((e) => {
+                  const inactive = e.status && !['active', 'training'].includes(String(e.status).toLowerCase());
+                  return (
+                    <li key={e.id}>
+                      <button
+                        type="button"
+                        onClick={() => onOpenHomeEmployee?.(e)}
+                        className={`w-full text-left flex items-center gap-1.5 text-[12px] rounded pl-1 pr-2 py-0.5 hover:bg-emerald-50 ${inactive ? 'opacity-50' : ''}`}
+                        title="Open in Employee edit"
+                      >
+                        <span className="font-medium text-gray-800 truncate">{e.name}</span>
+                        {e.designation && <span className="text-gray-300 flex-shrink-0">·</span>}
+                        {e.designation && <span className="text-gray-500 truncate">{e.designation}</span>}
+                        {inactive && e.status && (
+                          <span className="ml-auto text-[10px] text-gray-400 flex-shrink-0 capitalize">{e.status}</span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           )}
           {(node.designations || []).length > 0 && (
@@ -537,7 +586,8 @@ function DeptNode({ node, depth, openIds, toggleOpen, setModal, onToggleActive, 
 
       {isOpen && (node.children || []).map(child => (
         <DeptNode key={child.id} node={child} depth={depth + 1} openIds={openIds} toggleOpen={toggleOpen}
-          setModal={setModal} onToggleActive={onToggleActive} onDelete={onDelete} onDetachRole={onDetachRole} tagByName={tagByName} />
+          setModal={setModal} onToggleActive={onToggleActive} onDelete={onDelete} onDetachRole={onDetachRole}
+          tagByName={tagByName} onOpenHomeEmployee={onOpenHomeEmployee} />
       ))}
     </div>
   );

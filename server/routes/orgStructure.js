@@ -102,8 +102,40 @@ router.get('/departments', requirePermission(M, 'view'), (req, res) => {
   const byDept = {};
   for (const m of maps) (byDept[m.department_id] ||= []).push({ id: m.id, name: m.name, tag_name: m.tag_name, status: m.status });
 
+  // Phase 2 — HOME people under each department (HR-designated place via
+  // employees.department_id). Skip for activeOnly picker payloads.
+  const homeByDept = {};
+  if (!activeOnly && tableHasColumn(db, 'employees', 'department_id')) {
+    const homeRows = db.prepare(`
+      SELECT id, name, designation, status, department_id
+      FROM employees
+      WHERE department_id IS NOT NULL
+      ORDER BY CASE lower(COALESCE(status, ''))
+                 WHEN 'active' THEN 0
+                 WHEN 'training' THEN 1
+                 ELSE 2
+               END,
+               name COLLATE NOCASE
+    `).all();
+    for (const e of homeRows) {
+      (homeByDept[e.department_id] ||= []).push({
+        id: e.id,
+        name: e.name,
+        designation: e.designation || null,
+        status: e.status || null,
+      });
+    }
+  }
+
   const nodes = {};
-  rows.forEach(r => { nodes[r.id] = { ...r, designations: byDept[r.id] || [], children: [] }; });
+  rows.forEach(r => {
+    nodes[r.id] = {
+      ...r,
+      designations: byDept[r.id] || [],
+      home_employees: homeByDept[r.id] || [],
+      children: [],
+    };
+  });
   const roots = [];
   rows.forEach(r => {
     const n = nodes[r.id];

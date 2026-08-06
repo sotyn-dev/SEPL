@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -75,6 +76,37 @@ export default function Employees() {
   // of the form state anymore; it just opens the workspace and reloads the
   // list when it reports a save.
   const workspace = useEmployeeForm({ onSaved: load });
+
+  // Deep-link from Org Structure HOME list: /employees?edit=:id opens the
+  // workspace once the roster is loaded, then clears the query param.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const openedEditRef = useRef(null);
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) {
+      openedEditRef.current = null;
+      return;
+    }
+    if (!employees.length || openedEditRef.current === editId) return;
+    const emp = employees.find((e) => String(e.id) === String(editId));
+    if (!emp) {
+      toast.error('Employee not found');
+      openedEditRef.current = editId;
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('edit');
+        return next;
+      }, { replace: true });
+      return;
+    }
+    openedEditRef.current = editId;
+    workspace.openEdit(emp);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('edit');
+      return next;
+    }, { replace: true });
+  }, [employees, searchParams, setSearchParams, workspace.openEdit]);
 
   // Delete an employee — surfaces WHY it's blocked instead of a bare "Delete
   // failed" (mam 2026-07-06). Payroll history → server 400 tells her to
