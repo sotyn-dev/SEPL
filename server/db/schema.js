@@ -6170,6 +6170,16 @@ in your first week. If a process feels broken, raise a Help Ticket
     console.warn('[indent_flow_settings] migrations skipped (non-fatal):', e.message);
   }
 
+  // System Requirements — product evolution tracker (lean Phase 1).
+  // Open access + dual Business/IT approvers via app_settings.
+  // docs/SYSTEM_REQUIREMENTS.md
+  try {
+    const { runSystemRequirementsMigrations } = require('./systemRequirementsSchema');
+    runSystemRequirementsMigrations(db);
+  } catch (e) {
+    console.warn('[system_requirements] migrations skipped (non-fatal):', e.message);
+  }
+
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────
   // "in rec. against delivery note show here ok site name also show here
   // delivery note number and against it we will upload receiving".
