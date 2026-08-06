@@ -33,7 +33,7 @@ function EditableBlock({
   saving,
   onSave,
   emptyText = '—',
-  minHeightClass = 'min-h-[80px]',
+  minHeightClass = 'min-h-[56px]',
   maxLength = null,
   lengthGuidance = null,
 }) {
@@ -544,10 +544,9 @@ export default function SystemRequirementWorkspace() {
           </div>
           <h1 className="text-xl font-semibold text-gray-900 mt-1">{data.title}</h1>
           {data.status === 'under_review' && (
-            <p className="text-sm text-amber-800 mt-1 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 inline-block">
-              Waiting for business approval — <strong>{data.assignee_name || 'business owner'}</strong>
+            <p className="text-sm text-amber-800 mt-1 inline-block">
+              &#9888; Waiting for business approval — <strong>{data.assignee_name || 'business owner'}</strong>
               {data.business_approved_at ? ' · signed off once before' : ''}
-              {' · '}Status locked
             </p>
           )}
         </div>
@@ -677,7 +676,7 @@ export default function SystemRequirementWorkspace() {
                 </div>
               </div>
               {data.status === 'under_review' && (
-                <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 w-full">
+                <p className="text-[11px] text-amber-800 w-full">
                   Assignee and status locked during business approval — use Approve / Need Clarification / Reject
                 </p>
               )}
