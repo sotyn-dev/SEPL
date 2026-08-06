@@ -5,7 +5,7 @@ const express = require('express');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
-const { TYPES, PRIORITIES, STATUSES, MANUAL_STATUSES, STATUS_LABELS } = require('../lib/systemRequirements/constants');
+const { TYPES, PRIORITIES, STATUSES, MANUAL_STATUSES, STATUS_LABELS, DESC_HARD_LIMIT, COMMENT_HARD_LIMIT } = require('../lib/systemRequirements/constants');
 const { appendHistory, listHistory } = require('../lib/systemRequirements/history');
 const { applyTransition, nextActionsFor, statusOptionsFor } = require('../lib/systemRequirements/statusMachine');
 const {
@@ -352,6 +352,9 @@ router.post('/', (req, res) => {
     if (b.priority && !PRIORITIES.includes(b.priority)) {
       return res.status(400).json({ error: 'Invalid priority' });
     }
+    if (b.description != null && String(b.description).length > DESC_HARD_LIMIT) {
+      return res.status(400).json({ error: `Description max ${DESC_HARD_LIMIT} characters` });
+    }
 
     const reqNumber = nextReqNumber(db);
     const status = b.submit ? 'submitted' : 'draft';
@@ -499,6 +502,9 @@ router.patch('/:id', (req, res) => {
       if (f === 'priority' && b[f] && !PRIORITIES.includes(b[f])) {
         return res.status(400).json({ error: 'Invalid priority' });
       }
+      if (f === 'description' && b[f] != null && String(b[f]).length > DESC_HARD_LIMIT) {
+        return res.status(400).json({ error: `Description max ${DESC_HARD_LIMIT} characters` });
+      }
       if (f === 'assignee_id' && b[f]) {
         const target = Number(b[f]);
         if (row.status === 'under_review') {
@@ -622,6 +628,9 @@ router.post('/:id/comments', (req, res) => {
     if (!row) return res.status(404).json({ error: 'Not found' });
     const body = (req.body?.body || '').trim();
     if (!body) return res.status(400).json({ error: 'Comment body required' });
+    if (body.length > COMMENT_HARD_LIMIT) {
+      return res.status(400).json({ error: `Comment max ${COMMENT_HARD_LIMIT} characters` });
+    }
 
     const info = db.prepare(`
       INSERT INTO sysreq_comments (requirement_id, parent_id, body, author_id)
@@ -668,6 +677,9 @@ router.patch('/:id/comments/:commentId', (req, res) => {
 
     const body = (req.body?.body || '').trim();
     if (!body) return res.status(400).json({ error: 'Comment body required' });
+    if (body.length > COMMENT_HARD_LIMIT) {
+      return res.status(400).json({ error: `Comment max ${COMMENT_HARD_LIMIT} characters` });
+    }
 
     db.prepare(`
       UPDATE sysreq_comments SET body = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?

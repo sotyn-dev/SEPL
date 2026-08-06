@@ -95,3 +95,45 @@ export function prettyAction(action) {
   if (action === 'close') return 'Close';
   return String(action || '').replace(/_/g, ' ');
 }
+
+/** Length limits (characters). */
+export const DESC_HARD_LIMIT = 2000;
+export const COMMENT_HARD_LIMIT = 2000;
+/** Development panel notes — frontend only (no server reject). */
+export const DEV_NOTES_HARD_LIMIT = 5000;
+
+export const DESC_GUIDANCE = 'Keep it clear and concise — module / department context can go here.';
+
+export function lengthHint(text = '', limit, guidance = null) {
+  const n = String(text || '').length;
+  if (n >= limit) {
+    return {
+      tone: 'warn',
+      text: `Limit reached (${n.toLocaleString()} / ${limit.toLocaleString()} characters).`,
+    };
+  }
+  if (n > Math.floor(limit * 0.9)) {
+    return {
+      tone: 'warn',
+      text: `Approaching limit (${n.toLocaleString()} / ${limit.toLocaleString()} characters).`,
+    };
+  }
+  if (guidance) {
+    return { tone: 'soft', text: `${guidance} (${n.toLocaleString()} / ${limit.toLocaleString()})` };
+  }
+  return { tone: 'soft', text: `${n.toLocaleString()} / ${limit.toLocaleString()}` };
+}
+
+export function descLengthHint(text = '') {
+  return lengthHint(text, DESC_HARD_LIMIT, DESC_GUIDANCE);
+}
+
+export function commentLengthHint(text = '') {
+  return lengthHint(text, COMMENT_HARD_LIMIT);
+}
+
+export function clipToLimit(text, limit) {
+  const s = String(text ?? '');
+  return s.length <= limit ? s : s.slice(0, limit);
+}
+

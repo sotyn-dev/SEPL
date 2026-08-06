@@ -10,7 +10,8 @@ import { fmtDate, fmtDateTime } from '../../utils/datetime';
 import { useAuth } from '../../context/AuthContext';
 import {
   TYPES, PRIORITIES, STATUSES, STATUS_COLORS, PRIORITY_COLORS,
-  labelOf, prettyAction,
+  labelOf, prettyAction, commentLengthHint, lengthHint,
+  DESC_HARD_LIMIT, COMMENT_HARD_LIMIT, DEV_NOTES_HARD_LIMIT, clipToLimit,
 } from './constants';
 
 const TABS = ['overview', 'discussion', 'attachments', 'development', 'timeline', 'release'];
@@ -33,6 +34,8 @@ function EditableBlock({
   onSave,
   emptyText = '—',
   minHeightClass = 'min-h-[80px]',
+  maxLength = null,
+  lengthGuidance = null,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || '');
@@ -52,9 +55,14 @@ function EditableBlock({
   };
 
   const save = async () => {
-    const ok = await onSave(draft);
+    const payload = maxLength != null ? clipToLimit(draft, maxLength) : draft;
+    const ok = await onSave(payload);
     if (ok) setEditing(false);
   };
+
+  const hint = maxLength != null
+    ? lengthHint(editing ? draft : value, maxLength, lengthGuidance)
+    : null;
 
   return (
     <div>
@@ -72,16 +80,23 @@ function EditableBlock({
             <textarea
               className={`input w-full ${minHeightClass}`}
               value={draft}
-              onChange={e => setDraft(e.target.value)}
+              maxLength={maxLength || undefined}
+              onChange={e => setDraft(maxLength != null ? clipToLimit(e.target.value, maxLength) : e.target.value)}
               autoFocus
             />
           ) : (
             <input
               className="input w-full"
               value={draft}
-              onChange={e => setDraft(e.target.value)}
+              maxLength={maxLength || undefined}
+              onChange={e => setDraft(maxLength != null ? clipToLimit(e.target.value, maxLength) : e.target.value)}
               autoFocus
             />
+          )}
+          {hint && (
+            <p className={`text-[11px] mt-1 ${hint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>
+              {hint.text}
+            </p>
           )}
           <div className="mt-2 flex gap-2">
             <button
@@ -103,9 +118,14 @@ function EditableBlock({
           </div>
         </>
       ) : (
-        <div className={`text-sm text-gray-800 whitespace-pre-wrap ${multiline ? minHeightClass : ''} ${!value ? 'text-gray-400' : ''}`}>
-          {value || emptyText}
-        </div>
+        <>
+          <div className={`text-sm text-gray-800 whitespace-pre-wrap ${multiline ? minHeightClass : ''} ${!value ? 'text-gray-400' : ''}`}>
+            {value || emptyText}
+          </div>
+          {hint && value && hint.tone === 'warn' && (
+            <p className="text-[11px] mt-1 text-amber-700">{hint.text}</p>
+          )}
+        </>
       )}
     </div>
   );
@@ -342,8 +362,14 @@ export default function SystemRequirementWorkspace() {
 
   const addComment = async () => {
     if (!comment.trim()) return;
+    if (comment.length > COMMENT_HARD_LIMIT) {
+      toast.error(`Comment max ${COMMENT_HARD_LIMIT} characters`);
+      return;
+    }
     try {
-      const { data: c } = await api.post(`/system-requirements/${id}/comments`, { body: comment.trim() });
+      const { data: c } = await api.post(`/system-requirements/${id}/comments`, {
+        body: clipToLimit(comment.trim(), COMMENT_HARD_LIMIT),
+      });
       setData(d => ({ ...d, comments: [...(d.comments || []), c] }));
       setComment('');
       toast.success('Comment added');
@@ -369,9 +395,13 @@ export default function SystemRequirementWorkspace() {
   };
 
   const saveComment = async (commentId) => {
-    const body = editingCommentBody.trim();
+    const body = clipToLimit(editingCommentBody.trim(), COMMENT_HARD_LIMIT);
     if (!body) {
       toast.error('Comment cannot be empty');
+      return;
+    }
+    if (editingCommentBody.length > COMMENT_HARD_LIMIT) {
+      toast.error(`Comment max ${COMMENT_HARD_LIMIT} characters`);
       return;
     }
     try {
@@ -604,6 +634,8 @@ export default function SystemRequirementWorkspace() {
               canEdit={canField(data, 'description')}
               saving={saving}
               emptyText="No description yet."
+              maxLength={DESC_HARD_LIMIT}
+              lengthGuidance="Keep it clear and concise — module / department context can go here."
               onSave={(v) => patch({ description: v || null })}
             />
           </div>
@@ -759,9 +791,18 @@ export default function SystemRequirementWorkspace() {
                       <textarea
                         className="input w-full min-h-[70px]"
                         value={editingCommentBody}
-                        onChange={e => setEditingCommentBody(e.target.value)}
+                        maxLength={COMMENT_HARD_LIMIT}
+                        onChange={e => setEditingCommentBody(clipToLimit(e.target.value, COMMENT_HARD_LIMIT))}
                         autoFocus
                       />
+                      {(() => {
+                        const hint = commentLengthHint(editingCommentBody);
+                        return (
+                          <p className={`text-[11px] ${hint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>
+                            {hint.text}
+                          </p>
+                        );
+                      })()}
                       <div className="flex gap-2">
                         <button
                           type="button"
@@ -786,9 +827,25 @@ export default function SystemRequirementWorkspace() {
               );
             })}
           </div>
-          <div className="flex gap-2">
-            <textarea className="input flex-1 min-h-[70px]" value={comment} onChange={e => setComment(e.target.value)} placeholder="Add a comment… (@name is fine as plain text)" />
-            <button type="button" onClick={addComment} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white self-end">Post</button>
+          <div className="space-y-1">
+            <div className="flex gap-2">
+              <textarea
+                className="input flex-1 min-h-[70px]"
+                value={comment}
+                maxLength={COMMENT_HARD_LIMIT}
+                onChange={e => setComment(clipToLimit(e.target.value, COMMENT_HARD_LIMIT))}
+                placeholder="Add a comment… (@name is fine as plain text)"
+              />
+              <button type="button" onClick={addComment} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white self-end">Post</button>
+            </div>
+            {(() => {
+              const hint = commentLengthHint(comment);
+              return (
+                <p className={`text-[11px] ${hint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>
+                  {hint.text}
+                </p>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -804,6 +861,7 @@ export default function SystemRequirementWorkspace() {
               canEdit={canField(data, key)}
               saving={saving}
               emptyText="Not filled yet."
+              maxLength={DEV_NOTES_HARD_LIMIT}
               onSave={(v) => patch({ [key]: v || null })}
             />
           ))}

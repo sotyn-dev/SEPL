@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import api from '../../api';
 import Modal from '../../components/Modal';
 import toast from 'react-hot-toast';
-import { TYPES, PRIORITIES } from './constants';
+import { TYPES, PRIORITIES, DESC_HARD_LIMIT, descLengthHint, clipToLimit } from './constants';
 
 const empty = {
   title: '',
@@ -27,10 +27,15 @@ export default function CreateModal({ open, onClose, onCreated }) {
       toast.error('Title is required');
       return;
     }
+    if ((form.description || '').length > DESC_HARD_LIMIT) {
+      toast.error(`Description max ${DESC_HARD_LIMIT} characters`);
+      return;
+    }
     setSaving(true);
     try {
       const { data } = await api.post('/system-requirements', {
         ...form,
+        description: form.description || null,
         submit,
       });
       toast.success(submit ? 'Submitted — Waiting (priority IT manager)' : 'Draft saved');
@@ -42,6 +47,8 @@ export default function CreateModal({ open, onClose, onCreated }) {
       setSaving(false);
     }
   };
+
+  const descHint = descLengthHint(form.description);
 
   return (
     <Modal isOpen={open} onClose={onClose} title="New requirement" wide>
@@ -55,9 +62,13 @@ export default function CreateModal({ open, onClose, onCreated }) {
           <textarea
             className="input w-full mt-1 min-h-[110px]"
             value={form.description}
-            onChange={e => set('description', e.target.value)}
+            maxLength={DESC_HARD_LIMIT}
+            onChange={e => set('description', clipToLimit(e.target.value, DESC_HARD_LIMIT))}
             placeholder="What is needed and why? Include ERP module / department context here if relevant."
           />
+          <p className={`text-[11px] mt-1 ${descHint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>
+            {descHint.text}
+          </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>

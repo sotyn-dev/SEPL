@@ -61,6 +61,10 @@ const OPEN_STATUSES = STATUSES.filter(s => !['closed', 'archived', 'rejected'].i
 const DONE_STATUSES = ['released', 'closed', 'archived'];
 const STALE_DAYS = 14;
 
+/** Hard character limits (description + discussion comments). Dev notes are FE-only. */
+const DESC_HARD_LIMIT = 2000;
+const COMMENT_HARD_LIMIT = 2000;
+
 const SETTINGS_KEYS = {
   itManagers: 'sysreq_it_manager_ids',
   itTeam: 'sysreq_it_team_ids',
@@ -104,6 +108,8 @@ module.exports = {
   OPEN_STATUSES,
   DONE_STATUSES,
   STALE_DAYS,
+  DESC_HARD_LIMIT,
+  COMMENT_HARD_LIMIT,
   SETTINGS_KEYS,
   TRANSITIONS,
 };
