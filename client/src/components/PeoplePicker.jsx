@@ -240,7 +240,7 @@ export default function PeoplePicker({
               ref={inputRef}
               type="text"
               className="input text-sm w-full"
-              placeholder="Type a name, email or department…"
+              placeholder="Type a name or email…"
               value={search}
               onChange={e => { setSearch(e.target.value); setActive(0); }}
               onKeyDown={onSearchKeyDown}

@@ -87,6 +87,7 @@ export default function useEmployeeForm({ onSaved }) {
     setOriginal(null);
     setForm({
       name: '', phone: '', email: '', designation: '', department: '',
+      department_id: null, designation_id: null,
       join_date: '', salary: 0, user_id: null, roster: 'general',
       // Form-only defaults for a brand-new hire — never written to the DB
       // until a section Save sends them (see schema.js: no DB-level default,
@@ -177,6 +178,8 @@ export default function useEmployeeForm({ onSaved }) {
     const payload = {
       name: form.name, phone: form.phone, email: form.email,
       designation: form.designation, department: form.department,
+      designation_id: form.designation_id || null,
+      department_id: form.department_id || null,
       join_date: form.join_date, user_id: form.user_id, roster: form.roster,
     };
     // Only send salary if it's actually set — 0 is the Draft default and

@@ -147,9 +147,9 @@ function recordEmployeeChange(db, opts) {
 
   // Open the new full-snapshot row. Snapshot columns + values come from the field
   // registry (lib/employeeFields.js) — a new `snapshot: true` field there is now
-  // enough to appear here, no second hand-edit. department_id/designation_id stay
-  // NULL — org-structure carries only the free-text department/designation for
-  // now; the *_id columns fill in once the employee write path resolves them.
+  // enough to appear here, no second hand-edit. department_id/designation_id are
+  // bind metadata (not tracked change fields): copied from the live employee
+  // row so rename self-heal + Org HOME can key off open timeline rows.
   // manager_id (Phase 5) is populated straight off the snapshot's
   // reports_to_employee_id — see the FIELDS registry comment on that entry for
   // why the raw id and the denormalized manager_label are two separate columns.
@@ -161,6 +161,7 @@ function recordEmployeeChange(db, opts) {
   const bankAccountMaskedVal = maskAccount(emp.bank_account_number);
   const cols = [
     'employee_id', ...snapshotTimelineCols(), 'manager_id',
+    'department_id', 'designation_id',
     'salary_effective_from', 'status_effective_from', 'salary_action', 'salary_reason_code',
     'confirmation_effective_from',
     'effective_from', 'effective_seq', 'effective_to',
@@ -171,6 +172,7 @@ function recordEmployeeChange(db, opts) {
       linkedUserLabel: linkedLabel, managerLabel: managerLabelVal,
       aadharMasked: aadharMaskedVal, bankAccountMasked: bankAccountMaskedVal,
     }), emp.reports_to_employee_id || null,
+    emp.department_id || null, emp.designation_id || null,
     salaryEff, statusEff, salaryActionVal, salaryReasonVal,
     confirmationEff,
     eff, seq, null,

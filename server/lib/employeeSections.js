@@ -20,7 +20,7 @@ const SECTIONS = {
     'photo_url', 'name', 'date_of_birth', 'gender', 'father_spouse_name', 'blood_group',
   ],
   employment: [
-    'designation', 'department', 'reports_to_employee_id', 'grade',
+    'designation', 'department', 'designation_id', 'department_id', 'reports_to_employee_id', 'grade',
     'employment_type', 'join_date', 'probation_end_date', 'confirmation_status',
     'notice_period_days', 'salary', 'roster', 'status',
   ],

@@ -88,6 +88,15 @@ function runHrMigrations(db) {
     try { db.exec(`ALTER TABLE employees ADD COLUMN ${col}`); } catch (e) {}
   }
 
+  // Plan B.0 Phase 1 — soft org binds on the live employee row. Leaf TEXT
+  // (department / designation) stays the denormalized display/legacy axis;
+  // these IDs are the identity for rename self-heal + Org Structure HOME.
+  // Soft refs (no FK) so catalog deactivate/delete guards stay app-level.
+  try { db.exec('ALTER TABLE employees ADD COLUMN department_id INTEGER'); } catch (e) {}
+  try { db.exec('ALTER TABLE employees ADD COLUMN designation_id INTEGER'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_employees_department_id ON employees(department_id)'); } catch (e) {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_employees_designation_id ON employees(designation_id)'); } catch (e) {}
+
   // Statutory/Compliance catalogs (PT State, Bank Name) — same shape and
   // pattern as org_grades (orgSchema.js): id/name/sort_order/active, seeded
   // once on an empty table, CRUD deferred to Org Structure later. Bank Name's

@@ -23,6 +23,61 @@ function activeHolders(db, designationId) {
   `).get(designationId).c;
 }
 
+// PRAGMA helper — Phase 1 will add employees.department_id / designation_id;
+// hard-delete guards check those columns only when they exist.
+function tableHasColumn(db, table, col) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col);
+}
+
+// Template Set is bootstrap-only. Once any employee (or timeline catalog bind)
+// exists, resetting the catalog would orphan or wipe live HR data.
+function templateSetGuard(db) {
+  const employeeCount = db.prepare('SELECT COUNT(*) c FROM employees').get().c;
+  if (employeeCount > 0) {
+    return {
+      allowed: false,
+      employeeCount,
+      reason: 'Template Set is for initial structure only. Employees already exist — edit the tree instead of resetting.',
+    };
+  }
+  const timelineRefs = db.prepare(`
+    SELECT COUNT(*) c FROM employee_timeline
+    WHERE department_id IS NOT NULL OR designation_id IS NOT NULL
+  `).get().c;
+  if (timelineRefs > 0) {
+    return {
+      allowed: false,
+      employeeCount: 0,
+      reason: 'Template Set is for initial structure only. Employee history already references departments or designations.',
+    };
+  }
+  return { allowed: true, employeeCount: 0, reason: null };
+}
+
+function departmentHardDeleteBlock(db, id) {
+  const timeline = db.prepare('SELECT COUNT(*) c FROM employee_timeline WHERE department_id=?').get(id).c;
+  if (timeline) {
+    return 'Employees are (or were) tagged to this department — deactivate it instead of deleting';
+  }
+  if (tableHasColumn(db, 'employees', 'department_id')) {
+    const live = db.prepare('SELECT COUNT(*) c FROM employees WHERE department_id=?').get(id).c;
+    if (live) return 'Employees are assigned to this department — deactivate it instead of deleting';
+  }
+  return null;
+}
+
+function designationHardDeleteBlock(db, id) {
+  const timeline = db.prepare('SELECT COUNT(*) c FROM employee_timeline WHERE designation_id=?').get(id).c;
+  if (timeline) {
+    return 'This title is in use — set it to “not wanted” instead of deleting';
+  }
+  if (tableHasColumn(db, 'employees', 'designation_id')) {
+    const live = db.prepare('SELECT COUNT(*) c FROM employees WHERE designation_id=?').get(id).c;
+    if (live) return 'This title is assigned to employees — set it to “not wanted” instead of deleting';
+  }
+  return null;
+}
+
 // ─── Departments ────────────────────────────────────────────────────────────
 
 // Nested tree. ?activeOnly=1 flattens to active departments (for pickers).
@@ -121,20 +176,31 @@ router.put('/departments/:id', requirePermission(M, 'edit'), (req, res) => {
         b.parent_id !== undefined ? b.parent_id : dept.parent_id,
         id,
       );
-      // Rename clockwork (design §7): re-derive the cached LEAF string on every
-      // employee CURRENTLY tagged here (open timeline row) + mirror the linked
-      // users.department — same transaction. No-op until employees are tagged.
+      // Rename self-heal (Plan B.0): refresh denormalized leaf TEXT on every
+      // employee currently bound here — via live employees.department_id and
+      // via open timeline rows (covers pre-bind timeline tags). Linked
+      // users.department mirrors the same set.
       if (b.name !== undefined && newName !== dept.name) {
+        db.prepare('UPDATE employees SET department=? WHERE department_id=?').run(newName, id);
+        // Pre-bind open timeline tags (id on timeline, not yet on employees row).
         db.prepare(`
           UPDATE employees SET department=?
-          WHERE id IN (SELECT employee_id FROM employee_timeline WHERE department_id=? AND effective_to IS NULL)
+          WHERE department_id IS NULL
+            AND id IN (SELECT employee_id FROM employee_timeline WHERE department_id=? AND effective_to IS NULL)
+        `).run(newName, id);
+        db.prepare(`
+          UPDATE users SET department=?
+          WHERE id IN (
+            SELECT e.user_id FROM employees e
+            WHERE e.department_id=? AND e.user_id IS NOT NULL
+          )
         `).run(newName, id);
         db.prepare(`
           UPDATE users SET department=?
           WHERE id IN (
             SELECT e.user_id FROM employees e
             JOIN employee_timeline t ON t.employee_id = e.id
-            WHERE t.department_id=? AND t.effective_to IS NULL AND e.user_id IS NOT NULL
+            WHERE e.department_id IS NULL AND t.department_id=? AND t.effective_to IS NULL AND e.user_id IS NOT NULL
           )
         `).run(newName, id);
       }
@@ -157,10 +223,9 @@ router.delete('/departments/:id', requirePermission(M, 'delete'), (req, res) => 
   if (!dept) return res.status(404).json({ error: 'Not found' });
   const kids = db.prepare('SELECT COUNT(*) c FROM org_departments WHERE parent_id=?').get(id).c;
   if (kids) return res.status(400).json({ error: 'This department has sub-departments — move or remove them first, or deactivate instead' });
-  // Any timeline reference (open OR closed) blocks a hard delete — preserve
-  // history; deactivate instead. (Also avoids the FK RESTRICT surfacing raw.)
-  const refs = db.prepare('SELECT COUNT(*) c FROM employee_timeline WHERE department_id=?').get(id).c;
-  if (refs) return res.status(400).json({ error: 'Employees are (or were) tagged to this department — deactivate it instead of deleting' });
+  // Timeline (any era) or live employees.department_id → deactivate, never wipe.
+  const block = departmentHardDeleteBlock(db, id);
+  if (block) return res.status(400).json({ error: block });
   db.prepare('DELETE FROM org_departments WHERE id=?').run(id); // junction rows cascade
   res.json({ ok: true });
 });
@@ -249,12 +314,14 @@ router.put('/designations/:id', requirePermission(M, 'edit'), (req, res) => {
         b.status !== undefined ? b.status : d.status,
         id,
       );
-      // Designation rename → re-derive the cached leaf string on currently-tagged
-      // employees (symmetry with dept rename; no users.designation column exists).
+      // Designation rename → re-derive cached leaf TEXT on bound employees
+      // (live designation_id + open timeline tags). Closed timeline untouched.
       if (b.name !== undefined && newName !== d.name) {
+        db.prepare('UPDATE employees SET designation=? WHERE designation_id=?').run(newName, id);
         db.prepare(`
           UPDATE employees SET designation=?
-          WHERE id IN (SELECT employee_id FROM employee_timeline WHERE designation_id=? AND effective_to IS NULL)
+          WHERE designation_id IS NULL
+            AND id IN (SELECT employee_id FROM employee_timeline WHERE designation_id=? AND effective_to IS NULL)
         `).run(newName, id);
       }
     });
@@ -272,8 +339,8 @@ router.delete('/designations/:id', requirePermission(M, 'delete'), (req, res) =>
   const id = Number(req.params.id);
   const d = db.prepare('SELECT * FROM org_designations WHERE id=?').get(id);
   if (!d) return res.status(404).json({ error: 'Not found' });
-  const inUse = db.prepare('SELECT COUNT(*) c FROM employee_timeline WHERE designation_id=?').get(id).c;
-  if (inUse) return res.status(400).json({ error: 'This title is in use — set it to “not wanted” instead of deleting' });
+  const block = designationHardDeleteBlock(db, id);
+  if (block) return res.status(400).json({ error: block });
   db.prepare('DELETE FROM org_designations WHERE id=?').run(id); // junction rows cascade
   res.json({ ok: true });
 });
@@ -298,21 +365,11 @@ router.delete('/departments/:id/designations/:designationId', requirePermission(
   res.json({ ok: true });
 });
 
-// ─── Template reset (Mandatory Field Spec HR-2/HR-3 draft catalog) ──────────
-// "Start over, cleanly" — wipes the designation catalog and any department
-// outside root + the 5 function nodes + the spec's 11 leaves, then reseeds
-// from db/orgTemplate.js (dme 2026-08-03: the pre-parking test data — a mock
-// "MOCK Ravi Kumar" as head, typo'd/duplicate titles like "Staffs" and
-// "Managing Director1" — isn't real data worth preserving; a clean template
-// is more useful than perpetuating it). Destructive BY DESIGN, gated behind
-// requirePermission(M,'delete') and a confirm dialog on the client naming
-// exactly what will be removed. Re-runnable: edit orgTemplate.js when the
-// real Role Master Sheet 03 arrives, click again, it applies with no deploy.
-//
-// Safe today specifically because employee_timeline.department_id/
-// designation_id are still NULL — nothing has wired the Employee form to
-// them yet (later phase), so no employee history references any row this
-// deletes. Revisit this endpoint's safety once that wiring lands.
+// ─── Template bootstrap (Mandatory Field Spec HR-2/HR-3 draft catalog) ──────
+// Initial-structure tool only: wipes non-skeleton departments + the whole
+// designation catalog, then reseeds from db/orgTemplate.js. Preview stays
+// available always. Set is blocked once any employee (or timeline catalog
+// bind) exists — playground reset after go-live is not allowed (Plan B.0 P0).
 
 // Read-only: which departments WOULD be removed, and the resulting counts —
 // shared by /template/preview (GET, no mutation) and /template/load (POST,
@@ -356,12 +413,17 @@ function computeTemplateDiff(db, tpl) {
   };
 }
 
-// List available templates — populates the client's dropdown. Add a new
-// template by editing db/orgTemplate.js's TEMPLATES list; nothing else
-// needs to change for it to show up here.
+// List available templates + whether Set is still allowed (bootstrap-only).
 router.get('/templates', requirePermission(M, 'view'), (req, res) => {
+  const db = getDb();
   const { TEMPLATES } = require('../db/orgTemplate');
-  res.json(TEMPLATES.map((t) => ({ id: t.id, name: t.name, description: t.description })));
+  const guard = templateSetGuard(db);
+  res.json({
+    templates: TEMPLATES.map((t) => ({ id: t.id, name: t.name, description: t.description })),
+    setAllowed: guard.allowed,
+    setBlockedReason: guard.reason,
+    employeeCount: guard.employeeCount,
+  });
 });
 
 // Preview only — computes the diff, mutates nothing. requirePermission(M,
@@ -373,10 +435,13 @@ router.get('/template/preview', requirePermission(M, 'view'), (req, res) => {
   if (!tpl) return res.status(400).json({ error: 'Unknown template' });
   const diff = computeTemplateDiff(db, tpl);
   if (!diff) return res.status(400).json({ error: 'No root department — org structure was never seeded' });
+  const guard = templateSetGuard(db);
   res.json({
     departmentsToRemove: diff.departmentsToRemove.map((d) => d.name),
     currentDesignationCount: diff.currentDesignationCount,
     newDesignationCount: diff.newDesignationCount,
+    setAllowed: guard.allowed,
+    setBlockedReason: guard.reason,
   });
 });
 
@@ -386,6 +451,11 @@ router.post('/template/load', requirePermission(M, 'delete'), (req, res) => {
   const { ensureSpecDepartments } = require('../db/orgSchema');
   const tpl = getTemplate((req.body || {}).id);
   if (!tpl) return res.status(400).json({ error: 'Unknown template' });
+
+  const guard = templateSetGuard(db);
+  if (!guard.allowed) {
+    return res.status(400).json({ error: guard.reason });
+  }
 
   try {
     const result = db.transaction(() => {

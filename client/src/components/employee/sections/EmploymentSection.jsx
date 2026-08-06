@@ -2,7 +2,9 @@ import { useState, useEffect, useMemo } from 'react';
 import { FiLock, FiUnlock } from 'react-icons/fi';
 import api from '../../../api';
 import PeoplePicker from '../../PeoplePicker';
+import OrgCatalogPicker, { departmentCatalogOptions, designationCatalogOptions } from '../../OrgCatalogPicker';
 import { normalizePeople } from '../../../hooks/usePeopleOptions';
+import useDepartmentTree from '../../../hooks/useDepartmentTree';
 import WasHint, { FieldError, trackAccent } from '../WasHint';
 import { fmtDate } from '../../../utils/datetime';
 import { JOIN_DATE_MIN, JOIN_DATE_MAX } from '../../../constants/employeeValidation';
@@ -22,6 +24,18 @@ function fetchGrades() {
   return gradesPromise;
 }
 
+let desigCache = null;
+let desigPromise = null;
+function fetchDesignations() {
+  if (desigCache) return Promise.resolve(desigCache);
+  if (!desigPromise) {
+    desigPromise = api.get('/org-structure/designations', { params: { status: 'present' } })
+      .then((r) => { desigCache = Array.isArray(r.data) ? r.data : []; return desigCache; })
+      .catch((err) => { desigPromise = null; throw err; });
+  }
+  return desigPromise;
+}
+
 // date-string in, date-string out — used only for the probation suggestion
 // below, never written to the field until HR clicks "Use".
 const plusMonths = (ymd, months) => {
@@ -38,12 +52,36 @@ const plusMonths = (ymd, months) => {
 export default function EmploymentSection({ ws, employees, canSeeSalary }) {
   const { form, setForm, changedSet, original, revertField, joinDateLocked, setJoinDateLocked, editing } = ws;
   const [grades, setGrades] = useState(gradesCache || []);
+  const [designations, setDesignations] = useState(desigCache || []);
+  const [desigError, setDesigError] = useState(false);
+  const { tree: deptTree, loading: deptLoading, error: deptError, refresh: refreshDepts } = useDepartmentTree({ activeOnly: true });
+
   useEffect(() => { fetchGrades().then(setGrades); }, []);
+  const loadDesigs = () => {
+    setDesigError(false);
+    fetchDesignations().then(setDesignations).catch(() => setDesigError(true));
+  };
+  useEffect(() => { loadDesigs(); }, []);
 
   const managerOptions = useMemo(
     () => normalizePeople(employees, 'employee').filter((e) => !editing || e.id !== editing.id),
     [employees, editing],
   );
+
+  const deptOptions = useMemo(() => departmentCatalogOptions(deptTree), [deptTree]);
+  const desigOptions = useMemo(() => designationCatalogOptions(designations), [designations]);
+
+  const singletonWarn = useMemo(() => {
+    if (!form.designation_id) return null;
+    const opt = desigOptions.find((o) => o.id === form.designation_id);
+    if (!opt?.singleton || !(opt.active_holders > 0)) return null;
+    // Soft warn only — still saveable. Ignore self when editing the sole holder.
+    const holders = opt.active_holders;
+    const selfHolds = editing?.designation_id === form.designation_id;
+    if (selfHolds && holders <= 1) return null;
+    return `Unique title — currently held by ${holders} active employee${holders === 1 ? '' : 's'}. You can still save.`;
+  }, [form.designation_id, desigOptions, editing]);
+
   // Spec HR-7 says "DOJ + 3m (blue) or 6m (white)" — no blue/white collar
   // concept exists here (or in the source data), so it's mapped to
   // employment_type per the plan's documented decision: Permanent -> 6m
@@ -52,6 +90,9 @@ export default function EmploymentSection({ ws, employees, canSeeSalary }) {
   const probationMonths = form.employment_type === 'Permanent' ? 6 : 3;
   const suggestedProbation = form.employment_type && form.join_date ? plusMonths(form.join_date, probationMonths) : null;
 
+  const legacyDept = !form.department_id && form.department ? form.department : '';
+  const legacyDesig = !form.designation_id && form.designation ? form.designation : '';
+
   return (
     <div className="space-y-4">
       <div>
@@ -59,22 +100,55 @@ export default function EmploymentSection({ ws, employees, canSeeSalary }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className={trackAccent(changedSet, 'designation')}>
             <label className="label">Designation</label>
-            <input className="input" list="empDesigDL" value={form.designation || ''} onChange={(e) => setForm({ ...form, designation: e.target.value })} placeholder="Pick or type" />
-            <datalist id="empDesigDL">{[...new Set(employees.map((e) => e.designation).filter(Boolean))].map((d) => <option key={d} value={d} />)}</datalist>
-            <WasHint k="designation" changedSet={changedSet} original={original} revertField={revertField} />
+            <OrgCatalogPicker
+              options={desigOptions}
+              value={form.designation_id || null}
+              legacyLabel={legacyDesig}
+              loading={!desigCache && !desigError && designations.length === 0}
+              error={desigError}
+              onRetry={() => { desigCache = null; desigPromise = null; loadDesigs(); }}
+              placeholder="Select designation…"
+              searchPlaceholder="Search title or tag…"
+              warning={singletonWarn}
+              onChange={(id, opt) => setForm({
+                ...form,
+                designation_id: id,
+                designation: opt ? opt.label : '',
+              })}
+            />
+            <WasHint k="designation" changedSet={changedSet} original={original} revertField={(k) => {
+              revertField(k);
+              revertField('designation_id');
+            }} />
           </div>
           <div className={trackAccent(changedSet, 'department')}>
             <label className="label">Department</label>
-            <input className="input" list="empDeptDL" value={form.department || ''} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="Pick or type" />
-            <datalist id="empDeptDL">{[...new Set(employees.map((e) => e.department).filter(Boolean))].map((d) => <option key={d} value={d} />)}</datalist>
-            <WasHint k="department" changedSet={changedSet} original={original} revertField={revertField} />
+            <OrgCatalogPicker
+              options={deptOptions}
+              value={form.department_id || null}
+              legacyLabel={legacyDept}
+              loading={deptLoading}
+              error={!!deptError}
+              onRetry={refreshDepts}
+              placeholder="Select department…"
+              searchPlaceholder="Search department…"
+              onChange={(id, opt) => setForm({
+                ...form,
+                department_id: id,
+                department: opt ? opt.label : '',
+              })}
+            />
+            <WasHint k="department" changedSet={changedSet} original={original} revertField={(k) => {
+              revertField(k);
+              revertField('department_id');
+            }} />
           </div>
           <div className={trackAccent(changedSet, 'reports_to_employee_id')}>
             <label className="label">Reports To</label>
             <PeoplePicker
               options={managerOptions}
               value={form.reports_to_employee_id || null}
-              placeholder="Search by name…"
+              placeholder="Search name or email…"
               onChange={(id) => setForm({ ...form, reports_to_employee_id: id })}
             />
             <WasHint k="reports_to_employee_id" fmt={(v) => employees.find((e) => e.id === v)?.name || '—'} changedSet={changedSet} original={original} revertField={revertField} />

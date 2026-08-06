@@ -15,6 +15,7 @@ const { validateEmployee, getActivationGaps, computeCompleteness } = require('..
 const { SECTIONS: EMPLOYEE_SECTIONS } = require('../lib/employeeSections');
 const { encryptAadhaar, last4: aadharLast4 } = require('../lib/cryptoFields');
 const { getEmployeeFull, FULL_SELECT_LIST, FULL_JOIN_SQL, STATUTORY_COLS, COMPENSATION_COLS } = require('../lib/employeeQuery');
+const { resolveOrgEmployeeBind } = require('../lib/orgEmployeeBind');
 
 // Statutory/Compliance pack — can the caller see the FULL bank account number
 // and (n/a for Aadhaar — that one's never shown in the clear, see cryptoFields.js
@@ -853,7 +854,9 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           pf_deduction, esi_deduction, professional_tax, tds_estimated_annual, reimbursements,
           bonus_target_pct, last_increment_date, salary_review_cycle,
           // Assets pack (Module 3)
-          laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number } = req.body;
+          laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number,
+          // Plan B.0 — org catalog binds (optional on create)
+          department_id, designation_id } = req.body;
   let { user_id } = req.body;
   const db = getDb();
   // Auto-link by email if user_id wasn't explicitly set
@@ -873,6 +876,14 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   const errors = validateEmployee(req.body, { db });
   if (errors.length) return res.status(400).json({ error: errors[0].message, errors });
 
+  // Resolve catalog binds → authoritative leaf names (Plan B.0).
+  const bind = resolveOrgEmployeeBind(db, { department_id, designation_id, department, designation });
+  if (bind.errors.length) return res.status(400).json({ error: bind.errors[0].message, errors: bind.errors });
+  const deptText = bind.department_id !== undefined ? bind.department : (department || null);
+  const desigText = bind.designation_id !== undefined ? bind.designation : (designation || null);
+  const deptId = bind.department_id !== undefined ? bind.department_id : null;
+  const desigId = bind.designation_id !== undefined ? bind.designation_id : null;
+
   // Insert the employee, stamp updated_at, seed employee_statutory/
   // employee_compensation satellite rows (dme 2026-08-04 split — see
   // hrSchema.js), and seed the opening "Hired" timeline row — one
@@ -880,7 +891,7 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   // anchor rows.
   const createEmp = db.transaction(() => {
     const r = db.prepare(`
-      INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
+      INSERT INTO employees (user_id,name,phone,email,designation,department,department_id,designation_id,join_date,salary,
                              aadhar_file, pan_file, qualification_file, roster,
                              reports_to_employee_id, employment_type, grade, probation_end_date,
                              confirmation_status, notice_period_days, date_of_birth, gender,
@@ -890,8 +901,8 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                              form11_file, formf_file,
                              laptop_asset_tag, mobile_asset_tag, vehicle_allotted, sim_card_number,
                              onboarding_status, updated_at)
-      VALUES (${Array(37).fill('?').join(',')})
-    `).run(user_id || null, name, phone || null, email || null, designation || null, department || null,
+      VALUES (${Array(39).fill('?').join(',')})
+    `).run(user_id || null, name, phone || null, email || null, desigText, deptText, deptId, desigId,
           join_date || null, salary || null,
           aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
           reports_to_employee_id || null, employment_type || null, grade || null, probation_end_date || null,
@@ -1040,8 +1051,26 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   const name = req.body.name !== undefined ? req.body.name : before.name;
   const phone = req.body.phone !== undefined ? req.body.phone : before.phone;
   const email = req.body.email !== undefined ? req.body.email : before.email;
-  const designation = req.body.designation !== undefined ? req.body.designation : before.designation;
-  const department = req.body.department !== undefined ? req.body.department : before.department;
+  // Plan B.0 — catalog ids are authoritative for leaf TEXT when sent.
+  // Partial-save: omitted ids keep before.*; explicit null clears the bind.
+  const bindInput = {};
+  if (req.body.department_id !== undefined) bindInput.department_id = req.body.department_id;
+  if (req.body.designation_id !== undefined) bindInput.designation_id = req.body.designation_id;
+  if (req.body.department !== undefined) bindInput.department = req.body.department;
+  if (req.body.designation !== undefined) bindInput.designation = req.body.designation;
+  const bind = Object.keys(bindInput).length
+    ? resolveOrgEmployeeBind(db, bindInput)
+    : { department_id: undefined, designation_id: undefined, department: undefined, designation: undefined, errors: [] };
+  if (bind.errors.length) return res.status(400).json({ error: bind.errors[0].message, errors: bind.errors });
+
+  const designation = bind.designation_id !== undefined
+    ? bind.designation
+    : (req.body.designation !== undefined ? req.body.designation : before.designation);
+  const department = bind.department_id !== undefined
+    ? bind.department
+    : (req.body.department !== undefined ? req.body.department : before.department);
+  const department_id = bind.department_id !== undefined ? bind.department_id : before.department_id;
+  const designation_id = bind.designation_id !== undefined ? bind.designation_id : before.designation_id;
   const salary = req.body.salary !== undefined ? req.body.salary : before.salary;
   const status = req.body.status !== undefined ? req.body.status : before.status;
   const user_id = req.body.user_id !== undefined ? req.body.user_id : before.user_id;
@@ -1228,7 +1257,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   // today and becomes real partial-save behaviour once the form does.
   db.prepare(`
     UPDATE employees
-       SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?, join_date=?,
+       SET name=?, phone=?, email=?, designation=?, department=?, department_id=?, designation_id=?, salary=?, status=?, user_id=?, join_date=?,
            roster = COALESCE(?, roster),
            aadhar_file        = COALESCE(?, aadhar_file),
            pan_file           = COALESCE(?, pan_file),
@@ -1258,7 +1287,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            sim_card_number         = COALESCE(?, sim_card_number),
            updated_at = ?
      WHERE id=?
-  `).run(name, phone, email, designation, department, salary, status, user_id || null, join_date || null,
+  `).run(name, phone, email, designation, department, department_id || null, designation_id || null, salary, status, user_id || null, join_date || null,
         roster ? normalizeRoster(roster) : null,
         aadhar_file || null, pan_file || null, qualification_file || null,
         reports_to_employee_id || null, employment_type || null, grade || null, probation_end_date || null,

@@ -50,6 +50,8 @@ export default function OrgStructure() {
   // fetched, feeds Set's confirm dialog with real numbers instead of a
   // generic warning.
   const [templates, setTemplates] = useState([]);
+  const [templateSetAllowed, setTemplateSetAllowed] = useState(true);
+  const [templateSetBlockedReason, setTemplateSetBlockedReason] = useState(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [templatePreview, setTemplatePreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -85,7 +87,19 @@ export default function OrgStructure() {
   useEffect(() => { loadTree(); loadDesig(); }, [loadTree, loadDesig]);
   useEffect(() => {
     if (!canLoadTemplate) return;
-    api.get('/org-structure/templates').then(r => setTemplates(r.data)).catch(e => toast.error(errMsg(e, 'Failed to load templates')));
+    api.get('/org-structure/templates').then((r) => {
+      const data = r.data;
+      // Object shape (Plan B.0 P0) — array fallback if an older server replies.
+      if (Array.isArray(data)) {
+        setTemplates(data);
+        setTemplateSetAllowed(true);
+        setTemplateSetBlockedReason(null);
+      } else {
+        setTemplates(data.templates || []);
+        setTemplateSetAllowed(data.setAllowed !== false);
+        setTemplateSetBlockedReason(data.setBlockedReason || null);
+      }
+    }).catch(e => toast.error(errMsg(e, 'Failed to load templates')));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canLoadTemplate]);
 
@@ -134,13 +148,14 @@ export default function OrgStructure() {
       .finally(() => setPreviewLoading(false));
   }, [selectedTemplateId]);
 
-  // "Set" — resets the designation catalog and any department outside the
-  // standard 11 to the SELECTED template (server/db/orgTemplate.js), for when
-  // the current data is test/placeholder rather than something worth
-  // preserving. Destructive; server also gates it behind delete permission —
-  // this confirm is the client-side warning, not the guard.
+  // "Set" — bootstrap only. Server blocks once employees exist; client
+  // disables Set when templates payload says setAllowed=false.
   const setTemplate = useCallback(() => {
     if (!selectedTemplateId) return;
+    if (!templateSetAllowed) {
+      toast.error(templateSetBlockedReason || 'Template Set is for initial structure only.');
+      return;
+    }
     const tplName = templates.find((t) => t.id === selectedTemplateId)?.name || 'this template';
     const p = templatePreview;
     const detail = p
@@ -159,7 +174,7 @@ export default function OrgStructure() {
       ),
       { title: 'Load Template', confirmLabel: 'Set' },
     );
-  }, [selectedTemplateId, templates, templatePreview, confirm, mutate, loadTree, loadDesig]);
+  }, [selectedTemplateId, templates, templatePreview, templateSetAllowed, templateSetBlockedReason, confirm, mutate, loadTree, loadDesig]);
 
   // name → tag/short-code lookup, so a head's designation can show as its alias
   // (e.g. "MD") with the full title on hover. Custom/legacy titles with no catalog
@@ -195,6 +210,7 @@ export default function OrgStructure() {
             <TemplatePicker
               templates={templates} selectedId={selectedTemplateId} onSelect={chooseTemplate} onClose={closeTemplatePicker}
               preview={templatePreview} previewLoading={previewLoading} onPreview={previewTemplate} onSet={setTemplate}
+              setAllowed={templateSetAllowed} setBlockedReason={templateSetBlockedReason}
             />
           )}
         </div>
@@ -214,14 +230,22 @@ export default function OrgStructure() {
         <DepartmentsTab
           tree={tree} openIds={openIds} toggleOpen={toggleOpen} setModal={setModal} tagByName={tagByName}
           onToggleActive={(n) => mutate(api.put(`/org-structure/departments/${n.id}`, { active: n.active ? 0 : 1 }), afterDeptChange)}
-          onDelete={(n) => confirmDelete(`Delete “${n.name}”? This cannot be undone.`, () => api.delete(`/org-structure/departments/${n.id}`), afterDeptChange)}
+          onDelete={(n) => confirmDelete(
+            `Hard-delete “${n.name}”? Prefer Deactivate if this department may be used. Linked employee history blocks delete.`,
+            () => api.delete(`/org-structure/departments/${n.id}`),
+            afterDeptChange,
+          )}
           onDetachRole={(deptId, desigId, label) => confirm(`Remove “${label}” from this department’s designations?`, () => mutate(api.delete(`/org-structure/departments/${deptId}/designations/${desigId}`), () => { loadTree(); loadDesig(); }), { title: 'Remove designation', confirmLabel: 'Remove' })}
         />
       )}
 
       {view === 'designations' && (
         <DesignationsTab designations={designations} setModal={setModal}
-          onDelete={(d) => confirmDelete(`Delete “${d.name}”?`, () => api.delete(`/org-structure/designations/${d.id}`), () => { loadDesig(); loadTree(); })}
+          onDelete={(d) => confirmDelete(
+            `Hard-delete “${d.name}”? Prefer “not wanted” if the title may be referenced. In-use titles cannot be deleted.`,
+            () => api.delete(`/org-structure/designations/${d.id}`),
+            () => { loadDesig(); loadTree(); },
+          )}
         />
       )}
 
@@ -276,7 +300,7 @@ export default function OrgStructure() {
 // affects (dme 2026-08-03: a page-header dropdown + a separate page-footer
 // action bar was the wrong shape — this replaces it). Adding a second
 // template to db/orgTemplate.js needs no change here, it's just another row.
-function TemplatePicker({ templates, selectedId, onSelect, onClose, preview, previewLoading, onPreview, onSet }) {
+function TemplatePicker({ templates, selectedId, onSelect, onClose, preview, previewLoading, onPreview, onSet, setAllowed = true, setBlockedReason }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -296,7 +320,13 @@ function TemplatePicker({ templates, selectedId, onSelect, onClose, preview, pre
         <FiChevronDown className={`inline -mt-0.5 ml-1.5 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 z-20 w-60 max-w-[calc(100vw-1.5rem)] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+        <div className="absolute right-0 mt-1 z-20 w-72 max-w-[calc(100vw-1.5rem)] bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+          {!setAllowed && (
+            <div className="px-2.5 py-2 text-[11px] leading-snug text-amber-900 bg-amber-50 border-b border-amber-100">
+              <span className="font-semibold">Initial structure only.</span>{' '}
+              {setBlockedReason || 'Employees exist — Preview is available; Set is blocked.'}
+            </div>
+          )}
           {preview ? (
             <div className="p-2.5 space-y-2">
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
@@ -310,7 +340,15 @@ function TemplatePicker({ templates, selectedId, onSelect, onClose, preview, pre
               </div>
               <div className="flex justify-end gap-2">
                 <button type="button" className="btn btn-secondary text-xs" onClick={() => { setOpen(false); onClose(); }}>Close</button>
-                <button type="button" className="btn btn-primary text-xs" onClick={() => { setOpen(false); onSet(); }}>Apply</button>
+                <button
+                  type="button"
+                  className="btn btn-primary text-xs"
+                  disabled={!setAllowed || preview.setAllowed === false}
+                  title={!setAllowed || preview.setAllowed === false ? (setBlockedReason || preview.setBlockedReason || 'Set blocked') : undefined}
+                  onClick={() => { setOpen(false); onSet(); }}
+                >
+                  Apply
+                </button>
               </div>
             </div>
           ) : (
@@ -332,7 +370,13 @@ function TemplatePicker({ templates, selectedId, onSelect, onClose, preview, pre
                   title="See what Set would change, without applying it">
                   <FiRefreshCw className="inline -mt-0.5 mr-1" />{previewLoading ? 'Loading…' : 'Preview'}
                 </button>
-                <button type="button" className="btn btn-primary text-xs" disabled={!selectedId} onClick={() => { setOpen(false); onSet(); }}>
+                <button
+                  type="button"
+                  className="btn btn-primary text-xs"
+                  disabled={!selectedId || !setAllowed}
+                  title={!setAllowed ? (setBlockedReason || 'Set blocked') : undefined}
+                  onClick={() => { setOpen(false); onSet(); }}
+                >
                   Set
                 </button>
               </div>
