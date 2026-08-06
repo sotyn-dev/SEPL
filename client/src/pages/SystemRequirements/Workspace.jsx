@@ -119,7 +119,7 @@ function EditableBlock({
         </>
       ) : (
         <>
-          <div className={`text-sm text-gray-800 whitespace-pre-wrap ${multiline ? minHeightClass : ''} ${!value ? 'text-gray-400' : ''}`}>
+          <div className={`text-sm text-gray-800 whitespace-pre-wrap rounded-xl border border-gray-200 py-[10px] px-[14px] ${multiline ? minHeightClass : ''} ${!value ? 'text-gray-400' : ''}`}>
             {value || emptyText}
           </div>
           {hint && value && hint.tone === 'warn' && (
