@@ -152,7 +152,7 @@ export default function SettingsModal({ open, onClose, onSaved }) {
       <div className="mt-6 flex justify-end gap-2">
         <button type="button" onClick={onClose} className="px-3 py-2 text-sm rounded-lg border border-gray-300">Cancel</button>
         {canEdit && (
-          <button type="button" disabled={saving} onClick={save} className="px-3 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">
+          <button type="button" disabled={saving} onClick={save} className="px-3 py-2 text-sm rounded-lg btn-primary text-white hover:bg-red-700 disabled:opacity-50">
             {saving ? 'Saving…' : 'Save'}
           </button>
         )}
