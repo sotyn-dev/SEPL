@@ -557,12 +557,14 @@ export default function SystemRequirementWorkspace() {
                 label="Description"
                 value={data.description || ''}
                 multiline
+                markdown
                 minHeightClass="min-h-[120px]"
                 canEdit={canField(data, 'description')}
                 saving={saving}
                 emptyText="No description yet."
                 maxLength={DESC_HARD_LIMIT}
                 lengthGuidance="Keep it clear and concise — module / department context can go here."
+                placeholder="What is needed and why? Use **bold** and lists if helpful."
                 onSave={(v) => patch({ description: v || null })}
               />
               <AttachmentsPanel
@@ -606,6 +608,7 @@ export default function SystemRequirementWorkspace() {
                 label={label}
                 value={data[key] || ''}
                 multiline
+                markdown
                 canEdit={canField(data, key)}
                 saving={saving}
                 emptyText="Not filled yet."

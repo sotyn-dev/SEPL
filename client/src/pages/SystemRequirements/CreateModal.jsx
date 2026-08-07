@@ -3,6 +3,7 @@ import api from '../../api';
 import Modal from '../../components/Modal';
 import toast from 'react-hot-toast';
 import { FiPaperclip, FiTrash2 } from 'react-icons/fi';
+import MinimalMarkdownEditor from '../../components/MinimalMarkdownEditor';
 import { TYPES, PRIORITIES, DESC_HARD_LIMIT, descLengthHint, clipToLimit } from './constants';
 
 const empty = {
@@ -76,13 +77,16 @@ export default function CreateModal({ open, onClose, onCreated }) {
         </div>
         <div>
           <label className="text-xs font-medium text-gray-600">Description</label>
-          <textarea
-            className="input w-full mt-1 min-h-[110px]"
-            value={form.description}
-            maxLength={DESC_HARD_LIMIT}
-            onChange={e => set('description', clipToLimit(e.target.value, DESC_HARD_LIMIT))}
-            placeholder="What is needed and why? Include ERP module / department context here if relevant."
-          />
+          <div className="mt-1">
+            <MinimalMarkdownEditor
+              value={form.description}
+              maxLength={DESC_HARD_LIMIT}
+              clip={t => clipToLimit(t, DESC_HARD_LIMIT)}
+              minHeightClass="min-h-[110px]"
+              placeholder="What is needed and why? Include ERP module / department context here if relevant."
+              onChange={v => set('description', v)}
+            />
+          </div>
           <p className={`text-[11px] mt-1 ${descHint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>
             {descHint.text}
           </p>
@@ -134,7 +138,7 @@ export default function CreateModal({ open, onClose, onCreated }) {
       <div className="mt-5 flex justify-end gap-2">
         <button type="button" onClick={onClose} className="px-3 py-2 text-sm rounded-lg border border-gray-300">Cancel</button>
         <button type="button" disabled={saving} onClick={() => save(false)} className="px-3 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50">Save draft</button>
-        <button type="button" disabled={saving} onClick={() => save(true)} className="px-3 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Submit</button>
+        <button type="button" disabled={saving} onClick={() => save(true)} className="px-3 py-2 text-sm rounded-lg btn-primary text-white hover:bg-red-700 disabled:opacity-50">Submit</button>
       </div>
     </Modal>
   );
