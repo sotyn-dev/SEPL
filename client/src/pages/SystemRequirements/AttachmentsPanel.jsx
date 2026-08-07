@@ -83,8 +83,9 @@ export function AttachmentLinks({
             {canDelete && (
               <button
                 type="button"
-                className="shrink-0 text-gray-400 hover:text-red-600"
+                className="shrink-0 p-0.5 text-red-600 hover:text-red-700"
                 onClick={() => setPending(att)}
+                title="Remove"
                 aria-label="Remove attachment"
               >
                 <FiTrash2 size={14} />

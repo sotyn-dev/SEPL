@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { FiEdit2 } from 'react-icons/fi';
 import { lengthHint, clipToLimit } from './constants';
 
 /** Explicit Edit → Save / Cancel (avoids accidental onBlur saves). */
@@ -46,8 +47,14 @@ export default function EditableBlock({
       <div className="flex items-center justify-between gap-2 mb-1">
         <label className="text-xs font-medium text-gray-600">{label}</label>
         {canEdit && !editing && (
-          <button type="button" onClick={startEdit} className="text-xs font-medium text-red-700 hover:underline">
-            Edit
+          <button
+            type="button"
+            onClick={startEdit}
+            className="p-1 rounded text-blue-600 hover:bg-gray-100"
+            title="Edit"
+            aria-label="Edit"
+          >
+            <FiEdit2 size={14} />
           </button>
         )}
       </div>

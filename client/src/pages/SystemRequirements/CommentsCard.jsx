@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FiPaperclip } from 'react-icons/fi';
+import { FiPaperclip, FiEdit2, FiTrash2 } from 'react-icons/fi';
 import { AttachmentLinks } from './AttachmentsPanel';
 import {
   COMMENT_HARD_LIMIT, commentLengthHint, clipToLimit,
@@ -224,20 +224,24 @@ export default function CommentsCard({
                   {c.updated_at && c.updated_at !== c.created_at ? ' · edited' : ''}
                 </div>
                 {mine && !editing && !systemBiz && (
-                  <div className="flex gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
                       onClick={() => { setEditingCommentId(c.id); setEditingCommentBody(c.body || ''); }}
-                      className="text-xs font-medium text-red-700 hover:underline"
+                      className="p-1 rounded text-blue-600 hover:bg-gray-100"
+                      title="Edit"
+                      aria-label="Edit"
                     >
-                      Edit
+                      <FiEdit2 size={14} />
                     </button>
                     <button
                       type="button"
                       onClick={() => removeComment(c)}
-                      className="text-xs font-medium text-gray-500 hover:text-red-600 hover:underline"
+                      className="p-1 rounded text-red-600 hover:bg-gray-100"
+                      title="Delete"
+                      aria-label="Delete"
                     >
-                      Delete
+                      <FiTrash2 size={14} />
                     </button>
                   </div>
                 )}
