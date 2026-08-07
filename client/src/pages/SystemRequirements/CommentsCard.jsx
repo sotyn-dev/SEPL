@@ -94,6 +94,7 @@ export function MentionComposer({
         onChange={onTextChange}
         placeholder={placeholder || 'Add a comment… Use @ to mention'}
       />
+      <p className={`text-[11px] !mt-0.5 ${hint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>{hint.text}</p>
       {candidates.length > 0 && (
         <ul className="absolute z-20 left-0 right-12 bottom-full mb-1 max-h-40 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg text-sm">
           {candidates.map(u => (
@@ -122,14 +123,16 @@ export function MentionComposer({
       )}
       <div className="flex flex-wrap items-center gap-2">
         <label className="inline-flex items-center gap-1 px-2 py-1.5 text-xs rounded-lg border border-gray-300 cursor-pointer hover:bg-gray-50">
-          <FiPaperclip size={12} /> Attach
+          <FiPaperclip size={12} /> Attachment
           <input
             type="file"
             multiple
             className="hidden"
             onChange={e => {
-              onPickFiles?.(e.target.files);
+              // Copy before clearing — FileList is live and empties when value is reset
+              const list = Array.from(e.target.files || []);
               e.target.value = '';
+              if (list.length) onPickFiles?.(list);
             }}
           />
         </label>
@@ -142,7 +145,6 @@ export function MentionComposer({
           {posting ? 'Posting…' : 'Post'}
         </button>
       </div>
-      <p className={`text-[11px] ${hint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>{hint.text}</p>
     </div>
   );
 }
@@ -184,6 +186,7 @@ export default function CommentsCard({
       const comment = await addComment(text);
       if (comment?.id && pendingFiles.length) {
         const { default: api } = await import('../../api');
+        const { default: toast } = await import('react-hot-toast');
         for (const file of pendingFiles) {
           const fd = new FormData();
           fd.append('file', file);
@@ -191,7 +194,6 @@ export default function CommentsCard({
           try {
             await api.post(`/system-requirements/${requirementId}/attachments`, fd);
           } catch (e) {
-            const { default: toast } = await import('react-hot-toast');
             toast.error(e.response?.data?.error || `Failed: ${file.name}`);
           }
         }

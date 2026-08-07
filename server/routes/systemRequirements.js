@@ -516,6 +516,7 @@ router.get('/:id', (req, res) => {
       attachments: byComment.get(c.id) || [],
     }));
 
+    // Overview list: requirement + comment-scoped files (dev files stay on Development tab)
     const overviewAttachments = attachments.filter(a => !a.dev_section);
     const developmentAttachments = attachments.filter(a => a.dev_section === DEV_SECTION);
 
@@ -867,15 +868,24 @@ router.delete('/:id/comments/:commentId', (req, res) => {
       WHERE id = ?
     `).run(commentId);
 
+    // Hide attachments that belonged to this comment
+    const attResult = db.prepare(`
+      UPDATE sysreq_attachments SET soft_deleted_at = CURRENT_TIMESTAMP
+      WHERE comment_id = ? AND requirement_id = ? AND soft_deleted_at IS NULL
+    `).run(commentId, reqId);
+
     touch(db, reqId, req.user.id);
     appendHistory(db, {
       requirementId: reqId,
       eventType: 'comment_deleted',
       actorId: req.user.id,
-      payload: { comment_id: commentId },
+      payload: {
+        comment_id: commentId,
+        attachments_removed: attResult.changes || 0,
+      },
     });
 
-    res.json({ ok: true });
+    res.json({ ok: true, attachments_removed: attResult.changes || 0 });
   } catch (e) {
     console.error('[sysreq] comment delete', e);
     res.status(500).json({ error: e.message });

@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { FiPaperclip, FiTrash2 } from 'react-icons/fi';
 import api from '../../api';
 import toast from 'react-hot-toast';
+import ConfirmDialog from '../../components/ConfirmDialog';
 
 const VIEW_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf']);
 const ZIP_EXT = new Set(['.zip', '.rar', '.7z']);
@@ -61,33 +63,55 @@ export function AttachmentLinks({
   canDelete = false,
   onDelete,
 }) {
+  const [pending, setPending] = useState(null);
+
   if (!attachments.length) return null;
   return (
-    <ul className="mt-2 space-y-1">
-      {attachments.map(att => (
-        <li key={att.id} className="flex items-center gap-2 text-sm min-w-0">
-          <FiPaperclip className="shrink-0 text-gray-400" size={14} />
-          <button
-            type="button"
-            className="text-red-700 hover:underline truncate text-left"
-            onClick={() => openAttachment(requirementId, att)}
-            title={attachmentOpenMode(att) === 'view' ? 'Open' : 'Download'}
-          >
-            {att.original_filename}
-          </button>
-          {canDelete && (
+    <>
+      <ul className="mt-2 space-y-1">
+        {attachments.map(att => (
+          <li key={att.id} className="flex items-center gap-2 text-sm min-w-0">
+            <FiPaperclip className="shrink-0 text-gray-400" size={14} />
             <button
               type="button"
-              className="shrink-0 text-gray-400 hover:text-red-600"
-              onClick={() => onDelete?.(att)}
-              aria-label="Remove attachment"
+              className="text-red-700 hover:underline truncate text-left"
+              onClick={() => openAttachment(requirementId, att)}
+              title={attachmentOpenMode(att) === 'view' ? 'Open' : 'Download'}
             >
-              <FiTrash2 size={14} />
+              {att.original_filename}
             </button>
-          )}
-        </li>
-      ))}
-    </ul>
+            {canDelete && (
+              <button
+                type="button"
+                className="shrink-0 text-gray-400 hover:text-red-600"
+                onClick={() => setPending(att)}
+                aria-label="Remove attachment"
+              >
+                <FiTrash2 size={14} />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        open={!!pending}
+        title="Remove attachment?"
+        message={
+          pending
+            ? `Remove “${pending.original_filename}” from this task?\nIt will no longer appear here.`
+            : ''
+        }
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        tone="danger"
+        onConfirm={() => {
+          const att = pending;
+          setPending(null);
+          if (att) onDelete?.(att);
+        }}
+        onCancel={() => setPending(null)}
+      />
+    </>
   );
 }
 
