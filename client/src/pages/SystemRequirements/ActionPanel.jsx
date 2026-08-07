@@ -25,7 +25,22 @@ export default function ActionPanel({
   return (
     <div className="space-y-3">
       <div className="space-y-2">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3">
+          <div>
+            <label className="text-xs font-medium text-gray-600">Status</label>
+            <select
+              className="input w-full mt-1"
+              disabled={statusLocked}
+              value={data.status}
+              onChange={e => changeStatus(e.target.value)}
+            >
+              {statusOpts.map(o => (
+                <option key={o.value} value={o.value} disabled={o.disabled}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <div>
             <label className="text-xs font-medium text-gray-600">
               Assignee
@@ -42,21 +57,6 @@ export default function ActionPanel({
                 }
               />
             </div>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-gray-600">Status</label>
-            <select
-              className="input w-full mt-1"
-              disabled={statusLocked}
-              value={data.status}
-              onChange={e => changeStatus(e.target.value)}
-            >
-              {statusOpts.map(o => (
-                <option key={o.value} value={o.value} disabled={o.disabled}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
           </div>
         </div>
         {data.status === 'under_review' && (
@@ -82,16 +82,15 @@ export default function ActionPanel({
           </p>
         )}
       </div>
-
-      <div className="grid grid-cols-2 gap-3 pt-1 border-t border-gray-100">
-        <div>
-          <label className="text-xs font-medium text-gray-600">Reporter</label>
-          <p className="mt-1 text-sm text-gray-800 py-2">{data.requested_by_name || '—'}</p>
-        </div>
+      <div className="flex items-center gap-3 !mt-4 pt-4 border-t border-dashed border-gray-200">
+        <label className="text-xs font-medium text-gray-600">Reporter</label>
+        <p className="text-sm text-gray-800">{data.requested_by_name || '—'}</p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2 gap-3">
         <div>
           <label className="text-xs font-medium text-gray-600">Type</label>
           <select
-            className="input w-full mt-1"
+            className="input w-full mt-1 max-sm:!text-sm"
             disabled={!canField(data, 'type')}
             value={data.type}
             onChange={e => { field('type', e.target.value); patch({ type: e.target.value }); }}
@@ -102,7 +101,7 @@ export default function ActionPanel({
         <div>
           <label className="text-xs font-medium text-gray-600">Priority</label>
           <select
-            className="input w-full mt-1"
+            className="input w-full mt-1 max-sm:!text-sm"
             disabled={!canField(data, 'priority')}
             value={data.priority}
             onChange={e => { field('priority', e.target.value); patch({ priority: e.target.value }); }}
@@ -114,7 +113,7 @@ export default function ActionPanel({
           <label className="text-xs font-medium text-gray-600">Due date</label>
           <input
             type="date"
-            className="input w-full mt-1"
+            className="input w-full mt-1 max-sm:!text-sm"
             disabled={!canField(data, 'due_date')}
             value={data.due_date || ''}
             onChange={e => { field('due_date', e.target.value); patch({ due_date: e.target.value || null }); }}
@@ -124,7 +123,7 @@ export default function ActionPanel({
           <label className="text-xs font-medium text-gray-600">Target start</label>
           <input
             type="date"
-            className="input w-full mt-1"
+            className="input w-full mt-1 max-sm:!text-sm"
             disabled={!canField(data, 'target_start_date')}
             value={data.target_start_date || ''}
             onChange={e => { field('target_start_date', e.target.value); patch({ target_start_date: e.target.value || null }); }}
