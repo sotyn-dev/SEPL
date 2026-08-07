@@ -5,16 +5,21 @@ import toast from 'react-hot-toast';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import Modal from '../../components/Modal';
 import SearchableSelect from '../../components/SearchableSelect';
-import { FiArrowLeft, FiPaperclip, FiTrash2 } from 'react-icons/fi';
-import { fmtDate, fmtDateTime } from '../../utils/datetime';
+import { FiArrowLeft, FiSliders, FiX } from 'react-icons/fi';
+import { fmtDateTime } from '../../utils/datetime';
 import { useAuth } from '../../context/AuthContext';
 import {
-  TYPES, PRIORITIES, STATUSES, STATUS_COLORS, PRIORITY_COLORS,
-  labelOf, prettyAction, commentLengthHint, lengthHint,
+  STATUSES, STATUS_COLORS, PRIORITY_COLORS, PRIORITIES,
+  labelOf, prettyAction,
   DESC_HARD_LIMIT, COMMENT_HARD_LIMIT, DEV_NOTES_HARD_LIMIT, clipToLimit,
 } from './constants';
+import ActionPanel, { canField } from './ActionPanel';
+import AttachmentsPanel from './AttachmentsPanel';
+import CommentsCard from './CommentsCard';
+import EditableBlock from './EditableBlock';
+import RemarkConfirmDialog from './RemarkConfirmDialog';
 
-const TABS = ['overview', 'discussion', 'attachments', 'development', 'timeline', 'release'];
+const TABS = ['overview', 'development', 'release', 'timeline'];
 
 const DEV_FIELDS = [
   ['tech_analysis', 'Technical analysis'],
@@ -24,120 +29,6 @@ const DEV_FIELDS = [
   ['completion_summary', 'Completion summary'],
 ];
 
-/** Explicit Edit → Save / Cancel (avoids accidental onBlur saves). */
-function EditableBlock({
-  label,
-  value,
-  multiline = false,
-  canEdit,
-  saving,
-  onSave,
-  emptyText = '—',
-  minHeightClass = 'min-h-[56px]',
-  maxLength = null,
-  lengthGuidance = null,
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value || '');
-
-  useEffect(() => {
-    if (!editing) setDraft(value || '');
-  }, [value, editing]);
-
-  const startEdit = () => {
-    setDraft(value || '');
-    setEditing(true);
-  };
-
-  const cancel = () => {
-    setDraft(value || '');
-    setEditing(false);
-  };
-
-  const save = async () => {
-    const payload = maxLength != null ? clipToLimit(draft, maxLength) : draft;
-    const ok = await onSave(payload);
-    if (ok) setEditing(false);
-  };
-
-  const hint = maxLength != null
-    ? lengthHint(editing ? draft : value, maxLength, lengthGuidance)
-    : null;
-
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <label className="text-xs font-medium text-gray-600">{label}</label>
-        {canEdit && !editing && (
-          <button type="button" onClick={startEdit} className="text-xs font-medium text-red-700 hover:underline">
-            Edit
-          </button>
-        )}
-      </div>
-      {editing ? (
-        <>
-          {multiline ? (
-            <textarea
-              className={`input w-full ${minHeightClass}`}
-              value={draft}
-              maxLength={maxLength || undefined}
-              onChange={e => setDraft(maxLength != null ? clipToLimit(e.target.value, maxLength) : e.target.value)}
-              autoFocus
-            />
-          ) : (
-            <input
-              className="input w-full"
-              value={draft}
-              maxLength={maxLength || undefined}
-              onChange={e => setDraft(maxLength != null ? clipToLimit(e.target.value, maxLength) : e.target.value)}
-              autoFocus
-            />
-          )}
-          {hint && (
-            <p className={`text-[11px] mt-1 ${hint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>
-              {hint.text}
-            </p>
-          )}
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={save}
-              className="px-3 py-1.5 text-sm rounded-lg bg-gray-900 text-white disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={cancel}
-              className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <div className={`text-sm text-gray-800 whitespace-pre-wrap rounded-xl border border-gray-200 py-[10px] px-[14px] ${multiline ? minHeightClass : ''} ${!value ? 'text-gray-400' : ''}`}>
-            {value || emptyText}
-          </div>
-          {hint && value && hint.tone === 'warn' && (
-            <p className="text-[11px] mt-1 text-amber-700">{hint.text}</p>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function canField(data, field) {
-  if (!data) return false;
-  const list = data.editable_fields;
-  if (Array.isArray(list)) return list.includes(field);
-  return !!data.can_edit;
-}
-
 export default function SystemRequirementWorkspace() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -146,15 +37,14 @@ export default function SystemRequirementWorkspace() {
   const [data, setData] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [businessOwners, setBusinessOwners] = useState([]);
-  const [comment, setComment] = useState('');
-  const [editingCommentId, setEditingCommentId] = useState(null);
-  const [editingCommentBody, setEditingCommentBody] = useState('');
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState(null);
+  const [remarkConfirm, setRemarkConfirm] = useState(null);
   const [bizOpen, setBizOpen] = useState(false);
   const [bizOwner, setBizOwner] = useState('');
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignTo, setReassignTo] = useState('');
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [releaseDraft, setReleaseDraft] = useState({
     target_version: '',
     release_version: '',
@@ -199,6 +89,13 @@ export default function SystemRequirementWorkspace() {
       .catch(() => setBusinessOwners([]));
   }, []);
 
+  useEffect(() => {
+    if (!actionsOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setActionsOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [actionsOpen]);
+
   const patch = async (fields) => {
     setSaving(true);
     try {
@@ -214,34 +111,96 @@ export default function SystemRequirementWorkspace() {
     }
   };
 
+  const doTransition = async (action, extra = {}) => {
+    try {
+      const { data: row } = await api.post(`/system-requirements/${id}/transition`, { action, ...extra });
+      setData(d => ({
+        ...d,
+        ...row,
+        comments: row.comments || d.comments,
+        attachments: row.attachments || d.attachments,
+        development_attachments: row.development_attachments || d.development_attachments,
+        history: row.history || d.history,
+      }));
+      await load();
+      toast.success(
+        action === 'reassign' ? 'Reassigned'
+          : action === 'request_business_approval' ? 'Sent for business approval'
+            : action === 'approve_business' ? 'Approved — back to Waiting / Backlog'
+              : action === 'reject' ? 'Rejected — back to Waiting / Backlog'
+                : action === 'need_clarification' ? 'Need Clarification — with IT'
+                  : action === 'done' ? 'Marked Done'
+                    : action === 'closed' || action === 'close' ? 'Closed early'
+                      : action === 'reopened' || action === 'reopen' ? 'Reopened'
+                        : 'Status updated'
+      );
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Transition failed');
+    }
+  };
+
   const runTransition = async (action) => {
     if (action === 'request_business_approval') {
       setBizOwner('');
       setBizOpen(true);
       return;
     }
-    const risky = action === 'reject' || action === 'archived' || action === 'close' || action === 'closed';
+
+    const isBizReject = action === 'reject' && data.status === 'under_review';
+    const isBizClarify = action === 'need_clarification' && data.status === 'under_review';
+
+    if (isBizReject || isBizClarify) {
+      setRemarkConfirm({
+        title: isBizReject ? 'Reject back to IT managers?' : 'Need clarification?',
+        message: isBizReject
+          ? 'Returns the ticket to Waiting / Backlog for IT managers. Your remark is posted in Comments.'
+          : 'Sets Need Clarification and returns to the priority IT manager. Your remark is posted in Comments.',
+        confirmLabel: isBizReject ? 'Reject → IT' : 'Need Clarification',
+        tone: isBizReject ? 'danger' : 'warning',
+        remarkPlaceholder: isBizReject ? 'Why is this rejected?' : 'What needs clarifying?',
+        onConfirm: async (note) => {
+          setRemarkConfirm(null);
+          await doTransition(action, { note });
+        },
+      });
+      return;
+    }
+
+    const risky = action === 'reject' || action === 'archived'
+      || action === 'close' || action === 'closed' || action === 'done' || action === 'reopen' || action === 'reopened';
     if (risky) {
-      const isBizReject = action === 'reject' && data.status === 'under_review';
       const titles = {
-        reject: isBizReject ? 'Reject back to IT managers?' : 'Mark rejected?',
-        close: 'Close this requirement?',
-        closed: 'Close this requirement?',
+        reject: 'Mark rejected?',
+        close: 'Close early?',
+        closed: 'Close early?',
+        done: 'Mark Done?',
+        reopen: 'Reopen this requirement?',
+        reopened: 'Reopen this requirement?',
         archived: 'Archive requirement?',
       };
       const messages = {
-        reject: isBizReject
-          ? 'Returns the ticket to Waiting for IT managers — rework or close.'
-          : 'Marks the requirement rejected.',
-        close: 'Closes the ticket. IT managers can reopen later if needed.',
-        closed: 'Closes the ticket. IT managers can reopen later if needed.',
+        reject: 'Marks the requirement rejected.',
+        close: 'Early stop — will not ship. IT managers can reopen later if needed.',
+        closed: 'Early stop — will not ship. IT managers can reopen later if needed.',
+        done: 'Marks successful completion after release. Optional proof can go in Comments.',
+        reopen: 'Brings the ticket back for rework. Next set Pending / In Progress and assign a developer.',
+        reopened: 'Brings the ticket back for rework. Next set Pending / In Progress and assign a developer.',
         archived: 'Archived items are hidden from the active list.',
+      };
+      const labels = {
+        close: 'Close',
+        closed: 'Close',
+        done: 'Done',
+        reopen: 'Reopen',
+        reopened: 'Reopen',
+        reject: 'Reject',
+        archived: 'Archive',
       };
       setConfirm({
         title: titles[action] || 'Confirm?',
         message: messages[action] || 'Continue?',
-        confirmLabel: isBizReject ? 'Reject → IT' : action === 'close' || action === 'closed' ? 'Close' : action === 'reject' ? 'Reject' : 'Archive',
-        tone: 'danger',
+        confirmLabel: labels[action] || 'Confirm',
+        tone: action === 'done' || action === 'reopen' || action === 'reopened' ? 'warning' : 'danger',
         onConfirm: async () => {
           setConfirm(null);
           await doTransition(action);
@@ -250,30 +209,6 @@ export default function SystemRequirementWorkspace() {
       return;
     }
     await doTransition(action);
-  };
-
-  const doTransition = async (action, extra = {}) => {
-    try {
-      const { data: row } = await api.post(`/system-requirements/${id}/transition`, { action, ...extra });
-      setData(d => ({
-        ...d,
-        ...row,
-        comments: d.comments,
-        attachments: d.attachments,
-        history: row.history || d.history,
-      }));
-      await load();
-      toast.success(
-        action === 'reassign' ? 'Reassigned'
-          : action === 'request_business_approval' ? 'Sent for business approval'
-            : action === 'approve_business' ? 'Approved — back to Waiting'
-              : action === 'reject' ? 'Rejected — back to Waiting'
-                : action === 'need_clarification' ? 'Need Clarification — with IT'
-                  : 'Status updated'
-      );
-    } catch (e) {
-      toast.error(e.response?.data?.error || 'Transition failed');
-    }
   };
 
   const confirmBizApproval = async () => {
@@ -293,13 +228,39 @@ export default function SystemRequirementWorkspace() {
     }
     if (to === 'closed') {
       setConfirm({
-        title: 'Close this requirement?',
-        message: 'Closes the ticket. IT managers can reopen later if needed.',
+        title: 'Close early?',
+        message: 'Early stop — will not ship. IT managers can reopen later if needed.',
         confirmLabel: 'Close',
         tone: 'danger',
         onConfirm: async () => {
           setConfirm(null);
           await doTransition('closed');
+        },
+      });
+      return;
+    }
+    if (to === 'done') {
+      setConfirm({
+        title: 'Mark Done?',
+        message: 'Successful completion after release. Optional proof can go in Comments.',
+        confirmLabel: 'Done',
+        tone: 'warning',
+        onConfirm: async () => {
+          setConfirm(null);
+          await doTransition('done');
+        },
+      });
+      return;
+    }
+    if (to === 'reopened') {
+      setConfirm({
+        title: 'Reopen this requirement?',
+        message: 'Brings the ticket back for rework. Next set Pending / In Progress and assign a developer.',
+        confirmLabel: 'Reopen',
+        tone: 'warning',
+        onConfirm: async () => {
+          setConfirm(null);
+          await doTransition('reopened');
         },
       });
       return;
@@ -360,21 +321,21 @@ export default function SystemRequirementWorkspace() {
     setReleaseDirty(false);
   };
 
-  const addComment = async () => {
-    if (!comment.trim()) return;
-    if (comment.length > COMMENT_HARD_LIMIT) {
+  const addComment = async (text) => {
+    if (!text?.trim()) return null;
+    if (text.length > COMMENT_HARD_LIMIT) {
       toast.error(`Comment max ${COMMENT_HARD_LIMIT} characters`);
-      return;
+      return null;
     }
     try {
       const { data: c } = await api.post(`/system-requirements/${id}/comments`, {
-        body: clipToLimit(comment.trim(), COMMENT_HARD_LIMIT),
+        body: clipToLimit(text.trim(), COMMENT_HARD_LIMIT),
       });
-      setData(d => ({ ...d, comments: [...(d.comments || []), c] }));
-      setComment('');
       toast.success('Comment added');
+      return c;
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed');
+      return null;
     }
   };
 
@@ -384,33 +345,15 @@ export default function SystemRequirementWorkspace() {
     return Number(c.author_id) === Number(user.id);
   };
 
-  const startEditComment = (c) => {
-    setEditingCommentId(c.id);
-    setEditingCommentBody(c.body || '');
-  };
-
-  const cancelEditComment = () => {
-    setEditingCommentId(null);
-    setEditingCommentBody('');
-  };
-
-  const saveComment = async (commentId) => {
-    const body = clipToLimit(editingCommentBody.trim(), COMMENT_HARD_LIMIT);
+  const saveComment = async (commentId, bodyRaw) => {
+    const body = clipToLimit(String(bodyRaw || '').trim(), COMMENT_HARD_LIMIT);
     if (!body) {
       toast.error('Comment cannot be empty');
       return;
     }
-    if (editingCommentBody.length > COMMENT_HARD_LIMIT) {
-      toast.error(`Comment max ${COMMENT_HARD_LIMIT} characters`);
-      return;
-    }
     try {
-      const { data: updated } = await api.patch(`/system-requirements/${id}/comments/${commentId}`, { body });
-      setData(d => ({
-        ...d,
-        comments: (d.comments || []).map(c => (c.id === commentId ? updated : c)),
-      }));
-      cancelEditComment();
+      await api.patch(`/system-requirements/${id}/comments/${commentId}`, { body });
+      await load();
       toast.success('Comment updated');
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed to update');
@@ -427,63 +370,13 @@ export default function SystemRequirementWorkspace() {
         setConfirm(null);
         try {
           await api.delete(`/system-requirements/${id}/comments/${c.id}`);
-          setData(d => ({
-            ...d,
-            comments: (d.comments || []).filter(x => x.id !== c.id),
-          }));
-          if (editingCommentId === c.id) cancelEditComment();
+          await load();
           toast.success('Comment deleted');
         } catch (e) {
           toast.error(e.response?.data?.error || 'Failed to delete');
         }
       },
     });
-  };
-
-  const uploadFile = async (file) => {
-    if (!file) return;
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-      const { data: att } = await api.post(`/system-requirements/${id}/attachments`, fd);
-      setData(d => ({ ...d, attachments: [att, ...(d.attachments || [])] }));
-      toast.success('Uploaded');
-    } catch (e) {
-      toast.error(e.response?.data?.error || 'Upload failed');
-    }
-  };
-
-  const removeAttachment = (att) => {
-    setConfirm({
-      title: 'Remove attachment?',
-      message: `Remove “${att.original_filename}”?`,
-      confirmLabel: 'Remove',
-      tone: 'danger',
-      onConfirm: async () => {
-        setConfirm(null);
-        try {
-          await api.delete(`/system-requirements/${id}/attachments/${att.id}`);
-          setData(d => ({ ...d, attachments: d.attachments.filter(a => a.id !== att.id) }));
-          toast.success('Removed');
-        } catch (e) {
-          toast.error(e.response?.data?.error || 'Failed');
-        }
-      },
-    });
-  };
-
-  const downloadAttachment = async (att) => {
-    try {
-      const r = await api.get(`/system-requirements/${id}/attachments/${att.id}/download`, { responseType: 'blob' });
-      const url = URL.createObjectURL(r.data);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = att.original_filename || 'download';
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast.error('Download failed');
-    }
   };
 
   if (!data) {
@@ -500,10 +393,21 @@ export default function SystemRequirementWorkspace() {
     ? data.status_options
     : [{ value: data.status, label: labelOf(STATUSES, data.status) }];
 
-  // Quick actions: business tangent (+ draft Submit). Never show Assign → Pending.
-  const quickActions = (data.next_actions || []).filter(a =>
-    !['assign', 'pending', 'in_progress', 'close', 'closed'].includes(a.action)
-  );
+  const quickActions = data.next_actions || [];
+
+  const quickActionClass = (action) => {
+    if (action === 'approve_business') {
+      return 'bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-600';
+    }
+    if (action === 'reject') {
+      return 'bg-red-600 text-white hover:bg-red-700 border border-red-600';
+    }
+    if (action === 'need_clarification') {
+      return 'bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-300';
+    }
+    // neutral: Submit, Request business approval, etc.
+    return 'bg-white text-gray-800 hover:bg-gray-50 border border-gray-300';
+  };
 
   const assigneeOptions = data.status === 'under_review'
     ? [
@@ -526,11 +430,27 @@ export default function SystemRequirementWorkspace() {
         : []),
     ];
 
+  const actionPanelProps = {
+    data,
+    saving,
+    employees,
+    assigneeOptions,
+    statusOpts,
+    statusLocked,
+    changeAssignee,
+    changeStatus,
+    field,
+    patch,
+    openReassign,
+  };
+
+  const canDevAttach = !!(data.is_staff || canField(data, 'tech_analysis'));
+
   return (
     <div className="space-y-4 min-h-[calc(100vh-180px)]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Link to="/system-requirements" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 mb-1">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <Link to="/system-requirements" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 mb-2">
             <FiArrowLeft size={14} /> Back to board
           </Link>
           <div className="flex flex-wrap items-center gap-2">
@@ -550,20 +470,13 @@ export default function SystemRequirementWorkspace() {
             </p>
           )}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {quickActions.map(a => (
-            <button
-              key={a.action}
-              type="button"
-              onClick={() => runTransition(a.action)}
-              className={`px-3 py-1.5 text-sm rounded-lg capitalize ${
-                a.action === 'reject' ? 'bg-red-600 text-white' : 'bg-gray-900 text-white'
-              }`}
-            >
-              {a.label || prettyAction(a.action)}
-            </button>
-          ))}
-        </div>
+        <button
+          type="button"
+          className="lg:hidden inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+          onClick={() => setActionsOpen(true)}
+        >
+          <FiSliders size={14} /> Actions
+        </button>
       </div>
 
       {data.needs_reassignment && (
@@ -609,267 +522,116 @@ export default function SystemRequirementWorkspace() {
       </div>
 
       {tab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="space-y-4 card p-4">
-            <EditableBlock
-              label="Title"
-              value={data.title || ''}
-              canEdit={canField(data, 'title')}
-              saving={saving}
-              onSave={async (v) => {
-                const title = String(v || '').trim();
-                if (!title) {
-                  toast.error('Title is required');
-                  return false;
-                }
-                return patch({ title });
-              }}
-            />
-            <EditableBlock
-              label="Description"
-              value={data.description || ''}
-              multiline
-              minHeightClass="min-h-[120px]"
-              canEdit={canField(data, 'description')}
-              saving={saving}
-              emptyText="No description yet."
-              maxLength={DESC_HARD_LIMIT}
-              lengthGuidance="Keep it clear and concise — module / department context can go here."
-              onSave={(v) => patch({ description: v || null })}
-            />
-          </div>
-          <div className="space-y-3 card p-4">
-            {/* Assignee + Status at top (Jira-style). Quick actions are business-only. */}
-            <div className="space-y-2">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-gray-600">
-                    Assignee {data.status === 'under_review' ? '(business owner)' : '(IT managers + team)'}
-                  </label>
-                  <div className={`mt-1 ${!data.can_change_assignee || data.status === 'under_review' ? 'pointer-events-none opacity-60' : ''}`}>
-                    <SearchableSelect
-                      options={assigneeOptions}
-                      value={data.assignee_id || ''}
-                      onChange={v => changeAssignee(v || null)}
-                      placeholder={
-                        data.status === 'under_review'
-                          ? (data.assignee_name || 'Business owner')
-                          : (employees.length ? 'Assign person…' : 'No assignable users — Settings')
-                      }
-                    />
-                  </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 space-y-4">
+            <div className="card p-4 space-y-4">
+              {quickActions.length > 0 && (
+                <div className="flex flex-wrap justify-end gap-2 mb-3">
+                  {quickActions.map(a => (
+                    <button
+                      key={a.action}
+                      type="button"
+                      onClick={() => runTransition(a.action)}
+                      className={`px-2 py-1 text-xs rounded ${quickActionClass(a.action)}`}
+                    >
+                      {a.label || prettyAction(a.action)}
+                    </button>
+                  ))}
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-600">Status</label>
-                  <select
-                    className="input w-full mt-1"
-                    disabled={statusLocked}
-                    value={data.status}
-                    onChange={e => changeStatus(e.target.value)}
-                  >
-                    {statusOpts.map(o => (
-                      <option key={o.value} value={o.value} disabled={o.disabled}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              {data.status === 'under_review' && (
-                <p className="text-[11px] text-amber-800 w-full">
-                  Assignee and status locked during business approval — use Approve / Need Clarification / Reject
-                </p>
               )}
-              {data.status !== 'under_review' && (!data.can_change_assignee || !data.can_change_status) && (
-                <p className="text-[11px] text-gray-400 w-full">
-                  {!data.can_change_assignee && !data.can_change_status
-                    ? 'Assignee and status changes are for IT managers / admin'
-                    : !data.can_change_assignee
-                      ? 'Only IT managers / admin can change assignee'
-                      : 'Status changes are for IT / admin'}
-                </p>
-              )}
-              {data.assignee_inactive && data.status !== 'under_review' && (
-                <p className="text-xs text-amber-700 w-full">
-                  Current assignee is inactive.
-                  {data.can_reassign && (
-                    <> <button type="button" className="underline font-medium" onClick={openReassign}>Reassign without changing status</button></>
-                  )}
-                </p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 pt-1 border-t border-gray-100">
-              <div>
-                <label className="text-xs font-medium text-gray-600">Type</label>
-                <select
-                  className="input w-full mt-1"
-                  disabled={!canField(data, 'type')}
-                  value={data.type}
-                  onChange={e => { field('type', e.target.value); patch({ type: e.target.value }); }}
-                >
-                  {TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600">Priority</label>
-                <select
-                  className="input w-full mt-1"
-                  disabled={!canField(data, 'priority')}
-                  value={data.priority}
-                  onChange={e => { field('priority', e.target.value); patch({ priority: e.target.value }); }}
-                >
-                  {PRIORITIES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600">Due date</label>
-                <input
-                  type="date"
-                  className="input w-full mt-1"
-                  disabled={!canField(data, 'due_date')}
-                  value={data.due_date || ''}
-                  onChange={e => { field('due_date', e.target.value); patch({ due_date: e.target.value || null }); }}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600">Target start</label>
-                <input
-                  type="date"
-                  className="input w-full mt-1"
-                  disabled={!canField(data, 'target_start_date')}
-                  value={data.target_start_date || ''}
-                  onChange={e => { field('target_start_date', e.target.value); patch({ target_start_date: e.target.value || null }); }}
-                />
-              </div>
-            </div>
-
-            <p className="text-xs text-gray-500">
-              Requested by {data.requested_by_name || '—'} · Updated {fmtDateTime(data.updated_at)}
-              {saving ? ' · Saving…' : ''}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {tab === 'discussion' && (
-        <div className="card p-4 space-y-4">
-          <div className="space-y-3 max-h-[50vh] overflow-y-auto">
-            {(data.comments || []).length === 0 && <p className="text-sm text-gray-400">No comments yet.</p>}
-            {(data.comments || []).map(c => {
-              const mine = canManageComment(c);
-              const editing = editingCommentId === c.id;
-              return (
-                <div key={c.id} className="border border-gray-100 rounded-lg p-3">
-                  <div className="flex items-start justify-between gap-2 mb-1">
-                    <div className="text-xs text-gray-500">
-                      {c.author_name} · {fmtDateTime(c.created_at)}
-                      {c.updated_at && c.updated_at !== c.created_at ? ' · edited' : ''}
-                    </div>
-                    {mine && !editing && (
-                      <div className="flex gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => startEditComment(c)}
-                          className="text-xs font-medium text-red-700 hover:underline"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeComment(c)}
-                          className="text-xs font-medium text-gray-500 hover:text-red-600 hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  {editing ? (
-                    <div className="space-y-2">
-                      <textarea
-                        className="input w-full min-h-[70px]"
-                        value={editingCommentBody}
-                        maxLength={COMMENT_HARD_LIMIT}
-                        onChange={e => setEditingCommentBody(clipToLimit(e.target.value, COMMENT_HARD_LIMIT))}
-                        autoFocus
-                      />
-                      {(() => {
-                        const hint = commentLengthHint(editingCommentBody);
-                        return (
-                          <p className={`text-[11px] ${hint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>
-                            {hint.text}
-                          </p>
-                        );
-                      })()}
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => saveComment(c.id)}
-                          className="px-3 py-1.5 text-sm rounded-lg bg-gray-900 text-white"
-                        >
-                          Save
-                        </button>
-                        <button
-                          type="button"
-                          onClick={cancelEditComment}
-                          className="px-3 py-1.5 text-sm rounded-lg border border-gray-300"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-sm text-gray-800 whitespace-pre-wrap">{c.body}</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="space-y-1">
-            <div className="flex gap-2">
-              <textarea
-                className="input flex-1 min-h-[70px]"
-                value={comment}
-                maxLength={COMMENT_HARD_LIMIT}
-                onChange={e => setComment(clipToLimit(e.target.value, COMMENT_HARD_LIMIT))}
-                placeholder="Add a comment… (@name is fine as plain text)"
+              <EditableBlock
+                label="Title"
+                value={data.title || ''}
+                canEdit={canField(data, 'title')}
+                saving={saving}
+                onSave={async (v) => {
+                  const title = String(v || '').trim();
+                  if (!title) {
+                    toast.error('Title is required');
+                    return false;
+                  }
+                  return patch({ title });
+                }}
               />
-              <button type="button" onClick={addComment} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white self-end">Post</button>
+              <EditableBlock
+                label="Description"
+                value={data.description || ''}
+                multiline
+                minHeightClass="min-h-[120px]"
+                canEdit={canField(data, 'description')}
+                saving={saving}
+                emptyText="No description yet."
+                maxLength={DESC_HARD_LIMIT}
+                lengthGuidance="Keep it clear and concise — module / department context can go here."
+                onSave={(v) => patch({ description: v || null })}
+              />
+              <AttachmentsPanel
+                requirementId={id}
+                attachments={data.attachments || []}
+                canEdit={!!data.can_edit}
+                onChanged={load}
+                label="Attachments"
+              />
             </div>
-            {(() => {
-              const hint = commentLengthHint(comment);
-              return (
-                <p className={`text-[11px] ${hint.tone === 'warn' ? 'text-amber-700' : 'text-gray-400'}`}>
-                  {hint.text}
-                </p>
-              );
-            })()}
+            <CommentsCard
+              requirementId={Number(id)}
+              comments={data.comments || []}
+              mentionUsers={data.mention_users || []}
+              selfId={user?.id}
+              isAdmin={user?.role === 'admin'}
+              canEditAttachments={!!data.can_edit}
+              onRefresh={load}
+              addComment={addComment}
+              saveComment={saveComment}
+              removeComment={removeComment}
+              canManageComment={canManageComment}
+            />
+          </div>
+          <div className="hidden lg:block">
+            <div className="card p-4 sticky top-4">
+              <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-3">Actions</h3>
+              <ActionPanel {...actionPanelProps} />
+            </div>
           </div>
         </div>
       )}
 
       {tab === 'development' && (
-        <div className="card p-4 grid grid-cols-1 gap-4">
-          {DEV_FIELDS.map(([key, label]) => (
-            <EditableBlock
-              key={key}
-              label={label}
-              value={data[key] || ''}
-              multiline
-              canEdit={canField(data, key)}
-              saving={saving}
-              emptyText="Not filled yet."
-              maxLength={DEV_NOTES_HARD_LIMIT}
-              onSave={(v) => patch({ [key]: v || null })}
+        <div className="card p-4 space-y-4">
+          <h5 className="font-semibold text-sm">Task's Development Notes</h5>
+          <div className="grid grid-cols-1 gap-4">
+            {DEV_FIELDS.map(([key, label]) => (
+              <EditableBlock
+                key={key}
+                label={label}
+                value={data[key] || ''}
+                multiline
+                canEdit={canField(data, key)}
+                saving={saving}
+                emptyText="Not filled yet."
+                maxLength={DEV_NOTES_HARD_LIMIT}
+                onSave={(v) => patch({ [key]: v || null })}
+              />
+            ))}
+          </div>
+          <div className="pt-3 border-t border-gray-100">
+            <AttachmentsPanel
+              requirementId={id}
+              attachments={data.development_attachments || []}
+              canEdit={canDevAttach}
+              onChanged={load}
+              uploadFields={{ dev_section: 'development' }}
+              label="Development files"
+              emptyText="No development files yet."
             />
-          ))}
+          </div>
         </div>
       )}
 
       {tab === 'timeline' && (
         <div className="card p-4">
-          <ul className="space-y-3">
+          <h5 className="font-semibold text-sm mb-4">Task's timeline records</h5>
+          <ul className="space-y-3 max-h-[450px] overflow-y-auto -mr-4">
             {(data.history || []).map(h => (
               <li key={h.id} className="flex gap-3 text-sm">
                 <div className="w-36 shrink-0 text-xs text-gray-400">{fmtDateTime(h.created_at)}</div>
@@ -888,39 +650,9 @@ export default function SystemRequirementWorkspace() {
         </div>
       )}
 
-      {tab === 'attachments' && (
-        <div className="card p-4 space-y-4">
-          {data.is_staff && (
-            <label className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-dashed border-gray-300 cursor-pointer hover:bg-gray-50">
-              <FiPaperclip /> Upload file
-              <input type="file" className="hidden" onChange={e => uploadFile(e.target.files?.[0])} />
-            </label>
-          )}
-          <ul className="divide-y">
-            {(data.attachments || []).length === 0 && <li className="text-sm text-gray-400 py-2">No attachments.</li>}
-            {(data.attachments || []).map(a => (
-              <li key={a.id} className="py-2 flex items-center justify-between gap-2 text-sm">
-                <div>
-                  <button
-                    type="button"
-                    className="text-red-700 hover:underline text-left"
-                    onClick={() => downloadAttachment(a)}
-                  >
-                    {a.original_filename}
-                  </button>
-                  <div className="text-xs text-gray-400">{a.uploaded_by_name} · {fmtDate(a.created_at)}</div>
-                </div>
-                {data.is_staff && (
-                  <button type="button" onClick={() => removeAttachment(a)} className="text-gray-400 hover:text-red-600"><FiTrash2 /></button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {tab === 'release' && (
         <div className="card p-4 space-y-4">
+          <h5 className="font-semibold text-sm">Release Notes</h5>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-gray-600">Target version</label>
@@ -976,6 +708,27 @@ export default function SystemRequirementWorkspace() {
         </div>
       )}
 
+      {/* Mobile Actions drawer */}
+      {actionsOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setActionsOpen(false)}
+          />
+          <div className="absolute inset-y-0 right-0 w-full max-w-sm bg-white shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+              <h3 className="text-sm font-semibold text-gray-900">Actions</h3>
+              <button type="button" className="p-2 rounded-lg hover:bg-gray-100" onClick={() => setActionsOpen(false)}>
+                <FiX size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              <ActionPanel {...actionPanelProps} />
+            </div>
+          </div>
+        </div>
+      )}
+
       <ConfirmDialog
         open={!!confirm}
         title={confirm?.title}
@@ -984,6 +737,17 @@ export default function SystemRequirementWorkspace() {
         tone={confirm?.tone || 'warning'}
         onConfirm={confirm?.onConfirm}
         onCancel={() => setConfirm(null)}
+      />
+
+      <RemarkConfirmDialog
+        open={!!remarkConfirm}
+        title={remarkConfirm?.title}
+        message={remarkConfirm?.message}
+        confirmLabel={remarkConfirm?.confirmLabel}
+        tone={remarkConfirm?.tone || 'warning'}
+        remarkPlaceholder={remarkConfirm?.remarkPlaceholder}
+        onConfirm={remarkConfirm?.onConfirm}
+        onCancel={() => setRemarkConfirm(null)}
       />
 
       <Modal isOpen={bizOpen} onClose={() => setBizOpen(false)} title="Request business approval">
@@ -998,50 +762,41 @@ export default function SystemRequirementWorkspace() {
         ) : (
           <SearchableSelect
             options={businessOwners}
-            value={bizOwner === '' ? '' : Number(bizOwner)}
-            onChange={v => setBizOwner(v)}
-            placeholder="Select business owner…"
+            value={bizOwner}
+            onChange={setBizOwner}
+            placeholder="Business owner…"
           />
         )}
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={() => setBizOpen(false)} className="px-3 py-2 text-sm rounded-lg border border-gray-300">Cancel</button>
           <button type="button" disabled={!businessOwners.length} onClick={confirmBizApproval} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white disabled:opacity-50">
-            Send for approval
+            Submit
           </button>
         </div>
       </Modal>
 
-      <Modal
-        isOpen={reassignOpen}
-        onClose={() => setReassignOpen(false)}
-        title={`Reassign → ${reassignRoleLabel(data.reassign_role)}`}
-      >
+      <Modal isOpen={reassignOpen} onClose={() => setReassignOpen(false)} title="Reassign">
         <p className="text-sm text-gray-600 mb-3">
-          Status stays <strong>{labelOf(STATUSES, data.status)}</strong>. Pick an active{' '}
-          {reassignRoleLabel(data.reassign_role)} for this step.
+          Pick a replacement {reassignRoleLabel(data.reassign_role)}. Status stays the same.
         </p>
-        {(data.reassign_users || []).length === 0 ? (
-          <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            No active people in that Settings list. Ask an admin to update Settings first.
-          </p>
-        ) : (
-          <SearchableSelect
-            options={(data.reassign_users || []).map(u => ({
+        <SearchableSelect
+          options={
+            (data.reassign_pool || []).map(u => ({
               value: u.id,
               label: u.name || u.email || `#${u.id}`,
-            }))}
-            value={reassignTo === '' ? '' : Number(reassignTo)}
-            onChange={v => setReassignTo(v)}
-            placeholder="Select replacement…"
-          />
-        )}
-        <div className="mt-5 flex justify-end gap-2">
+            }))
+          }
+          value={reassignTo}
+          onChange={setReassignTo}
+          placeholder="Select person…"
+        />
+        <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={() => setReassignOpen(false)} className="px-3 py-2 text-sm rounded-lg border border-gray-300">Cancel</button>
           <button
             type="button"
-            disabled={!(data.reassign_users || []).length}
+            disabled={!reassignTo}
             onClick={confirmReassign}
-            className="px-3 py-2 text-sm rounded-lg bg-amber-700 text-white disabled:opacity-50"
+            className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white disabled:opacity-50"
           >
             Reassign
           </button>

@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const ROOT = path.join(__dirname, '..', '..', '..', 'data', 'uploads', 'system_requirements', 'attachments');
 const VIDEO_RE = /^video\//i;
 const MAX_BYTES = 25 * 1024 * 1024;
+/** Single Development-tab files bucket (not per-section). */
+const DEV_SECTION = 'development';
 
 function ensureDir() {
   if (!fs.existsSync(ROOT)) fs.mkdirSync(ROOT, { recursive: true });
@@ -14,7 +16,16 @@ function isVideoMime(mime) {
   return !!(mime && VIDEO_RE.test(mime));
 }
 
-function storeFile({ buffer, originalFilename, mimeType, requirementId, uploadedBy, db }) {
+function storeFile({
+  buffer,
+  originalFilename,
+  mimeType,
+  requirementId,
+  uploadedBy,
+  db,
+  commentId = null,
+  devSection = null,
+}) {
   if (isVideoMime(mimeType)) {
     const err = new Error('Video uploads are not supported');
     err.status = 400;
@@ -22,6 +33,16 @@ function storeFile({ buffer, originalFilename, mimeType, requirementId, uploaded
   }
   if (buffer.length > MAX_BYTES) {
     const err = new Error('File too large (max 25 MB)');
+    err.status = 400;
+    throw err;
+  }
+  if (commentId && devSection) {
+    const err = new Error('Attachment cannot be both comment- and development-scoped');
+    err.status = 400;
+    throw err;
+  }
+  if (devSection && devSection !== DEV_SECTION) {
+    const err = new Error('Invalid development section');
     err.status = 400;
     throw err;
   }
@@ -35,10 +56,12 @@ function storeFile({ buffer, originalFilename, mimeType, requirementId, uploaded
   const relativePath = path.join('system_requirements', 'attachments', stored).replace(/\\/g, '/');
   const info = db.prepare(`
     INSERT INTO sysreq_attachments
-      (requirement_id, original_filename, stored_filename, relative_path, file_size, mime_type, uploaded_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (requirement_id, comment_id, dev_section, original_filename, stored_filename, relative_path, file_size, mime_type, uploaded_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     requirementId,
+    commentId || null,
+    devSection || null,
     originalFilename || stored,
     stored,
     relativePath,
@@ -64,6 +87,7 @@ function softDeleteAttachment(db, attachmentId, actorId) {
 module.exports = {
   ROOT,
   MAX_BYTES,
+  DEV_SECTION,
   ensureDir,
   isVideoMime,
   storeFile,

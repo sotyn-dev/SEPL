@@ -4,7 +4,7 @@
 const STATUS_CHECK = `
   'draft','submitted','under_review','need_clarification','approved','rejected',
   'planned','assigned','pending','in_progress','in_development',
-  'testing','released','closed','archived','reopened'
+  'testing','released','done','closed','archived','reopened'
 `;
 
 function recreateRequirementsTable(db) {
@@ -58,7 +58,10 @@ function recreateRequirementsTable(db) {
     )
     SELECT
       id, req_number, title, description, type,
-      CASE WHEN status = 'in_development' THEN 'pending' ELSE status END,
+      CASE
+        WHEN status = 'in_development' THEN 'pending'
+        ELSE status
+      END,
       priority,
       requested_by, assignee_id,
       due_date, target_start_date, target_version, release_version, release_notes,
@@ -73,19 +76,62 @@ function recreateRequirementsTable(db) {
   `);
 }
 
+/** Post-release closed rows → done (history had released). Early closed stays closed. */
+function migratePostReleaseClosedToDone(db) {
+  try {
+    db.prepare(`
+      UPDATE sysreq_requirements
+      SET status = 'done'
+      WHERE status = 'closed'
+        AND id IN (
+          SELECT DISTINCT requirement_id FROM sysreq_history WHERE to_status = 'released'
+        )
+    `).run();
+  } catch (e) {
+    console.warn('[sysreq] migrate closed→done skipped:', e.message);
+  }
+}
+
 function ensureStatusConstraint(db) {
   const row = db.prepare(
     `SELECT sql FROM sqlite_master WHERE type='table' AND name='sysreq_requirements'`
   ).get();
   if (!row?.sql) return;
-  if (row.sql.includes("'pending'") && row.sql.includes("'in_progress'")) {
-    // Still migrate any leftover in_development rows without rebuild
+
+  const hasDone = row.sql.includes("'done'");
+  const hasPending = row.sql.includes("'pending'") && row.sql.includes("'in_progress'");
+
+  if (!hasPending || !hasDone) {
+    recreateRequirementsTable(db);
+  } else {
     db.prepare(
       `UPDATE sysreq_requirements SET status='pending' WHERE status='in_development'`
     ).run();
-    return;
   }
-  recreateRequirementsTable(db);
+  migratePostReleaseClosedToDone(db);
+}
+
+function ensureAttachmentAndCommentColumns(db) {
+  try {
+    const commentCols = db.prepare(`PRAGMA table_info(sysreq_comments)`).all();
+    const commentNames = new Set(commentCols.map(c => c.name));
+    if (!commentNames.has('source')) {
+      db.exec(`ALTER TABLE sysreq_comments ADD COLUMN source TEXT NOT NULL DEFAULT 'user'`);
+    }
+
+    const attCols = db.prepare(`PRAGMA table_info(sysreq_attachments)`).all();
+    const attNames = new Set(attCols.map(c => c.name));
+    if (!attNames.has('comment_id')) {
+      db.exec(`ALTER TABLE sysreq_attachments ADD COLUMN comment_id INTEGER REFERENCES sysreq_comments(id)`);
+    }
+    if (!attNames.has('dev_section')) {
+      db.exec(`ALTER TABLE sysreq_attachments ADD COLUMN dev_section TEXT`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sysreq_attach_comment ON sysreq_attachments(comment_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sysreq_attach_dev ON sysreq_attachments(dev_section)`);
+  } catch (e) {
+    console.warn('[sysreq] attachment/comment columns skipped:', e.message);
+  }
 }
 
 function dropAiPromptNotesColumn(db) {
@@ -161,6 +207,7 @@ function runSystemRequirementsMigrations(db) {
       parent_id INTEGER REFERENCES sysreq_comments(id),
       body TEXT NOT NULL,
       author_id INTEGER NOT NULL REFERENCES users(id),
+      source TEXT NOT NULL DEFAULT 'user',
       soft_deleted_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -180,6 +227,8 @@ function runSystemRequirementsMigrations(db) {
     CREATE TABLE IF NOT EXISTS sysreq_attachments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       requirement_id INTEGER NOT NULL REFERENCES sysreq_requirements(id),
+      comment_id INTEGER REFERENCES sysreq_comments(id),
+      dev_section TEXT,
       original_filename TEXT NOT NULL,
       stored_filename TEXT NOT NULL,
       relative_path TEXT NOT NULL,
@@ -194,6 +243,7 @@ function runSystemRequirementsMigrations(db) {
   ensureStatusConstraint(db);
   dropAiPromptNotesColumn(db);
   dropModuleDepartmentColumns(db);
+  ensureAttachmentAndCommentColumns(db);
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sysreq_status ON sysreq_requirements(status);

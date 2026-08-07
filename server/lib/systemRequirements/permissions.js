@@ -115,7 +115,7 @@ function canTransition(db, user, reqRow, toStatus) {
   }
 
   if (reqRow.assignee_id === uid &&
-      ['testing', 'released', 'assigned', 'planned', 'pending', 'in_progress'].includes(toStatus)) {
+      ['testing', 'released', 'done', 'assigned', 'planned', 'pending', 'in_progress'].includes(toStatus)) {
     return true;
   }
 
@@ -125,7 +125,7 @@ function canTransition(db, user, reqRow, toStatus) {
   }
 
   if (isItTeamMember(db, user) && assignableIds(db).includes(uid) &&
-      ['pending', 'in_progress', 'testing', 'submitted', 'need_clarification', 'released', 'closed'].includes(toStatus)) {
+      ['pending', 'in_progress', 'testing', 'submitted', 'need_clarification', 'released', 'done'].includes(toStatus)) {
     return true;
   }
 

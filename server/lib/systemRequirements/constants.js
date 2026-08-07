@@ -16,17 +16,20 @@ const TYPE_LABELS = {
   refactoring: 'Refactoring',
 };
 
-/** Working statuses: pending + in_progress (replaces in_development). Keep legacy keys for old rows until migrated. */
+/**
+ * Full catalog (includes legacy keys for old rows).
+ * Operator-facing set: see MANUAL_STATUSES + under_review tangent.
+ */
 const STATUSES = [
   'draft', 'submitted', 'under_review', 'need_clarification', 'approved', 'rejected',
   'planned', 'assigned', 'pending', 'in_progress', 'in_development',
-  'testing', 'released', 'closed', 'archived', 'reopened',
+  'testing', 'released', 'done', 'closed', 'archived', 'reopened',
 ];
 
 const STATUS_LABELS = {
   draft: 'Draft',
-  submitted: 'Waiting', // IT queue
-  under_review: 'Business Approval', // tangent — not free-picked in status dropdown
+  submitted: 'Waiting / Backlog',
+  under_review: 'Business Approval',
   need_clarification: 'Need Clarification',
   approved: 'Approved',
   rejected: 'Rejected',
@@ -37,15 +40,25 @@ const STATUS_LABELS = {
   in_development: 'In Development', // legacy
   testing: 'Testing',
   released: 'Released',
-  closed: 'Closed',
+  done: 'Done',
+  closed: 'Closed', // early IT kill — not post-release
   archived: 'Archived',
   reopened: 'Reopened',
 };
 
-/** Statuses shown in the manual Status dropdown (Waiting = submitted). under_review is a tangent. */
+/**
+ * Manual Status dropdown (Waiting / Backlog = submitted).
+ * under_review is a tangent via Request business approval.
+ */
 const MANUAL_STATUSES = [
   'submitted', 'need_clarification', 'pending', 'in_progress',
-  'testing', 'released', 'closed',
+  'testing', 'released', 'done', 'closed', 'reopened', 'rejected',
+];
+
+/** List-view status filter (lean). */
+const FILTER_STATUSES = [
+  'submitted', 'under_review', 'need_clarification', 'pending', 'in_progress',
+  'testing', 'released', 'done', 'closed', 'reopened', 'rejected',
 ];
 
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
@@ -57,13 +70,28 @@ const PRIORITY_LABELS = {
   urgent: 'Urgent',
 };
 
-const OPEN_STATUSES = STATUSES.filter(s => !['closed', 'archived', 'rejected'].includes(s));
-const DONE_STATUSES = ['released', 'closed', 'archived'];
+/** Still “on the board” for workload / open counts. */
+const OPEN_STATUSES = STATUSES.filter(s =>
+  !['done', 'closed', 'archived', 'rejected'].includes(s)
+);
+
+/** Finished / off the default board (`hide_done`). */
+const DONE_STATUSES = ['done', 'closed', 'archived', 'rejected'];
 const STALE_DAYS = 14;
 
 /** Hard character limits (description + discussion comments). Dev notes are FE-only. */
 const DESC_HARD_LIMIT = 2000;
 const COMMENT_HARD_LIMIT = 2000;
+
+/** Comment source: user chat vs business tangent auto-posts. */
+const COMMENT_SOURCES = {
+  user: 'user',
+  businessReject: 'business_reject',
+  businessClarify: 'business_clarify',
+};
+
+/** Single Development-tab attachment bucket. */
+const DEV_SECTION = 'development';
 
 const SETTINGS_KEYS = {
   itManagers: 'sysreq_it_manager_ids',
@@ -76,24 +104,26 @@ const SETTINGS_KEYS = {
 
 /**
  * Allowed next statuses from a given status.
- * Business approve/reject → Waiting (submitted). under_review is a tangent.
+ * Business approve/reject → Waiting / Backlog (submitted). under_review is a tangent.
+ * Closed = early kill. Done = post-release success. Reopen from finished states.
  */
 const TRANSITIONS = {
   draft: ['submitted'],
-  submitted: ['draft', 'under_review', 'pending', 'closed', 'rejected'],
+  submitted: ['under_review', 'pending', 'closed', 'rejected'],
   under_review: ['need_clarification', 'submitted'],
   need_clarification: ['submitted', 'under_review', 'pending', 'closed'],
-  approved: ['pending', 'submitted'],
-  rejected: ['submitted', 'closed', 'archived'],
-  planned: ['pending', 'assigned'],
-  assigned: ['pending'],
-  pending: ['in_progress', 'testing', 'under_review', 'submitted'],
+  approved: ['pending', 'submitted'], // legacy
+  rejected: ['reopened', 'submitted', 'archived'],
+  planned: ['pending', 'assigned'], // legacy
+  assigned: ['pending'], // legacy
+  pending: ['in_progress', 'testing', 'under_review', 'submitted', 'closed'],
   in_progress: ['pending', 'testing', 'under_review'],
-  in_development: ['pending', 'in_progress', 'testing', 'under_review'],
+  in_development: ['pending', 'in_progress', 'testing', 'under_review'], // legacy
   testing: ['in_progress', 'pending', 'released'],
-  released: ['closed'],
-  closed: ['archived', 'reopened'],
-  reopened: ['submitted', 'pending'],
+  released: ['done'],
+  done: ['reopened'],
+  closed: ['reopened', 'archived'],
+  reopened: ['pending', 'in_progress', 'submitted'],
   archived: [],
 };
 
@@ -103,6 +133,7 @@ module.exports = {
   STATUSES,
   STATUS_LABELS,
   MANUAL_STATUSES,
+  FILTER_STATUSES,
   PRIORITIES,
   PRIORITY_LABELS,
   OPEN_STATUSES,
@@ -110,6 +141,8 @@ module.exports = {
   STALE_DAYS,
   DESC_HARD_LIMIT,
   COMMENT_HARD_LIMIT,
+  COMMENT_SOURCES,
+  DEV_SECTION,
   SETTINGS_KEYS,
   TRANSITIONS,
 };

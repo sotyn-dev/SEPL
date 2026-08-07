@@ -5,7 +5,7 @@ const express = require('express');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
-const { TYPES, PRIORITIES, STATUSES, MANUAL_STATUSES, STATUS_LABELS, DESC_HARD_LIMIT, COMMENT_HARD_LIMIT } = require('../lib/systemRequirements/constants');
+const { TYPES, PRIORITIES, STATUSES, MANUAL_STATUSES, FILTER_STATUSES, STATUS_LABELS, DESC_HARD_LIMIT, COMMENT_HARD_LIMIT, COMMENT_SOURCES, DONE_STATUSES } = require('../lib/systemRequirements/constants');
 const { appendHistory, listHistory } = require('../lib/systemRequirements/history');
 const { applyTransition, nextActionsFor, statusOptionsFor } = require('../lib/systemRequirements/statusMachine');
 const {
@@ -43,8 +43,10 @@ const {
   softDeleteAttachment,
   isVideoMime,
   MAX_BYTES,
+  DEV_SECTION,
 } = require('../lib/systemRequirements/attachments');
 const { dashboard, runReport } = require('../lib/systemRequirements/analytics');
+const { notifyMany } = require('../lib/push');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -56,8 +58,62 @@ const upload = multer({
 
 const IN_TRANSIT_STATUSES = [
   'submitted', 'under_review', 'need_clarification', 'approved',
-  'planned', 'assigned', 'pending', 'in_progress', 'in_development', 'testing', 'reopened',
+  'planned', 'assigned', 'pending', 'in_progress', 'in_development', 'testing', 'released', 'reopened',
 ];
+
+const DONE_LIST_SQL = DONE_STATUSES.map(s => `'${s}'`).join(',');
+const OVERDUE_EXCLUDE_SQL = `('done','closed','archived','rejected','released')`;
+
+function insertComment(db, {
+  requirementId, body, authorId, parentId = null, source = COMMENT_SOURCES.user,
+}) {
+  const info = db.prepare(`
+    INSERT INTO sysreq_comments (requirement_id, parent_id, body, author_id, source)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(requirementId, parentId, body, authorId, source || COMMENT_SOURCES.user);
+  return db.prepare(`
+    SELECT c.*, u.name AS author_name FROM sysreq_comments c
+    LEFT JOIN users u ON u.id = c.author_id WHERE c.id = ?
+  `).get(info.lastInsertRowid);
+}
+
+function parseMentions(body, candidates) {
+  if (!body || !candidates?.length) return [];
+  const ids = new Set();
+  for (const u of candidates) {
+    const name = (u.name || '').trim();
+    if (!name) continue;
+    const re = new RegExp(`(?:^|[\\s])@${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$|[.,!?;:])`, 'i');
+    if (re.test(body)) ids.add(Number(u.id));
+  }
+  return [...ids];
+}
+
+function relatedMentionUsers(db, row) {
+  const settings = getTeamSettings(db);
+  const ids = new Set([
+    ...(settings.it_manager_ids || []),
+    ...(settings.it_team_ids || []),
+    ...(settings.business_owner_ids || []),
+  ]);
+  if (row.requested_by) ids.add(Number(row.requested_by));
+  if (row.assignee_id) ids.add(Number(row.assignee_id));
+  if (row.created_by) ids.add(Number(row.created_by));
+  if (!ids.size) return [];
+  const placeholders = [...ids].map(() => '?').join(',');
+  return db.prepare(`
+    SELECT id, name FROM users
+    WHERE id IN (${placeholders}) AND (active IS NULL OR active = 1) AND COALESCE(archived, 0) = 0
+  `).all(...ids);
+}
+
+function canUploadAttachment(db, user, row, { commentId, devSection }) {
+  if (devSection) {
+    return isStaffUser(db, user) || canEditField(db, user, row, 'tech_analysis');
+  }
+  if (commentId) return true; // any authenticated viewer posting a comment
+  return canEditRequirement(db, user, row);
+}
 
 function loadReq(db, id) {
   return db.prepare(`
@@ -175,7 +231,13 @@ router.put('/settings', (req, res) => {
 // ── Dashboard & reports ────────────────────────────────────────
 router.get('/dashboard', (req, res) => {
   try {
-    res.json(dashboard(getDb(), { userId: req.user.id }));
+    const db = getDb();
+    const data = dashboard(db, { userId: req.user.id });
+    // Workload strip is IT manager / admin only
+    if (!(isAdminUser(req.user) || isItManager(db, req.user))) {
+      data.assignee_workload = [];
+    }
+    res.json(data);
   } catch (e) {
     console.error('[sysreq] dashboard', e);
     res.status(500).json({ error: e.message });
@@ -202,6 +264,7 @@ router.get('/meta', (req, res) => {
     statuses: STATUSES,
     status_labels: STATUS_LABELS,
     manual_statuses: MANUAL_STATUSES,
+    filter_statuses: FILTER_STATUSES,
     settings,
     assignable_users: listAssignableUsers(db),
     business_owners: listBusinessOwners(db),
@@ -266,7 +329,7 @@ router.get('/', (req, res) => {
       where.push(`r.status IN (${list.map(() => '?').join(',')})`);
       params.push(...list);
     } else if (hide_done === '1') {
-      where.push(`r.status NOT IN ('closed','archived')`);
+      where.push(`r.status NOT IN (${DONE_LIST_SQL})`);
     }
 
     if (type) { where.push('r.type = ?'); params.push(type); }
@@ -277,10 +340,10 @@ router.get('/', (req, res) => {
     }
     if (assignee_id) { where.push('r.assignee_id = ?'); params.push(Number(assignee_id)); }
     if (overdue === '1') {
-      where.push(`r.due_date IS NOT NULL AND r.due_date < date('now') AND r.status NOT IN ('released','closed','archived','rejected')`);
+      where.push(`r.due_date IS NOT NULL AND r.due_date < date('now') AND r.status NOT IN ${OVERDUE_EXCLUDE_SQL}`);
     }
     if (stale === '1') {
-      where.push(`r.updated_at < datetime('now', '-14 days') AND r.status NOT IN ('closed','archived','rejected')`);
+      where.push(`r.updated_at < datetime('now', '-14 days') AND r.status NOT IN (${DONE_LIST_SQL})`);
     }
     if (inactive_assignee === '1') {
       where.push(`r.status IN (${IN_TRANSIT_STATUSES.map(() => '?').join(',')})`);
@@ -442,13 +505,30 @@ router.get('/:id', (req, res) => {
       ORDER BY a.created_at DESC
     `).all(row.id);
 
+    const byComment = new Map();
+    for (const a of attachments) {
+      if (!a.comment_id) continue;
+      if (!byComment.has(a.comment_id)) byComment.set(a.comment_id, []);
+      byComment.get(a.comment_id).push(a);
+    }
+    const commentsWithAtt = comments.map(c => ({
+      ...c,
+      attachments: byComment.get(c.id) || [],
+    }));
+
+    const overviewAttachments = attachments.filter(a => !a.dev_section);
+    const developmentAttachments = attachments.filter(a => a.dev_section === DEV_SECTION);
+
     const history = listHistory(db, row.id, { limit: 100 });
     const enriched = enrichInactiveFlags(db, row);
+    const mentionUsers = relatedMentionUsers(db, row);
 
     res.json({
       ...enriched,
-      comments,
-      attachments,
+      comments: commentsWithAtt,
+      attachments: overviewAttachments,
+      development_attachments: developmentAttachments,
+      mention_users: mentionUsers,
       history,
       ...capabilityPayload(db, req.user, row),
     });
@@ -568,20 +648,71 @@ router.post('/:id/transition', (req, res) => {
     const action = req.body?.action;
     if (!action) return res.status(400).json({ error: 'action is required' });
 
+    const note = (req.body?.note || '').trim() || null;
+    const needsBizRemark = (action === 'reject' || action === 'need_clarification')
+      && row.status === 'under_review';
+    if (needsBizRemark && !note) {
+      return res.status(400).json({ error: 'A short remark is required' });
+    }
+
     const tx = db.transaction(() => {
-      return applyTransition(db, {
+      const updated = applyTransition(db, {
         requirement: row,
         user: req.user,
         action,
-        note: req.body?.note || null,
+        note,
         assigneeId: req.body?.assignee_id,
       });
+
+      if (needsBizRemark && note) {
+        const source = action === 'reject'
+          ? COMMENT_SOURCES.businessReject
+          : COMMENT_SOURCES.businessClarify;
+        const prefix = action === 'reject' ? 'Rejected' : 'Need clarification';
+        const comment = insertComment(db, {
+          requirementId: id,
+          body: `${prefix}: ${note}`,
+          authorId: req.user.id,
+          source,
+        });
+        appendHistory(db, {
+          requirementId: id,
+          eventType: 'comment_added',
+          actorId: req.user.id,
+          payload: { comment_id: comment.id, source },
+        });
+      }
+
+      return updated;
     });
 
     const updated = tx();
     const full = enrichInactiveFlags(db, loadReq(db, id));
+    const comments = db.prepare(`
+      SELECT c.*, u.name AS author_name FROM sysreq_comments c
+      LEFT JOIN users u ON u.id = c.author_id
+      WHERE c.requirement_id = ? AND c.soft_deleted_at IS NULL
+      ORDER BY c.created_at ASC
+    `).all(id);
+    const attachments = db.prepare(`
+      SELECT a.*, u.name AS uploaded_by_name
+      FROM sysreq_attachments a
+      LEFT JOIN users u ON u.id = a.uploaded_by
+      WHERE a.requirement_id = ? AND a.soft_deleted_at IS NULL
+      ORDER BY a.created_at DESC
+    `).all(id);
+    const byComment = new Map();
+    for (const a of attachments) {
+      if (!a.comment_id) continue;
+      if (!byComment.has(a.comment_id)) byComment.set(a.comment_id, []);
+      byComment.get(a.comment_id).push(a);
+    }
+
     res.json({
       ...full,
+      comments: comments.map(c => ({ ...c, attachments: byComment.get(c.id) || [] })),
+      attachments: attachments.filter(a => !a.dev_section),
+      development_attachments: attachments.filter(a => a.dev_section === DEV_SECTION),
       history: listHistory(db, id, { limit: 100 }),
       ...capabilityPayload(db, req.user, updated),
     });
@@ -632,25 +763,33 @@ router.post('/:id/comments', (req, res) => {
       return res.status(400).json({ error: `Comment max ${COMMENT_HARD_LIMIT} characters` });
     }
 
-    const info = db.prepare(`
-      INSERT INTO sysreq_comments (requirement_id, parent_id, body, author_id)
-      VALUES (?, ?, ?, ?)
-    `).run(id, req.body.parent_id || null, body, req.user.id);
+    const comment = insertComment(db, {
+      requirementId: id,
+      body,
+      authorId: req.user.id,
+      parentId: req.body.parent_id || null,
+      source: COMMENT_SOURCES.user,
+    });
 
     touch(db, id, req.user.id);
     appendHistory(db, {
       requirementId: id,
       eventType: 'comment_added',
       actorId: req.user.id,
-      payload: { comment_id: info.lastInsertRowid },
+      payload: { comment_id: comment.id },
     });
 
-    const comment = db.prepare(`
-      SELECT c.*, u.name AS author_name FROM sysreq_comments c
-      LEFT JOIN users u ON u.id = c.author_id WHERE c.id = ?
-    `).get(info.lastInsertRowid);
+    const mentionIds = parseMentions(body, relatedMentionUsers(db, row))
+      .filter(uid => uid !== Number(req.user.id));
+    if (mentionIds.length) {
+      notifyMany(mentionIds, {
+        title: 'You were mentioned',
+        body: `${req.user.name || 'Someone'} mentioned you on ${row.req_number}`,
+        url: `/system-requirements/${id}`,
+      });
+    }
 
-    res.status(201).json(comment);
+    res.status(201).json({ ...comment, attachments: [] });
   } catch (e) {
     console.error('[sysreq] comment', e);
     res.status(500).json({ error: e.message });
@@ -764,12 +903,30 @@ router.post('/:id/attachments', upload.single('file'), (req, res) => {
     const id = Number(req.params.id);
     const row = loadReq(db, id);
     if (!row) return res.status(404).json({ error: 'Not found' });
-    if (!canEditRequirement(db, req.user, row)) {
-      return res.status(403).json({ error: 'Not allowed' });
-    }
     if (!req.file) return res.status(400).json({ error: 'file required' });
     if (isVideoMime(req.file.mimetype)) {
       return res.status(400).json({ error: 'Video uploads are not supported' });
+    }
+
+    let commentId = req.body?.comment_id ? Number(req.body.comment_id) : null;
+    let devSection = req.body?.dev_section || null;
+    if (devSection === 'true' || devSection === '1') devSection = DEV_SECTION;
+    if (devSection && devSection !== DEV_SECTION) {
+      return res.status(400).json({ error: 'Invalid development section' });
+    }
+    if (commentId && devSection) {
+      return res.status(400).json({ error: 'Use either comment_id or dev_section, not both' });
+    }
+    if (commentId) {
+      const c = db.prepare(`
+        SELECT id FROM sysreq_comments
+        WHERE id = ? AND requirement_id = ? AND soft_deleted_at IS NULL
+      `).get(commentId, id);
+      if (!c) return res.status(400).json({ error: 'Comment not found on this requirement' });
+    }
+
+    if (!canUploadAttachment(db, req.user, row, { commentId, devSection })) {
+      return res.status(403).json({ error: 'Not allowed' });
     }
 
     const att = storeFile({
@@ -779,6 +936,8 @@ router.post('/:id/attachments', upload.single('file'), (req, res) => {
       requirementId: id,
       uploadedBy: req.user.id,
       db,
+      commentId,
+      devSection,
     });
 
     touch(db, id, req.user.id);
@@ -786,7 +945,12 @@ router.post('/:id/attachments', upload.single('file'), (req, res) => {
       requirementId: id,
       eventType: 'attachment_uploaded',
       actorId: req.user.id,
-      payload: { attachment_id: att.id, filename: att.original_filename },
+      payload: {
+        attachment_id: att.id,
+        filename: att.original_filename,
+        comment_id: commentId,
+        dev_section: devSection,
+      },
     });
 
     res.status(201).json(att);
@@ -822,14 +986,20 @@ router.delete('/:id/attachments/:attId', (req, res) => {
     const id = Number(req.params.id);
     const row = loadReq(db, id);
     if (!row) return res.status(404).json({ error: 'Not found' });
-    if (!canEditRequirement(db, req.user, row)) {
-      return res.status(403).json({ error: 'Not allowed' });
-    }
     const att = db.prepare(`
       SELECT * FROM sysreq_attachments
       WHERE id = ? AND requirement_id = ? AND soft_deleted_at IS NULL
     `).get(Number(req.params.attId), id);
     if (!att) return res.status(404).json({ error: 'Attachment not found' });
+
+    const uploader = Number(att.uploaded_by) === Number(req.user.id);
+    const allowed = canEditRequirement(db, req.user, row)
+      || isAdminUser(req.user)
+      || (att.comment_id && uploader)
+      || (att.dev_section && (isStaffUser(db, req.user) || canEditField(db, req.user, row, 'tech_analysis')));
+    if (!allowed) {
+      return res.status(403).json({ error: 'Not allowed' });
+    }
 
     softDeleteAttachment(db, att.id, req.user.id);
     touch(db, id, req.user.id);

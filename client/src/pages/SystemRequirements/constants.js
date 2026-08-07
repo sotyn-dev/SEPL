@@ -11,9 +11,10 @@ export const TYPES = [
   { value: 'refactoring', label: 'Refactoring' },
 ];
 
+/** Full catalog (labels for history / badges). Includes legacy. */
 export const STATUSES = [
   { value: 'draft', label: 'Draft' },
-  { value: 'submitted', label: 'Waiting' },
+  { value: 'submitted', label: 'Waiting / Backlog' },
   { value: 'under_review', label: 'Business Approval' },
   { value: 'need_clarification', label: 'Need Clarification' },
   { value: 'approved', label: 'Approved' },
@@ -24,20 +25,39 @@ export const STATUSES = [
   { value: 'in_progress', label: 'In Progress' },
   { value: 'testing', label: 'Testing' },
   { value: 'released', label: 'Released' },
+  { value: 'done', label: 'Done' },
   { value: 'closed', label: 'Closed' },
   { value: 'archived', label: 'Archived' },
   { value: 'reopened', label: 'Reopened' },
 ];
 
-/** Manual Status dropdown options (Waiting = submitted). Business approval is a tangent. */
-export const MANUAL_STATUSES = [
-  { value: 'submitted', label: 'Waiting' },
+/** List-view status filter (lean operator set). */
+export const FILTER_STATUSES = [
+  { value: 'submitted', label: 'Waiting / Backlog' },
+  { value: 'under_review', label: 'Business Approval' },
   { value: 'need_clarification', label: 'Need Clarification' },
   { value: 'pending', label: 'Pending' },
   { value: 'in_progress', label: 'In Progress' },
   { value: 'testing', label: 'Testing' },
   { value: 'released', label: 'Released' },
+  { value: 'done', label: 'Done' },
   { value: 'closed', label: 'Closed' },
+  { value: 'reopened', label: 'Reopened' },
+  { value: 'rejected', label: 'Rejected' },
+];
+
+/** Manual Status dropdown (Waiting / Backlog = submitted). Business approval is a tangent. */
+export const MANUAL_STATUSES = [
+  { value: 'submitted', label: 'Waiting / Backlog' },
+  { value: 'need_clarification', label: 'Need Clarification' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'testing', label: 'Testing' },
+  { value: 'released', label: 'Released' },
+  { value: 'done', label: 'Done' },
+  { value: 'closed', label: 'Closed' },
+  { value: 'reopened', label: 'Reopened' },
+  { value: 'rejected', label: 'Rejected' },
 ];
 
 export const PRIORITIES = [
@@ -61,6 +81,7 @@ export const STATUS_COLORS = {
   in_development: 'bg-sky-100 text-sky-800',
   testing: 'bg-cyan-100 text-cyan-800',
   released: 'bg-green-100 text-green-800',
+  done: 'bg-emerald-100 text-emerald-800',
   closed: 'bg-gray-100 text-gray-500',
   archived: 'bg-gray-100 text-gray-400',
   reopened: 'bg-pink-100 text-pink-700',
@@ -93,6 +114,8 @@ export function prettyAction(action) {
   if (action === 'reject') return 'Reject → IT managers';
   if (action === 'submitted') return 'Submit';
   if (action === 'close') return 'Close';
+  if (action === 'reopen') return 'Reopen';
+  if (action === 'done') return 'Done';
   return String(action || '').replace(/_/g, ' ');
 }
 
@@ -136,4 +159,3 @@ export function clipToLimit(text, limit) {
   const s = String(text ?? '');
   return s.length <= limit ? s : s.slice(0, limit);
 }
-

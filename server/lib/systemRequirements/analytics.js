@@ -22,15 +22,15 @@ function dashboard(db, { userId } = {}) {
   const testing = countStatus(['testing']);
   const releasedMonth = db.prepare(`
     SELECT COUNT(*) c FROM sysreq_requirements
-    WHERE ${ACTIVE_SQL} AND status IN ('released','closed')
-      AND completed_at >= datetime('now', 'start of month')
+    WHERE ${ACTIVE_SQL} AND status IN ('released','done')
+      AND COALESCE(completed_at, updated_at) >= datetime('now', 'start of month')
   `).get().c;
 
   const overdue = db.prepare(`
     SELECT COUNT(*) c FROM sysreq_requirements
     WHERE ${ACTIVE_SQL}
       AND due_date IS NOT NULL AND due_date < date('now')
-      AND status NOT IN ('released','closed','archived','rejected')
+      AND status NOT IN ('released','done','closed','archived','rejected')
   `).get().c;
 
   const highPriority = db.prepare(`
@@ -227,14 +227,14 @@ function reportDeliveryLog(db) {
            completed_at, status
     FROM sysreq_requirements
     WHERE soft_deleted_at IS NULL
-      AND status IN ('released','closed')
+      AND status IN ('released','done')
     ORDER BY COALESCE(completed_at, updated_at) DESC
     LIMIT 500
   `).all();
   const byMonth = db.prepare(`
     SELECT strftime('%Y-%m', COALESCE(completed_at, updated_at)) AS month, COUNT(*) cnt
     FROM sysreq_requirements
-    WHERE soft_deleted_at IS NULL AND status IN ('released','closed')
+    WHERE soft_deleted_at IS NULL AND status IN ('released','done')
     GROUP BY month
     ORDER BY month DESC
     LIMIT 24

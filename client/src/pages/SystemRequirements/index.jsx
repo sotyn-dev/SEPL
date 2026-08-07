@@ -4,29 +4,45 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { useUrlTab } from '../../hooks/useUrlTab';
 import {
-  FiPlus, FiSettings, FiRefreshCw, FiSearch, FiClipboard,
+  FiPlus, FiSettings, FiRefreshCw, FiSearch, FiClipboard, FiX,
 } from 'react-icons/fi';
 import { exportCsv } from '../../utils/exportCsv';
 import { fmtDate, fmtDateTime } from '../../utils/datetime';
 import CreateModal from './CreateModal';
 import SettingsModal from './SettingsModal';
 import {
-  TYPES, PRIORITIES, STATUSES, STATUS_COLORS, PRIORITY_COLORS,
+  TYPES, PRIORITIES, FILTER_STATUSES, STATUSES, STATUS_COLORS, PRIORITY_COLORS,
   REPORTS, labelOf,
 } from './constants';
 
-function Chip({ label, value, active, onClick, tone = 'gray' }) {
+function FilterStat({ label, value, active, onClick, tone = 'neutral' }) {
   const tones = {
-    gray: active ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
-    amber: active ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-800 hover:bg-amber-100',
-    red: active ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100',
-    sky: active ? 'bg-sky-600 text-white' : 'bg-sky-50 text-sky-800 hover:bg-sky-100',
-    green: active ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100',
+    neutral: active
+      ? 'bg-gray-900 text-white'
+      : 'text-gray-700 hover:bg-gray-100',
+    warn: active
+      ? 'bg-amber-600 text-white'
+      : 'text-gray-700 hover:bg-gray-100',
+    danger: active
+      ? 'bg-red-600 text-white'
+      : 'text-gray-700 hover:bg-gray-100',
+    info: active
+      ? 'bg-sky-600 text-white'
+      : 'text-gray-700 hover:bg-gray-100',
+    success: active
+      ? 'bg-emerald-600 text-white'
+      : 'text-gray-700 hover:bg-gray-100',
   };
   return (
-    <button type="button" onClick={onClick} className={`px-3 py-2 rounded-xl text-left min-w-[110px] ${tones[tone]}`}>
-      <div className="text-lg font-semibold leading-none">{value ?? 0}</div>
-      <div className="text-xs mt-1 opacity-90">{label}</div>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full flex items-center justify-between gap-2 px-2 py-0.5 rounded text-left text-xs transition-colors lg:text-sm ${tones[tone]}`}
+    >
+      <span className={`truncate ${active ? 'font-medium' : ''}`}>{label}</span>
+      <span className={`shrink-0 tabular-nums font-semibold ${active ? 'opacity-100' : 'opacity-80'}`}>
+        {value ?? 0}
+      </span>
     </button>
   );
 }
@@ -47,6 +63,7 @@ export default function SystemRequirementsBoard() {
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [canEditSettings, setCanEditSettings] = useState(false);
+  const [canViewWorkload, setCanViewWorkload] = useState(false);
   const [reportKey, setReportKey] = useState('by_status');
   const [report, setReport] = useState(null);
 
@@ -61,8 +78,15 @@ export default function SystemRequirementsBoard() {
 
   useEffect(() => {
     api.get('/system-requirements/meta')
-      .then(r => setCanEditSettings(!!r.data?.me?.can_edit_settings))
-      .catch(() => setCanEditSettings(false));
+      .then(r => {
+        const me = r.data?.me || {};
+        setCanEditSettings(!!me.can_edit_settings);
+        setCanViewWorkload(!!(me.is_admin || me.is_it_manager));
+      })
+      .catch(() => {
+        setCanEditSettings(false);
+        setCanViewWorkload(false);
+      });
   }, []);
 
   const loadList = useCallback(async () => {
@@ -95,6 +119,18 @@ export default function SystemRequirementsBoard() {
   useEffect(() => { loadDash(); }, [loadDash]);
   useEffect(() => { if (tab === 'board') loadList(); }, [tab, loadList]);
   useEffect(() => { if (tab === 'reports') loadReport(); }, [tab, loadReport]);
+
+  const hasFilters = !!(q || status || priority || type || overdue || stale || inactiveAssignee);
+
+  const clearFilters = () => {
+    setQ('');
+    setStatus('');
+    setPriority('');
+    setType('');
+    setOverdue(false);
+    setStale(false);
+    setInactiveAssignee(false);
+  };
 
   const applyChip = (kind) => {
     setOverdue(false);
@@ -146,7 +182,7 @@ export default function SystemRequirementsBoard() {
               <FiSettings size={14} /> Settings
             </button>
           )}
-          <button type="button" onClick={() => setCreateOpen(true)} className="px-3 py-2 text-sm rounded-lg bg-red-600 text-white inline-flex items-center gap-1">
+          <button type="button" onClick={() => setCreateOpen(true)} className="px-3 py-2 btn-primary text-sm rounded-lg text-white inline-flex items-center gap-1">
             <FiPlus size={14} /> New
           </button>
         </div>
@@ -169,60 +205,139 @@ export default function SystemRequirementsBoard() {
 
       {tab === 'board' && (
         <>
-          <div className="flex flex-wrap gap-2">
-            <Chip label="Open" value={dash?.counts?.open} onClick={() => { setStatus(''); setOverdue(false); setStale(false); setInactiveAssignee(false); }} active={!status && !overdue && !stale && !inactiveAssignee} />
-            <Chip label="Waiting" value={dash?.counts?.with_it_managers} onClick={() => applyChip('it')} tone="amber" active={status === 'submitted'} />
-            <Chip label="Business approval" value={dash?.counts?.waiting_approval} onClick={() => applyChip('waiting')} tone="amber" active={status === 'under_review'} />
-            <Chip label="Pending" value={dash?.counts?.pending} onClick={() => applyChip('pending')} tone="sky" active={status === 'pending'} />
-            <Chip label="In Progress" value={dash?.counts?.in_progress} onClick={() => applyChip('progress')} tone="sky" active={status === 'in_progress'} />
-            <Chip label="Testing" value={dash?.counts?.testing} onClick={() => applyChip('testing')} tone="sky" active={status === 'testing'} />
-            <Chip label="Released this month" value={dash?.counts?.released_this_month} tone="green" onClick={() => setStatus('released,closed')} active={status === 'released,closed'} />
-            <Chip label="Overdue" value={dash?.counts?.overdue} onClick={() => applyChip('overdue')} tone="red" active={overdue} />
-            <Chip label="Inactive assignee" value={dash?.counts?.inactive_assignee} onClick={() => applyChip('inactive')} tone="red" active={inactiveAssignee} />
-            <Chip label="Need clarification" value={dash?.counts?.need_clarification} onClick={() => applyChip('clarification')} tone="amber" active={status === 'need_clarification'} />
-            <Chip label="Stale" value={dash?.counts?.stale} onClick={() => applyChip('stale')} tone="amber" active={stale} />
-          </div>
-
-          {(dash?.assignee_workload || []).length > 0 && (
-            <div className="card p-3">
-              <div className="text-xs font-semibold text-gray-500 mb-2">Open work by assignee</div>
-              <div className="flex flex-wrap gap-2">
-                {dash.assignee_workload.map(a => (
-                  <span key={a.id} className="text-xs px-2 py-1 rounded-lg bg-gray-100 text-gray-700">
-                    {a.name} <strong>{a.cnt}</strong>
-                  </span>
-                ))}
+          <div className="flex items-stretch gap-4 max-xl:flex-col">
+            <div className="card p-2 flex-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-2 gap-y-0.5">
+                <FilterStat
+                  label="Open work"
+                  value={dash?.counts?.open}
+                  active={!status && !overdue && !stale && !inactiveAssignee}
+                  onClick={() => { setStatus(''); setOverdue(false); setStale(false); setInactiveAssignee(false); }}
+                />
+                <FilterStat
+                  label="Waiting / Backlog"
+                  value={dash?.counts?.with_it_managers}
+                  tone="warn"
+                  active={status === 'submitted'}
+                  onClick={() => applyChip('it')}
+                />
+                <FilterStat
+                  label="Business approval"
+                  value={dash?.counts?.waiting_approval}
+                  tone="warn"
+                  active={status === 'under_review'}
+                  onClick={() => applyChip('waiting')}
+                />
+                <FilterStat
+                  label="Need clarification"
+                  value={dash?.counts?.need_clarification}
+                  tone="warn"
+                  active={status === 'need_clarification'}
+                  onClick={() => applyChip('clarification')}
+                />
+                <FilterStat
+                  label="Pending"
+                  value={dash?.counts?.pending}
+                  tone="info"
+                  active={status === 'pending'}
+                  onClick={() => applyChip('pending')}
+                />
+                <FilterStat
+                  label="In Progress"
+                  value={dash?.counts?.in_progress}
+                  tone="info"
+                  active={status === 'in_progress'}
+                  onClick={() => applyChip('progress')}
+                />
+                <FilterStat
+                  label="Testing"
+                  value={dash?.counts?.testing}
+                  tone="info"
+                  active={status === 'testing'}
+                  onClick={() => applyChip('testing')}
+                />
+                <FilterStat
+                  label="Released / Done (month)"
+                  value={dash?.counts?.released_this_month}
+                  tone="success"
+                  active={status === 'released,done'}
+                  onClick={() => { setOverdue(false); setStale(false); setInactiveAssignee(false); setStatus('released,done'); }}
+                />
+                <FilterStat
+                  label="Overdue"
+                  value={dash?.counts?.overdue}
+                  tone="danger"
+                  active={overdue}
+                  onClick={() => applyChip('overdue')}
+                />
+                <FilterStat
+                  label="Inactive assignee"
+                  value={dash?.counts?.inactive_assignee}
+                  tone="danger"
+                  active={inactiveAssignee}
+                  onClick={() => applyChip('inactive')}
+                />
+                <FilterStat
+                  label="Stale (14d)"
+                  value={dash?.counts?.stale}
+                  tone="warn"
+                  active={stale}
+                  onClick={() => applyChip('stale')}
+                />
               </div>
             </div>
-          )}
+
+            {canViewWorkload && (dash?.assignee_workload || []).length > 0 && (
+              <div className="xl:w-[32.3%] xl:pl-2.5">
+                <div className="text-xs font-semibold text-gray-500 mb-2">Open work by assignee</div>
+                <div className="flex flex-wrap gap-2">
+                  {dash.assignee_workload.map(a => (
+                    <span key={a.id} className="cursor-default text-xs px-2 py-1 rounded bg-white border border-gray-200 text-gray-700">
+                      {a.name} <strong>{a.cnt}</strong>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+          </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2 card p-0 overflow-hidden">
-              <div className="p-3 border-b flex flex-wrap gap-2 items-center">
-                <div className="relative flex-1 min-w-[180px]">
-                  <FiSearch className="absolute left-2 top-2.5 text-gray-400" size={14} />
+              <div className="p-3 border-b grid grid-cols-1 sm:grid-cols-3 xl:grid-cols-4 gap-2 items-center">
+                <div className="relative sm:col-span-3 xl:col-span-4">
+                  <FiSearch className="absolute left-2 top-3.5 text-gray-400" size={14} />
                   <input
                     className="input w-full pl-8"
                     placeholder="Search number, title…"
                     value={q}
                     onChange={e => setQ(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && loadList()}
                   />
                 </div>
-                <select className="input" value={type} onChange={e => setType(e.target.value)}>
+                <select className="input !text-sm !pl-2" value={type} onChange={e => setType(e.target.value)}>
                   <option value="">All types</option>
                   {TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
-                <select className="input" value={priority} onChange={e => setPriority(e.target.value)}>
+                <select className="input !text-sm !pl-2" value={priority} onChange={e => setPriority(e.target.value)}>
                   <option value="">All priorities</option>
                   {PRIORITIES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                   <option value="high,urgent">High + Urgent</option>
                 </select>
-                <select className="input" value={status} onChange={e => setStatus(e.target.value)}>
-                  <option value="">Active statuses</option>
-                  {STATUSES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                <select className="input !text-sm !pl-2" value={status} onChange={e => setStatus(e.target.value)}>
+                  <option value="">Open work</option>
+                  {FILTER_STATUSES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
-                <button type="button" onClick={loadList} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white">Filter</button>
+                {
+                  hasFilters && (
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="btn btn-secondary inline-flex items-center justify-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
+                    >
+                      <FiX size={14} /> Clear filters
+                    </button>
+                  )
+                }
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -281,6 +396,22 @@ export default function SystemRequirementsBoard() {
 
             <div className="space-y-4">
               <div className="card p-3">
+                <div className="text-xs font-semibold text-gray-500 mb-2 flex items-center justify-between">
+                  <span>My assigned</span>
+                  <span className="text-xs text-blue-800">{`( ${(dash?.my_assigned || []).length} )`}</span>
+                </div>
+                <ul className="space-y-2 overflow-y-auto max-h-[300px]">
+                  {(dash?.my_assigned || []).length === 0 && <li className="text-sm text-gray-400">None assigned to you.</li>}
+                  {(dash?.my_assigned || []).map(r => (
+                    <li key={r.id}>
+                      <Link to={`/system-requirements/${r.id}`} className="text-sm text-gray-800 hover:text-red-700">
+                        {r.req_number} — {r.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="card p-3">
                 <div className="text-xs font-semibold text-gray-500 mb-2">Recent activity</div>
                 <ul className="space-y-2 max-h-64 overflow-y-auto">
                   {(dash?.recent_activity || []).length === 0 && <li className="text-sm text-gray-400">Nothing yet.</li>}
@@ -295,79 +426,94 @@ export default function SystemRequirementsBoard() {
                   ))}
                 </ul>
               </div>
-              <div className="card p-3">
-                <div className="text-xs font-semibold text-gray-500 mb-2">My assigned</div>
-                <ul className="space-y-2">
-                  {(dash?.my_assigned || []).length === 0 && <li className="text-sm text-gray-400">None assigned to you.</li>}
-                  {(dash?.my_assigned || []).map(r => (
-                    <li key={r.id}>
-                      <Link to={`/system-requirements/${r.id}`} className="text-sm text-gray-800 hover:text-red-700">
-                        {r.req_number} — {r.title}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
             </div>
           </div>
         </>
       )}
 
       {tab === 'reports' && (
-        <div className="space-y-4">
+        <div className="space-y-4 min-h-[60vh]">
           <div className="flex flex-wrap gap-2 items-center">
-            <select className="input" value={reportKey} onChange={e => setReportKey(e.target.value)}>
+            <select className="input max-w-[240px]" value={reportKey} onChange={e => setReportKey(e.target.value)}>
               {REPORTS.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
             <button type="button" onClick={loadReport} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white">Run</button>
             <button type="button" onClick={exportReport} className="px-3 py-2 text-sm rounded-lg border border-gray-300">Export CSV</button>
           </div>
-          <div className="card p-0 overflow-hidden">
-            {report?.averages && (
-              <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {Object.entries(report.averages).map(([k, v]) => (
-                  <div key={k} className="bg-gray-50 rounded-xl p-3">
-                    <div className="text-xs text-gray-500 capitalize">{k.replace(/_/g, ' ')}</div>
-                    <div className="text-xl font-semibold">{v == null ? '—' : `${v}d`}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {report?.by_month && (
-              <div className="p-4 flex flex-wrap gap-2 border-b">
-                {report.by_month.map(m => (
-                  <span key={m.month} className="text-xs px-2 py-1 rounded-lg bg-emerald-50 text-emerald-800">{m.month}: {m.cnt}</span>
-                ))}
-              </div>
-            )}
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500">
-                <tr>
-                  {report?.rows?.[0] && Object.keys(report.rows[0]).map(k => (
-                    <th key={k} className="px-3 py-2 capitalize">{k.replace(/_/g, ' ')}</th>
-                  ))}
-                  {report?.outcomes && !report?.rows && (
-                    <><th className="px-3 py-2">Status</th><th className="px-3 py-2">Count</th></>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {(report?.rows || []).map((row, i) => (
-                  <tr key={i} className="border-t border-gray-100">
-                    {Object.values(row).map((v, j) => (
-                      <td key={j} className="px-3 py-2">{String(v ?? '—')}</td>
+          {(() => {
+            const hasRows = (report?.rows || []).length > 0;
+            const hasOutcomes = (report?.outcomes || []).length > 0;
+            const hasAverages = report?.averages && Object.keys(report.averages).length > 0;
+            const hasByMonth = (report?.by_month || []).length > 0;
+            const hasReportData = hasRows || hasOutcomes || hasAverages || hasByMonth;
+
+            if (!report) {
+              return (
+                <div className="card p-8 text-center text-sm text-gray-400">
+                  Pick a report and click Run.
+                </div>
+              );
+            }
+
+            if (!hasReportData) {
+              return (
+                <div className="card p-8 text-center text-sm text-gray-400">
+                  No reports found.
+                </div>
+              );
+            }
+
+            return (
+              <div className="card p-0 overflow-hidden">
+                {hasAverages && (
+                  <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {Object.entries(report.averages).map(([k, v]) => (
+                      <div key={k} className="bg-gray-50 rounded-xl p-3">
+                        <div className="text-xs text-gray-500 capitalize">{k.replace(/_/g, ' ')}</div>
+                        <div className="text-xl font-semibold">{v == null ? '—' : `${v}d`}</div>
+                      </div>
                     ))}
-                  </tr>
-                ))}
-                {(report?.outcomes || []).map((o, i) => (
-                  <tr key={`o-${i}`} className="border-t border-gray-100">
-                    <td className="px-3 py-2">{o.status}</td>
-                    <td className="px-3 py-2">{o.cnt}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                  </div>
+                )}
+                {hasByMonth && (
+                  <div className="p-4 flex flex-wrap gap-2 border-b">
+                    {report.by_month.map(m => (
+                      <span key={m.month} className="text-xs px-2 py-1 rounded-lg bg-emerald-50 text-emerald-800">{m.month}: {m.cnt}</span>
+                    ))}
+                  </div>
+                )}
+                {(hasRows || hasOutcomes) && (
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-left text-xs text-gray-500">
+                      <tr>
+                        {hasRows && Object.keys(report.rows[0]).map(k => (
+                          <th key={k} className="px-3 py-2 capitalize">{k.replace(/_/g, ' ')}</th>
+                        ))}
+                        {hasOutcomes && !hasRows && (
+                          <><th className="px-3 py-2">Status</th><th className="px-3 py-2">Count</th></>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(report.rows || []).map((row, i) => (
+                        <tr key={i} className="border-t border-gray-100">
+                          {Object.values(row).map((v, j) => (
+                            <td key={j} className="px-3 py-2">{String(v ?? '—')}</td>
+                          ))}
+                        </tr>
+                      ))}
+                      {(report.outcomes || []).map((o, i) => (
+                        <tr key={`o-${i}`} className="border-t border-gray-100">
+                          <td className="px-3 py-2">{o.status}</td>
+                          <td className="px-3 py-2">{o.cnt}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 

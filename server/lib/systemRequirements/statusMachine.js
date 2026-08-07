@@ -72,7 +72,7 @@ function applyAssign(db, { requirement, user, assigneeId, note }) {
 
   const from = requirement.status;
   const uid = Number(user.id);
-  const blocked = ['released', 'closed', 'archived', 'under_review'];
+  const blocked = ['released', 'done', 'closed', 'archived', 'under_review'];
   if (blocked.includes(from)) {
     const err = new Error(`Cannot assign while status is ${from}`);
     err.status = 400;
@@ -317,9 +317,12 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
     });
   }
 
-  // IT manager terminal close after triage / post-reject
+  // IT manager early close (not post-release — that is Done)
   if (action === 'close') {
     action = 'closed';
+  }
+  if (action === 'reopen') {
+    action = 'reopened';
   }
 
   let toStatus = action;
@@ -338,6 +341,20 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
   const businessClarify = from === 'under_review' && toStatus === 'need_clarification';
   if (!requesterDraftSubmit && !businessClarify && !canChangeStatus(db, user, requirement)) {
     const err = new Error('You cannot change status on this ticket');
+    err.status = 403;
+    throw err;
+  }
+
+  // Early Closed: IT manager / admin only
+  if (toStatus === 'closed' && !isItManager(db, user) && !isAdminUser(user)) {
+    const err = new Error('Only IT managers can early-close a ticket');
+    err.status = 403;
+    throw err;
+  }
+
+  // Reopen: IT manager / admin only
+  if (toStatus === 'reopened' && !isItManager(db, user) && !isAdminUser(user)) {
+    const err = new Error('Only IT managers can reopen a ticket');
     err.status = 403;
     throw err;
   }
@@ -378,10 +395,14 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
   }
 
   const extras = [];
-  if (toStatus === 'released' || toStatus === 'closed') {
+  if (toStatus === 'done' || toStatus === 'closed') {
     extras.push(`completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)`);
   }
-  if (toStatus === 'need_clarification' || toStatus === 'rejected' || toStatus === 'reopened') {
+  if (toStatus === 'reopened') {
+    extras.push('completed_at = NULL');
+    clearApprovals(db, requirement.id);
+  }
+  if (toStatus === 'need_clarification' || toStatus === 'rejected') {
     clearApprovals(db, requirement.id);
   }
   if (toStatus === 'under_review') {
@@ -394,10 +415,11 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
         : toStatus === 'pending' ? 'status_changed'
           : toStatus === 'testing' ? 'testing_started'
             : toStatus === 'released' ? 'released'
-              : toStatus === 'closed' ? 'closed'
-                : toStatus === 'reopened' ? 'reopened'
-                  : toStatus === 'need_clarification' ? 'clarification_requested'
-                    : 'status_changed';
+              : toStatus === 'done' ? 'done'
+                : toStatus === 'closed' ? 'closed'
+                  : toStatus === 'reopened' ? 'reopened'
+                    : toStatus === 'need_clarification' ? 'clarification_requested'
+                      : 'status_changed';
 
   db.prepare(`
     UPDATE sysreq_requirements SET
