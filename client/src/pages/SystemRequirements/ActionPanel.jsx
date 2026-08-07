@@ -28,7 +28,7 @@ export default function ActionPanel({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-medium text-gray-600">
-              Assignee {data.status === 'under_review' ? '(business owner)' : '(IT managers + team)'}
+              Assignee
             </label>
             <div className={`mt-1 ${!data.can_change_assignee || data.status === 'under_review' ? 'pointer-events-none opacity-60' : ''}`}>
               <SearchableSelect

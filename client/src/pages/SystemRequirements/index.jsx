@@ -364,9 +364,9 @@ export default function SystemRequirementsBoard() {
                         onClick={() => navigate(`/system-requirements/${r.id}`)}
                       >
                         <td className="px-3 py-2 font-mono text-xs text-gray-500">{r.req_number}</td>
-                        <td className="px-3 py-2 font-medium text-gray-800">{r.title}</td>
+                        <td className="px-3 py-2 font-medium text-gray-800 text-xs min-w-[200]">{r.title}</td>
                         <td className="px-3 py-2">
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[r.status]}`}>
+                          <span className={`text-nowrap text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[r.status]}`}>
                             {labelOf(STATUSES, r.status)}
                           </span>
                         </td>
@@ -376,7 +376,7 @@ export default function SystemRequirementsBoard() {
                           </span>
                         </td>
                         <td className="px-3 py-2 text-gray-600">
-                          <span className="inline-flex items-center gap-1.5 flex-wrap">
+                          <span className="inline-flex items-center gap-1.5 flex-wrap text-xs">
                             {r.assignee_name || '—'}
                             {r.assignee_inactive && (
                               <span className="text-[10px] uppercase tracking-wide font-semibold bg-amber-200 text-amber-900 rounded px-1.5 py-0.5">
@@ -385,7 +385,7 @@ export default function SystemRequirementsBoard() {
                             )}
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-gray-600">{r.due_date ? fmtDate(r.due_date) : '—'}</td>
+                        <td className="text-xs px-3 py-2 text-gray-600">{r.due_date ? fmtDate(r.due_date) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -406,7 +406,7 @@ export default function SystemRequirementWorkspace() {
       return 'bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-300';
     }
     // neutral: Submit, Request business approval, etc.
-    return 'bg-white text-gray-800 hover:bg-gray-50 border border-gray-300';
+    return 'bg-gray-800 text-white hover:bg-gray-950 border border-black';
   };
 
   const assigneeOptions = data.status === 'under_review'
@@ -532,7 +532,7 @@ export default function SystemRequirementWorkspace() {
                       key={a.action}
                       type="button"
                       onClick={() => runTransition(a.action)}
-                      className={`px-2 py-1 text-xs rounded ${quickActionClass(a.action)}`}
+                      className={`px-2 py-1 text-xs rounded-md ${quickActionClass(a.action)}`}
                     >
                       {a.label || prettyAction(a.action)}
                     </button>
@@ -751,23 +751,25 @@ export default function SystemRequirementWorkspace() {
       />
 
       <Modal isOpen={bizOpen} onClose={() => setBizOpen(false)} title="Request business approval">
-        <p className="text-sm text-gray-600 mb-3">
-          Pick <strong>one</strong> business owner. Status becomes <strong>Business Approval</strong> (locked).
-          Banner will show: Waiting for business approval — their name.
-        </p>
-        {businessOwners.length === 0 ? (
-          <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            No business owners. Ask an admin to add them under Settings.
+        <div className="min-h-[200px]">
+          <p className="text-sm text-gray-600 mb-3">
+            Pick <strong>one</strong> business owner. Status becomes <strong>Business Approval</strong> (locked).
+            Banner will show: Waiting for business approval — their name.
           </p>
-        ) : (
-          <SearchableSelect
-            options={businessOwners}
-            value={bizOwner}
-            onChange={setBizOwner}
-            placeholder="Business owner…"
-          />
-        )}
-        <div className="mt-4 flex justify-end gap-2">
+          {businessOwners.length === 0 ? (
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              No business owners. Ask an admin to add them under Settings.
+            </p>
+          ) : (
+            <SearchableSelect
+              options={businessOwners}
+              value={bizOwner}
+              onChange={setBizOwner}
+              placeholder="Business owner…"
+            />
+          )}
+        </div>
+        <div className="mt-4 flex justify-end gap-2 sticky bottom-4">
           <button type="button" onClick={() => setBizOpen(false)} className="px-3 py-2 text-sm rounded-lg border border-gray-300">Cancel</button>
           <button type="button" disabled={!businessOwners.length} onClick={confirmBizApproval} className="px-3 py-2 text-sm rounded-lg bg-gray-900 text-white disabled:opacity-50">
             Submit
