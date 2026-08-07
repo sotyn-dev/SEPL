@@ -64,6 +64,7 @@ export default function SystemRequirementsBoard() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [canEditSettings, setCanEditSettings] = useState(false);
   const [canViewWorkload, setCanViewWorkload] = useState(false);
+  const [isTechOperator, setIsTechOperator] = useState(false);
   const [reportKey, setReportKey] = useState('by_status');
   const [report, setReport] = useState(null);
 
@@ -82,10 +83,12 @@ export default function SystemRequirementsBoard() {
         const me = r.data?.me || {};
         setCanEditSettings(!!me.can_edit_settings);
         setCanViewWorkload(!!(me.is_admin || me.is_it_manager));
+        setIsTechOperator(!!(me.is_tech_operator || me.is_staff));
       })
       .catch(() => {
         setCanEditSettings(false);
         setCanViewWorkload(false);
+        setIsTechOperator(false);
       });
   }, []);
 
@@ -118,7 +121,10 @@ export default function SystemRequirementsBoard() {
 
   useEffect(() => { loadDash(); }, [loadDash]);
   useEffect(() => { if (tab === 'board') loadList(); }, [tab, loadList]);
-  useEffect(() => { if (tab === 'reports') loadReport(); }, [tab, loadReport]);
+  useEffect(() => { if (tab === 'reports' && isTechOperator) loadReport(); }, [tab, loadReport, isTechOperator]);
+  useEffect(() => {
+    if (!isTechOperator && tab === 'reports') setTab('board');
+  }, [isTechOperator, tab, setTab]);
 
   const hasFilters = !!(q || status || priority || type || overdue || stale || inactiveAssignee);
 
@@ -189,7 +195,7 @@ export default function SystemRequirementsBoard() {
       </div>
 
       <div className="flex gap-1 border-b border-gray-200">
-        {['board', 'reports'].map(t => (
+        {(isTechOperator ? ['board', 'reports'] : ['board']).map(t => (
           <button
             key={t}
             type="button"
@@ -198,7 +204,7 @@ export default function SystemRequirementsBoard() {
               tab === t ? 'border-red-600 text-red-700 font-medium' : 'border-transparent text-gray-500'
             }`}
           >
-            {t === 'board' ? 'Control Center' : 'Reports'}
+            {t === 'board' ? (isTechOperator ? 'Control Center' : 'My tickets') : 'Reports'}
           </button>
         ))}
       </div>

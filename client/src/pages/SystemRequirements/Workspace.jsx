@@ -19,7 +19,8 @@ import CommentsCard from './CommentsCard';
 import EditableBlock from './EditableBlock';
 import RemarkConfirmDialog from './RemarkConfirmDialog';
 
-const TABS = ['overview', 'development', 'release', 'timeline'];
+const ALL_TABS = ['overview', 'development', 'release', 'timeline'];
+const RAISER_TABS = ['overview', 'timeline'];
 
 const DEV_FIELDS = [
   ['tech_analysis', 'Technical analysis'],
@@ -444,14 +445,19 @@ export default function SystemRequirementWorkspace() {
     openReassign,
   };
 
-  const canDevAttach = !!(data.is_staff || canField(data, 'tech_analysis'));
+  const canDevAttach = !!(data.is_tech_operator || data.is_staff || canField(data, 'tech_analysis'));
+  const tabs = (data.is_tech_operator || data.is_staff) ? ALL_TABS : RAISER_TABS;
+
+  useEffect(() => {
+    if (!tabs.includes(tab)) setTab('overview');
+  }, [tabs, tab]);
 
   return (
     <div className="space-y-4 min-h-[calc(100vh-180px)]">
         <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <Link to="/system-requirements" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 mb-2">
-            <FiArrowLeft size={14} /> Back to board
+            <FiArrowLeft size={14} /> Back
           </Link>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-mono text-gray-500">{data.req_number}</span>
@@ -507,7 +513,7 @@ export default function SystemRequirementWorkspace() {
       )}
 
       <div className="flex gap-1 overflow-x-auto border-b border-gray-200">
-        {TABS.map(t => (
+        {tabs.map(t => (
           <button
             key={t}
             type="button"

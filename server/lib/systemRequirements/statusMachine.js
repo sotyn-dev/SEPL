@@ -7,6 +7,7 @@ const {
   canAssign,
   canToggleWorkStatus,
   canChangeStatus,
+  canReopen,
 } = require('./permissions');
 const {
   getTeamSettings,
@@ -54,7 +55,7 @@ function assignPrimaryManager(db, requirementId, actorId) {
  */
 function applyAssign(db, { requirement, user, assigneeId, note }) {
   if (!canAssign(db, user)) {
-    const err = new Error('Only IT managers (or admin) can assign tickets');
+    const err = new Error('Only IT managers, IT team, or admin can assign tickets');
     err.status = 403;
     throw err;
   }
@@ -292,6 +293,11 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
       err.status = 400;
       throw err;
     }
+    if (!isAdminUser(user) && Number(requirement.assignee_id) !== uid) {
+      const err = new Error('Only the assigned business owner can approve this ticket');
+      err.status = 403;
+      throw err;
+    }
     return returnToItManagers(db, {
       requirement,
       user,
@@ -305,6 +311,11 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
   if (action === 'reject' && from === 'under_review') {
     if (!isBusinessOwner(db, user) && !isAdminUser(user)) {
       const err = new Error('Only business owners can reject while Under Review');
+      err.status = 403;
+      throw err;
+    }
+    if (!isAdminUser(user) && Number(requirement.assignee_id) !== uid) {
+      const err = new Error('Only the assigned business owner can reject this ticket');
       err.status = 403;
       throw err;
     }
@@ -339,7 +350,8 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
   const requesterDraftSubmit = from === 'draft' && toStatus === 'submitted'
     && canTransition(db, user, requirement, toStatus);
   const businessClarify = from === 'under_review' && toStatus === 'need_clarification';
-  if (!requesterDraftSubmit && !businessClarify && !canChangeStatus(db, user, requirement)) {
+  const reopenAction = toStatus === 'reopened' && canReopen(db, user, requirement);
+  if (!requesterDraftSubmit && !businessClarify && !reopenAction && !canChangeStatus(db, user, requirement)) {
     const err = new Error('You cannot change status on this ticket');
     err.status = 403;
     throw err;
@@ -352,9 +364,13 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
     throw err;
   }
 
-  // Reopen: IT manager / admin only
-  if (toStatus === 'reopened' && !isItManager(db, user) && !isAdminUser(user)) {
-    const err = new Error('Only IT managers can reopen a ticket');
+  // Reopen: closed = manager/admin; released/done = raiser + tech
+  if (toStatus === 'reopened' && !canReopen(db, user, requirement)) {
+    const err = new Error(
+      (from === 'closed' || from === 'rejected')
+        ? 'Only IT managers can reopen this ticket'
+        : 'You cannot reopen this ticket'
+    );
     err.status = 403;
     throw err;
   }
@@ -389,6 +405,11 @@ function applyTransition(db, { requirement, user, action, note, assigneeId }) {
   if (from === 'under_review' && toStatus === 'need_clarification') {
     if (!isBusinessOwner(db, user) && !isAdminUser(user)) {
       const err = new Error('Only business owners can request clarification');
+      err.status = 403;
+      throw err;
+    }
+    if (!isAdminUser(user) && Number(requirement.assignee_id) !== uid) {
+      const err = new Error('Only the assigned business owner can request clarification');
       err.status = 403;
       throw err;
     }
@@ -482,9 +503,12 @@ function nextActionsFor(db, user, requirement) {
   const biz = isBusinessOwner(db, user) || isAdminUser(user);
 
   if (from === 'under_review' && biz) {
-    actions.push({ action: 'approve_business', label: 'Approve (Business)' });
-    actions.push({ action: 'need_clarification', label: 'Need Clarification' });
-    actions.push({ action: 'reject', label: 'Reject → IT managers' });
+    // Only the assigned business approver (or admin) acts
+    if (isAdminUser(user) || requirement.assignee_id === Number(user.id)) {
+      actions.push({ action: 'approve_business', label: 'Approve (Business)' });
+      actions.push({ action: 'need_clarification', label: 'Need Clarification' });
+      actions.push({ action: 'reject', label: 'Reject → IT managers' });
+    }
     return actions;
   }
 
@@ -494,6 +518,10 @@ function nextActionsFor(db, user, requirement) {
 
   if (it && ['submitted', 'need_clarification', 'pending', 'in_progress', 'planned', 'assigned', 'approved', 'reopened', 'in_development'].includes(from)) {
     actions.push({ action: 'request_business_approval', label: 'Request business approval' });
+  }
+
+  if (canReopen(db, user, requirement) && ['released', 'done', 'closed', 'rejected'].includes(from)) {
+    actions.push({ action: 'reopen', label: 'Reopen' });
   }
 
   return actions;

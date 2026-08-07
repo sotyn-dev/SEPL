@@ -247,6 +247,13 @@ function runSystemRequirementsMigrations(db) {
       soft_deleted_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS sysreq_watchers (
+      requirement_id INTEGER NOT NULL REFERENCES sysreq_requirements(id),
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (requirement_id, user_id)
+    );
   `);
 
   ensureStatusConstraint(db);
@@ -264,6 +271,7 @@ function runSystemRequirementsMigrations(db) {
     CREATE INDEX IF NOT EXISTS idx_sysreq_hist_type ON sysreq_history(event_type, created_at);
     CREATE INDEX IF NOT EXISTS idx_sysreq_comments_req ON sysreq_comments(requirement_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sysreq_attach_req ON sysreq_attachments(requirement_id);
+    CREATE INDEX IF NOT EXISTS idx_sysreq_watchers_user ON sysreq_watchers(user_id);
   `);
 }
 

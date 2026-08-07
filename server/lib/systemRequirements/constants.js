@@ -120,7 +120,7 @@ const TRANSITIONS = {
   in_progress: ['pending', 'testing', 'under_review'],
   in_development: ['pending', 'in_progress', 'testing', 'under_review'], // legacy
   testing: ['in_progress', 'pending', 'released'],
-  released: ['done'],
+  released: ['done', 'reopened'],
   done: ['reopened'],
   closed: ['reopened', 'archived'],
   reopened: ['pending', 'in_progress', 'submitted'],

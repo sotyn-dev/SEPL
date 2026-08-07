@@ -3,51 +3,68 @@ const { STALE_DAYS, OPEN_STATUSES } = require('./constants');
 const ACTIVE_SQL = `soft_deleted_at IS NULL`;
 const openList = OPEN_STATUSES.map(s => `'${s}'`).join(',');
 
-function dashboard(db, { userId } = {}) {
-  const countStatus = (statuses) => {
+/**
+ * @param {object} opts
+ * @param {number} [opts.userId]
+ * @param {{ sql: string, params: any[] }} [opts.visibility] — AND-clause for non-tech scoping
+ */
+function dashboard(db, { userId, visibility } = {}) {
+  const v = visibility && visibility.sql !== '1=1'
+    ? { sql: visibility.sql, params: visibility.params || [] }
+    : { sql: '1=1', params: [] };
+  const vParams = v.params;
+  const active = `r.soft_deleted_at IS NULL`;
+
+  const countStatusAliased = (statuses) => {
     const ph = statuses.map(() => '?').join(',');
     return db.prepare(
-      `SELECT COUNT(*) c FROM sysreq_requirements WHERE ${ACTIVE_SQL} AND status IN (${ph})`
-    ).get(...statuses).c;
+      `SELECT COUNT(*) c FROM sysreq_requirements r
+       WHERE ${active} AND r.status IN (${ph}) AND (${v.sql})`
+    ).get(...statuses, ...vParams).c;
   };
 
   const open = db.prepare(
-    `SELECT COUNT(*) c FROM sysreq_requirements WHERE ${ACTIVE_SQL} AND status IN (${openList})`
-  ).get().c;
+    `SELECT COUNT(*) c FROM sysreq_requirements r
+     WHERE ${active} AND r.status IN (${openList}) AND (${v.sql})`
+  ).get(...vParams).c;
 
-  const waitingApproval = countStatus(['under_review']);
-  const withItManagers = countStatus(['submitted']);
-  const pending = countStatus(['pending', 'in_development']);
-  const inProgress = countStatus(['in_progress']);
-  const testing = countStatus(['testing']);
+  const waitingApproval = countStatusAliased(['under_review']);
+  const withItManagers = countStatusAliased(['submitted']);
+  const pending = countStatusAliased(['pending', 'in_development']);
+  const inProgress = countStatusAliased(['in_progress']);
+  const testing = countStatusAliased(['testing']);
   const releasedMonth = db.prepare(`
-    SELECT COUNT(*) c FROM sysreq_requirements
-    WHERE ${ACTIVE_SQL} AND status IN ('released','done')
-      AND COALESCE(completed_at, updated_at) >= datetime('now', 'start of month')
-  `).get().c;
+    SELECT COUNT(*) c FROM sysreq_requirements r
+    WHERE ${active} AND r.status IN ('released','done')
+      AND COALESCE(r.completed_at, r.updated_at) >= datetime('now', 'start of month')
+      AND (${v.sql})
+  `).get(...vParams).c;
 
   const overdue = db.prepare(`
-    SELECT COUNT(*) c FROM sysreq_requirements
-    WHERE ${ACTIVE_SQL}
-      AND due_date IS NOT NULL AND due_date < date('now')
-      AND status NOT IN ('released','done','closed','archived','rejected')
-  `).get().c;
+    SELECT COUNT(*) c FROM sysreq_requirements r
+    WHERE ${active}
+      AND r.due_date IS NOT NULL AND r.due_date < date('now')
+      AND r.status NOT IN ('released','done','closed','archived','rejected')
+      AND (${v.sql})
+  `).get(...vParams).c;
 
   const highPriority = db.prepare(`
-    SELECT COUNT(*) c FROM sysreq_requirements
-    WHERE ${ACTIVE_SQL}
-      AND priority IN ('high','urgent')
-      AND status IN (${openList})
-  `).get().c;
+    SELECT COUNT(*) c FROM sysreq_requirements r
+    WHERE ${active}
+      AND r.priority IN ('high','urgent')
+      AND r.status IN (${openList})
+      AND (${v.sql})
+  `).get(...vParams).c;
 
-  const needClarification = countStatus(['need_clarification']);
+  const needClarification = countStatusAliased(['need_clarification']);
 
   const stale = db.prepare(`
-    SELECT COUNT(*) c FROM sysreq_requirements
-    WHERE ${ACTIVE_SQL}
-      AND status IN (${openList})
-      AND updated_at < datetime('now', ?)
-  `).get(`-${STALE_DAYS} days`).c;
+    SELECT COUNT(*) c FROM sysreq_requirements r
+    WHERE ${active}
+      AND r.status IN (${openList})
+      AND r.updated_at < datetime('now', ?)
+      AND (${v.sql})
+  `).get(`-${STALE_DAYS} days`, ...vParams).c;
 
   const inactiveAssignee = db.prepare(`
     SELECT COUNT(*) c FROM sysreq_requirements r
@@ -63,23 +80,24 @@ function dashboard(db, { userId } = {}) {
         OR (asg.active IS NOT NULL AND asg.active = 0)
         OR COALESCE(asg.archived, 0) = 1
       )
-  `).get().c;
+      AND (${v.sql})
+  `).get(...vParams).c;
 
   const myAssigned = userId
     ? db.prepare(`
         SELECT id, req_number, title, status, priority, due_date, updated_at
-        FROM sysreq_requirements
-        WHERE ${ACTIVE_SQL} AND assignee_id = ? AND status IN (${openList})
-        ORDER BY updated_at DESC LIMIT 10
-      `).all(userId)
+        FROM sysreq_requirements r
+        WHERE ${active} AND r.assignee_id = ? AND r.status IN (${openList}) AND (${v.sql})
+        ORDER BY r.updated_at DESC LIMIT 10
+      `).all(userId, ...vParams)
     : [];
 
   const recentlyUpdated = db.prepare(`
-    SELECT id, req_number, title, status, priority, updated_at
-    FROM sysreq_requirements
-    WHERE ${ACTIVE_SQL}
-    ORDER BY updated_at DESC LIMIT 10
-  `).all();
+    SELECT r.id, r.req_number, r.title, r.status, r.priority, r.updated_at
+    FROM sysreq_requirements r
+    WHERE ${active} AND (${v.sql})
+    ORDER BY r.updated_at DESC LIMIT 10
+  `).all(...vParams);
 
   const recentActivity = db.prepare(`
     SELECT h.id, h.requirement_id, h.event_type, h.from_status, h.to_status, h.created_at,
@@ -87,21 +105,21 @@ function dashboard(db, { userId } = {}) {
     FROM sysreq_history h
     JOIN sysreq_requirements r ON r.id = h.requirement_id
     LEFT JOIN users u ON u.id = h.actor_id
-    WHERE r.soft_deleted_at IS NULL
+    WHERE r.soft_deleted_at IS NULL AND (${v.sql})
     ORDER BY h.created_at DESC, h.id DESC
     LIMIT 20
-  `).all();
+  `).all(...vParams);
 
   const byStatus = db.prepare(`
-    SELECT status, COUNT(*) cnt FROM sysreq_requirements
-    WHERE ${ACTIVE_SQL} GROUP BY status ORDER BY cnt DESC
-  `).all();
+    SELECT r.status, COUNT(*) cnt FROM sysreq_requirements r
+    WHERE ${active} AND (${v.sql}) GROUP BY r.status ORDER BY cnt DESC
+  `).all(...vParams);
 
   const byType = db.prepare(`
-    SELECT type, COUNT(*) cnt FROM sysreq_requirements
-    WHERE ${ACTIVE_SQL} AND status IN (${openList})
-    GROUP BY type ORDER BY cnt DESC
-  `).all();
+    SELECT r.type, COUNT(*) cnt FROM sysreq_requirements r
+    WHERE ${active} AND r.status IN (${openList}) AND (${v.sql})
+    GROUP BY r.type ORDER BY cnt DESC
+  `).all(...vParams);
 
   const assigneeWorkload = db.prepare(`
     SELECT u.id, u.name, COUNT(*) cnt
@@ -109,10 +127,11 @@ function dashboard(db, { userId } = {}) {
     JOIN users u ON u.id = r.assignee_id
     WHERE r.soft_deleted_at IS NULL
       AND r.status IN (${openList})
+      AND (${v.sql})
     GROUP BY u.id, u.name
     ORDER BY cnt DESC
     LIMIT 15
-  `).all();
+  `).all(...vParams);
 
   return {
     counts: {
@@ -121,7 +140,7 @@ function dashboard(db, { userId } = {}) {
       with_it_managers: withItManagers,
       pending,
       in_progress: inProgress,
-      in_development: pending, // legacy chip key
+      in_development: pending,
       testing,
       released_this_month: releasedMonth,
       overdue,

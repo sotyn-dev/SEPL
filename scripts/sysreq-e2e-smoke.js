@@ -443,6 +443,7 @@ function main() {
       ['in_progress', 'testing'],
       ['testing', 'released'],
       ['released', 'done'],
+      ['released', 'reopened'],
       ['done', 'reopened'],
       ['closed', 'reopened'],
       ['reopened', 'pending'],
@@ -476,6 +477,127 @@ function main() {
     ok('soft-delete ticket');
   } catch (e) {
     fail('soft-delete', e);
+  }
+
+  // ── 12. Access cohort: visibility, reopen personas, assign ───
+  console.log('\n12. Tech vs raise/watch access');
+  try {
+    const {
+      isTechOperator, canAssign, canReopen, isStaffUser,
+    } = require('../server/lib/systemRequirements/permissions');
+    const {
+      canViewRequirement, addWatchers, visibleRequirementFilter,
+    } = require('../server/lib/systemRequirements/visibility');
+
+    assert(isTechOperator(db, admin), 'admin is tech');
+    assert(isTechOperator(db, manager), 'manager is tech');
+    assert(isTechOperator(db, team), 'IT team is tech');
+    assert(!isTechOperator(db, biz), 'business owner is NOT tech');
+    assert(!isStaffUser(db, biz), 'business owner is NOT staff');
+    assert(canAssign(db, team), 'IT team can assign');
+    ok('persona flags');
+
+    const raiserCandidates = db.prepare(`
+      SELECT id, name, role FROM users WHERE active = 1 ORDER BY id ASC LIMIT 30
+    `).all();
+    const settings = getTeamSettings(db);
+    const techIds = new Set([
+      admin.id,
+      ...(settings.it_manager_ids || []),
+      ...(settings.it_team_ids || []),
+      ...(settings.business_owner_ids || []),
+    ]);
+    const raiserRow = raiserCandidates.find(u => !techIds.has(u.id)) || null;
+    assert(raiserRow, 'need a non-settings user as plain raiser');
+    const raiser = { id: raiserRow.id, role: raiserRow.role, name: raiserRow.name };
+
+    let r = createReq(db, {
+      title: 'E2E Raiser Scope',
+      status: 'submitted',
+      assigneeId: manager.id,
+      requestedBy: raiser.id,
+      createdBy: raiser.id,
+    });
+    assert(canViewRequirement(db, raiser, r), 'raiser can view own');
+    assert(canViewRequirement(db, manager, r), 'tech can view any');
+    assert(!canViewRequirement(db, biz, r), 'unrelated BO cannot view');
+    ok('visibility: raised + tech');
+
+    const other = createReq(db, {
+      title: 'E2E Watcher Mention',
+      status: 'submitted',
+      assigneeId: manager.id,
+      requestedBy: manager.id,
+      createdBy: manager.id,
+    });
+    assert(!canViewRequirement(db, raiser, other), 'non-raiser cannot view before mention');
+    addWatchers(db, other.id, [raiser.id]);
+    assert(canViewRequirement(db, raiser, other), 'watcher can view after @mention upsert');
+    ok('visibility: durable watcher');
+
+    const under = createReq(db, {
+      title: 'E2E BO Inbox',
+      status: 'under_review',
+      assigneeId: biz.id,
+      requestedBy: raiser.id,
+      createdBy: raiser.id,
+    });
+    assert(canViewRequirement(db, biz, under), 'BO sees assigned under_review');
+    const boActions = nextActionsFor(db, biz, under).map(a => a.action);
+    assert(boActions.includes('approve_business'), 'assigned BO gets approve');
+    const otherBo = nextActionsFor(db, { id: raiser.id, role: 'user' }, under);
+    assert(!otherBo.some(a => a.action === 'approve_business'), 'non-assignee no approve');
+    ok('BO approve only when assignee');
+
+    let shipped = createReq(db, {
+      title: 'E2E Raiser Reopen',
+      status: 'released',
+      assigneeId: team.id,
+      requestedBy: raiser.id,
+      createdBy: raiser.id,
+    });
+    assert(canReopen(db, raiser, shipped), 'raiser can reopen released');
+    shipped = transition(db, shipped, raiser, 'reopen');
+    expectStatus(shipped, 'reopened', 'raiser reopen released');
+    ok('raiser reopen from Released');
+
+    let doneRow = createReq(db, {
+      title: 'E2E Done Reopen',
+      status: 'done',
+      assigneeId: team.id,
+      requestedBy: raiser.id,
+      createdBy: raiser.id,
+    });
+    doneRow = transition(db, doneRow, raiser, 'reopen');
+    expectStatus(doneRow, 'reopened', 'raiser reopen done');
+    ok('raiser reopen from Done');
+
+    let closed = createReq(db, {
+      title: 'E2E Closed Reopen Guard',
+      status: 'closed',
+      assigneeId: manager.id,
+      requestedBy: raiser.id,
+      createdBy: raiser.id,
+    });
+    assert(!canReopen(db, raiser, closed), 'raiser cannot reopen closed');
+    assert(!canReopen(db, team, closed), 'IT team cannot reopen closed');
+    assert(canReopen(db, manager, closed), 'manager can reopen closed');
+    let blocked = null;
+    try {
+      transition(db, closed, raiser, 'reopen');
+    } catch (e) {
+      blocked = e;
+    }
+    assert(blocked, 'raiser reopen closed blocked');
+    ok('closed reopen = manager/admin only');
+
+    const vis = visibleRequirementFilter(db, raiser);
+    assert(vis.sql !== '1=1', 'raiser gets scoped SQL');
+    const techVis = visibleRequirementFilter(db, manager);
+    assert(techVis.sql === '1=1', 'tech gets unscoped SQL');
+    ok('visibleRequirementFilter');
+  } catch (e) {
+    fail('access cohort', e);
   }
 
   // Mark all E2E rows soft-deleted so they don't pollute open work

@@ -31,12 +31,20 @@ const {
   canAssign,
   canChangeAssignee,
   canChangeStatus,
+  canReopen,
   isAdminUser,
   isItManager,
   isItTeamMember,
   isBusinessOwner,
   isStaffUser,
+  isTechOperator,
+  isRaiser,
 } = require('../lib/systemRequirements/permissions');
+const {
+  visibleRequirementFilter,
+  canViewRequirement,
+  addWatchers,
+} = require('../lib/systemRequirements/visibility');
 const {
   storeFile,
   absolutePathFor,
@@ -109,7 +117,7 @@ function relatedMentionUsers(db, row) {
 
 function canUploadAttachment(db, user, row, { commentId, devSection }) {
   if (devSection) {
-    return isStaffUser(db, user) || canEditField(db, user, row, 'tech_analysis');
+    return isTechOperator(db, user) || canEditField(db, user, row, 'tech_analysis');
   }
   if (commentId) return true; // any authenticated viewer posting a comment
   return canEditRequirement(db, user, row);
@@ -168,7 +176,11 @@ function capabilityPayload(db, user, row) {
     can_change_status: canChangeStatus(db, user, row),
     can_delete: canSoftDelete(db, user),
     can_reassign: canAssign(db, user),
-    is_staff: isStaffUser(db, user),
+    can_reopen: canReopen(db, user, row),
+    is_staff: isTechOperator(db, user),
+    is_tech_operator: isTechOperator(db, user),
+    is_business_owner: isBusinessOwner(db, user),
+    is_raiser: isRaiser(user, row),
   };
 }
 
@@ -232,7 +244,8 @@ router.put('/settings', (req, res) => {
 router.get('/dashboard', (req, res) => {
   try {
     const db = getDb();
-    const data = dashboard(db, { userId: req.user.id });
+    const visibility = visibleRequirementFilter(db, req.user);
+    const data = dashboard(db, { userId: req.user.id, visibility });
     // Workload strip is IT manager / admin only
     if (!(isAdminUser(req.user) || isItManager(db, req.user))) {
       data.assignee_workload = [];
@@ -246,8 +259,12 @@ router.get('/dashboard', (req, res) => {
 
 router.get('/reports/:key', (req, res) => {
   try {
+    const db = getDb();
+    if (!isTechOperator(db, req.user)) {
+      return res.status(403).json({ error: 'Reports are available to IT managers and IT team only' });
+    }
     const days = req.query.days ? Number(req.query.days) : undefined;
-    res.json(runReport(getDb(), req.params.key, { days }));
+    res.json(runReport(db, req.params.key, { days }));
   } catch (e) {
     const status = e.status || 500;
     if (status === 500) console.error('[sysreq] report', e);
@@ -258,6 +275,7 @@ router.get('/reports/:key', (req, res) => {
 router.get('/meta', (req, res) => {
   const db = getDb();
   const settings = enrichTeamSettings(db, getTeamSettings(db));
+  const tech = isTechOperator(db, req.user);
   res.json({
     types: TYPES,
     priorities: PRIORITIES,
@@ -275,11 +293,13 @@ router.get('/meta', (req, res) => {
       is_it_manager: isItManager(db, req.user),
       is_it_team: isItTeamMember(db, req.user),
       is_business_owner: isBusinessOwner(db, req.user),
-      is_staff: isStaffUser(db, req.user),
+      is_staff: tech,
+      is_tech_operator: tech,
       can_assign: canAssign(db, req.user),
       can_change_assignee: canChangeAssignee(db, req.user, null),
       can_edit_settings: canEditSettings(db, req.user),
       can_delete: canSoftDelete(db, req.user),
+      can_view_reports: tech,
     },
   });
 });
@@ -323,6 +343,10 @@ router.get('/', (req, res) => {
 
     const where = ['r.soft_deleted_at IS NULL'];
     const params = [];
+
+    const vis = visibleRequirementFilter(db, req.user);
+    where.push(`(${vis.sql})`);
+    params.push(...vis.params);
 
     if (status) {
       const list = String(status).split(',').filter(Boolean);
@@ -488,6 +512,9 @@ router.get('/:id', (req, res) => {
     const db = getDb();
     const row = loadReq(db, Number(req.params.id));
     if (!row) return res.status(404).json({ error: 'Not found' });
+    if (!canViewRequirement(db, req.user, row)) {
+      return res.status(403).json({ error: 'Not allowed to view this ticket' });
+    }
 
     const comments = db.prepare(`
       SELECT c.*, u.name AS author_name
@@ -545,6 +572,9 @@ router.patch('/:id', (req, res) => {
     const id = Number(req.params.id);
     const row = loadReq(db, id);
     if (!row) return res.status(404).json({ error: 'Not found' });
+    if (!canViewRequirement(db, req.user, row)) {
+      return res.status(403).json({ error: 'Not allowed to view this ticket' });
+    }
     if (!canEditRequirement(db, req.user, row)) {
       return res.status(403).json({ error: 'Not allowed to edit' });
     }
@@ -570,7 +600,7 @@ router.patch('/:id', (req, res) => {
           return res.status(403).json({
             error: row.status === 'under_review'
               ? 'Assignee is locked during business approval'
-              : 'Only IT managers (or admin) can change assignee',
+              : 'Only IT managers, IT team, or admin can change assignee',
           });
         }
       } else if (!canEditField(db, req.user, row, f)) {
@@ -645,6 +675,9 @@ router.post('/:id/transition', (req, res) => {
     const id = Number(req.params.id);
     const row = loadReq(db, id);
     if (!row) return res.status(404).json({ error: 'Not found' });
+    if (!canViewRequirement(db, req.user, row)) {
+      return res.status(403).json({ error: 'Not allowed to view this ticket' });
+    }
 
     const action = req.body?.action;
     if (!action) return res.status(400).json({ error: 'action is required' });
@@ -758,6 +791,9 @@ router.post('/:id/comments', (req, res) => {
     const id = Number(req.params.id);
     const row = loadReq(db, id);
     if (!row) return res.status(404).json({ error: 'Not found' });
+    if (!canViewRequirement(db, req.user, row)) {
+      return res.status(403).json({ error: 'Not allowed to view this ticket' });
+    }
     const body = (req.body?.body || '').trim();
     if (!body) return res.status(400).json({ error: 'Comment body required' });
     if (body.length > COMMENT_HARD_LIMIT) {
@@ -783,6 +819,7 @@ router.post('/:id/comments', (req, res) => {
     const mentionIds = parseMentions(body, relatedMentionUsers(db, row))
       .filter(uid => uid !== Number(req.user.id));
     if (mentionIds.length) {
+      addWatchers(db, id, mentionIds);
       notifyMany(mentionIds, {
         title: 'You were mentioned',
         body: `${req.user.name || 'Someone'} mentioned you on ${row.req_number}`,
@@ -976,6 +1013,10 @@ router.get('/:id/attachments/:attId/download', (req, res) => {
     const db = getDb();
     const id = Number(req.params.id);
     if (!loadReq(db, id)) return res.status(404).json({ error: 'Not found' });
+    const row = loadReq(db, id);
+    if (!canViewRequirement(db, req.user, row)) {
+      return res.status(403).json({ error: 'Not allowed to view this ticket' });
+    }
     const att = db.prepare(`
       SELECT * FROM sysreq_attachments
       WHERE id = ? AND requirement_id = ? AND soft_deleted_at IS NULL

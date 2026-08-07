@@ -67,9 +67,9 @@ export default function ActionPanel({
         {data.status !== 'under_review' && (!data.can_change_assignee || !data.can_change_status) && (
           <p className="text-[11px] text-gray-400 w-full">
             {!data.can_change_assignee && !data.can_change_status
-              ? 'Assignee and status changes are for IT managers / admin'
+              ? 'Assignee and status are view-only (IT managers / IT team / admin can change)'
               : !data.can_change_assignee
-                ? 'Only IT managers / admin can change assignee'
+                ? 'Only IT managers / IT team / admin can change assignee'
                 : 'Status changes are for IT / admin'}
           </p>
         )}
