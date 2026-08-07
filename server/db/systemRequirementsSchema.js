@@ -8,72 +8,81 @@ const STATUS_CHECK = `
 `;
 
 function recreateRequirementsTable(db) {
-  db.exec(`
-    CREATE TABLE sysreq_requirements__new (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      req_number TEXT NOT NULL UNIQUE,
-      title TEXT NOT NULL,
-      description TEXT,
-      type TEXT NOT NULL DEFAULT 'enhancement'
-        CHECK(type IN (
-          'new_feature','enhancement','bug_fix','ui_improvement','report_request',
-          'automation','performance','integration','technical_debt','refactoring'
-        )),
-      status TEXT NOT NULL DEFAULT 'draft'
-        CHECK(status IN (${STATUS_CHECK})),
-      priority TEXT NOT NULL DEFAULT 'medium'
-        CHECK(priority IN ('low','medium','high','urgent')),
-      requested_by INTEGER REFERENCES users(id),
-      assignee_id INTEGER REFERENCES users(id),
-      due_date DATE,
-      target_start_date DATE,
-      target_version TEXT,
-      release_version TEXT,
-      release_notes TEXT,
-      completed_at DATETIME,
-      tech_analysis TEXT,
-      impl_strategy TEXT,
-      dev_notes TEXT,
-      testing_notes TEXT,
-      completion_summary TEXT,
-      business_approved_at DATETIME,
-      business_approved_by INTEGER REFERENCES users(id),
-      it_approved_at DATETIME,
-      it_approved_by INTEGER REFERENCES users(id),
-      soft_deleted_at DATETIME,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      created_by INTEGER REFERENCES users(id),
-      updated_by INTEGER REFERENCES users(id)
-    );
+  // Child tables (history/comments/attachments) FK to requirements — must disable
+  // FK checks for DROP/RENAME. PRAGMA foreign_keys cannot change inside a transaction.
+  const fkWasOn = db.pragma('foreign_keys', { simple: true });
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.exec(`DROP TABLE IF EXISTS sysreq_requirements__new`);
+    db.exec(`
+      CREATE TABLE sysreq_requirements__new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        req_number TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        description TEXT,
+        type TEXT NOT NULL DEFAULT 'enhancement'
+          CHECK(type IN (
+            'new_feature','enhancement','bug_fix','ui_improvement','report_request',
+            'automation','performance','integration','technical_debt','refactoring'
+          )),
+        status TEXT NOT NULL DEFAULT 'draft'
+          CHECK(status IN (${STATUS_CHECK})),
+        priority TEXT NOT NULL DEFAULT 'medium'
+          CHECK(priority IN ('low','medium','high','urgent')),
+        requested_by INTEGER REFERENCES users(id),
+        assignee_id INTEGER REFERENCES users(id),
+        due_date DATE,
+        target_start_date DATE,
+        target_version TEXT,
+        release_version TEXT,
+        release_notes TEXT,
+        completed_at DATETIME,
+        tech_analysis TEXT,
+        impl_strategy TEXT,
+        dev_notes TEXT,
+        testing_notes TEXT,
+        completion_summary TEXT,
+        business_approved_at DATETIME,
+        business_approved_by INTEGER REFERENCES users(id),
+        it_approved_at DATETIME,
+        it_approved_by INTEGER REFERENCES users(id),
+        soft_deleted_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_by INTEGER REFERENCES users(id),
+        updated_by INTEGER REFERENCES users(id)
+      );
 
-    INSERT INTO sysreq_requirements__new (
-      id, req_number, title, description, type, status, priority,
-      requested_by, assignee_id,
-      due_date, target_start_date, target_version, release_version, release_notes,
-      completed_at, tech_analysis, impl_strategy, dev_notes,
-      testing_notes, completion_summary,
-      business_approved_at, business_approved_by, it_approved_at, it_approved_by,
-      soft_deleted_at, created_at, updated_at, created_by, updated_by
-    )
-    SELECT
-      id, req_number, title, description, type,
-      CASE
-        WHEN status = 'in_development' THEN 'pending'
-        ELSE status
-      END,
-      priority,
-      requested_by, assignee_id,
-      due_date, target_start_date, target_version, release_version, release_notes,
-      completed_at, tech_analysis, impl_strategy, dev_notes,
-      testing_notes, completion_summary,
-      business_approved_at, business_approved_by, it_approved_at, it_approved_by,
-      soft_deleted_at, created_at, updated_at, created_by, updated_by
-    FROM sysreq_requirements;
+      INSERT INTO sysreq_requirements__new (
+        id, req_number, title, description, type, status, priority,
+        requested_by, assignee_id,
+        due_date, target_start_date, target_version, release_version, release_notes,
+        completed_at, tech_analysis, impl_strategy, dev_notes,
+        testing_notes, completion_summary,
+        business_approved_at, business_approved_by, it_approved_at, it_approved_by,
+        soft_deleted_at, created_at, updated_at, created_by, updated_by
+      )
+      SELECT
+        id, req_number, title, description, type,
+        CASE
+          WHEN status = 'in_development' THEN 'pending'
+          ELSE status
+        END,
+        priority,
+        requested_by, assignee_id,
+        due_date, target_start_date, target_version, release_version, release_notes,
+        completed_at, tech_analysis, impl_strategy, dev_notes,
+        testing_notes, completion_summary,
+        business_approved_at, business_approved_by, it_approved_at, it_approved_by,
+        soft_deleted_at, created_at, updated_at, created_by, updated_by
+      FROM sysreq_requirements;
 
-    DROP TABLE sysreq_requirements;
-    ALTER TABLE sysreq_requirements__new RENAME TO sysreq_requirements;
-  `);
+      DROP TABLE sysreq_requirements;
+      ALTER TABLE sysreq_requirements__new RENAME TO sysreq_requirements;
+    `);
+  } finally {
+    db.pragma(`foreign_keys = ${fkWasOn ? 'ON' : 'OFF'}`);
+  }
 }
 
 /** Post-release closed rows → done (history had released). Early closed stays closed. */
