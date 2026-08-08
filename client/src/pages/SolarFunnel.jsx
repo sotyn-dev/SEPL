@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown } from 'react-icons/fi';
+import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown, FiSearch } from 'react-icons/fi';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -46,6 +46,7 @@ export default function SolarFunnel() {
   const [leads, setLeads] = useState([]);
   const [tab, setTab] = useState('pipeline');
   const [modal, setModal] = useState(null); // null | {} (new) | deal (edit)
+  const [searchQuery, setSearchQuery] = useState('');
 
   const load = () => {
     api.get('/solar/deals').then((r) => setDeals(r.data || [])).catch(() => toast.error('Could not load deals'));
@@ -57,11 +58,23 @@ export default function SolarFunnel() {
     load();
   }, []); // eslint-disable-line
 
+  const filteredDeals = useMemo(() => {
+    if (!searchQuery.trim()) return deals;
+    const q = searchQuery.toLowerCase().trim();
+    return deals.filter((d) => {
+      const clientMatch = d.client_name && d.client_name.toLowerCase().includes(q);
+      const companyMatch = d.company && d.company.toLowerCase().includes(q);
+      const dealNoMatch = d.deal_no && d.deal_no.toLowerCase().includes(q);
+      const phoneMatch = d.phone && d.phone.includes(q);
+      return clientMatch || companyMatch || dealNoMatch || phoneMatch;
+    });
+  }, [deals, searchQuery]);
+
   const byStage = useMemo(() => {
     const m = {}; stages.forEach((s) => (m[s.key] = []));
-    deals.forEach((d) => { (m[d.stage] = m[d.stage] || []).push(d); });
+    filteredDeals.forEach((d) => { (m[d.stage] = m[d.stage] || []).push(d); });
     return m;
-  }, [deals, stages]);
+  }, [filteredDeals, stages]);
   const conv = useMemo(() => {
     const m = {}; (analytics?.byStage || []).forEach((s) => (m[s.key] = s)); return m;
   }, [analytics]);
@@ -80,13 +93,91 @@ export default function SolarFunnel() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><FiSun className="text-amber-500" /> Solar Sales Funnel</h1>
           <p className="text-xs text-gray-500">Every solar opportunity, stage by stage — with conversion, next actions and stuck-deal alerts driving each step.</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
+          {/* Top Search Bar */}
+          <div className="relative w-64 sm:w-72">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search company or client name..."
+              className="w-full pl-8 pr-7 py-1.5 text-xs border border-gray-300 rounded-full bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                title="Clear search"
+              >
+                <FiX size={12} />
+              </button>
+            )}
+          </div>
           <button onClick={() => setTab('pipeline')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'pipeline' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}>Pipeline</button>
           <button onClick={() => setTab('analytics')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'analytics' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}><FiTrendingUp className="inline mr-1" />Conversion</button>
           <button onClick={() => setTab('responsible')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'responsible' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}>⚙ Responsible</button>
           <button onClick={() => setModal({ owner_name: user?.name || '', stage: 'inquiry', project_type: 'ongrid' })} className="btn btn-primary text-sm flex items-center gap-1"><FiPlus size={14} /> New Deal</button>
         </div>
       </div>
+
+      {/* Search result indicator banner & Top Matching Results */}
+      {searchQuery && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-xs text-blue-900 bg-blue-50 border border-blue-200 rounded-lg px-3.5 py-2">
+            <div className="flex items-center gap-2">
+              <FiSearch size={14} className="text-blue-600" />
+              <span>Showing <b>{filteredDeals.length}</b> of <b>{deals.length}</b> deals matching "<b>{searchQuery}</b>"</span>
+            </div>
+            <button onClick={() => setSearchQuery('')} className="text-xs text-blue-700 hover:underline font-semibold">Clear filter</button>
+          </div>
+
+          {/* Top Matching Deals Card View */}
+          {filteredDeals.length > 0 ? (
+            <div className="bg-gradient-to-r from-blue-50/80 via-indigo-50/50 to-blue-50/80 border border-blue-200 rounded-xl p-3.5 shadow-sm">
+              <p className="text-xs font-bold text-blue-900 mb-2.5 flex items-center gap-1.5 uppercase tracking-wide">
+                <FiSun className="text-amber-500" size={14} /> Top Matching Deals ({filteredDeals.length})
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {filteredDeals.map((d) => {
+                  const stageObj = stages.find((s) => s.key === d.stage);
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => api.get(`/solar/deals/${d.id}`).then((r) => setModal(r.data))}
+                      className="bg-white rounded-xl border border-blue-200 p-3 shadow-sm hover:shadow-md hover:border-blue-400 transition-all cursor-pointer flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1.5">
+                          <span className="text-[11px] font-bold text-blue-900 bg-blue-100/80 px-2 py-0.5 rounded-md">{d.deal_no}</span>
+                          <span className="text-[10px] bg-slate-100 text-slate-700 font-semibold px-2 py-0.5 rounded-full border border-slate-200">
+                            {stageObj?.label || d.stage}
+                          </span>
+                        </div>
+                        <p className="text-xs font-bold text-gray-900 truncate">{d.client_name || '—'}</p>
+                        {d.company && d.company !== d.client_name && (
+                          <p className="text-[11px] text-gray-600 truncate">{d.company}</p>
+                        )}
+                        <p className="text-[10px] text-gray-500 mt-1">
+                          {fmt(d.capacity_kw)} kW · {inr(d.value)}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-gray-100 text-[10px]">
+                        <span className="text-gray-400">{d.owner_name || ''}</span>
+                        <span className="text-blue-600 font-bold hover:underline">Open deal details ›</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-center text-xs text-gray-500">
+              No solar deals match "<b>{searchQuery}</b>". Try searching by company name, client name, or deal number.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* KPI strip */}
       {T && (
@@ -135,6 +226,9 @@ export default function SolarFunnel() {
                           {d.stuck && <FiAlertTriangle className="text-rose-500" size={12} />}
                         </div>
                         <p className="text-xs font-medium truncate">{d.client_name || '—'}</p>
+                        {d.company && d.company !== d.client_name && (
+                          <p className="text-[10px] text-gray-500 font-normal truncate">{d.company}</p>
+                        )}
                         <p className="text-[10px] text-gray-500">{fmt(d.capacity_kw)} kW · {inr(d.value)}</p>
                         {d.next_action && <p className="text-[10px] text-gray-600 mt-1 truncate">→ {d.next_action}</p>}
                         <div className="flex items-center justify-between mt-1">
