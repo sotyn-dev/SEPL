@@ -3442,6 +3442,11 @@ function initializeDatabase() {
     // Help ticket target date. Nullable so every existing ticket stays valid
     // and simply renders "Not Assigned" until someone sets one.
     ['support_tickets', 'deadline_date DATE'],
+    // Inventory ageing — the date the material started sitting in this
+    // warehouse. Only the DATE is stored; the day count is derived on every
+    // read so it advances on its own without anyone editing the row.
+    // NULL on every existing row, which is what makes the calendar icon show.
+    ['stock_balance', 'aging_start_date DATE'],
     // Mam (2026-05-22): same upload affordance on the New PMS Task
     // modal — pick a brief / drawing / photo when raising.
     ['pms_tasks', 'attachment_url TEXT'],
