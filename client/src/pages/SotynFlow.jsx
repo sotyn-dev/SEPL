@@ -7,7 +7,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
-import ConfirmDialog from '../components/ConfirmDialog';
+import ConfirmDialog from '../components/ConfirmDialog2';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { getToken } from '../lib/tokenStore';

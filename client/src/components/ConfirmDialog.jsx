@@ -1,54 +1,60 @@
-import { useEffect } from 'react';
+import { FiAlertTriangle } from 'react-icons/fi';
 
-// Small shared confirmation dialog — the in-app replacement for window.confirm().
-//
-// Why not confirm(): it can't say anything beyond one line, it can't distinguish
-// "this is reversible" from "this is permanent", and on a phone a native browser
-// dialog reads like a scam popup, so people dismiss it without reading. The whole
-// point of confirming a destructive action is that the wording lands.
-//
-// Deliberately NOT built on <Modal>: this is a compact prompt, not a page-sized
-// panel, so it owns a smaller heading and tighter spacing than Modal's header.
-//
-// tone drives the confirm button colour ONLY, so the same component covers both
-// "permanent, be careful" (danger) and "reversible, just checking" (warning) —
-// and the two never look alike, which is the actual safety property.
+// Sleek, purpose-built confirm popup — replaces raw window.confirm() where the
+// message needs to be multi-line or styled. Deliberately not built on top of
+// Modal.jsx: that component is header+scrollable-body chrome meant for forms,
+// overkill for a two-line confirm.
 export default function ConfirmDialog({
-  open, title, message, note,
-  confirmLabel = 'Confirm', cancelLabel = 'Cancel',
-  tone = 'danger', busy = false, onConfirm, onCancel, infoOnly = false,
+  open, title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel',
+  tone = 'warning', onConfirm, onCancel, infoOnly = false,
 }) {
-  // Esc cancels — matches what a native confirm() does, and what anyone expects
-  // from a dialog. Ignored while the action is in flight.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape' && !busy) onCancel?.(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, busy, onCancel]);
-
   if (!open) return null;
-  const confirmClass = tone === 'warning'
-    ? 'bg-amber-500 hover:bg-amber-600'
-    : 'bg-red-600 hover:bg-red-700';
+  const confirmClasses = tone === 'danger'
+    ? 'bg-red-600 hover:bg-red-700'
+    : 'bg-amber-500 hover:bg-amber-600';
+  const iconClasses = tone === 'danger'
+    ? 'bg-red-100 text-red-600'
+    : 'bg-amber-100 text-amber-600';
+
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
-      onClick={() => { if (!busy) onCancel?.(); }}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-[340px] p-4" onClick={e => e.stopPropagation()}>
-        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-        <p className="mt-1.5 text-[13px] text-gray-600 leading-snug">{message}</p>
-        {note && <p className="mt-1.5 text-[11px] text-gray-400 leading-snug">{note}</p>}
-        <div className="mt-4 flex justify-end gap-2">
-          {!infoOnly && (
-            <button type="button" onClick={onCancel} disabled={busy}
-              className="px-3 py-1.5 rounded-lg border text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50">
-              {cancelLabel}
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={onCancel}>
+      <div
+        className="bg-white rounded-xl shadow-xl w-full max-w-sm p-5"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <div className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${iconClasses}`}>
+            <FiAlertTriangle size={18} />
+          </div>
+          <div className="min-w-0">
+            {title && <h3 className="text-sm font-semibold text-gray-900">{title}</h3>}
+            <p className="mt-1 text-sm text-gray-600 whitespace-pre-line">{message}</p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          {infoOnly ? (
+            <button
+              onClick={onConfirm}
+              className={`px-3 py-1.5 text-sm rounded-lg text-white ${confirmClasses}`}
+            >
+              {confirmLabel}
             </button>
+          ) : (
+            <>
+              <button
+                onClick={onCancel}
+                className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                {cancelLabel}
+              </button>
+              <button
+                onClick={onConfirm}
+                className={`px-3 py-1.5 text-sm rounded-lg text-white ${confirmClasses}`}
+              >
+                {confirmLabel}
+              </button>
+            </>
           )}
-          <button type="button" onClick={onConfirm} disabled={busy} autoFocus
-            className={`px-3 py-1.5 rounded-lg text-white text-xs font-semibold disabled:opacity-50 ${confirmClass}`}>
-            {busy ? 'Working…' : confirmLabel}
-          </button>
         </div>
       </div>
     </div>
