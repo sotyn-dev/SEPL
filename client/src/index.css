@@ -235,6 +235,15 @@ thead {
 th {
   @apply px-4 py-3 text-left font-bold text-gray-500 uppercase text-[10px] tracking-wider;
 }
+/* CMD / TOC / War-Room dashboards (cmdDashboardUi.jsx) are dark-themed but
+   use plain <table>/<thead>/<th> tags, so they still inherit the light-mode
+   gradient above — it washes out to a near-invisible pale header on the
+   near-black card background. th text color is already inline-overridden
+   per table; only the thead background needs neutralizing here (mam
+   2026-08-01 readability pass). */
+.cmd-dark-table thead {
+  background: none;
+}
 /* Freeze head — mam (2026-06-02): "freeze like excel till headers".
    Previously inert because page-level sticky leaked thead through
    page-header / stat tiles.  Now wired correctly:

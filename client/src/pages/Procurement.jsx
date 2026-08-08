@@ -1032,11 +1032,22 @@ export default function Procurement() {
         }
       }
     }
+    // SPOS off-day rule: routine indents Wed + Sat only; any other day
+    // needs the Emergency tick + reason (server enforces too).
+    const offDay = !!raiseWindow && !raiseWindow.allowed;
+    if (offDay && !editingIndentId && !form.is_emergency) {
+      return toast.error('Today is not an indent day (Wed/Sat). Tick "Emergency indent" and write the reason to raise it now.');
+    }
+    if (offDay && !editingIndentId && form.is_emergency && !(form.emergency_reason || '').trim()) {
+      return toast.error('Emergency indent needs a reason — why can\'t this wait for Wednesday/Saturday?');
+    }
     const payload = {
       site_name: form.site_name,
       raised_by_name: form.raised_by_name,
       notes: form.notes || '',
       indent_category: cat,
+      is_emergency: form.is_emergency ? 1 : 0,
+      emergency_reason: (form.emergency_reason || '').trim(),
       items: indentItems.map(it => ({
         ...it,
         make: it.make || '',
@@ -1859,6 +1870,10 @@ export default function Procurement() {
         fd0.append('sales_bill_pending', '1');
         const dn = await api.post('/procurement/delivery-notes', fd0, { headers: { 'Content-Type': 'multipart/form-data' } });
         receiveId = dn.data?.id;
+        // Remember the DN we just created: if the receive below fails (e.g.
+        // the SPOS late-delivery 400 asking for a reason), the retry must
+        // reuse THIS challan — not mint a duplicate (audit 2026-07-31).
+        setForm(f => ({ ...f, receive_id: receiveId }));
       } catch (err) { return toast.error(err.response?.data?.error || 'Could not create dispatch record'); }
     }
     if (!receiveId) return toast.error('No dispatch to receive against');
@@ -1866,6 +1881,9 @@ export default function Procurement() {
     const fd = new FormData();
     fd.append('received_by_name', form.received_by_name);
     if (form.received_at) fd.append('received_at', form.received_at);
+    // SPOS: reason for delay — server rejects a late receive without one
+    // (only when the PO carries an expected delivery date).
+    if (form.delay_reason && form.delay_reason.trim()) fd.append('delay_reason', form.delay_reason.trim());
     if (form.receipt_file) fd.append('file', form.receipt_file);
     // Optional inventory hook — when mam picks a warehouse, the linked
     // vendor PO's items auto-land as stock IN at that warehouse on the
@@ -2251,11 +2269,10 @@ export default function Procurement() {
               const raiseClosed = !!raiseWindow && !raiseWindow.allowed;
               return (
                 <button
-                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
-                  disabled={raiseClosed}
-                  title={raiseClosed ? 'Indents can be raised only on Saturday.' : ''}
-                  className={`btn flex items-center gap-2 ${raiseClosed ? 'opacity-50 cursor-not-allowed bg-gray-300 text-gray-600' : 'btn-primary'}`}>
-                  <FiPlus /> Raise Indent
+                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', is_emergency: false, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
+                  title={raiseClosed ? 'Off-day — opens as an EMERGENCY indent (reason required)' : ''}
+                  className={`btn flex items-center gap-2 ${raiseClosed ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
+                  <FiPlus /> {raiseClosed ? 'Raise Emergency Indent' : 'Raise Indent'}
                 </button>
               );
             })()}
@@ -2263,26 +2280,29 @@ export default function Procurement() {
 
           {/* Raise window banner (mam 2026-06-16): indents only on Saturday;
               admin can open an emergency one-day window for everyone. */}
+          {/* SPOS (mam 2026-07-29): TWO routine days — Wednesday (mid-week
+              stock review) + Saturday (next-week lookahead). Off-days allow
+              only flagged EMERGENCY indents (reason mandatory, <5% KPI). */}
           {raiseWindow && (
             raiseWindow.allowed ? (
-              <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-emerald-50 border-emerald-200 text-emerald-800">
+              <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-emerald-50 border-emerald-200 text-emerald-800 flex-wrap">
                 <span>
-                  {raiseWindow.isSaturday
-                    ? '✅ Saturday — indent raising is open for everyone.'
-                    : '⚡ Emergency raising is OPEN for today (enabled by admin).'}
+                  {raiseWindow.isIndentDay
+                    ? `✅ ${raiseWindow.isWednesday ? 'Wednesday (mid-week stock review)' : 'Saturday (next-week lookahead)'} — routine indent raising is open.`
+                    : '⚡ Emergency raising is OPEN for today (enabled by admin) — indents raised today are flagged EMERGENCY.'}
                 </span>
-                {isAdmin() && !raiseWindow.isSaturday && (
+                {isAdmin() && !raiseWindow.isIndentDay && (
                   <button onClick={toggleIndentEmergency} className="text-[11px] font-semibold px-2 py-1 rounded border border-emerald-300 hover:bg-emerald-100 whitespace-nowrap">
                     Turn off emergency
                   </button>
                 )}
               </div>
             ) : (
-              <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-amber-50 border-amber-200 text-amber-800">
-                <span>🔒 Indents can be raised only on <b>Saturday</b>.{isAdmin() ? ' For a weekday emergency, open today below.' : ''}</span>
+              <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-amber-50 border-amber-200 text-amber-800 flex-wrap">
+                <span>🔒 Routine indents open on <b>Wednesday &amp; Saturday</b> only (SPOS). Need material today? Raise an <b>Emergency indent</b> — reason required, flagged for approval.</span>
                 {isAdmin() && (
                   <button onClick={toggleIndentEmergency} className="text-[11px] font-semibold px-2 py-1 rounded border border-amber-400 bg-amber-100 hover:bg-amber-200 whitespace-nowrap">
-                    ⚡ Enable emergency raising for today
+                    ⚡ Open the whole day (admin)
                   </button>
                 )}
               </div>
@@ -2592,7 +2612,10 @@ export default function Procurement() {
                   <div className="flex justify-between items-start gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Indent No</div>
-                      <div className="text-lg font-bold text-gray-900 truncate">{i.indent_number}</div>
+                      <div className="text-lg font-bold text-gray-900 truncate">
+                        {i.indent_number}
+                        {!!i.is_emergency && <span title={i.emergency_reason || 'Emergency indent'} className="ml-1.5 align-middle text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-300">⚡ Emergency</span>}
+                      </div>
                       <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
                         <FiCalendar size={10} className="text-gray-400" />
                         {i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}
@@ -2788,7 +2811,10 @@ export default function Procurement() {
                       </button>
                     )}
                   </td>
-                  <td className="font-medium">{i.indent_number}</td>
+                  <td className="font-medium">
+                    {i.indent_number}
+                    {!!i.is_emergency && <span title={i.emergency_reason || 'Emergency indent'} className="ml-1 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-300 whitespace-nowrap">⚡ EMG</span>}
+                  </td>
                   <td className="text-xs text-gray-600">{i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}</td>
                   <td>{i.site_name || i.client_name || <span className="text-gray-400">—</span>}</td>
                   {/* Dedicated Category column (mam 2026-05-28). Coloured
@@ -5697,8 +5723,8 @@ export default function Procurement() {
           <div className="space-y-3">
             <div className="card p-4 flex items-center justify-between gap-3">
               <div>
-                <h3 className="font-semibold text-gray-800">Post-PO Pipeline</h3>
-                <p className="text-xs text-gray-500">Where each Vendor PO stands: PO → Delivery → Received → Bill → Vendor Paid.</p>
+                <h3 className="font-semibold text-gray-800">Material Pipeline (SPOS)</h3>
+                <p className="text-xs text-gray-500">Live status of every indent's material: Requested → Approved → Ordered → Dispatched → Received → Issued, with expected delivery, live delay &amp; reason. Never ask "material kab aa raha hai" again.</p>
               </div>
               <button onClick={loadPipeline} className="btn btn-secondary flex items-center gap-2 text-sm"><FiRefreshCw size={14} /> Refresh</button>
             </div>
@@ -5707,6 +5733,23 @@ export default function Procurement() {
               {pipeline.map(p => {
                 const received = (+p.grn_count > 0) || (+p.dn_received > 0);
                 const paid = p.bill_payment_status === 'paid';
+                // SPOS delay chip — live variance vs expected delivery
+                let delayChip = null;
+                if (p.expected_receipt_date) {
+                  if (received && p.delay_days === null) delayChip = <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-300">✓ received (GRN)</span>;
+                  else if (received && p.delay_days > 0) delayChip = <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300">was late {p.delay_days}d</span>;
+                  else if (received) delayChip = <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-300">✓ on time</span>;
+                  else if (p.delay_days > 0) delayChip = <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-red-50 text-red-700 border-red-300 animate-pulse">LATE {p.delay_days}d</span>;
+                  else delayChip = <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-blue-50 text-blue-700 border-blue-300">ETA {p.expected_receipt_date}{p.lead_time_days != null ? ` · ${p.lead_time_days}d lead` : ''}</span>;
+                } else {
+                  delayChip = <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-gray-50 text-gray-400 border-gray-200">no ETA set</span>;
+                }
+                const logReason = async () => {
+                  const r = window.prompt('Reason for the delay (visible to everyone on the pipeline):', p.delay_reason || '');
+                  if (r === null) return;
+                  try { await api.patch(`/procurement/vendor-po/${p.id}/delay-reason`, { delay_reason: r }); toast.success('Reason logged'); loadPipeline(); }
+                  catch (e2) { toast.error(e2.response?.data?.error || 'Failed'); }
+                };
                 return (
                   <div key={p.id} className="card p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -5716,23 +5759,40 @@ export default function Procurement() {
                         <span className="text-sm text-gray-700">{p.vendor_name || '—'}</span>
                         {p.site_name && <span className="text-[11px] text-gray-400 ml-2">{p.site_name}</span>}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {delayChip}
                         {+p.debit_count > 0 && <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-red-50 text-red-700 border-red-200">{p.debit_count} debit</span>}
                         <span className="text-sm font-semibold tabular-nums text-gray-700">₹ {Math.round(+p.total_amount || 0).toLocaleString('en-IN')}</span>
                         <a href={`/vendor-po/${p.id}/print`} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline text-xs font-medium">PO</a>
                       </div>
                     </div>
-                    <div className="flex items-start">
-                      <Stage done={true} label="PO" sub={p.po_date || ''} tone="blue" />
+                    <div className="flex items-start flex-wrap gap-y-2">
+                      <Stage done={!!p.indent_number} label="Requested" sub={p.indent_number || ''} tone="blue" />
                       <div className={conn} />
-                      <Stage done={+p.dn_count > 0} label="Delivery" sub={+p.dn_count > 0 ? `${p.dn_count} note` : ''} />
+                      {/* Direct POs (no indent) skip Requested/Approved — a done
+                          'Approved' after an undone 'Requested' read as broken. */}
+                      <Stage done={!!p.indent_number} label="Approved" sub={p.indent_approved_at ? String(p.indent_approved_at).slice(0, 10) : ''} tone="blue" />
                       <div className={conn} />
-                      <Stage done={received} label="Received" sub={+p.grn_count > 0 ? 'GRN' : (+p.dn_received > 0 ? 'signed' : '')} />
+                      <Stage done={true} label="Ordered" sub={p.po_date || ''} tone="blue" />
+                      <div className={conn} />
+                      <Stage done={+p.dn_count > 0} label="Dispatched" sub={p.dispatched_on || (+p.dn_count > 0 ? `${p.dn_count} note` : '')} />
+                      <div className={conn} />
+                      <Stage done={received} label="Received" sub={p.received_on ? String(p.received_on).slice(0, 10) : (+p.grn_count > 0 ? 'GRN' : '')} />
+                      <div className={conn} />
+                      <Stage done={+p.issued_moves > 0} label="Issued" sub={+p.issued_moves > 0 ? 'to site work' : ''} />
                       <div className={conn} />
                       <Stage done={+p.bill_count > 0} label="P.Bill" sub={+p.bill_count > 0 ? `${p.bill_count}` : ''} />
                       <div className={conn} />
                       <Stage done={paid} label="Paid" sub={p.bill_payment_status || (p.payment_block_status === 'pending' ? 'blocked' : '')} />
                     </div>
+                    {(p.delay_reason || (p.is_late && !received) || (received && p.delay_days > 0)) && (
+                      <div className="mt-2 text-[11px] flex flex-wrap items-center gap-2">
+                        {p.delay_reason
+                          ? <span className="text-gray-600"><span className="font-semibold text-amber-700">Delay reason:</span> {p.delay_reason}</span>
+                          : <span className="text-red-600 font-medium">No delay reason logged yet.</span>}
+                        <button onClick={logReason} className="text-blue-700 hover:underline font-medium">{p.delay_reason ? '✎ edit' : '+ log reason'}</button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -5797,6 +5857,28 @@ export default function Procurement() {
             <span>Dated: <b className="text-gray-700">{new Date().toLocaleString()}</b></span>
             <span className="text-gray-400">(auto-recorded on create)</span>
           </div>
+          {/* SPOS emergency section — shows only when raising OFF-day (not
+              Wed/Sat, no admin day-open). Reason is mandatory; the indent is
+              flagged ⚡EMERGENCY for approvers + the <5% KPI. */}
+          {!editingIndentId && raiseWindow && !raiseWindow.allowed && (
+            <div className="border border-red-300 bg-red-50 rounded p-3 space-y-2">
+              <label className="flex items-start gap-2 text-xs cursor-pointer">
+                <input type="checkbox" className="mt-0.5"
+                  checked={!!form.is_emergency}
+                  onChange={e => setForm({ ...form, is_emergency: e.target.checked })} />
+                <span>
+                  <span className="font-semibold text-red-700">⚡ Emergency indent — today is not an indent day (Wed/Sat)</span>
+                  <span className="text-red-600 block mt-0.5">Tick to confirm this cannot wait for the next routine indent day. It will carry an EMERGENCY flag through approval and count toward the emergency-indent KPI (target &lt; 5%).</span>
+                </span>
+              </label>
+              {form.is_emergency && (
+                <textarea className="input" rows="2" required
+                  placeholder="Why can't this wait for Wednesday/Saturday? (mandatory)"
+                  value={form.emergency_reason || ''}
+                  onChange={e => setForm({ ...form, emergency_reason: e.target.value })} />
+              )}
+            </div>
+          )}
           {/* Header — Site from Business Book, Raised By from Employees. Stacks on mobile. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
@@ -7577,6 +7659,15 @@ export default function Procurement() {
             <label className="label">Received On</label>
             <input className="input" type="date" value={form.received_at || ''} onChange={e => setForm({...form, received_at: e.target.value})} />
             <p className="text-[10px] text-gray-400 mt-0.5">Defaults to today if left blank.</p>
+          </div>
+          {/* SPOS (mam 2026-07-29): late arrivals need a logged reason. The
+              server blocks a late receive (vs the PO's expected delivery
+              date) until a reason is on record. */}
+          <div>
+            <label className="label">Reason for delay <span className="text-gray-400 font-normal">(required only if arriving after the PO's expected delivery date)</span></label>
+            <textarea className="input" rows="2" placeholder="e.g. Vendor production hold-up / transporter strike / payment released late…"
+              value={form.delay_reason || ''}
+              onChange={e => setForm({...form, delay_reason: e.target.value})} />
           </div>
           <div>
             <label className="label">Receipt Proof * <span className="text-red-500 font-normal">(stamped + signed photo — prevents client denial disputes)</span></label>

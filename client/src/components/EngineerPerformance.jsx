@@ -115,28 +115,30 @@ export default function EngineerPerformance() {
           <div>
             <label className="text-xs text-gray-600 block mb-1">From</label>
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-              className="border rounded px-2 py-1.5 text-sm" />
+              className="border rounded px-2 py-1.5 !text-sm w-[124px]" />
           </div>
           <div>
             <label className="text-xs text-gray-600 block mb-1">To</label>
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-              className="border rounded px-2 py-1.5 text-sm" />
+              className="border rounded px-2 py-1.5 !text-sm  w-[124px]" />
           </div>
           <div className="flex gap-1">
-            <button onClick={() => setQuickRange(7)}   className="btn btn-secondary text-xs px-2 py-1.5">7d</button>
-            <button onClick={() => setQuickRange(30)}  className="btn btn-secondary text-xs px-2 py-1.5">30d</button>
-            <button onClick={() => setQuickRange(90)}  className="btn btn-secondary text-xs px-2 py-1.5">90d</button>
-            <button onClick={() => setQuickRange(180)} className="btn btn-secondary text-xs px-2 py-1.5">6m</button>
-            <button onClick={() => setQuickRange(365)} className="btn btn-secondary text-xs px-2 py-1.5">1y</button>
+            <button onClick={() => setQuickRange(7)}   className="btn btn-secondary !rounded text-xs px-2 py-1.5">7d</button>
+            <button onClick={() => setQuickRange(30)}  className="btn btn-secondary !rounded text-xs px-2 py-1.5">30d</button>
+            <button onClick={() => setQuickRange(90)}  className="btn btn-secondary !rounded text-xs px-2 py-1.5">90d</button>
+            <button onClick={() => setQuickRange(180)} className="btn btn-secondary !rounded text-xs px-2 py-1.5">6m</button>
+            <button onClick={() => setQuickRange(365)} className="btn btn-secondary !rounded text-xs px-2 py-1.5">1y</button>
           </div>
-          <div className="flex-1 min-w-[180px]">
-            <label className="text-xs text-gray-600 block mb-1">Search engineer / site / client</label>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="e.g. Manoj, Hero, HVAC…"
-              className="border rounded px-2 py-1.5 text-sm w-full" />
+          <div className="max-md:w-full gap-3 flex flex-wrap items-end xl:ml-auto lg:justify-end">
+            <div className="flex-1 min-w-[200px]">
+              <label className="text-xs text-gray-600 block mb-1">Search engineer / site / client</label>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="e.g. Manoj, Hero, HVAC…"
+                className="border rounded px-2 py-1.5 text-sm w-full" />
+            </div>
+            <button onClick={exportRows} disabled={!filtered.length}
+              className="btn btn-secondary flex items-center gap-1.5"><FiDownload /> Export CSV</button>
+            <button onClick={load} className="btn btn-primary">Refresh</button>
           </div>
-          <button onClick={exportRows} disabled={!filtered.length}
-            className="btn btn-secondary flex items-center gap-1.5"><FiDownload /> Export CSV</button>
-          <button onClick={load} className="btn btn-primary">Refresh</button>
         </div>
         <div className="text-[11px] text-gray-500 mt-2">
           Window: <strong>{data.range?.date_from || dateFrom}</strong> → <strong>{data.range?.date_to || dateTo}</strong> ({data.range?.calendar_days || 0} days).

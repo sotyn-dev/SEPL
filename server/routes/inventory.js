@@ -14,6 +14,11 @@
 //
 //   GET  /movements                          - history with filters
 //
+//   PUT  /stock/:id/aging                    - set the material's ageing start
+//                                              date (write-once). Day count is
+//                                              never stored — /stock derives
+//                                              agingDays + agingColor per read.
+//
 // Stock balance is updated INSIDE a SQLite transaction with the movement
 // insert, so qty + journal stay consistent. Rate uses moving average on IN
 // movements; OUT movements use the current avg.
@@ -31,6 +36,55 @@ router.use(authMiddleware);
 // GET /stock prefers this column; legacy rows where it's NULL fall back
 // to deriving from the last IN movement.
 try { getDb().exec(`ALTER TABLE stock_balance ADD COLUMN condition TEXT`); } catch (_) {}
+
+// Same idempotent guard for the ageing date, so a box that boots this router
+// before the schema migration list has run still gets the column.
+try { getDb().exec(`ALTER TABLE stock_balance ADD COLUMN aging_start_date DATE`); } catch (_) {}
+
+// ─── Material ageing ─────────────────────────────────────────────────────
+// Only `aging_start_date` is persisted. The day count is derived on EVERY
+// read so it climbs on its own — nobody has to touch the row again.
+//
+// Thresholds differ by where the material sits (mam's rule): a site store is
+// expected to consume within 60 days, the central/office warehouse within 90.
+const AGING_LIMITS = {
+  site: { max: 60, green: 15, yellow: 30 },   // site_store and anything else
+  office: { max: 90, green: 30, yellow: 60 }, // central warehouse
+};
+
+// Days between two calendar DATES, ignoring clock time and timezone offset.
+// Both sides are pinned to UTC midnight, so a DST shift or a server in a
+// different zone than the browser can never produce an off-by-one day.
+function daysBetween(startYmd, todayYmd) {
+  const [y1, m1, d1] = startYmd.split('-').map(Number);
+  const [y2, m2, d2] = todayYmd.split('-').map(Number);
+  const a = Date.UTC(y1, m1 - 1, d1);
+  const b = Date.UTC(y2, m2 - 1, d2);
+  return Math.floor((b - a) / 86400000);
+}
+
+// Server-local calendar day as YYYY-MM-DD (not toISOString, which would shift
+// the date backwards for anyone east of UTC late in the day).
+function todayYmd(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Attach agingDays / agingColor / agingOverdue to a stock row.
+// A row with no date returns nulls — that's the signal for the UI to keep
+// showing the calendar icon (every legacy row lands here).
+function withAging(row) {
+  const start = row.aging_start_date;
+  if (!start) return { ...row, agingDays: null, agingColor: null, agingOverdue: false, agingLimit: null };
+  const limits = row.warehouse_type === 'office' ? AGING_LIMITS.office : AGING_LIMITS.site;
+  // Clamp at 0 so a row somehow dated in the future never reads negative.
+  const days = Math.max(0, daysBetween(start, todayYmd()));
+  const color = days > limits.max ? 'black'
+    : days <= limits.green ? 'green'
+    : days <= limits.yellow ? 'yellow'
+    : 'red';
+  return { ...row, agingDays: days, agingColor: color, agingOverdue: days > limits.max, agingLimit: limits.max };
+}
 
 // Mam 2026-05-29: 'this all black is used so how can edit other you do
 // used'. Legacy stock has no condition flag anywhere — neither on
@@ -104,7 +158,29 @@ router.get('/warehouses', requirePermission('inventory', 'view'), (req, res) => 
        LEFT JOIN sites s ON s.id = w.site_id
       ORDER BY w.type='office' DESC, w.name`
   ).all();
-  res.json(rows);
+
+  // Warehouse-level ageing = the ageing of the OLDEST dated material sitting
+  // in that store, so the row answers "how stale is this warehouse?". One
+  // query for every warehouse (not one per row), then rolled up in JS.
+  //
+  // A warehouse with no stock — or whose stock has no start date yet — comes
+  // back null, which the UI renders as "—". A store can't age on its own; it
+  // only inherits the age of what's inside it.
+  const oldest = db.prepare(
+    `SELECT sb.warehouse_id, MIN(sb.aging_start_date) AS oldest_start
+       FROM stock_balance sb
+      WHERE sb.quantity > 0 AND sb.aging_start_date IS NOT NULL
+      GROUP BY sb.warehouse_id`
+  ).all();
+  const startBy = new Map(oldest.map(r => [r.warehouse_id, r.oldest_start]));
+
+  res.json(rows.map(w => {
+    // Reuse withAging so the warehouse pill uses the EXACT same thresholds
+    // and field names as the per-item pill on the Stock tab.
+    const { agingDays, agingColor, agingOverdue, agingLimit } =
+      withAging({ aging_start_date: startBy.get(w.id) || null, warehouse_type: w.type });
+    return { ...w, aging_start_date: startBy.get(w.id) || null, agingDays, agingColor, agingOverdue, agingLimit };
+  }));
 });
 
 router.post('/warehouses', requirePermission('inventory', 'create'), (req, res) => {
@@ -153,6 +229,7 @@ router.get('/stock', requirePermission('inventory', 'view'), (req, res) => {
 
   const rows = db.prepare(
     `SELECT sb.id, sb.warehouse_id, sb.item_master_id, sb.quantity, sb.avg_rate, sb.reorder_level, sb.updated_at,
+            sb.aging_start_date,
             w.name as warehouse_name, w.type as warehouse_type,
             im.item_code, im.item_name, im.specification, im.size, im.uom, im.make, im.type as item_type,
             im.current_price as master_price,
@@ -180,7 +257,9 @@ router.get('/stock', requirePermission('inventory', 'view'), (req, res) => {
   res.json(rows.map(r => {
     const eff = (+r.avg_rate > 0) ? +r.avg_rate : (+r.master_price || 0);
     const src = (+r.avg_rate > 0) ? 'movements' : (+r.master_price > 0 ? 'master' : 'none');
-    return { ...r, effective_rate: eff, rate_source: src, value: +(eff * (+r.quantity || 0)).toFixed(2) };
+    // withAging derives agingDays/agingColor from aging_start_date on every
+    // response, so the count advances daily with no stored value to refresh.
+    return withAging({ ...r, effective_rate: eff, rate_source: src, value: +(eff * (+r.quantity || 0)).toFixed(2) });
   }));
 });
 
@@ -393,6 +472,49 @@ router.get('/movements', requirePermission('inventory', 'view'), (req, res) => {
   res.json(rows);
 });
 
+// ---------- AGEING START DATE ----------
+// Body: { aging_start_date: 'YYYY-MM-DD' }
+// Write-once by design: the spec is that the calendar disappears for good
+// once a date is confirmed, so a row that already has one is rejected rather
+// than silently overwritten (two users on the same row can't fight over it).
+router.put('/stock/:id/aging', requirePermission('inventory', 'edit'), (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const raw = String(req.body?.aging_start_date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return res.status(400).json({ error: 'aging_start_date must be YYYY-MM-DD' });
+  }
+  // Real-calendar check: rejects 2026-02-30 and 2025-02-29, accepts 2024-02-29.
+  const [y, m, d] = raw.split('-').map(Number);
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) {
+    return res.status(400).json({ error: 'Not a valid calendar date' });
+  }
+  if (daysBetween(raw, todayYmd()) < 0) {
+    return res.status(400).json({ error: 'Ageing cannot start in the future' });
+  }
+
+  const sb = db.prepare('SELECT * FROM stock_balance WHERE id=?').get(id);
+  if (!sb) return res.status(404).json({ error: 'Stock row not found' });
+  if (sb.aging_start_date) {
+    return res.status(409).json({ error: 'Ageing date is already set for this material' });
+  }
+  db.prepare('UPDATE stock_balance SET aging_start_date=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(raw, id);
+
+  // Return the row's derived ageing so the UI can swap the icon for the
+  // value without re-fetching the whole list.
+  const w = db.prepare('SELECT type FROM warehouses WHERE id=?').get(sb.warehouse_id);
+  const out = withAging({ aging_start_date: raw, warehouse_type: w?.type });
+  res.json({
+    message: 'Ageing start date saved',
+    aging_start_date: raw,
+    agingDays: out.agingDays,
+    agingColor: out.agingColor,
+    agingOverdue: out.agingOverdue,
+    agingLimit: out.agingLimit,
+  });
+});
+
 // ---------- REORDER LEVEL (small helper) ----------
 router.put('/reorder/:warehouse_id/:item_master_id', requirePermission('inventory', 'edit'), (req, res) => {
   const lvl = +(req.body?.reorder_level || 0);
@@ -417,6 +539,12 @@ router.put('/reorder/:warehouse_id/:item_master_id', requirePermission('inventor
 // a paper trail (rate=newRate, qty=0 is illegal in applyMovement,
 // so we skip the movement when qty is unchanged).
 router.patch('/stock/:id', requirePermission('inventory', 'edit'), (req, res) => {
+  // SPOS rule (mam 2026-07-31): no manual stock editing — every change
+  // must ride a movement (Receive / Issue / Transfer / Return / DPR
+  // consumption). Admin keeps the override for genuine corrections.
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Manual stock edit band hai (SPOS) — stock sirf Receive / Issue / Transfer / Return se badlega. Correction ke liye admin se bolo.' });
+  }
   const db = getDb();
   const id = +req.params.id;
   const newQty = req.body?.quantity != null ? +req.body.quantity : null;
@@ -482,6 +610,10 @@ router.patch('/stock/:id', requirePermission('inventory', 'edit'), (req, res) =>
 // Zero out a stock_balance row and record a final OUT ADJUST movement
 // for the audit trail. The balance row is then physically removed.
 router.delete('/stock/:id', requirePermission('inventory', 'delete'), (req, res) => {
+  // SPOS rule (mam 2026-07-31): same as PATCH — admin-only correction.
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Manual stock delete band hai (SPOS) — admin se bolo.' });
+  }
   const db = getDb();
   const id = +req.params.id;
   const sb = db.prepare('SELECT * FROM stock_balance WHERE id=?').get(id);
@@ -503,6 +635,75 @@ router.delete('/stock/:id', requirePermission('inventory', 'delete'), (req, res)
     res.json({ message: 'Stock row deleted' });
   } catch (e) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+// ---------- SPOS STOCK EQUATION (mam 2026-07-31) ----------
+// Live, per-item, movement-derived:
+//   Opening + Received + Returned − Issued − Consumed ± Adjust = Closing
+// Nothing here is typed by anyone — pure read of stock_movements, which is
+// why manual stock edits are locked to admin above.
+router.get('/equation', requirePermission('inventory', 'view'), (req, res) => {
+  const db = getDb();
+  const warehouseId = +req.query.warehouse_id;
+  if (!warehouseId) return res.status(400).json({ error: 'warehouse_id required' });
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const todayIso = `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
+  const from = String(req.query.from || todayIso.slice(0, 8) + '01').slice(0, 10);
+  const to = String(req.query.to || todayIso).slice(0, 10);
+  try {
+    const rows = db.prepare(`
+      SELECT im.id item_master_id, im.item_name, im.specification, im.size, im.uom,
+        COALESCE((SELECT SUM(CASE WHEN sm.type='IN' THEN sm.quantity ELSE -sm.quantity END)
+           FROM stock_movements sm WHERE sm.warehouse_id=? AND sm.item_master_id=im.id
+            AND date(sm.created_at) < ?), 0) opening,
+        COALESCE((SELECT SUM(sm.quantity) FROM stock_movements sm
+           WHERE sm.warehouse_id=? AND sm.item_master_id=im.id AND sm.type='IN'
+            AND COALESCE(sm.reference_type,'') NOT IN ('SITE_RETURN','ADJUST')
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) received,
+        COALESCE((SELECT SUM(sm.quantity) FROM stock_movements sm
+           WHERE sm.warehouse_id=? AND sm.item_master_id=im.id AND sm.type='IN'
+            AND sm.reference_type='SITE_RETURN'
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) returned,
+        COALESCE((SELECT SUM(sm.quantity) FROM stock_movements sm
+           WHERE sm.warehouse_id=? AND sm.item_master_id=im.id AND sm.type='OUT'
+            AND COALESCE(sm.reference_type,'') NOT IN ('DPR_CONSUMPTION','ADJUST')
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) issued,
+        COALESCE((SELECT SUM(sm.quantity) FROM stock_movements sm
+           WHERE sm.warehouse_id=? AND sm.item_master_id=im.id AND sm.type='OUT'
+            AND sm.reference_type='DPR_CONSUMPTION'
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) consumed,
+        COALESCE((SELECT SUM(CASE WHEN sm.type='IN' THEN sm.quantity ELSE -sm.quantity END)
+           FROM stock_movements sm WHERE sm.warehouse_id=? AND sm.item_master_id=im.id
+            AND sm.reference_type='ADJUST'
+            AND date(sm.created_at) BETWEEN ? AND ?), 0) adjust,
+        COALESCE((SELECT sb.quantity FROM stock_balance sb
+           WHERE sb.warehouse_id=? AND sb.item_master_id=im.id), 0) live_balance
+      FROM item_master im
+      WHERE EXISTS (SELECT 1 FROM stock_movements sm2
+                     WHERE sm2.warehouse_id=? AND sm2.item_master_id=im.id)
+      ORDER BY im.item_name
+    `).all(warehouseId, from, warehouseId, from, to, warehouseId, from, to,
+           warehouseId, from, to, warehouseId, from, to, warehouseId, from, to,
+           warehouseId, warehouseId);
+    const r2 = (x) => Math.round(x * 1000) / 1000;
+    res.json({
+      warehouse_id: warehouseId, from, to,
+      rows: rows.map(r => {
+        const closing = r.opening + r.received + r.returned - r.issued - r.consumed + r.adjust;
+        return {
+          ...r,
+          material_name: [r.item_name, r.specification, r.size].filter(Boolean).join(' '),
+          opening: r2(r.opening), received: r2(r.received), returned: r2(r.returned),
+          issued: r2(r.issued), consumed: r2(r.consumed), adjust: r2(r.adjust),
+          closing: r2(closing), live_balance: r2(r.live_balance),
+          matches: Math.abs(closing - r.live_balance) < 0.001,
+        };
+      }),
+    });
+  } catch (e) {
+    console.error('[inventory/equation]', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

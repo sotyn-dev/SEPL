@@ -16,7 +16,7 @@ import { useEffect } from 'react';
 export default function ConfirmDialog({
   open, title, message, note,
   confirmLabel = 'Confirm', cancelLabel = 'Cancel',
-  tone = 'danger', busy = false, onConfirm, onCancel,
+  tone = 'danger', busy = false, onConfirm, onCancel, infoOnly = false,
 }) {
   // Esc cancels — matches what a native confirm() does, and what anyone expects
   // from a dialog. Ignored while the action is in flight.
@@ -39,10 +39,12 @@ export default function ConfirmDialog({
         <p className="mt-1.5 text-[13px] text-gray-600 leading-snug">{message}</p>
         {note && <p className="mt-1.5 text-[11px] text-gray-400 leading-snug">{note}</p>}
         <div className="mt-4 flex justify-end gap-2">
-          <button type="button" onClick={onCancel} disabled={busy}
-            className="px-3 py-1.5 rounded-lg border text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50">
-            {cancelLabel}
-          </button>
+          {!infoOnly && (
+            <button type="button" onClick={onCancel} disabled={busy}
+              className="px-3 py-1.5 rounded-lg border text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+              {cancelLabel}
+            </button>
+          )}
           <button type="button" onClick={onConfirm} disabled={busy} autoFocus
             className={`px-3 py-1.5 rounded-lg text-white text-xs font-semibold disabled:opacity-50 ${confirmClass}`}>
             {busy ? 'Working…' : confirmLabel}
