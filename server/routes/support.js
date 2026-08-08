@@ -164,10 +164,11 @@ router.post('/', (req, res) => {
   // Push to assignee (or every admin if unassigned)
   try {
     const { notify, notifyMany } = require('../lib/push');
+    const dueInfo = deadline ? ` · Due: ${deadline}` : '';
     if (assigned_to) {
       notify(+assigned_to, {
         title: `🆘 ${ticketNo} — ${priority || 'medium'} priority`,
-        body: subject,
+        body: `${subject}${dueInfo}`,
         url: '/help-tickets',
         tag: `ticket-${r.lastInsertRowid}`,
       });
@@ -175,7 +176,7 @@ router.post('/', (req, res) => {
       const admins = db.prepare(`SELECT id FROM users WHERE role='admin' AND COALESCE(active,1)=1`).all().map(u => u.id);
       notifyMany(admins, {
         title: `🆘 New unassigned ticket — ${ticketNo}`,
-        body: subject,
+        body: `${subject}${dueInfo}`,
         url: '/help-tickets',
         tag: `ticket-${r.lastInsertRowid}`,
       });
@@ -188,6 +189,7 @@ router.post('/', (req, res) => {
     category: category || 'bug',
     created_by: req.user.name || '',
     date: new Date().toISOString().slice(0, 10),
+    deadline_date: deadline || '',
     creator_email: req.user.email || stUserEmail(db, req.user.id),
     assignee_email: assigned_to ? stUserEmail(db, +assigned_to) : null,
     director_email: stDirector(),
