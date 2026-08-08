@@ -444,13 +444,13 @@ export default function Delegation() {
       </div>
 
       {/* DASHBOARD — per-person workload table. mam's spec:
-          Person · Total · Active · Completed · Delayed · Avg Delay · WIP Limit · Status
-          Status: 🔴 Overloaded (active > WIP) · 🔴 Constraint (>=25% delayed
+          Person · Total · Active · Today · Completed · Delayed · Avg Delay · WIP Limit / Day · Status
+          Status: 🔴 Overloaded (tasks_today > WIP) · 🔴 Constraint (>=25% delayed
           or avg_delay > 5d) · 🟢 OK */}
       {view === 'dashboard' && (
         <>
           <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-500 text-xs text-gray-700">
-            <b>Workload Dashboard</b> — one row per person with active tasks. WIP limit is 5 by default. <span className="text-red-600 font-semibold">Overloaded</span> = too many active tasks. <span className="text-amber-700 font-semibold">Constraint</span> = ≥25% delayed or avg delay &gt; 5 days.
+            <b>Workload Dashboard</b> — one row per person with active tasks. WIP limit is <b>3 per day</b> (new tasks assigned today). <span className="text-red-600 font-semibold">Overloaded</span> = more than 3 tasks assigned today. <span className="text-amber-700 font-semibold">Constraint</span> = ≥25% delayed or avg delay &gt; 5 days.
           </div>
           <div className="card p-0 overflow-x-auto">
             <table className="text-sm w-full">
@@ -459,10 +459,11 @@ export default function Delegation() {
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Person</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Total</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Active</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase" title="New tasks assigned today">Today</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Completed</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Delayed</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Avg Delay (Days)</th>
-                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">WIP Limit</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase" title="Max new tasks assigned per day">WIP Limit / Day</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Status</th>
                 </tr>
               </thead>
@@ -471,7 +472,7 @@ export default function Delegation() {
                   const dotClass = r.status === 'Overloaded' ? 'bg-red-500'
                     : r.status === 'Constraint' ? 'bg-red-400'
                     : 'bg-emerald-500';
-                  const overActive = r.active_tasks > r.wip_limit;
+                  const overToday = (r.tasks_today || 0) > r.wip_limit;
                   return (
                     <tr key={r.id} className="border-t hover:bg-gray-50/60">
                       <td className="px-3 py-2">
@@ -479,7 +480,8 @@ export default function Delegation() {
                         <div className="text-[10px] text-gray-400">{r.role}{r.department ? ' · ' + r.department : ''}</div>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.total_tasks}</td>
-                      <td className={`px-3 py-2 text-right tabular-nums font-bold ${overActive ? 'text-red-600' : 'text-gray-800'}`}>{r.active_tasks}</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-bold text-gray-800">{r.active_tasks}</td>
+                      <td className={`px-3 py-2 text-right tabular-nums font-bold ${overToday ? 'text-red-600' : 'text-gray-800'}`}>{r.tasks_today || 0}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-emerald-700">{r.completed}</td>
                       <td className={`px-3 py-2 text-right tabular-nums ${r.delayed_tasks > 0 ? 'text-red-600 font-bold' : 'text-gray-400'}`}>{r.delayed_tasks}</td>
                       <td className={`px-3 py-2 text-right tabular-nums ${(r.avg_delay || 0) > 5 ? 'text-red-600 font-bold' : 'text-gray-700'}`}>{r.avg_delay || 0}</td>
@@ -494,7 +496,7 @@ export default function Delegation() {
                   );
                 })}
                 {dashboard.length === 0 && (
-                  <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No active delegations yet.</td></tr>
+                  <tr><td colSpan="9" className="text-center py-8 text-gray-400 text-sm">No active delegations yet.</td></tr>
                 )}
               </tbody>
             </table>

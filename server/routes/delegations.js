@@ -232,21 +232,22 @@ router.get('/', (req, res) => {
 });
 
 // Per-person workload dashboard. mam's spec — one row per assignee with:
-//   Total Tasks · Active · Completed · Delayed · Avg Delay (days) · WIP Limit · Status
+//   Total Tasks · Active · Today · Completed · Delayed · Avg Delay (days) · WIP Limit · Status
 // Status:
-//   Overloaded — active_tasks > wip_limit
+//   Overloaded — tasks_today > wip_limit (new tasks assigned today)
 //   Constraint — >= 25% of tasks delayed OR avg_delay > 5 days
 //   OK         — neither
-// WIP limit is 5 by default for everyone; can be made per-user later.
+// WIP limit is 3 per day by default for everyone; can be made per-user later.
 router.get('/dashboard', (req, res) => {
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
-  const WIP_LIMIT_DEFAULT = 5;
+  const WIP_LIMIT_DEFAULT = 3;
 
   const rows = db.prepare(`
     SELECT u.id, u.name as person, u.role, u.department,
            COUNT(d.id) as total_tasks,
            SUM(CASE WHEN d.status IN ('pending','submitted','rejected') THEN 1 ELSE 0 END) as active_tasks,
+           SUM(CASE WHEN date(d.created_at) = date(?) THEN 1 ELSE 0 END) as tasks_today,
            SUM(CASE WHEN d.status = 'approved' THEN 1 ELSE 0 END) as completed,
            SUM(CASE WHEN d.status IN ('pending','submitted')
                      AND d.due_date IS NOT NULL AND d.due_date < ? THEN 1 ELSE 0 END) as delayed_tasks,
@@ -259,13 +260,13 @@ router.get('/dashboard', (req, res) => {
      GROUP BY u.id
     HAVING total_tasks > 0
      ORDER BY active_tasks DESC, delayed_tasks DESC, person
-  `).all(today, today, today);
+  `).all(today, today, today, today);
 
   const out = rows.map(r => {
     const wip = WIP_LIMIT_DEFAULT;
     const delayedRatio = r.total_tasks > 0 ? r.delayed_tasks / r.total_tasks : 0;
     let status = 'OK';
-    if (r.active_tasks > wip) status = 'Overloaded';
+    if ((r.tasks_today || 0) > wip) status = 'Overloaded';
     else if (delayedRatio >= 0.25 || (r.avg_delay || 0) > 5) status = 'Constraint';
     return {
       id: r.id,
@@ -274,6 +275,7 @@ router.get('/dashboard', (req, res) => {
       department: r.department,
       total_tasks: r.total_tasks || 0,
       active_tasks: r.active_tasks || 0,
+      tasks_today: r.tasks_today || 0,
       completed: r.completed || 0,
       delayed_tasks: r.delayed_tasks || 0,
       avg_delay: r.avg_delay || 0,
