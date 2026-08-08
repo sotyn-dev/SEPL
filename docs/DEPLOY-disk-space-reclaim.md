@@ -12,7 +12,8 @@ Flow: PR `feat/disk-space-reclaim` → `main` on GitHub, merge, then the VPS ste
 | Phase | In this branch | Deploy-time action |
 |---|---|---|
 | **1 — log rotation** | `setup-log-rotation.sh` (NEW — not in main) | **manual**, run once on the VPS after the pull |
-| **2/3 — nightly maintenance** | `db-maintenance.js` (+VACUUM, +sotynflow.db) | auto — arms on boot at 02:15 |
+| **2 — nightly backup** | `backup-db.js` (zip, +sotynflow.db) | auto — arms on boot at 02:00 |
+| **3 — nightly maintenance (VACUUM)** | `db-maintenance.js` (+VACUUM, +sotynflow.db) | **off by default** — set `ERP_ENABLE_DB_MAINTENANCE=1` to arm at 02:15 |
 | **5 — S3 seam + backup offload** | `storage.js`, `backfill-uploads-s3.js`, `backup-db.js` | **inert** unless `STORAGE_DRIVER=s3` / `BACKUP_S3=1` |
 | **sweep scheduler** | `sweep-uploads.js` | **off** unless `ERP_ENABLE_SWEEP_CRON=1` |
 | archive UX | chat + boards `archived_at` | auto `ALTER TABLE` on boot, idempotent |
@@ -53,10 +54,16 @@ misbehaves on the big production DB. Worth knowing they exist before deploy nigh
 
 | Var | Turns off |
 |---|---|
-| `ERP_DISABLE_DB_MAINTENANCE` | the 02:15 WAL-checkpoint + VACUUM (Phase 3) |
 | `ERP_DISABLE_BACKUP_SCHEDULER` | the 02:00 nightly backup (Phase 2) |
 | `ERP_DISABLE_UPLOADS_BACKFILL` | the 02:30 S3 backfill (already dormant without S3) |
 | `ERP_BACKUP_DIR` | *(path, not on/off)* — where backup zips are written; defaults to `~/erp-backups` |
+
+**DB maintenance (WAL-checkpoint + VACUUM, Phase 3) is opt-IN, not opt-out** — the inverse of
+the row above. It stays off until you explicitly set `ERP_ENABLE_DB_MAINTENANCE=1`, because
+VACUUM's memory behavior on the VPS's 217 MB `erp.db` is unmeasured (see the temp_store caveat
+below) and better-sqlite3 is synchronous, so VACUUM blocks the whole event loop for its
+duration. Until it's been tested against a copy of prod `erp.db`, leave it unset and run
+`node server/scripts/db-maintenance.js` by hand whenever reclaiming is actually wanted.
 
 ## Ordered deploy (run top to bottom)
 
@@ -115,32 +122,29 @@ pm2 logs erp --lines 40                 # confirm the lines in the next section
 ```
 [auth]     JWT secret locked in at boot (stable across restarts)
 [backup]   Next scheduled run at ...T20:30:00.000Z          (02:00 IST)
-[db-maint] Next scheduled run at ...T20:45:00.000Z          (02:15 IST)
+[db-maint] Scheduler not started: set ERP_ENABLE_DB_MAINTENANCE=1 to enable.
 [backfill] Scheduler not started: STORAGE_DRIVER is not "s3".
 [sweep]    Scheduler not started: set ERP_ENABLE_SWEEP_CRON=1 to enable.
 ```
 
-The `[db-maint]` three-target VACUUM summary (`erp.db, chat.db, sotynflow.db`) only prints
-when it RUNS at 02:15 — not at boot. What you confirm at boot is that both new schedulers
-are **dormant**: `[backfill] Scheduler not started` and `[sweep] Scheduler not started`.
-Then click into SOTYN Chat → open a group → the ⋮ menu should show Archive/Delete; the
-archive toggle sits at the foot of the group list.
+What you confirm at boot is that three of the four new schedulers are **dormant**:
+`[db-maint]`, `[backfill]`, and `[sweep]` all print "Scheduler not started". Only `[backup]`
+arms automatically. Then click into SOTYN Chat → open a group → the ⋮ menu should show
+Archive/Delete; the archive toggle sits at the foot of the group list.
 
 ## The morning after (the real test — not deploy night)
 
-Boot only proves the schedulers ARMED. The Phase 2/3 machinery first runs overnight
-(02:00 backup, 02:15 maintenance), so verify the next morning:
+Boot only proves the backup scheduler ARMED. That machinery first runs overnight (02:00),
+so verify the next morning:
 
 ```bash
 ls -lh ~/erp-backups | tail -3        # a fresh backup-<ts>.zip from 02:00 should be there
-pm2 logs erp --lines 200 | grep -E "\[backup\]|\[db-maint\]"
+pm2 logs erp --lines 200 | grep -E "\[backup\]"
 ```
 
-Expect `[backup] Wrote backup-<ts>.zip (... MB) — N DB(s)` and a `[db-maint]` line per DB.
-On this first run `db-maint` reports `VACUUM skipped` for all three (freelist is 0 — nothing
-deleted yet); that is correct, not a failure. The number that should move is the **WAL** fold
-(`WAL -X MB`). If a 02:15 VACUUM ever fires later (after purge/retention deletes rows), that
-is the run to watch on the 217 MB `erp.db` — see the temp_store caveat below.
+Expect `[backup] Wrote backup-<ts>.zip (... MB) — N DB(s)`. There is no `[db-maint]` line to
+check — maintenance stays off until `ERP_ENABLE_DB_MAINTENANCE=1` is set (see the temp_store
+caveat below for why, and test-against-a-copy before ever setting it in prod).
 
 ## Rollback
 
@@ -181,7 +185,8 @@ temporary rewrite through RAM; if it does, the first VACUUM that actually reclai
 amount (after purge/retention deletes rows) could try to materialise 150 MB+ in memory on a
 1–2 GB VPS. This deploy does NOT trigger it — VACUUM skips while freelist is 0. But before
 the first deletion-driven VACUUM ever runs in production, test it against a **copy** of the
-prod `erp.db` and watch RSS. Escape hatch if needed: `ERP_DISABLE_DB_MAINTENANCE=1`.
+prod `erp.db` and watch RSS. This is also why maintenance now defaults OFF — see
+`ERP_ENABLE_DB_MAINTENANCE` above — so nothing runs until that test has been done.
 
 ## S3 — only if/when you decide to offload uploads
 

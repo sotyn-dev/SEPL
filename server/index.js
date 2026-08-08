@@ -173,17 +173,27 @@ if (!process.env.ERP_DISABLE_BACKUP_SCHEDULER) {
   }
 }
 
-// Nightly DB compaction — runs at 02:15 (right after the 02:00 backup) to
-// checkpoint the WAL into each DB and VACUUM when there's meaningful free space,
-// so erp.db/chat.db actually shrink after deletes instead of only ever growing.
-// Skip in dev via ERP_DISABLE_DB_MAINTENANCE=1.
-if (!process.env.ERP_DISABLE_DB_MAINTENANCE) {
+// Nightly DB compaction — checkpoints the WAL into each DB and VACUUMs when
+// there's meaningful free space, so erp.db/chat.db actually shrink after
+// deletes instead of only ever growing.
+//
+// DEFAULT-OFF (opt-in, not opt-out): VACUUM's temp rewrite may route through
+// RAM (temp_store=MEMORY is set on erp.db) and this hasn't been measured
+// against prod's real DB size on the VPS's 1-2 GB RAM. better-sqlite3 is also
+// synchronous, so VACUUM blocks the whole Node event loop for its duration —
+// unmeasured how long that is at scale. Until a VACUUM has been run against a
+// copy of prod erp.db with RSS watched, leave this off and run
+// `node server/scripts/db-maintenance.js` by hand when reclaiming is actually
+// wanted. Set ERP_ENABLE_DB_MAINTENANCE=1 to arm the nightly scheduler.
+if (process.env.ERP_ENABLE_DB_MAINTENANCE) {
   try {
     const { scheduleNightlyMaintenance } = require('./scripts/db-maintenance');
     scheduleNightlyMaintenance();
   } catch (e) {
     console.warn('[db-maint] Scheduler not started:', e.message);
   }
+} else {
+  console.log('[db-maint] Scheduler not started: set ERP_ENABLE_DB_MAINTENANCE=1 to enable.');
 }
 
 // Nightly uploads → S3 migration at 02:30. Ordering is deliberate: 02:00 backup
