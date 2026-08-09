@@ -1246,10 +1246,16 @@ function indentRaiseWindow(db) {
   const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   const todayStr = `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
   const isSaturday = ist.getDay() === 6;
+  // SPOS cadence (mam 2026-07-29): TWO routine indent days — Wednesday
+  // (mid-week stock review) + Saturday (next-week lookahead). Off-day
+  // raising is still possible but only as a flagged EMERGENCY indent
+  // (reason mandatory, counts toward the <5% emergency KPI).
+  const isWednesday = ist.getDay() === 3;
+  const isIndentDay = isSaturday || isWednesday;
   const row = db.prepare("SELECT value FROM app_settings WHERE key='indent_emergency_date'").get();
   const emergencyDate = (row && row.value) || '';
   const emergencyActive = !!emergencyDate && emergencyDate === todayStr;
-  return { todayStr, isSaturday, emergencyDate, emergencyActive, allowed: isSaturday || emergencyActive };
+  return { todayStr, isSaturday, isWednesday, isIndentDay, emergencyDate, emergencyActive, allowed: isIndentDay || emergencyActive };
 }
 
 // Raise-window status — read by the Raise Indent screen to show whether
@@ -1277,15 +1283,27 @@ router.post('/indents', (req, res) => {
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
   }
-  // Day gate (mam 2026-06-16): indents only on Saturday, unless an admin
-  // has opened today for an emergency. Applies to everyone (admin included
-  // — the admin opens the day via the toggle, then raises).
+  // Day gate — SPOS upgrade (mam 2026-07-29, supersedes the 2026-06-16
+  // Saturday-only rule): routine indents on Wednesday + Saturday. On any
+  // other day the indent must be raised as a flagged EMERGENCY with a
+  // written reason (PM/L1 still approves it; feeds the <5% emergency KPI).
+  // The admin one-day override keeps working — indents raised under it are
+  // auto-flagged emergency too, so the KPI never under-counts.
   const win = indentRaiseWindow(db);
-  if (!win.allowed) {
-    return res.status(403).json({
-      error: 'Indents can be raised only on Saturday. For a weekday emergency, ask an admin to enable emergency raising for today.',
-      code: 'INDENT_DAY_BLOCKED',
-    });
+  const wantsEmergency = req.body.is_emergency === true || req.body.is_emergency === 1 || req.body.is_emergency === '1';
+  const emergencyReason = String(req.body.emergency_reason || '').trim();
+  let isEmergency = 0;
+  if (!win.isIndentDay) {
+    if (!wantsEmergency && !win.emergencyActive) {
+      return res.status(403).json({
+        error: 'Routine indents are raised on Wednesday & Saturday only (SPOS). To raise one today, tick "Emergency indent" and write the reason — it will be flagged for PM approval.',
+        code: 'INDENT_DAY_BLOCKED',
+      });
+    }
+    if (wantsEmergency && !emergencyReason) {
+      return res.status(400).json({ error: 'Emergency indent needs a reason — write why this cannot wait for Wednesday/Saturday.' });
+    }
+    isEmergency = 1;   // off-day = emergency, whether via flag or admin day-open
   }
   // ─── Indent Category (mam's spec 2026-05-26) ─────────────────────────
   // Validate and normalise the category. Default 'material' so any
@@ -1514,8 +1532,8 @@ router.post('/indents', (req, res) => {
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
-        approval_policy, l1_status, l2_status, indent_category, crm_status)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        approval_policy, l1_status, l2_status, indent_category, crm_status, is_emergency, emergency_reason)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     resolvedPlanningId, indentNum, 'submitted',
     notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id,
@@ -1529,6 +1547,8 @@ router.post('/indents', (req, res) => {
     (l2Enabled(db) && (policy === 'two_level' || policy === 'crm_two_level')) ? 'pending' : null,
     category,
     policy === 'crm_two_level' ? 'pending' : 'n/a',
+    isEmergency,
+    isEmergency ? (emergencyReason || 'Admin emergency window (day-open)') : null,
   );
 
   // Seed the indent_tracker with the approval_pending stage so the IndentFMS
@@ -4000,6 +4020,9 @@ router.put('/vendor-po/:id', (req, res) => {
   // New editable header fields (mam's full-edit modal)
   if (b.po_date !== undefined)               set('po_date', b.po_date || null);
   if (b.expected_receipt_date !== undefined) set('expected_receipt_date', b.expected_receipt_date || null);
+  // delay_reason deliberately NOT handled here — this PUT is auth-only, and
+  // the audit (2026-07-31) flagged that any logged-in user could erase the
+  // accountability record. It lives on the gated PATCH /vendor-po/:id/delay-reason.
   if (b.remarks !== undefined)               set('remarks', b.remarks || null);
   if (b.advance_required !== undefined)      set('advance_required', +b.advance_required || 0);
 
@@ -4704,6 +4727,19 @@ router.get('/debit-notes/:id/print', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+// SPOS: log/edit the delay reason from the pipeline — gated like every
+// other vendor-facing procurement action (audit 2026-07-31: it briefly
+// rode the ungated PUT /vendor-po/:id).
+router.patch('/vendor-po/:id/delay-reason', needsApprove, (req, res) => {
+  const db = getDb();
+  const vp = db.prepare('SELECT id FROM vendor_pos WHERE id=?').get(req.params.id);
+  if (!vp) return res.status(404).json({ error: 'Vendor PO not found' });
+  const reason = String(req.body?.delay_reason || '').trim();
+  db.prepare('UPDATE vendor_pos SET delay_reason=?, delay_reason_by=?, delay_reason_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(reason || null, req.user.id, vp.id);
+  res.json({ ok: true, delay_reason: reason || null });
+});
+
 // POST-PO PIPELINE (mam 2026-06-04 chart): one row per Vendor PO showing
 // how far it has progressed: PO → Delivery Note → Received(GRN) →
 // Purchase Bill → Vendor Paid, plus a debit-note flag.  Pure read of the
@@ -4714,20 +4750,58 @@ router.get('/po-pipeline', (req, res) => {
   const rows = db.prepare(`
     SELECT vp.id, vp.po_number, vp.po_date, vp.total_amount, vp.status,
            vp.payment_block_status,
+           vp.expected_receipt_date, vp.delay_reason,
            v.name as vendor_name,
-           i.indent_number, i.site_name,
+           i.indent_number, i.site_name, i.indent_date, i.approved_at as indent_approved_at,
            (SELECT COUNT(*) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id) as dn_count,
            (SELECT COUNT(*) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id AND dn.status='received') as dn_received,
+           (SELECT MIN(dn.delivery_date) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id) as dispatched_on,
+           (SELECT MAX(dn.received_at) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id AND dn.status='received') as received_on,
            (SELECT COUNT(*) FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id) as bill_count,
            (SELECT pb.payment_status FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id ORDER BY pb.id DESC LIMIT 1) as bill_payment_status,
            (SELECT COUNT(*) FROM grn g WHERE g.vendor_po_id = vp.id) as grn_count,
-           (SELECT COUNT(*) FROM debit_notes d WHERE d.vendor_po_id = vp.id) as debit_count
+           (SELECT COUNT(*) FROM debit_notes d WHERE d.vendor_po_id = vp.id) as debit_count,
+           -- SPOS "Issued" stage: any stock OUT (site issue / DPR consumption)
+           -- at a warehouse this PO was received into, for one of this PO's
+           -- catalogue items, on/after the receive. Read-only heuristic.
+           (SELECT COUNT(*) FROM stock_movements sm
+             WHERE sm.type = 'OUT'
+               AND sm.reference_type IN ('DPR_CONSUMPTION','ISSUE')
+               AND sm.warehouse_id IN (SELECT dn2.warehouse_id FROM delivery_notes dn2
+                                        WHERE dn2.vendor_po_id = vp.id AND dn2.status='received' AND dn2.warehouse_id IS NOT NULL)
+               AND sm.item_master_id IN (SELECT ii2.item_master_id FROM vendor_po_items vpi2
+                                          JOIN indent_items ii2 ON ii2.id = vpi2.indent_item_id
+                                         WHERE vpi2.vendor_po_id = vp.id AND ii2.item_master_id IS NOT NULL)
+               AND sm.created_at >= (SELECT MIN(dn3.received_at) FROM delivery_notes dn3
+                                      WHERE dn3.vendor_po_id = vp.id AND dn3.status='received')
+           ) as issued_moves
       FROM vendor_pos vp
       LEFT JOIN vendors v ON v.id = vp.vendor_id
       LEFT JOIN indents i ON i.id = vp.indent_id
      WHERE COALESCE(vp.cancelled, 0) = 0
      ORDER BY vp.id DESC
   `).all();
+  // Live delay per row (SPOS "Delay: real-time delay variance"):
+  //   received → received date vs expected; still open → today vs expected.
+  // lead_time_days = expected − po_date (the vendor's committed transit).
+  // IST calendar date (audit 2026-07-31: UTC showed 'ETA' instead of
+  // 'LATE 1d' until 05:30 IST each morning).
+  const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const todayIso = `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, '0')}-${String(istNow.getDate()).padStart(2, '0')}`;
+  for (const r of rows) {
+    const exp = r.expected_receipt_date;
+    const recIso = r.received_on ? String(r.received_on).slice(0, 10) : null;
+    const receivedSomehow = (+r.dn_received > 0) || (+r.grn_count > 0);
+    r.lead_time_days = (exp && r.po_date) ? Math.round((new Date(exp) - new Date(r.po_date)) / 86400000) : null;
+    // Received via GRN only (no dated delivery-note receive): the arrival
+    // date is unknown — no delay verdict, instead of an ever-growing
+    // "was late Nd" vs today (audit 2026-07-31).
+    r.delay_days = !exp ? null
+      : recIso ? Math.round((new Date(recIso) - new Date(exp)) / 86400000)
+      : receivedSomehow ? null
+      : Math.round((new Date(todayIso) - new Date(exp)) / 86400000);
+    r.is_late = r.delay_days !== null && r.delay_days > 0;
+  }
   res.json(rows);
 });
 
@@ -5036,8 +5110,35 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
     return res.status(400).json({ error: 'Receipt proof photo is required — attach the stamped + signed document' });
   }
   const db = getDb();
-  const existing = db.prepare('SELECT id FROM delivery_notes WHERE id=?').get(req.params.id);
+  const existing = db.prepare('SELECT id, vendor_po_id FROM delivery_notes WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Dispatch not found' });
+
+  // SPOS late-delivery rule (mam 2026-07-29): when material lands AFTER the
+  // PO's expected date, a delay reason must be on record — either sent with
+  // this receive or already logged on the PO from the pipeline view. Old POs
+  // with no expected date are exempt (nothing to be late against).
+  // IST business date (audit 2026-07-31: UTC misjudged 00:00–05:30 IST).
+  const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const istToday = `${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, '0')}-${String(istNow.getDate()).padStart(2, '0')}`;
+  if (received_at && String(received_at).slice(0, 10) > istToday) {
+    return res.status(400).json({ error: 'Received-on date cannot be in the future.' });
+  }
+  if (existing.vendor_po_id) {
+    const vp = db.prepare('SELECT expected_receipt_date, delay_reason FROM vendor_pos WHERE id=?').get(existing.vendor_po_id);
+    const receiveDate = (received_at ? String(received_at) : istToday).slice(0, 10);
+    const sentReason = String(b.delay_reason || '').trim();
+    if (vp?.expected_receipt_date && receiveDate > vp.expected_receipt_date && !sentReason && !vp.delay_reason) {
+      const daysLate = Math.round((new Date(receiveDate) - new Date(vp.expected_receipt_date)) / 86400000);
+      return res.status(400).json({
+        error: `Material is ${daysLate} day(s) later than the expected delivery (${vp.expected_receipt_date}) — enter the Reason for delay before marking received (SPOS rule).`,
+        needs_delay_reason: true, days_late: daysLate, expected_receipt_date: vp.expected_receipt_date,
+      });
+    }
+    if (sentReason) {
+      db.prepare('UPDATE vendor_pos SET delay_reason=?, delay_reason_by=?, delay_reason_at=CURRENT_TIMESTAMP WHERE id=?')
+        .run(sentReason, req.user.id, existing.vendor_po_id);
+    }
+  }
 
   // Rename + persist the uploaded receipt photo under /uploads
   let receiptPath = null;

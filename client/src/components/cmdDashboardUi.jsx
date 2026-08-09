@@ -17,7 +17,11 @@ export const C = {
   line:  '#262B33',
   ink:   '#F2F4F7',
   ink2:  '#9AA3AD',
-  ink3:  '#5C6470',
+  // Was #5C6470 (~3.0:1 against the panel bg — under WCAG AA's 4.5:1 floor
+  // for this font size). First pass (#78808A) only just cleared 4.5:1 and
+  // still read as hard-to-read at a glance; lightened again to ~6:1 for a
+  // comfortable margin (mam 2026-08-01, round 2).
+  ink3:  '#8B93A0',
   red:   '#E5484D',
   amber: '#FFB224',
   green: '#46A758',
@@ -174,7 +178,12 @@ export function Pill({ kind = 'blue', children }) {
   );
 }
 
-// Horizontal-funnel row (Leads → Qualified → ... visual).
+// Horizontal-funnel row (Leads → Qualified → ... visual). Width stays a
+// truthful % of the top stage (mam 2026-05-22 audit: a 0-count stage must
+// show a ~0%-wide bar, not a padded-out one) — so the label is drawn as an
+// overlay across the FULL track instead of being clipped to the fill width;
+// otherwise multi-word labels ("Quote sent", "Cash collected") wrap to 2
+// lines and bleed into the row below at low widths (mam 2026-08-01 fix).
 export function FunnelBar({ label, value, drop, width, color, textColor = '#000' }) {
   return (
     <div style={{
@@ -182,12 +191,21 @@ export function FunnelBar({ label, value, drop, width, color, textColor = '#000'
       gap: 8, alignItems: 'center', fontSize: 11,
     }}>
       <div style={{
-        height: 18, background: C.panel2, borderRadius: 3, overflow: 'hidden',
+        position: 'relative', height: 18, background: C.panel2,
+        borderRadius: 3, overflow: 'hidden',
       }}>
         <div style={{
-          width: `${width}%`, height: '100%', background: color, borderRadius: 3,
-          display: 'flex', alignItems: 'center', padding: '0 8px',
-          fontSize: 10, fontWeight: 600, color: textColor,
+          position: 'absolute', inset: 0, width: `${width}%`, minWidth: 5,
+          background: color, borderRadius: 3,
+        }} />
+        <div style={{
+          position: 'relative', height: '100%', display: 'flex', alignItems: 'center',
+          padding: '0 8px', fontSize: 10, fontWeight: 600,
+          // Only trust the stage's own text colour once the fill actually
+          // covers the label; otherwise it's sitting on the dark empty
+          // track and needs the light ink colour to stay legible.
+          color: width >= 40 ? textColor : C.ink,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{label}</div>
       </div>
       <div style={{ textAlign: 'right', fontWeight: 600, fontSize: 11.5 }}>{value}</div>
@@ -249,21 +267,24 @@ export function HeatCell({ label, value, intensity = 'green' }) {
 }
 
 // Layout grid presets matching the HTML spec (.r-strip, .r-3, .r-4, etc.)
+// Responsive by default: mobile stacks down, desktop keeps the original
+// column count/ratio from mam's HTML spec at lg/xl. "strip" (the KPI tile
+// rows) reflows 2 → 3 → 4 → all-in-one-row per the dashboard-readability
+// pass (mam 2026-08-01).
 export const Row = ({ cols, children, style }) => {
   const map = {
-    strip: 'repeat(8, 1fr)',
-    '3':   '1.2fr 1fr 1fr',
-    '3eq': 'repeat(3, 1fr)',
-    '4':   'repeat(4, 1fr)',
-    '2':   '1fr 1fr',
-    '2-1': '2fr 1fr',
-    '1-2': '1fr 2fr',
+    strip: 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8',
+    '3':   'grid-cols-1 md:grid-cols-2 lg:grid-cols-[1.2fr_1fr_1fr]',
+    '3eq': 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3',
+    '4':   'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4',
+    '2':   'grid-cols-1 lg:grid-cols-2',
+    '2-1': 'grid-cols-1 lg:grid-cols-[2fr_1fr]',
+    '1-2': 'grid-cols-1 lg:grid-cols-[1fr_2fr]',
   };
   return (
-    <div style={{
-      display: 'grid', gap: 12, marginBottom: 0,
-      gridTemplateColumns: map[cols] || cols, ...style,
-    }}>{children}</div>
+    <div className={`grid gap-3 ${map[cols] || cols}`} style={{ marginBottom: 0, ...style }}>
+      {children}
+    </div>
   );
 };
 

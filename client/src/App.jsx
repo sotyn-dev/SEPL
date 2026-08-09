@@ -66,6 +66,7 @@ const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
 const DeliveryNotePrint = lazy(() => import('./pages/DeliveryNotePrint'));
 const RentalPOPrint = lazy(() => import('./pages/RentalPOPrint'));
 const IndentPrint = lazy(() => import('./pages/IndentPrint'));
+const SiteSlipPrint = lazy(() => import('./pages/SiteSlipPrint'));
 const QuotationPrint = lazy(() => import('./pages/QuotationPrint'));
 const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
 const RolesPermissions = lazy(() => import('./pages/admin/RolesPermissions'));
@@ -156,6 +157,8 @@ export default function App() {
       <Route path="/vendor-po/:id/delivery-note" element={<ProtectedRoute><DeliveryNotePrint /></ProtectedRoute>} />
       <Route path="/rental-po/:id/print" element={<ProtectedRoute><RentalPOPrint /></ProtectedRoute>} />
       <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
+      {/* SPOS site-store GRN slips (mam 2026-07-31): printable Issue/Return slip */}
+      <Route path="/site-slip/:id/print" element={<ProtectedRoute><SiteSlipPrint /></ProtectedRoute>} />
       <Route path="/quotation/:indentId/print" element={<ProtectedRoute><QuotationPrint /></ProtectedRoute>} />
       <Route path="/po-foc/:id/print" element={<ProtectedRoute><PoFocPrint /></ProtectedRoute>} />
       <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />

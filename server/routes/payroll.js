@@ -623,8 +623,12 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
     const out = employees.map(emp => {
       if (finalised) {
-        const snap = db.prepare('SELECT * FROM payroll_runs WHERE month=? AND employee_id=?').get(month, emp.id);
-        if (snap) return { ...snap, locked: true };
+        const snap = db.prepare(
+          `SELECT pr.*, u.name AS finalised_by_name FROM payroll_runs pr
+           LEFT JOIN users u ON u.id = pr.finalised_by
+           WHERE pr.month=? AND pr.employee_id=?`
+        ).get(month, emp.id);
+        if (snap) return { ...snap, sunday_count: snap.sundays, locked: true };
       }
       return calculateForEmployee(db, settings, emp, month);
     });
@@ -675,8 +679,9 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
       absent_days, late_marks, lates_converted_absent, late_penalty, paid_leaves, unpaid_leaves, sundays,
       ot_hours, gross_earned, ot_pay, ot_eligible, ot_per_hour_rate, ot_threshold, net_before_ot, roster, deductions, net_pay,
       basic_pay, conveyance, hra, adhoc, misc, advance,
+      present_days, sunday_worked_pay,
       breakdown_json, status, finalised_by, finalised_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
 
     const tx = db.transaction(() => {
       for (const emp of employees) {
@@ -686,6 +691,7 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
           r.absent_days, r.late_marks, r.lates_converted_absent, r.late_penalty, r.paid_leaves, r.unpaid_leaves, r.sunday_count,
           r.ot_hours, r.gross_earned, r.ot_pay, (emp.ot_eligible ? 1 : 0), r.ot_per_hour_rate, r.ot_threshold, r.net_before_ot, (emp.roster || 'general'), r.deductions, r.net_pay,
           r.basic_pay, r.conveyance, r.hra, r.adhoc, r.misc, r.advance,
+          r.present_days, r.sunday_worked_pay,
           JSON.stringify(r.breakdown), 'finalised', req.user.id
         );
       }

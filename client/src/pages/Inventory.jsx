@@ -14,7 +14,25 @@ import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import { useAuth } from '../context/AuthContext';
-import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera, FiDownload } from 'react-icons/fi';
+import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera, FiDownload, FiCalendar } from 'react-icons/fi';
+
+// Ageing pill colours. The BAND is decided server-side (agingColor) because the
+// 60-day site / 90-day warehouse limits are business rules, not presentation —
+// this map only turns that band into classes.
+const AGING_PILL = {
+  green: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  yellow: 'bg-amber-50 text-amber-700 border-amber-200',
+  red: 'bg-red-50 text-red-700 border-red-200',
+  black: 'bg-gray-900 text-white border-gray-900',   // past the limit = overdue
+};
+
+// Local calendar day as YYYY-MM-DD. Deliberately NOT toISOString(), which is
+// UTC and would offer "yesterday" as the max selectable date for anyone east
+// of UTC (IST is +5:30, so it breaks there every day after 18:30).
+const todayStr = (d = new Date()) => {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 import { exportCsv } from '../utils/exportCsv';
 import BarcodeScanner from '../components/BarcodeScanner';
 import { fmtDateTime } from '../utils/datetime';
@@ -160,6 +178,7 @@ export default function Inventory() {
           ['receive', 'Receive (IN)', canCreate('inventory')],
           ['issue', 'Issue / Transfer (OUT)', canCreate('inventory')],
           ['movements', 'Movements'],
+          ['equation', 'Stock Equation (SPOS)'],
           ['reports', 'Reports & Valuation'],
           ['warehouses', 'Warehouses'],
         ].filter(([, , cond]) => cond === undefined || cond).map(([id, label]) => (
@@ -175,6 +194,7 @@ export default function Inventory() {
       {tab === 'receive' && <ReceiveTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'issue' && <IssueTab warehouses={warehouses} sites={sites} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'movements' && <MovementsTab movements={movements} warehouses={warehouses} filter={mvmtFilter} setFilter={setMvmtFilter} />}
+      {tab === 'equation' && <EquationTab warehouses={warehouses} />}
       {tab === 'reports' && <ReportsTab summary={summary} warehouses={warehouses} />}
       {tab === 'warehouses' && <WarehousesTab warehouses={warehouses} sites={sites} reload={loadCommon} canEdit={canEdit('inventory') || isAdmin()} canCreate={canCreate('inventory') || isAdmin()} />}
     </div>
@@ -199,6 +219,12 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   // typeFilter. Lets mam isolate e.g. all "Free to use" spare stock, and with
   // the warehouse picker, see what's free at a given site (mam 2026-07-15).
   const [condFilter, setCondFilter] = useState('');
+  // Ageing date picker. `agingRow` is the stock row whose calendar is open;
+  // `agingDraft` holds the picked date UNSAVED until OK is pressed, which is
+  // the whole point — Cancel/close must leave the DB untouched.
+  const [agingRow, setAgingRow] = useState(null);
+  const [agingDraft, setAgingDraft] = useState('');
+  const [agingSaving, setAgingSaving] = useState(false);
 
   // Item-type badge styling (PO / FOC / RGP), shared by the table + cards.
   const typeBadgeClass = (t) => {
@@ -272,6 +298,23 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
     }
+  };
+
+  // Ageing: the day count is NEVER stored — the server derives it from
+  // aging_start_date on every response, so it climbs on its own. Saving is
+  // deliberately two-step (pick → OK) so an accidental tap can't stamp a
+  // date that is write-once.
+  const saveAging = async () => {
+    if (!agingRow || !agingDraft || agingSaving) return;
+    setAgingSaving(true);
+    try {
+      await api.put(`/inventory/stock/${agingRow.id}/aging`, { aging_start_date: agingDraft });
+      setAgingRow(null); setAgingDraft('');
+      toast.success('Ageing start date saved');
+      reload();                       // pull the derived agingDays/agingColor back
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save ageing date');
+    } finally { setAgingSaving(false); }
   };
 
   // Flat list — mam's spec is one row per (site, item) with Site Name as
@@ -474,6 +517,28 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                     {low && <span className="text-amber-700 font-bold ml-1">· LOW STOCK</span>}
                   </div>
                 )}
+                {/* Ageing — same rule as the desktop column so a phone user
+                    isn't stuck without it (mam's earlier "not showing on
+                    mobile" complaint about Edit). */}
+                <div className="flex items-center justify-center gap-1.5 text-[10px] text-gray-500">
+                  <span className="uppercase text-gray-400">Aging</span>
+                  {r.agingDays == null ? (
+                    <button
+                      type="button"
+                      disabled={!canEdit}
+                      onClick={() => { if (canEdit) { setAgingRow(r); setAgingDraft(todayStr()); } }}
+                      className={`p-1 rounded ${canEdit ? 'text-gray-400 hover:text-red-600 hover:bg-red-50' : 'text-gray-300'}`}
+                      title={canEdit ? 'Set ageing start date' : 'No permission to set ageing'}
+                    >
+                      <FiCalendar size={13} />
+                    </button>
+                  ) : (
+                    <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${AGING_PILL[r.agingColor] || ''}`}
+                      title={`Ageing since ${r.aging_start_date}${r.agingOverdue ? ` · OVERDUE (limit ${r.agingLimit} days)` : ''}`}>
+                      {r.agingDays} {r.agingDays === 1 ? 'Day' : 'Days'}
+                    </span>
+                  )}
+                </div>
                 {/* Edit / Delete — same actions as the desktop table (mam
                     2026-07-06: "i give him edit option but not showing on
                     mobile"). The Edit button opens the SAME modal, which handles
@@ -523,6 +588,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Rate</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Value</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Reorder</th>
+                  <th className="text-center px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Aging</th>
                   {(canEdit || canDelete) && <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Actions</th>}
                 </tr>
               </thead>
@@ -543,10 +609,17 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                   return (
                     <tr key={r.id} className={`border-t ${low ? 'bg-amber-50/40' : 'hover:bg-gray-50'}`}>
                       <td className="px-3 py-2 text-gray-500 font-mono text-[11px]">{r.item_code || '—'}</td>
-                      <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
-                          {r.warehouse_type === 'office' ? <FiHome size={11} className="text-red-500 flex-shrink-0" /> : <FiMapPin size={11} className="text-red-500 flex-shrink-0" />}
-                          <span className="text-[12px]">{r.warehouse_name}</span>
+                      {/* No `whitespace-nowrap` here: with auto table layout it
+                          sized this column to the LONGEST site name in the whole
+                          list (e.g. "Emerald land india pvt ltd (Imperial Golf)
+                          Store"), so every short name like "Office Store" left a
+                          wide empty gap before Item. Wrapping + a max width lets
+                          the long ones use two lines and gives the space back to
+                          the Item column. */}
+                      <td className="px-3 py-2 text-gray-700 max-w-[160px]">
+                        <div className="flex items-start gap-1.5">
+                          {r.warehouse_type === 'office' ? <FiHome size={11} className="text-red-500 flex-shrink-0 mt-0.5" /> : <FiMapPin size={11} className="text-red-500 flex-shrink-0 mt-0.5" />}
+                          <span className="text-[12px] leading-snug break-words">{r.warehouse_name}</span>
                         </div>
                       </td>
                       <td className="px-3 py-2 text-gray-800">
@@ -660,6 +733,29 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                           </button>
                         )}
                       </td>
+                      {/* AGEING — calendar until a start date is confirmed, then
+                          the derived day count for good. agingDays comes from the
+                          server on every load, so it advances by itself. */}
+                      <td className="px-3 py-2 text-center whitespace-nowrap">
+                        {r.agingDays == null ? (
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => { if (canEdit) { setAgingRow(r); setAgingDraft(todayStr()); } }}
+                            className={`p-1.5 rounded ${canEdit ? 'text-gray-400 hover:text-red-600 hover:bg-red-50' : 'text-gray-300 cursor-default'}`}
+                            title={canEdit ? 'Set ageing start date' : 'No permission to set ageing'}
+                          >
+                            <FiCalendar size={14} />
+                          </button>
+                        ) : (
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold border ${AGING_PILL[r.agingColor] || ''}`}
+                            title={`Ageing since ${r.aging_start_date}${r.agingOverdue ? ` · OVERDUE (limit ${r.agingLimit} days)` : ''}`}
+                          >
+                            {r.agingDays} {r.agingDays === 1 ? 'Day' : 'Days'}
+                          </span>
+                        )}
+                      </td>
                       {(canEdit || canDelete) && (
                         <td className="px-3 py-2 text-right whitespace-nowrap">
                           {canEdit && (
@@ -747,6 +843,45 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
               <button type="button" onClick={() => setEditRow(null)} className="btn btn-secondary text-sm">Cancel</button>
               <button type="button" disabled={savingRow} onClick={saveEditRow} className="btn btn-primary text-sm flex items-center gap-2">
                 <FiCheck size={14} /> {savingRow ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── AGEING DATE PICKER ─────────────────────────────────────────
+          Two-step on purpose: the picked date lives in `agingDraft` and is
+          only written on OK. Cancel / closing the modal discards it, and the
+          calendar icon stays. The date is write-once, so this is the last
+          chance to get it right. */}
+      {agingRow && (
+        <Modal isOpen={true} onClose={() => { setAgingRow(null); setAgingDraft(''); }} title="Set Ageing Start Date" maxWidth="max-w-sm">
+          <div className="space-y-3 text-sm">
+            <div className="bg-gray-50 rounded px-2 py-1.5 text-[11px] text-gray-600">
+              <div className="font-medium text-gray-800">{agingRow.item_name}</div>
+              <div>{agingRow.warehouse_name} · limit {agingRow.warehouse_type === 'office' ? 90 : 60} days
+                {' '}({agingRow.warehouse_type === 'office' ? 'warehouse' : 'site'} material)</div>
+            </div>
+            <div>
+              <label className="label">Material received on</label>
+              {/* max=today blocks future dates in the native picker; the server
+                  re-checks, so a devtools edit can't get past it either. */}
+              <input
+                type="date"
+                className="input"
+                value={agingDraft}
+                max={todayStr()}
+                onChange={e => setAgingDraft(e.target.value)}
+                autoFocus
+              />
+              <p className="text-[10px] text-gray-400 mt-1">
+                Today or any past date. Ageing counts up from here automatically — it is not stored, so it stays correct every day.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => { setAgingRow(null); setAgingDraft(''); }} className="btn btn-secondary text-sm">Cancel</button>
+              <button type="button" disabled={!agingDraft || agingSaving} onClick={saveAging} className="btn btn-primary text-sm flex items-center gap-2 disabled:opacity-50">
+                <FiCheck size={14} /> {agingSaving ? 'Saving…' : 'OK'}
               </button>
             </div>
           </div>
@@ -1608,6 +1743,87 @@ function IssueTab({ warehouses, sites, items, reload }) {
 }
 
 // ---------- MOVEMENTS TAB ----------
+// EquationTab — SPOS automatic inventory equation (mam 2026-07-31):
+// Opening + Received + Returned − Issued − Consumed ± Adjust = Closing.
+// Pure movement-derived, live; ✓/✗ shows whether the ledger matches the
+// live balance (manual stock edits are admin-only now, so drift = bug).
+function EquationTab({ warehouses }) {
+  const istToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const [whId, setWhId] = useState('');
+  const [from, setFrom] = useState(istToday().slice(0, 8) + '01');
+  const [to, setTo] = useState(istToday());
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const load = async (w = whId, f = from, t = to) => {
+    if (!w) { setData(null); return; }
+    setLoading(true);
+    try { setData((await api.get('/inventory/equation', { params: { warehouse_id: w, from: f, to: t } })).data); }
+    catch (e) { toast.error(e.response?.data?.error || 'Load failed'); setData(null); }
+    finally { setLoading(false); }
+  };
+  return (
+    <div className="card p-4 space-y-3">
+      <div>
+        <h3 className="font-semibold text-gray-800">Stock Equation — auto, koi manual entry nahi</h3>
+        <p className="text-xs text-gray-500">
+          <b>Opening + Received + Returned − Issued − Consumed ± Adjust = Closing.</b> Sab movements se aata hai
+          (Receive / Issue / Transfer / GRN slips / DPR consumption). Manual stock edit ab sirf admin kar sakta hai.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2 items-end">
+        <div>
+          <label className="label">Warehouse / Site Store</label>
+          <select className="select" value={whId} onChange={e => { setWhId(e.target.value); load(e.target.value, from, to); }}>
+            <option value="">— pick —</option>
+            {(warehouses || []).map(w => <option key={w.id} value={w.id}>{w.name} ({w.type})</option>)}
+          </select>
+        </div>
+        <div><label className="label">From</label><input type="date" className="input" value={from} onChange={e => { setFrom(e.target.value); load(whId, e.target.value, to); }} /></div>
+        <div><label className="label">To</label><input type="date" className="input" value={to} onChange={e => { setTo(e.target.value); load(whId, from, e.target.value); }} /></div>
+      </div>
+      {loading ? <div className="text-sm text-gray-400 py-6 text-center">Loading…</div>
+        : !data ? <div className="text-sm text-gray-400 py-6 text-center">Warehouse chuno — equation live dikhega.</div>
+        : data.rows.length === 0 ? <div className="text-sm text-gray-400 py-6 text-center">Is warehouse mein koi movement nahi hai.</div>
+        : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead><tr className="text-gray-500 border-b text-left">
+              <th className="py-1.5 pr-2">Material</th>
+              <th className="py-1.5 px-2 text-right">Opening</th>
+              <th className="py-1.5 px-2 text-right text-emerald-700">+ Received</th>
+              <th className="py-1.5 px-2 text-right text-emerald-700">+ Returned</th>
+              <th className="py-1.5 px-2 text-right text-red-700">− Issued</th>
+              <th className="py-1.5 px-2 text-right text-red-700">− Consumed</th>
+              <th className="py-1.5 px-2 text-right text-gray-500">± Adjust</th>
+              <th className="py-1.5 px-2 text-right font-bold">= Closing</th>
+              <th className="py-1.5 pl-2 text-right">Live</th>
+            </tr></thead>
+            <tbody>
+              {data.rows.map(r => (
+                <tr key={r.item_master_id} className="border-b hover:bg-gray-50">
+                  <td className="py-1.5 pr-2">{r.material_name} <span className="text-gray-400">({r.uom || 'nos'})</span></td>
+                  <td className="py-1.5 px-2 text-right tabular-nums">{r.opening}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-emerald-700">{r.received || '—'}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-emerald-700">{r.returned || '—'}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-red-700">{r.issued || '—'}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-red-700">{r.consumed || '—'}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-gray-500">{r.adjust || '—'}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums font-bold">{r.closing}</td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums">
+                    {r.live_balance} {r.matches
+                      ? <span className="text-emerald-600 font-bold">✓</span>
+                      : <span className="text-red-600 font-bold" title="Ledger aur live balance match nahi kar rahe — admin ko batao">✗</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MovementsTab({ movements, warehouses, filter, setFilter }) {
   return (
     <>
@@ -1852,6 +2068,9 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">In Charge</th>
               <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Items</th>
               <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Value</th>
+              {/* Ageing of the OLDEST dated material in this store — the
+                  per-item detail stays on the Stock tab. */}
+              <th className="text-center px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Aging</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Status</th>
               <th></th>
             </tr>
@@ -1866,6 +2085,18 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
                 <td className="px-3 py-2 text-gray-600">{w.in_charge || '—'}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{fmtNum(w.item_count)}</td>
                 <td className="px-3 py-2 text-right text-gray-700 tabular-nums">{fmtMoney(w.total_value)}</td>
+                {/* Same pill as the Stock tab — server decides the band, so the
+                    60-day site / 90-day warehouse rules can't drift apart. */}
+                <td className="px-3 py-2 text-center whitespace-nowrap">
+                  {w.agingDays == null ? (
+                    <span className="text-gray-400" title="No dated material in this warehouse yet">—</span>
+                  ) : (
+                    <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold border ${AGING_PILL[w.agingColor] || ''}`}
+                      title={`Oldest material ageing since ${w.aging_start_date}${w.agingOverdue ? ` · OVERDUE (limit ${w.agingLimit} days)` : ` · limit ${w.agingLimit} days`}`}>
+                      {w.agingDays} {w.agingDays === 1 ? 'Day' : 'Days'}
+                    </span>
+                  )}
+                </td>
                 <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded ${w.active ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-500'}`}>{w.active ? 'Active' : 'Inactive'}</span></td>
                 <td className="px-3 py-2 text-right">{canEdit && <button onClick={() => open(w)} className="p-1 text-gray-400 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}</td>
               </tr>

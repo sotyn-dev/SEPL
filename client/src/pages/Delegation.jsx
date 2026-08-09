@@ -9,6 +9,18 @@ import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
 import { fmtDate } from '../utils/datetime';
 
+// Proof remarks are capped by WORD count (not characters) so the approver
+// gets a readable note, not an essay. Enforced again server-side.
+const REMARKS_WORD_LIMIT = 300;
+const countWords = (s) => (s || '').trim().split(/\s+/).filter(Boolean).length;
+// Trim to the first `limit` words, keeping any trailing space the user just
+// typed so the caret doesn't fight them mid-sentence.
+const capWords = (s, limit) => {
+  const words = (s || '').split(/\s+/).filter(Boolean);
+  if (words.length <= limit) return s;
+  return words.slice(0, limit).join(' ');
+};
+
 // Web Speech API — available as SpeechRecognition in Chromium-based browsers
 const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
@@ -42,7 +54,7 @@ export default function Delegation() {
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
-  const [submitForm, setSubmitForm] = useState({ proof_url: '', uploading: false });
+  const [submitForm, setSubmitForm] = useState({ proof_url: '', proof_remarks: '', uploading: false });
   // Mam's MD (2026-05-21): "SOTYN.AI is hang" when raising task with photo.
   // Root cause was a silent 30-60s photo upload with no progress.  Track
   // a saving flag + percentage so the Save button reflects what's
@@ -296,13 +308,18 @@ export default function Delegation() {
       setProofPct(0);
     }
   };
+  const remarkWords = countWords(submitForm.proof_remarks);
   const submitProof = async (e) => {
     e.preventDefault();
     if (!submitForm.proof_url) return toast.error('Please upload proof first');
+    if (remarkWords > REMARKS_WORD_LIMIT) return toast.error(`Remarks cannot exceed ${REMARKS_WORD_LIMIT} words`);
     try {
-      await api.post(`/delegations/${submitModal.id}/submit`, { proof_url: submitForm.proof_url });
+      await api.post(`/delegations/${submitModal.id}/submit`, {
+        proof_url: submitForm.proof_url,
+        proof_remarks: submitForm.proof_remarks,
+      });
       toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); setSubmitForm({ proof_url: '', uploading: false }); load();
+      setSubmitModal(null); setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -580,7 +597,9 @@ export default function Delegation() {
               <th>Assigned To</th>
               <th>Due / Completed</th>
               <th>Status</th>
-              <th>Upload Proof</th>
+              {/* Capped at 200px so a long proof remark wraps inside the cell
+                  instead of stretching the column across the table. */}
+              <th className="max-w-[200px]">Upload Proof</th>
               <th>Extension</th>
               <th>Followup Remarks<br/><span className="text-[9px] font-normal normal-case text-gray-400">(EA → MD)</span></th>
               <th>Actions</th>
@@ -603,7 +622,7 @@ export default function Delegation() {
               const canEditProject = isAdmin() || isAssigner;
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
-                <tr key={t.id} id={`deleg-row-${t.id}`} className={`${t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}${String(t.id) === String(highlightId) ? ' ring-2 ring-amber-400 ring-inset' : ''}`}>
+                <tr key={t.id} id={`deleg-row-${t.id}`} className={`align-top ${t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}${String(t.id) === String(highlightId) ? ' ring-2 ring-amber-400 ring-inset' : ''}`}>
                   <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
                   <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>
@@ -646,14 +665,17 @@ export default function Delegation() {
                     </span>
                   </td>
                   <td>{statusBadge(t.status)}</td>
-                  <td>
-                    <div className="flex flex-col gap-1">
+                  <td className="max-w-[200px] align-top">
+                    <div className="flex flex-col items-start gap-1">
                       {t.proof_url && (
-                        <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
+                        <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1 whitespace-nowrap"><FiExternalLink size={11} className="shrink-0" /> View</a>
+                      )}
+                      {t.proof_remarks && (
+                        <span className="text-[10px] text-gray-500 italic line-clamp-2 break-words" title={t.proof_remarks}>{t.proof_remarks}</span>
                       )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
-                          <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
+                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
+                          <FiUpload size={11} className="shrink-0" /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
                       {!t.proof_url && !((isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected')) && (
@@ -781,10 +803,13 @@ export default function Delegation() {
               {t.extension_status === 'pending' && t.requested_due_date && (
                 <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-[11px] text-amber-800 mb-2 flex items-start gap-1"><FiCalendar size={11} className="mt-0.5" /> Extension → {t.requested_due_date}</div>
               )}
+              {t.proof_remarks && (
+                <div className="text-[11px] text-gray-600 italic mb-2">{t.proof_remarks}</div>
+              )}
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -1040,6 +1065,21 @@ export default function Delegation() {
               </div>
             )}
             {submitForm.proof_url && <p className="text-xs text-emerald-600 mt-1">✓ Ready to submit</p>}
+          </div>
+          {/* Remarks travel with the proof so the approver reads what was
+              actually done instead of guessing from the file alone. */}
+          <div>
+            <label className="label">Remarks <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
+            <textarea
+              className="input"
+              rows="3"
+              value={submitForm.proof_remarks}
+              onChange={e => setSubmitForm(f => ({ ...f, proof_remarks: capWords(e.target.value, REMARKS_WORD_LIMIT) }))}
+              placeholder="What was done? Anything the approver should know…"
+            />
+            <p className={`text-[10px] mt-0.5 text-right ${remarkWords >= REMARKS_WORD_LIMIT ? 'text-red-600' : 'text-gray-400'}`}>
+              {remarkWords}/{REMARKS_WORD_LIMIT} words
+            </p>
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setSubmitModal(null)} className="btn btn-secondary">Cancel</button>

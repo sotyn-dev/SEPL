@@ -99,7 +99,7 @@ export default function DashboardCMD() {
   const cashForecastChart = cash.cash_forecast_30d;
 
   return (
-    <div style={{ background: C.bg, color: C.ink, margin: '-8px -8px -8px -8px', minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif', fontSize: 12 }}>
+    <div className="cmd-dark-table" style={{ background: C.bg, color: C.ink, margin: '-8px -8px -8px -8px', minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif', fontSize: 12 }}>
       <PageHeader
         title="SEPL Operating Console" tag="CMD VIEW"
         subtitle={`Secured Engineers Pvt Ltd · MEPF + Solar EPC · ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} IST`}

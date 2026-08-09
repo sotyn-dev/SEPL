@@ -54,18 +54,22 @@ const seesAll = (req) => {
 //   Payment Release → Aanchal (named person)
 // Step numbers stay 1, 2, 3, 5 so the in-flight requests (parked on the old
 // step 1/2/5) keep flowing; step 4 (retired Billing Engineer) is migrated to 5.
+// Step NAMES state the GATE only (software manager review 2026-07-30): the
+// person is pinned separately in approver_name and resolved at read time, so a
+// routing override never contradicts the label ("L2 Approval (Nitin Jain)" +
+// "Waiting on Ravi Kumar" on the same row). Labels match raciModules.js.
 const STANDARD_FLOW = [
   { step: 1, name: 'L1 Approval (Accountant)', approver_role: 'Accountant' },
-  { step: 2, name: 'L2 Approval (Nitin Jain)', approver_name: 'Nitin Jain' },
-  { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)', approver_name: 'Ankur Kaplesh' },
-  { step: 5, name: 'Payment Release (Aanchal)', approver_name: 'Aanchal' },
+  { step: 2, name: 'L2 Approval', approver_name: 'Nitin Jain' },
+  { step: 3, name: 'L3 Approval (MD)', approver_name: 'Ankur Kaplesh' },
+  { step: 5, name: 'Payment Release', approver_name: 'Aanchal' },
 ];
 // TA/DA pre-approval (mam 2026-06-17): from 15/06/2026 every NEW TA/DA request
 // must clear HR (Prabhdeep Singh) BEFORE L1 Accountant. Step 0 is prepended so
 // it always sorts ahead of L1. Existing in-flight requests keep their current
 // step (1+) and simply never visit step 0 — i.e. only new requests get HR.
 const TADA_FLOW = [
-  { step: 0, name: 'HR Approval (Prabhdeep Singh)', approver_name: 'Prabhdeep Singh' },
+  { step: 0, name: 'HR Approval', approver_name: 'Prabhdeep Singh' },
   ...STANDARD_FLOW,
 ];
 const WORKFLOW = {
@@ -306,6 +310,13 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
         const hasL2 = !needsL2 || names.some(n => n.includes('l2') || n.includes('nitin'));
         const hasL3 = !needsL3 || names.some(n => n.includes('l3') || n.includes('ankur'));
         row.l3_missing = (row.status === 'final_approved') && (!hasL2 || !hasL3);
+        // In-flight row PARKED at Payment Release that skipped L2/L3 (old-flow
+        // data): flag it so the badge doesn't read "Approved" (manager review
+        // 2026-07-30 — string-equality badge showed Approved for a parked row).
+        // preReleaseGap() bounces it back on the next approve attempt.
+        const releaseStep = flow.length ? flow[flow.length - 1].step : 5;
+        row.release_gap = row.status !== 'final_approved' && row.status !== 'rejected'
+          && row.current_step === releaseStep && (!hasL2 || !hasL3);
       }
       row.step_amounts = {};
       for (const a of appr) row.step_amounts[a.step] = (a.step_amount != null ? +a.step_amount : (+row.approved_amount || +row.amount || 0));
@@ -375,6 +386,22 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
   const raciByRecord = getRaciForRecords(db, 'payables', rows.map(r => r.id));
   const _nameCache = {};
   const nameById = (id) => { if (!id) return null; if (!(id in _nameCache)) _nameCache[id] = db.prepare('SELECT name FROM users WHERE id=?').get(id)?.name || null; return _nameCache[id]; };
+  // Who is a given (category, step) waiting on RIGHT NOW? override > named
+  // approver resolved live > null (role steps show the role in the label).
+  // Step labels no longer embed the default person (manager review 2026-07-30),
+  // so the bulk-approve card must carry the resolved person separately —
+  // same read-time resolution the list endpoint does. Memoized: few distinct keys.
+  const _whoCache = {};
+  const whoFor = (category, w) => {
+    const k = category + '|' + w.step;
+    if (!(k in _whoCache)) {
+      const ov = getApprovalRoutingFor(db, category, w.step);
+      if (ov) _whoCache[k] = nameById(ov);
+      else if (w.approver_name) { const u = resolveUserByName(db, w.approver_name); _whoCache[k] = u?.name || w.approver_name; }
+      else _whoCache[k] = null;
+    }
+    return _whoCache[k];
+  };
 
   const inbox = [];
   for (const row of rows) {
@@ -406,6 +433,7 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
       row.approvals_total = workflow.length;
       row.current_step_name = stepInfo.name;
       row.next_approver_role = stepInfo.approver_role;
+      row.next_approver_name = whoFor(row.category, stepInfo);
       const lastApproval = db.prepare(`
         SELECT pa.step_name, pa.approved_at, u.name AS approved_by_name
           FROM payment_approvals pa
@@ -460,6 +488,7 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
           step: w.step, name: w.name,
           status: done ? 'done' : (isCurrent ? 'current' : 'pending'),
           by_name: done ? done.by_name : null,
+          who: done ? null : whoFor(row.category, w),
           at: done ? done.approved_at : null,
           raci: cfg ? { responsible: nameById(cfg.responsible_id), accountable: nameById(cfg.accountable_id), consulted: nameById(cfg.consulted_id), informed: nameById(cfg.informed_id), sla_hours: sla } : null,
           elapsed_hours: elapsed != null ? Math.round(elapsed * 10) / 10 : null,
@@ -478,10 +507,6 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
 router.get('/my-inbox-count', requirePermission('payment_required', 'view'), (req, res) => {
   const db = getDb();
   const uid = req.user.id;
-  const isAdmin = req.user.role === 'admin';
-  const myRoles = db.prepare(
-    `SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`
-  ).all(uid).map(r => r.name);
   const rows = db.prepare(`
     SELECT id, category, current_step FROM payment_requests
      WHERE status NOT IN ('final_approved','rejected')
@@ -492,12 +517,11 @@ router.get('/my-inbox-count', requirePermission('payment_required', 'view'), (re
     if (!workflow) continue;
     const stepInfo = workflow.find(w => w.step === row.current_step);
     if (!stepInfo || stepInfo.approver_role === 'System') continue;
-    const overrideUserId = getApprovalRoutingFor(db, row.category, row.current_step);
-    if (overrideUserId) {
-      if (overrideUserId === uid || isAdmin) count++;
-    } else {
-      if (myRoles.includes(stepInfo.approver_role) || isAdmin) count++;
-    }
+    // Same authorisation as /my-inbox and the approve action (admin / override /
+    // named approver / COO / role). The old role-only check here showed a 0
+    // badge to the named L2/L3/Release approvers — which is why those accounts
+    // got handed the admin role, gutting the whole chain (manager 2026-07-30).
+    if (canUserApproveStep(db, uid, row.category, row.current_step)) count++;
   }
   res.json({ count });
 });
@@ -533,6 +557,12 @@ router.get('/:id', requirePermission('payment_required', 'view'), (req, res, nex
       if (overrideUserId) {
         const u = db.prepare('SELECT name FROM users WHERE id=?').get(overrideUserId);
         request.next_approver_name = u?.name || null;
+      } else if (curStep.approver_name) {
+        // Named steps (L2/L3/Release) — resolve the person at read time so the
+        // detail modal's "WAITING ON" shows a name, not blank (labels no longer
+        // embed the default person; manager review 2026-07-30).
+        const u = resolveUserByName(db, curStep.approver_name);
+        request.next_approver_name = u?.name || curStep.approver_name;
       }
       request.next_approver_role = curStep.approver_role;
       request.current_step_name = curStep.name;
@@ -743,6 +773,23 @@ function advanceToNextStep(db, request, approvedBy) {
   return 'step_advanced';
 }
 
+// Who does this step actually require RIGHT NOW? Resolution order mirrors
+// canUserApproveStep: routing override > named approver > role. Used in the
+// 403s — the old message printed `approver_role` which is undefined for the
+// named L2/L3/Release steps, so blocked approvers saw "requires: undefined"
+// (manager review 2026-07-30).
+function stepRequirementLabel(db, category, stepInfo) {
+  if (!stepInfo) return 'the assigned approver';
+  const overrideUserId = getApprovalRoutingFor(db, category, stepInfo.step);
+  if (overrideUserId) {
+    const nm = db.prepare('SELECT name FROM users WHERE id=?').get(overrideUserId)?.name;
+    if (nm) return `${nm} (set in Approval Routing)`;
+  }
+  if (stepInfo.approver_name) return stepInfo.approver_name;
+  if (stepInfo.approver_role) return `any ${stepInfo.approver_role}`;
+  return 'the assigned approver';
+}
+
 // Separation of duties (mam 2026-07-08 bug: an admin who FILLED a payable could
 // approve every step himself in seconds → instant "Final Approved / Paid",
 // bypassing L1 Accountant → L2 Nitin → L3 MD → Release Aanchal). Rule, applied to
@@ -773,9 +820,13 @@ router.put('/:id/approve', (req, res) => {
   if (request.status === 'final_approved' || request.status === 'rejected') return res.status(400).json({ error: 'Already ' + request.status });
 
   if (!canUserApproveStep(db, req.user.id, request.category, request.current_step)) {
+    // Detailed "who this step requires" only for users who can already see all
+    // requests (approvers/admin) — otherwise any logged-in user could probe
+    // foreign IDs to map who approves what (review finding 2026-07-30).
+    if (!seesAll(req)) return res.status(403).json({ error: 'Not authorized' });
     const workflow = WORKFLOW[request.category];
     const stepInfo = workflow?.find(w => w.step === request.current_step);
-    return res.status(403).json({ error: `Not authorized. This step requires: ${stepInfo?.approver_role}` });
+    return res.status(403).json({ error: `Not authorized — ${stepInfo?.name || 'this step'} requires: ${stepRequirementLabel(db, request.category, stepInfo)}` });
   }
 
   // Separation of duties — the person who raised the request can't approve it.
@@ -907,7 +958,12 @@ router.put('/:id/reject', (req, res) => {
   const db = getDb();
   const request = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(req.params.id);
   if (!request) return res.status(404).json({ error: 'Not found' });
-  if (!canUserApproveStep(db, req.user.id, request.category, request.current_step)) return res.status(403).json({ error: 'Not authorized' });
+  if (!canUserApproveStep(db, req.user.id, request.category, request.current_step)) {
+    // Same scope gate as /approve — no workflow detail for non-approvers.
+    if (!seesAll(req)) return res.status(403).json({ error: 'Not authorized' });
+    const si = WORKFLOW[request.category]?.find(w => w.step === request.current_step);
+    return res.status(403).json({ error: `Not authorized — ${si?.name || 'this step'} requires: ${stepRequirementLabel(db, request.category, si)}` });
+  }
 
   const stepInfo = WORKFLOW[request.category]?.find(w => w.step === request.current_step);
   db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, approved_by) VALUES (?,?,?,?,?,?)')
@@ -1060,7 +1116,10 @@ router.put('/approval-routing', (req, res) => {
   const db = getDb();
   ensureOverrideTable(db);
   const { category, step, user_id } = req.body || {};
-  if (!category || !step) return res.status(400).json({ error: 'category and step required' });
+  // step === 0 is the TA/DA HR gate — `!step` treated 0 as missing, so the HR
+  // step could never be reassigned ("category and step required" on every
+  // attempt; manager review 2026-07-30). Only null/undefined/'' are invalid.
+  if (!category || step === undefined || step === null || step === '') return res.status(400).json({ error: 'category and step required' });
   if (!WORKFLOW[category]) return res.status(400).json({ error: 'unknown category' });
   if (!WORKFLOW[category].find(s => s.step === +step)) return res.status(400).json({ error: 'unknown step for that category' });
 
