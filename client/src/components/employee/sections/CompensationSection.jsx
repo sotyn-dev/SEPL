@@ -1,38 +1,28 @@
 import WasHint, { FieldError, trackAccent } from '../WasHint';
+import { proposeCompensation } from '../../../utils/compensationPropose';
+import { ESI_GROSS_CEILING } from '../../../constants/employeeValidation';
 
 // Pay & Compensation — live payroll monthly (`salary` on employees) plus the
 // Mandatory Field Spec Module 2 CTC pack (employee_compensation). Whole tab is
 // gated behind employee_salary.can_view (hr.js redactCompensation + NAV filter).
 //
-// Groups: Monthly payroll pay → Salary Structure → Components → Statutory
-// Deductions → Review & Growth → Other. Hints are captions only (prefer fixed
-// monthly gross, else CTC÷12); this is NOT a payroll calculator / Apply engine.
+// Propose/check math lives in utils/compensationPropose.js (mirrored on
+// server/lib/compensationPropose.js). Captions only — no Apply / auto-write.
 const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
 
 export default function CompensationSection({ ws }) {
   const { form, setForm, changedSet, original, revertField } = ws;
+  const p = proposeCompensation(form);
 
-  const salary = Number(form.salary || 0);
-  const ctc = Number(form.ctc_annual || 0);
-  const basic = Number(form.basic_pay || 0);
-  const gross = Number(form.fixed_monthly_gross || 0);
-  const structureMonthly = gross > 0 ? gross : (ctc > 0 ? ctc / 12 : null);
-  const structureHintLabel = gross > 0 ? 'Structure gross' : 'From CTC';
-  const structureHintSuffix = gross > 0 ? '' : ' (÷12)';
-  const salaryDiffers = structureMonthly != null && salary > 0
-    && Math.abs(salary - structureMonthly) > Math.max(1, structureMonthly * 0.01);
-  const splitSum = Number(form.basic_pay || 0) + Number(form.hra || 0) + Number(form.special_allowance || 0);
-  const splitPartsSet = [form.basic_pay, form.hra, form.special_allowance]
-    .some((v) => v !== '' && v !== null && v !== undefined && Number(v) > 0);
-  const splitDiffers = gross > 0 && splitPartsSet
-    && Math.abs(splitSum - gross) > Math.max(1, gross * 0.01);
-  const fixedGrossHint = ctc > 0 ? money(ctc / 12) : null;
-  const payrollSeedHint = !(ctc > 0) && !(gross > 0) && salary > 0 ? money(salary) : null;
-  const ctcSeedHint = !(ctc > 0) && salary > 0 ? money(salary * 12) : null;
-  const pfHint = basic > 0 ? money(basic * 0.12) : null;
-  const esiHint = gross > 0
-    ? (gross <= 21000 ? money(gross * 0.0075) : 'Not eligible — exceeds ₹21,000 ceiling')
-    : null;
+  const structureHintLabel = p.proposedMonthlySource === 'gross' ? 'Structure gross' : 'From CTC';
+  const structureHintSuffix = p.proposedMonthlySource === 'ctc' ? ' (÷12)' : '';
+  const fixedGrossHint = p.ctcMonthly != null ? money(p.ctcMonthly) : null;
+  const payrollSeedHint = p.payrollSeedMonthly != null ? money(p.payrollSeedMonthly) : null;
+  const ctcSeedHint = p.ctcSeedAnnual != null ? money(p.ctcSeedAnnual) : null;
+  const pfHint = p.pfSuggested != null ? money(p.pfSuggested) : null;
+  const esiHint = p.esiNotEligible
+    ? `Not eligible — exceeds ₹${ESI_GROSS_CEILING.toLocaleString('en-IN')} ceiling`
+    : (p.esiSuggested != null ? money(p.esiSuggested) : null);
 
   const num = (key) => (e) => setForm({ ...form, [key]: e.target.value === '' ? '' : Number(e.target.value) });
 
@@ -45,10 +35,10 @@ export default function CompensationSection({ ws }) {
           <div className={trackAccent(changedSet, 'salary')}>
             <label className="label">Salary (₹ / month)</label>
             <input className="input" type="number" min="0" value={form.salary || 0} onChange={(e) => setForm({ ...form, salary: +e.target.value })} />
-            {structureMonthly != null && (
+            {p.proposedMonthly != null && (
               <p className="text-[10px] text-gray-400 mt-0.5">
-                {structureHintLabel}: {money(structureMonthly)}{structureHintSuffix}
-                {salaryDiffers ? ' · Differs from structure' : ''}
+                {structureHintLabel}: {money(p.proposedMonthly)}{structureHintSuffix}
+                {p.salaryDiffers ? ' · Differs from structure' : ''}
               </p>
             )}
             <WasHint k="salary" fmt={money} changedSet={changedSet} original={original} revertField={revertField} />
@@ -87,8 +77,8 @@ export default function CompensationSection({ ws }) {
         <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Salary Components</div>
         <p className="text-[10px] text-gray-400 -mt-1 mb-2">
           The composite split of Fixed Monthly Gross.
-          {gross > 0 && splitPartsSet && (
-            <> · Sum {money(splitSum)}{splitDiffers ? ` · Differs from gross ${money(gross)}` : ' · Matches gross'}</>
+          {p.gross > 0 && p.splitPartsSet && (
+            <> · Sum {money(p.splitSum)}{p.splitDiffers ? ` · Differs from gross ${money(p.gross)}` : ' · Matches gross'}</>
           )}
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
