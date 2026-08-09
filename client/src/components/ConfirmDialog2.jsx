@@ -32,7 +32,7 @@ export default function ConfirmDialog({
     ? 'bg-amber-500 hover:bg-amber-600'
     : 'bg-red-600 hover:bg-red-700';
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+    <div className="!m-0 fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
       onClick={() => { if (!busy) onCancel?.(); }}>
       <div className="bg-white rounded-xl shadow-xl w-full max-w-[340px] p-4" onClick={e => e.stopPropagation()}>
         <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
