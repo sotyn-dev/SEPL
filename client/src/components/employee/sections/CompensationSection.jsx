@@ -1,26 +1,29 @@
 import WasHint, { FieldError, trackAccent } from '../WasHint';
 
-// Compensation pack (Mandatory Field Spec, Module 2, 2026-08-04). Whole tab is
-// gated behind employee_salary.can_view server-side (see hr.js's
-// redactCompensation) and hidden entirely client-side when !canSeeSalary (see
-// EmployeeWorkspaceModal.jsx's NAV filter) — the 14 fields simply never arrive
-// in `form` for a non-holder, so this component always assumes they're real.
+// Pay & Compensation — live payroll monthly (`salary` on employees) plus the
+// Mandatory Field Spec Module 2 CTC pack (employee_compensation). Whole tab is
+// gated behind employee_salary.can_view (hr.js redactCompensation + NAV filter).
 //
-// 5 business groups, in the exact order agreed in the plan's "Business
-// Grouping & UX" section — each its own dashed-border subsection, identical
-// visual pattern to StatutorySection.jsx. Only 3 fields (Fixed Monthly Gross,
-// PF Deduction, ESI Deduction) get a computed-hint caption; every other
-// field is a plain input with no helper text, per the plan's "hints are
-// minimal and load-bearing only" rule — this is NOT a payroll calculator.
+// Groups: Monthly payroll pay → Salary Structure → Components → Statutory
+// Deductions → Review & Growth → Other. Hints are captions only (prefer fixed
+// monthly gross, else CTC÷12); this is NOT a payroll calculator / Apply engine.
 const money = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
 
 export default function CompensationSection({ ws }) {
   const { form, setForm, changedSet, original, revertField } = ws;
 
+  const salary = Number(form.salary || 0);
   const ctc = Number(form.ctc_annual || 0);
   const basic = Number(form.basic_pay || 0);
   const gross = Number(form.fixed_monthly_gross || 0);
+  const structureMonthly = gross > 0 ? gross : (ctc > 0 ? ctc / 12 : null);
+  const structureHintLabel = gross > 0 ? 'Structure gross' : 'From CTC';
+  const structureHintSuffix = gross > 0 ? '' : ' (÷12)';
+  const salaryDiffers = structureMonthly != null && salary > 0
+    && Math.abs(salary - structureMonthly) > Math.max(1, structureMonthly * 0.01);
   const fixedGrossHint = ctc > 0 ? money(ctc / 12) : null;
+  const payrollSeedHint = !(ctc > 0) && !(gross > 0) && salary > 0 ? money(salary) : null;
+  const ctcSeedHint = !(ctc > 0) && salary > 0 ? money(salary * 12) : null;
   const pfHint = basic > 0 ? money(basic * 0.12) : null;
   const esiHint = gross > 0
     ? (gross <= 21000 ? money(gross * 0.0075) : 'Not eligible — exceeds ₹21,000 ceiling')
@@ -31,11 +34,31 @@ export default function CompensationSection({ ws }) {
   return (
     <div className="space-y-4">
       <div>
+        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Monthly payroll pay</div>
+        <p className="text-[10px] text-gray-400 -mt-1 mb-2">Drives payroll. Structure fields below are the CTC pack — hints only, not auto-applied.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={trackAccent(changedSet, 'salary')}>
+            <label className="label">Salary (₹ / month)</label>
+            <input className="input" type="number" min="0" value={form.salary || 0} onChange={(e) => setForm({ ...form, salary: +e.target.value })} />
+            {structureMonthly != null && (
+              <p className="text-[10px] text-gray-400 mt-0.5">
+                {structureHintLabel}: {money(structureMonthly)}{structureHintSuffix}
+                {salaryDiffers ? ' · Differs from structure' : ''}
+              </p>
+            )}
+            <WasHint k="salary" fmt={money} changedSet={changedSet} original={original} revertField={revertField} />
+            <FieldError k="salary" ws={ws} />
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-dashed pt-4 !mt-6">
         <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Salary Structure</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className={trackAccent(changedSet, 'ctc_annual')}>
             <label className="label">CTC Annual (₹)</label>
             <input className="input" type="number" min="0" value={form.ctc_annual ?? ''} onChange={num('ctc_annual')} />
+            {ctcSeedHint && <p className="text-[10px] text-gray-400 mt-0.5">≈ {ctcSeedHint} if annualising payroll monthly</p>}
             <WasHint k="ctc_annual" fmt={money} changedSet={changedSet} original={original} revertField={revertField} />
             <FieldError k="ctc_annual" ws={ws} />
           </div>
@@ -43,6 +66,7 @@ export default function CompensationSection({ ws }) {
             <label className="label">Fixed Monthly Gross (₹)</label>
             <input className="input" type="number" min="0" value={form.fixed_monthly_gross ?? ''} onChange={num('fixed_monthly_gross')} />
             {fixedGrossHint && <p className="text-[10px] text-gray-400 mt-0.5">Suggested: {fixedGrossHint} (CTC ÷ 12)</p>}
+            {payrollSeedHint && <p className="text-[10px] text-gray-400 mt-0.5">Payroll monthly today: {payrollSeedHint}</p>}
             <WasHint k="fixed_monthly_gross" fmt={money} changedSet={changedSet} original={original} revertField={revertField} />
             <FieldError k="fixed_monthly_gross" ws={ws} />
           </div>

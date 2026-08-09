@@ -11,16 +11,16 @@ import CompensationSection from './sections/CompensationSection';
 import DocumentsSection from './sections/DocumentsSection';
 import AssetsSection from './sections/AssetsSection';
 
-// Compensation (Module 2, 2026-08-04) is entirely gated behind
-// employee_salary.can_view (no new permission — reuses the same flag that
-// already gates the `salary` field itself, see the plan's "Decisions locked
-// in" section) — a holder-less viewer never even sees the tab, rather than
-// seeing an empty/error-prone one whose 14 fields the server always strips.
+// Pay & Compensation (Module 2 + payroll monthly salary) is entirely gated
+// behind employee_salary.can_view (no new permission — reuses the same flag
+// that already gates the `salary` field itself) — a holder-less viewer never
+// even sees the tab, rather than seeing an empty/error-prone one whose fields
+// the server always strips.
 const BASE_NAV = [
   { key: 'personal', label: 'Personal', icon: FiUser, Section: PersonalSection },
   { key: 'employment', label: 'Job', icon: FiBriefcase, Section: EmploymentSection },
   { key: 'contact', label: 'Contact', icon: FiPhone, Section: ContactSection },
-  { key: 'compensation', label: 'Compensation', icon: FiDollarSign, Section: CompensationSection },
+  { key: 'compensation', label: 'Pay & Compensation', icon: FiDollarSign, Section: CompensationSection },
   { key: 'statutory', label: 'Statutory', icon: FiShield, Section: StatutorySection },
   { key: 'documents', label: 'Docs', icon: FiFileText, Section: DocumentsSection },
   // Assets pack (Module 3, 2026-08-04) — no permission filter (unlike
@@ -179,7 +179,7 @@ function SectionFooter({ ws, sectionKey, users, employees, canSeeSalary }) {
           disabled={ws.uploading || hasErrors}
           title={hasErrors ? 'Fix the highlighted field(s) before saving' : undefined}
           className="btn btn-primary disabled:opacity-50">
-          {ws.uploading ? 'Uploading…' : 'Save section'}
+          {ws.uploading ? 'Uploading…' : (sectionKey === 'compensation' ? 'Save pay & compensation' : 'Save section')}
         </button>
       </div>
     </>

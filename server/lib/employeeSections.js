@@ -22,7 +22,7 @@ const SECTIONS = {
   employment: [
     'designation', 'department', 'designation_id', 'department_id', 'reports_to_employee_id', 'grade',
     'employment_type', 'join_date', 'probation_end_date', 'confirmation_status',
-    'notice_period_days', 'salary', 'roster', 'status',
+    'notice_period_days', 'roster', 'status',
   ],
   contact: [
     'phone', 'email', 'permanent_address', 'permanent_pincode',
@@ -54,14 +54,13 @@ const SECTIONS = {
   access: [
     'user_id',
   ],
-  // Compensation pack (Mandatory Field Spec, Module 2, 2026-08-04) — the 14
-  // columns behind the Compensation tab, in Business Grouping & UX order
-  // (Salary Structure -> Salary Components -> Statutory Deductions ->
-  // Review & Growth -> Other Compensation; see the module's plan). `salary`
-  // itself stays in `employment` — it's the live payroll field, this tab is
-  // explicitly informational-only. Gated client-side behind canSeeSalary,
-  // same as `salary` (see EmployeeWorkspaceModal.jsx's NAV).
+  // Pay & Compensation (Mandatory Field Spec Module 2 + live payroll monthly).
+  // `salary` is employees.salary (payroll pay-base); the remaining columns are
+  // the CTC structure pack on employee_compensation. One Workspace section so
+  // monthly pay sits next to CTC/gross; one Save PUTs both via the existing
+  // multi-table employee update. Gated client-side behind canSeeSalary.
   compensation: [
+    'salary',
     'ctc_annual', 'fixed_monthly_gross', 'variable_bonus',
     'basic_pay', 'hra', 'special_allowance',
     'pf_deduction', 'esi_deduction', 'professional_tax', 'tds_estimated_annual',

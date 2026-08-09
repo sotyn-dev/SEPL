@@ -49,7 +49,7 @@ const plusMonths = (ymd, months) => {
 // Reporting / Employment Terms / Payroll & Shift) — they're one Workspace
 // section (`employment` in employeeSections.js) with one Save, just visually
 // grouped per the plan's Phase 4 layout guidance.
-export default function EmploymentSection({ ws, employees, canSeeSalary }) {
+export default function EmploymentSection({ ws, employees }) {
   const { form, setForm, changedSet, original, revertField, joinDateLocked, setJoinDateLocked, editing } = ws;
   const [grades, setGrades] = useState(gradesCache || []);
   const [designations, setDesignations] = useState(desigCache || []);
@@ -226,15 +226,8 @@ export default function EmploymentSection({ ws, employees, canSeeSalary }) {
       </div>
 
       <div className="border-t border-dashed pt-4 !mt-6">
-        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Payroll & Shift</div>
+        <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Shift & status</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {canSeeSalary && (
-            <div className={trackAccent(changedSet, 'salary')}>
-              <label className="label">Salary (Rs)</label>
-              <input className="input" type="number" min="0" value={form.salary || 0} onChange={(e) => setForm({ ...form, salary: +e.target.value })} />
-              <WasHint k="salary" fmt={(v) => `₹${Number(v || 0).toLocaleString('en-IN')}`} changedSet={changedSet} original={original} revertField={revertField} />
-            </div>
-          )}
           <div className={trackAccent(changedSet, 'roster')}>
             <label className="label">Roster / Shift</label>
             <select className="select" value={form.roster || 'general'} onChange={(e) => setForm({ ...form, roster: e.target.value })}>
