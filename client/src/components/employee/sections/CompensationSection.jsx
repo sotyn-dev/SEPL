@@ -21,6 +21,11 @@ export default function CompensationSection({ ws }) {
   const structureHintSuffix = gross > 0 ? '' : ' (÷12)';
   const salaryDiffers = structureMonthly != null && salary > 0
     && Math.abs(salary - structureMonthly) > Math.max(1, structureMonthly * 0.01);
+  const splitSum = Number(form.basic_pay || 0) + Number(form.hra || 0) + Number(form.special_allowance || 0);
+  const splitPartsSet = [form.basic_pay, form.hra, form.special_allowance]
+    .some((v) => v !== '' && v !== null && v !== undefined && Number(v) > 0);
+  const splitDiffers = gross > 0 && splitPartsSet
+    && Math.abs(splitSum - gross) > Math.max(1, gross * 0.01);
   const fixedGrossHint = ctc > 0 ? money(ctc / 12) : null;
   const payrollSeedHint = !(ctc > 0) && !(gross > 0) && salary > 0 ? money(salary) : null;
   const ctcSeedHint = !(ctc > 0) && salary > 0 ? money(salary * 12) : null;
@@ -80,7 +85,12 @@ export default function CompensationSection({ ws }) {
 
       <div className="border-t border-dashed pt-4 !mt-6">
         <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Salary Components</div>
-        <p className="text-[10px] text-gray-400 -mt-1 mb-2">The composite split of Fixed Monthly Gross.</p>
+        <p className="text-[10px] text-gray-400 -mt-1 mb-2">
+          The composite split of Fixed Monthly Gross.
+          {gross > 0 && splitPartsSet && (
+            <> · Sum {money(splitSum)}{splitDiffers ? ` · Differs from gross ${money(gross)}` : ' · Matches gross'}</>
+          )}
+        </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className={trackAccent(changedSet, 'basic_pay')}>
             <label className="label">Basic (₹)</label>
