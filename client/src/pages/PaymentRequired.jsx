@@ -723,6 +723,9 @@ export default function PaymentRequired() {
                         <div className="text-[11px] font-semibold text-emerald-700">approved {fmt(r.approved_amount)}</div>
                       )}
                       <div className="mt-1"><StatusBadge status={r.status} /></div>
+                      {(r.l3_missing || r.release_gap) && (
+                        <div className="mt-1"><span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title={r.l3_missing ? 'Released without L2/L3 approval — not properly paid.' : 'Reached Payment Release without L2/L3 sign-off.'}>{r.l3_missing ? '⚠ Not Paid' : '⚠ Needs L2/L3'}</span></div>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 text-[11px]">
@@ -859,7 +862,9 @@ export default function PaymentRequired() {
                     // stage's label — this used to compare against the literal
                     // 'Payment Release (Aanchal)' and silently stopped matching
                     // the moment that label changed.
-                    if (st && st === STAGE_SEQ[STAGE_SEQ.length - 1]) return <span className={cls + 'bg-emerald-100 text-emerald-700'}>Approved</span>;
+                    if (st && st === STAGE_SEQ[STAGE_SEQ.length - 1]) return r.release_gap
+                      ? <span className={cls + 'bg-red-100 text-red-700'} title="Reached Payment Release without L2/L3 sign-off (old flow). It will be routed back to the missing step on the next action.">⚠ Needs L2/L3</span>
+                      : <span className={cls + 'bg-emerald-100 text-emerald-700'} title="All approvals done — waiting for the payment to be released. Not paid yet.">Approved · awaiting release</span>;
                     // Show WHICH level it's pending at (mam 2026-06-18: status was
                     // a hotchpotch — everything just said "Pending"). Level read
                     // from the current step name (HR / L1 / L2 / L3).
@@ -1549,10 +1554,12 @@ export default function PaymentRequired() {
         ) : (
           <div className="space-y-4">
             <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-gray-700 leading-relaxed">
-              <strong>How this works:</strong> Every category now uses one standard flow —
-              <em> L1 Accountant → L2 Nitin Jain → L3 MD (Ankur Kaplesh) → Payment Release Aanchal</em>.
-              L1 is open to anyone holding the Accountant role; L2/L3/Release are pinned to the named person.
-              Pick a specific user here to <strong>override</strong> a step — from then on only that user (or admin) can clear it.
+              <strong>How this works:</strong> Every category uses one standard flow —
+              <em> L1 Approval (Accountant) → L2 Approval → L3 Approval (MD) → Payment Release</em>
+              (TA/DA starts with an extra HR Approval step).
+              L1 is open to anyone holding the Accountant role; the other steps default to the person shown
+              in the "Default" column. Pick a specific user here to <strong>override</strong> a step — from
+              then on only that user (or admin) can clear it, and every screen shows the new person.
               Set back to "— Default —" to revert to the standard approver.
             </div>
             {Object.entries(routingMatrix).map(([category, steps]) => (
@@ -1675,7 +1682,7 @@ export default function PaymentRequired() {
                             : (s.at ? fmtISTPair(s.at).date : '');
                           return (
                             <div key={j} className={`text-[10px] px-2 py-1 rounded border ${s.late_hours > 0 ? 'bg-rose-50 border-rose-300 text-rose-800' : s.status === 'done' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : s.status === 'current' ? 'bg-amber-50 border-amber-400 text-amber-800 font-semibold' : 'bg-gray-50 border-gray-200 text-gray-400'}`} title={tip}>
-                              <div>{s.status === 'done' ? '✓ ' : s.status === 'current' ? '⏳ ' : '○ '}{s.name}{s.by_name ? ` · ${s.by_name}` : ''}</div>
+                              <div>{s.status === 'done' ? '✓ ' : s.status === 'current' ? '⏳ ' : '○ '}{s.name}{s.by_name ? ` · ${s.by_name}` : s.who ? ` · ${s.who}` : ''}</div>
                               {(s.elapsed_hours != null || s.late_hours > 0 || ra?.responsible) && (
                                 <div className="flex flex-wrap gap-x-1.5 mt-0.5 leading-tight">
                                   {s.elapsed_hours != null && <span className="text-[9px] text-gray-500">⏱ {s.elapsed_hours}h</span>}

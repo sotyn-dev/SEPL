@@ -165,6 +165,27 @@ try {
   console.warn('[dpr-prompt] Scheduler not started:', e.message);
 }
 
+// Daily 09:00 morning-manpower reminder — SPOS (mam 2026-07-29). Pushes a
+// notification to every site engineer whose active site has no contractor
+// attendance punched yet today. Skip via ERP_DISABLE_PUNCH_PROMPT=1.
+try {
+  const { scheduleMorningPunchPrompt } = require('./scripts/morningPunchPrompt');
+  scheduleMorningPunchPrompt();
+} catch (e) {
+  console.warn('[punch-prompt] Scheduler not started:', e.message);
+}
+
+// Daily 18:30 SPOS Exception Report — SPOS (mam 2026-07-29). The Project
+// Coordinator's evening review, automated: sites missing morning punch /
+// DPR / photos / approved weekly plan go to admins (in-app) + director
+// (email). Skip via ERP_DISABLE_SPOS_REPORT=1.
+try {
+  const { scheduleSposExceptionReport } = require('./scripts/sposExceptionReport');
+  scheduleSposExceptionReport();
+} catch (e) {
+  console.warn('[spos-report] Scheduler not started:', e.message);
+}
+
 // AR collection-day auto-roll — daily 01:00 moves unpaid, overdue AR entries
 // to the next Mon/Thu (mam 2026-06-18). Skip via ERP_DISABLE_ARAP_ROLL=1.
 try {
