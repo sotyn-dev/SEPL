@@ -178,6 +178,7 @@ const SIDEBAR_GROUPS = [
   { id: 'service_desk', label: 'Service Desk', icon: FiPhoneCall, items: [
     { path: '/complaints',   label: 'Complaints',   icon: FiAlertTriangle,  module: 'complaints' },
     { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null, open: true },
+    { path: '/system-requirements', label: 'System Requirements', icon: FiClipboard, module: null, open: true },
   ]},
   // Executive group — 3 dashboards (mam 2026-05-27).
   { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [

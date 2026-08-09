@@ -59,6 +59,8 @@ const Delegation = lazy(() => import('./pages/Delegation'));
 const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const HelpTickets = lazy(() => import('./pages/HelpTickets'));
+const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
+const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
 const DebitNotePrint = lazy(() => import('./pages/DebitNotePrint'));
 const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
@@ -217,6 +219,8 @@ export default function App() {
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
+        <Route path="system-requirements" element={<SystemRequirements />} />
+        <Route path="system-requirements/:id" element={<SystemRequirementWorkspace />} />
         <Route path="installation" element={<ModuleRoute module="installation"><SalesBilling /></ModuleRoute>} />
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
