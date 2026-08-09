@@ -257,7 +257,7 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
 
   return (
     <>
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center overflow-y-auto p-4">
+    <div className="!m-0 fixed inset-0 bg-black/40 z-50 flex items-start justify-center overflow-y-auto p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl my-8">
         <div className="px-5 py-3 border-b flex items-center justify-between">
           <h3 className="font-bold">{isNew ? 'New Solar Lead' : `${deal.deal_no} · ${deal.client_name}`}</h3>

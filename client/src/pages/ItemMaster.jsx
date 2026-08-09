@@ -751,7 +751,7 @@ export default function ItemMaster() {
 
       {/* Photo lightbox — click a thumbnail (table or form) to view full-size. */}
       {lightbox && (
-        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setLightbox(null)}>
+        <div className="!m-0 fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setLightbox(null)}>
           <img src={lightbox} alt="item" className="max-w-full max-h-full rounded shadow-2xl" onClick={e => e.stopPropagation()} />
           <button onClick={() => setLightbox(null)} className="absolute top-4 right-4 text-white/90 hover:text-white" aria-label="Close"><FiX size={28} /></button>
         </div>
