@@ -20,12 +20,20 @@ const { DATA_ROOT, ensureDir } = require('./paths');
 // The ONE list to edit when a module becomes switchable. `default` is what an absent
 // entry in the file means, so a module ships in the state declared here with nothing
 // to seed or migrate:
-//   sotyn_flow — brand new, untested, must not appear on deploy → default OFF
-//   site_chat  — in daily use today → default ON, so nothing changes for anyone
+//   sotyn_flow          — brand new, untested, must not appear on deploy → default OFF
+//   site_chat           — in daily use today → default ON, so nothing changes for anyone
+//   system_requirements — new with this deploy → default OFF until an admin enables it
 // Optional `offHint` adds a custom second line to the "switched off" screen.
+// Optional `dormant: true` reserves a row before feature code exists (forced OFF).
 const KILLABLE_MODULES = [
   { key: 'sotyn_flow', label: 'SOTYN Flow', description: 'Task boards for planning and tracking work.', default: false },
   { key: 'site_chat',  label: 'SOTYN Chat', description: 'Internal messaging, groups and calls.', default: true },
+  {
+    key: 'system_requirements',
+    label: 'System Requirements',
+    description: 'Product evolution / requirements tracker.',
+    default: false,
+  },
 ];
 
 const FLAGS_PATH = path.join(DATA_ROOT, 'module-flags.json');
@@ -70,12 +78,19 @@ function getModuleList() {
   const flags = getModuleFlags();
   return KILLABLE_MODULES.map(m => ({
     key: m.key, label: m.label, description: m.description || null,
-    offHint: m.offHint || null, enabled: flags[m.key],
+    offHint: m.offHint || null,
+    // Dormant modules never report enabled — even if an override sneaks into the file.
+    enabled: m.dormant ? false : flags[m.key],
+    dormant: !!m.dormant,
   }));
 }
 
 function isKillable(key) {
   return KILLABLE_MODULES.some(m => m.key === key);
+}
+
+function getRegistryEntry(key) {
+  return KILLABLE_MODULES.find(m => m.key === key) || null;
 }
 
 // THE single server-side gating call. Anything that needs to know "is this module on"
@@ -84,6 +99,8 @@ function isKillable(key) {
 // is already correct.
 function isModuleEnabled(key) {
   if (!isKillable(key)) return true;      // not switchable → always on
+  const m = getRegistryEntry(key);
+  if (m?.dormant) return false;           // reserved row — never live until undormanted
   return getModuleFlags()[key];
 }
 
@@ -91,6 +108,8 @@ function isModuleEnabled(key) {
 // (which would otherwise read as "corrupt" and silently revert every module to default).
 function setModuleFlag(key, on) {
   if (!isKillable(key)) throw new Error(`Unknown module: ${key}`);
+  const m = getRegistryEntry(key);
+  if (m?.dormant) throw new Error(`${m.label} is not deployed yet — enable it after the module is merged`);
   ensureDir(DATA_ROOT);
   const next = { ...readOverrides(), [key]: !!on };
   const tmp = `${FLAGS_PATH}.tmp`;

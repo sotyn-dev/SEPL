@@ -518,7 +518,6 @@ app.use('/api/cheques', require('./routes/cheques'));
 app.use('/api/dashboards', require('./routes/dashboards'));
 app.use('/api/fire-noc', require('./routes/fireNoc'));
 app.use('/api/rental-tools', require('./routes/rentalTools'));
-app.use('/api/system-requirements', require('./routes/systemRequirements'));
 app.use('/api/influencers', require('./routes/influencers'));
 app.use('/api/crm-kitting', require('./routes/crmKitting'));
 app.use('/api/hr-system', require('./routes/hrSystem'));
@@ -536,6 +535,8 @@ app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
 app.use('/api/site-chat', requireModuleEnabled('site_chat'), require('./routes/siteChat'));
 // SOTYN Flow — task boards (own DB sotynflow.db + shared socket)
 app.use('/api/sotyn-flow', requireModuleEnabled('sotyn_flow'), require('./routes/sotynFlow'));
+// System Requirements — product evolution tracker (upload-heavy; swept/quarantined)
+app.use('/api/system-requirements', requireModuleEnabled('system_requirements'), require('./routes/systemRequirements'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 

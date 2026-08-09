@@ -1,8 +1,8 @@
 // Scoped orphan-uploads sweep + quarantine.
 //
-// SAFETY: this only ever looks inside the SWEEP_FOLDERS (site-chat, help-tickets)
-// under the uploads root. The flat root and every other feature subdir are NEVER
-// scanned, quarantined, or deleted.
+// SAFETY: this only ever looks inside the SWEEP_FOLDERS (site-chat, help-tickets,
+// sotyn-flow, system_requirements) under the uploads root. The flat root and every
+// other feature subdir are NEVER scanned, quarantined, or deleted.
 //
 // A file in a swept folder is an ORPHAN only if its basename is referenced by NO
 // row in ANY DB under data/ AND it's older than GRACE_DAYS. Orphans are MOVED to

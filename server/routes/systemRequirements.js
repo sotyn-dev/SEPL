@@ -47,12 +47,13 @@ const {
 } = require('../lib/systemRequirements/visibility');
 const {
   storeFile,
-  absolutePathFor,
   softDeleteAttachment,
+  softDeleteAttachmentsFor,
   isVideoMime,
   MAX_BYTES,
   DEV_SECTION,
 } = require('../lib/systemRequirements/attachments');
+const storage = require('../lib/storage');
 const { dashboard, runReport } = require('../lib/systemRequirements/analytics');
 const { notifyMany } = require('../lib/push');
 
@@ -769,6 +770,8 @@ router.delete('/:id', (req, res) => {
     db.prepare(`
       UPDATE sysreq_requirements SET soft_deleted_at = CURRENT_TIMESTAMP, updated_by = ? WHERE id = ?
     `).run(req.user.id, id);
+    // Quarantine every live attachment — soft-delete alone would leave bytes on disk.
+    softDeleteAttachmentsFor(db, { requirementId: id });
     appendHistory(db, {
       requirementId: id,
       eventType: 'status_changed',
@@ -905,11 +908,8 @@ router.delete('/:id/comments/:commentId', (req, res) => {
       WHERE id = ?
     `).run(commentId);
 
-    // Hide attachments that belonged to this comment
-    const attResult = db.prepare(`
-      UPDATE sysreq_attachments SET soft_deleted_at = CURRENT_TIMESTAMP
-      WHERE comment_id = ? AND requirement_id = ? AND soft_deleted_at IS NULL
-    `).run(commentId, reqId);
+    // Soft-delete + quarantine attachments that belonged to this comment
+    const attResult = softDeleteAttachmentsFor(db, { requirementId: reqId, commentId });
 
     touch(db, reqId, req.user.id);
     appendHistory(db, {
@@ -918,11 +918,11 @@ router.delete('/:id/comments/:commentId', (req, res) => {
       actorId: req.user.id,
       payload: {
         comment_id: commentId,
-        attachments_removed: attResult.changes || 0,
+        attachments_removed: attResult.count || 0,
       },
     });
 
-    res.json({ ok: true, attachments_removed: attResult.changes || 0 });
+    res.json({ ok: true, attachments_removed: attResult.count || 0 });
   } catch (e) {
     console.error('[sysreq] comment delete', e);
     res.status(500).json({ error: e.message });
@@ -944,7 +944,7 @@ router.get('/:id/history', (req, res) => {
 });
 
 // ── Attachments ────────────────────────────────────────────────
-router.post('/:id/attachments', upload.single('file'), (req, res) => {
+router.post('/:id/attachments', upload.single('file'), async (req, res) => {
   try {
     const db = getDb();
     const id = Number(req.params.id);
@@ -976,7 +976,7 @@ router.post('/:id/attachments', upload.single('file'), (req, res) => {
       return res.status(403).json({ error: 'Not allowed' });
     }
 
-    const att = storeFile({
+    const att = await storeFile({
       buffer: req.file.buffer,
       originalFilename: req.file.originalname,
       mimeType: req.file.mimetype,
@@ -1008,7 +1008,7 @@ router.post('/:id/attachments', upload.single('file'), (req, res) => {
   }
 });
 
-router.get('/:id/attachments/:attId/download', (req, res) => {
+router.get('/:id/attachments/:attId/download', async (req, res) => {
   try {
     const db = getDb();
     const id = Number(req.params.id);
@@ -1021,10 +1021,19 @@ router.get('/:id/attachments/:attId/download', (req, res) => {
       SELECT * FROM sysreq_attachments
       WHERE id = ? AND requirement_id = ? AND soft_deleted_at IS NULL
     `).get(Number(req.params.attId), id);
-    if (!att) return res.status(404).json({ error: 'Attachment not found' });
+    if (!att || !att.relative_path || att.relative_path === 'deleted') {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
 
-    const abs = absolutePathFor(att);
-    res.download(abs, att.original_filename);
+    const obj = await storage.openStream(att.relative_path);
+    if (!obj) return res.status(404).json({ error: 'File missing' });
+    res.setHeader('Content-Type', att.mime_type || 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(att.original_filename || 'download')}`,
+    );
+    if (obj.size != null) res.setHeader('Content-Length', obj.size);
+    obj.stream.pipe(res);
   } catch (e) {
     console.error('[sysreq] download', e);
     res.status(500).json({ error: e.message });

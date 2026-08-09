@@ -16,7 +16,7 @@ const CHAT_DB_PATH = path.join(DATA_ROOT, 'chat.db');
 
 // Modules whose NEW uploads go into their own subfolder, so the orphan sweep can
 // target ONLY these folders and never touch the flat root or other features.
-const SWEEP_FOLDERS = ['site-chat', 'help-tickets', 'sotyn-flow'];
+const SWEEP_FOLDERS = ['site-chat', 'help-tickets', 'sotyn-flow', 'system_requirements'];
 
 const uploadsSub = (...p) => path.join(UPLOADS_ROOT, ...p);
 function ensureDir(d) { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); return d; }

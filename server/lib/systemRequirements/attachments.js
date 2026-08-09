@@ -1,22 +1,28 @@
-const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const quarantine = require('../quarantine');
+const storage = require('../storage');
 
-const ROOT = path.join(__dirname, '..', '..', '..', 'data', 'uploads', 'system_requirements', 'attachments');
 const VIDEO_RE = /^video\//i;
 const MAX_BYTES = 25 * 1024 * 1024;
 /** Single Development-tab files bucket (not per-section). */
 const DEV_SECTION = 'development';
-
-function ensureDir() {
-  if (!fs.existsSync(ROOT)) fs.mkdirSync(ROOT, { recursive: true });
-}
+const UPLOAD_PREFIX = 'system_requirements/attachments';
 
 function isVideoMime(mime) {
   return !!(mime && VIDEO_RE.test(mime));
 }
 
-function storeFile({
+// Best-effort: move each uploads key to quarantine (reversible; lazy-restored on
+// re-serve if a DB revert re-references it). Never throws — attachment cleanup
+// must not block the soft-delete response.
+function quarantineKeys(keys) {
+  for (const k of keys) {
+    if (k) { try { quarantine.quarantineKey(k).catch(() => {}); } catch (e) { /* best-effort */ } }
+  }
+}
+
+async function storeFile({
   buffer,
   originalFilename,
   mimeType,
@@ -47,13 +53,17 @@ function storeFile({
     throw err;
   }
 
-  ensureDir();
   const ext = path.extname(originalFilename || '').slice(0, 20);
   const stored = `${Date.now()}_${crypto.randomBytes(8).toString('hex')}${ext}`;
-  const absolute = path.join(ROOT, stored);
-  fs.writeFileSync(absolute, buffer);
+  const relativePath = `${UPLOAD_PREFIX}/${stored}`;
 
-  const relativePath = path.join('system_requirements', 'attachments', stored).replace(/\\/g, '/');
+  // Goes through the storage seam so local disk and S3 stay interchangeable.
+  await storage.putObject({
+    key: relativePath,
+    body: buffer,
+    contentType: mimeType || 'application/octet-stream',
+  });
+
   const info = db.prepare(`
     INSERT INTO sysreq_attachments
       (requirement_id, comment_id, dev_section, original_filename, stored_filename, relative_path, file_size, mime_type, uploaded_by)
@@ -73,24 +83,69 @@ function storeFile({
   return db.prepare('SELECT * FROM sysreq_attachments WHERE id=?').get(info.lastInsertRowid);
 }
 
-function absolutePathFor(row) {
-  return path.join(ROOT, row.stored_filename);
+// Soft-delete + quarantine. Clears stored_filename / relative_path so the orphan
+// sweep's keep-set (which scans every text column) does not rehydrate the file
+// back into uploads while the row is still soft-deleted.
+function softDeleteAttachment(db, attachmentId, actorId) {
+  const row = db.prepare(`
+    SELECT * FROM sysreq_attachments WHERE id = ? AND soft_deleted_at IS NULL
+  `).get(attachmentId);
+  if (!row) return null;
+
+  const key = row.relative_path || (row.stored_filename ? `${UPLOAD_PREFIX}/${row.stored_filename}` : null);
+  // Placeholder paths (no file extension) so the orphan sweep's keep-set — which
+  // scans every text column — cannot rehydrate this file while soft-deleted.
+  // Columns stay NOT NULL; original_filename is kept for history/UI.
+  db.prepare(`
+    UPDATE sysreq_attachments
+       SET soft_deleted_at = CURRENT_TIMESTAMP,
+           stored_filename = 'deleted',
+           relative_path = 'deleted'
+     WHERE id = ? AND soft_deleted_at IS NULL
+  `).run(attachmentId);
+  if (key) quarantineKeys([key]);
+  return { id: attachmentId, deleted_by: actorId, key };
 }
 
-function softDeleteAttachment(db, attachmentId, actorId) {
-  db.prepare(`
-    UPDATE sysreq_attachments SET soft_deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND soft_deleted_at IS NULL
-  `).run(attachmentId);
-  return { id: attachmentId, deleted_by: actorId };
+// Soft-delete every live attachment on a requirement (or one comment) and quarantine.
+function softDeleteAttachmentsFor(db, { requirementId, commentId = null } = {}) {
+  let rows;
+  if (commentId != null) {
+    rows = db.prepare(`
+      SELECT id, relative_path, stored_filename FROM sysreq_attachments
+      WHERE requirement_id = ? AND comment_id = ? AND soft_deleted_at IS NULL
+    `).all(requirementId, commentId);
+  } else {
+    rows = db.prepare(`
+      SELECT id, relative_path, stored_filename FROM sysreq_attachments
+      WHERE requirement_id = ? AND soft_deleted_at IS NULL
+    `).all(requirementId);
+  }
+  if (!rows.length) return { count: 0 };
+
+  const keys = [];
+  const upd = db.prepare(`
+    UPDATE sysreq_attachments
+       SET soft_deleted_at = CURRENT_TIMESTAMP,
+           stored_filename = 'deleted',
+           relative_path = 'deleted'
+     WHERE id = ? AND soft_deleted_at IS NULL
+  `);
+  for (const r of rows) {
+    upd.run(r.id);
+    keys.push(r.relative_path || (r.stored_filename ? `${UPLOAD_PREFIX}/${r.stored_filename}` : null));
+  }
+  quarantineKeys(keys);
+  return { count: rows.length };
 }
 
 module.exports = {
-  ROOT,
   MAX_BYTES,
   DEV_SECTION,
-  ensureDir,
+  UPLOAD_PREFIX,
   isVideoMime,
   storeFile,
-  absolutePathFor,
   softDeleteAttachment,
+  softDeleteAttachmentsFor,
+  quarantineKeys,
 };

@@ -219,8 +219,8 @@ export default function App() {
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
-        <Route path="system-requirements" element={<SystemRequirements />} />
-        <Route path="system-requirements/:id" element={<SystemRequirementWorkspace />} />
+        <Route path="system-requirements" element={<ModuleGate module="system_requirements"><SystemRequirements /></ModuleGate>} />
+        <Route path="system-requirements/:id" element={<ModuleGate module="system_requirements"><SystemRequirementWorkspace /></ModuleGate>} />
         <Route path="installation" element={<ModuleRoute module="installation"><SalesBilling /></ModuleRoute>} />
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />

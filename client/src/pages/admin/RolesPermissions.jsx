@@ -540,17 +540,24 @@ export default function RolesPermissions() {
         </p>
         <div className="mt-3 divide-y border-t">
           {killableModules.map(m => (
-            <div key={m.key} className="flex items-center justify-between py-3 gap-4">
+            <div key={m.key} className={`flex items-center justify-between py-3 gap-4 ${m.dormant ? 'opacity-60' : ''}`}>
               <div className="min-w-0">
-                <div className="text-sm font-medium text-gray-700">{m.label}</div>
+                <div className="text-sm font-medium text-gray-700 flex items-center gap-2 flex-wrap">
+                  {m.label}
+                  {m.dormant && (
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                      Not deployed
+                    </span>
+                  )}
+                </div>
                 {m.description && <div className="text-xs text-gray-500">{m.description}</div>}
               </div>
               <button
-                onClick={() => toggleModule(m.key, !m.enabled)}
-                disabled={flagBusy === m.key}
+                onClick={() => !m.dormant && toggleModule(m.key, !m.enabled)}
+                disabled={m.dormant || flagBusy === m.key}
                 role="switch" aria-checked={m.enabled} aria-label={`${m.label} availability`}
-                title={m.enabled ? 'Switch off for the whole organisation' : 'Switch on'}
-                className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:opacity-50 ${m.enabled ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                title={m.dormant ? 'Reserved — enable after the module is deployed' : (m.enabled ? 'Switch off for the whole organisation' : 'Switch on')}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${m.enabled ? 'bg-emerald-500' : 'bg-gray-300'}`}
               >
                 <span className={`inline-block h-5 w-5 mt-0.5 rounded-full bg-white shadow transition-transform ${m.enabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
               </button>

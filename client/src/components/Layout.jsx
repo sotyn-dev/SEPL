@@ -178,7 +178,7 @@ const SIDEBAR_GROUPS = [
   { id: 'service_desk', label: 'Service Desk', icon: FiPhoneCall, items: [
     { path: '/complaints',   label: 'Complaints',   icon: FiAlertTriangle,  module: 'complaints' },
     { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null, open: true },
-    { path: '/system-requirements', label: 'System Requirements', icon: FiClipboard, module: null, open: true },
+    { path: '/system-requirements', label: 'System Requirements', icon: FiClipboard, module: null, open: true, flag: 'system_requirements' },
   ]},
   // Executive group — 3 dashboards (mam 2026-05-27).
   { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [
@@ -482,9 +482,14 @@ export default function Layout() {
   //   • it's explicitly flagged `open: true` (the few features open to all
   //     staff — Help Tickets, Onboarding, Training, RFQ Queue), OR
   //   • the role can view its `module` (admin passes everything via canView).
+  // Optional `flag` is the Module availability kill-switch (Chat/Flow/SysReq) —
+  // when present, the org-wide switch must be ON regardless of open/RBAC.
   // An item with no `open` flag and no/unknown module is hidden for
   // non-admins — so forgetting to wire a permission key no longer leaks it.
-  const itemVisible = (item) => item.open === true || canView(item.module);
+  const itemVisible = (item) => {
+    if (item.flag && !moduleAccess(item.flag).ok) return false;
+    return item.open === true || canView(item.module);
+  };
   // A group renders only if (a) it has at least one visible item AND
   // matches the current search (or search is empty), and (b) the user
   // passes any adminOnly gate. Hidden helper items (the 2 legacy CMD
