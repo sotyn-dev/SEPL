@@ -12,34 +12,27 @@ import { exportCsv } from '../utils/exportCsv';
 import { fmtISTPair } from '../utils/dateIST';
 import { LuIndianRupee } from 'react-icons/lu';
 
-const CATEGORIES = ['TA/DA', 'Purchase', 'Labour', 'Transport', 'Salary', 'Compliance', 'Manpower Advance'];
-const STATUSES = ['pending', 'step1_approved', 'accounts_approved', 'dues_checked', 'velocity_checked', 'final_approved', 'rejected'];
-const STATUS_LABELS = { pending: 'Pending', step1_approved: 'Step 1 Approved', accounts_approved: 'Accounts Approved', dues_checked: 'Dues Checked', velocity_checked: 'Velocity Checked', final_approved: 'Final Approved', rejected: 'Rejected' };
-// One standard flow for every category (mam 2026-06-11). Step numbers (1,2,3,5)
-// AND names match the server WORKFLOW exactly — names state the GATE only; the
-// person on duty is resolved server-side (next_approver_name), so a routing
-// override never contradicts the label (manager review 2026-07-30).
-const STEPS = [
-  { step: 1, name: 'L1 Approval (Accountant)' },
-  { step: 2, name: 'L2 Approval' },
-  { step: 3, name: 'L3 Approval (MD)' },
-  { step: 5, name: 'Payment Release' },
-];
-// TA/DA gets an HR pre-approval step (mam 2026-06-17) before L1 Accountant,
-// for new requests from 15/06/2026.
-const TADA_STEPS = [{ step: 0, name: 'HR Approval' }, ...STEPS];
+// CATEGORIES / STATUSES / STAGE_SEQ / STEPS / TADA_STEPS used to be hardcoded
+// here — retyped copies of the server's WORKFLOW constants. They drifted: the
+// stage labels still named people who had been reassigned, and the status list
+// offered four values retired on 2026-06-11 that no row could ever match. They
+// now come from GET /payment-required/lookups, built from the SAME constants the
+// approval flow runs on, so the two sides cannot disagree again.
 
-// Canonical order of LIVE workflow stages for the dashboard tiles/chips
-// (union of the 5-step and TA/DA workflows). Mam (2026-05-30): the stage
-// tiles used to count by the coarse `status`, which stays 'pending' for
-// every in-flight request — so everything piled into "HR Approval" and
-// the later stages showed 0. A request's true stage is its live
-// current_step_name; terminal states fall back to status.
-const STAGE_SEQ = ['HR Approval', 'L1 Approval (Accountant)', 'L2 Approval', 'L3 Approval (MD)', 'Payment Release'];
+// A request's live stage: terminal states collapse to Approved / Rejected,
+// everything else is the server's current_step_name (mam 2026-05-30 — the tiles
+// used to count by the coarse `status`, which stays 'pending' for every
+// in-flight request, so everything piled into the first stage).
+//
+// The fallback fires only when current_step sits on a step its category's flow
+// does not define (stale / corrupt data). It deliberately names no real stage:
+// defaulting to the first one used to label such a row "HR Approval" even for
+// the six categories that have no HR step, dressing a broken record as a normal
+// one. The step number is included so it can be traced.
 const stageOf = (r) =>
   r.status === 'final_approved' ? 'Approved'
   : r.status === 'rejected' ? 'Rejected'
-  : (r.current_step_name || STAGE_SEQ[0]);
+  : (r.current_step_name || `Unknown stage (step ${r.current_step})`);
 
 // Default 'Required By Date' is today + 5 days — immediate payments can't be
 // processed so we set a realistic lead time.
@@ -97,6 +90,10 @@ export default function PaymentRequired() {
   const [myInbox, setMyInbox] = useState([]);
   const [myInboxCount, setMyInboxCount] = useState(0);
   const [stats, setStats] = useState(null);
+  // Workflow option lists from the server (categories, real statuses, stage
+  // order). null until the one-time fetch lands — every consumer falls back to
+  // an empty list, so the page renders rather than crashing on a failed load.
+  const [lookups, setLookups] = useState(null);
   const [sites, setSites] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -113,9 +110,65 @@ export default function PaymentRequired() {
   // Approval Amt column shows the amount THAT level approved. Mutually
   // exclusive with stageFilter (the pending-stage chips).
   const [approvedLevel, setApprovedLevel] = useState(null);
-  const APPROVED_LEVELS = [{ step: 1, label: 'Approved by L1' }, { step: 2, label: 'Approved by L2' }, { step: 3, label: 'Approved by L3' }];
   const clearedAt = (r, step) => !!(r.step_amounts && r.step_amounts[step] != null);
   const [uploading, setUploading] = useState(false);
+
+  // The lists that used to be hardcoded module constants, same names, now served
+  // from /payment-required/lookups. Empty until the fetch resolves.
+  const STEPS = lookups?.steps || [];
+  const TADA_STEPS = lookups?.tada_steps || [];
+  const STAGE_SEQ = lookups?.stage_seq || [];
+  const CATEGORIES = lookups?.categories || [];
+  const STATUSES = lookups?.statuses || [];   // [{ value, label }] — labels come with them now
+  // Per-category flow WITH the current holder of each step resolved server-side
+  // (override → named default → role): { 'TA/DA': [{ step, name, approver }] }.
+  const FLOWS = lookups?.flows      || {};
+
+  // The levels the "Approved so far" chips offer. Every step except the final
+  // payout is an approval. Derived from the flow (TA/DA is the superset) rather
+  // than retyped: the old hardcoded [1,2,3] list predated the HR step, so TA/DA
+  // requests cleared by HR had no chip at all. `short` is the step name minus
+  // the " Approval" suffix — HR / L1 / L2 / L3 — keeping the existing wording.
+  const APPROVED_LEVELS = TADA_STEPS.slice(0, -1).map(s => {
+    const short = s.name.replace(/\s*Approval$/i, '').trim() || s.name;
+    return { step: s.step, short, label: `Approved by ${short}` };
+  });
+
+  // Stage label for DISPLAY only — never for comparison, filtering, payloads or
+  // any validation (those all run on the canonical name; see stageOf above).
+  //
+  // Old rows baked the approver into the stored string ('L3 Approval (MD - Ankur
+  // Kaplesh)'); those are history and are shown exactly as recorded. New rows
+  // store the canonical 'L3 Approval' and get the CURRENTLY effective approver
+  // appended, so a re-assignment in Approver Settings moves the name everywhere
+  // at once instead of leaving a stale one baked in. The 'MD -' style title is
+  // metadata on the DEFAULT approver only — an override shows just their name.
+  const displayWorkflowStage = (storedName, category, step) => {
+    const raw = String(storedName || '');
+    if (!raw) return raw;
+    if (raw.includes('(')) return raw;                 // legacy label — untouched
+    const flow = FLOWS[category] || [];
+    const s = flow.find(f => f.name === raw) || flow.find(f => f.step === step);
+    if (!s || !s.approver) return raw;
+    const who = s.approver_kind === 'default' && s.approver_label
+      ? `${s.approver_label} - ${s.approver}`
+      : s.approver;
+    return `${raw} (${who})`;
+  };
+
+  // Why a released request is flagged "⚠ Not Paid". Names the SAME two gates the
+  // server's l3_missing check looks for (workflowStage(flow,'L2'/'L3')), read off
+  // the category's own flow — it used to hardcode "L2 (Nitin) / L3 (MD)", which
+  // went stale the moment either seat was re-assigned.
+  const notPaidReason = (category) => {
+    const flow = FLOWS[category] || [];
+    const gates = ['L2', 'L3']
+      .map(lvl => flow.find(s => new RegExp(`^${lvl}\\b`, 'i').test(String(s.name || ''))))
+      .filter(Boolean)
+      .map(s => displayWorkflowStage(s.name, category, s.step));
+    const missing = gates.length ? gates.join(' / ') : 'the required approvals';
+    return `Released without ${missing} — not properly paid. Needs the backfill to correct.`;
+  };
 
   // Approval routing — admin-only (mam, 2026-05-16: "i want hr
   // approval will give to anchal how can be it dynamic all steps").
@@ -168,6 +221,10 @@ export default function PaymentRequired() {
           ? { ...s, override_user_id: user_id || null, override_user_name: user_id ? routingUsers.find(u => +u.id === +user_id)?.name || null : null }
           : s),
       }));
+      // Re-pull the lookups so everything reading `flows` (the New Request
+      // approval-flow banner) shows the new holder straight away — they are
+      // fetched once on mount, so without this they would sit stale until reload.
+      loadLookups();
       toast.success('Routing updated');
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed');
@@ -186,6 +243,17 @@ export default function PaymentRequired() {
     // inbox list or poll the count.  Endpoints remain on the server
     // for any external consumer / future re-introduction.
   }, [search, filters]);
+
+  // Workflow option lists — fetched on mount, and again whenever a routing
+  // override is saved (the `flows` half names the current holder of each step,
+  // so it is the one part that can change mid-session). Deliberately not part of
+  // load(), which refires on every keystroke in the search box.
+  const loadLookups = useCallback(() => {
+    api.get('/payment-required/lookups')
+      .then(r => setLookups(r.data))
+      .catch(() => toast.error('Could not load the workflow options — filters may be empty'));
+  }, []);
+  useEffect(() => { loadLookups(); }, [loadLookups]);
 
   useEffect(() => {
     load();
@@ -407,7 +475,7 @@ export default function PaymentRequired() {
             className="btn btn-secondary flex items-center gap-2"><FiDownload size={16} /> Export Excel</button>
           {isAdmin && (
             <button onClick={openRoutingModal} className="btn btn-secondary flex items-center gap-2"
-                    title="Re-assign approval steps to specific users (HR → Aanchal, etc.)">
+                    title="Re-assign any approval step of any category to a specific user">
               <FiSettings size={16} /> Approval Routing
             </button>
           )}
@@ -480,7 +548,7 @@ export default function PaymentRequired() {
                     <td className="text-[11px]">
                       <div className="flex items-center gap-1 mb-0.5">
                         <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-mono text-[10px]">{r.approvals_count || 0}/{r.approvals_total || 2}</span>
-                        {r.current_step_name && <span className="text-amber-700 font-medium">{r.current_step_name}</span>}
+                        {r.current_step_name && <span className="text-amber-700 font-medium">{displayWorkflowStage(r.current_step_name, r.category, r.current_step)}</span>}
                       </div>
                       {r.last_approved_by_name && <div className="text-[10px] text-emerald-700">✓ by <b>{r.last_approved_by_name}</b></div>}
                       {(r.next_approver_name || r.next_approver_role) && (
@@ -516,7 +584,7 @@ export default function PaymentRequired() {
               <input type="date" className="select w-36" value={filters.date_to} onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))} />
             </div>
             <select className="select w-40" value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}><option value="">All Categories</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
-            <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select>
+            <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}</select>
             {(filters.date_from || filters.date_to || filters.category || filters.status || stageFilter || search) && (
               <button onClick={() => { setSearch(''); setStageFilter(''); setApprovedLevel(null); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
                 className="btn btn-secondary text-xs flex items-center gap-1 text-red-600 whitespace-nowrap">
@@ -556,9 +624,9 @@ export default function PaymentRequired() {
               { border: 'border-indigo-500', label: 'text-indigo-700', num: 'text-indigo-700', activeBg: 'bg-indigo-50', ring: 'ring-indigo-300' },
               { border: 'border-sky-500',    label: 'text-sky-700',    num: 'text-sky-700',    activeBg: 'bg-sky-50',    ring: 'ring-sky-300' },
             ];
-            // Always show the full standard flow (L1 → L2 → L3 → Release),
-            // even a stage with 0 rows, so L3 Ankur Kaplesh is never hidden
-            // just because no request sits there yet (mam 2026-06-11).
+            // Always show the whole flow, even a stage with 0 rows, so a later
+            // stage is never hidden just because no request sits there yet
+            // (mam 2026-06-11).
             const presentStages = STAGE_SEQ;
             const tiles = [
               { key: 'all', label: 'Showing', stage: null, color: { border: 'border-blue-500', label: 'text-gray-500', num: 'text-blue-700', activeBg: 'bg-blue-50', ring: 'ring-blue-300' } },
@@ -569,20 +637,19 @@ export default function PaymentRequired() {
             const tile = ({ key, label, stage, color }) => {
               const rows = rowsOf(stage);
               const amt = rows.reduce((s, r) => s + (+r.amount || 0), 0);
-              const active = stage != null && stageFilter === stage && !approvedLevel;
+              const active = stage == null ? (!stageFilter && !approvedLevel) : (stageFilter === stage && !approvedLevel);
               return (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => { setApprovedLevel(null); setStageFilter(active ? '' : (stage || '')); }}
-                  disabled={stage == null}
-                  className={`card px-2 py-1.5 border-l-4 text-left transition hover:shadow disabled:cursor-default disabled:hover:shadow-none ${color.border} ${active ? `${color.activeBg} ring-2 ${color.ring}` : ''}`}
-                  title={`${label} · ${rows.length} ${rows.length === 1 ? 'request' : 'requests'} · Rs ${fmt(amt)}`}
+                  onClick={() => { setApprovedLevel(null); setStageFilter(stage == null ? '' : (active ? '' : stage)); }}
+                  className={`card px-2 py-1.5 border-l-4 text-left transition hover:shadow ${color.border} ${active ? `${color.activeBg} ring-2 ${color.ring}` : ''}`}
+                  title={`${label} · ${rows.length} ${rows.length === 1 ? 'request' : 'requests'} · ${fmt(amt)}`}
                 >
                   <div className={`text-[9px] uppercase font-semibold leading-tight truncate ${color.label}`}>{label}</div>
                   <div className="flex items-baseline gap-1.5 mt-0.5">
                     <span className={`text-base font-bold leading-none ${color.num}`}>{rows.length}</span>
-                    <span className="text-[10px] text-gray-600 leading-none truncate">Rs {fmt(amt)}</span>
+                    <span className="text-[10px] text-gray-600 leading-none truncate">{fmt(amt)}</span>
                   </div>
                 </button>
               );
@@ -623,7 +690,7 @@ export default function PaymentRequired() {
                     >
                       ✓ {lv.label}
                       <span className={`text-[10px] font-bold rounded-full bg-white/70 px-1.5 ${n === 0 ? 'text-gray-400' : ''}`}>{n}</span>
-                      {amt > 0 && <span className="text-[10px] font-semibold opacity-90">Rs {fmt(amt)}</span>}
+                      {amt > 0 && <span className="text-[10px] font-semibold opacity-90">{fmt(amt)}</span>}
                     </button>
                   );
                 })}
@@ -678,11 +745,11 @@ export default function PaymentRequired() {
                     <div className="flex items-center gap-1.5">
                       <span className="bg-gray-100 px-2 py-0.5 rounded font-mono">{r.approvals_count || 0}/{r.approvals_total || 5}</span>
                       {r.current_step_name && r.status !== 'final_approved' && r.status !== 'rejected' && (
-                        <span className="text-amber-700 font-medium">→ {r.current_step_name}</span>
+                        <span className="text-amber-700 font-medium">→ {displayWorkflowStage(r.current_step_name, r.category, r.current_step)}</span>
                       )}
                     </div>
                     {r.last_approved_by_name && (
-                      <div className="text-emerald-700">✓ {r.last_approved_step_name} by <b>{r.last_approved_by_name}</b></div>
+                      <div className="text-emerald-700">✓ {displayWorkflowStage(r.last_approved_step_name, r.category)} by <b>{r.last_approved_by_name}</b></div>
                     )}
                     {r.status !== 'final_approved' && r.status !== 'rejected' && (r.next_approver_name || r.next_approver_role) && (
                       <div className="text-amber-800">⏳ Waiting on {r.next_approver_name ? <b>{r.next_approver_name}</b> : <>any <b>{r.next_approver_role}</b></>}</div>
@@ -734,7 +801,7 @@ export default function PaymentRequired() {
                       reduced it. */}
                   <td className="font-semibold">
                     {approvedLevel && r.step_amounts && r.step_amounts[approvedLevel] != null
-                      ? <span className="text-green-700" title={`Amount approved at L${approvedLevel}`}>{fmt(r.step_amounts[approvedLevel])}</span>
+                      ? <span className="text-green-700" title={`Amount approved at ${APPROVED_LEVELS.find(l => l.step === approvedLevel)?.short || `step ${approvedLevel}`}`}>{fmt(r.step_amounts[approvedLevel])}</span>
                       : r.approved_amount != null
                         ? <span className={+r.approved_amount !== +r.amount ? 'text-emerald-700' : ''} title={+r.approved_amount !== +r.amount ? `Adjusted from ${fmt(r.amount)}` : 'Approved at requested amount'}>{fmt(r.approved_amount)}</span>
                         : <span className="text-gray-400" title="Not yet approved — will pay the requested amount unless a level adjusts it">{fmt(r.amount)}</span>}
@@ -765,12 +832,12 @@ export default function PaymentRequired() {
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <span className="bg-gray-100 px-2 py-0.5 rounded font-mono text-[11px]">{r.approvals_count || 0}/{r.approvals_total || 5}</span>
                       {r.current_step_name && r.status !== 'final_approved' && r.status !== 'rejected' && (
-                        <span className="text-amber-700 font-medium">→ {r.current_step_name}</span>
+                        <span className="text-amber-700 font-medium">→ {displayWorkflowStage(r.current_step_name, r.category, r.current_step)}</span>
                       )}
                     </div>
                     {r.last_approved_by_name && (
                       <div className="text-[10px] text-emerald-700">
-                        ✓ {r.last_approved_step_name} by <b>{r.last_approved_by_name}</b>
+                        ✓ {displayWorkflowStage(r.last_approved_step_name, r.category)} by <b>{r.last_approved_by_name}</b>
                       </div>
                     )}
                     {r.status !== 'final_approved' && r.status !== 'rejected' && (r.next_approver_name || r.next_approver_role) && (
@@ -788,15 +855,24 @@ export default function PaymentRequired() {
                     const cls = 'px-2 py-0.5 rounded text-[11px] font-semibold whitespace-nowrap ';
                     if (st === 'Rejected') return <span className={cls + 'bg-red-100 text-red-700'}>Rejected</span>;
                     if (st === 'Approved') return r.l3_missing
-                      ? <span className={cls + 'bg-red-100 text-red-700'} title="Released without L2 (Nitin) / L3 (MD) approval — not properly paid. Needs the L3 backfill to correct.">⚠ Not Paid</span>
+                      ? <span className={cls + 'bg-red-100 text-red-700'} title={notPaidReason(r.category)}>⚠ Not Paid</span>
                       : <span className={cls + 'bg-green-600 text-white'}>Paid</span>;
-                    if (st === 'Payment Release') return r.release_gap
+                    // Parked on the LAST stage of the flow = every approval is in,
+                    // only the payout remains. Matched by position, not by the
+                    // stage's label — this used to compare against the literal
+                    // 'Payment Release (Aanchal)' and silently stopped matching
+                    // the moment that label changed.
+                    if (st && st === STAGE_SEQ[STAGE_SEQ.length - 1]) return r.release_gap
                       ? <span className={cls + 'bg-red-100 text-red-700'} title="Reached Payment Release without L2/L3 sign-off (old flow). It will be routed back to the missing step on the next action.">⚠ Needs L2/L3</span>
                       : <span className={cls + 'bg-emerald-100 text-emerald-700'} title="All approvals done — waiting for the payment to be released. Not paid yet.">Approved · awaiting release</span>;
                     // Show WHICH level it's pending at (mam 2026-06-18: status was
                     // a hotchpotch — everything just said "Pending"). Level read
                     // from the current step name (HR / L1 / L2 / L3).
-                    const lvl = (r.current_step_name || '').match(/\b(HR|L1|L2|L3)\b/)?.[1] || '';
+                    // Anchored to the START of the stage name — the level is always
+                    // the prefix ('L2 Approval', 'HR Approval'). An unanchored match
+                    // would also fire on a stage that merely mentions a level later
+                    // in its name, labelling the row with the wrong one.
+                    const lvl = (r.current_step_name || '').match(/^(HR|L1|L2|L3)\b/)?.[1] || '';
                     return <span className={cls + 'bg-amber-100 text-amber-700'}>Pending{lvl ? ' · ' + lvl : ''}</span>;
                   })()}</td>
                   {/* Date column — mam (2026-05-22): "this is pick wrong
@@ -865,7 +941,7 @@ export default function PaymentRequired() {
                 {isAdmin && (
                   <button onClick={openRoutingModal}
                           className="block ml-auto mt-2 text-[10px] text-blue-600 hover:text-blue-800 underline"
-                          title="Re-assign HR / Accountant / Release steps to specific users (e.g. HR → Aanchal)">
+                          title="Re-assign any approval step of any category to a specific user">
                     Manage step approvers…
                   </button>
                 )}
@@ -906,7 +982,9 @@ export default function PaymentRequired() {
                         {isCurrent && <span>⏳</span>}
                         {!approval && !isCurrent && <span>⏸</span>}
                       </div>
-                      <div className="text-[10.5px] leading-tight">{s.name}</div>
+                      {/* A cleared step shows what history recorded; a pending
+                          one shows the currently effective holder. */}
+                      <div className="text-[10.5px] leading-tight">{displayWorkflowStage(approval?.step_name || s.name, viewData.category, s.step)}</div>
                       {isSystem && <div className="text-[9px] italic text-gray-500 mt-0.5">(auto)</div>}
                       {approval && (
                         <div className="text-[9.5px] mt-1 leading-tight">
@@ -1139,7 +1217,7 @@ export default function PaymentRequired() {
                 <div className="space-y-1">{viewData.approvals.map(a => (
                   <div key={a.id} className={`text-xs p-2 rounded flex justify-between items-center ${a.action === 'approved' ? 'bg-emerald-50' : 'bg-red-50'}`}>
                     <span>
-                      <strong>Step {a.step}:</strong> {a.step_name} —{' '}
+                      <strong>Step {a.step}:</strong> {displayWorkflowStage(a.step_name, viewData.category, a.step)} —{' '}
                       <span className={a.action === 'approved' ? 'text-emerald-700' : 'text-red-600'}>{a.action.toUpperCase()}</span>
                       {' '}by {a.approved_by_name}
                       {a.step_amount != null && (
@@ -1161,7 +1239,7 @@ export default function PaymentRequired() {
               const reduceBy = willReduce ? currentApproved - draft : 0;
               return (
               <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50 space-y-3">
-                <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {(viewData.workflow?.find(w => w.step === viewData.current_step) || {}).name || viewData.current_step_name}</h5>
+                <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {displayWorkflowStage((viewData.workflow?.find(w => w.step === viewData.current_step) || {}).name || viewData.current_step_name, viewData.category, viewData.current_step)}</h5>
 
                 {/* Approver-side amount adjustment (mam 2026-05-28) */}
                 <div>
@@ -1419,12 +1497,27 @@ export default function PaymentRequired() {
             </div>
           )}
 
-          {/* Approval workflow info — one standard flow for every category */}
-          {form.category && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
-              <strong>Approval Flow:</strong> <span>{form.category === 'TA/DA' ? 'HR Approval → ' : ''}L1 Approval (Accountant) → L2 Approval → L3 Approval (MD) → Payment Release</span>
-            </div>
-          )}
+          {/* The chain this request will travel once submitted. Built from the
+              server's own flow for THIS category — so TA/DA correctly shows its
+              extra HR step, which the old hardcoded line never did — and it names
+              the CURRENT holder of each step, so a routing re-assignment is
+              reflected here instead of the banner promising someone who no
+              longer approves it. */}
+          {form.category && (() => {
+            // Prefer the resolved flow (carries the current holder of each step).
+            // Fall back to the plain step list so the banner still shows the chain
+            // — without names — rather than disappearing if `flows` is missing.
+            const chain = FLOWS[form.category]?.length
+              ? FLOWS[form.category]
+              : (form.category === 'TA/DA' ? TADA_STEPS : STEPS);
+            if (!chain.length) return null;
+            return (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
+                <strong>Approval Flow:</strong>{' '}
+                <span>{chain.map(s => s.approver ? `${s.name} (${s.approver})` : s.name).join(' → ')}</span>
+              </div>
+            );
+          })()}
 
           {/* Missing-proofs banner — visible before Submit so the user
               knows what's blocking the request. Same rules as the
