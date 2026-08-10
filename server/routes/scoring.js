@@ -810,6 +810,21 @@ function computeScorecard(db, userId, weekStart) {
         return { given: null, done: c };
       }
 
+      // ===== Snag List =====
+      // Same given/done, assigned-this-week cohort as tickets/delegations.
+      // auto:snags = a user scored on THEIR OWN assigned snags; auto:snags_all
+      // = a process owner scored on the WHOLE punch-list (company-wide).
+      if (source === 'auto:snags') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND raised_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND raised_at BETWEEN ? AND ? AND status='approved'`).get(userId, since, until).c;
+        return { given, done };
+      }
+      if (source === 'auto:snags_all') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE raised_at BETWEEN ? AND ?`).get(since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE raised_at BETWEEN ? AND ? AND status='approved'`).get(since, until).c;
+        return { given, done };
+      }
+
       // ===== Complaints =====
       if (source === 'auto:complaints_raised') {
         const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
