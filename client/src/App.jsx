@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
+import { ModuleGate } from './context/ModuleFlagsContext';
 import Login from './pages/Login';
 // Layout (the authenticated app shell — sidebar, header, CallProvider/WebRTC,
 // AI chat, bells, ~64 icons) is lazy so it stays OUT of the entry chunk. A
@@ -50,6 +51,7 @@ const CashFlow = lazy(() => import('./pages/CashFlow'));
 const Collections = lazy(() => import('./pages/Collections'));
 const ArApTracker = lazy(() => import('./pages/ArApTracker'));
 const SiteChat = lazy(() => import('./pages/SiteChat'));
+const SotynFlow = lazy(() => import('./pages/SotynFlow'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
 const IndentLabourPayment = lazy(() => import('./pages/IndentLabourPayment'));
@@ -57,6 +59,8 @@ const Delegation = lazy(() => import('./pages/Delegation'));
 const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const HelpTickets = lazy(() => import('./pages/HelpTickets'));
+const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
+const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
 const DebitNotePrint = lazy(() => import('./pages/DebitNotePrint'));
 const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
@@ -178,8 +182,16 @@ export default function App() {
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
         <Route path="ar-ap-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
         {/* WhatsApp is open to all signed-in users — access is by group
-            membership, not the site_chat module permission (mam 2026-06-19). */}
-        <Route path="site-chat" element={<SiteChat />} />
+            membership, not the site_chat module permission (mam 2026-06-19).
+            ModuleGate is the global on/off switch, NOT a permission check — it's
+            separate from ModuleRoute precisely because these two have no view
+            permission to check. */}
+        <Route path="site-chat" element={<ModuleGate module="site_chat"><SiteChat /></ModuleGate>} />
+        {/* SOTYN Flow — task boards. Full-width; access by board membership
+            (super-viewers see all), so no ModuleRoute permission gate — only the
+            same global ModuleGate switch as site-chat. */}
+        <Route path="sotyn-flow" element={<ModuleGate module="sotyn_flow"><SotynFlow /></ModuleGate>} />
+        <Route path="sotyn-flow/:boardId" element={<ModuleGate module="sotyn_flow"><SotynFlow /></ModuleGate>} />
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
@@ -207,6 +219,8 @@ export default function App() {
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
+        <Route path="system-requirements" element={<ModuleGate module="system_requirements"><SystemRequirements /></ModuleGate>} />
+        <Route path="system-requirements/:id" element={<ModuleGate module="system_requirements"><SystemRequirementWorkspace /></ModuleGate>} />
         <Route path="installation" element={<ModuleRoute module="installation"><SalesBilling /></ModuleRoute>} />
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />

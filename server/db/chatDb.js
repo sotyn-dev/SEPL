@@ -104,6 +104,14 @@ function getChatDb() {
     const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
     if (!mcols.includes('edited_at')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN edited_at DATETIME");
   } catch (e) { /* ignore */ }
+  // archived_at: soft archive — the group drops out of the sidebar and the unread
+  // badge but keeps every row, so it is restorable instantly and scrolling back
+  // through an ARCHIVED group still works. NULL = active. Deliberately NOT a
+  // space-saving feature: nothing is deleted, so the file does not shrink.
+  try {
+    const gcols = chatDb.prepare("PRAGMA table_info(chat_groups)").all().map(c => c.name);
+    if (!gcols.includes('archived_at')) chatDb.exec("ALTER TABLE chat_groups ADD COLUMN archived_at DATETIME");
+  } catch (e) { /* ignore */ }
   return chatDb;
 }
 
