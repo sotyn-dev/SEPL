@@ -1,0 +1,37 @@
+{
+  "$id": "https://sotyn.com/schemas/tenant-branding.json",
+  "title": "TenantBranding",
+  "description": "Per-tenant white-label contract. Platform is SoT; tenant ERP consumes a materialized copy. Missing logo → generic Sotyn mark — never Secured artwork as global default.",
+  "type": "object",
+  "required": ["slug", "displayName"],
+  "properties": {
+    "slug": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$" },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "shortName": { "type": "string", "maxLength": 40 },
+    "legalName": { "type": "string", "maxLength": 200 },
+    "productMark": { "type": "string", "maxLength": 80, "description": "Optional product chrome e.g. SOTYN.AI" },
+    "showPoweredBy": { "type": "boolean", "default": true },
+    "themeColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+    "accentColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+    "loginTagline": { "type": "string", "maxLength": 160 },
+    "pwa": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "shortName": { "type": "string" },
+        "description": { "type": "string" },
+        "appleTitle": { "type": "string" }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "properties": {
+        "logo": { "type": "string" },
+        "logoPng": { "type": "string" },
+        "icon": { "type": "string" },
+        "favicon": { "type": "string" },
+        "icons": { "type": "string" }
+      }
+    }
+  }
+}

@@ -228,3 +228,7 @@ Note the current asymmetry (Phase 4 unifies it): `TENANT_ID` moves only the **lo
 `data/<tenant>/` tree; the **bucket** key is prefixed **only** by `S3_KEY_PREFIX`. On the S3
 driver, `TENANT_ID` has no effect on where objects are stored — so `S3_KEY_PREFIX` is the one
 that names the S3 side today.
+
+Full Phase 4 resume notes (decisions, open process-model fork, paths.js prerequisite):
+[docs/PHASE4-tenant-model.md](PHASE4-tenant-model.md). Concept + panel sketches:
+[docs/multitenancy/](multitenancy/README.md).

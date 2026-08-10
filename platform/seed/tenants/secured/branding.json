@@ -1,0 +1,26 @@
+{
+  "$schema": "../../../contracts/branding.schema.json",
+  "slug": "secured",
+  "displayName": "Secured Engineers",
+  "shortName": "SEPL",
+  "legalName": "Secured Engineers Pvt. Ltd.",
+  "productMark": "SOTYN.AI",
+  "showPoweredBy": false,
+  "themeColor": "#1e40af",
+  "accentColor": "#1d4ed8",
+  "loginTagline": "Sign in to SOTYN.AI",
+  "pwa": {
+    "name": "SEPL Business ERP",
+    "shortName": "SEPL ERP",
+    "description": "Secured Engineers Pvt Ltd · Business ERP",
+    "appleTitle": "SOTYN.AI"
+  },
+  "assets": {
+    "logo": "assets/logo.webp",
+    "logoPng": "assets/logo.png",
+    "icon": "assets/icon.svg",
+    "favicon": "assets/favicon.svg",
+    "icons": "assets/icons.svg"
+  },
+  "notes": "Extracted from ERP client/public + Login/Layout/manifest (Aug 2026). This is tenant branding for slug=secured — NOT the global fallback for other orgs."
+}

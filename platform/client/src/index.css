@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(30, 64, 175, 0.08), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(15, 23, 42, 0.04), transparent 50%),
+    #f0f4f8;
+}
+
+/* Prefer thumb-friendly controls on coarse pointers */
+@media (pointer: coarse) {
+  button, a, [role="switch"] {
+    touch-action: manipulation;
+  }
+}
+
+/* Match ERP client/src/index.css brand buttons (mam 2026-05-20 royal blue). */
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-200 disabled:opacity-50 cursor-pointer shadow-sm;
+  }
+  .btn:active {
+    @apply scale-95;
+  }
+  .btn-primary {
+    @apply bg-gradient-to-r from-blue-800 to-blue-900 text-white hover:from-blue-900 hover:to-slate-900 shadow-blue-300;
+  }
+  .btn-secondary {
+    @apply bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 hover:border-gray-300 shadow-none;
+  }
+}

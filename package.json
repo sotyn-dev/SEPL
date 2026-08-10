@@ -13,6 +13,10 @@
     "build": "cd client && npm install && npm run build",
     "install-all": "npm install && cd client && npm install",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "platform": "npm run dev --prefix platform",
+    "platform:server": "npm run server --prefix platform",
+    "platform:client": "npm run client --prefix platform",
+    "platform:agent": "npm run agent --prefix platform",
     "postinstall": "npm run build"
   },
   "dependencies": {

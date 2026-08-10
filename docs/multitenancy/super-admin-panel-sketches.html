@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Super-admin panel — screen sketches</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#1a2332;
+    --muted:#5c6b7a;
+    --line:#c9d2dc;
+    --paper:#f3f1eb;
+    --panel:#fffdf8;
+    --platform:#0b6e6e;
+    --platform-soft:#d9efef;
+    --tenant:#8a5a12;
+    --tenant-soft:#f5e6c8;
+    --dash:2px dashed #9aa8b5;
+    --radius:6px;
+    --shadow:0 1px 0 rgba(26,35,50,.06);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font:15px/1.55 "IBM Plex Sans", system-ui, sans-serif;
+  }
+  code, .mono{font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:12.5px}
+  .wrap{max-width:1080px; margin:0 auto; padding:28px 20px 72px}
+  .hero{
+    border:1px solid var(--ink); background:var(--ink); color:#f3f1eb;
+    padding:28px 26px; border-radius:8px;
+  }
+  .hero .tag{
+    font-family:"IBM Plex Mono", monospace; font-size:11px; letter-spacing:.08em;
+    text-transform:uppercase; opacity:.75;
+  }
+  .hero h1{margin:10px 0 8px; font-size:26px; font-weight:700; letter-spacing:-.02em}
+  .hero p{margin:0; max-width:62ch; color:#c9d2dc; font-size:14.5px}
+  .hero .links{margin-top:14px; font-size:13px}
+  .hero a{color:#9ee0e0}
+  .note{
+    margin:16px 0; padding:12px 14px; border-left:3px solid var(--platform);
+    background:var(--platform-soft); font-size:14px;
+  }
+  nav.toc{
+    margin:18px 0; padding:14px 16px; background:var(--panel);
+    border:var(--dash); border-radius:var(--radius);
+  }
+  nav.toc h2{margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-family:"IBM Plex Mono",monospace}
+  nav.toc ol{margin:0; padding-left:18px; columns:2; gap:24px}
+  nav.toc a{color:var(--ink); text-decoration:none}
+  nav.toc a:hover{color:var(--platform); text-decoration:underline}
+  .screen{
+    margin:28px 0; padding:0; background:transparent;
+  }
+  .screen-head{
+    display:flex; flex-wrap:wrap; gap:10px; align-items:baseline;
+    margin-bottom:10px;
+  }
+  .screen-head h2{margin:0; font-size:18px}
+  .pill{
+    font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:600;
+    letter-spacing:.04em; text-transform:uppercase;
+    padding:2px 8px; border-radius:999px; border:1px solid var(--line);
+    background:#fff;
+  }
+  .pill.sketch{border-color:var(--tenant); color:var(--tenant); background:var(--tenant-soft)}
+  .pill.later{color:var(--muted)}
+  .caption{color:var(--muted); font-size:13.5px; margin:0 0 12px; max-width:70ch}
+  /* Fake app chrome */
+  .frame{
+    border:var(--dash); border-radius:8px; background:#e8ecef;
+    padding:10px; box-shadow:var(--shadow);
+  }
+  .chrome{
+    display:grid; grid-template-columns:200px 1fr; min-height:420px;
+    background:var(--panel); border:1px solid var(--ink); border-radius:6px; overflow:hidden;
+  }
+  .aside{
+    background:#243040; color:#d7dee8; padding:14px 12px; font-size:13px;
+  }
+  .aside .brand{
+    font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.06em;
+    text-transform:uppercase; color:#9ee0e0; margin-bottom:14px;
+  }
+  .aside .nav-item{
+    padding:8px 10px; border-radius:4px; margin:2px 0; color:#c9d2dc;
+  }
+  .aside .nav-item.active{background:rgba(158,224,224,.18); color:#fff; font-weight:600}
+  .aside .nav-item.dim{opacity:.45}
+  .main{padding:14px 16px; background:#fffdf8}
+  .topbar{
+    display:flex; justify-content:space-between; align-items:center;
+    gap:12px; margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid var(--line);
+  }
+  .topbar h3{margin:0; font-size:16px}
+  .btn{
+    display:inline-flex; align-items:center; gap:6px;
+    font:600 12.5px/1 "IBM Plex Sans",sans-serif;
+    padding:8px 12px; border-radius:4px; border:1px solid var(--ink);
+    background:#fff; color:var(--ink); cursor:default;
+  }
+  .btn.primary{background:var(--platform); border-color:var(--platform); color:#fff}
+  .btn.ghost{background:transparent}
+  .btn.small{padding:5px 8px; font-size:11.5px}
+  table.grid{width:100%; border-collapse:collapse; font-size:13px}
+  table.grid th{
+    text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--muted); font-weight:600; padding:8px 8px; border-bottom:1px solid var(--line);
+    font-family:"IBM Plex Mono",monospace;
+  }
+  table.grid td{padding:10px 8px; border-bottom:1px solid #ebe6dc; vertical-align:middle}
+  table.grid tr:last-child td{border-bottom:none}
+  .status{
+    font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600;
+    padding:2px 7px; border-radius:999px;
+  }
+  .status.on{background:#d9efef; color:#0b6e6e}
+  .status.off{background:#eee; color:#666}
+  .status.warn{background:var(--tenant-soft); color:var(--tenant)}
+  .row-actions{display:flex; gap:6px; flex-wrap:wrap}
+  .form{display:grid; gap:12px; max-width:520px}
+  .field label{
+    display:block; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--muted); font-family:"IBM Plex Mono",monospace; margin-bottom:4px;
+  }
+  .field .input{
+    border:1px solid var(--line); border-radius:4px; padding:9px 10px;
+    background:#faf8f3; color:var(--ink); font-size:13.5px;
+  }
+  .field .input.fake-select::after{content:" ▾"; color:var(--muted)}
+  .steps{
+    display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;
+    font-family:"IBM Plex Mono",monospace; font-size:11px;
+  }
+  .steps span{
+    padding:4px 8px; border:1px solid var(--line); border-radius:999px; color:var(--muted);
+  }
+  .steps span.now{border-color:var(--platform); color:var(--platform); background:var(--platform-soft); font-weight:600}
+  .toggle-list{display:grid; gap:8px}
+  .toggle{
+    display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center;
+    padding:10px 12px; border:1px solid var(--line); border-radius:4px; background:#faf8f3;
+  }
+  .toggle .name{font-weight:600; font-size:13.5px}
+  .toggle .desc{font-size:12.5px; color:var(--muted)}
+  .switch{
+    width:36px; height:20px; border-radius:999px; background:#c9d2dc; position:relative;
+  }
+  .switch.on{background:var(--platform)}
+  .switch::after{
+    content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+    border-radius:50%; background:#fff;
+  }
+  .switch.on::after{left:18px}
+  .split{display:grid; grid-template-columns:1.1fr .9fr; gap:14px}
+  .card{
+    border:1px solid var(--line); border-radius:4px; padding:12px; background:#faf8f3;
+  }
+  .card h4{margin:0 0 6px; font-size:13px}
+  .card p{margin:0; font-size:12.5px; color:var(--muted)}
+  .callout-inline{
+    margin-top:10px; padding:8px 10px; font-size:12.5px;
+    border:var(--dash); border-radius:4px; color:var(--muted);
+  }
+  .dialog-wrap{
+    display:flex; justify-content:center; align-items:center; min-height:360px;
+    background:rgba(26,35,50,.35); border-radius:6px; padding:20px;
+  }
+  .dialog{
+    width:min(420px,100%); background:var(--panel); border:1px solid var(--ink);
+    border-radius:6px; padding:16px;
+  }
+  .dialog h3{margin:0 0 6px; font-size:15px}
+  .dialog p{margin:0 0 12px; font-size:13px; color:var(--muted)}
+  .dialog .actions{display:flex; justify-content:flex-end; gap:8px; margin-top:14px}
+  .ghost-label{
+    font-family:"IBM Plex Mono",monospace; font-size:10px; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;
+  }
+  footer{margin-top:36px; color:var(--muted); font-size:12.5px; text-align:center}
+  @media(max-width:800px){
+    nav.toc ol{columns:1}
+    .chrome{grid-template-columns:1fr}
+    .aside{display:none}
+    .split{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="tag">Draft sketches · Not built · Layer 1 only</div>
+    <h1>Super-admin orchestration panel</h1>
+    <p>
+      Low-fidelity screens for the platform control room described in the tenant-model ideation doc.
+      Audience: SEPL platform operators only — not tenant end-users.
+    </p>
+    <div class="links">
+      Pair with: <a href="./tenant-model-ideation.html">tenant-model-ideation.html</a>
+      · engineering notes: <a href="../PHASE4-tenant-model.md">PHASE4-tenant-model.md</a>
+    </div>
+  </header>
+
+  <div class="note">
+    These are <strong>sketches for discussion</strong>, not product UI. Dashed frames mark “not implemented.”
+    <strong>Product vision (Aug 2026):</strong> <span class="mono">{slug}-erp.sotyn.com</span> (wildcard DNS + auto SSL).
+    <strong>All orgs Docker from day 1</strong> — secured bind-mounts existing <span class="mono">/root/erp/data/*</span> (no move);
+    new orgs use <span class="mono">/var/lib/sotyn/tenants/{slug}/data</span>.
+    Platform at <span class="mono">platform.sotyn.com</span> drives a <strong>worker agent</strong> (local day‑1; remote on later VPSes).
+    This panel onboards/monitors containers and controls features. Pricing / billing screens stay stubbed as later.
+  </div>
+
+  <nav class="toc">
+    <h2>Screens</h2>
+    <ol>
+      <li><a href="#s1">Companies list</a></li>
+      <li><a href="#s2">Create company</a></li>
+      <li><a href="#s3">Company detail — overview</a></li>
+      <li><a href="#s4">Plan &amp; feature entitlements</a></li>
+      <li><a href="#s5">Export dev config</a></li>
+      <li><a href="#s6">Pricing packages (later stub)</a></li>
+    </ol>
+  </nav>
+
+  <!-- 1 -->
+  <article class="screen" id="s1">
+    <div class="screen-head">
+      <h2>1 · Companies list</h2>
+      <span class="pill sketch">Sketch</span>
+    </div>
+    <p class="caption">Home of the control room. Every hosted company is a row. Actions: open, pause, export setup.</p>
+    <div class="frame">
+      <div class="ghost-label">Platform shell · super-admin only</div>
+      <div class="chrome">
+        <aside class="aside">
+          <div class="brand">SOTYN Platform</div>
+          <div class="nav-item active">Companies</div>
+          <div class="nav-item dim">Plans (later)</div>
+          <div class="nav-item dim">Audit log</div>
+          <div class="nav-item dim">Operators</div>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <h3>Companies</h3>
+            <button class="btn primary" type="button">+ New company</button>
+          </div>
+          <table class="grid">
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Id</th>
+                <th>Plan</th>
+                <th>Status</th>
+                <th>Modules on</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>SEPL</strong><br><span class="mono" style="color:var(--muted)">sepl-erp.sotyn.com</span></td>
+                <td class="mono">tenant_sepl</td>
+                <td>Full ERP</td>
+                <td><span class="status on">live</span></td>
+                <td class="mono">48 / 50</td>
+                <td class="row-actions">
+                  <button class="btn small" type="button">Open</button>
+                  <button class="btn small ghost" type="button">Export</button>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Concern Pharma</strong><br><span class="mono" style="color:var(--muted)">pharma-erp.sotyn.com</span></td>
+                <td class="mono">tenant_pharma</td>
+                <td>Chat only</td>
+                <td><span class="status on">live</span></td>
+                <td class="mono">2 / 50</td>
+                <td class="row-actions">
+                  <button class="btn small" type="button">Open</button>
+                  <button class="btn small ghost" type="button">Export</button>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Demo Co</strong><br><span class="mono" style="color:var(--muted)">—</span></td>
+                <td class="mono">tenant_demo</td>
+                <td>Trial</td>
+                <td><span class="status warn">paused</span></td>
+                <td class="mono">6 / 50</td>
+                <td class="row-actions">
+                  <button class="btn small" type="button">Open</button>
+                  <button class="btn small ghost" type="button">Export</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- 2 -->
+  <article class="screen" id="s2">
+    <div class="screen-head">
+      <h2>2 · Create company</h2>
+      <span class="pill sketch">Sketch</span>
+    </div>
+    <p class="caption">Settings-managed onboarding: identity → plan defaults → confirm. DB + seeds + backups follow automatically after create.</p>
+    <div class="frame">
+      <div class="chrome">
+        <aside class="aside">
+          <div class="brand">SOTYN Platform</div>
+          <div class="nav-item active">Companies</div>
+          <div class="nav-item dim">Plans (later)</div>
+          <div class="nav-item dim">Audit log</div>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <h3>New company</h3>
+            <button class="btn ghost" type="button">Cancel</button>
+          </div>
+          <div class="steps">
+            <span class="now">1 Identity</span>
+            <span>2 Plan defaults</span>
+            <span>3 Confirm</span>
+          </div>
+          <div class="form">
+            <div class="field">
+              <label>Display name</label>
+              <div class="input">Concern Pharma</div>
+            </div>
+            <div class="field">
+              <label>Tenant id (folder / S3 prefix)</label>
+              <div class="input mono">tenant_pharma</div>
+            </div>
+            <div class="field">
+              <label>Subdomain (auto from slug)</label>
+              <div class="input mono">pharma-erp.sotyn.com</div>
+            </div>
+            <div class="field">
+              <label>Slug</label>
+              <div class="input mono">pharma</div>
+            </div>
+            <div class="field">
+              <label>Starting plan</label>
+              <div class="input fake-select">Chat only</div>
+            </div>
+            <div>
+              <button class="btn primary" type="button">Continue</button>
+            </div>
+          </div>
+          <div class="callout-inline">
+            After confirm: create data dir → first boot builds schema → entitlements written to <span class="mono">platform.db</span> only → nightly backup discovers the new DBs.
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- 3 -->
+  <article class="screen" id="s3">
+    <div class="screen-head">
+      <h2>3 · Company detail — overview</h2>
+      <span class="pill sketch">Sketch</span>
+    </div>
+    <p class="caption">One company card. Jump to entitlements, pause/resume, or pull a safe setup export for developers.</p>
+    <div class="frame">
+      <div class="chrome">
+        <aside class="aside">
+          <div class="brand">SOTYN Platform</div>
+          <div class="nav-item active">Companies</div>
+          <div class="nav-item dim">Plans (later)</div>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <div>
+              <h3>Concern Pharma</h3>
+              <div class="mono" style="color:var(--muted); font-size:12px">tenant_pharma · pharma-erp.sotyn.com</div>
+            </div>
+            <div class="row-actions">
+              <button class="btn small" type="button">Pause</button>
+              <button class="btn small ghost" type="button">Export dev config</button>
+            </div>
+          </div>
+          <div class="split">
+            <div class="card">
+              <h4>Status</h4>
+              <p><span class="status on">live</span> · Plan: <strong>Chat only</strong></p>
+              <p style="margin-top:8px">Data path: <span class="mono">data/tenant_pharma/</span></p>
+              <p>S3 prefix: <span class="mono">tenant_pharma/</span></p>
+            </div>
+            <div class="card">
+              <h4>Quick links</h4>
+              <p style="margin-bottom:8px"><button class="btn small" type="button">Edit entitlements</button></p>
+              <p style="margin-bottom:8px"><button class="btn small ghost" type="button">View audit for this company</button></p>
+              <p><button class="btn small ghost" type="button">Open tenant app ↗</button></p>
+            </div>
+          </div>
+          <div class="callout-inline">
+            Layer 2 (users, roles, preferences) is edited <em>inside</em> the company app — not here. This panel only governs allowance and platform ops.
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- 4 -->
+  <article class="screen" id="s4">
+    <div class="screen-head">
+      <h2>4 · Plan &amp; feature entitlements</h2>
+      <span class="pill sketch">Sketch</span>
+    </div>
+    <p class="caption">The commercial gate. Same module vocabulary as today’s Module availability / RBAC — but stored in platform DB, checked live, never restored from a tenant backup.</p>
+    <div class="frame">
+      <div class="chrome">
+        <aside class="aside">
+          <div class="brand">SOTYN Platform</div>
+          <div class="nav-item active">Companies</div>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <div>
+              <h3>Entitlements · Concern Pharma</h3>
+              <div class="mono" style="color:var(--muted); font-size:12px">effective = entitled × (role permission inside tenant)</div>
+            </div>
+            <button class="btn primary" type="button">Save</button>
+          </div>
+          <div class="field" style="margin-bottom:14px; max-width:320px">
+            <label>Plan template</label>
+            <div class="input fake-select">Chat only</div>
+          </div>
+          <div class="toggle-list">
+            <div class="toggle">
+              <div>
+                <div class="name">SOTYN Chat</div>
+                <div class="desc">site_chat — messaging, groups, calls</div>
+              </div>
+              <div class="switch on" title="on"></div>
+            </div>
+            <div class="toggle">
+              <div>
+                <div class="name">SOTYN Flow</div>
+                <div class="desc">sotyn_flow — task boards</div>
+              </div>
+              <div class="switch" title="off"></div>
+            </div>
+            <div class="toggle">
+              <div>
+                <div class="name">Collections / Solar / War Room…</div>
+                <div class="desc">SEPL construction ERP modules — off for this plan</div>
+              </div>
+              <div class="switch" title="off"></div>
+            </div>
+            <div class="toggle">
+              <div>
+                <div class="name">Custom: Pharma gossip pack</div>
+                <div class="desc">Gated bespoke module in shared codebase — only opens for this tenant</div>
+              </div>
+              <div class="switch on" title="on"></div>
+            </div>
+          </div>
+          <div class="callout-inline">
+            Trap avoided: these toggles must <strong>not</strong> live as source-of-truth inside the company’s <span class="mono">erp.db</span>. A restore must not resurrect a paid module.
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- 5 -->
+  <article class="screen" id="s5">
+    <div class="screen-head">
+      <h2>5 · Export dev config</h2>
+      <span class="pill sketch">Sketch</span>
+    </div>
+    <p class="caption">Least-privilege pull of setup only (roles + settings + entitlements). No customer data, no secrets. Every pull is audited.</p>
+    <div class="frame">
+      <div class="dialog-wrap">
+        <div class="dialog">
+          <h3>Export dev config</h3>
+          <p>Company: <strong>Concern Pharma</strong> · includes roles, permissions, non-secret settings, and current entitlements.</p>
+          <div class="card" style="margin-bottom:10px">
+            <h4>Will include</h4>
+            <p>roles · role_permissions · whitelisted app_settings · enabled_modules from platform</p>
+          </div>
+          <div class="card">
+            <h4>Will strip</h4>
+            <p>passwords · API keys · JWT · emergency reset · all customer / operational rows</p>
+          </div>
+          <div class="actions">
+            <button class="btn ghost" type="button">Cancel</button>
+            <button class="btn primary" type="button">Download JSON</button>
+          </div>
+          <div class="callout-inline" style="margin-top:12px">
+            Laptop step (not this panel): <span class="mono">seed-local-tenant &lt;file&gt;</span> builds a fresh local DB + fake users per role.
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- 6 -->
+  <article class="screen" id="s6">
+    <div class="screen-head">
+      <h2>6 · Pricing / feature packages</h2>
+      <span class="pill later">Later · stub only</span>
+    </div>
+    <p class="caption">Called out in the ideation doc as not designed yet. Placeholder so reviewers see where packaging would sit — not a proposal to build now.</p>
+    <div class="frame">
+      <div class="chrome">
+        <aside class="aside">
+          <div class="brand">SOTYN Platform</div>
+          <div class="nav-item dim">Companies</div>
+          <div class="nav-item active">Plans (later)</div>
+        </aside>
+        <div class="main">
+          <div class="topbar">
+            <h3>Plans</h3>
+            <button class="btn primary" type="button" disabled style="opacity:.45">+ New plan</button>
+          </div>
+          <table class="grid">
+            <thead>
+              <tr><th>Plan</th><th>Modules</th><th>Price</th><th>Used by</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Chat only</td>
+                <td class="mono">site_chat (+ optional AI pack)</td>
+                <td colspan="2" style="color:var(--muted)">Shape TBD — pricing &amp; packaging screens not designed</td>
+              </tr>
+              <tr>
+                <td>Full ERP</td>
+                <td class="mono">~all SEPL modules</td>
+                <td colspan="2" style="color:var(--muted)">Shape TBD</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="callout-inline">
+            Open feedback Q5 in the ideation doc: what should be designed into packaging from day one?
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <footer>
+    SEPL · docs/multitenancy/super-admin-panel-sketches.html · draft sketches for review · Aug 2026
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Tenant Model — Ideation for Review</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1f2733; --muted:#5b6675;
+    --line:#e3e7ee; --accent:#2f6df6; --accent-soft:#eaf1ff;
+    --tenant:#0e9f6e; --tenant-soft:#e7f7f0;
+    --platform:#7c3aed; --platform-soft:#f1eaff;
+    --warn:#b45309; --warn-soft:#fff4e5;
+    --good:#0e7a4a; --good-soft:#e6f6ec;
+    --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08);
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:940px; margin:0 auto; padding:32px 22px 80px}
+  header.hero{
+    background:linear-gradient(135deg,#1f2733,#2b3a55); color:#fff;
+    border-radius:16px; padding:34px 32px; box-shadow:var(--shadow);
+  }
+  header.hero .tag{
+    display:inline-block; font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+    background:rgba(255,255,255,.14); padding:5px 11px; border-radius:999px; margin-bottom:14px;
+  }
+  header.hero h1{margin:.1em 0 .3em; font-size:29px; line-height:1.2}
+  header.hero p{margin:.2em 0; color:#d7deea; font-size:15.5px}
+  .meta{margin-top:16px; font-size:13px; color:#aeb9cc}
+  .callout{
+    border-radius:var(--radius); padding:16px 18px; margin:18px 0; border:1px solid var(--line);
+    background:var(--card); box-shadow:var(--shadow);
+  }
+  .callout.review{border-left:4px solid var(--accent); background:var(--accent-soft)}
+  .callout.warn{border-left:4px solid var(--warn); background:var(--warn-soft)}
+  .callout.good{border-left:4px solid var(--good); background:var(--good-soft)}
+  .callout.tech{border-left:4px solid #334155; background:#f1f5f9}
+  .callout.tech ul{margin:.4em 0 0}
+  .callout.tech li{margin:.4em 0}
+  .callout .k{font-weight:700; display:block; margin-bottom:4px}
+  nav.toc{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:16px 20px; margin:22px 0; box-shadow:var(--shadow);
+  }
+  nav.toc h2{margin:0 0 8px; font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted)}
+  nav.toc ol{margin:0; padding-left:20px; columns:2; column-gap:28px}
+  nav.toc a{color:var(--ink); text-decoration:none}
+  nav.toc a:hover{color:var(--accent); text-decoration:underline}
+  section{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:24px 26px; margin:18px 0; box-shadow:var(--shadow);
+  }
+  section h2{margin:0 0 6px; font-size:21px}
+  section h2 .num{color:var(--accent); font-weight:700; margin-right:8px}
+  .lead{color:var(--muted); margin:.2em 0 1em; font-size:15px}
+  h3{margin:1.1em 0 .3em; font-size:16.5px}
+  p{margin:.55em 0}
+  ul,ol{margin:.5em 0; padding-left:22px}
+  li{margin:.3em 0}
+  .pill{display:inline-block; font-size:12px; font-weight:700; padding:2px 9px; border-radius:999px; vertical-align:middle}
+  .pill.decided{background:var(--good-soft); color:var(--good)}
+  .pill.open{background:var(--warn-soft); color:var(--warn)}
+  .pill.later{background:var(--accent-soft); color:var(--accent)}
+  code{background:#eef1f6; padding:1px 6px; border-radius:5px; font-size:13.5px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  .analogy{
+    display:flex; gap:16px; align-items:flex-start; background:#fbfcfe;
+    border:1px dashed var(--line); border-radius:var(--radius); padding:16px 18px; margin:14px 0;
+  }
+  .analogy .emoji{font-size:30px; line-height:1}
+  /* two-layer diagram */
+  .layers{margin:18px 0}
+  .layer{
+    border-radius:var(--radius); padding:16px 18px; margin:10px 0; border:1px solid var(--line);
+    position:relative;
+  }
+  .layer .lname{font-weight:700; font-size:15px; display:flex; align-items:center; gap:8px}
+  .layer .ldesc{color:var(--muted); font-size:14px; margin-top:4px}
+  .layer.top{background:var(--platform-soft); border-color:#e0d3fb}
+  .layer.bottom{background:var(--tenant-soft); border-color:#cdeede}
+  .layer .badge{font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; text-transform:uppercase; letter-spacing:.05em}
+  .layer.top .badge{background:var(--platform); color:#fff}
+  .layer.bottom .badge{background:var(--tenant); color:#fff}
+  .arrow{text-align:center; color:var(--muted); font-size:20px; margin:-2px 0}
+  /* ownership table */
+  table{width:100%; border-collapse:collapse; margin:12px 0; font-size:14.5px}
+  th,td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{background:#f3f5f9; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted)}
+  tr:last-child td{border-bottom:none}
+  .owner-platform{color:var(--platform); font-weight:700}
+  .owner-tenant{color:var(--tenant); font-weight:700}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:12px 0}
+  .box{border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:#fbfcfe}
+  .box h4{margin:0 0 4px; font-size:14.5px}
+  .box.dodont-do{border-left:3px solid var(--good)}
+  .box.dodont-dont{border-left:3px solid #d1495b}
+  ol.steps{counter-reset:s; list-style:none; padding-left:0}
+  ol.steps>li{position:relative; padding-left:40px; margin:12px 0}
+  ol.steps>li::before{
+    counter-increment:s; content:counter(s);
+    position:absolute; left:0; top:0; width:26px; height:26px; border-radius:50%;
+    background:var(--accent); color:#fff; font-weight:700; font-size:13px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .qbox{border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:10px;
+    padding:12px 16px; margin:10px 0; background:var(--card)}
+  .qbox .q{font-weight:700}
+  footer{color:var(--muted); font-size:13px; text-align:center; margin-top:26px}
+  @media(max-width:680px){
+    nav.toc ol{columns:1}
+    .grid2{grid-template-columns:1fr}
+    header.hero h1{font-size:24px}
+  }
+  @media print{
+    body{background:#fff}
+    section,nav.toc,.callout{box-shadow:none; break-inside:avoid}
+    header.hero{background:#1f2733 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <span class="tag">Draft for team review · Not built yet</span>
+    <h1>How we plan to serve many companies from one product</h1>
+    <p>A plain-language concept for turning our ERP into a multi-company (multi-tenant) platform — written so <strong>everyone</strong>, technical or not, can review it and weigh in.</p>
+    <div class="meta">Prepared 19 Jul 2026 · Status: ideation / open for feedback · Nothing in here is implemented yet</div>
+  </header>
+
+  <div class="callout review">
+    <span class="k">Why you're reading this</span>
+    We want a shared, agreed mental model <em>before</em> any code is written. Please read it as a proposal, not a decision. Where you see the <span class="pill open">OPEN</span> tag, your opinion is specifically wanted. Feedback questions are collected at the end.
+  </div>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#big-idea">The one big idea</a></li>
+      <li><a href="#two-layers">The two-layer model</a></li>
+      <li><a href="#db-per-tenant">A separate pantry per company — storage &amp; disk</a></li>
+      <li><a href="#entitlement-vs-rbac">Entitlements vs. permissions</a></li>
+      <li><a href="#ownership">What lives where (and why restore is safe)</a></li>
+      <li><a href="#custom">Custom work for one company</a></li>
+      <li><a href="#dev-sim">How a developer reproduces a company's issue</a></li>
+      <li><a href="#onboarding">Adding a new company</a></li>
+      <li><a href="#status">What's decided vs. still open</a></li>
+      <li><a href="#feedback">Questions for you</a></li>
+    </ol>
+  </nav>
+
+  <section id="big-idea">
+    <h2><span class="num">1</span>The one big idea</h2>
+    <p class="lead">Everything below rests on a single picture. If you remember only this, you'll understand the rest.</p>
+    <div class="analogy">
+      <div class="emoji">🍽️</div>
+      <div>
+        <p style="margin-top:0">Think of a <strong>restaurant chain</strong>:</p>
+        <ul>
+          <li>The <strong>recipe book</strong> = our software (the code). Everyone shares the <em>same</em> recipe book.</li>
+          <li>The <strong>ingredients</strong> = the data (each company's customers, orders, files).</li>
+          <li>Each company gets its <strong>own private pantry</strong> that nobody else can see or touch.</li>
+        </ul>
+        <p style="margin-bottom:0">Same recipes for all; every company cooks with its own private ingredients. That one idea answers almost every question about multi-company design.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="two-layers">
+    <h2><span class="num">2</span>The two-layer model</h2>
+    <p class="lead">The design is built as two clearly separated layers. Keeping them apart is the core principle — mixing them is where multi-tenant systems go wrong.</p>
+
+    <div class="layers">
+      <div class="layer top">
+        <div class="lname"><span class="badge">Layer 1</span> Platform / Orchestration <span style="font-weight:400;color:var(--muted)">— the “management” layer</span></div>
+        <div class="ldesc">
+          The company-of-companies control room. It decides <strong>who the tenants are</strong>, what <strong>plan / price</strong> each is on, which <strong>features they're allowed</strong>, and it <strong>creates new companies</strong>. Run and seen only by us (the super-admin).
+        </div>
+      </div>
+      <div class="arrow">▾ governs ▾</div>
+      <div class="layer bottom">
+        <div class="lname"><span class="badge">Layer 2</span> Per-Tenant Settings <span style="font-weight:400;color:var(--muted)">— each company's own world</span></div>
+        <div class="ldesc">
+          Inside one company: its own <strong>users, roles &amp; permissions (RBAC)</strong>, its own preferences, and its own data. Each company runs its own house — including whether it even uses an “admin” role or its own custom scheme.
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <span class="k">In one line</span>
+      <strong>Layer 1 decides what a company is <em>allowed</em> to have; Layer 2 decides how that company <em>runs itself</em> inside those allowances.</strong>
+    </div>
+  </section>
+
+  <section id="db-per-tenant">
+    <h2><span class="num">3</span>A separate pantry per company <span class="pill decided">DECIDED</span></h2>
+    <p class="lead">How each company's data is kept apart.</p>
+    <p>Every company gets its <strong>own separate database and its own file storage</strong> — its own labelled cupboard. One company can never see into another's cupboard, even by accident. This is the safest design and, happily, our app is already built this way, so it's a natural fit rather than a rebuild.</p>
+    <div class="grid2">
+      <div class="box dodont-do"><h4>✓ Why this is good</h4>
+        <ul style="margin-bottom:0">
+          <li>Strong privacy — data can't leak between companies.</li>
+          <li>Backups, cleanup and disk usage are naturally <em>per company</em>.</li>
+          <li>One company's problem stays contained to that company.</li>
+        </ul>
+      </div>
+      <div class="box dodont-dont"><h4>✗ What we deliberately avoid</h4>
+        <ul style="margin-bottom:0">
+          <li>One giant shared database with a “company” tag on every row.</li>
+          <li>That path risks cross-company leaks and is a far bigger, riskier rebuild.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Where the files live — and keeping the VPS from filling up</h3>
+    <p>Two things eat disk space: the <strong>database</strong> (records) and <strong>uploaded files</strong> (photos, attachments, voice notes, documents). Today both sit on the VPS's own disk. As companies and their files pile up, that fixed disk becomes the ceiling — and VPS disk is small and relatively costly. So the design treats <strong>storage as a swappable layer</strong>, which is a major safeguard for scaling to many companies.</p>
+
+    <div class="callout tech">
+      <span class="k">Technical note — the storage “seam” (for those who want the mechanics)</span>
+      <ul>
+        <li><strong>A storage switch, not a rewrite.</strong> One setting — <code>STORAGE_DRIVER = local | s3</code> — decides where uploaded files physically live. <code>local</code> = the VPS disk (today); <code>s3</code> = cloud object storage. The application code is identical either way.</li>
+        <li><strong>Object storage = effectively unlimited, cheap, pay-as-you-go.</strong> Services like <strong>Cloudflare R2</strong>, Backblaze B2 or Amazon S3 hold files <em>outside</em> the VPS. This lifts the disk ceiling and grows with us — the core disk-space + scalability lever.</li>
+        <li><strong>The database doesn't change.</strong> Records still store a plain path such as <code>/uploads/site-chat/photo.jpg</code>. Whether that resolves to the VPS or the cloud is decided by the switch — so turning on cloud storage is a <em>configuration flip (“just add a key”)</em>, not a code migration.</li>
+        <li><strong>Company identity carries into the cloud.</strong> Each company's files sit under their own prefix in the bucket, e.g. <code>tenant_sepl/uploads/…</code> — the same “separate pantry” idea, now in cloud storage.</li>
+        <li><strong>Disk safeguards already in place.</strong> Backups are compressed into one <code>.zip</code> per run and auto-pruned; databases are periodically compacted; orphaned uploads are swept into a reversible quarantine. Cloud offload is the next lever stacked on top of these.</li>
+      </ul>
+    </div>
+    <p style="margin-bottom:0"><strong>Why it matters here:</strong> building storage as a swappable layer <em>now</em> means we can move files to cheap cloud storage <em>later</em> — the day volume or budget calls for it — without touching the app. Worth weighing as part of the model. <span class="pill later">SEAM READY · SWITCH LATER</span></p>
+  </section>
+
+  <section id="entitlement-vs-rbac">
+    <h2><span class="num">4</span>Two kinds of “settings” people confuse</h2>
+    <p class="lead">“Can this person do X?” actually has two gates. Both must say yes.</p>
+    <table>
+      <tr><th>Gate</th><th>Question it answers</th><th>Who sets it</th></tr>
+      <tr>
+        <td><strong>Entitlement</strong><br><span style="font-size:13px;color:var(--muted)">(the plan)</span></td>
+        <td>Is this <em>feature/module</em> included in the company's plan at all?</td>
+        <td><span class="owner-platform">Layer 1 — us</span></td>
+      </tr>
+      <tr>
+        <td><strong>Permission (RBAC)</strong><br><span style="font-size:13px;color:var(--muted)">(the role)</span></td>
+        <td>Within the company, is <em>this user's role</em> allowed to do it?</td>
+        <td><span class="owner-tenant">Layer 2 — the company</span></td>
+      </tr>
+    </table>
+    <p><strong>Effective access = entitled <em>and</em> permitted.</strong> Example: the Solar module must be <em>in the company's plan</em> (entitlement) <em>and</em> the logged-in user's role must allow it (permission). Good news: our app already has a full “module + role permission” system, so this is a layer added on top of something that exists — not a new invention.</p>
+  </section>
+
+  <section id="ownership">
+    <h2><span class="num">5</span>What lives where — and why a restore stays safe</h2>
+    <p class="lead">A subtle but important rule that protects revenue and trust.</p>
+    <p>Because the plan (entitlements) is a <strong>commercial</strong> decision and the company's own settings are <strong>operational</strong>, they must live in different places:</p>
+    <table>
+      <tr><th>Information</th><th>Lives in</th><th>Restored with company data?</th></tr>
+      <tr><td>Plan &amp; allowed features (entitlements)</td><td><span class="owner-platform">Platform (Layer 1)</span></td><td>No — kept separate</td></tr>
+      <tr><td>Users, roles, permissions, preferences</td><td><span class="owner-tenant">The company's own DB (Layer 2)</span></td><td>Yes — belongs to them</td></tr>
+    </table>
+    <div class="callout warn">
+      <span class="k">The trap we're avoiding</span>
+      If a company's <em>allowed features</em> were stored inside their own database, then restoring an old backup could quietly <strong>bring back features they no longer pay for</strong> — overriding the current plan. So the “what you're allowed” always lives in the platform layer and is checked live. Restoring a company's data can only bring back <em>their</em> information, never their commercial allowance.
+    </div>
+  </section>
+
+  <section id="custom">
+    <h2><span class="num">6</span>Custom work for just one company</h2>
+    <p class="lead">Sometimes one company needs something bespoke. Here's the rule that keeps that sane.</p>
+    <div class="analogy">
+      <div class="emoji">📖</div>
+      <div>
+        <p style="margin-top:0">Bespoke work is a <strong>clearly-labelled special chapter in the one shared recipe book</strong> — never a separate book. Everyone still has one book; that chapter simply <strong>only opens for the company it's meant for</strong> and stays closed for everyone else.</p>
+        <p style="margin-bottom:0"><strong>Why never a separate copy of the software?</strong> The day you print a slightly different book per company, every future fix must be redone in every book by hand — they drift apart and become unmaintainable.</p>
+      </div>
+    </div>
+    <p style="margin-bottom:0"><strong>Rule of thumb:</strong> differences between companies live in their <em>settings</em>, their <em>data</em>, or a <em>clearly-scoped switchable module</em> — never in a separate copy of the software.</p>
+  </section>
+
+  <section id="dev-sim">
+    <h2><span class="num">7</span>How a developer reproduces one company's issue</h2>
+    <p class="lead">Fixing a company-specific problem — safely, without touching real customer data.</p>
+    <p>A developer can recreate a company's <strong>setup</strong> on their own laptop, using fake practice data. This reproduces the common kind of issue (“who can see what,” feature/permission quirks) with <strong>zero real customer data leaving the server</strong>.</p>
+    <ol class="steps">
+      <li><strong>Pull the company's setup</strong> — through the orchestration dashboard, a developer with a special limited permission clicks <em>“Export dev config”</em> for that company. It bundles the roles, permissions and settings (with all passwords/secrets stripped out).</li>
+      <li><strong>Load it locally</strong> — a small script builds a fresh local copy, applies that setup, and creates fake test users for each role.</li>
+      <li><strong>Work as any role</strong> — the developer logs in as, say, that company's “viewer” role, sees exactly what they see, reproduces the problem, and fixes it.</li>
+    </ol>
+    <div class="callout good">
+      <span class="k">Safe by design</span>
+      Only the <em>setup</em> is copied (no customer records, no secrets), and every export is logged (who pulled which company, when). For the rarer bug caused by one odd data record, a specially <strong>anonymised</strong> data sample is used instead — only when authorised.
+    </div>
+  </section>
+
+  <section id="onboarding">
+    <h2><span class="num">8</span>Adding a new company <span class="pill later">VISION</span></h2>
+    <p class="lead">The end goal: onboarding should feel like flipping switches, not a technical project.</p>
+    <p>A <strong>super-admin orchestration panel</strong> where we can create a company, choose its plan, turn features on/off, and (later) drive pricing &amp; feature-selection screens. The aim is that adding a company is <strong>settings-managed</strong> — its database and starting setup build themselves, and its nightly backups start automatically. No manual technical labour per company.</p>
+    <div class="callout">
+      <span class="k">The one design choice this depends on</span>
+      How companies “run” affects how easy automatic onboarding is — this is still <span class="pill open">OPEN</span>. See the next section.
+    </div>
+  </section>
+
+  <section id="status">
+    <h2><span class="num">9</span>What's decided vs. still open</h2>
+    <p class="lead">So reviewers know where opinions actually change the outcome.</p>
+    <h3>Decided <span class="pill decided">DECIDED</span></h3>
+    <ul>
+      <li><strong>Separate database + files per company</strong> (the private pantry). Not one shared database.</li>
+      <li><strong>Two-layer model</strong>: platform allowances on top, each company's own RBAC underneath.</li>
+      <li><strong>Allowances (the plan) live in the platform layer</strong>, checked live — never inside a company's own database.</li>
+      <li><strong>Bespoke work = a switchable module in the one codebase</strong> — never a separate copy.</li>
+      <li><strong>Storage is a swappable layer</strong> — files can move from VPS disk to cheap cloud storage (S3/R2) later by a config switch, with no code change. Disk-saving groundwork (compressed backups, DB compaction, upload quarantine) is already in place.</li>
+    </ul>
+    <h3>Still open — your input wanted <span class="pill open">OPEN</span></h3>
+    <ul>
+      <li><strong>How companies run (the big one):</strong> one shared program serving all companies, versus one separate program per company. This mainly affects how automatic onboarding can be and how isolated companies are from each other. It can also be decided later, when the second company actually arrives.</li>
+      <li><strong>Pricing &amp; feature-selection screens</strong> — a later phase; shape not yet designed.</li>
+    </ul>
+    <h3>Important groundwork (before company #2)</h3>
+    <ul style="margin-bottom:0">
+      <li>Tidy up a few places where rules are “hard-wired” in code today, so per-company features stay reliable.</li>
+      <li>Add a simple “which version is this database on” stamp and make setup steps fail loudly instead of silently, so many companies' databases can be kept in step safely.</li>
+      <li>Roll changes out to one company first (a canary) before all.</li>
+    </ul>
+  </section>
+
+  <section id="feedback">
+    <h2><span class="num">10</span>Questions we'd like your opinion on</h2>
+    <p class="lead">Please respond against these — or add anything we've missed.</p>
+    <div class="qbox"><span class="q">Q1.</span> Does the <strong>two-layer split</strong> (platform allowances vs. each company's own roles) match how you expect to sell and operate this?</div>
+    <div class="qbox"><span class="q">Q2.</span> For how companies run — do you value <strong>maximum isolation</strong> (separate program each) or <strong>easiest automatic onboarding</strong> (one shared program)? Or defer until the second company is real?</div>
+    <div class="qbox"><span class="q">Q3.</span> Are you comfortable that <strong>bespoke company requests</strong> are handled as switchable modules in one codebase, never separate copies?</div>
+    <div class="qbox"><span class="q">Q4.</span> For the <strong>developer simulation</strong> flow — is “export setup (no real data) via the dashboard, rebuild locally with fake data” the right level of access and safety?</div>
+    <div class="qbox"><span class="q">Q5.</span> Anything about <strong>pricing / feature packaging</strong> we should design into the platform layer from the start?</div>
+    <div class="qbox"><span class="q">Q6.</span> On <strong>storage &amp; disk</strong> — should we plan to move uploaded files to cloud storage (S3/R2) sooner as a scalability safeguard, or stay on VPS disk until volume forces it? Any cost/vendor preferences?</div>
+  </section>
+
+  <footer>
+    Internal ideation document · SEPL ERP multi-tenant model · 19 Jul 2026 · Draft — not implemented · Please send feedback against the Q-numbers above.
+    <br>Panel screen sketches: <a href="./super-admin-panel-sketches.html">super-admin-panel-sketches.html</a>
+    · engineering notes: <a href="../PHASE4-tenant-model.md">PHASE4-tenant-model.md</a>
+  </footer>
+
+</div>
+</body>
+</html>
