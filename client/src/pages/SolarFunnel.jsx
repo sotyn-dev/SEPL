@@ -48,8 +48,21 @@ export default function SolarFunnel() {
   const [modal, setModal] = useState(null); // null | {} (new) | deal (edit)
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Lost deals are fetched separately (the /deals endpoint hides them unless
+  // include_lost is set) and are deliberately NOT merged into `deals`, so the
+  // pipeline board, stage counts and analytics stay exactly as they were.
+  // They exist only so that SEARCH can find them: previously, searching a
+  // client whose deals had all been marked Lost returned "No solar deals
+  // match", which reads as "we never dealt with them" when the truth is
+  // "we dealt with them and lost it" — a materially different answer for
+  // anyone picking the phone up to that client.
+  const [lostDeals, setLostDeals] = useState([]);
+
   const load = () => {
     api.get('/solar/deals').then((r) => setDeals(r.data || [])).catch(() => toast.error('Could not load deals'));
+    api.get('/solar/deals', { params: { include_lost: 1 } })
+      .then((r) => setLostDeals((r.data || []).filter((d) => d.status === 'lost')))
+      .catch(() => {});
     api.get('/solar/funnel/analytics').then((r) => setAnalytics(r.data)).catch(() => {});
   };
   useEffect(() => {
@@ -58,17 +71,29 @@ export default function SolarFunnel() {
     load();
   }, []); // eslint-disable-line
 
+  const matchesQuery = (d, q) => (
+    (d.client_name && d.client_name.toLowerCase().includes(q))
+    || (d.company && d.company.toLowerCase().includes(q))
+    || (d.deal_no && d.deal_no.toLowerCase().includes(q))
+    || (d.phone && d.phone.includes(q))
+  );
+
   const filteredDeals = useMemo(() => {
     if (!searchQuery.trim()) return deals;
     const q = searchQuery.toLowerCase().trim();
-    return deals.filter((d) => {
-      const clientMatch = d.client_name && d.client_name.toLowerCase().includes(q);
-      const companyMatch = d.company && d.company.toLowerCase().includes(q);
-      const dealNoMatch = d.deal_no && d.deal_no.toLowerCase().includes(q);
-      const phoneMatch = d.phone && d.phone.includes(q);
-      return clientMatch || companyMatch || dealNoMatch || phoneMatch;
-    });
+    return deals.filter((d) => matchesQuery(d, q));
   }, [deals, searchQuery]);
+
+  // Lost matches surface only while searching — never on the default board.
+  const filteredLost = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase().trim();
+    return lostDeals.filter((d) => matchesQuery(d, q));
+  }, [lostDeals, searchQuery]);
+
+  // The case worth calling out explicitly: every match for this search is a
+  // deal we already lost.
+  const onlyLostMatches = searchQuery.trim() && filteredDeals.length === 0 && filteredLost.length > 0;
 
   const byStage = useMemo(() => {
     const m = {}; stages.forEach((s) => (m[s.key] = []));
@@ -127,7 +152,10 @@ export default function SolarFunnel() {
           <div className="flex items-center justify-between text-xs text-blue-900 bg-blue-50 border border-blue-200 rounded-lg px-3.5 py-2">
             <div className="flex items-center gap-2">
               <FiSearch size={14} className="text-blue-600" />
-              <span>Showing <b>{filteredDeals.length}</b> of <b>{deals.length}</b> deals matching "<b>{searchQuery}</b>"</span>
+              <span>
+                Showing <b>{filteredDeals.length}</b> of <b>{deals.length}</b> deals matching "<b>{searchQuery}</b>"
+                {filteredLost.length > 0 && <> · <b className="text-rose-700">{filteredLost.length} lost</b></>}
+              </span>
             </div>
             <button onClick={() => setSearchQuery('')} className="text-xs text-blue-700 hover:underline font-semibold">Clear filter</button>
           </div>
@@ -171,9 +199,64 @@ export default function SolarFunnel() {
                 })}
               </div>
             </div>
-          ) : (
+          ) : !onlyLostMatches && (
             <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-center text-xs text-gray-500">
               No solar deals match "<b>{searchQuery}</b>". Try searching by company name, client name, or deal number.
+            </div>
+          )}
+
+          {/* Lost matches. Shown as their own section so a closed-lost deal can
+              never be mistaken for live pipeline, with the reason surfaced —
+              that is the thing a rep actually needs before calling back. */}
+          {filteredLost.length > 0 && (
+            <div className="bg-rose-50/60 border border-rose-200 rounded-xl p-3.5">
+              {onlyLostMatches && (
+                <div className="flex items-start gap-2 mb-3 text-xs text-rose-900 bg-rose-100/70 border border-rose-200 rounded-lg px-3 py-2">
+                  <FiAlertTriangle size={14} className="text-rose-600 mt-0.5 shrink-0" />
+                  <span>
+                    <b>No active deals for "{searchQuery}".</b> The {filteredLost.length === 1 ? 'only match is a deal that was' : `${filteredLost.length} matches are all deals that were`} marked <b>Lost</b>.
+                    They are not in the pipeline and are not counted in the funnel figures.
+                  </span>
+                </div>
+              )}
+              <p className="text-xs font-bold text-rose-900 mb-2.5 flex items-center gap-1.5 uppercase tracking-wide">
+                <FiX className="text-rose-500" size={14} /> Lost deals ({filteredLost.length})
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {filteredLost.map((d) => {
+                  const stageObj = stages.find((s) => s.key === d.stage);
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => api.get(`/solar/deals/${d.id}`).then((r) => setModal(r.data))}
+                      className="bg-white/80 rounded-xl border border-rose-200 p-3 shadow-sm hover:shadow-md hover:border-rose-400 transition-all cursor-pointer flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1.5">
+                          <span className="text-[11px] font-bold text-rose-900 bg-rose-100 px-2 py-0.5 rounded-md">{d.deal_no}</span>
+                          <span className="text-[10px] bg-rose-500 text-white font-bold px-2 py-0.5 rounded-full">LOST</span>
+                        </div>
+                        <p className="text-xs font-bold text-gray-700 truncate">{d.client_name || '—'}</p>
+                        {d.company && d.company !== d.client_name && (
+                          <p className="text-[11px] text-gray-500 truncate">{d.company}</p>
+                        )}
+                        <p className="text-[10px] text-gray-500 mt-1">
+                          {fmt(d.capacity_kw)} kW · {inr(d.value)} · lost at {stageObj?.label || d.stage}
+                        </p>
+                        {d.lost_reason && (
+                          <p className="text-[10px] text-rose-700 mt-1.5 line-clamp-2" title={d.lost_reason}>
+                            Reason: {d.lost_reason}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-rose-100 text-[10px]">
+                        <span className="text-gray-400">{d.owner_name || ''}</span>
+                        <span className="text-rose-600 font-bold hover:underline">Open deal details ›</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

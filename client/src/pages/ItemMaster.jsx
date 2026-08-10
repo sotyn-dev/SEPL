@@ -69,7 +69,15 @@ export default function ItemMaster() {
   // Allow opening pre-searched via ?search=CODE, or ?edit=CODE which also
   // auto-opens that item's Edit modal (the ✎ button in the PO/FOC builder
   // opens straight to this quick edit window).
-  const [search, setSearch] = useState(() => { const p = new URLSearchParams(window.location.search); return p.get('search') || p.get('edit') || ''; });
+  // Two pieces of state on purpose:
+  //   searchInput — what is in the box, updated on every keystroke.
+  //   search      — the debounced value the query actually uses.
+  // Keeping them separate is what stops the typed text being disturbed when
+  // the list reloads: the box is never re-rendered from server state, so a
+  // reload landing mid-word can no longer interfere with typing.
+  const initialSearch = (() => { const p = new URLSearchParams(window.location.search); return p.get('search') || p.get('edit') || ''; })();
+  const [searchInput, setSearchInput] = useState(initialSearch);
+  const [search, setSearch] = useState(initialSearch);
   const autoEditCode = useRef((new URLSearchParams(window.location.search)).get('edit'));
   const autoEditDone = useRef(false);
   const [filterDept, setFilterDept] = useState('');
@@ -82,6 +90,19 @@ export default function ItemMaster() {
   const [pipeWeights, setPipeWeights] = useState([]);  // lookup for the item form dropdown
   const [lightbox, setLightbox] = useState(null);      // photo URL shown full-size on click
 
+  // Debounce: one request when typing pauses, instead of one per keystroke.
+  // Typing "cement" used to fire six queries against 2,385 rows.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 350);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  // Sequence guard. Responses can arrive out of order — a slow query for
+  // "ce" landing after the quick one for "cement" would repaint the table
+  // with the wrong rows, so the list stopped matching what was in the box.
+  // Only the newest request is allowed to write to state.
+  const reqSeq = useRef(0);
+
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
@@ -90,11 +111,18 @@ export default function ItemMaster() {
     if (approvalFilter) params.set('approval', approvalFilter);
     params.set('limit', PAGE_SIZE);
     params.set('offset', page * PAGE_SIZE);
+    const seq = ++reqSeq.current;
     setLoading(true);
     api.get(`/item-master?${params}`)
-      .then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); })
-      .catch(err => { toast.error(err.response?.data?.error || 'Could not load items'); })
-      .finally(() => setLoading(false));
+      .then(r => {
+        if (seq !== reqSeq.current) return;      // a newer request has since been sent
+        setItems(r.data.items || []); setTotal(r.data.total || 0);
+      })
+      .catch(err => {
+        if (seq !== reqSeq.current) return;
+        toast.error(err.response?.data?.error || 'Could not load items');
+      })
+      .finally(() => { if (seq === reqSeq.current) setLoading(false); });
   }, [search, filterDept, statusFilter, approvalFilter, page]);
 
   useEffect(() => { load(); }, [load]);
@@ -399,11 +427,13 @@ export default function ItemMaster() {
             <label className="label flex items-center gap-1"><FiSearch size={12} /> Search by name / spec / code / make</label>
             <div className="relative">
               <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-              <input className="input pl-10" placeholder="Type to search…" value={search} onChange={e => setSearch(e.target.value)} />
+              <input className="input pl-10" placeholder="Type to search…" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
             </div>
           </div>
-          {(search || filterDept || statusFilter || approvalFilter) && (
-            <button onClick={() => { setSearch(''); setFilterDept(''); setStatusFilter(''); setApprovalFilter(''); }} className="btn btn-secondary text-red-500 flex items-center gap-1 whitespace-nowrap">
+          {/* keyed off searchInput so Clear appears as soon as you type,
+              not 350ms later when the debounced value catches up */}
+          {(searchInput || filterDept || statusFilter || approvalFilter) && (
+            <button onClick={() => { setSearchInput(''); setSearch(''); setFilterDept(''); setStatusFilter(''); setApprovalFilter(''); }} className="btn btn-secondary text-red-500 flex items-center gap-1 whitespace-nowrap">
               <FiX size={14} /> Clear
             </button>
           )}
