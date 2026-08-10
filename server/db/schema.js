@@ -3439,6 +3439,9 @@ function initializeDatabase() {
     // the approver maintains on the list — this one travels with the
     // submission so the reviewer reads it while checking the proof.
     ['delegations', 'proof_remarks TEXT'],
+    // Help ticket target date. Nullable so every existing ticket stays valid
+    // and simply renders "Not Assigned" until someone sets one.
+    ['support_tickets', 'deadline_date DATE'],
     // Inventory ageing — the date the material started sitting in this
     // warehouse. Only the DATE is stored; the day count is derived on every
     // read so it advances on its own without anyone editing the row.
