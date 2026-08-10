@@ -233,11 +233,11 @@ router.post('/groups', requirePermission('site_chat', 'create'), (req, res) => {
 // Direct message — open (or create) a 1-on-1 chat with another user. Open to
 // EVERY signed-in user (no create permission needed): personal connect like
 // WhatsApp (mam 2026-06-19 "if monika wants send to sushila she can direct").
-router.post('/dm', (req, res) => {
-  const db = getChatDb();
-  const me = req.user.id, other = +req.body?.user_id;
-  if (!other || other === me) return res.status(400).json({ error: 'Pick a different person to message' });
-  // Reuse an existing DM between exactly these two people, if any.
+// Find the 1-on-1 DM between two people, creating it if it doesn't exist yet.
+// Shared by POST /dm and POST /forward so "message someone new" and "forward to
+// someone new" can never drift into two different behaviours.
+function ensureDm(db, me, myName, other) {
+  if (!other || other === me) throw new Error('Pick a different person to message');
   const existing = db.prepare(`
     SELECT g.id FROM chat_groups g
     WHERE g.is_dm=1
@@ -245,13 +245,107 @@ router.post('/dm', (req, res) => {
       AND EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)
       AND EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)
     LIMIT 1`).get(me, other);
-  if (existing) return res.json({ id: existing.id, name: userName(other) });
-  const otherName = userName(other), myName = req.user.name || '';
-  const gid = db.prepare('INSERT INTO chat_groups (name, is_dm, created_by, created_by_name) VALUES (?,1,?,?)').run(otherName || 'Direct message', me, myName).lastInsertRowid;
+  if (existing) return existing.id;
+  const otherName = userName(other);
+  const gid = db.prepare('INSERT INTO chat_groups (name, is_dm, created_by, created_by_name) VALUES (?,1,?,?)')
+    .run(otherName || 'Direct message', me, myName).lastInsertRowid;
   const ins = db.prepare('INSERT OR IGNORE INTO chat_group_members (group_id, user_id, user_name, added_by) VALUES (?,?,?,?)');
   db.transaction(() => { ins.run(gid, me, myName, me); ins.run(gid, other, otherName, me); })();
   emitChat(gid, 'changed', { groupId: gid });
-  res.json({ id: gid, name: otherName });
+  return gid;
+}
+
+router.post('/dm', (req, res) => {
+  const db = getChatDb();
+  const me = req.user.id, other = +req.body?.user_id;
+  if (!other || other === me) return res.status(400).json({ error: 'Pick a different person to message' });
+  const gid = ensureDm(db, me, req.user.name || '', other);
+  res.json({ id: gid, name: userName(other) });
+});
+
+// ─── FORWARD DIALOG ──────────────────────────────────────────────────────
+// Everything the forward picker needs in ONE request: every group you're in,
+// PLUS every active colleague — including people you have never messaged, so
+// you never have to open a chat before you can forward to someone.
+//
+// Rows are merged on identity: a person you already DM comes back once, as a
+// 'group' row (the existing DM) rather than twice.
+router.get('/forward-targets', (req, res) => {
+  const db = getChatDb(), erp = getDb(), me = req.user.id;
+
+  const groups = db.prepare(`
+    SELECT g.id, g.name, g.is_dm,
+           (SELECT MAX(created_at) FROM chat_messages m WHERE m.group_id=g.id) AS last_at,
+           (SELECT COUNT(*) FROM chat_group_members m WHERE m.group_id=g.id)   AS members
+      FROM chat_groups g
+     WHERE EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)`).all(me);
+
+  // The other participant of each DM, so a DM row can be de-duped against the
+  // person row and can show their department/phone.
+  const dmIds = groups.filter(g => g.is_dm).map(g => g.id);
+  const dmPeer = {};
+  if (dmIds.length) {
+    const ph = dmIds.map(() => '?').join(',');
+    for (const r of db.prepare(`SELECT group_id, user_id FROM chat_group_members WHERE group_id IN (${ph}) AND user_id<>?`).all(...dmIds, me)) {
+      dmPeer[r.group_id] = r.user_id;
+    }
+  }
+
+  const people = erp.prepare(
+    `SELECT id, name, username, department, role, phone, email, avatar_url
+       FROM users WHERE COALESCE(active,1)=1 AND COALESCE(archived,0)=0 AND id<>?`).all(me);
+  const byId = new Map(people.map(u => [u.id, u]));
+
+  const favRows = db.prepare('SELECT target_type, target_id FROM chat_forward_favorites WHERE user_id=?').all(me);
+  const favs = new Set(favRows.map(f => `${f.target_type}:${f.target_id}`));
+  const statRows = db.prepare('SELECT target_type, target_id, forward_count, last_forwarded_at FROM chat_forward_stats WHERE user_id=?').all(me);
+  const stats = new Map(statRows.map(s => [`${s.target_type}:${s.target_id}`, s]));
+  const decorate = (type, id, row) => {
+    const k = `${type}:${id}`;
+    const s = stats.get(k);
+    return { ...row, favorite: favs.has(k), forwardCount: s?.forward_count || 0, lastForwardedAt: s?.last_forwarded_at || null };
+  };
+
+  const out = [];
+  const coveredUsers = new Set();
+  for (const g of groups) {
+    const peer = g.is_dm ? byId.get(dmPeer[g.id]) : null;
+    if (g.is_dm && !peer) continue;                     // peer deactivated — hide the DM
+    if (peer) coveredUsers.add(peer.id);
+    out.push(decorate('group', g.id, {
+      targetType: 'group', targetId: g.id, groupId: g.id, isDm: !!g.is_dm,
+      name: peer ? peer.name : g.name,
+      subtitle: peer ? [peer.department, peer.role].filter(Boolean).join(' · ') : `${g.members} members`,
+      phone: peer?.phone || null, email: peer?.email || null,
+      avatarUserId: peer?.id || null, lastAt: g.last_at || null,
+    }));
+  }
+  // Colleagues with no DM yet — the whole point of the redesign.
+  for (const u of people) {
+    if (coveredUsers.has(u.id)) continue;
+    out.push(decorate('user', u.id, {
+      targetType: 'user', targetId: u.id, groupId: null, isDm: true,
+      name: u.name, subtitle: [u.department, u.role].filter(Boolean).join(' · '),
+      phone: u.phone || null, email: u.email || null,
+      avatarUserId: u.id, lastAt: null, username: u.username || null,
+    }));
+  }
+  res.json(out);
+});
+
+// Pin / unpin a forward target. Toggle — the client doesn't track which way.
+router.post('/forward-favorite', (req, res) => {
+  const db = getChatDb(), me = req.user.id;
+  const type = req.body?.target_type === 'user' ? 'user' : 'group';
+  const id = +req.body?.target_id;
+  if (!id) return res.status(400).json({ error: 'target_id required' });
+  const row = db.prepare('SELECT id FROM chat_forward_favorites WHERE user_id=? AND target_type=? AND target_id=?').get(me, type, id);
+  if (row) {
+    db.prepare('DELETE FROM chat_forward_favorites WHERE id=?').run(row.id);
+    return res.json({ favorite: false });
+  }
+  db.prepare('INSERT INTO chat_forward_favorites (user_id, target_type, target_id) VALUES (?,?,?)').run(me, type, id);
+  res.json({ favorite: true });
 });
 
 // Rename a group — same privilege as managing members (create). DMs can't be
@@ -365,6 +459,52 @@ router.get('/:groupId', (req, res) => {
 const sendLimiter = rateLimit({
   windowMs: 10_000, max: 40, keyFn: (req) => req.user?.id,
   message: 'You are sending messages too fast — take a breath and try again in a moment.',
+});
+
+// Forward one message to MANY targets in a single call.
+// A 'user' target with no DM yet gets one created here, so forwarding to
+// someone you've never messaged just works.
+router.post('/forward', sendLimiter, (req, res) => {
+  const db = getChatDb(), me = req.user.id;
+  const { body, attachment_url, attachment_name, targets } = req.body || {};
+  if (!Array.isArray(targets) || !targets.length) return res.status(400).json({ error: 'Pick at least one chat' });
+  if ((!body || !String(body).trim()) && !attachment_url) return res.status(400).json({ error: 'Nothing to forward' });
+  if (targets.length > 25) return res.status(400).json({ error: 'Forward to at most 25 chats at once' });
+
+  const myName = req.user.name || '';
+  // forwarded=1 so the recipient's bubble carries the "Forwarded" label.
+  const insMsg = db.prepare('INSERT INTO chat_messages (group_id, body, attachment_url, attachment_name, sender_id, sender_name, forwarded) VALUES (?,?,?,?,?,?,1)');
+  const bump = db.prepare(`
+    INSERT INTO chat_forward_stats (user_id, target_type, target_id, forward_count, last_forwarded_at)
+    VALUES (?,?,?,1,CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, target_type, target_id)
+    DO UPDATE SET forward_count = forward_count + 1, last_forwarded_at = CURRENT_TIMESTAMP`);
+
+  const sent = [], failed = [];
+  for (const t of targets) {
+    const type = t?.target_type === 'user' ? 'user' : 'group';
+    const tid = +t?.target_id;
+    if (!tid) { failed.push({ ...t, error: 'bad target' }); continue; }
+    try {
+      let gid;
+      if (type === 'group') {
+        if (!canAccess(db, req, tid)) { failed.push({ ...t, error: 'not a member' }); continue; }
+        gid = tid;
+      } else {
+        gid = ensureDm(db, me, myName, tid);            // creates the DM if absent
+      }
+      const info = insMsg.run(gid, body ? String(body).trim() : null, attachment_url || null, attachment_name || null, me, myName);
+      markRead(db, gid, me, info.lastInsertRowid);
+      bump.run(me, type, tid);
+      const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(info.lastInsertRowid);
+      emitChat(gid, 'message', row);
+      emitChat(gid, 'changed', { groupId: gid });
+      sent.push({ target_type: type, target_id: tid, group_id: gid, message: row });
+    } catch (e) {
+      failed.push({ target_type: type, target_id: tid, error: e.message });
+    }
+  }
+  res.json({ sent: sent.length, failed, results: sent });
 });
 
 // Any MEMBER can post — gated by group membership ONLY, not any site_chat
