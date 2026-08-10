@@ -197,6 +197,7 @@ Docker / Compose locally is **optional** — only when proving real provision (`
 | Entitlement API | Coarse **packs** `GET/PUT /api/tenants/:slug/entitlements` — not per-widget |
 | Hide / disable | **Best effort, loose coupling** — nav + pack front door; Dashboard/DPR/overlays degrade (skip/empty), never hard-unplumb every JOIN. See § Entitlement API + hide/disable semantics |
 | Secured entitlements | **All packs ON** at seed — full surface as today |
+| Effective access chain | **Platform entitlement → Module availability → RBAC matrix** (entitlement overrides Roles popup kill-switches; saved flags/matrix not wiped) |
 | Code | One monorepo → ERP image + platform app + worker agent; never fork/copy per org |
 | Local default | **Run scripts** for ERP, platform, agent; Docker optional for provision tests only |
 | Slug resonance | `pharma` → `pharma-erp.sotyn.com` → `/var/lib/sotyn/tenants/pharma/data` → S3 prefix `pharma` |
@@ -300,7 +301,8 @@ Practical floor for “on Sotyn **ERP**” project work: **BB + Items + Vendors 
 | Procurement / site | Indent to Dispatch, Orders, Gantt, Inventory |
 | Projects | DPR, Snags, Indent Labour Payment, Sales Billing |
 | Finance depth | Payables, Collections, Cash Flow, AR-AP, Cheques, Invoices |
-| HRMS depth | Attendance, Payroll, Hiring, Sub-con, Champions / Performance |
+| Attendance | Punch / muster as its **own** sellable pack (spine = chassis `users`; employees/leave soft; not forced `erp_baseline` / full HRMS) — salon-ready |
+| HRMS depth | Payroll, Hiring, Sub-con, Champions / Performance (Payroll may require Attendance + employees) |
 | Extras | AI, Tasks, Service Desk, Rentals / Assets, Fire NOC |
 
 ```text
@@ -379,6 +381,21 @@ Dashboard, DPR (and similar rollups: CMD, scoring, AI) pull plumbing from many m
 | **Secured** | All packs ON → today’s full Dashboard / DPR behavior |
 | **MEPF partial** | Thinner nav; Dashboard shows entitled tiles; missing sections omit, don’t error |
 | **Feature-only** | Near-empty home + sold packs; don’t load MEPF DPR spine if projects / ERP baseline OFF |
+
+**Override chain (Roles & Permissions — locked):** today’s ERP already has two in-tenant layers on Settings → Roles & Permissions:
+
+1. **Module availability** popup — org kill-switch (`features.js` / `module-flags.json`), above the matrix  
+2. **Permissions matrix** — per-role grants  
+
+**Platform entitlements sit above both.** Effective show = entitled × module-flag ON × role allows.
+
+| Priority | Layer | SoT | If OFF |
+|---|---|---|---|
+| 1 (highest) | Platform pack entitlement | `platform.db` | Hidden from ERP view (nav, Module availability list, matrix columns for that pack). Tenant admin cannot “turn on” what wasn’t sold |
+| 2 | Module availability | tenant `module-flags` | Hidden for everyone in that org; **flags kept** when flipped back |
+| 3 | Role permissions matrix | tenant `erp.db` | User lacks action; **matrix rows kept** when pack / flag returns |
+
+Do **not** delete `module-flags` or `role_permissions` when platform turns a pack OFF — same preserve rule as matrix vs entitlements. Module availability UI should only list (or only allow toggling) modules inside entitled packs; entitlement wins if a stale flag says ON.
 
 ### White-label — org name & logo (locked notes — Aug 2026)
 
