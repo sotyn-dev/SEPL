@@ -8,11 +8,11 @@ Priority matches `docs/PHASE4-tenant-model.md` § White-label.
 |---|---|---|---|
 | P0 | Login | `Login.jsx` — `/sepl-logo.webp`, “Secured Engineers Pvt Ltd”, SOTYN.AI | `assets.logo`, `displayName` / `legalName`, `productMark`, `loginTagline` |
 | P0 | Sidebar / header | `Layout.jsx` — logo + “Secured Engineers” | `assets.logo`, `displayName`, `shortName` |
-| P0 | Document title + favicon | `client/index.html`, `manifest.json` | `pwa.*`, `themeColor`, `assets.favicon` / `icon` |
+| P0 | Document title + favicon | `client/index.html`, `manifest.json` | `pwa.*`, `assets.favicon` / `icon` (shared ERP theme — no per-tenant colors) |
 | P1 | Email from-name / footer | mailer templates (when sending as customer) | `displayName`, `legalName` |
 | P2 | Print / PDF letterhead | `VendorPOPrint.jsx`, `OfferLetterPrint.jsx`, `NDAPrint.jsx`, `IndentPrint.jsx`, Delivery Note / Sales Bill | `legalName`, `assets.logo`, address/GST later |
 
-**Deferred:** full theme rewrite; every help string; custom domain.
+**Deferred:** per-tenant theme/colors (ERP keeps one shared palette); every help string; custom domain.
 
 **Assets extracted (seed for slug=`secured` only):**
 

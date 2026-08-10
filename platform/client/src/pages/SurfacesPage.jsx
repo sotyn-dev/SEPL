@@ -1,7 +1,7 @@
 const ROWS = [
   { p: 'P0', surface: 'Login', erp: 'Login.jsx — logo, legal line, tagline', field: 'logo, displayName, productMark, loginTagline' },
   { p: 'P0', surface: 'Sidebar / header', erp: 'Layout.jsx', field: 'logo, displayName, shortName' },
-  { p: 'P0', surface: 'Title + favicon + PWA', erp: 'index.html, manifest.json', field: 'pwa.*, themeColor, favicon/icon' },
+  { p: 'P0', surface: 'Title + favicon + PWA', erp: 'index.html, manifest.json', field: 'pwa.*, favicon/icon (ERP shared theme colors)' },
   { p: 'P1', surface: 'Email from / footer', erp: 'mailer templates', field: 'displayName, legalName' },
   { p: 'P2', surface: 'Print / PDF letterhead', erp: 'VendorPOPrint, OfferLetter, NDA, Indent…', field: 'legalName, logo (+ address later)' },
 ];

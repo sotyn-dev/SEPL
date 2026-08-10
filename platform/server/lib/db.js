@@ -64,8 +64,6 @@ function openDb() {
       legal_name TEXT,
       product_mark TEXT,
       show_powered_by INTEGER NOT NULL DEFAULT 1,
-      theme_color TEXT,
-      accent_color TEXT,
       login_tagline TEXT,
       pwa_json TEXT,
       assets_json TEXT,
@@ -133,8 +131,8 @@ function seedSecured(db) {
   db.prepare(`
     INSERT INTO tenant_branding (
       tenant_id, display_name, short_name, legal_name, product_mark,
-      show_powered_by, theme_color, accent_color, login_tagline, pwa_json, assets_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      show_powered_by, login_tagline, pwa_json, assets_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     b.displayName,
@@ -142,8 +140,6 @@ function seedSecured(db) {
     b.legalName || null,
     b.productMark || null,
     b.showPoweredBy ? 1 : 0,
-    b.themeColor || null,
-    b.accentColor || null,
     b.loginTagline || null,
     JSON.stringify(b.pwa || {}),
     JSON.stringify(b.assets || {})

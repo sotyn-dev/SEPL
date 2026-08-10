@@ -194,6 +194,9 @@ Docker / Compose locally is **optional** — only when proving real provision (`
 | New orgs | **Docker** + bind-mount `/var/lib/sotyn/tenants/{slug}/data` → container `data/` |
 | Tenancy shape | Separate folder + DB per org; never shared DB + `tenant_id` |
 | Entitlements | Authoritative in `platform.db` only |
+| Entitlement API | Coarse **packs** `GET/PUT /api/tenants/:slug/entitlements` — not per-widget |
+| Hide / disable | **Best effort, loose coupling** — nav + pack front door; Dashboard/DPR/overlays degrade (skip/empty), never hard-unplumb every JOIN. See § Entitlement API + hide/disable semantics |
+| Secured entitlements | **All packs ON** at seed — full surface as today |
 | Code | One monorepo → ERP image + platform app + worker agent; never fork/copy per org |
 | Local default | **Run scripts** for ERP, platform, agent; Docker optional for provision tests only |
 | Slug resonance | `pharma` → `pharma-erp.sotyn.com` → `/var/lib/sotyn/tenants/pharma/data` → S3 prefix `pharma` |
@@ -206,7 +209,7 @@ Docker / Compose locally is **optional** — only when proving real provision (`
 | What subdomain means | **Tenant slot** — not “must be MEPF ERP customer” |
 | What you sell | **Packs / apps** via panel; one image; exclusive apps = pack OFF everywhere except listed tenants |
 | Tenant classes | **MEPF/ERP** · **feature-only** · **exclusive-app** (see *What you are selling*) |
-| Secured’s place | **A tenant like any other** for product/branding/entitlements — not “the default org.” Legacy only: data stays at `/root/erp/data` (bind-mount). See **White-label** |
+| Secured’s place | **A tenant like any other** for product/branding — not “the default org.” Special cases only: legacy `/root/erp/data` bind-mount + **all packs entitled**. See **White-label** / entitlements |
 | White-label | Per-tenant display name + logo (platform sets → tenant shell/login/prints). No hardcoded Secured-as-default chrome |
 | Field access | **PWA / WebView** on tenant URL + home-screen icons from tenant branding; optional **mini downloadable wrapper** for some tenants only — no separate field backend |
 
@@ -303,7 +306,7 @@ Practical floor for “on Sotyn **ERP**” project work: **BB + Items + Vendors 
 ```text
 ERP tenant        = chassis + ERP baseline + sold packs
 Feature-only      = chassis + sold packs only   ← barber salon chain
-Secured today     ≈ ERP tenant with most packs ON
+Secured           = ERP tenant with **all packs ON** (seed entitlements full)
 ```
 
 Tenant **Roles & Permissions** still carve who may use an entitled module; platform only decides which packs exist for that org.
@@ -336,8 +339,46 @@ Together these define selling from one image + wildcard tenancy:
 3. App gates with existing `isModuleEnabled` / `ModuleGate` / `requireModuleEnabled`  
 4. Tenant admins still own **who** inside the org may use an entitled feature (RBAC)  
 5. Plans encode **tenant class** (MEPF/ERP vs feature-only vs exclusive) or empty baseline — never force hollow BB/Items nav on a salon  
+6. **Secured (`secured`)** seeds with **all packs ON** — full surface as today’s single-org app (legacy data path remains the only other Secured special case)
 
 Same shape later: Solar to X, Payables to Y, remove Champions from Z, Chat-only salon group, partner-only exclusive module.
+
+### Entitlement API + hide/disable semantics (locked — Aug 2026)
+
+**API stays coarse** (platform control plane — not ERP):
+
+| Method | Path | Body / result |
+|---|---|---|
+| `GET` | `/api/tenants/:slug/entitlements` | `{ packs: { chassis: true, erp_baseline: true, projects: false, … } }` |
+| `PUT` | `/api/tenants/:slug/entitlements` | same → upsert `tenant_entitlements` in **`platform.db`** |
+
+- Pack keys = product catalog (not every RBAC leaf, not per Dashboard card).  
+- Platform may refuse illegal **sells** via pack-level `dependsOn` (e.g. Procurement without ERP baseline hubs). That is plan integrity only.  
+- Truth never lives in tenant `erp.db`.
+
+**Hide / disable = best effort, loose coupling** — especially for composite ERP surfaces.
+
+Dashboard, DPR (and similar rollups: CMD, scoring, AI) pull plumbing from many modules. Day‑1 entitlements must **not** require rewriting every JOIN or shipping a custom Dashboard per tenant class.
+
+| Layer | Behavior |
+|---|---|
+| **1. Nav / `ModuleGate`** | Hide entry points for OFF packs — primary UX |
+| **2. Pack front door** | `requireModuleEnabled` (or pack equivalent) on that pack’s **own** APIs only — hard 404/403 at the door |
+| **3. Overlays / composites** | Dashboard, DPR, CMD, scoring, AI: **opportunistic sections** — if a source pack is OFF or a call fails → skip / empty / hide; **never** block the shell or 500 the home page |
+
+**`dependsOn`:** used when **entitling packs** in the panel (don’t sell a hollow plan). **Not** used to make Dashboard/DPR refuse to boot when an upstream pack is off — those stay **overlay / soft** (see [module-depends-graph.md](multitenancy/module-depends-graph.md)).
+
+**Explicitly out of day‑1 scope:**
+
+- Per-tenant Dashboard layouts or DPR schema forks  
+- Entitlement checks on every internal SQL JOIN  
+- Perfect scrubbing of dead filters/columns in reports (empty / zero / hidden is enough)
+
+| Tenant | Expectation |
+|---|---|
+| **Secured** | All packs ON → today’s full Dashboard / DPR behavior |
+| **MEPF partial** | Thinner nav; Dashboard shows entitled tiles; missing sections omit, don’t error |
+| **Feature-only** | Near-empty home + sold packs; don’t load MEPF DPR spine if projects / ERP baseline OFF |
 
 ### White-label — org name & logo (locked notes — Aug 2026)
 
@@ -345,7 +386,7 @@ Same shape later: Solar to X, Payables to Y, remove Champions from Z, Chat-only 
 
 | | **Platform (super-admin)** | **Tenant app (client module)** |
 |---|---|---|
-| **Owns** | Per-org display name, logo asset/URL, optional accent; onboard + Brand tab | Renders name/logo on shell surfaces |
+| **Owns** | Per-org display name, logo asset/URL; onboard + Brand tab | Renders name/logo on shell surfaces |
 | **Does not** | Render every PDF itself | Hold a second branding SoT |
 
 **Propagate:** platform writes branding → agent materializes onto tenant config mount and/or `data/` (same family as entitlements) → tenant loads on boot. Hosted orgs: platform can override; optional later: tenant admin edits own logo/name.
@@ -358,7 +399,7 @@ Same shape later: Solar to X, Payables to Y, remove Champions from Z, Chat-only 
 4. Email from-name / footer (when sending as the customer)  
 5. Print / PDF letterhead (many surfaces still hardcode Secured today)
 
-**Defer unless sold:** full theme/colors; rewriting every “SOTYN.AI” help string; custom domain (separate from wildcard).
+**Defer / out of scope:** per-tenant theme/colors (ERP UI stays one shared palette); rewriting every “SOTYN.AI” help string; custom domain (separate from wildcard).
 
 **Two marks:**
 

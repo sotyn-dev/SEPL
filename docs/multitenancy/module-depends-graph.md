@@ -170,6 +170,11 @@ const MODULE_DEPS = {
   },
 
   // ── Overlays (never hard-block product kills) ─────────────────
+  // Dashboard / DPR / CMD / scoring / AI: composite surfaces.
+  // Entitlement hide/disable is best-effort: nav hide + pack front-door
+  // gates; overlay sections skip/empty when a source pack is OFF.
+  // dependsOn does NOT mean “Dashboard may not boot.” See PHASE4
+  // § Entitlement API + hide/disable semantics.
   scoring: {
     dependsOn: [],
     strength: {},
@@ -317,4 +322,6 @@ Feature-only   = chassis + sold packs only
 
 - Not implementing `dependsOn` in `features.js` yet  
 - Not claiming every soft client `api.get` is listed — **hard SQL/FK edges are the contract**  
-- Not splitting code into packages — graph is for entitlement logic only
+- Not splitting code into packages — graph is for entitlement logic only  
+- Not requiring Dashboard / DPR / other overlays to hard-fail when an upstream pack is OFF — those degrade (best effort); see `PHASE4-tenant-model.md` § Entitlement API + hide/disable semantics  
+- Not using this graph to invent per-tenant Dashboard / DPR forks

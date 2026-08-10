@@ -36,6 +36,8 @@ Auth: **platform JWT** (`PLATFORM_JWT_SECRET`, persisted in `platform_settings`)
 
 Data dir default: `platform/data/platform.db` (gitignored). Seed loads `secured` on first boot.
 
+**Brand assets (durable):** uploads write to `platform/data/tenants/{slug}/assets/` (gitignored). Serve order: durable → seed (`platform/seed/tenants/{slug}/assets/`). API: `POST /api/branding/:slug/assets/:kind` multipart field `file` (`logo` | `logoPng` | `icon` | `favicon` | `icons`). Pointers stored in `tenant_branding.assets_json`.
+
 Product mark: `platform/client/public/sotyn-logo.png` (login + header).
 
 ## Routes — live vs pencil
@@ -46,7 +48,7 @@ Product mark: `platform/client/public/sotyn-logo.png` (login + header).
 | `/` Companies list | **Live** list/create draft tenants (`platform.db`) |
 | `/orgs/:slug` Overview | **Pencil** — layout + real tenant fields; Pause not wired |
 | `/orgs/:slug/entitlements` | **Pencil** — fixture pack toggles; Save does not persist |
-| `/orgs/:slug/brand` | **Live** — branding API + seed assets |
+| `/orgs/:slug/brand` | **Live** — branding API + **upload** to durable store (`data/tenants/{slug}/assets/`); seed = fallback |
 | `/plans` | **Pencil / later** — pricing stub |
 | Export dev config dialog | **Pencil** — Download disabled |
 | `/dev/surfaces` | Engineering checklist (white-label ERP surfaces) |
@@ -68,3 +70,4 @@ HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for 
 2. Worker agent Docker + local drivers (`/v1/tenants…`)
 3. Dockerfile for ERP image + agent provision
 4. Materialize branding/entitlements into tenant mount; ERP consumes contract
+   (branding durable store + upload UI already live — materialize still pending)

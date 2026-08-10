@@ -19,7 +19,8 @@ export function setToken(token) {
 
 export async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-  if (options.body && !headers['Content-Type']) {
+  const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (options.body && !isForm && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
   const token = getToken();
@@ -33,4 +34,11 @@ export async function api(path, options = {}) {
     }
   }
   return res;
+}
+
+/** Multipart upload helper (do not set Content-Type — browser sets boundary). */
+export async function uploadFile(path, file, fieldName = 'file') {
+  const fd = new FormData();
+  fd.append(fieldName, file);
+  return api(path, { method: 'POST', body: fd });
 }

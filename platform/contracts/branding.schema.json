@@ -11,8 +11,6 @@
     "legalName": { "type": "string", "maxLength": 200 },
     "productMark": { "type": "string", "maxLength": 80, "description": "Optional product chrome e.g. SOTYN.AI" },
     "showPoweredBy": { "type": "boolean", "default": true },
-    "themeColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
-    "accentColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
     "loginTagline": { "type": "string", "maxLength": 160 },
     "pwa": {
       "type": "object",

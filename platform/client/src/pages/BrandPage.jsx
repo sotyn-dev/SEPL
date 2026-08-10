@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api } from '../lib/api.js';
+import { api, uploadFile } from '../lib/api.js';
 
 const empty = {
   displayName: '',
@@ -8,10 +8,23 @@ const empty = {
   legalName: '',
   productMark: '',
   showPoweredBy: true,
-  themeColor: '#0d9488',
-  accentColor: '#0f766e',
   loginTagline: '',
 };
+
+const UPLOAD_SLOTS = [
+  { kind: 'logo', label: 'Logo', accept: '.webp,.png,.jpg,.jpeg,.svg', hint: 'Login + sidebar mark' },
+  { kind: 'logoPng', label: 'Logo (PNG)', accept: '.png', hint: 'Print / fallback' },
+  { kind: 'icon', label: 'App icon', accept: '.svg,.png,.webp', hint: 'PWA / home screen' },
+  { kind: 'favicon', label: 'Favicon', accept: '.svg,.png,.ico', hint: 'Browser tab' },
+];
+
+function assetUrl(slug, assets, kind, bust) {
+  const ref = assets?.[kind];
+  if (!ref) return null;
+  const file = String(ref).split('/').pop();
+  const q = bust ? `?t=${encodeURIComponent(bust)}` : '';
+  return `/api/branding/${slug}/assets/${file}${q}`;
+}
 
 export default function BrandPage() {
   const { slug } = useParams();
@@ -19,6 +32,19 @@ export default function BrandPage() {
   const [form, setForm] = useState(empty);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
+  const [uploading, setUploading] = useState(null);
+
+  const applyBranding = (b) => {
+    setBranding(b);
+    setForm({
+      displayName: b.displayName || '',
+      shortName: b.shortName || '',
+      legalName: b.legalName || '',
+      productMark: b.productMark || '',
+      showPoweredBy: !!b.showPoweredBy,
+      loginTagline: b.loginTagline || '',
+    });
+  };
 
   useEffect(() => {
     setMsg('');
@@ -27,17 +53,7 @@ export default function BrandPage() {
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || 'Load failed');
-        setBranding(d.branding);
-        setForm({
-          displayName: d.branding.displayName || '',
-          shortName: d.branding.shortName || '',
-          legalName: d.branding.legalName || '',
-          productMark: d.branding.productMark || '',
-          showPoweredBy: !!d.branding.showPoweredBy,
-          themeColor: d.branding.themeColor || '#0d9488',
-          accentColor: d.branding.accentColor || '#0f766e',
-          loginTagline: d.branding.loginTagline || '',
-        });
+        applyBranding(d.branding);
       })
       .catch((e) => setError(String(e.message || e)));
   }, [slug]);
@@ -55,22 +71,40 @@ export default function BrandPage() {
       setError(d.error || 'Save failed');
       return;
     }
-    setBranding(d.branding);
+    applyBranding(d.branding);
     setMsg('Saved in platform.db — not pushed to ERP yet.');
   };
 
-  const logoUrl = branding?.assets?.logo
-    ? `/api/branding/${slug}/assets/${String(branding.assets.logo).split('/').pop()}`
-    : null;
+  const onUpload = async (kind, file) => {
+    if (!file) return;
+    setUploading(kind);
+    setMsg('');
+    setError('');
+    try {
+      const r = await uploadFile(`/api/branding/${slug}/assets/${kind}`, file);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Upload failed');
+      applyBranding(d.branding);
+      setMsg(`Uploaded ${kind} → durable store (platform/data/tenants/${slug}/assets/).`);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const bust = branding?.updatedAt || '';
+  const logoUrl = assetUrl(slug, branding?.assets, 'logo', bust)
+    || assetUrl(slug, branding?.assets, 'logoPng', bust);
 
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-teal-700 font-semibold mb-1">White-label pencil</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-teal-700 font-semibold mb-1">White-label</p>
           <h1 className="font-display text-2xl sm:text-3xl font-semibold text-ink break-all">{slug}</h1>
           <p className="text-sm text-slate-600 mt-1">
-            Platform SoT for name + logo. ERP still hardcodes Secured until materialize lands.
+            Platform SoT for name + logo. Uploads land in durable store; seed is fallback only.
           </p>
         </div>
         <Link to={`/orgs/${slug}`} className="text-sm text-blue-800 hover:underline">← Overview</Link>
@@ -87,8 +121,6 @@ export default function BrandPage() {
             ['legalName', 'Legal name'],
             ['productMark', 'Product mark (optional)'],
             ['loginTagline', 'Login tagline'],
-            ['themeColor', 'Theme color'],
-            ['accentColor', 'Accent color'],
           ].map(([key, label]) => (
             <label key={key} className="block text-xs font-semibold text-slate-600 space-y-1">
               {label}
@@ -113,10 +145,7 @@ export default function BrandPage() {
         </form>
 
         <div className="space-y-4">
-          <div
-            className="rounded-xl overflow-hidden shadow-lg border border-slate-200"
-            style={{ background: `linear-gradient(135deg, ${form.themeColor}, ${form.accentColor})` }}
-          >
+          <div className="rounded-xl overflow-hidden shadow-lg border border-slate-200 bg-gradient-to-br from-blue-800 to-blue-950">
             <div className="bg-white m-4 rounded-lg p-6 space-y-4">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden">
@@ -137,7 +166,7 @@ export default function BrandPage() {
               </div>
               <div className="h-9 rounded-lg bg-slate-100" />
               <div className="h-9 rounded-lg bg-slate-100" />
-              <div className="h-10 rounded-lg text-white text-sm font-medium flex items-center justify-center" style={{ background: form.themeColor }}>
+              <div className="h-10 rounded-lg btn-primary flex items-center justify-center shadow-none">
                 Sign in
               </div>
               {form.showPoweredBy && (
@@ -146,20 +175,57 @@ export default function BrandPage() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white p-4 text-xs text-slate-600 space-y-2">
-            <p className="font-semibold text-ink text-sm">Seed assets ({slug})</p>
-            {branding?.assets ? (
-              <ul className="font-mono space-y-1">
-                {Object.entries(branding.assets).map(([k, v]) => (
-                  <li key={k}>{k}: {v}</li>
-                ))}
-              </ul>
-            ) : (
-              <p>No assets yet — upload / seed later.</p>
-            )}
-            <p className="text-slate-500 pt-1">
-              Secured logos live under <code>platform/seed/tenants/secured/assets/</code> — tenant-scoped, not global default.
-            </p>
+          <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm space-y-4">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Brand assets</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Writes to <code className="bg-slate-50 px-1 rounded">platform/data/tenants/{slug}/assets/</code>
+                {' '}(gitignored). Seed used only if no durable file.
+              </p>
+            </div>
+            <ul className="space-y-3">
+              {UPLOAD_SLOTS.map((slot) => {
+                const preview = assetUrl(slug, branding?.assets, slot.kind, bust);
+                const busy = uploading === slot.kind;
+                return (
+                  <li
+                    key={slot.kind}
+                    className="flex flex-col sm:flex-row sm:items-center gap-3 border border-slate-100 rounded-lg p-3"
+                  >
+                    <div className="w-14 h-14 shrink-0 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden">
+                      {preview ? (
+                        <img src={preview} alt="" className="w-full h-full object-contain p-1" />
+                      ) : (
+                        <span className="text-[10px] text-slate-400">—</span>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-ink">{slot.label}</p>
+                      <p className="text-xs text-slate-500">{slot.hint}</p>
+                      {branding?.assets?.[slot.kind] && (
+                        <p className="text-[11px] font-mono text-slate-400 mt-0.5 truncate">
+                          {branding.assets[slot.kind]}
+                        </p>
+                      )}
+                    </div>
+                    <label className="btn btn-secondary text-xs cursor-pointer shrink-0 self-start sm:self-auto">
+                      {busy ? 'Uploading…' : 'Upload'}
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept={slot.accept}
+                        disabled={!!uploading}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = '';
+                          onUpload(slot.kind, f);
+                        }}
+                      />
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         </div>
       </div>
