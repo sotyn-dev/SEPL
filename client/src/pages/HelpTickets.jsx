@@ -127,7 +127,8 @@ export default function HelpTickets() {
       try {
         const fd = new FormData();
         fd.append('file', form._file);
-        const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        // ?folder=help-tickets → own uploads subfolder so the orphan sweep can target it.
+        const up = await api.post('/upload?folder=help-tickets', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
         payload.attachment_link = up.data?.url || null;
       } catch (err) {
         toast.error(`Attachment upload failed: ${err.response?.data?.error || err.message} — submitting without file`, { duration: 5000 });
@@ -167,7 +168,7 @@ export default function HelpTickets() {
       const toSend = file.type?.startsWith('image/') ? await compressImage(file) : file;
       const fd = new FormData();
       fd.append('file', toSend);
-      const res = await api.post('/upload', fd, {
+      const res = await api.post('/upload?folder=help-tickets', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (ev) => { if (ev.total) setProof(p => ({ ...p, pct: Math.round((ev.loaded / ev.total) * 100) })); },
       });

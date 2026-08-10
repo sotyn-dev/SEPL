@@ -9,6 +9,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider } from './context/AuthContext'
 import { SocketProvider } from './context/SocketProvider'
+import { ModuleFlagsProvider } from './context/ModuleFlagsContext'
 import { getToken } from './lib/tokenStore'
 // Self-hosted Inter (weight-axis variable font, one same-origin woff2 covering
 // all weights). Replaces the render-blocking Google Fonts @import — subsets are
@@ -83,8 +84,13 @@ createRoot(document.getElementById('root')).render(
       <BrowserRouter>
         <AuthProvider>
           <SocketProvider>
-            <App />
-            <Toaster position="top-right" />
+            {/* Module availability (global feature on/off). Sits INSIDE SocketProvider
+                so it can subscribe to `modules:changed` itself and react the moment an
+                admin flips a switch — no extra listener component needed. */}
+            <ModuleFlagsProvider>
+              <App />
+              <Toaster position="top-right" />
+            </ModuleFlagsProvider>
           </SocketProvider>
         </AuthProvider>
       </BrowserRouter>

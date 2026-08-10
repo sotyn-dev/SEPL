@@ -5731,6 +5731,12 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
+    // SOTYN Flow — Trello-style task boards. Registered ONLY so the "See All"
+    // (can_see_all) toggle exists in Roles & Permissions: ticking it lets a role
+    // see every board (else only boards they're a member of). View/Create/etc.
+    // are not used to gate boards — access is board membership; management is
+    // board-admin.
+    'sotyn_flow',
     // Mam (2026-06-19): Labour Rate Sheet — was sharing the `quotations`
     // permission so it never showed separately in Roles & Permissions.
     // Now its own module so access can be granted/revoked on its own.
@@ -6168,6 +6174,16 @@ in your first week. If a process feels broken, raise a Help Ticket
     runIndentFlowSettingsMigrations(db);
   } catch (e) {
     console.warn('[indent_flow_settings] migrations skipped (non-fatal):', e.message);
+  }
+
+  // System Requirements — product evolution tracker (lean Phase 1).
+  // Open access + dual Business/IT approvers via app_settings.
+  // docs/SYSTEM_REQUIREMENTS.md
+  try {
+    const { runSystemRequirementsMigrations } = require('./systemRequirementsSchema');
+    runSystemRequirementsMigrations(db);
+  } catch (e) {
+    console.warn('[system_requirements] migrations skipped (non-fatal):', e.message);
   }
 
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────
