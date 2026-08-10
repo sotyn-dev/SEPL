@@ -818,14 +818,18 @@ function computeScorecard(db, userId, weekStart) {
       // that is complete") — unlike delegations/pms/tickets, this checks
       // approved_at too, not just current status, so a late approval doesn't
       // retroactively fix a past week's score once that week has closed.
+      // date(raised_at) instead of raw string BETWEEN — prod snag rows came in
+      // via a separate PR + imports, so timestamps may be 'T'-separated ISO or
+      // date-only; date() normalizes every ISO variant (raw compare missed them
+      // and the whole KPI silently read 0).
       if (source === 'auto:snags') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND raised_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND raised_at BETWEEN ? AND ? AND status='approved' AND approved_at BETWEEN ? AND ?`).get(userId, since, until, since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ? AND status='approved' AND date(approved_at) BETWEEN ? AND ?`).get(userId, sinceDate, untilDate, sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:snags_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE raised_at BETWEEN ? AND ?`).get(since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE raised_at BETWEEN ? AND ? AND status='approved' AND approved_at BETWEEN ? AND ?`).get(since, until, since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ? AND status='approved' AND date(approved_at) BETWEEN ? AND ?`).get(sinceDate, untilDate, sinceDate, untilDate).c;
         return { given, done };
       }
 
