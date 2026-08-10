@@ -128,7 +128,7 @@ function ProjectModal({ project, stages, onClose, onSaved, reopen }) {
   const collected = ms.filter((m) => m.status === 'collected').reduce((a, m) => a + (m.amount || 0), 0);
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center overflow-y-auto p-4">
+    <div className="!m-0 fixed inset-0 bg-black/40 z-50 flex items-start justify-center overflow-y-auto p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl my-8">
         <div className="px-5 py-3 border-b flex items-center justify-between">
           <h3 className="font-bold">{p.project_no} · {p.client_name} <span className="text-xs font-normal text-gray-500">· {fmt(p.capacity_kw)} kW · {inr(p.value)}</span></h3>

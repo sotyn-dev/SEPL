@@ -3,6 +3,7 @@ const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
+const quarantine = require('../lib/quarantine');     // reversible cleanup of deleted ticket files
 const stUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const stDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 // Deadline date validation, shared by POST and PUT.
@@ -379,7 +380,12 @@ router.delete('/:id', (req, res) => {
   const db = getDb();
   const user = db.prepare('SELECT role FROM users WHERE id=?').get(req.user.id);
   if (user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const t = db.prepare('SELECT attachment_link, proof_url FROM support_tickets WHERE id=?').get(req.params.id);
   db.prepare('DELETE FROM support_tickets WHERE id=?').run(req.params.id);
+  // Quarantine the ticket's attachment + proof (reversible cleanup).
+  for (const u of [t && t.attachment_link, t && t.proof_url]) {
+    if (u) { try { quarantine.quarantineUrl(u).catch(() => {}); } catch (e) { /* best-effort */ } }
+  }
   res.json({ message: 'Deleted' });
 });
 
