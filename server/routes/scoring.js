@@ -811,17 +811,21 @@ function computeScorecard(db, userId, weekStart) {
       }
 
       // ===== Snag List =====
-      // Same given/done, assigned-this-week cohort as tickets/delegations.
       // auto:snags = a user scored on THEIR OWN assigned snags; auto:snags_all
       // = a process owner scored on the WHOLE punch-list (company-wide).
+      // Plan = snags RAISED this week. Actual = of those, how many were also
+      // APPROVED this same week (mam 2026-08-10: "approved as per planning,
+      // that is complete") — unlike delegations/pms/tickets, this checks
+      // approved_at too, not just current status, so a late approval doesn't
+      // retroactively fix a past week's score once that week has closed.
       if (source === 'auto:snags') {
         const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND raised_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND raised_at BETWEEN ? AND ? AND status='approved'`).get(userId, since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND raised_at BETWEEN ? AND ? AND status='approved' AND approved_at BETWEEN ? AND ?`).get(userId, since, until, since, until).c;
         return { given, done };
       }
       if (source === 'auto:snags_all') {
         const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE raised_at BETWEEN ? AND ?`).get(since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE raised_at BETWEEN ? AND ? AND status='approved'`).get(since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE raised_at BETWEEN ? AND ? AND status='approved' AND approved_at BETWEEN ? AND ?`).get(since, until, since, until).c;
         return { given, done };
       }
 
