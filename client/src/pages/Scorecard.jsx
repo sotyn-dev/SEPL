@@ -79,11 +79,13 @@ const SOURCE_INFO = {
   'auto:pms':                   { plan: 'PMS tasks assigned to user',         actual: 'PMS tasks completed (status=approved)' },
   'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
   'auto:tickets':               { plan: 'Help tickets assigned to user',      actual: 'Tickets resolved / closed by user' },
+  'auto:snags':                  { plan: 'Snags raised on user this week',    actual: 'Of those, approved (closed) within the SAME week' },
   'auto:activity_log':          { plan: 'You set',                            actual: 'Create/update/delete actions the user logged this week (audit trail)' },
   // Responsibility (RACI / SLA) — cross-module accountability from the "Responsible" tabs
   'auto:pms_all':               { plan: 'ALL PMS tasks assigned this week (company-wide)', actual: 'ALL PMS tasks done this week (company-wide)' },
   'auto:delegations_all':       { plan: 'ALL delegations assigned this week (company-wide)', actual: 'ALL delegations done this week (company-wide)' },
   'auto:tickets_all':           { plan: 'ALL help tickets raised this week (company-wide)', actual: 'ALL tickets resolved this week (company-wide)' },
+  'auto:snags_all':             { plan: 'ALL snags raised this week (company-wide)', actual: 'Of those, approved (closed) within the SAME week (company-wide)' },
   'auto:erp_module_coverage':   { plan: 'SOTYN.AI modules tracked (the target = all running)', actual: 'Modules with activity this week' },
   'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },
   'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
@@ -1214,12 +1216,14 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:pms">pms tasks (assigned/done)</option>
                     <option value="auto:checklists">checklists (per day)</option>
                     <option value="auto:tickets">help tickets (assigned/resolved)</option>
+                    <option value="auto:snags">snag list (assigned/approved)</option>
                     <option value="auto:activity_log">activity log — data entries (by user)</option>
                   </optgroup>
                   <optgroup label="Owner / Company-wide (ALL records)">
                     <option value="auto:pms_all">PMS tasks — ALL (company-wide)</option>
                     <option value="auto:delegations_all">Delegations — ALL (company-wide)</option>
                     <option value="auto:tickets_all">Help tickets — ALL (company-wide)</option>
+                    <option value="auto:snags_all">Snag list — ALL (company-wide)</option>
                     <option value="auto:erp_module_coverage">SOTYN.AI module coverage (how many ran)</option>
                   </optgroup>
                   <optgroup label="Responsibility (RACI / SLA)">
@@ -1389,6 +1393,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="auto:pms">auto: pms tasks</option>
             <option value="auto:checklists">auto: checklists</option>
             <option value="auto:tickets">auto: tickets</option>
+            <option value="auto:snags">auto: snag list</option>
             <option value="auto:raci_steps_done">auto: RACI steps (all modules)</option>
             <RaciStepOptions modules={raciModules} />
           </select>
