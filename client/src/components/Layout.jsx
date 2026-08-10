@@ -87,6 +87,7 @@ const SIDEBAR_GROUPS = [
   ]},
   { id: 'solar_sales', label: 'Solar Division', icon: FiSun, items: [
     { path: '/solar-funnel',          label: 'Solar Sales Funnel',   icon: FiTrendingUp, module: 'solar_quotation' },
+    { path: '/solar-site-design',     label: '3D Shadow Analysis',   icon: FiLayers,     module: 'solar_quotation' },
     { path: '/solar-quotation',       label: 'Solar Quotation',      icon: FiClipboard,  module: 'solar_quotation' },
     { path: '/solar-projects',        label: 'Solar Projects',       icon: FiActivity,   module: 'solar_quotation' },
     { path: '/solar-material-master', label: 'Solar Material Master', icon: FiPackage,   module: 'solar_quotation' },

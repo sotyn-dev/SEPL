@@ -473,6 +473,101 @@ function safeRunQuery(db, sql) {
   }
 }
 
+// ── Solar quick-estimate tool (director ask, 2026-08-08) ───────────────────
+// query_database can already SELECT solar tables, but it can't COMPUTE — a
+// "roughly what would a 5kW residential system in Punjab cost, and what
+// subsidy applies" question needs the same math the quotation engine runs
+// (client/src/lib/solar/engine.js), not a raw row dump. This ports just the
+// pure-arithmetic slice (subsidy slabs, EMI, a rough cost from REAL configured
+// rates) — kept in sync with engine.js's computeSubsidy/computeEMI by hand,
+// not shared code, because the client build is ESM and this server is
+// CommonJS. It never fabricates a number it can't ground in configured data:
+// tariff/subsidy top-up/cost rates that aren't configured come back explicitly
+// flagged as unset, never guessed.
+function solarSubsidySlabs(realKWp) {
+  const kwp = Math.min(realKWp, 10); // PM Surya Ghar CFA eligibility ceiling
+  return kwp <= 2 ? kwp * 30000 : kwp <= 3 ? 2 * 30000 + (kwp - 2) * 18000 : 78000;
+}
+function solarEmi(principal, annualRatePct, tenureYears) {
+  const P = Math.max(0, principal || 0), n = Math.round((tenureYears || 0) * 12), r = (annualRatePct || 0) / 100 / 12;
+  if (n <= 0 || P <= 0) return { emi: 0, totalPayment: 0, totalInterest: 0 };
+  if (r <= 0) { const emi = P / n; return { emi, totalPayment: emi * n, totalInterest: 0 }; }
+  const f = Math.pow(1 + r, n), emi = (P * r * f) / (f - 1);
+  return { emi, totalPayment: emi * n, totalInterest: emi * n - P };
+}
+function runSolarQuickEstimate(db, args) {
+  const capacityKw = Number(args.capacity_kw);
+  if (!(capacityKw > 0)) return { error: 'capacity_kw must be a positive number' };
+  const state = String(args.state || '').trim();
+  const propertyType = args.property_type || 'Commercial';
+  const conn = args.conn || 'ongrid';
+  const mount = args.mount || 'rcc';
+  const dcac = Number(args.dcac) || 1.0;
+  const realKWp = capacityKw * dcac;
+
+  const stateRow = state ? db.prepare(`SELECT val1 specific_yield, val4 tariff, val5 subsidy_topup FROM solar_factors WHERE kind='state' AND name=?`).get(state) : null;
+  const specificYield = stateRow?.specific_yield || 1500; // conservative pan-India fallback if the state isn't found
+  const PR = Number(db.prepare(`SELECT value FROM solar_settings WHERE key='performance_ratio'`).get()?.value) || 0.80;
+  const annualKWh = Math.round(realKWp * specificYield * PR);
+
+  const tariff = args.tariff != null ? Number(args.tariff) : (stateRow?.tariff || null);
+  const annualSavings = tariff ? Math.round(annualKWh * tariff) : null;
+
+  const wantsSubsidy = args.apply_subsidy !== false;
+  const eligible = wantsSubsidy && propertyType === 'Residential' && conn === 'ongrid' && (mount === 'rcc' || mount === 'tin');
+  const subsidy = eligible ? Math.round(solarSubsidySlabs(realKWp) + (stateRow?.subsidy_topup || 0)) : 0;
+
+  // Deliberately NO cost/payback estimate from bare material rates: panel +
+  // inverter + structure purchase price alone is roughly HALF a real system's
+  // cost once labour, BOS (ACDB/DCDB/earthing/cabling/lightning arrestor/
+  // cleaning), contingency and margin are added — an early version of this
+  // tool did that math and produced a "0.2-year payback", which is worse
+  // than useless, it's confidently wrong. total_cost_rs must come from a real
+  // source: an actual saved quotation (query_database on solar_quotations),
+  // or a figure the user themselves supplies. Cost/EMI/payback are computed
+  // ONLY when the caller provides one — never derived here.
+  const totalCost = args.total_cost_rs != null ? Number(args.total_cost_rs) : null;
+  const netCost = totalCost != null ? Math.max(0, totalCost - subsidy) : null;
+
+  let finance = null;
+  if (netCost != null && args.loan_pct) {
+    const principal = netCost * (Number(args.loan_pct) / 100);
+    const e = solarEmi(principal, Number(args.loan_rate) || 10.5, Number(args.loan_tenure) || 5);
+    finance = { principal: Math.round(principal), emi: Math.round(e.emi), totalInterest: Math.round(e.totalInterest), totalPayment: Math.round(e.totalPayment) };
+  }
+
+  return {
+    note: 'Quick estimate only — not a formal quotation. Provide total_cost_rs from a real saved quotation (query_database) or the user for cost/EMI/payback — this tool never invents a system price from bare material rates.',
+    inputs: { capacity_kw: capacityKw, realKWp, state: state || null, property_type: propertyType, conn, mount },
+    state_data_found: !!stateRow,
+    annual_generation_kwh: annualKWh, specific_yield_used: specificYield,
+    tariff_rs_per_unit: tariff, tariff_source: args.tariff != null ? 'given' : (stateRow?.tariff ? 'state default' : 'not configured — cannot estimate savings'),
+    annual_bill_savings_rs: annualSavings,
+    subsidy_eligible: eligible, subsidy_rs: subsidy,
+    total_cost_rs: totalCost, net_cost_after_subsidy_rs: netCost,
+    finance,
+    payback_years: netCost != null && annualSavings ? +(netCost / annualSavings).toFixed(1) : null,
+  };
+}
+const SOLAR_ESTIMATE_SCHEMA = {
+  type: 'object',
+  properties: {
+    capacity_kw: { type: 'number', description: 'AC system capacity in kW (required)' },
+    state: { type: 'string', description: 'Indian state — used to look up the configured specific yield / typical tariff / subsidy top-up' },
+    property_type: { type: 'string', enum: ['Residential', 'Commercial', 'Industrial', 'Institutional', 'Agricultural'], description: 'Default Commercial. Must be Residential for PM Surya Ghar subsidy to apply.' },
+    conn: { type: 'string', enum: ['ongrid', 'zeroexport', 'hybrid', 'offgrid'], description: 'Default ongrid.' },
+    mount: { type: 'string', enum: ['ground', 'rcc', 'tin', 'carport', 'floating'], description: 'Default rcc. Subsidy needs rcc or tin.' },
+    dcac: { type: 'number', description: 'DC:AC ratio, default 1.0' },
+    tariff: { type: 'number', description: 'Override ₹/unit grid tariff; omit to use the state default if one is configured' },
+    apply_subsidy: { type: 'boolean', description: 'Default true — check PM Surya Ghar eligibility' },
+    total_cost_rs: { type: 'number', description: 'A REAL total system cost, e.g. pulled from an actual saved quotation via query_database, or given by the user. Required for payback/EMI — never estimate this yourself from material rates alone (it misses labour, BOS and margin, and will be badly wrong).' },
+    loan_pct: { type: 'number', description: 'Optional: % of net cost to finance, to also return an EMI estimate (needs total_cost_rs)' },
+    loan_rate: { type: 'number', description: 'Optional loan interest %/yr, default 10.5' },
+    loan_tenure: { type: 'number', description: 'Optional loan tenure in years, default 5' },
+  },
+  required: ['capacity_kw'],
+};
+
 // ── Google Gemini path (mam 2026-06-15: wants a FREE AI key) ───────────────
 // Runs the agent against Gemini's NATIVE generateContent API so we get BOTH
 // our function tools (read the ERP DB + module guides) AND Google Search
@@ -494,6 +589,11 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
       name: 'get_module_guide',
       description: 'Look up the official step-by-step guide for an ERP module. Use for any "how to" / training / workflow question.',
       parameters: { type: 'object', properties: { module: { type: 'string', enum: GUIDE_KEYS, description: `Module key — one of: ${GUIDE_KEYS.join(', ')}.` } }, required: ['module'] },
+    },
+    {
+      name: 'solar_quick_estimate',
+      description: 'Compute generation, PM Surya Ghar subsidy and EMI for a hypothetical solar system (capacity/state/customer-type). Never invents a system cost from material rates alone — pass total_cost_rs from a real saved quotation (via query_database) for payback/EMI; without it you only get generation/subsidy. Not a formal quotation; use the Solar Quotation module for a bindable one.',
+      parameters: SOLAR_ESTIMATE_SCHEMA,
     },
   ];
   // Both tools: our functions + Google Search grounding (for market rates).
@@ -563,6 +663,8 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
         resultObj = result;
       } else if (fc.name === 'get_module_guide') {
         resultObj = MODULE_GUIDES[String(args.module || '').toLowerCase().trim()] || { error: `Unknown module. Available: ${GUIDE_KEYS.join(', ')}` };
+      } else if (fc.name === 'solar_quick_estimate') {
+        resultObj = runSolarQuickEstimate(db, args);
       } else {
         resultObj = { error: `unknown tool ${fc.name}` };
       }
@@ -668,6 +770,8 @@ If a question is about the asker themselves (e.g. "who am I", "kya mera salary h
 
 3. get_module_guide — pull built-in step-by-step instructions for an ERP module. Use this WHENEVER the user asks "how to ...", "kaise karte hai...", "training", "guide me through ...", or asks how to submit / create / file something. Valid module keys: ${GUIDE_KEYS.join(', ')}. Always call this BEFORE saying "I don't know how" — the answer is almost always in the guide.
 
+4. solar_quick_estimate — compute (don't guess) generation / PM Surya Ghar subsidy / EMI for a HYPOTHETICAL system that ISN'T an existing saved quotation (query_database can look up a real saved quote, but can't compute a new one). It deliberately does NOT invent a system cost — bare material rates miss labour/BOS/margin and would be badly wrong. For payback or EMI, first find a real total cost (query_database against a comparable saved solar_quotations row, or ask the user) and pass it as total_cost_rs; without it you'll only get generation/subsidy, which is fine — just say cost/payback needs a real quotation. Always tell the user this is an estimate and point them to the Solar Quotation module for a bindable one. If tariff_source says "not configured", say so plainly instead of inventing a number.
+
 PERSON-BY-NAME LOOKUPS — when a user asks "who is X", "tell me about X", "X kaun hai", or any question naming a person:
   a) First check if X matches the current user identity above.  If yes, answer using that.
   b) Otherwise call query_database with: SELECT id, name, designation, department, phone, email, status, join_date FROM employees WHERE LOWER(name) LIKE LOWER('%X%').  This covers every SEPL employee.
@@ -727,6 +831,11 @@ Guidance:
         },
         required: ['module'],
       },
+    },
+    {
+      name: 'solar_quick_estimate',
+      description: 'Compute generation, PM Surya Ghar subsidy and EMI for a hypothetical solar system (capacity/state/customer-type). Never invents a system cost from material rates alone — pass total_cost_rs from a real saved quotation (via query_database) for payback/EMI; without it you only get generation/subsidy. Not a formal quotation; use the Solar Quotation module for a bindable one.',
+      input_schema: SOLAR_ESTIMATE_SCHEMA,
     },
   ];
   // Web search available on every model — mam: "i want real ai agent
@@ -836,6 +945,14 @@ Guidance:
               is_error: false,
             });
           }
+        } else if (block.name === 'solar_quick_estimate') {
+          const result = runSolarQuickEstimate(db, block.input || {});
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(result).slice(0, 50000),
+            is_error: !!result.error,
+          });
         }
         // Other tools (web_search) are server-side at Anthropic; nothing
         // for us to do — Anthropic injects its own tool_result block.
