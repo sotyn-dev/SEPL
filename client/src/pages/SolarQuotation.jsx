@@ -1,13 +1,33 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FiSun, FiSave, FiDownload, FiPrinter, FiZap, FiList, FiTrash2, FiFileText } from 'react-icons/fi';
+import { FiSun, FiSave, FiDownload, FiPrinter, FiZap, FiList, FiTrash2, FiFileText, FiShoppingCart } from 'react-icons/fi';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, CartesianGrid } from 'recharts';
 import api from '../api';
 import SearchableSelect from '../components/SearchableSelect';
+import { exportCsv } from '../utils/exportCsv';
 import { num as fmt, inr } from '../lib/solar/format';
+
+// 25-year cumulative-savings curve for the ROI chart. Uses the SAME 0.8%/yr
+// degradation engine.js's computeROI() assumes for `sav25`, then scales so
+// the chart's year-25 total lands exactly on the already-displayed sav25
+// figure — the visual and the headline number must never quietly disagree.
+// No live monitoring feed exists (that's explicitly out of scope) — this is
+// the modelled projection, same as the number it's illustrating.
+function buildSavingsSeries(annualSav, netCost, sav25) {
+  if (!(annualSav > 0)) return [];
+  let raw = 0;
+  const factors = Array.from({ length: 25 }, (_, i) => { const f = Math.pow(1 - 0.008, i); raw += f; return f; });
+  const scale = sav25 > 0 ? sav25 / (annualSav * raw) : 1;
+  let cum = 0;
+  return factors.map((f, i) => {
+    cum += annualSav * f * scale;
+    return { year: i + 1, cumulative: Math.round(cum), netCost: Math.round(netCost || 0) };
+  });
+}
 import {
-  DEFAULTS, compute, buildBOQ, groupBOQ, summarize, computeROI,
-  PROJECT_TYPES, MOUNTS, ARRAY_TYPES, typeLabel,
+  DEFAULTS, compute, buildBOQ, groupBOQ, summarize, computeROI, computeFinance,
+  PROJECT_TYPES, MOUNTS, ARRAY_TYPES, PROPERTY_TYPES, typeLabel,
 } from '../lib/solar/engine';
 import { STATES } from '../data/indiaLocations';
 
@@ -64,6 +84,11 @@ export default function SolarQuotation() {
     try {
       const { data: d } = await api.get(`/solar/deals/${o.id}`);
       setLeadId(d.lead_id || '');
+      // The qualification call already asked the customer's ACTUAL tariff
+      // and property type (qualification.js) — that's real, customer-specific
+      // data, worth far more than a flat default or a state-average guess.
+      // Carry it straight into the quote instead of losing it here.
+      const q = d.qualification || {};
       setInp((p) => ({
         ...p,
         client: d.client_name || d.company || p.client,
@@ -71,10 +96,19 @@ export default function SolarQuotation() {
         ...(d.project_type ? { conn: d.project_type } : {}),
         ...(d.state ? { state: d.state } : {}),
         ...(d.location ? { addr: d.location } : {}),
+        ...(Number(q.tariff) > 0 ? { tariff: q.tariff } : {}),
+        ...(q.property_type ? { property_type: q.property_type } : {}),
+        ...(q.subsidy === 'Interested' ? { subsidy: true } : {}),
       }));
       toast.success('Loaded from Sales Funnel');
     } catch { toast.error('Could not load that lead'); }
   };
+
+  // State's "typical tariff" is only ever a starting point (Solar Settings),
+  // and only worth offering when the director has actually configured one —
+  // it must never silently overwrite a real, already-entered value.
+  const stateTariffHint = rb.factors.state[inp.state]?.tariff || 0;
+  const applyStateTariff = () => { set('tariff', stateTariffHint); toast.success(`Set to ${inp.state}'s typical rate — confirm against the customer's bill`); };
 
   // zero-export → net metering not applicable
   useEffect(() => { if (inp.conn === 'zeroexport' && inp.net) set('net', false); }, [inp.conn]); // eslint-disable-line
@@ -86,6 +120,9 @@ export default function SolarQuotation() {
   const battMakes = Object.keys(rb.ui.battery || {});
   const stateNames = Object.keys(rb.factors.state);
   const isBatt = inp.conn === 'offgrid' || inp.conn === 'hybrid';
+  const brandName = String(rb.settings?.company_name || '').trim() || 'Secured Engineers India';
+  const brandTagline = String(rb.settings?.company_tagline || '').trim();
+  const brandLogoUrl = String(rb.settings?.logo_url || '').trim();
 
   const c = useMemo(() => compute(inp, rb), [inp, rb]);
   const lines = useMemo(() => buildBOQ(c, inp, rb), [c, inp, rb]);
@@ -99,6 +136,8 @@ export default function SolarQuotation() {
   const gstAmt = tot.totSP * gstPct / 100;
   const grand = tot.totSP + gstAmt + netchg;
   const roi = useMemo(() => computeROI(c, grand, inp, rb), [c, grand, inp, rb]);
+  const finance = useMemo(() => computeFinance(Math.max(0, grand - roi.subsidy.totalSubsidy), inp), [grand, roi.subsidy.totalSubsidy, inp]);
+  const savingsSeries = useMemo(() => buildSavingsSeries(roi.annualSav, roi.netCost, roi.sav25), [roi.annualSav, roi.netCost, roi.sav25]);
   const floor = parseFloat(inp.floor) || 0;
   const marginOk = tot.marginPct >= floor;
 
@@ -153,6 +192,19 @@ export default function SolarQuotation() {
     } catch (e) { toast.error('Export failed'); }
   };
 
+  // Procurement today has no notion of a solar BOQ — it's built around
+  // order_planning/business_book-linked indents raised only on Saturdays
+  // (a deliberate gate, not an oversight). Rather than bypass that, this
+  // hands the person raising the indent a clean, correctly-priced sheet —
+  // no more retyping the BOQ from the quotation PDF by hand.
+  const exportBoqForProcurement = () => {
+    exportCsv(
+      `solar-boq-procurement-${(inp.client || 'quote').replace(/[^a-z0-9]/gi, '_')}`,
+      ['Description', 'Make', 'Unit', 'Quantity', 'Purchase Rate ₹', 'Purchase Amount ₹'],
+      lines.map((l) => [l.desc, l.make, l.unit, fmt(l.qty), fmt(l.ppUnit, 2), fmt(l.pp, 2)]),
+    );
+  };
+
   // PDF in mam's quotation format (the Residence-114-1 layout she shared):
   // page 1 = BOQ (S.No/Description/Unit/Makes/Qty, no prices), page 2 =
   // commercial (client block + lumpsum base price + notes). Built as a
@@ -161,6 +213,13 @@ export default function SolarQuotation() {
   const printPdf = () => {
     const p = payload();
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+    // A window.open() popup starts at about:blank, so a relative /uploads/…
+    // path won't resolve — the logo needs the app's actual origin prefixed.
+    const brandLogo = String(rb.settings?.logo_url || '').trim();
+    const brandLogoAbs = brandLogo ? `${window.location.origin}${brandLogo}` : '';
+    const brandHtml = brandLogoAbs
+      ? `<img src="${esc(brandLogoAbs)}" style="max-height:34px;max-width:180px;display:block;margin-bottom:2px" />`
+      : `<div class="brand">${esc(brandName)}</div>`;
     const kw = Math.round(p.capacity_kw || 0);
     const tl = typeLabel(inp.conn);
     const roof = surfLabel(inp.mount);
@@ -193,14 +252,14 @@ td.c, th.c { text-align: center; }
 ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
 </style></head><body onload="setTimeout(function(){window.print();},200)">
 <div class="page">
-  <div class="brand">SECURED ENGINEERS INDIA</div>
+  ${brandHtml}
   <div class="title">Proposal for ${kw} KW ${esc(tl)} Solar System on ${esc(roof)}</div>
   <div class="muted">Providing, laying, testing &amp; commissioning of</div>
   <table><thead><tr><th class="c">S.NO.</th><th>DESCRIPTION</th><th class="c">UNIT</th><th>MAKES</th><th class="c">QTY</th></tr></thead>
   <tbody>${boqRows}</tbody></table>
 </div>
 <div class="page">
-  <div class="brand">SECURED ENGINEERS INDIA</div>
+  ${brandHtml}
   <h1>QUOTATION FOR ${esc(sysTitle)}</h1>
   <table class="kv">
     <tr><td><b>NAME</b></td><td>${esc(p.client_name)}</td><td><b>Date</b></td><td>${esc(today)}</td></tr>
@@ -210,7 +269,10 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
   <tbody>
     <tr><td class="c">1</td><td>${esc(sysTitle)}</td><td class="c">${inr(p.sell)}</td></tr>
     <tr><td></td><td><b>BASE PRICE WITHOUT GST</b></td><td class="c">₹${fmt(p.sell_per_w, 2)}/watt</td></tr>
+    ${p.roi.subsidy.eligible ? `<tr><td></td><td><b>LESS: PM SURYA GHAR SUBSIDY</b></td><td class="c">− ${inr(p.roi.subsidy.totalSubsidy)}</td></tr>
+    <tr><td></td><td><b>YOUR NET INVESTMENT</b></td><td class="c">${inr(p.roi.netCost)}</td></tr>` : ''}
   </tbody></table>
+  ${finance.emi > 0 ? `<div class="muted">EMI option: ₹${fmt(finance.emi, 0)}/month for ${fmt(inp.loanTenure, 0)} years (${fmt(inp.loanPct, 0)}% financed @ ${fmt(inp.loanRate, 1)}% p.a.)</div>` : ''}
   <div class="title">Note:</div>
   <ol>${noteRows}</ol>
 </div>
@@ -308,7 +370,10 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
                   <td className="p-2">{typeLabel(s.project_type)}</td><td className="p-2 text-right">{fmt(s.capacity_kw)}</td>
                   <td className="p-2 text-right">{inr(s.sell)}</td><td className="p-2 text-right text-emerald-600">{fmt(s.margin_pct, 1)}%</td>
                   <td className="p-2 text-gray-500">{(s.updated_at || '').slice(0, 10)}</td>
-                  <td className="p-2"><button onClick={(e) => { e.stopPropagation(); delSaved(s.id); }} className="text-red-500"><FiTrash2 size={14} /></button></td>
+                  <td className="p-2 flex items-center gap-2">
+                    <button onClick={(e) => { e.stopPropagation(); window.open(`/solar-quotations/${s.id}/design-report`, '_blank'); }} title="Engineering / Design Basis Report" className="text-blue-600"><FiFileText size={14} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); delSaved(s.id); }} className="text-red-500"><FiTrash2 size={14} /></button>
+                  </td>
                 </tr>))}
               {!saved.length && <tr><td colSpan={8} className="p-6 text-center text-gray-400">No saved solar quotations yet.</td></tr>}
             </tbody>
@@ -327,6 +392,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
               {Tx('client', 'Client name')}
               {Tx('addr', 'Address')}
               {Se('state', 'State', STATES)}
+              {Se('property_type', 'Customer type', PROPERTY_TYPES)}
               {Se('conn', 'Connection', PROJECT_TYPES)}
               {Se('mount', 'Mounting', MOUNTS)}
               {Nu('area', 'Shadow-free area (m²)')}
@@ -384,11 +450,36 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
             <div className="grid grid-cols-2 gap-2">
               {Nu('margin', 'Target margin %', { step: '0.5' })}{Nu('floor', 'Min-margin floor %', { step: '0.5' })}
               {Nu('gst', 'GST %', { step: '0.1' })}{Nu('netchg', 'Net-meter charge ₹')}
-              {Nu('cont', 'Contingency %', { step: '0.5' })}{Nu('tariff', 'Grid tariff ₹/unit (ROI)')}
+              {Nu('cont', 'Contingency %', { step: '0.5' })}
+              <label className="block">
+                <span className="label">Grid tariff ₹/unit (ROI)</span>
+                <div className="flex gap-1">
+                  <input className="input-compact w-full" type="number" value={inp.tariff ?? ''} onChange={(e) => set('tariff', e.target.value)} />
+                  {stateTariffHint > 0 && <button type="button" onClick={applyStateTariff} title={`Use ${inp.state}'s typical rate: ₹${stateTariffHint}/unit`} className="btn btn-secondary text-[10px] px-2 shrink-0">₹{stateTariffHint}</button>}
+                </div>
+              </label>
               {Nu('valid', 'Quote validity (days)')}{Nu('amcfree', 'AMC free years')}
               {Nu('amcfee', 'AMC after, ₹/yr')}
             </div>
-            <div className="grid grid-cols-2 gap-1">{Ck('transport', 'Transport included')}{Ck('escal', 'Price-escalation clause')}{Ck('subsidy', 'Apply subsidy line')}{Ck('scope', 'Scope list on client quote')}</div>
+            <div className="grid grid-cols-2 gap-1">
+              {Ck('transport', 'Transport included')}{Ck('escal', 'Price-escalation clause')}
+              {Ck('subsidy', 'Apply PM Surya Ghar subsidy')}{Ck('scope', 'Scope list on client quote')}
+            </div>
+            {inp.subsidy && (
+              roi.subsidy.eligible
+                ? <p className="text-[11px] text-emerald-700">✓ Eligible — ₹{fmt(roi.subsidy.totalSubsidy, 0)} ({fmt(c.realKWp, 1)} kWp{roi.subsidy.stateSubsidy > 0 ? `, incl. ₹${fmt(roi.subsidy.stateSubsidy, 0)} state top-up` : ''})</p>
+                : <p className="text-[11px] text-amber-700">⚠ {roi.subsidy.reason}</p>
+            )}
+          </div>
+
+          <div className="card p-4 space-y-3">
+            <p className="font-bold text-[11px] uppercase tracking-wide text-gray-700">5 · Finance (EMI calculator)</p>
+            <div className="grid grid-cols-3 gap-2">
+              {Nu('loanPct', 'Financed %', { step: '5', min: '0', max: '100' })}
+              {Nu('loanRate', 'Interest %/yr', { step: '0.1' })}
+              {Nu('loanTenure', 'Tenure (yrs)', { step: '1' })}
+            </div>
+            <p className="text-[10px] text-gray-500">A calculator, not a live bank quote — set rate/tenure from whatever the customer's actual lender offers.</p>
           </div>
         </div>
 
@@ -404,6 +495,8 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
               <button onClick={() => window.print()} className="btn btn-secondary text-sm flex items-center gap-1"><FiPrinter size={14} /> Print</button>
               <button onClick={printPdf} className="btn btn-secondary text-sm flex items-center gap-1"><FiFileText size={14} /> PDF</button>
               <button onClick={exportXlsx} className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Excel</button>
+              <button onClick={exportBoqForProcurement} title="BOQ as a procurement-ready CSV — description, make, unit, qty, purchase rate" className="btn btn-secondary text-sm flex items-center gap-1"><FiShoppingCart size={14} /> BOQ for Procurement</button>
+              {currentId && <button onClick={() => window.open(`/solar-quotations/${currentId}/design-report`, '_blank')} className="btn btn-secondary text-sm flex items-center gap-1"><FiFileText size={14} /> Design Report</button>}
               <button onClick={save} disabled={busy} className="btn btn-primary text-sm flex items-center gap-1"><FiSave size={14} /> {currentId ? 'Update' : 'Save'}</button>
             </div>
           </div>
@@ -428,6 +521,17 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
                 ['Payback', `${fmt(roi.payback, 1)} yrs`], ['25-yr savings', `₹${fmt(roi.sav25 / 1e7, 2)} Cr`], ['CO₂ offset', `${fmt(roi.co2, 0)} t/yr`]]
                 .map(([k, v]) => <div key={k} className="border rounded-lg p-2"><p className="text-[10px] text-gray-400 uppercase">{k}</p><p className="font-semibold">{v}</p></div>)}
             </div>
+            {roi.subsidy.eligible && (
+              <p className="text-[11px] text-emerald-700 mt-2">Payback above is net of ₹{fmt(roi.subsidy.totalSubsidy, 0)} PM Surya Ghar subsidy — gross cost would be {inr(grand)}, net {inr(roi.netCost)}.</p>
+            )}
+            {finance.emi > 0 && (
+              <div className="mt-2 pt-2 border-t flex flex-wrap gap-4 text-xs">
+                <span className="text-gray-500">EMI on {fmt(inp.loanPct, 0)}% financed ({inr(finance.principal)} @ {fmt(inp.loanRate, 1)}% / {fmt(inp.loanTenure, 0)} yr):</span>
+                <b>₹{fmt(finance.emi, 0)}/month</b>
+                <span className="text-gray-400">total interest {inr(finance.totalInterest)}</span>
+              </div>
+            )}
+            {savingsSeries.length > 0 && <SavingsChart data={savingsSeries} netCost={roi.netCost} payback={roi.payback} />}
           </div>
 
           {/* Engineering */}
@@ -446,7 +550,10 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
                 <p className="text-xs text-gray-500">{inp.client || '—'} · {inp.addr || '—'}</p>
               </div>
               <div className="text-right text-xs text-gray-600">
-                <p className="font-bold text-blue-900">Secured Engineers India</p>
+                {brandLogoUrl
+                  ? <img src={brandLogoUrl} alt={brandName} className="h-8 ml-auto mb-0.5 object-contain" />
+                  : <p className="font-bold text-blue-900">{brandName}</p>}
+                {brandTagline && <p className="text-[10px] text-gray-400">{brandTagline}</p>}
                 <p>Base: ₹{fmt(tot.wpRate, 2)}/watt · ₹{fmt(tot.kwRate, 0)}/kW (ex-GST)</p>
               </div>
             </div>
@@ -499,7 +606,11 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
                     <tr className="text-gray-600"><td></td><td className="p-2">Base price (ex-GST)</td><td className="p-2 text-right">₹{fmt(tot.wpRate, 2)}/watt · ₹{fmt(tot.kwRate, 0)}/kW</td></tr>
                     <tr className="text-gray-600"><td></td><td className="p-2">GST @ {gstPct}%</td><td className="p-2 text-right">{inr(gstAmt)}</td></tr>
                     {netApplicable && <tr className="text-gray-600"><td></td><td className="p-2">Net-meter charge (extra, at actual)</td><td className="p-2 text-right">{inr(netchg)}</td></tr>}
-                    <tr className="border-t-2 font-bold text-blue-900"><td></td><td className="p-2">Grand total (incl GST)</td><td className="p-2 text-right">{inr(grand)}</td></tr>
+                    <tr className={`font-bold text-blue-900 ${roi.subsidy.eligible ? '' : 'border-t-2'}`}><td></td><td className="p-2">Grand total (incl GST)</td><td className="p-2 text-right">{inr(grand)}</td></tr>
+                    {roi.subsidy.eligible && (<>
+                      <tr className="text-emerald-700"><td></td><td className="p-2">Less: PM Surya Ghar subsidy{roi.subsidy.stateSubsidy > 0 ? ' + state top-up' : ''}</td><td className="p-2 text-right">− {inr(roi.subsidy.totalSubsidy)}</td></tr>
+                      <tr className="border-t-2 font-bold text-blue-900"><td></td><td className="p-2">Your net investment</td><td className="p-2 text-right">{inr(roi.netCost)}</td></tr>
+                    </>)}
                   </tbody>
                 </table>
                 <div className="mb-4 p-3 bg-emerald-50 rounded-lg">
@@ -510,6 +621,15 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
                     <div><p className="text-gray-500">Payback period</p><p className="font-bold">{fmt(roi.payback, 1)} yrs</p></div>
                     <div><p className="text-gray-500">Lifetime (25-yr) savings</p><p className="font-bold text-emerald-700">₹{fmt(roi.sav25 / 1e7, 2)} Cr</p></div>
                   </div>
+                  {finance.emi > 0 && (
+                    <p className="text-[11px] text-emerald-800 mt-2 pt-2 border-t border-emerald-200">
+                      Or pay via EMI: <b>₹{fmt(finance.emi, 0)}/month</b> for {fmt(inp.loanTenure, 0)} years ({fmt(inp.loanPct, 0)}% financed @ {fmt(inp.loanRate, 1)}% p.a.)
+                    </p>
+                  )}
+                  {/* On-screen only (no-print) — recharts' responsive sizing
+                      doesn't reflow reliably inside the print pass, and the
+                      cumulative figures are already in the printed table above. */}
+                  {savingsSeries.length > 0 && <div className="no-print"><SavingsChart data={savingsSeries} netCost={roi.netCost} payback={roi.payback} /></div>}
                 </div>
                 {inp.scope && (
                   <div>
@@ -529,6 +649,40 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
         </div>
       </div>
       )}
+    </div>
+  );
+}
+
+// 25-year cumulative-savings curve with the payback crossover marked — the
+// same modelled numbers already on the page (annualSav/sav25/netCost/payback),
+// just made legible at a glance instead of read off a table.
+function SavingsChart({ data, netCost, payback }) {
+  const paybackYear = payback > 0 && payback <= 25 ? Math.round(payback * 10) / 10 : null;
+  return (
+    <div className="mt-3 pt-3 border-t">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[11px] font-semibold text-gray-600">Cumulative savings vs. net investment — 25 years</p>
+        {paybackYear && <span className="text-[10px] text-gray-400">Break-even ≈ year {paybackYear}</span>}
+      </div>
+      <ResponsiveContainer width="100%" height={180}>
+        <AreaChart data={data} margin={{ top: 6, right: 12, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id="savingsFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#059669" stopOpacity={0.35} />
+              <stop offset="100%" stopColor="#059669" stopOpacity={0.03} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+          <XAxis dataKey="year" tick={{ fontSize: 10 }} tickFormatter={(y) => `Y${y}`} interval={4} />
+          <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `₹${fmt(v / 1e5, 1)}L`} width={44} />
+          <Tooltip
+            formatter={(v, key) => [inr(v), key === 'cumulative' ? 'Cumulative savings' : 'Net investment']}
+            labelFormatter={(y) => `Year ${y}`}
+          />
+          {netCost > 0 && <ReferenceLine y={netCost} stroke="#dc2626" strokeDasharray="4 3" label={{ value: 'Net investment', fontSize: 9, fill: '#dc2626', position: 'insideTopRight' }} />}
+          <Area type="monotone" dataKey="cumulative" stroke="#059669" strokeWidth={2} fill="url(#savingsFill)" />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }

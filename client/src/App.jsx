@@ -13,11 +13,14 @@ const Leads = lazy(() => import('./pages/Leads'));
 const Quotations = lazy(() => import('./pages/Quotations'));
 const Estimator = lazy(() => import('./pages/Estimator'));
 const SolarQuotation = lazy(() => import('./pages/SolarQuotation'));
+const SolarDesignReport = lazy(() => import('./pages/SolarDesignReport'));
+const SolarNetMeteringPrint = lazy(() => import('./pages/SolarNetMeteringPrint'));
 const SolarRateMaster = lazy(() => import('./pages/SolarRateMaster'));
 const SolarFunnel = lazy(() => import('./pages/SolarFunnel'));
 const SolarMaterialMaster = lazy(() => import('./pages/SolarMaterialMaster'));
 const SolarLabourMaster = lazy(() => import('./pages/SolarLabourMaster'));
 const SolarProjects = lazy(() => import('./pages/SolarProjects'));
+const SolarSiteDesign = lazy(() => import('./pages/SolarSiteDesign'));
 const PoFocStripped = lazy(() => import('./pages/PoFocStripped'));
 const PoFocPrint = lazy(() => import('./pages/PoFocPrint'));
 const LabourRate = lazy(() => import('./pages/LabourRate'));
@@ -229,7 +232,10 @@ export default function App() {
         <Route path="estimator" element={<ModuleRoute module="ai_quotation"><Estimator /></ModuleRoute>} />
         <Route path="solar-funnel" element={<ModuleRoute module="solar_quotation"><SolarFunnel /></ModuleRoute>} />
         <Route path="solar-quotation" element={<ModuleRoute module="solar_quotation"><SolarQuotation /></ModuleRoute>} />
+        <Route path="solar-quotations/:id/design-report" element={<ModuleRoute module="solar_quotation"><SolarDesignReport /></ModuleRoute>} />
         <Route path="solar-projects" element={<ModuleRoute module="solar_quotation"><SolarProjects /></ModuleRoute>} />
+        <Route path="solar-projects/:id/net-metering-print" element={<ModuleRoute module="solar_quotation"><SolarNetMeteringPrint /></ModuleRoute>} />
+        <Route path="solar-site-design" element={<ModuleRoute module="solar_quotation"><SolarSiteDesign /></ModuleRoute>} />
         <Route path="solar-material-master" element={<ModuleRoute module="solar_quotation"><SolarMaterialMaster /></ModuleRoute>} />
         <Route path="solar-labour-master" element={<ModuleRoute module="solar_quotation"><SolarLabourMaster /></ModuleRoute>} />
         <Route path="solar-rate-master" element={<ModuleRoute module="solar_quotation"><SolarRateMaster /></ModuleRoute>} />
