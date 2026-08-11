@@ -4,7 +4,7 @@
 // to (g:<groupId>); the chat route calls emitChat() to push live events.
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
-const { getSecret } = require('../middleware/auth');
+const { getSecret, tenantClaimOk } = require('../middleware/auth');
 const { getChatDb } = require('../db/chatDb');
 
 let io = null;
@@ -27,7 +27,9 @@ function initChatSocket(httpServer) {
     try {
       const t = socket.handshake.auth?.token || socket.handshake.query?.token;
       if (!t) return next(new Error('No token'));
-      socket.user = jwt.verify(t, getSecret());
+      const decoded = jwt.verify(t, getSecret());
+      if (!tenantClaimOk(decoded)) return next(new Error('Auth failed'));
+      socket.user = decoded;
       next();
     } catch (e) { next(new Error('Auth failed')); }
   });

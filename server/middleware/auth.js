@@ -34,6 +34,14 @@ function authMiddleware(req, res, next) {
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
     const decoded = jwt.verify(token, getSecret());
+    if (!tenantClaimOk(decoded)) {
+      if (String(req.originalUrl || '').includes('/auth/me')) {
+        console.warn(
+          `[auth] /auth/me 401 — tenant mismatch: token=${decoded.tenant_id || '(none)'} env=${currentTenantId() || '(none)'} | token.user=${decoded.id ?? '?'}`
+        );
+      }
+      return res.status(401).json({ error: 'Invalid token' });
+    }
     req.user = decoded;
     // Sliding session (mam 2026-06-12: "after some time automatically logout
     // ... very bad"). While the user is active, keep handing back a fresh
@@ -50,7 +58,11 @@ function authMiddleware(req, res, next) {
       // the cliff is now 90 days, so a missed refresh is survivable, not fatal.
       const TOKEN_LIFETIME_DAYS = 90;
       const REFRESH_WHEN_REMAINING_UNDER = (TOKEN_LIFETIME_DAYS - 1) * 24 * 60 * 60; // >1 day old → roll
-      if (decoded.exp && (decoded.exp - now) < REFRESH_WHEN_REMAINING_UNDER) {
+      // Also roll once when TENANT_ID is set but the legacy token lacks tenant_id,
+      // so active users quietly pick up the claim without re-login (soft rollout).
+      const needsTenantStamp = !!(currentTenantId() && (decoded.tenant_id == null || decoded.tenant_id === ''));
+      const needsAgeRoll = decoded.exp && (decoded.exp - now) < REFRESH_WHEN_REMAINING_UNDER;
+      if (needsTenantStamp || needsAgeRoll) {
         const fresh = generateToken(decoded);
         res.setHeader('X-Refresh-Token', fresh);
         res.setHeader('Access-Control-Expose-Headers', 'X-Refresh-Token');
@@ -167,9 +179,37 @@ function getUserPermissions(userId) {
   return perms;
 }
 
+/** Host/container tenant slug (agent sets TENANT_ID=<slug>). Empty = single-tenant / local. */
+function currentTenantId() {
+  const t = String(process.env.TENANT_ID || '').trim();
+  return t || null;
+}
+
+/**
+ * Soft tenant gate for multi-tenant (shared JWT_SECRET + tenant_id claim).
+ * - No TENANT_ID env → skip (local / legacy single process).
+ * - Token missing tenant_id → allow (legacy sessions; sliding refresh stamps it).
+ * - Token has tenant_id that ≠ env → reject (cross-org reuse).
+ */
+function tenantClaimOk(decoded) {
+  const expected = currentTenantId();
+  if (!expected) return true;
+  const claim = decoded?.tenant_id;
+  if (claim == null || claim === '') return true;
+  return String(claim) === expected;
+}
+
 function generateToken(user) {
+  const payload = {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+  };
+  const tid = currentTenantId();
+  if (tid) payload.tenant_id = tid;
   return jwt.sign(
-    { id: user.id, email: user.email, role: user.role, name: user.name },
+    payload,
     getSecret(),
     { expiresIn: '90d' }   // base lifetime; slides forward on activity (see authMiddleware)
   );
@@ -179,5 +219,6 @@ function generateToken(user) {
 // one persisted secret.
 module.exports = {
   authMiddleware, adminOnly, requirePermission, getUserPermissions, generateToken, getSecret,
+  currentTenantId, tenantClaimOk,
   get SECRET() { return getSecret(); },
 };
