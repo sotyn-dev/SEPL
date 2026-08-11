@@ -125,7 +125,8 @@ Prod overrides: `SECURED_DATA_PATH=/root/erp/data`, `SECURED_BACKUP_PATH=/root/e
 | `/login` | **Live** — platform JWT |
 | `/invite/:token` · `/reset/:token` | **Live** — set password (invite / admin reset) |
 | `/` Companies list | **Live** list/create draft tenants (`platform.db`) |
-| `/deploy` | **Live** — Deploy / rollback / prune images via worker agent (host picker ready; never wipes `data/` or `backups/`) |
+| `/hosts` | **Live** — register worker VPS agents (URL, token, health); multi-VPS chassis |
+| `/deploy` | **Live** — Deploy / rollback / prune images via worker agent (host picker; never wipes `data/` or `backups/`) |
 | `/operators` | **Live** — invite operators, admin reset links, activate/deactivate |
 | `/backups` | **Live** — `platform.db` zip backups (Backup Now / list / download; nightly 2:00) |
 | `/docs` | **Live** — HTML how‑tos (Deploy · Operators · Backups tabs) |
@@ -152,7 +153,7 @@ HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for 
 1. **`platform.db` backup/restore** — ✅ zip-only Backups page (see `/backups`)
 2. Persist entitlements to `platform.db` + wire Save
 3. **Platform audit** writes on mutations (full Audit UI can follow; nav is “Later” today)
-4. Wire platform Create company → agent provision
+4. Wire platform Create company → agent provision ✅ (host picker + Provision)
 5. Materialize branding/entitlements into tenant mount; ERP consumes contract
    (branding durable store + upload UI already live — materialize still pending)
 6. Multi-VPS Deploy fan-out (same button → remote agents)

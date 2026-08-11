@@ -13,6 +13,7 @@ import OperatorsPage from './pages/OperatorsPage.jsx';
 import SetPasswordPage from './pages/SetPasswordPage.jsx';
 import DocsPage from './pages/DocsPage.jsx';
 import BackupsPage from './pages/BackupsPage.jsx';
+import HostsPage from './pages/HostsPage.jsx';
 
 const linkClass = ({ isActive }) =>
   `px-3 py-1.5 rounded-md text-sm font-medium transition whitespace-nowrap ${
@@ -72,6 +73,7 @@ function Shell({ children }) {
             <nav className="hidden md:flex gap-1 min-w-0 overflow-x-auto items-center flex-1">
               <NavLink to="/" end className={linkClass}>Companies</NavLink>
               <NavLink to="/deploy" className={linkClass}>Deploy</NavLink>
+              <NavLink to="/hosts" className={linkClass}>Hosts</NavLink>
               <NavLink to="/operators" className={linkClass}>Operators</NavLink>
               <NavLink to="/backups" className={linkClass}>Backups</NavLink>
               <NavLink to="/docs" className={linkClass}>Docs</NavLink>
@@ -107,6 +109,7 @@ function Shell({ children }) {
             <nav className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-col gap-1 pb-1">
               <NavLink to="/" end className={linkClass} onClick={closeMenu}>Companies</NavLink>
               <NavLink to="/deploy" className={linkClass} onClick={closeMenu}>Deploy</NavLink>
+              <NavLink to="/hosts" className={linkClass} onClick={closeMenu}>Hosts</NavLink>
               <NavLink to="/operators" className={linkClass} onClick={closeMenu}>Operators</NavLink>
               <NavLink to="/backups" className={linkClass} onClick={closeMenu}>Backups</NavLink>
               <NavLink to="/docs" className={linkClass} onClick={closeMenu}>Docs</NavLink>
@@ -149,6 +152,7 @@ export default function App() {
       <Route path="/reset/:token" element={<SetPasswordPage purpose="reset" />} />
       <Route path="/" element={<Authed><OrgsPage /></Authed>} />
       <Route path="/deploy" element={<Authed><DeployPage /></Authed>} />
+      <Route path="/hosts" element={<Authed><HostsPage /></Authed>} />
       <Route path="/operators" element={<Authed><OperatorsPage /></Authed>} />
       <Route path="/backups" element={<Authed><BackupsPage /></Authed>} />
       <Route path="/docs" element={<Authed><DocsPage /></Authed>} />

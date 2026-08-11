@@ -171,9 +171,50 @@ Tenant containers are **not** updated by PM2 restart.
 
 1. `git pull origin main` on the VPS (human)
 2. Platform UI → **Deploy** → build/recreate tenant containers via agent  
-   (auto keep‑N image prune; never deletes host `data/`)
+   (auto keep‑N image prune; never deletes host `data/` or `backups/`)
 
 Details: root [`README.md`](../README.md) · platform UI **Docs → Deploy**.
+
+---
+
+## Multi-VPS (adding a worker box)
+
+**Platform stays on VPS‑1.** A new VPS is **agent + Docker tenants only** — same agent API, called remotely from the platform.
+
+### One-time: stand up VPS‑2
+
+1. Install Docker; clone the monorepo (image build context — platform app not required on this box).
+2. Run **worker agent** (PM2) with its own `HOST_ID`, same `AGENT_TOKEN` as platform (for now), `TENANTS_ROOT`, `ERP_ENV_FILE`.
+3. Register that host in platform UI **Hosts** (id, label, reachable `agent_url`, optional per-host token).
+4. Nginx / edge: `{slug}-erp…` → that box’s published container ports.
+5. **Companies → New company** → pick that host → Provision (or draft then Provision).
+
+Secured usually stays on VPS‑1; new orgs land on VPS‑2 when capacity needs it.
+
+### Everyday code deploy (each VPS, separately)
+
+| Step | Who | Action |
+|---|---|---|
+| 1 | You | `git pull` **on that VPS** (platform never runs git) |
+| 2 | You | Platform → **Deploy** → pick **that host** |
+| 3 | Agent on that host | Build `sotyn-erp:$TAG` → recreate **its** tenant containers only |
+
+Image prune/delete is also **per host**. Data/backups on that disk are never deleted.
+
+### Built already?
+
+| Piece | Status |
+|---|---|
+| `hosts` table + seeded `host_local` | ✅ |
+| Platform **Hosts** UI (register / edit / remove / health) | ✅ |
+| Per-host `agent_token` (falls back to env `AGENT_TOKEN`) | ✅ |
+| Deploy host picker + `hostId` on deploy / images / prune / delete | ✅ |
+| Create company → choose host; optional / later **Provision** via agent | ✅ |
+| Private network / tunnel productization | ❌ (ops: WireGuard / SSH / VPC) |
+| Auto fan-out (one Deploy → all VPS) | ❌ |
+| Tenant move between VPS | ❌ |
+
+Day‑1 path is identical: platform talks to an agent; VPS‑2 just makes that agent remote instead of `localhost`. Also in platform UI **Docs → Multi‑VPS** and **Hosts**.
 
 ---
 

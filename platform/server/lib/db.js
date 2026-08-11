@@ -52,6 +52,7 @@ function openDb() {
       id TEXT PRIMARY KEY,
       label TEXT NOT NULL,
       agent_url TEXT NOT NULL,
+      agent_token TEXT,
       status TEXT NOT NULL DEFAULT 'unknown',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -89,7 +90,7 @@ function openDb() {
       PRIMARY KEY (tenant_id, pack_key)
     );
   `);
-  // Soft migrate older DBs created before email / tokens
+  // Soft migrate older DBs created before email / tokens / host agent_token
   try {
     const cols = db.prepare('PRAGMA table_info(platform_users)').all().map((c) => c.name);
     if (!cols.includes('email')) {
@@ -98,7 +99,32 @@ function openDb() {
   } catch (_) {
     /* ignore */
   }
+  try {
+    const hostCols = db.prepare('PRAGMA table_info(hosts)').all().map((c) => c.name);
+    if (!hostCols.includes('agent_token')) {
+      db.exec('ALTER TABLE hosts ADD COLUMN agent_token TEXT');
+    }
+  } catch (_) {
+    /* ignore */
+  }
   return db;
+}
+
+/** Ensure day‑1 host_local exists; fill agent_token from env when missing. */
+function ensureHostLocal(db) {
+  const agentUrl = process.env.AGENT_URL || 'http://127.0.0.1:7200';
+  const token = process.env.AGENT_TOKEN || 'dev-agent-token';
+  const existing = db.prepare('SELECT * FROM hosts WHERE id = ?').get('host_local');
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO hosts (id, label, agent_url, agent_token, status)
+      VALUES (?, ?, ?, ?, ?)
+    `).run('host_local', 'Local / VPS-1', agentUrl, token, 'local');
+    return;
+  }
+  if (!existing.agent_token) {
+    db.prepare('UPDATE hosts SET agent_token = ? WHERE id = ?').run(token, 'host_local');
+  }
 }
 
 function seedAdmin(db) {
@@ -130,10 +156,16 @@ function seedSecured(db) {
   const hostId = 'host_local';
 
   const insertHost = db.prepare(`
-    INSERT OR IGNORE INTO hosts (id, label, agent_url, status)
-    VALUES (?, ?, ?, ?)
+    INSERT OR IGNORE INTO hosts (id, label, agent_url, agent_token, status)
+    VALUES (?, ?, ?, ?, ?)
   `);
-  insertHost.run(hostId, 'Local / VPS-1', process.env.AGENT_URL || 'http://127.0.0.1:7200', 'local');
+  insertHost.run(
+    hostId,
+    'Local / VPS-1',
+    process.env.AGENT_URL || 'http://127.0.0.1:7200',
+    process.env.AGENT_TOKEN || 'dev-agent-token',
+    'local'
+  );
 
   db.prepare(`
     INSERT INTO tenants (id, slug, display_name, status, host_id, data_path, s3_key_prefix, tenant_class)
@@ -174,6 +206,7 @@ let _db;
 function getDb() {
   if (!_db) {
     _db = openDb();
+    ensureHostLocal(_db);
     seedAdmin(_db);
     seedSecured(_db);
   }

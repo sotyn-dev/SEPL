@@ -5,15 +5,36 @@ import { modulesOnDisplay, planLabelForClass } from '../fixtures/packs.js';
 
 export default function OrgsPage() {
   const [tenants, setTenants] = useState([]);
+  const [hosts, setHosts] = useState([]);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ slug: '', displayName: '', tenantClass: 'mepf_erp' });
+  const [busy, setBusy] = useState(false);
+  const [provisionBusy, setProvisionBusy] = useState('');
+  const [form, setForm] = useState({
+    slug: '',
+    displayName: '',
+    tenantClass: 'mepf_erp',
+    hostId: 'host_local',
+    provision: false,
+  });
 
   const load = () => {
     api('/api/tenants')
       .then((r) => r.json())
       .then((d) => setTenants(d.tenants || []))
       .catch((e) => setError(String(e.message || e)));
+    api('/api/hosts')
+      .then((r) => r.json())
+      .then((d) => {
+        const list = d.hosts || [];
+        setHosts(list);
+        setForm((f) => {
+          if (list.some((h) => h.id === f.hostId)) return f;
+          return { ...f, hostId: list[0]?.id || 'host_local' };
+        });
+      })
+      .catch(() => {});
   };
 
   useEffect(load, []);
@@ -21,19 +42,63 @@ export default function OrgsPage() {
   const create = async (e) => {
     e.preventDefault();
     setError('');
-    const r = await api('/api/tenants', {
-      method: 'POST',
-      body: JSON.stringify(form),
-    });
-    const d = await r.json();
-    if (!r.ok) {
-      setError(d.error || 'Create failed');
-      return;
+    setNotice('');
+    setBusy(true);
+    try {
+      const r = await api('/api/tenants', {
+        method: 'POST',
+        body: JSON.stringify(form),
+      });
+      const d = await r.json();
+      if (!r.ok && !d.tenant) {
+        setError(d.error || 'Create failed');
+        return;
+      }
+      if (!r.ok && d.tenant) {
+        setError(d.error || 'Provision failed — draft saved');
+        setNotice(d.note || '');
+      } else if (form.provision) {
+        setNotice(`Created and provisioned ${d.tenant.slug} on ${d.tenant.hostId}.`);
+      } else {
+        setNotice(`Draft ${d.tenant.slug} on ${d.tenant.hostId}.`);
+      }
+      setForm((f) => ({
+        slug: '',
+        displayName: '',
+        tenantClass: 'mepf_erp',
+        hostId: f.hostId,
+        provision: false,
+      }));
+      setShowCreate(false);
+      load();
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setBusy(false);
     }
-    setForm({ slug: '', displayName: '', tenantClass: 'mepf_erp' });
-    setShowCreate(false);
-    load();
   };
+
+  const provision = async (t) => {
+    setError('');
+    setNotice('');
+    setProvisionBusy(t.slug);
+    try {
+      const r = await api(`/api/tenants/${encodeURIComponent(t.slug)}/provision`, {
+        method: 'POST',
+        body: JSON.stringify({ hostId: t.hostId }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Provision failed');
+      setNotice(`Provisioned ${d.tenant.slug} on ${d.tenant.hostId}.`);
+      load();
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setProvisionBusy('');
+    }
+  };
+
+  const hostLabel = (id) => hosts.find((h) => h.id === id)?.label || id;
 
   return (
     <div className="space-y-6">
@@ -57,6 +122,9 @@ export default function OrgsPage() {
       {error && (
         <p className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2 break-words">{error}</p>
       )}
+      {notice && (
+        <p className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 break-words">{notice}</p>
+      )}
 
       {/* Mobile cards */}
       <div className="md:hidden space-y-3">
@@ -77,8 +145,19 @@ export default function OrgsPage() {
             </div>
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
               <span>{planLabelForClass(t.tenantClass)}</span>
+              <span className="font-mono">{hostLabel(t.hostId)}</span>
               <span className="font-mono">{modulesOnDisplay(t.tenantClass)}</span>
             </div>
+            {t.status === 'draft' && (
+              <button
+                type="button"
+                className="mt-3 text-xs font-medium text-blue-800 hover:underline"
+                disabled={!!provisionBusy}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); provision(t); }}
+              >
+                {provisionBusy === t.slug ? 'Provisioning…' : 'Provision on host'}
+              </button>
+            )}
           </Link>
         ))}
         {!tenants.length && (
@@ -94,7 +173,7 @@ export default function OrgsPage() {
           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3 font-semibold">Company</th>
-              <th className="px-4 py-3 font-semibold">Id</th>
+              <th className="px-4 py-3 font-semibold">Host</th>
               <th className="px-4 py-3 font-semibold">Plan</th>
               <th className="px-4 py-3 font-semibold">Status</th>
               <th className="px-4 py-3 font-semibold">Modules on</th>
@@ -108,7 +187,10 @@ export default function OrgsPage() {
                   <p className="font-medium text-ink">{t.displayName}</p>
                   <p className="font-mono text-[11px] text-slate-500">{t.hostname}</p>
                 </td>
-                <td className="px-4 py-3 font-mono text-xs text-slate-600">{t.id}</td>
+                <td className="px-4 py-3 font-mono text-xs text-slate-600">
+                  {hostLabel(t.hostId)}
+                  <span className="block text-[10px] text-slate-400">{t.hostId}</span>
+                </td>
                 <td className="px-4 py-3 text-slate-600">{planLabelForClass(t.tenantClass)}</td>
                 <td className="px-4 py-3">
                   <span className="inline-flex px-2 py-0.5 rounded-full text-xs bg-teal-50 text-teal-800 border border-teal-100">
@@ -119,7 +201,17 @@ export default function OrgsPage() {
                   {modulesOnDisplay(t.tenantClass)}
                   <span className="block text-[10px] text-slate-400 normal-case">fixture estimate</span>
                 </td>
-                <td className="px-4 py-3 text-right whitespace-nowrap">
+                <td className="px-4 py-3 text-right whitespace-nowrap space-x-3">
+                  {t.status === 'draft' && (
+                    <button
+                      type="button"
+                      className="text-xs text-blue-800 font-medium hover:underline"
+                      disabled={!!provisionBusy}
+                      onClick={() => provision(t)}
+                    >
+                      {provisionBusy === t.slug ? 'Provisioning…' : 'Provision'}
+                    </button>
+                  )}
                   <Link
                     className="text-blue-800 font-medium hover:underline text-sm"
                     to={`/orgs/${t.slug}`}
@@ -144,7 +236,7 @@ export default function OrgsPage() {
         <form onSubmit={create} className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm space-y-4 max-w-xl w-full">
           <h2 className="font-semibold text-ink">Create company</h2>
           <p className="text-xs text-slate-500">
-            Writes a draft row to <code className="bg-slate-50 px-1 rounded">platform.db</code> only — no Docker provision.
+            Assign a worker host now. Optionally provision Docker immediately (needs agent + image on that host).
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-xs font-semibold text-slate-600 space-y-1 block">
@@ -174,6 +266,19 @@ export default function OrgsPage() {
             Hostname preview: {form.slug || '…'}-erp.sotyn.com
           </p>
           <label className="text-xs font-semibold text-slate-600 space-y-1 block">
+            Worker host
+            <select
+              className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm"
+              value={form.hostId}
+              onChange={(e) => setForm((f) => ({ ...f, hostId: e.target.value }))}
+            >
+              {hosts.map((h) => (
+                <option key={h.id} value={h.id}>{h.label} ({h.id})</option>
+              ))}
+              {!hosts.length && <option value="host_local">host_local</option>}
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-slate-600 space-y-1 block">
             Tenant class
             <select
               className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm"
@@ -185,6 +290,20 @@ export default function OrgsPage() {
               <option value="exclusive_app">Exclusive-app</option>
             </select>
           </label>
+          <label className="flex items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={form.provision}
+              onChange={(e) => setForm((f) => ({ ...f, provision: e.target.checked }))}
+            />
+            <span>
+              Provision on host now
+              <span className="block text-xs text-slate-500">
+                Calls the agent to create data/backups mounts + container. Requires Docker image on that host.
+              </span>
+            </span>
+          </label>
           <div className="flex flex-col-reverse sm:flex-row gap-2">
             <button
               type="button"
@@ -193,8 +312,8 @@ export default function OrgsPage() {
             >
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary">
-              Create draft
+            <button type="submit" disabled={busy} className="btn btn-primary">
+              {busy ? 'Working…' : (form.provision ? 'Create & provision' : 'Create draft')}
             </button>
           </div>
         </form>

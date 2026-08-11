@@ -89,7 +89,95 @@ function DeployDocsHtml() {
         <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
           <li><strong className="font-medium text-ink">Refresh</strong> reloads the image list for the selected host.</li>
           <li>Auto-prune runs only after a successful deploy/rollback on that host.</li>
-          <li>Multi-VPS: pick another worker host in the dropdown — prune/delete never fans out to all hosts.</li>
+          <li>
+            Multi-VPS: pick another worker host in the dropdown — prune/delete never fans out to all hosts.
+            See <Link to="/docs?tab=multivps" className="text-blue-800 hover:underline">Multi‑VPS</Link>.
+          </li>
+        </ul>
+      </Section>
+    </DocCard>
+  );
+}
+
+function MultiVpsDocsHtml() {
+  return (
+    <DocCard
+      title="Multi-VPS (worker hosts)"
+      blurb={
+        <>
+          Platform stays on VPS‑1. Extra VPS boxes run <strong className="font-medium text-ink">agent + Docker tenants only</strong>.
+          Same Deploy UI; operations are always host-scoped.
+        </>
+      }
+    >
+      <Section title="What runs where">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>
+            <strong className="font-medium text-ink">VPS‑1:</strong> platform API/UI + local agent + usually secured
+            (+ a few orgs).
+          </li>
+          <li>
+            <strong className="font-medium text-ink">VPS‑2+:</strong> worker agent + tenant containers + that host’s{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">data/</code> and{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">backups/</code> — no second platform.
+          </li>
+          <li>Platform never talks to Docker directly; it always calls a worker agent.</li>
+        </ul>
+      </Section>
+
+      <Section title="One-time: stand up a new worker VPS">
+        <ol className="list-decimal pl-5 space-y-1.5">
+          <li>Install Docker; clone the monorepo (build context for <code className="text-xs bg-slate-50 px-1 rounded">sotyn-erp</code> images).</li>
+          <li>
+            Run the worker agent (PM2) with its own <code className="text-xs bg-slate-50 px-1 rounded">HOST_ID</code>,
+            matching <code className="text-xs bg-slate-50 px-1 rounded">AGENT_TOKEN</code>,{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">TENANTS_ROOT</code>,{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">ERP_ENV_FILE</code>.
+          </li>
+          <li>
+            Register that host in platform <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>
+            {' '}(id, label, agent URL, optional token) so Deploy / provision can reach it.
+          </li>
+          <li>Nginx / edge: route <code className="text-xs bg-slate-50 px-1 rounded">{'{slug}'}-erp…</code> → that box’s container ports.</li>
+          <li>Provision orgs onto that host via platform → agent → Docker + bind mounts.</li>
+        </ol>
+      </Section>
+
+      <Section title="Everyday code deploy (each VPS)">
+        <ol className="list-decimal pl-5 space-y-1.5">
+          <li>
+            On <strong className="font-medium text-ink">that</strong> VPS:{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">git pull origin main</code> (platform never runs git).
+          </li>
+          <li>
+            Platform → <Link to="/deploy" className="text-blue-800 hover:underline">Deploy</Link> → pick{' '}
+            <strong className="font-medium text-ink">that host</strong>.
+          </li>
+          <li>Agent on that host builds <code className="text-xs bg-slate-50 px-1 rounded">sotyn-erp:$TAG</code> and recreates only its tenant containers.</li>
+        </ol>
+        <p className="text-slate-600 text-xs mt-2">
+          Image prune/delete is also per host. Host <code className="bg-slate-50 px-1 rounded">data/</code> and{' '}
+          <code className="bg-slate-50 px-1 rounded">backups/</code> are never deleted.
+        </p>
+      </Section>
+
+      <Section title="Built already?">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>
+            <strong className="font-medium text-emerald-800">Ready:</strong>{' '}
+            <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link> registry (add / edit / remove /
+            health), per-host agent token, Deploy host picker, create company with host + optional provision,
+            <code className="text-xs bg-slate-50 px-1 rounded"> POST /api/tenants/:slug/provision</code>.
+          </li>
+          <li>
+            <strong className="font-medium text-amber-800">Still later:</strong> private-network / tunnel as a
+            productized flow (you choose WireGuard / SSH / VPC), auto fan-out Deploy to all VPS, tenant move
+            between hosts.
+          </li>
+          <li>
+            When VPS‑2 exists: register it under <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>,
+            Health-check, then create/provision orgs onto that host id.
+          </li>
         </ul>
       </Section>
     </DocCard>
@@ -216,6 +304,7 @@ function BackupsDocsHtml() {
 
 const TABS = [
   { id: 'deploy', label: 'Deploy' },
+  { id: 'multivps', label: 'Multi‑VPS' },
   { id: 'operators', label: 'Operators' },
   { id: 'backups', label: 'Backups' },
 ];
@@ -256,6 +345,7 @@ export default function DocsPage() {
       </div>
 
       {tab === 'deploy' && <DeployDocsHtml />}
+      {tab === 'multivps' && <MultiVpsDocsHtml />}
       {tab === 'operators' && <OperatorsDocsHtml />}
       {tab === 'backups' && <BackupsDocsHtml />}
     </div>

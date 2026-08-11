@@ -700,7 +700,7 @@ Not built yet. Do not confuse with **tenant ERP** Backups / Audit (chassis insid
 | 4 | Super-admin panel on `platform.sotyn.com` | 🟡 local UI pencil; VPS runbook: [`PLATFORM-VPS-deploy.md`](./PLATFORM-VPS-deploy.md) |
 | 5 | Wildcard DNS/TLS `*-erp.sotyn.com` + nginx host→port | ❌ |
 | 6 | Cutover secured → Docker (bind `/root/erp/data`); canary org #2 on `/var/lib/sotyn/tenants/…` | ❌ |
-| 7 | Later: remote agent on VPS‑2 + tenant move; optional paths.js hygiene | ❌ |
+| 7 | Remote agent on VPS‑2 + tenant move; optional paths.js hygiene | 🟡 hosts UI + per-host token + provision-to-host ✅; move/fan-out ❌ |
 
 ---
 

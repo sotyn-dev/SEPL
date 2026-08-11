@@ -11,6 +11,7 @@ const brandingRouter = require('./routes/branding');
 const deployRouter = require('./routes/deploy');
 const usersRouter = require('./routes/users');
 const backups = require('./routes/backups');
+const hostsRouter = require('./routes/hosts');
 const { router: authRouter, requireAuth } = require('./routes/auth');
 const { scheduleNightly } = require('./lib/backup');
 
@@ -36,19 +37,7 @@ app.get('/api/backups/:file/download', backups.downloadHandler);
 
 app.use(requireAuth);
 
-app.get('/api/hosts', (_req, res) => {
-  const rows = getDb().prepare('SELECT * FROM hosts ORDER BY created_at ASC').all();
-  res.json({
-    hosts: rows.map((h) => ({
-      id: h.id,
-      label: h.label,
-      agentUrl: h.agent_url,
-      status: h.status,
-      createdAt: h.created_at,
-    })),
-  });
-});
-
+app.use('/api/hosts', hostsRouter);
 app.use('/api/tenants', tenantsRouter);
 app.use('/api/branding', brandingRouter);
 app.use('/api/deploy', deployRouter);

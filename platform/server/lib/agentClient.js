@@ -2,27 +2,33 @@
 
 const { getDb } = require('./db');
 
-const AGENT_TOKEN = process.env.AGENT_TOKEN || 'dev-agent-token';
 const DEFAULT_HOST_ID = 'host_local';
+const ENV_TOKEN = process.env.AGENT_TOKEN || 'dev-agent-token';
 
-function rowToHost(row) {
-  return {
+function rowToHost(row, { includeToken = false } = {}) {
+  if (!row) return null;
+  const token = row.agent_token || ENV_TOKEN;
+  const out = {
     id: row.id,
     label: row.label,
     agentUrl: (row.agent_url || '').replace(/\/$/, ''),
     status: row.status,
+    hasToken: !!(row.agent_token || ENV_TOKEN),
+    createdAt: row.created_at,
   };
+  if (includeToken) out.agentToken = token;
+  return out;
 }
 
-/** All registered worker hosts (day‑1: host_local; later: VPS‑2+). */
+/** Public list shape — never returns raw agent tokens. */
 function listHosts() {
   return getDb()
     .prepare('SELECT * FROM hosts ORDER BY created_at ASC')
     .all()
-    .map(rowToHost);
+    .map((row) => rowToHost(row));
 }
 
-function getHost(hostId) {
+function getHostRow(hostId) {
   const id = hostId || DEFAULT_HOST_ID;
   let row = getDb().prepare('SELECT * FROM hosts WHERE id = ?').get(id);
   if (!row && (!hostId || hostId === DEFAULT_HOST_ID)) {
@@ -33,7 +39,11 @@ function getHost(hostId) {
     err.status = hostId ? 404 : 503;
     throw err;
   }
-  return rowToHost(row);
+  return row;
+}
+
+function getHost(hostId) {
+  return rowToHost(getHostRow(hostId), { includeToken: true });
 }
 
 function getLocalHost() {
@@ -41,15 +51,15 @@ function getLocalHost() {
 }
 
 /**
- * Call a worker agent. Pass hostId to target a specific VPS (multi-host ready).
- * Omitting hostId uses host_local / first registered host.
+ * Call a worker agent. Pass hostId to target a specific VPS.
+ * Uses that host's agent_token when set; else PLATFORM AGENT_TOKEN env.
  */
 async function agentFetch(path, options = {}) {
   const { hostId, ...fetchOpts } = options;
   const host = getHost(hostId);
   const url = `${host.agentUrl}${path.startsWith('/') ? path : `/${path}`}`;
   const headers = {
-    Authorization: `Bearer ${AGENT_TOKEN}`,
+    Authorization: `Bearer ${host.agentToken}`,
     ...(fetchOpts.headers || {}),
   };
   if (fetchOpts.body && !headers['Content-Type']) {
@@ -84,10 +94,12 @@ async function agentFetch(path, options = {}) {
 }
 
 module.exports = {
-  AGENT_TOKEN,
   DEFAULT_HOST_ID,
+  ENV_TOKEN,
   listHosts,
   getHost,
+  getHostRow,
   getLocalHost,
   agentFetch,
+  rowToHost,
 };
