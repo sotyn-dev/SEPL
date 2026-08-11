@@ -37,6 +37,7 @@ function CopyField({ label, value }) {
 
 export default function OperatorsPage() {
   const [users, setUsers] = useState([]);
+  const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -53,6 +54,7 @@ export default function OperatorsPage() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || 'Failed to list users');
         setUsers(d.users || []);
+        setSmtpConfigured(!!d.smtpConfigured);
       })
       .catch((e) => setError(String(e.message || e)));
   }, []);
@@ -85,8 +87,13 @@ export default function OperatorsPage() {
         url: d.inviteUrl,
         expiresAt: d.expiresAt,
         note: d.note,
+        emailSent: d.emailSent,
       });
-      setNotice('Invite created — copy the link now (token shown once).');
+      setNotice(
+        d.emailSent
+          ? `Invite emailed to ${d.user.email}. Link also shown once below.`
+          : 'Invite created — copy the link now (token shown once).'
+      );
       load();
     } catch (err) {
       setError(String(err.message || err));
@@ -112,8 +119,13 @@ export default function OperatorsPage() {
         url: d.resetUrl,
         expiresAt: d.expiresAt,
         note: d.note,
+        emailSent: d.emailSent,
       });
-      setNotice('Reset link ready — old password invalidated.');
+      setNotice(
+        d.emailSent
+          ? 'Reset emailed — old password invalidated.'
+          : 'Reset link ready — old password invalidated.'
+      );
     } catch (err) {
       setError(String(err.message || err));
     }
@@ -122,7 +134,9 @@ export default function OperatorsPage() {
   const resetPassword = (u) => {
     setConfirm({
       title: `Reset password for ${u.username}?`,
-      message: 'Their current password will stop working immediately. You must copy the new reset link.',
+      message: u.email
+        ? `Their current password will stop working immediately. A reset link will be emailed to ${u.email} if SMTP is configured (and still shown once here).`
+        : 'Their current password will stop working immediately. No email on file — you must copy the new reset link.',
       confirmLabel: 'Reset & show link',
       tone: 'danger',
       onConfirm: () => runResetPassword(u),
@@ -203,8 +217,8 @@ export default function OperatorsPage() {
         <div>
           <h1 className="font-display text-2xl sm:text-3xl font-semibold text-ink">Operators</h1>
           <p className="text-slate-600 mt-1 text-sm max-w-2xl">
-            Platform control-plane users (not tenant ERP logins). Invite with a one-time link.
-            Password reset is admin-issued — no email yet; copy the link to the person.
+            Platform control-plane users (not tenant ERP logins). Invite with a one-time link
+            {smtpConfigured ? ' — emailed when an address is provided.' : ' (SMTP not configured — copy links manually).'}
           </p>
         </div>
         <Link
@@ -306,14 +320,14 @@ export default function OperatorsPage() {
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1" htmlFor="op-email">Email (optional)</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1" htmlFor="op-email">Email (for invite mail)</label>
           <input
             id="op-email"
             type="email"
             value={form.email}
             onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
             className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-            placeholder="for your records — email send later"
+            placeholder={smtpConfigured ? 'operator@example.com' : 'optional — SMTP not configured'}
             disabled={busy}
           />
         </div>

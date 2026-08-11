@@ -52,8 +52,16 @@ PLATFORM_PORT=7100
 PLATFORM_DATA_DIR=/var/lib/sotyn/platform
 PLATFORM_ADMIN_USER=admin
 PLATFORM_ADMIN_PASSWORD='strong-password-first-boot-only'
+PLATFORM_ADMIN_EMAIL=sotyn.soft@gmail.com
 PLATFORM_JWT_SECRET='paste-openssl-rand-hex-32'
 PLATFORM_PUBLIC_URL=https://platform.sotyn.com
+
+# Optional — invite / forgot-password email (Gmail app password etc.)
+# PLATFORM_SMTP_HOST=smtp.gmail.com
+# PLATFORM_SMTP_PORT=587
+# PLATFORM_SMTP_USER=sotyn.soft@gmail.com
+# PLATFORM_SMTP_PASS='app-password'
+# PLATFORM_EMAIL_FROM='Sotyn Platform <sotyn.soft@gmail.com>'
 
 AGENT_URL=http://127.0.0.1:7200
 AGENT_TOKEN='paste-another-openssl-rand-hex-32'
@@ -61,7 +69,8 @@ AGENT_TOKEN='paste-another-openssl-rand-hex-32'
 
 Notes:
 
-- `PLATFORM_ADMIN_PASSWORD` only seeds admin when `platform_users` is empty (first boot). After that use **Operators → Set password**.
+- `PLATFORM_ADMIN_PASSWORD` only seeds admin when `platform_users` is empty (first boot). After that use **Operators → Set password** or login **Forgot password** (needs SMTP + admin email).
+- `PLATFORM_ADMIN_EMAIL` defaults to `sotyn.soft@gmail.com` (also backfilled when empty on existing DBs).
 - `PLATFORM_JWT_SECRET` is a random string you invent — not downloaded from a service. Prefer setting it **before** first start so it is not locked to the weak default in `platform.db`.
 - This is **not** the ERP `JWT_SECRET` in `/root/erp/.env`.
 

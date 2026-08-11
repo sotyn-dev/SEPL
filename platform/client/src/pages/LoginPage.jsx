@@ -6,7 +6,10 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [form, setForm] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState('login'); // login | forgot
+  const [forgotId, setForgotId] = useState('');
 
   if (getToken()) {
     return <Navigate to="/" replace />;
@@ -16,6 +19,7 @@ export default function LoginPage() {
     e.preventDefault();
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       const res = await api('/api/auth/login', {
         method: 'POST',
@@ -28,6 +32,29 @@ export default function LoginPage() {
       }
       setToken(data.token);
       navigate('/', { replace: true });
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitForgot = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const res = await api('/api/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ username: forgotId.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Request failed');
+        return;
+      }
+      setNotice(data.message || 'If that account has email on file, a reset link was sent.');
     } catch (err) {
       setError(String(err.message || err));
     } finally {
@@ -55,56 +82,124 @@ export default function LoginPage() {
             />
           </div>
 
-          <form
-            onSubmit={submit}
-            className="rounded-2xl border border-white/10 bg-zinc-950/80 p-5 sm:p-7 shadow-2xl shadow-blue-950/40 space-y-4"
-          >
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">Platform sign-in</h1>
-              <p className="text-sm text-zinc-400 mt-1">Operator access only — no public register.</p>
-            </div>
-
-            {error && (
-              <p className="text-sm text-red-300 bg-red-950/50 border border-red-900/60 rounded-lg px-3 py-2">
-                {error}
-              </p>
-            )}
-
-            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 space-y-1.5">
-              Username
-              <input
-                className="w-full rounded-xl bg-black border border-white/15 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-[#0059cf]"
-                autoComplete="username"
-                value={form.username}
-                onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
-                required
-              />
-            </label>
-
-            <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 space-y-1.5">
-              Password
-              <input
-                type="password"
-                className="w-full rounded-xl bg-black border border-white/15 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-[#0059cf]"
-                autoComplete="current-password"
-                value={form.password}
-                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                required
-              />
-            </label>
-
-            <button
-              type="submit"
-              disabled={busy}
-              className="btn btn-primary w-full mt-2 py-3 disabled:opacity-60"
+          {mode === 'login' ? (
+            <form
+              onSubmit={submit}
+              className="rounded-2xl border border-white/10 bg-zinc-950/80 p-5 sm:p-7 shadow-2xl shadow-blue-950/40 space-y-4"
             >
-              {busy ? 'Signing in…' : 'Sign in'}
-            </button>
-          </form>
+              <div>
+                <h1 className="text-xl font-semibold tracking-tight">Platform sign-in</h1>
+                <p className="text-sm text-zinc-400 mt-1">Operator access only — no public register.</p>
+              </div>
+
+              {error && (
+                <p className="text-sm text-red-300 bg-red-950/50 border border-red-900/60 rounded-lg px-3 py-2">
+                  {error}
+                </p>
+              )}
+
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 space-y-1.5">
+                Username
+                <input
+                  className="w-full rounded-xl bg-black border border-white/15 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-[#0059cf]"
+                  autoComplete="username"
+                  value={form.username}
+                  onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
+                  required
+                />
+              </label>
+
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 space-y-1.5">
+                Password
+                <input
+                  type="password"
+                  className="w-full rounded-xl bg-black border border-white/15 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-[#0059cf]"
+                  autoComplete="current-password"
+                  value={form.password}
+                  onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                  required
+                />
+              </label>
+
+              <button
+                type="submit"
+                disabled={busy}
+                className="btn btn-primary w-full mt-2 py-3 disabled:opacity-60"
+              >
+                {busy ? 'Signing in…' : 'Sign in'}
+              </button>
+
+              <button
+                type="button"
+                className="w-full text-center text-xs text-zinc-400 hover:text-white pt-1"
+                onClick={() => {
+                  setMode('forgot');
+                  setError('');
+                  setNotice('');
+                  setForgotId(form.username);
+                }}
+              >
+                Forgot password?
+              </button>
+            </form>
+          ) : (
+            <form
+              onSubmit={submitForgot}
+              className="rounded-2xl border border-white/10 bg-zinc-950/80 p-5 sm:p-7 shadow-2xl shadow-blue-950/40 space-y-4"
+            >
+              <div>
+                <h1 className="text-xl font-semibold tracking-tight">Forgot password</h1>
+                <p className="text-sm text-zinc-400 mt-1">
+                  Enter your username or email. If SMTP is configured and email is on file, a reset link is sent.
+                </p>
+              </div>
+
+              {error && (
+                <p className="text-sm text-red-300 bg-red-950/50 border border-red-900/60 rounded-lg px-3 py-2">
+                  {error}
+                </p>
+              )}
+              {notice && (
+                <p className="text-sm text-emerald-300 bg-emerald-950/40 border border-emerald-900/50 rounded-lg px-3 py-2">
+                  {notice}
+                </p>
+              )}
+
+              <label className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 space-y-1.5">
+                Username or email
+                <input
+                  className="w-full rounded-xl bg-black border border-white/15 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 outline-none focus:border-[#0059cf]"
+                  autoComplete="username"
+                  value={forgotId}
+                  onChange={(e) => setForgotId(e.target.value)}
+                  required
+                />
+              </label>
+
+              <button
+                type="submit"
+                disabled={busy}
+                className="btn btn-primary w-full mt-2 py-3 disabled:opacity-60"
+              >
+                {busy ? 'Sending…' : 'Send reset link'}
+              </button>
+
+              <button
+                type="button"
+                className="w-full text-center text-xs text-zinc-400 hover:text-white pt-1"
+                onClick={() => {
+                  setMode('login');
+                  setError('');
+                  setNotice('');
+                }}
+              >
+                Back to sign-in
+              </button>
+            </form>
+          )}
 
           <p className="text-center text-[11px] text-zinc-500 mt-6">
             Control plane · not a tenant ERP login.
-            Invites and password resets use a one-time link from an existing admin.
           </p>
         </div>
       </div>

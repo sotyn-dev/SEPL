@@ -89,6 +89,32 @@ function openDb() {
       enabled INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (tenant_id, pack_key)
     );
+
+    -- Platform operator audit (mirrors ERP audit_log; control-plane only)
+    CREATE TABLE IF NOT EXISTS platform_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL DEFAULT (datetime('now')),
+      user_id TEXT,
+      user_name TEXT,
+      user_role TEXT,
+      action TEXT,
+      entity_type TEXT,
+      entity_id TEXT,
+      entity_label TEXT,
+      method TEXT,
+      path TEXT,
+      query TEXT,
+      body_summary TEXT,
+      status_code INTEGER,
+      ip TEXT,
+      user_agent TEXT,
+      before_json TEXT,
+      after_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_platform_audit_at ON platform_audit(at DESC);
+    CREATE INDEX IF NOT EXISTS idx_platform_audit_user ON platform_audit(user_id, at DESC);
+    CREATE INDEX IF NOT EXISTS idx_platform_audit_entity ON platform_audit(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_platform_audit_action ON platform_audit(action);
   `);
   // Soft migrate older DBs created before email / tokens / host agent_token
   try {
@@ -129,17 +155,28 @@ function ensureHostLocal(db) {
 
 function seedAdmin(db) {
   const count = db.prepare('SELECT COUNT(*) AS n FROM platform_users').get().n;
-  if (count > 0) return;
+  const email = process.env.PLATFORM_ADMIN_EMAIL || 'sotyn.soft@gmail.com';
 
-  const username = process.env.PLATFORM_ADMIN_USER || 'admin';
-  const password = process.env.PLATFORM_ADMIN_PASSWORD || 'sotyn-dev';
-  const hash = bcrypt.hashSync(password, 10);
-  db.prepare(`
-    INSERT INTO platform_users (id, username, password_hash, role, active)
-    VALUES (?, ?, ?, 'platform_admin', 1)
-  `).run('user_admin', username, hash);
+  if (count === 0) {
+    const username = process.env.PLATFORM_ADMIN_USER || 'admin';
+    const password = process.env.PLATFORM_ADMIN_PASSWORD || 'sotyn-dev';
+    const hash = bcrypt.hashSync(password, 10);
+    db.prepare(`
+      INSERT INTO platform_users (id, username, password_hash, role, active, email)
+      VALUES (?, ?, ?, 'platform_admin', 1, ?)
+    `).run('user_admin', username, hash, email);
+    console.log(`[platform] seeded operator "${username}" <${email}> (change PLATFORM_ADMIN_PASSWORD in prod)`);
+    return;
+  }
 
-  console.log(`[platform] seeded operator "${username}" (change PLATFORM_ADMIN_PASSWORD in prod)`);
+  // Backfill seed admin email when missing (existing DBs)
+  const admin = db.prepare('SELECT id, email FROM platform_users WHERE id = ?').get('user_admin');
+  if (admin && !admin.email) {
+    db.prepare(`
+      UPDATE platform_users SET email = ?, updated_at = datetime('now') WHERE id = ?
+    `).run(email, admin.id);
+    console.log(`[platform] backfilled admin email → ${email}`);
+  }
 }
 
 function seedSecured(db) {

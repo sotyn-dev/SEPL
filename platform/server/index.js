@@ -12,7 +12,9 @@ const deployRouter = require('./routes/deploy');
 const usersRouter = require('./routes/users');
 const backups = require('./routes/backups');
 const hostsRouter = require('./routes/hosts');
+const auditRouter = require('./routes/audit');
 const { router: authRouter, requireAuth } = require('./routes/auth');
+const { auditMiddleware } = require('./lib/audit');
 const { scheduleNightly } = require('./lib/backup');
 
 const PORT = Number(process.env.PLATFORM_PORT || 7100);
@@ -36,6 +38,7 @@ app.use('/api/auth', authRouter);
 app.get('/api/backups/:file/download', backups.downloadHandler);
 
 app.use(requireAuth);
+app.use(auditMiddleware);
 
 app.use('/api/hosts', hostsRouter);
 app.use('/api/tenants', tenantsRouter);
@@ -43,6 +46,7 @@ app.use('/api/branding', brandingRouter);
 app.use('/api/deploy', deployRouter);
 app.use('/api/users', usersRouter.router);
 app.use('/api/backups', backups.router);
+app.use('/api/audit', auditRouter);
 
 // Warm DB + seed on boot
 getDb();

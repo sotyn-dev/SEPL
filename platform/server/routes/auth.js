@@ -4,7 +4,17 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const express = require('express');
 const { getDb } = require('../lib/db');
-const { findValidToken, assertPassword } = require('./users');
+const {
+  findValidToken,
+  assertPassword,
+  findUserByLogin,
+  createUserToken,
+  trySendResetEmail,
+  PUBLIC_BASE,
+  RESET_HOURS,
+} = require('./users');
+const { logAuditEvent, clientIp } = require('../lib/audit');
+const { isConfigured } = require('../lib/email');
 
 const router = express.Router();
 
@@ -86,22 +96,117 @@ function requireAuth(req, res, next) {
 
 router.post('/login', (req, res) => {
   const { username, password } = req.body || {};
+  const ip = clientIp(req);
+  const ua = req.headers['user-agent'] || null;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password required' });
   }
 
+  const identifier = String(username).trim();
   const user = getDb().prepare(
     'SELECT id, username, password_hash, role, active FROM platform_users WHERE username = ?'
-  ).get(String(username).trim());
+  ).get(identifier);
 
   if (!user || !user.active || !bcrypt.compareSync(password, user.password_hash)) {
+    logAuditEvent({
+      action: 'LOGIN_FAIL',
+      entity_type: 'auth',
+      entity_label: identifier,
+      method: 'POST',
+      path: '/api/auth/login',
+      status_code: 401,
+      ip,
+      user_agent: ua,
+    });
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
   const token = signToken(user);
+  logAuditEvent({
+    user: { id: user.id, username: user.username, role: user.role },
+    action: 'LOGIN',
+    entity_type: 'auth',
+    entity_id: user.id,
+    entity_label: user.username,
+    method: 'POST',
+    path: '/api/auth/login',
+    status_code: 200,
+    ip,
+    user_agent: ua,
+  });
   res.json({
     token,
     user: { id: user.id, username: user.username, role: user.role },
+  });
+});
+
+/**
+ * Self-service forgot password. Always returns a generic success message.
+ * Does NOT invalidate the current password until the reset link is used.
+ * Requires the account to have an email and SMTP to be configured to actually send.
+ */
+router.post('/forgot-password', async (req, res) => {
+  const ip = clientIp(req);
+  const ua = req.headers['user-agent'] || null;
+  const identifier = String(req.body?.username || req.body?.email || '').trim();
+  const generic = {
+    ok: true,
+    message: 'If that account has an email on file and mail is configured, a reset link was sent.',
+  };
+
+  if (!identifier) {
+    return res.status(400).json({ error: 'Username or email required' });
+  }
+
+  const user = findUserByLogin(identifier);
+  if (!user || !user.active || !user.email) {
+    logAuditEvent({
+      action: 'FORGOT_PASSWORD',
+      entity_type: 'auth',
+      entity_label: identifier,
+      method: 'POST',
+      path: '/api/auth/forgot-password',
+      status_code: 200,
+      ip,
+      user_agent: ua,
+      body: { outcome: 'no_match_or_no_email' },
+    });
+    return res.json(generic);
+  }
+
+  const expiresAt = new Date(Date.now() + RESET_HOURS * 60 * 60 * 1000).toISOString();
+  const raw = createUserToken(getDb(), {
+    userId: user.id,
+    purpose: 'reset',
+    createdBy: null,
+    expiresAt,
+  });
+  const resetUrl = `${PUBLIC_BASE}/reset/${raw}`;
+  const emailResult = await trySendResetEmail({
+    to: user.email,
+    username: user.username,
+    url: resetUrl,
+    expiresAt,
+    selfServe: true,
+  });
+
+  logAuditEvent({
+    user: { id: user.id, username: user.username, role: user.role },
+    action: emailResult.sent ? 'FORGOT_PASSWORD' : 'FORGOT_PASSWORD_SKIP',
+    entity_type: 'auth',
+    entity_id: user.id,
+    entity_label: user.username,
+    method: 'POST',
+    path: '/api/auth/forgot-password',
+    status_code: 200,
+    ip,
+    user_agent: ua,
+    body: { emailSent: !!emailResult.sent, reason: emailResult.reason || null },
+  });
+
+  res.json({
+    ...generic,
+    smtpConfigured: isConfigured(),
   });
 });
 
@@ -142,6 +247,8 @@ router.get('/password-token/:token', (req, res) => {
 
 /** Public: set password via invite or reset link */
 router.post('/password-token/:token', (req, res) => {
+  const ip = clientIp(req);
+  const ua = req.headers['user-agent'] || null;
   try {
     const row = findValidToken(req.params.token);
     if (!row || !row.active) {
@@ -168,6 +275,18 @@ router.post('/password-token/:token', (req, res) => {
       'SELECT id, username, role, active FROM platform_users WHERE id = ?'
     ).get(row.user_id);
     const token = signToken(user);
+    logAuditEvent({
+      user: { id: user.id, username: user.username, role: user.role },
+      action: row.purpose === 'invite' ? 'ACCEPT_INVITE' : 'RESET_PASSWORD',
+      entity_type: 'auth',
+      entity_id: user.id,
+      entity_label: user.username,
+      method: 'POST',
+      path: '/api/auth/password-token',
+      status_code: 200,
+      ip,
+      user_agent: ua,
+    });
     res.json({
       ok: true,
       token,
@@ -182,6 +301,8 @@ router.post('/password-token/:token', (req, res) => {
 /** Logged-in: change own password (uses bearer; mounted under /api/auth before requireAuth) */
 router.post('/change-password', (req, res) => {
   const bearer = readBearer(req);
+  const ip = clientIp(req);
+  const ua = req.headers['user-agent'] || null;
   if (!bearer) return res.status(401).json({ error: 'No token provided' });
   try {
     const decoded = verifyToken(bearer);
@@ -196,12 +317,36 @@ router.post('/change-password', (req, res) => {
       return res.status(400).json({ error: 'currentPassword and newPassword required' });
     }
     if (!bcrypt.compareSync(currentPassword, user.password_hash)) {
+      logAuditEvent({
+        user: { id: user.id, username: user.username, role: user.role },
+        action: 'CHANGE_PASSWORD_FAIL',
+        entity_type: 'auth',
+        entity_id: user.id,
+        entity_label: user.username,
+        method: 'POST',
+        path: '/api/auth/change-password',
+        status_code: 401,
+        ip,
+        user_agent: ua,
+      });
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
     const password = assertPassword(newPassword);
     db.prepare(`
       UPDATE platform_users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?
     `).run(bcrypt.hashSync(password, 10), user.id);
+    logAuditEvent({
+      user: { id: user.id, username: user.username, role: user.role },
+      action: 'CHANGE_PASSWORD',
+      entity_type: 'auth',
+      entity_id: user.id,
+      entity_label: user.username,
+      method: 'POST',
+      path: '/api/auth/change-password',
+      status_code: 200,
+      ip,
+      user_agent: ua,
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(e.status || 401).json({ error: e.message || 'Invalid token' });

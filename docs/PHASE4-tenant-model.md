@@ -654,20 +654,22 @@ Control-plane users live in `platform_users` (not tenant ERP users). Seed admin 
 
 | Action | How |
 |---|---|
-| **Invite** | `platform_admin` creates username (+ optional email) → one-time invite link (copy/paste; email delivery later). Invitee opens `/invite/:token`, sets password (≥10 chars), then signs in. |
+| **Invite** | `platform_admin` creates username + email → one-time invite link (emailed when SMTP configured; always copyable once). Invitee opens `/invite/:token`, sets password (≥10 chars), then signs in. |
 | **Roles** | Day‑1: `platform_admin` only (full panel). Later: `platform_operator` (orgs/deploy; no user mgmt) if needed. |
-| **Password reset** | **Admin-issued reset link** (day‑1, no SMTP). Admin clicks **Reset link** on Operators → one-time `/reset/:token` URL (copy). **Old password is invalidated immediately**. Link expires (24h). Same set-password UI as invite. |
+| **Password reset** | **Admin-issued reset link** (invalidates old password). Emailed when user has email + SMTP; otherwise copy. Same set-password UI as invite. |
 | **Admin set password** | Admin clicks **Set password** → types new password (≥10). Takes effect immediately; tell the operator out of band. Burns open invite/reset tokens for that user. |
-| **Self-service forgot password** | Later — same token table + email when SMTP exists. Not day‑1. |
+| **Self-service forgot password** | Login → Forgot password → username/email. Issues reset token **without** invalidating current password until link used. Needs email on account + SMTP. |
 | **Change own password** | Logged-in operator: current + new password (`POST /api/auth/change-password`). |
 | **Deactivate** | Admin sets `active=0`; JWT checks fail on next request. Cannot deactivate last active admin. |
+| **SMTP** | Same nodemailer pattern as ERP `server/lib/email.js`. Env: `PLATFORM_SMTP_*` / `PLATFORM_EMAIL_FROM`. Graceful skip if unset. |
+| **Seed admin email** | Default `sotyn.soft@gmail.com` (`PLATFORM_ADMIN_EMAIL`); backfilled on existing DBs when empty. |
 | **Security** | bcrypt hashes; invite/reset tokens stored as SHA-256 only; never log raw tokens; change `PLATFORM_ADMIN_PASSWORD` / `PLATFORM_JWT_SECRET` in prod. |
 
 ---
 
 ### Platform control-plane safety (requirements — Aug 2026)
 
-Not built yet. Do not confuse with **tenant ERP** Backups / Audit (chassis inside each org). These are **platform-only**.
+Do not confuse with **tenant ERP** Backups / Audit (chassis inside each org). These are **platform-only**.
 
 **1. `platform.db` backup / restore (✅ zip-only — Aug 2026)**
 
@@ -676,12 +678,13 @@ Not built yet. Do not confuse with **tenant ERP** Backups / Audit (chassis insid
 - Restore: stop platform → unzip → replace `platform.db` → start. Branding asset files are **not** in the zip.
 - Optional later: scheduled offsite copy; still separate from per-tenant ERP DB backups.
 
-**2. Platform audit logs (skeleton early OK; full UI after mutations matter)**
+**2. Platform audit logs (✅ — Aug 2026; mirrors ERP `audit_log`)**
 
-- Separate from ERP activity logs. Platform records **operator** actions on the control plane.
-- Events to capture (minimum): login failures / operator login, create/update tenant, brand save / asset upload, entitlement Save, provision / start / stop / pause, backup / restore, export dev config (when wired).
-- Shape: `platform_audit` (or similar) in `platform.db` — who, when, action, tenant slug if any, payload summary; Audit nav page + per-org “View audit” (UI still dimmed / later today).
-- Sequencing recommendation: lightweight backup first → persist entitlements → write audit on those mutations (and later agent verbs) → fuller Audit UI. Full audit product before Save/provision is optional early skeleton only.
+- Table `platform_audit` in `platform.db`. Middleware auto-logs mutating `/api/*` after JWT auth; secrets redacted.
+- Manual events: `LOGIN` / `LOGIN_FAIL`, invite accept, reset-password via link, change-password.
+- API: `GET /api/audit`, `/meta`, `/:id`. UI: **Audit** nav + Docs → Audit.
+- Opt-out: `PLATFORM_DISABLE_AUDIT=1`. Debug: `PLATFORM_AUDIT_DEBUG=1`.
+- Not tenant ERP activity. Reading the audit API itself is skipped.
 
 ---
 
@@ -693,7 +696,7 @@ Not built yet. Do not confuse with **tenant ERP** Backups / Audit (chassis insid
 | 0b | Platform boilerplate (`platform/`) + Secured white-label seed + Brand pencil UI | ✅ started |
 | 0c | **`platform.db` backup/restore** (zip-only Backups page; nightly + download) | ✅ |
 | 0e | Platform operators: invite + admin reset link + Operators UI | ✅ |
-| 0d | **Platform audit** write path + Audit UI (after entitlements/agent mutations grow; thin stub OK earlier) | ❌ requirement noted |
+| 0d | **Platform audit** write path + Audit UI (after entitlements/agent mutations grow; thin stub OK earlier) | ✅ middleware + `/api/audit` + Audit page |
 | 1 | Dockerfile: same app, bind-mount `data/` (`Dockerfile` + `.dockerignore`) | ✅ |
 | 2 | Worker agent (`platform/worker-agent/`): `/v1` API + **Docker driver** (provision/start/stop; secured adopt) | ✅ docker mode |
 | 3 | `platform.db` + host registry + entitlements; platform always calls agent; **local = run script** | 🟡 db + orgs/branding; packs via **gradual ladder** (PHASE4 self-note), not full catalog first |

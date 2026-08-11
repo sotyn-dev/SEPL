@@ -4,6 +4,12 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const express = require('express');
 const { getDb } = require('../lib/db');
+const {
+  sendEmail,
+  isConfigured,
+  inviteEmailHtml,
+  resetEmailHtml,
+} = require('../lib/email');
 
 const router = express.Router();
 
@@ -99,6 +105,47 @@ function findValidToken(raw) {
   return row;
 }
 
+function findUserByLogin(identifier) {
+  const id = String(identifier || '').trim();
+  if (!id) return null;
+  return getDb().prepare(`
+    SELECT * FROM platform_users
+    WHERE LOWER(username) = LOWER(?) OR (email IS NOT NULL AND LOWER(email) = LOWER(?))
+  `).get(id, id);
+}
+
+async function trySendInviteEmail({ to, username, url, expiresAt }) {
+  if (!to) return { skipped: true, reason: 'No email on user' };
+  if (!isConfigured()) return { skipped: true, reason: 'SMTP not configured' };
+  try {
+    return await sendEmail({
+      to,
+      subject: 'Sotyn Platform invite',
+      html: inviteEmailHtml({ username, url, expiresAt }),
+      text: `You are invited to Sotyn Platform.\nUsername: ${username}\nAccept: ${url}\nExpires: ${expiresAt}`,
+    });
+  } catch (e) {
+    console.error('[platform-email] invite send failed:', e.message);
+    return { skipped: true, reason: e.message };
+  }
+}
+
+async function trySendResetEmail({ to, username, url, expiresAt, selfServe }) {
+  if (!to) return { skipped: true, reason: 'No email on user' };
+  if (!isConfigured()) return { skipped: true, reason: 'SMTP not configured' };
+  try {
+    return await sendEmail({
+      to,
+      subject: 'Sotyn Platform password reset',
+      html: resetEmailHtml({ username, url, expiresAt, selfServe }),
+      text: `Password reset for ${username}.\nSet password: ${url}\nExpires: ${expiresAt}`,
+    });
+  } catch (e) {
+    console.error('[platform-email] reset send failed:', e.message);
+    return { skipped: true, reason: e.message };
+  }
+}
+
 router.get('/', requireAdmin, (_req, res) => {
   const rows = getDb().prepare(`
     SELECT u.*,
@@ -109,10 +156,10 @@ router.get('/', requireAdmin, (_req, res) => {
     FROM platform_users u
     ORDER BY u.created_at ASC
   `).all();
-  res.json({ users: rows.map(mapUser) });
+  res.json({ users: rows.map(mapUser), smtpConfigured: isConfigured() });
 });
 
-router.post('/invite', requireAdmin, (req, res) => {
+router.post('/invite', requireAdmin, async (req, res) => {
   try {
     const username = assertUsername(req.body?.username);
     const role = assertRole(req.body?.role);
@@ -139,6 +186,14 @@ router.post('/invite', requireAdmin, (req, res) => {
     });
 
     const invitePath = `/invite/${raw}`;
+    const inviteUrl = `${PUBLIC_BASE}${invitePath}`;
+    const emailResult = await trySendInviteEmail({
+      to: email,
+      username,
+      url: inviteUrl,
+      expiresAt,
+    });
+
     res.status(201).json({
       user: mapUser({
         id,
@@ -151,24 +206,28 @@ router.post('/invite', requireAdmin, (req, res) => {
         updated_at: new Date().toISOString(),
       }),
       inviteToken: raw,
-      inviteUrl: `${PUBLIC_BASE}${invitePath}`,
+      inviteUrl,
       invitePath,
       expiresAt,
-      note: 'Copy the invite link to the new operator. Token shown once. Email delivery later.',
+      emailSent: !!emailResult.sent,
+      emailSkipped: emailResult.skipped ? emailResult.reason : null,
+      note: emailResult.sent
+        ? `Invite emailed to ${email}. Link also shown once below.`
+        : 'Copy the invite link to the new operator. Token shown once.'
+          + (email && !emailResult.sent ? ` (Email not sent: ${emailResult.reason})` : ''),
     });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
 });
 
-router.post('/:id/reset-password', requireAdmin, (req, res) => {
+router.post('/:id/reset-password', requireAdmin, async (req, res) => {
   try {
     const db = getDb();
     const user = db.prepare('SELECT * FROM platform_users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (!user.active) return res.status(400).json({ error: 'User is deactivated' });
 
-    // Invalidate current password immediately
     const unusable = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10);
     db.prepare(`
       UPDATE platform_users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?
@@ -183,14 +242,28 @@ router.post('/:id/reset-password', requireAdmin, (req, res) => {
     });
 
     const resetPath = `/reset/${raw}`;
+    const resetUrl = `${PUBLIC_BASE}${resetPath}`;
+    const emailResult = await trySendResetEmail({
+      to: user.email,
+      username: user.username,
+      url: resetUrl,
+      expiresAt,
+      selfServe: false,
+    });
+
     res.json({
       userId: user.id,
       username: user.username,
       resetToken: raw,
-      resetUrl: `${PUBLIC_BASE}${resetPath}`,
+      resetUrl,
       resetPath,
       expiresAt,
-      note: 'Old password invalidated. Copy the reset link to the operator. Token shown once.',
+      emailSent: !!emailResult.sent,
+      emailSkipped: emailResult.skipped ? emailResult.reason : null,
+      note: emailResult.sent
+        ? `Old password invalidated. Reset link emailed to ${user.email}.`
+        : 'Old password invalidated. Copy the reset link to the operator. Token shown once.'
+          + (user.email && !emailResult.sent ? ` (Email not sent: ${emailResult.reason})` : ''),
     });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
@@ -258,8 +331,12 @@ module.exports = {
   router,
   requireAdmin,
   findValidToken,
+  findUserByLogin,
+  createUserToken,
   hashToken,
   assertPassword,
   assertUsername,
+  trySendResetEmail,
   PUBLIC_BASE,
+  RESET_HOURS,
 };

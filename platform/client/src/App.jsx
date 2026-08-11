@@ -14,6 +14,7 @@ import SetPasswordPage from './pages/SetPasswordPage.jsx';
 import DocsPage from './pages/DocsPage.jsx';
 import BackupsPage from './pages/BackupsPage.jsx';
 import HostsPage from './pages/HostsPage.jsx';
+import AuditPage from './pages/AuditPage.jsx';
 
 const linkClass = ({ isActive }) =>
   `px-3 py-1.5 rounded-md text-sm font-medium transition whitespace-nowrap ${
@@ -76,9 +77,9 @@ function Shell({ children }) {
               <NavLink to="/hosts" className={linkClass}>Hosts</NavLink>
               <NavLink to="/operators" className={linkClass}>Operators</NavLink>
               <NavLink to="/backups" className={linkClass}>Backups</NavLink>
+              <NavLink to="/audit" className={linkClass}>Audit</NavLink>
               <NavLink to="/docs" className={linkClass}>Docs</NavLink>
               <NavLink to="/plans" className={linkClass}>Plans</NavLink>
-              <span className="px-2 py-1.5 text-xs text-slate-400 cursor-default" title="Later">Audit</span>
               <NavLink to="/dev/surfaces" className={linkClass}>Dev</NavLink>
             </nav>
 
@@ -112,9 +113,9 @@ function Shell({ children }) {
               <NavLink to="/hosts" className={linkClass} onClick={closeMenu}>Hosts</NavLink>
               <NavLink to="/operators" className={linkClass} onClick={closeMenu}>Operators</NavLink>
               <NavLink to="/backups" className={linkClass} onClick={closeMenu}>Backups</NavLink>
+              <NavLink to="/audit" className={linkClass} onClick={closeMenu}>Audit</NavLink>
               <NavLink to="/docs" className={linkClass} onClick={closeMenu}>Docs</NavLink>
               <NavLink to="/plans" className={linkClass} onClick={closeMenu}>Plans</NavLink>
-              <span className="px-3 py-1.5 text-xs text-slate-400">Audit · later</span>
               <NavLink to="/dev/surfaces" className={linkClass} onClick={closeMenu}>Dev</NavLink>
               <button
                 type="button"
@@ -155,6 +156,7 @@ export default function App() {
       <Route path="/hosts" element={<Authed><HostsPage /></Authed>} />
       <Route path="/operators" element={<Authed><OperatorsPage /></Authed>} />
       <Route path="/backups" element={<Authed><BackupsPage /></Authed>} />
+      <Route path="/audit" element={<Authed><AuditPage /></Authed>} />
       <Route path="/docs" element={<Authed><DocsPage /></Authed>} />
       <Route path="/plans" element={<Authed><PlansPage /></Authed>} />
       <Route path="/orgs/:slug" element={<Authed><OrgOverviewPage /></Authed>} />

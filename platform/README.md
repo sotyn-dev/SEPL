@@ -41,11 +41,11 @@ npm run platform:client
 npm run platform:agent    # :7200 Docker driver
 ```
 
-Local defaults: first boot seeds operator `admin` / `sotyn-dev` into `platform_users` (bcrypt). Override with `PLATFORM_ADMIN_USER` / `PLATFORM_ADMIN_PASSWORD` **before first boot**, or change via **Operators → Set password**. See [`platform/.env.example`](.env.example).
+Local defaults: first boot seeds operator `admin` / `sotyn-dev` with email `sotyn.soft@gmail.com` into `platform_users` (bcrypt). Override with `PLATFORM_ADMIN_USER` / `PLATFORM_ADMIN_PASSWORD` / `PLATFORM_ADMIN_EMAIL` **before first boot**, or change via **Operators → Set password** / login **Forgot password**. See [`platform/.env.example`](.env.example).
 
 Auth: **platform JWT** (`PLATFORM_JWT_SECRET`, persisted in `platform_settings`) — separate from ERP `JWT_SECRET`. Client sends `Authorization: Bearer <token>`.
 
-**Operators (invite / reset):** `/operators` — invite creates a one-time `/invite/:token` link (copy). **Reset link** issues `/reset/:token` and invalidates the old password. **Set password** lets an admin type a new password directly. Set-password / invite UI is public for links. `PLATFORM_PUBLIC_URL` (default `http://127.0.0.1:7101`) builds full invite/reset URLs.
+**Operators (invite / reset / email):** `/operators` — invite creates `/invite/:token` (emailed when SMTP + email set; always copyable once). **Reset link** invalidates the old password and emails when possible. **Forgot password** on login is self-service (does not invalidate until link used). SMTP: `PLATFORM_SMTP_*` — same nodemailer skip-if-unset pattern as ERP `server/lib/email.js`. `PLATFORM_PUBLIC_URL` builds full invite/reset URLs.
 
 Data dir default: `platform/data/platform.db` (gitignored). Seed loads `secured` on first boot.
 
@@ -129,14 +129,14 @@ Prod overrides: `SECURED_DATA_PATH=/root/erp/data`, `SECURED_BACKUP_PATH=/root/e
 | `/deploy` | **Live** — Deploy / rollback / prune images via worker agent (host picker; never wipes `data/` or `backups/`) |
 | `/operators` | **Live** — invite operators, admin reset links, activate/deactivate |
 | `/backups` | **Live** — `platform.db` zip backups (Backup Now / list / download; nightly 2:00) |
-| `/docs` | **Live** — HTML how‑tos (Deploy · Operators · Backups tabs) |
+| `/audit` | **Live** — operator audit log (`platform_audit`; mirrors ERP Admin → Audit) |
+| `/docs` | **Live** — HTML how‑tos (Deploy · Multi‑VPS · Operators · Backups · Audit) |
 | `/orgs/:slug` Overview | **Pencil** — layout + real tenant fields; Pause not wired |
 | `/orgs/:slug/entitlements` | **Pencil** — fixture pack toggles; Save does not persist |
 | `/orgs/:slug/brand` | **Live** — branding API + **upload** to durable store (`data/tenants/{slug}/assets/`); seed = fallback |
 | `/plans` | **Pencil / later** — pricing stub |
 | Export dev config dialog | **Pencil** — Download disabled |
 | `/dev/surfaces` | Engineering checklist (white-label ERP surfaces) |
-| Audit nav | Dim “Later” — no page yet |
 
 HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for discussion; React is the clickable walkthrough shell.
 
@@ -151,8 +151,8 @@ HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for 
 ## Next (architect order)
 
 1. **`platform.db` backup/restore** — ✅ zip-only Backups page (see `/backups`)
-2. Persist entitlements to `platform.db` + wire Save
-3. **Platform audit** writes on mutations (full Audit UI can follow; nav is “Later” today)
+2. **Platform audit** — ✅ middleware + `/api/audit` + Audit page
+3. Persist entitlements to `platform.db` + wire Save
 4. Wire platform Create company → agent provision ✅ (host picker + Provision)
 5. Materialize branding/entitlements into tenant mount; ERP consumes contract
    (branding durable store + upload UI already live — materialize still pending)

@@ -199,11 +199,11 @@ function OperatorsDocsHtml() {
       <Section title="Invite an operator">
         <ol className="list-decimal pl-5 space-y-1.5">
           <li>Open <strong className="font-medium text-ink">Operators</strong> (must be <code className="text-xs bg-slate-50 px-1 rounded">platform_admin</code>).</li>
-          <li>Enter a username (optional email for your records — email send is later).</li>
+          <li>Enter a username and email (email enables automatic invite mail when SMTP is configured).</li>
           <li>Click <strong className="font-medium text-ink">Create invite</strong>.</li>
           <li>
-            Copy the one-time invite URL (<code className="text-xs bg-slate-50 px-1 rounded">/invite/:token</code>) and send it to the person.
-            Token is shown once.
+            If SMTP is on, the invite is emailed; the one-time URL (
+            <code className="text-xs bg-slate-50 px-1 rounded">/invite/:token</code>) is still shown once for copy/paste.
           </li>
           <li>They open the link, set a password (≥10 characters), and are signed in. Invite expires in 7 days by default.</li>
         </ol>
@@ -217,8 +217,8 @@ function OperatorsDocsHtml() {
             {' '}(hash replaced with an unusable value).
           </li>
           <li>
-            Copy the one-time reset URL (<code className="text-xs bg-slate-50 px-1 rounded">/reset/:token</code>) and give it to them.
-            Expires in 24 hours by default.
+            If they have an email and SMTP is configured, the reset link is emailed; otherwise copy the one-time URL (
+            <code className="text-xs bg-slate-50 px-1 rounded">/reset/:token</code>). Expires in 24 hours by default.
           </li>
           <li>They open the link, set a new password, and are signed in.</li>
         </ol>
@@ -240,14 +240,31 @@ function OperatorsDocsHtml() {
         </ol>
       </Section>
 
-      <Section title="What is not day-1">
+      <Section title="Forgot password (self-service)">
+        <ol className="list-decimal pl-5 space-y-1.5">
+          <li>On the login page, click <strong className="font-medium text-ink">Forgot password?</strong></li>
+          <li>Enter username or email. If the account has email on file and SMTP is configured, a reset link is sent.</li>
+          <li>Unlike admin reset, the current password keeps working until the link is used.</li>
+        </ol>
+      </Section>
+
+      <Section title="SMTP &amp; notes">
         <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
-          <li>Self-service “forgot password” email — later, same token model when SMTP exists.</li>
-          <li>Extra roles (e.g. operator without user mgmt) — day‑1 is <code className="text-xs bg-slate-50 px-1 rounded">platform_admin</code> only.</li>
+          <li>
+            Same nodemailer pattern as ERP. Set <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_SMTP_HOST</code>,{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_SMTP_USER</code>,{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_SMTP_PASS</code> in{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">platform/.env</code>.
+          </li>
+          <li>
+            Seed admin email defaults to <code className="text-xs bg-slate-50 px-1 rounded">sotyn.soft@gmail.com</code>
+            {' '}(<code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_ADMIN_EMAIL</code>).
+          </li>
           <li>
             Set <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_PUBLIC_URL</code> in production so invite/reset links use the real UI host
             (default local: <code className="text-xs bg-slate-50 px-1 rounded">http://127.0.0.1:7101</code>).
           </li>
+          <li>Extra roles (e.g. operator without user mgmt) — day‑1 is <code className="text-xs bg-slate-50 px-1 rounded">platform_admin</code> only.</li>
         </ul>
       </Section>
     </DocCard>
@@ -302,11 +319,52 @@ function BackupsDocsHtml() {
   );
 }
 
+function AuditDocsHtml() {
+  return (
+    <DocCard
+      title="Platform audit log"
+      blurb={
+        <>
+          Who did what on the control plane. Same shape as ERP Admin → Audit Log, stored in{' '}
+          <code className="bg-slate-50 px-1 rounded">platform_audit</code> inside{' '}
+          <code className="bg-slate-50 px-1 rounded">platform.db</code>.
+          Live UI: <Link to="/audit" className="text-blue-800 hover:underline">Audit</Link>.
+        </>
+      }
+    >
+      <Section title="What is recorded">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>Every mutating API call after sign-in (POST / PUT / PATCH / DELETE) — create org, brand save, deploy, hosts, invite, backup run, etc.</li>
+          <li>Login success and failure (manual events; passwords never stored).</li>
+          <li>Invite accept, password reset via link, change-password (success / fail).</li>
+          <li>Body fields named password / token / secret / agent_token are redacted to <code className="text-xs bg-slate-50 px-1 rounded">[REDACTED]</code>.</li>
+        </ul>
+      </Section>
+
+      <Section title="Using the page">
+        <ol className="list-decimal pl-5 space-y-1.5">
+          <li>Open <strong className="font-medium text-ink">Audit</strong>.</li>
+          <li>Filter by operator, module, action, date range, or free-text search.</li>
+          <li>Click a row for path, redacted body, and optional before/after snapshots.</li>
+        </ol>
+      </Section>
+
+      <Section title="Not this log">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>Tenant ERP user activity — that stays in each org’s ERP Admin → Audit Log.</li>
+          <li>Reading the audit page itself is not logged (avoids noise).</li>
+        </ul>
+      </Section>
+    </DocCard>
+  );
+}
+
 const TABS = [
   { id: 'deploy', label: 'Deploy' },
   { id: 'multivps', label: 'Multi‑VPS' },
   { id: 'operators', label: 'Operators' },
   { id: 'backups', label: 'Backups' },
+  { id: 'audit', label: 'Audit' },
 ];
 
 export default function DocsPage() {
@@ -348,6 +406,7 @@ export default function DocsPage() {
       {tab === 'multivps' && <MultiVpsDocsHtml />}
       {tab === 'operators' && <OperatorsDocsHtml />}
       {tab === 'backups' && <BackupsDocsHtml />}
+      {tab === 'audit' && <AuditDocsHtml />}
     </div>
   );
 }
