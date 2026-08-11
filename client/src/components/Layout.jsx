@@ -47,6 +47,9 @@ import {
   FiGitMerge,
   // Procurement · backward-pass Gantt (mam 2026-05-28)
   FiGitBranch,
+  // Drawing Tracker (2026-08) — verified unused elsewhere in this file, so the
+  // no-duplicate-icons rule above still holds.
+  FiPenTool, FiLayout,
   // SOTYN Flow · task boards pinned link (mam 2026-07)
   FiTrello,
 } from 'react-icons/fi';
@@ -127,6 +130,13 @@ const SIDEBAR_GROUPS = [
     // just above Change Password (mam 2026-06-19). See SIDEBAR footer render.
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
     { path: '/installation', label: 'Sales Billing',     icon: FiTool,        module: 'installation' },
+  ]},
+  // Drawing Tracker (2026-08) — sits between Projects and Finance per spec.
+  // Project drawings + a permanent revision history; a revision is never
+  // overwritten, so Rev 0 stays readable after Rev 11 exists.
+  { id: 'drawing_tracker', label: 'Drawing Tracker', icon: FiPenTool, items: [
+    { path: '/drawing-tracker',              label: 'Drawings', icon: FiLayout,   module: 'drawing_tracker' },
+    { path: '/drawing-tracker?tab=reports',  label: 'Reports',  icon: FiFileText, module: 'drawing_tracker' },
   ]},
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },

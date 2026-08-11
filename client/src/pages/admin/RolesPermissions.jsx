@@ -27,6 +27,7 @@ const ALL_MODULES = [
   { key: 'sotyn_flow', label: "SOTYN Flow — Create = create & own boards. See All = view & contribute (cards, comments) on every board, not just your own. Board settings, members & lists stay board-admin only." },
   { key: 'dpr', label: 'DPR' },
   { key: 'indent_labour_payment', label: 'Indent Labour Payment' },
+  { key: 'drawing_tracker', label: 'Drawing Tracker — drawings + revision history (delete = cancel a revision)' },
   { key: 'labour_payment', label: 'Labour Payment Indents' },
   { key: 'delegations', label: 'Delegations' },
   { key: 'pms_tasks', label: 'PMS Tasks' },
