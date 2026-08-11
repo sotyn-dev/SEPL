@@ -109,9 +109,11 @@ function runContainer({ slug, port, dataPath, backupPath, image = IMAGE, extraEn
   if (ERP_ENV_FILE && fs.existsSync(ERP_ENV_FILE)) {
     envArgs.push('--env-file', ERP_ENV_FILE);
   }
-  // -e after --env-file wins: enable nightly backups into the bind-mounted folder.
+  // -e after --env-file wins: per-tenant identity + backup mount.
+  // S3_KEY_PREFIX=slug is harmless while STORAGE_DRIVER=local; required namespace when s3 is on.
   envArgs.push(
     '-e', `TENANT_ID=${slug}`,
+    '-e', `S3_KEY_PREFIX=${slug}`,
     '-e', `PORT=${CONTAINER_PORT}`,
     '-e', `ERP_BACKUP_DIR=${CONTAINER_BACKUPS}`,
     '-e', 'ERP_DISABLE_BACKUP_SCHEDULER=',

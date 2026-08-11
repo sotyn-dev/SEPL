@@ -132,7 +132,7 @@ Today (before cutover): one PM2 app `erp` at `/root/erp`, `PORT=5000`, relative 
 | **Data resonance** | Inside every container the app only knows `data/*` and `ERP_BACKUP_DIR=/app/backups` — zero path logic change. Host path differs per org. |
 | **Code** | One image built from `/root/erp` (or CI). No `/root/erp-pharma` code copy. Per worker VPS: one `/root/erp` checkout as build/pull context. |
 | **URL** | `{slug}-erp.sotyn.com` → nginx → that org’s container port |
-| **S3** | Per-org prefix = slug (set in container env) |
+| **S3** | Per-org prefix = slug. Agent always sets `-e S3_KEY_PREFIX={slug}` on provision/recreate (harmless while `STORAGE_DRIVER=local`) |
 | **Forbidden** | Moving/copying secured `data/*`; deleting host `backups/` on deploy/recreate; forking the repo per customer; one Node process multiplexing all tenant DBs |
 
 **Why Docker:** isolation + each org’s own disk tree **without** teaching the app multi-root paths and **without** relocating secured’s live files. A volume mount makes “another folder on the VPS” look like the same relative `data/*`.
@@ -143,7 +143,7 @@ Today (before cutover): one PM2 app `erp` at `/root/erp`, `PORT=5000`, relative 
 # Secured (legacy host path)
 image:   sotyn-erp:<git-sha>
 name:    erp-secured
-env:     PORT=5000  S3_KEY_PREFIX=secured  ERP_BACKUP_DIR=/app/backups
+env:     PORT=5000  TENANT_ID=secured  S3_KEY_PREFIX=secured  ERP_BACKUP_DIR=/app/backups
 ports:   127.0.0.1:5000:5000
 volume:  /root/erp/data  →  /app/data
 volume:  /root/erp-backups  →  /app/backups
@@ -151,7 +151,7 @@ volume:  /root/erp-backups  →  /app/backups
 # New org
 image:   sotyn-erp:<git-sha>
 name:    erp-pharma
-env:     PORT=5000  S3_KEY_PREFIX=pharma  ERP_BACKUP_DIR=/app/backups
+env:     PORT=5000  TENANT_ID=pharma  S3_KEY_PREFIX=pharma  ERP_BACKUP_DIR=/app/backups
 ports:   127.0.0.1:5101:5000
 volume:  /var/lib/sotyn/tenants/pharma/data  →  /app/data
 volume:  /var/lib/sotyn/tenants/pharma/backups  →  /app/backups
