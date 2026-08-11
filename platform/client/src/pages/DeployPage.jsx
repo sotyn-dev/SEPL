@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import { api } from '../lib/api.js';
 
 function suggestTag() {
@@ -24,6 +25,7 @@ export default function DeployPage() {
   const [deletingTag, setDeletingTag] = useState('');
   const [jobId, setJobId] = useState('');
   const [job, setJob] = useState(null);
+  const [confirm, setConfirm] = useState(null);
   const pollRef = useRef(null);
 
   const hostQs = hostId ? `?hostId=${encodeURIComponent(hostId)}` : '';
@@ -138,10 +140,7 @@ export default function DeployPage() {
     setBuild(false);
   };
 
-  const deleteTag = async (t) => {
-    if (!window.confirm(`Delete image sotyn-erp:${t} on this host?\n\nTenant data/ is never touched.`)) {
-      return;
-    }
+  const runDeleteTag = async (t) => {
     setError('');
     setNotice('');
     setDeletingTag(t);
@@ -160,13 +159,19 @@ export default function DeployPage() {
     }
   };
 
-  const pruneUnused = async () => {
+  const deleteTag = (t) => {
+    setConfirm({
+      title: `Delete sotyn-erp:${t}?`,
+      message: 'Remove this unused image tag from this host.',
+      note: 'Tenant data/ and backups/ are never touched.',
+      confirmLabel: 'Delete image',
+      tone: 'danger',
+      onConfirm: () => runDeleteTag(t),
+    });
+  };
+
+  const runPruneUnused = async () => {
     const n = Number(keepLatest);
-    if (!window.confirm(
-      `Prune unused sotyn-erp images on this host?\n\nKeeps: in-use tags, :latest, and ${n} newest unused tag(s) for rollback.\nTenant data/ is never touched.`
-    )) {
-      return;
-    }
     setError('');
     setNotice('');
     setPruneBusy(true);
@@ -192,6 +197,18 @@ export default function DeployPage() {
     } finally {
       setPruneBusy(false);
     }
+  };
+
+  const pruneUnused = () => {
+    const n = Number(keepLatest);
+    setConfirm({
+      title: 'Prune unused images?',
+      message: `Remove unused sotyn-erp tags on this host.\nKeeps in-use tags, :latest, and ${n} newest unused tag(s) for rollback.`,
+      note: 'Tenant data/ and backups/ are never touched.',
+      confirmLabel: 'Prune unused',
+      tone: 'warning',
+      onConfirm: () => runPruneUnused(),
+    });
   };
 
   const selectedHost = hosts.find((h) => h.id === hostId);
@@ -487,6 +504,21 @@ export default function DeployPage() {
           </>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title}
+        message={confirm?.message}
+        note={confirm?.note}
+        confirmLabel={confirm?.confirmLabel}
+        tone={confirm?.tone || 'danger'}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => {
+          const action = confirm?.onConfirm;
+          setConfirm(null);
+          action?.();
+        }}
+      />
     </div>
   );
 }

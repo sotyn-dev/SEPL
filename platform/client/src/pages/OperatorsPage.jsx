@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import { api } from '../lib/api.js';
 
 function CopyField({ label, value }) {
@@ -44,6 +45,7 @@ export default function OperatorsPage() {
   const [setPwUser, setSetPwUser] = useState(null);
   const [setPwForm, setSetPwForm] = useState({ password: '', confirm: '' });
   const [setPwBusy, setSetPwBusy] = useState(false);
+  const [confirm, setConfirm] = useState(null);
 
   const load = useCallback(() => {
     api('/api/users')
@@ -93,10 +95,7 @@ export default function OperatorsPage() {
     }
   };
 
-  const resetPassword = async (u) => {
-    if (!window.confirm(
-      `Reset password for ${u.username}?\n\nTheir current password will stop working immediately. You must copy the new reset link.`
-    )) return;
+  const runResetPassword = async (u) => {
     setError('');
     setNotice('');
     setLinkBanner(null);
@@ -118,6 +117,16 @@ export default function OperatorsPage() {
     } catch (err) {
       setError(String(err.message || err));
     }
+  };
+
+  const resetPassword = (u) => {
+    setConfirm({
+      title: `Reset password for ${u.username}?`,
+      message: 'Their current password will stop working immediately. You must copy the new reset link.',
+      confirmLabel: 'Reset & show link',
+      tone: 'danger',
+      onConfirm: () => runResetPassword(u),
+    });
   };
 
   const openSetPassword = (u) => {
@@ -160,9 +169,8 @@ export default function OperatorsPage() {
     }
   };
 
-  const toggleActive = async (u) => {
+  const runToggleActive = async (u) => {
     const action = u.active ? 'deactivate' : 'activate';
-    if (u.active && !window.confirm(`Deactivate ${u.username}? They will not be able to sign in.`)) return;
     setError('');
     try {
       const r = await api(`/api/users/${encodeURIComponent(u.id)}/${action}`, { method: 'POST' });
@@ -173,6 +181,20 @@ export default function OperatorsPage() {
     } catch (err) {
       setError(String(err.message || err));
     }
+  };
+
+  const toggleActive = (u) => {
+    if (!u.active) {
+      runToggleActive(u);
+      return;
+    }
+    setConfirm({
+      title: `Deactivate ${u.username}?`,
+      message: 'They will not be able to sign in until activated again.',
+      confirmLabel: 'Deactivate',
+      tone: 'warning',
+      onConfirm: () => runToggleActive(u),
+    });
   };
 
   return (
@@ -365,6 +387,21 @@ export default function OperatorsPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title}
+        message={confirm?.message}
+        note={confirm?.note}
+        confirmLabel={confirm?.confirmLabel}
+        tone={confirm?.tone || 'danger'}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => {
+          const action = confirm?.onConfirm;
+          setConfirm(null);
+          action?.();
+        }}
+      />
     </div>
   );
 }
