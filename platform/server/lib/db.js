@@ -31,9 +31,21 @@ function openDb() {
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'platform_admin',
+      email TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS platform_user_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES platform_users(id) ON DELETE CASCADE,
+      purpose TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      used_at TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS hosts (
@@ -77,6 +89,15 @@ function openDb() {
       PRIMARY KEY (tenant_id, pack_key)
     );
   `);
+  // Soft migrate older DBs created before email / tokens
+  try {
+    const cols = db.prepare('PRAGMA table_info(platform_users)').all().map((c) => c.name);
+    if (!cols.includes('email')) {
+      db.exec('ALTER TABLE platform_users ADD COLUMN email TEXT');
+    }
+  } catch (_) {
+    /* ignore */
+  }
   return db;
 }
 

@@ -30,6 +30,7 @@ platform/
 ```bash
 # one-time deps (run from platform/ — do not npm --prefix from repo root)
 cd platform && npm run install:all
+cp .env.example .env   # optional; gitignored as platform/.env
 
 # from repo root
 npm run platform          # API :7100 + UI :7101
@@ -40,9 +41,11 @@ npm run platform:client
 npm run platform:agent    # :7200 Docker driver
 ```
 
-Local defaults: first boot seeds operator `admin` / `sotyn-dev` into `platform_users` (bcrypt). Override with `PLATFORM_ADMIN_USER` / `PLATFORM_ADMIN_PASSWORD` **before first boot**, or change the hash in DB.
+Local defaults: first boot seeds operator `admin` / `sotyn-dev` into `platform_users` (bcrypt). Override with `PLATFORM_ADMIN_USER` / `PLATFORM_ADMIN_PASSWORD` **before first boot**, or change via **Operators → Set password**. See [`platform/.env.example`](.env.example).
 
 Auth: **platform JWT** (`PLATFORM_JWT_SECRET`, persisted in `platform_settings`) — separate from ERP `JWT_SECRET`. Client sends `Authorization: Bearer <token>`.
+
+**Operators (invite / reset):** `/operators` — invite creates a one-time `/invite/:token` link (copy). **Reset link** issues `/reset/:token` and invalidates the old password. **Set password** lets an admin type a new password directly. Set-password / invite UI is public for links. `PLATFORM_PUBLIC_URL` (default `http://127.0.0.1:7101`) builds full invite/reset URLs.
 
 Data dir default: `platform/data/platform.db` (gitignored). Seed loads `secured` on first boot.
 
@@ -94,9 +97,13 @@ curl -s -X POST http://127.0.0.1:7200/v1/deploy \
 # → { "jobId": "…" } ; poll GET /v1/deploy/jobs/{jobId}
 
 curl -s http://127.0.0.1:7200/v1/images -H "Authorization: Bearer dev-agent-token"
+curl -s -X DELETE http://127.0.0.1:7200/v1/images/old-tag -H "Authorization: Bearer dev-agent-token"
+curl -s -X POST http://127.0.0.1:7200/v1/images/prune \
+  -H "Authorization: Bearer dev-agent-token" -H "Content-Type: application/json" \
+  -d '{"keepLatest":4}'
 ```
 
-**Deploy / rollback:** human `git pull`; platform **Deploy** page → agent. Rollback = same with older tag and `build:false`. Containers only — **never** delete host `data/`.
+**Deploy / rollback:** human `git pull`; platform **Deploy** page → agent. Rollback = same with older tag and `build:false`. After success, auto keep‑N prune (default 4). Containers only — **never** delete host `data/`. Manual Delete remains. All host-scoped (`hostId`).
 
 Env for containers: `ERP_ENV_FILE` (default repo `.env` if present) passed as `--env-file`.
 
@@ -116,15 +123,19 @@ Prod overrides: `SECURED_DATA_PATH=/root/erp/data`, `TENANTS_ROOT=/var/lib/sotyn
 | Route | Status |
 |---|---|
 | `/login` | **Live** — platform JWT |
+| `/invite/:token` · `/reset/:token` | **Live** — set password (invite / admin reset) |
 | `/` Companies list | **Live** list/create draft tenants (`platform.db`) |
-| `/deploy` | **Live** — Deploy / rollback via local worker agent (build + recreate; never wipes `data/`) |
+| `/deploy` | **Live** — Deploy / rollback / prune images via worker agent (host picker ready; never wipes `data/`) |
+| `/operators` | **Live** — invite operators, admin reset links, activate/deactivate |
+| `/backups` | **Live** — `platform.db` zip backups (Backup Now / list / download; nightly 2:00) |
+| `/docs` | **Live** — HTML how‑tos (Deploy · Operators · Backups tabs) |
 | `/orgs/:slug` Overview | **Pencil** — layout + real tenant fields; Pause not wired |
 | `/orgs/:slug/entitlements` | **Pencil** — fixture pack toggles; Save does not persist |
 | `/orgs/:slug/brand` | **Live** — branding API + **upload** to durable store (`data/tenants/{slug}/assets/`); seed = fallback |
 | `/plans` | **Pencil / later** — pricing stub |
 | Export dev config dialog | **Pencil** — Download disabled |
 | `/dev/surfaces` | Engineering checklist (white-label ERP surfaces) |
-| Audit / Operators nav | Dim “Later” — no pages yet |
+| Audit nav | Dim “Later” — no page yet |
 
 HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for discussion; React is the clickable walkthrough shell.
 
@@ -138,7 +149,7 @@ HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for 
 
 ## Next (architect order)
 
-1. **`platform.db` backup/restore** (control-plane safety — see `docs/PHASE4-tenant-model.md` § Platform control-plane safety)
+1. **`platform.db` backup/restore** — ✅ zip-only Backups page (see `/backups`)
 2. Persist entitlements to `platform.db` + wire Save
 3. **Platform audit** writes on mutations (full Audit UI can follow; nav is “Later” today)
 4. Wire platform Create company → agent provision
@@ -146,3 +157,10 @@ HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for 
    (branding durable store + upload UI already live — materialize still pending)
 6. Multi-VPS Deploy fan-out (same button → remote agents)
 7. Nginx map + wildcard `*-erp.sotyn.com` (prod)
+
+## Related
+
+- [`docs/PLATFORM-VPS-deploy.md`](../docs/PLATFORM-VPS-deploy.md) — **production VPS**: platform + agent (PM2, nginx, secrets)
+- [`docs/PHASE4-tenant-model.md`](../docs/PHASE4-tenant-model.md) — architecture decisions
+- Root [`README.md`](../README.md) — tenant Docker Deploy / rollback / prune
+- [`.env.example`](.env.example) — platform env template

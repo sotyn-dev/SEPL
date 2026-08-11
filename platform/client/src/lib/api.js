@@ -27,9 +27,11 @@ export async function api(path, options = {}) {
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(path, { ...options, headers });
-  if (res.status === 401 && !path.includes('/api/auth/login')) {
+  if (res.status === 401 && !path.includes('/api/auth/login') && !path.includes('/api/auth/password-token')) {
+    const p = typeof window !== 'undefined' ? window.location.pathname : '';
+    const onPublic = p.startsWith('/login') || p.startsWith('/invite/') || p.startsWith('/reset/');
     setToken('');
-    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+    if (typeof window !== 'undefined' && !onPublic) {
       window.location.replace('/login');
     }
   }

@@ -173,6 +173,7 @@ Platform **never** talks to Docker/nginx directly. It always calls a **worker ag
 2. Platform **Deploy** → local worker agent: `docker build -t sotyn-erp:$TAG -t sotyn-erp:latest` (from already-pulled checkout) → recreate **every** tenant container on that host (same port, volume, `--env-file`, new image).
 3. **Rollback** = same Deploy with an older existing tag and `build: false` (no rebuild).
 4. **Hard rule:** deploy / recreate / rollback may only `docker rm -f` the **container**. Host bind-mounted `data/` is never removed, emptied, or passed through `wipeData`. Multi-VPS fan-out (same button → all agents) is later; day‑1 is **host_local only**.
+5. **Image prune / delete (locked):** after successful deploy/rollback, agent auto-prunes unused tags on **that host** (`keepLatest` default **4**; `pruneAfter:false` to skip). Platform Deploy UI also has manual Delete + optional Prune. Always host-scoped (`hostId`). Never delete in-use tags; keep in-use + `:latest` + N newest unused. Adding VPS‑2 = register another `hosts` row and pick it in the same UI.
 
 **Day‑1 host (locked):** one VPS runs **platform + local worker agent + Docker orgs (including secured)**. Agent is `localhost` to platform — identical provision path when VPS‑2 joins (agent is remote). No “platform drives Docker itself” shortcut.
 
@@ -612,7 +613,10 @@ Base path illustrative: `http://127.0.0.1:7200/v1`. All require Bearer token.
 | `POST` | `/v1/tenants/:slug/stop` | Stop (pause org) |
 | `POST` | `/v1/tenants/:slug/restart` | Restart / recreate **same** volume + image (or refreshed entitlements) |
 | `PUT` | `/v1/tenants/:slug/entitlements` | Materialize new entitlements then **recreate** that container (day‑1 propagation) |
-| `POST` | `/v1/deploy` | Body: `{ image }` — pull tag, rolling recreate **all** tenants on this host (volumes untouched) |
+| `POST` | `/v1/deploy` | Body: `{ tag, build, keepLatest?: 4, pruneAfter?: true }` — build (optional) + recreate tenants + auto-prune unused |
+| `GET` | `/v1/images` | List local `sotyn-erp` tags with `inUse` / `usedBy` |
+| `DELETE` | `/v1/images/:tag` | Remove one unused tag (409 if in use); never touches `data/` |
+| `POST` | `/v1/images/prune` | Body: `{ keepLatest?: 4 }` — delete unused on **this host only**; keeps in-use + `:latest` + N newest unused |
 | `DELETE` | `/v1/tenants/:slug` | Stop + remove container; **do not** delete data dir unless `wipeData: true` (dangerous, audited) |
 
 ### Later verbs (same agent, add when multi-VPS move is real)
@@ -638,16 +642,33 @@ Base path illustrative: `http://127.0.0.1:7200/v1`. All require Bearer token.
 | Nginx | Write + reload | Skip |
 | API | Identical `/v1/...` | Identical — platform always calls agent |
 
+### Platform operators (locked — Aug 2026)
+
+Control-plane users live in `platform_users` (not tenant ERP users). Seed admin is bootstrap only.
+
+| Action | How |
+|---|---|
+| **Invite** | `platform_admin` creates username (+ optional email) → one-time invite link (copy/paste; email delivery later). Invitee opens `/invite/:token`, sets password (≥10 chars), then signs in. |
+| **Roles** | Day‑1: `platform_admin` only (full panel). Later: `platform_operator` (orgs/deploy; no user mgmt) if needed. |
+| **Password reset** | **Admin-issued reset link** (day‑1, no SMTP). Admin clicks **Reset link** on Operators → one-time `/reset/:token` URL (copy). **Old password is invalidated immediately**. Link expires (24h). Same set-password UI as invite. |
+| **Admin set password** | Admin clicks **Set password** → types new password (≥10). Takes effect immediately; tell the operator out of band. Burns open invite/reset tokens for that user. |
+| **Self-service forgot password** | Later — same token table + email when SMTP exists. Not day‑1. |
+| **Change own password** | Logged-in operator: current + new password (`POST /api/auth/change-password`). |
+| **Deactivate** | Admin sets `active=0`; JWT checks fail on next request. Cannot deactivate last active admin. |
+| **Security** | bcrypt hashes; invite/reset tokens stored as SHA-256 only; never log raw tokens; change `PLATFORM_ADMIN_PASSWORD` / `PLATFORM_JWT_SECRET` in prod. |
+
+---
+
 ### Platform control-plane safety (requirements — Aug 2026)
 
 Not built yet. Do not confuse with **tenant ERP** Backups / Audit (chassis inside each org). These are **platform-only**.
 
-**1. `platform.db` backup / restore (do sooner)**
+**1. `platform.db` backup / restore (✅ zip-only — Aug 2026)**
 
-- Control plane truth lives in one SQLite file (`platform/data/platform.db` locally; host path on VPS).
-- Need: operator-triggered backup (file copy / `VACUUM INTO`), durable backup dir, download or host-path retention; documented restore.
-- Optional later: scheduled backups + retention; still separate from per-tenant ERP DB backups.
-- Why early: orgs + branding already write here; entitlements/agent will raise blast radius.
+- Control plane truth lives in one SQLite file (`platform/data/platform.db` locally; `PLATFORM_DATA_DIR` on VPS).
+- **Live:** platform **Backups** page + `POST /api/backups/run` → `platform-backup-<ts>.zip` (consistent `.backup()` + checkpoint, same pattern as ERP admin backups). List / download (`?token=`). Nightly 02:00; keep last 30 (`PLATFORM_BACKUP_DIR` / `PLATFORM_BACKUP_KEEP`).
+- Restore: stop platform → unzip → replace `platform.db` → start. Branding asset files are **not** in the zip.
+- Optional later: scheduled offsite copy; still separate from per-tenant ERP DB backups.
 
 **2. Platform audit logs (skeleton early OK; full UI after mutations matter)**
 
@@ -664,12 +685,13 @@ Not built yet. Do not confuse with **tenant ERP** Backups / Audit (chassis insid
 |---|---|---|
 | 0 | Docs synced: **Docker-all-orgs / no-move-secured** + **local scripts** + **capacity 2–3** + **local agent day 1** | ✅ |
 | 0b | Platform boilerplate (`platform/`) + Secured white-label seed + Brand pencil UI | ✅ started |
-| 0c | **`platform.db` backup/restore** (operator download or host copies) | ❌ requirement noted |
+| 0c | **`platform.db` backup/restore** (zip-only Backups page; nightly + download) | ✅ |
+| 0e | Platform operators: invite + admin reset link + Operators UI | ✅ |
 | 0d | **Platform audit** write path + Audit UI (after entitlements/agent mutations grow; thin stub OK earlier) | ❌ requirement noted |
 | 1 | Dockerfile: same app, bind-mount `data/` (`Dockerfile` + `.dockerignore`) | ✅ |
 | 2 | Worker agent (`platform/worker-agent/`): `/v1` API + **Docker driver** (provision/start/stop; secured adopt) | ✅ docker mode |
 | 3 | `platform.db` + host registry + entitlements; platform always calls agent; **local = run script** | 🟡 db + orgs/branding; packs via **gradual ladder** (PHASE4 self-note), not full catalog first |
-| 4 | Super-admin panel on `platform.sotyn.com` | 🟡 local UI pencil |
+| 4 | Super-admin panel on `platform.sotyn.com` | 🟡 local UI pencil; VPS runbook: [`PLATFORM-VPS-deploy.md`](./PLATFORM-VPS-deploy.md) |
 | 5 | Wildcard DNS/TLS `*-erp.sotyn.com` + nginx host→port | ❌ |
 | 6 | Cutover secured → Docker (bind `/root/erp/data`); canary org #2 on `/var/lib/sotyn/tenants/…` | ❌ |
 | 7 | Later: remote agent on VPS‑2 + tenant move; optional paths.js hygiene | ❌ |

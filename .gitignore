@@ -5,6 +5,7 @@ node_modules/
 client/dist/
 client/node_modules/
 platform/data/
+platform/backups/
 platform/server/node_modules/
 platform/client/node_modules/
 platform/client/dist/

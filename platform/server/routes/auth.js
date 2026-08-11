@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const express = require('express');
 const { getDb } = require('../lib/db');
+const { findValidToken, assertPassword } = require('./users');
 
 const router = express.Router();
 
@@ -120,8 +121,91 @@ router.get('/me', (req, res) => {
 });
 
 router.post('/logout', (_req, res) => {
-  // Stateless JWT — client discards the token. Endpoint kept for UI symmetry.
   res.json({ ok: true });
+});
+
+/** Public: validate invite/reset token */
+router.get('/password-token/:token', (req, res) => {
+  const row = findValidToken(req.params.token);
+  if (!row || !row.active) {
+    return res.status(404).json({ error: 'Link invalid or expired' });
+  }
+  if (row.purpose !== 'invite' && row.purpose !== 'reset') {
+    return res.status(404).json({ error: 'Link invalid or expired' });
+  }
+  res.json({
+    username: row.username,
+    purpose: row.purpose,
+    expiresAt: row.expires_at,
+  });
+});
+
+/** Public: set password via invite or reset link */
+router.post('/password-token/:token', (req, res) => {
+  try {
+    const row = findValidToken(req.params.token);
+    if (!row || !row.active) {
+      return res.status(404).json({ error: 'Link invalid or expired' });
+    }
+    if (row.purpose !== 'invite' && row.purpose !== 'reset') {
+      return res.status(404).json({ error: 'Link invalid or expired' });
+    }
+    const password = assertPassword(req.body?.password);
+    const hash = bcrypt.hashSync(password, 10);
+    const db = getDb();
+    db.prepare(`
+      UPDATE platform_users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?
+    `).run(hash, row.user_id);
+    db.prepare(`
+      UPDATE platform_user_tokens SET used_at = datetime('now') WHERE id = ?
+    `).run(row.id);
+    db.prepare(`
+      UPDATE platform_user_tokens SET used_at = datetime('now')
+      WHERE user_id = ? AND used_at IS NULL
+    `).run(row.user_id);
+
+    const user = db.prepare(
+      'SELECT id, username, role, active FROM platform_users WHERE id = ?'
+    ).get(row.user_id);
+    const token = signToken(user);
+    res.json({
+      ok: true,
+      token,
+      user: { id: user.id, username: user.username, role: user.role },
+      purpose: row.purpose,
+    });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+/** Logged-in: change own password (uses bearer; mounted under /api/auth before requireAuth) */
+router.post('/change-password', (req, res) => {
+  const bearer = readBearer(req);
+  if (!bearer) return res.status(401).json({ error: 'No token provided' });
+  try {
+    const decoded = verifyToken(bearer);
+    const db = getDb();
+    const user = db.prepare(
+      'SELECT id, username, password_hash, role, active FROM platform_users WHERE id = ?'
+    ).get(decoded.sub);
+    if (!user || !user.active) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'currentPassword and newPassword required' });
+    }
+    if (!bcrypt.compareSync(currentPassword, user.password_hash)) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    const password = assertPassword(newPassword);
+    db.prepare(`
+      UPDATE platform_users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?
+    `).run(bcrypt.hashSync(password, 10), user.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(e.status || 401).json({ error: e.message || 'Invalid token' });
+  }
 });
 
 module.exports = { router, requireAuth, getSecret };

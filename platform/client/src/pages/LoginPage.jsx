@@ -103,7 +103,8 @@ export default function LoginPage() {
           </form>
 
           <p className="text-center text-[11px] text-zinc-500 mt-6">
-            Control plane · not a tenant ERP login
+            Control plane · not a tenant ERP login.
+            Invites and password resets use a one-time link from an existing admin.
           </p>
         </div>
       </div>

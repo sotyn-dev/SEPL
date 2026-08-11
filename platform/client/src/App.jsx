@@ -9,6 +9,10 @@ import BrandPage from './pages/BrandPage.jsx';
 import PlansPage from './pages/PlansPage.jsx';
 import SurfacesPage from './pages/SurfacesPage.jsx';
 import DeployPage from './pages/DeployPage.jsx';
+import OperatorsPage from './pages/OperatorsPage.jsx';
+import SetPasswordPage from './pages/SetPasswordPage.jsx';
+import DocsPage from './pages/DocsPage.jsx';
+import BackupsPage from './pages/BackupsPage.jsx';
 
 const linkClass = ({ isActive }) =>
   `px-3 py-1.5 rounded-md text-sm font-medium transition whitespace-nowrap ${
@@ -68,9 +72,11 @@ function Shell({ children }) {
             <nav className="hidden md:flex gap-1 min-w-0 overflow-x-auto items-center flex-1">
               <NavLink to="/" end className={linkClass}>Companies</NavLink>
               <NavLink to="/deploy" className={linkClass}>Deploy</NavLink>
+              <NavLink to="/operators" className={linkClass}>Operators</NavLink>
+              <NavLink to="/backups" className={linkClass}>Backups</NavLink>
+              <NavLink to="/docs" className={linkClass}>Docs</NavLink>
               <NavLink to="/plans" className={linkClass}>Plans</NavLink>
               <span className="px-2 py-1.5 text-xs text-slate-400 cursor-default" title="Later">Audit</span>
-              <span className="px-2 py-1.5 text-xs text-slate-400 cursor-default" title="Later">Operators</span>
               <NavLink to="/dev/surfaces" className={linkClass}>Dev</NavLink>
             </nav>
 
@@ -101,9 +107,11 @@ function Shell({ children }) {
             <nav className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-col gap-1 pb-1">
               <NavLink to="/" end className={linkClass} onClick={closeMenu}>Companies</NavLink>
               <NavLink to="/deploy" className={linkClass} onClick={closeMenu}>Deploy</NavLink>
+              <NavLink to="/operators" className={linkClass} onClick={closeMenu}>Operators</NavLink>
+              <NavLink to="/backups" className={linkClass} onClick={closeMenu}>Backups</NavLink>
+              <NavLink to="/docs" className={linkClass} onClick={closeMenu}>Docs</NavLink>
               <NavLink to="/plans" className={linkClass} onClick={closeMenu}>Plans</NavLink>
               <span className="px-3 py-1.5 text-xs text-slate-400">Audit · later</span>
-              <span className="px-3 py-1.5 text-xs text-slate-400">Operators · later</span>
               <NavLink to="/dev/surfaces" className={linkClass} onClick={closeMenu}>Dev</NavLink>
               <button
                 type="button"
@@ -137,8 +145,13 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/invite/:token" element={<SetPasswordPage purpose="invite" />} />
+      <Route path="/reset/:token" element={<SetPasswordPage purpose="reset" />} />
       <Route path="/" element={<Authed><OrgsPage /></Authed>} />
       <Route path="/deploy" element={<Authed><DeployPage /></Authed>} />
+      <Route path="/operators" element={<Authed><OperatorsPage /></Authed>} />
+      <Route path="/backups" element={<Authed><BackupsPage /></Authed>} />
+      <Route path="/docs" element={<Authed><DocsPage /></Authed>} />
       <Route path="/plans" element={<Authed><PlansPage /></Authed>} />
       <Route path="/orgs/:slug" element={<Authed><OrgOverviewPage /></Authed>} />
       <Route path="/orgs/:slug/entitlements" element={<Authed><EntitlementsPage /></Authed>} />
