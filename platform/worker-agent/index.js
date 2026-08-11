@@ -1,10 +1,21 @@
 'use strict';
 
 /**
- * Worker agent stub — day-1 verbs live here later.
- * Platform always talks to the agent; local default is this process on :7200.
+ * Worker agent — Docker driver for tenant ERP containers.
+ * Platform talks here; mounts host data → /app/data (no path surgery in ERP).
+ * Deploy recreates containers only — never deletes host data/.
  */
 const http = require('http');
+const {
+  TENANTS_ROOT,
+  SECURED_DATA_PATH,
+  PORT_MIN,
+  PORT_MAX,
+  REPO_ROOT,
+  ERP_ENV_FILE,
+  assertSlug,
+} = require('./lib/paths');
+const driver = require('./lib/dockerDriver');
 
 const PORT = Number(process.env.AGENT_PORT || 7200);
 const TOKEN = process.env.AGENT_TOKEN || 'dev-agent-token';
@@ -23,26 +34,148 @@ function authorized(req) {
   return h === `Bearer ${TOKEN}`;
 }
 
-const server = http.createServer((req, res) => {
-  if (req.url === '/v1/health' && req.method === 'GET') {
-    return json(res, 200, { ok: true, service: 'sotyn-worker-agent', mode: 'stub' });
-  }
-  if (!authorized(req)) {
-    return json(res, 401, { error: 'Unauthorized' });
-  }
-  if (req.url === '/v1/host' && req.method === 'GET') {
-    return json(res, 200, {
-      hostId: process.env.HOST_ID || 'host_local',
-      mode: 'stub',
-      note: 'Docker / local drivers not implemented yet',
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw) return resolve({});
+      try {
+        resolve(JSON.parse(raw));
+      } catch (e) {
+        reject(Object.assign(new Error('Invalid JSON'), { status: 400 }));
+      }
     });
+    req.on('error', reject);
+  });
+}
+
+function match(url, method, pattern) {
+  if (method !== pattern.method) return null;
+  const m = url.match(pattern.re);
+  return m ? m.groups || {} : null;
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = (req.url || '').split('?')[0];
+
+    if (url === '/v1/health' && req.method === 'GET') {
+      const d = driver.dockerAvailable();
+      return json(res, 200, {
+        ok: true,
+        service: 'sotyn-worker-agent',
+        mode: 'docker',
+        docker: d.ok,
+        dockerError: d.ok ? undefined : d.error,
+      });
+    }
+
+    if (!authorized(req)) {
+      return json(res, 401, { error: 'Unauthorized' });
+    }
+
+    if (url === '/v1/host' && req.method === 'GET') {
+      const d = driver.dockerAvailable();
+      return json(res, 200, {
+        hostId: process.env.HOST_ID || 'host_local',
+        mode: 'docker',
+        docker: d.ok,
+        dockerError: d.ok ? undefined : d.error,
+        repoRoot: REPO_ROOT,
+        tenantsRoot: TENANTS_ROOT,
+        securedDataPath: SECURED_DATA_PATH,
+        envFile: ERP_ENV_FILE,
+        portRange: [PORT_MIN, PORT_MAX],
+        image: driver.IMAGE,
+      });
+    }
+
+    if (url === '/v1/images' && req.method === 'GET') {
+      return json(res, 200, { images: driver.listImages() });
+    }
+
+    if (url === '/v1/deploy' && req.method === 'POST') {
+      const body = await readBody(req);
+      const result = driver.startDeploy(body);
+      return json(res, 202, result);
+    }
+
+    let m = match(url, req.method, {
+      method: 'GET',
+      re: /^\/v1\/deploy\/jobs\/(?<id>[a-f0-9]+)$/,
+    });
+    if (m) {
+      const job = driver.getDeployJob(m.id);
+      if (!job) return json(res, 404, { error: 'job not found' });
+      return json(res, 200, { job });
+    }
+
+    if (url === '/v1/tenants' && req.method === 'GET') {
+      return json(res, 200, { tenants: driver.listTenants() });
+    }
+
+    if (url === '/v1/tenants' && req.method === 'POST') {
+      const body = await readBody(req);
+      const tenant = driver.provision(body);
+      return json(res, 201, { tenant });
+    }
+
+    m = match(url, req.method, { method: 'GET', re: /^\/v1\/tenants\/(?<slug>[^/]+)$/ });
+    if (m) {
+      assertSlug(m.slug);
+      const tenant = driver.getTenant(m.slug);
+      if (!tenant) return json(res, 404, { error: 'tenant not found' });
+      return json(res, 200, { tenant });
+    }
+
+    m = match(url, req.method, { method: 'POST', re: /^\/v1\/tenants\/(?<slug>[^/]+)\/start$/ });
+    if (m) {
+      assertSlug(m.slug);
+      return json(res, 200, { tenant: driver.start(m.slug) });
+    }
+
+    m = match(url, req.method, { method: 'POST', re: /^\/v1\/tenants\/(?<slug>[^/]+)\/stop$/ });
+    if (m) {
+      assertSlug(m.slug);
+      return json(res, 200, { tenant: driver.stop(m.slug) });
+    }
+
+    m = match(url, req.method, { method: 'POST', re: /^\/v1\/tenants\/(?<slug>[^/]+)\/restart$/ });
+    if (m) {
+      assertSlug(m.slug);
+      return json(res, 200, { tenant: driver.restart(m.slug) });
+    }
+
+    m = match(url, req.method, { method: 'DELETE', re: /^\/v1\/tenants\/(?<slug>[^/]+)$/ });
+    if (m) {
+      assertSlug(m.slug);
+      const q = new URL(req.url || '/', 'http://127.0.0.1').searchParams;
+      const body = await readBody(req).catch(() => ({}));
+      const wipeData = body.wipeData === true
+        || body.wipeData === 1
+        || body.wipeData === '1'
+        || q.get('wipeData') === '1'
+        || q.get('wipeData') === 'true';
+      const result = driver.destroy(m.slug, { wipeData });
+      return json(res, 200, result);
+    }
+
+    return json(res, 501, {
+      error: 'Not implemented',
+      path: url,
+      note: 'entitlements / nginx later',
+    });
+  } catch (e) {
+    const code = e.status || 500;
+    return json(res, code, { error: e.message || String(e), detail: e.detail });
   }
-  if (req.url === '/v1/tenants' && req.method === 'GET') {
-    return json(res, 200, { tenants: [], note: 'stub' });
-  }
-  json(res, 501, { error: 'Not implemented in stub', path: req.url });
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[worker-agent] stub http://127.0.0.1:${PORT}/v1 (Bearer ${TOKEN})`);
+  console.log(`[worker-agent] docker mode http://127.0.0.1:${PORT}/v1 (Bearer ${TOKEN})`);
+  console.log(`[worker-agent] tenantsRoot=${TENANTS_ROOT}`);
+  console.log(`[worker-agent] securedDataPath=${SECURED_DATA_PATH}`);
+  console.log(`[worker-agent] envFile=${ERP_ENV_FILE || '(none)'}`);
 });

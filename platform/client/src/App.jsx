@@ -8,6 +8,7 @@ import EntitlementsPage from './pages/EntitlementsPage.jsx';
 import BrandPage from './pages/BrandPage.jsx';
 import PlansPage from './pages/PlansPage.jsx';
 import SurfacesPage from './pages/SurfacesPage.jsx';
+import DeployPage from './pages/DeployPage.jsx';
 
 const linkClass = ({ isActive }) =>
   `px-3 py-1.5 rounded-md text-sm font-medium transition whitespace-nowrap ${
@@ -66,6 +67,7 @@ function Shell({ children }) {
 
             <nav className="hidden md:flex gap-1 min-w-0 overflow-x-auto items-center flex-1">
               <NavLink to="/" end className={linkClass}>Companies</NavLink>
+              <NavLink to="/deploy" className={linkClass}>Deploy</NavLink>
               <NavLink to="/plans" className={linkClass}>Plans</NavLink>
               <span className="px-2 py-1.5 text-xs text-slate-400 cursor-default" title="Later">Audit</span>
               <span className="px-2 py-1.5 text-xs text-slate-400 cursor-default" title="Later">Operators</span>
@@ -98,6 +100,7 @@ function Shell({ children }) {
           {menuOpen && (
             <nav className="md:hidden mt-3 pt-3 border-t border-slate-100 flex flex-col gap-1 pb-1">
               <NavLink to="/" end className={linkClass} onClick={closeMenu}>Companies</NavLink>
+              <NavLink to="/deploy" className={linkClass} onClick={closeMenu}>Deploy</NavLink>
               <NavLink to="/plans" className={linkClass} onClick={closeMenu}>Plans</NavLink>
               <span className="px-3 py-1.5 text-xs text-slate-400">Audit · later</span>
               <span className="px-3 py-1.5 text-xs text-slate-400">Operators · later</span>
@@ -135,6 +138,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<Authed><OrgsPage /></Authed>} />
+      <Route path="/deploy" element={<Authed><DeployPage /></Authed>} />
       <Route path="/plans" element={<Authed><PlansPage /></Authed>} />
       <Route path="/orgs/:slug" element={<Authed><OrgOverviewPage /></Authed>} />
       <Route path="/orgs/:slug/entitlements" element={<Authed><EntitlementsPage /></Authed>} />

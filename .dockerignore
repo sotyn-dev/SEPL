@@ -1,0 +1,16 @@
+data/
+tenants/
+backups/
+platform/
+node_modules/
+client/node_modules/
+client/dist/
+.git/
+.claude/
+docs/
+*.md
+.env
+.env.*
+**/*.log
+.cursor/
+agent-transcripts/

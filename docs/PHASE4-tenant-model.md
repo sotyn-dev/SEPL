@@ -164,26 +164,40 @@ Platform **never** talks to Docker/nginx directly. It always calls a **worker ag
 | Create org | Platform writes `platform.db` → calls **agent** `provision` → agent: `mkdir -p /var/lib/sotyn/tenants/{slug}/data` → `docker run` + volume + env + port → nginx map + reload → health-check |
 | Feature control | Entitlements in `platform.db` only; see **Entitlement propagation** below |
 | Monitor | Platform asks agent for container status + health; restart/stop/start; pause = stop container |
-| Deploy code | Platform sets desired image tag → agent(s) pull + rolling recreate **all** org containers on that host (volumes untouched) |
+| Deploy code | See **Deploy / rollback (locked)** below |
 | Move tenant (later) | Platform coordinates old agent (stop + export) → new agent (import + run) → flip routing |
+
+**Deploy / rollback (locked — Aug 2026):**
+
+1. Operator on the main VPS: `git pull origin main` only. Platform and agent **never** run git.
+2. Platform **Deploy** → local worker agent: `docker build -t sotyn-erp:$TAG -t sotyn-erp:latest` (from already-pulled checkout) → recreate **every** tenant container on that host (same port, volume, `--env-file`, new image).
+3. **Rollback** = same Deploy with an older existing tag and `build: false` (no rebuild).
+4. **Hard rule:** deploy / recreate / rollback may only `docker rm -f` the **container**. Host bind-mounted `data/` is never removed, emptied, or passed through `wipeData`. Multi-VPS fan-out (same button → all agents) is later; day‑1 is **host_local only**.
 
 **Day‑1 host (locked):** one VPS runs **platform + local worker agent + Docker orgs (including secured)**. Agent is `localhost` to platform — identical provision path when VPS‑2 joins (agent is remote). No “platform drives Docker itself” shortcut.
 
 ### Local development (locked — Aug 2026)
 
-**Default = run scripts only. No Docker required for daily work.**
+**Two gears (luxury + Docker tenants):**
+
+| Gear | When | How |
+|---|---|---|
+| **A. Everyday** | Feature work on secured / platform | `npm` scripts only — **no Docker**. Secured = repo `data/`. |
+| **B. Multitenant smoke** | Provision 2nd org / cutover rehearsal | Docker Desktop on; **worker agent Docker driver** bind-mounts host folders → container `/app/data` (same as prod). No `DATA_DIR` path surgery. |
 
 | Process | Local default |
 |---|---|
-| ERP | `npm` / Node against repo `data/` (same as today) |
-| Platform | run script (e.g. `npm run platform`) — **not** Docker |
-| Worker agent | run script; **dev driver** can start ERP as a child process / second port + folder under `./tenants/{slug}/data` instead of `docker run` |
+| ERP (secured day-to-day) | `npm` / Node against repo `data/` |
+| Platform | run script (`npm run platform`) — **not** Docker |
+| Worker agent | run script (`npm run platform:agent`); tenant ERP boxes via **`docker run`** |
+| New org data | `./tenants/{slug}/data` (gitignored) → mount `/app/data` |
+| Secured adopt (smoke) | repo `data/` → mount `/app/data` (stop npm first; **no file move**) |
 
-Docker / Compose locally is **optional** — only when proving real provision (`docker run`, bind mounts, image tags). Not part of the default edit-refresh loop.
+Compose is optional for fixed control-plane stacks later — **not** the onboarder (agent provisions tenants).
 
 **Local sim (privacy-safe):** export RBAC + entitlements (secret-filtered) via panel → seed into local `data/` or `./tenants/{slug}/data` via script.
 
-**What we explicitly dropped:** moving secured into `data/secured/` or symlink-flipping `/root/erp/data`. Product owner rejected it. Containerize-in-place via bind mount is the allowed path.
+**What we explicitly dropped:** moving secured into `data/secured/` or symlink-flipping `/root/erp/data`. Product owner rejected it. Containerize-in-place via bind mount is the allowed path. Child-process + `DATA_DIR` opener surgery is also rejected.
 
 ### Also locked
 
@@ -397,6 +411,33 @@ Dashboard, DPR (and similar rollups: CMD, scoring, AI) pull plumbing from many m
 
 Do **not** delete `module-flags` or `role_permissions` when platform turns a pack OFF — same preserve rule as matrix vs entitlements. Module availability UI should only list (or only allow toggling) modules inside entitled packs; entitlement wins if a stale flag says ON.
 
+### Self-note — gradual entitlement development (Aug 2026)
+
+Interdependence is real; **do not freeze the full pack catalog before coding**. API stays pack-level forever; **which packs exist** grows step by step. Treat `dependsOn` and hub JOINs as a discovery backlog, not a day‑1 blocker.
+
+**Ladder (prove each rung before inventing the next):**
+
+| Step | Entitle | Clears |
+|---|---|---|
+| **1** | `chassis` only (always ON) | Platform → ERP “what is sold” read path; login / users / roles / empty dashboard shell |
+| **2** | One **island** pack OFF/ON | Softest: Chat or Tasks / Service Desk — nav hide + pack API door; almost no hub JOINs |
+| **3** | One **standalone sellable** | Attendance (spine = chassis `users`) — salon-style without `erp_baseline` |
+| **4** | One **hub** pack alone | e.g. Items or Vendors OFF children — see orphan UI; hide best-effort, don’t micro-pack yet |
+| **5** | Thin **`erp_baseline`** | Employees + customers + vendors + book + items as *one* pack for MEPF orgs |
+| **6** | Chain packs | Procurement / Projects / Finance — only after baseline exists |
+| **7** | Overlays last | Dashboard / DPR = opportunistic sections; never block shell on missing packs |
+
+**Rules while climbing:**
+
+- Platform stores **pack booleans** only (not ~80 leaf module flags).
+- ERP maps pack → existing kill-switch / `ModuleGate` keys.
+- Orphan UI when parent ON / child OFF → **hide the orphan**; add a pack or `dependsOn` only when a real sale needs “X without Y”.
+- Golden asks drive the next rung (e.g. pharma + Chat, salon + Attendance) — not a complete sidebar matrix.
+
+**Explicit anti-goal:** designing the finished `{ chassis, erp_baseline, projects, solar, … }` config as “correct” before step 1–3 ship. Full catalog in fixtures/docs is a **wishlist**, not locked product truth until sold and proven.
+
+See also [module-depends-graph.md](multitenancy/module-depends-graph.md) (hubs / soft vs hard / overlays).
+
 ### White-label — org name & logo (locked notes — Aug 2026)
 
 **Secured is a tenant, not the default.** Product chrome must not assume “Secured Engineers / SEPL logo” is the fallback for every slug. Secured gets the same branding fields as Pharma or a salon; its only special case remains the **legacy data path** (`/root/erp/data` bind-mount), not identity.
@@ -549,8 +590,8 @@ platform.sotyn.com  --HTTPS-->  platform process
 ### Ingredients (what the agent is made of)
 
 1. **HTTP API** — verbs below (JSON in/out)  
-2. **Docker driver** — prod: Docker Engine API / CLI; **local dev:** child-process driver (no Docker) implementing the same verbs  
-3. **Filesystem** — `mkdir` / permissions under `/var/lib/sotyn/tenants/{slug}/data` (secured: adopt `/root/erp/data`, never mkdir-as-new)  
+2. **Docker driver** — Docker Engine CLI (`docker run` / start / stop / rm); same on local smoke and prod. Host data bind-mounted to container `/app/data`.  
+3. **Filesystem** — `mkdir` under `TENANTS_ROOT/{slug}/data` for new orgs; secured: adopt `SECURED_DATA_PATH` (local repo `data/`, prod `/root/erp/data`), never mkdir-as-new under `tenants/secured`  
 4. **Entitlements materializer** — write plan file/env from platform payload (not SoT)  
 5. **Nginx map writer** — update host→port fragment + reload  
 6. **Health probe** — HTTP check tenant container’s health URL after start  
@@ -590,11 +631,30 @@ Base path illustrative: `http://127.0.0.1:7200/v1`. All require Bearer token.
 
 ### Local vs prod driver
 
-| | Prod | Local default |
+| | Prod | Local (tenant ERP when exercising multitenancy) |
 |---|---|---|
-| Runtime | Docker + bind mounts | Child process / second port + `./tenants/{slug}/data` |
-| Nginx | Write + reload | Skip or stub map file |
+| Runtime | Docker + bind mounts | **Same** — Docker + bind mounts (`tenants/{slug}/data` or adopt `data/` for secured) |
+| Everyday secured / platform | — | npm scripts (Docker off) |
+| Nginx | Write + reload | Skip |
 | API | Identical `/v1/...` | Identical — platform always calls agent |
+
+### Platform control-plane safety (requirements — Aug 2026)
+
+Not built yet. Do not confuse with **tenant ERP** Backups / Audit (chassis inside each org). These are **platform-only**.
+
+**1. `platform.db` backup / restore (do sooner)**
+
+- Control plane truth lives in one SQLite file (`platform/data/platform.db` locally; host path on VPS).
+- Need: operator-triggered backup (file copy / `VACUUM INTO`), durable backup dir, download or host-path retention; documented restore.
+- Optional later: scheduled backups + retention; still separate from per-tenant ERP DB backups.
+- Why early: orgs + branding already write here; entitlements/agent will raise blast radius.
+
+**2. Platform audit logs (skeleton early OK; full UI after mutations matter)**
+
+- Separate from ERP activity logs. Platform records **operator** actions on the control plane.
+- Events to capture (minimum): login failures / operator login, create/update tenant, brand save / asset upload, entitlement Save, provision / start / stop / pause, backup / restore, export dev config (when wired).
+- Shape: `platform_audit` (or similar) in `platform.db` — who, when, action, tenant slug if any, payload summary; Audit nav page + per-org “View audit” (UI still dimmed / later today).
+- Sequencing recommendation: lightweight backup first → persist entitlements → write audit on those mutations (and later agent verbs) → fuller Audit UI. Full audit product before Save/provision is optional early skeleton only.
 
 ---
 
@@ -604,9 +664,11 @@ Base path illustrative: `http://127.0.0.1:7200/v1`. All require Bearer token.
 |---|---|---|
 | 0 | Docs synced: **Docker-all-orgs / no-move-secured** + **local scripts** + **capacity 2–3** + **local agent day 1** | ✅ |
 | 0b | Platform boilerplate (`platform/`) + Secured white-label seed + Brand pencil UI | ✅ started |
-| 1 | Dockerfile: same app, bind-mount `data/` | ❌ |
-| 2 | Worker agent (`platform/worker-agent/`): `/v1` API + Docker driver + local dev driver (stub health only today) | 🟡 stub |
-| 3 | `platform.db` + host registry + entitlements; platform always calls agent; **local = run script** | 🟡 db + orgs/branding; agent call + packs next |
+| 0c | **`platform.db` backup/restore** (operator download or host copies) | ❌ requirement noted |
+| 0d | **Platform audit** write path + Audit UI (after entitlements/agent mutations grow; thin stub OK earlier) | ❌ requirement noted |
+| 1 | Dockerfile: same app, bind-mount `data/` (`Dockerfile` + `.dockerignore`) | ✅ |
+| 2 | Worker agent (`platform/worker-agent/`): `/v1` API + **Docker driver** (provision/start/stop; secured adopt) | ✅ docker mode |
+| 3 | `platform.db` + host registry + entitlements; platform always calls agent; **local = run script** | 🟡 db + orgs/branding; packs via **gradual ladder** (PHASE4 self-note), not full catalog first |
 | 4 | Super-admin panel on `platform.sotyn.com` | 🟡 local UI pencil |
 | 5 | Wildcard DNS/TLS `*-erp.sotyn.com` + nginx host→port | ❌ |
 | 6 | Cutover secured → Docker (bind `/root/erp/data`); canary org #2 on `/var/lib/sotyn/tenants/…` | ❌ |

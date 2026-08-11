@@ -316,6 +316,8 @@ Feature-only   = chassis + sold packs only
 
 **Exceptions:** solar-only ERP SKU may omit `business_book`. Feature-only SKU (barber chain + Chat) omits the whole ERP baseline.
 
+> **Self-note:** table above is a **wishlist / direction**, not locked day‑1 product truth. Build packs on the ladder in `docs/PHASE4-tenant-model.md` § *Self-note — gradual entitlement development* (chassis → island → attendance → hub → erp_baseline → chains → overlays). Don’t freeze full `dependsOn` before those rungs ship.
+
 ---
 
 ## Explicit non-goals of this doc

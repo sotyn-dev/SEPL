@@ -8,6 +8,7 @@ platform/data/
 platform/server/node_modules/
 platform/client/node_modules/
 platform/client/dist/
+/tenants/
 .claude/worktrees/
 
 # generated sales-billing exports that land in client/public

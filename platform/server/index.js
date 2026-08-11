@@ -8,6 +8,7 @@ const cors = require('cors');
 const { getDb, DB_PATH } = require('./lib/db');
 const tenantsRouter = require('./routes/tenants');
 const brandingRouter = require('./routes/branding');
+const deployRouter = require('./routes/deploy');
 const { router: authRouter, requireAuth } = require('./routes/auth');
 
 const PORT = Number(process.env.PLATFORM_PORT || 7100);
@@ -43,6 +44,7 @@ app.get('/api/hosts', (_req, res) => {
 
 app.use('/api/tenants', tenantsRouter);
 app.use('/api/branding', brandingRouter);
+app.use('/api/deploy', deployRouter);
 
 // Warm DB + seed on boot
 getDb();
