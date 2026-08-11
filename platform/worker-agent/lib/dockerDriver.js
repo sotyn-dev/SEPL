@@ -277,26 +277,157 @@ function destroy(slug, { wipeData = false } = {}) {
   return { ok: true, slug, wipedData: !!wipeData };
 }
 
+/**
+ * Map tag → tenant slugs currently using that image (registry + live inspect).
+ */
+function imageUsageByTag() {
+  const used = new Map();
+  const add = (tag, slug) => {
+    if (!tag || tag === '<none>') return;
+    if (!used.has(tag)) used.set(tag, []);
+    if (slug && !used.get(tag).includes(slug)) used.get(tag).push(slug);
+  };
+
+  for (const row of state.list()) {
+    const img = String(row.image || '');
+    const m = img.match(/^sotyn-erp:(.+)$/);
+    if (m) add(m[1], row.slug);
+
+    const name = row.containerName || containerName(row.slug);
+    const r = docker(['inspect', '-f', '{{.Config.Image}}', name]);
+    if (r.status === 0 && r.stdout) {
+      const live = r.stdout.trim();
+      const lm = live.match(/^sotyn-erp:(.+)$/);
+      if (lm) add(lm[1], row.slug);
+    }
+  }
+  return used;
+}
+
 function listImages() {
   const r = docker([
     'images',
     'sotyn-erp',
     '--format',
-    '{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}\t{{.Size}}',
+    '{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}\t{{.Size}}\t{{.CreatedAt}}',
   ]);
   if (r.status !== 0) {
     const err = new Error(r.stderr || 'docker images failed');
     err.status = 502;
     throw err;
   }
+  const usage = imageUsageByTag();
   const images = [];
   for (const line of (r.stdout || '').split('\n')) {
     if (!line.trim()) continue;
-    const [repository, tag, id, created, size] = line.split('\t');
+    const [repository, tag, id, created, size, createdAt] = line.split('\t');
     if (!tag || tag === '<none>') continue;
-    images.push({ repository, tag, id, created, size, ref: `${repository}:${tag}` });
+    const usedBy = usage.get(tag) || [];
+    images.push({
+      repository,
+      tag,
+      id,
+      created,
+      createdAt: createdAt || null,
+      size,
+      ref: `${repository}:${tag}`,
+      inUse: usedBy.length > 0,
+      usedBy,
+    });
   }
+  // Newest first when CreatedAt present
+  images.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   return images;
+}
+
+/**
+ * Remove one local sotyn-erp tag. Refuses if any tenant container uses it.
+ * Never touches host data/.
+ */
+function deleteImage(tag) {
+  assertTag(tag);
+  const avail = dockerAvailable();
+  if (!avail.ok) {
+    const err = new Error(`Docker unavailable: ${avail.error}`);
+    err.status = 503;
+    throw err;
+  }
+
+  const images = listImages();
+  const row = images.find((i) => i.tag === tag);
+  if (!row) {
+    const err = new Error(`image sotyn-erp:${tag} not found`);
+    err.status = 404;
+    throw err;
+  }
+  if (row.inUse) {
+    const err = new Error(
+      `image sotyn-erp:${tag} is in use by: ${(row.usedBy || []).join(', ') || 'tenant(s)'}`
+    );
+    err.status = 409;
+    throw err;
+  }
+
+  const r = docker(['rmi', imageRef(tag)]);
+  if (r.status !== 0) {
+    const err = new Error(r.stderr || r.stdout || 'docker rmi failed');
+    err.status = 502;
+    err.detail = r.stderr;
+    throw err;
+  }
+  return { ok: true, deleted: [tag], kept: [], hostDataUntouched: true };
+}
+
+/**
+ * Delete unused sotyn-erp tags on this host only.
+ * keepLatest: number of newest *unused* tags to retain for rollback (default 4).
+ * Always keeps in-use tags. Optionally keep `latest` (default true).
+ * Never touches host data/.
+ */
+function pruneImages(body = {}) {
+  const avail = dockerAvailable();
+  if (!avail.ok) {
+    const err = new Error(`Docker unavailable: ${avail.error}`);
+    err.status = 503;
+    throw err;
+  }
+
+  const keepLatest = body.keepLatest == null ? 4 : Number(body.keepLatest);
+  if (!Number.isFinite(keepLatest) || keepLatest < 0 || keepLatest > 50) {
+    const err = new Error('keepLatest must be 0–50');
+    err.status = 400;
+    throw err;
+  }
+  const keepLatestTag = body.keepLatestTag !== false && body.keepLatestTag !== 0;
+
+  const images = listImages();
+  const keep = new Set();
+  for (const img of images) {
+    if (img.inUse) keep.add(img.tag);
+  }
+  if (keepLatestTag) keep.add('latest');
+
+  const unused = images.filter((i) => !keep.has(i.tag));
+  const retainUnused = unused.slice(0, keepLatest);
+  for (const img of retainUnused) keep.add(img.tag);
+
+  const deleted = [];
+  const errors = [];
+  for (const img of images) {
+    if (keep.has(img.tag)) continue;
+    const r = docker(['rmi', img.ref]);
+    if (r.status === 0) deleted.push(img.tag);
+    else errors.push({ tag: img.tag, error: r.stderr || r.stdout || 'rmi failed' });
+  }
+
+  return {
+    ok: errors.length === 0,
+    deleted,
+    kept: [...keep],
+    errors,
+    keepLatest,
+    hostDataUntouched: true,
+  };
 }
 
 /**
@@ -334,12 +465,20 @@ function recreateTenant(row, image) {
 /**
  * Sync deploy body validation; returns job handle. Work runs async.
  * Hard rule: never delete host data directories.
+ * After success, auto-prunes unused images (keepLatest default 4) unless pruneAfter:false.
  */
 function startDeploy(body = {}) {
   const tag = String(body.tag || '').trim();
   assertTag(tag);
   const build = body.build === true || body.build === 1 || body.build === '1' || body.build === 'true';
   const image = imageRef(tag);
+  const pruneAfter = !(body.pruneAfter === false || body.pruneAfter === 0 || body.pruneAfter === '0' || body.pruneAfter === 'false');
+  const keepLatest = body.keepLatest == null ? 4 : Number(body.keepLatest);
+  if (!Number.isFinite(keepLatest) || keepLatest < 0 || keepLatest > 50) {
+    const err = new Error('keepLatest must be 0–50');
+    err.status = 400;
+    throw err;
+  }
 
   const avail = dockerAvailable();
   if (!avail.ok) {
@@ -358,14 +497,30 @@ function startDeploy(body = {}) {
   }
 
   const tenants = state.list();
-  const job = jobs.createJob({ tag, build, image, tenantCount: tenants.length });
+  const job = jobs.createJob({
+    tag,
+    build,
+    image,
+    tenantCount: tenants.length,
+    pruneAfter,
+    keepLatest,
+  });
 
-  setImmediate(() => runDeployJob(job.id, { tag, build, image, tenants }));
+  setImmediate(() => runDeployJob(job.id, { tag, build, image, tenants, pruneAfter, keepLatest }));
 
-  return { jobId: job.id, status: job.status, tag, build, image, tenantCount: tenants.length };
+  return {
+    jobId: job.id,
+    status: job.status,
+    tag,
+    build,
+    image,
+    tenantCount: tenants.length,
+    pruneAfter,
+    keepLatest,
+  };
 }
 
-function runDeployJob(jobId, { tag, build, image, tenants }) {
+function runDeployJob(jobId, { tag, build, image, tenants, pruneAfter, keepLatest }) {
   jobs.patchJob(jobId, { status: 'running' });
   try {
     if (build) {
@@ -392,6 +547,31 @@ function runDeployJob(jobId, { tag, build, image, tenants }) {
       jobs.addStep(jobId, { op: 'recreate', slug: row.slug, ok: true });
     }
 
+    if (pruneAfter) {
+      jobs.addStep(jobId, {
+        op: 'prune',
+        message: `auto-prune unused images (keep ${keepLatest} unused + in-use + :latest)`,
+      });
+      const pruned = pruneImages({ keepLatest });
+      jobs.addStep(jobId, {
+        op: 'prune',
+        ok: pruned.ok,
+        message: pruned.deleted.length
+          ? `removed ${pruned.deleted.join(', ')}`
+          : 'nothing to prune',
+        deleted: pruned.deleted,
+        errors: pruned.errors,
+      });
+      if (pruned.errors?.length) {
+        jobs.addStep(jobId, {
+          op: 'prune',
+          message: `prune warnings: ${pruned.errors.map((e) => `${e.tag}: ${e.error}`).join('; ')}`,
+        });
+      }
+    } else {
+      jobs.addStep(jobId, { op: 'prune', skipped: true, message: 'pruneAfter:false' });
+    }
+
     jobs.patchJob(jobId, { status: 'ok', error: null });
     jobs.addStep(jobId, { op: 'done', message: `deployed ${image} to ${tenants.length} tenant(s)` });
   } catch (e) {
@@ -414,6 +594,8 @@ module.exports = {
   restart,
   destroy,
   listImages,
+  deleteImage,
+  pruneImages,
   startDeploy,
   getDeployJob,
   IMAGE,

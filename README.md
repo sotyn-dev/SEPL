@@ -44,7 +44,7 @@ This is the normal path once platform + worker agent are running on the host.
 
 **Rollback:** same **Deploy** page → pick an older tag from the image list → turn **Build** off → Deploy.
 
-**Old images:** unused tags can be removed with `docker rmi sotyn-erp:<tag>` (see [Cleaning old images](#cleaning-old-images)). Does not delete tenant data. Deploy does not auto-prune.
+**Old images:** after each successful deploy/rollback the agent auto-prunes unused tags on that host (keeps in-use + `:latest` + **N** newest unused; default **4**). Manual **Delete** remains on Deploy. See [Cleaning old images](#cleaning-old-images). Never deletes tenant data.
 
 ### Keep these running
 
@@ -74,11 +74,14 @@ curl -s -X POST http://127.0.0.1:7200/v1/deploy \
   -d '{"tag":"10-08-2026-v1","build":false}'
 ```
 
-Platform proxies the same calls (JWT required):
+Platform proxies the same calls (JWT required; pass `hostId` for multi-VPS):
 
-- `POST /api/deploy` `{ "tag", "build" }`
-- `GET /api/deploy/jobs/:id`
-- `GET /api/deploy/images`
+- `GET /api/deploy/hosts`
+- `POST /api/deploy` `{ "tag", "build", "hostId?", "keepLatest?": 4, "pruneAfter?": true }`
+- `GET /api/deploy/jobs/:id?hostId=`
+- `GET /api/deploy/images?hostId=`
+- `DELETE /api/deploy/images/:tag?hostId=`
+- `POST /api/deploy/images/prune` `{ "hostId?", "keepLatest": 4 }`
 
 ---
 
@@ -125,7 +128,9 @@ curl -s -X POST http://127.0.0.1:7200/v1/tenants \
 | Health | `GET /v1/health` (no auth) |
 | Provision | `POST /v1/tenants` `{"slug":"…"}` |
 | List / stop / start | `GET /v1/tenants` · `POST …/stop` · `…/start` |
-| Images | `GET /v1/images` |
+| Images | `GET /v1/images` (includes `inUse` / `usedBy`) |
+| Delete tag | `DELETE /v1/images/{tag}` (refuses if in use) |
+| Prune | `POST /v1/images/prune` `{ keepLatest?: 4 }` — this host only |
 | Deploy | `POST /v1/deploy` (see above) |
 | Remove container | `DELETE /v1/tenants/{slug}` — add `?wipeData=1` only if you really want that tenant’s data gone (`secured` refuses wipe) |
 
@@ -175,16 +180,16 @@ Rollback: same commands with an older tag. List images: `docker images sotyn-erp
 
 ### Cleaning old images
 
-You can delete old `sotyn-erp` tags you no longer need for rollback. That does **not** touch tenant `data/`.
+**Default:** after a successful Deploy / rollback, the agent auto-prunes unused `sotyn-erp` tags on that host (keeps in-use, `:latest`, and **4** newest unused — configurable via keep‑N on the Deploy form). Manual **Delete** on an unused row is still available. Optional **Prune unused** runs the same rule without deploying.
 
-Keep the tag tenants are running now, plus a few recent ones for rollback. Remove the rest:
+CLI fallback (does **not** touch tenant `data/`):
 
 ```bash
 docker images sotyn-erp
 docker rmi sotyn-erp:10-08-2026-v1
 ```
 
-If a container is still using that tag, recreate it on another tag first (or Docker will refuse). Platform Deploy does not auto-prune images yet — cleanup is manual.
+If a container is still using that tag, recreate/rollback first (or Docker / the agent will refuse).
 
 ---
 
@@ -215,6 +220,7 @@ Multi-VPS: later the same Deploy button fans out to each host’s agent. Day‑1
 
 ## Related docs
 
-- [`platform/README.md`](platform/README.md) — control plane local run  
-- [`docs/PHASE4-tenant-model.md`](docs/PHASE4-tenant-model.md) — architecture and decisions  
-- [`.env.example`](.env.example) — ERP env reference  
+- [`platform/README.md`](platform/README.md) — control plane local run
+- [`docs/PLATFORM-VPS-deploy.md`](docs/PLATFORM-VPS-deploy.md) — VPS: platform + agent (PM2, nginx, env)
+- [`docs/PHASE4-tenant-model.md`](docs/PHASE4-tenant-model.md) — architecture and decisions
+- [`.env.example`](.env.example) — ERP env reference

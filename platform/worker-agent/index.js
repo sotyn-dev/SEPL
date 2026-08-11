@@ -93,7 +93,31 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url === '/v1/images' && req.method === 'GET') {
-      return json(res, 200, { images: driver.listImages() });
+      return json(res, 200, {
+        hostId: process.env.HOST_ID || 'host_local',
+        images: driver.listImages(),
+      });
+    }
+
+    if (url === '/v1/images/prune' && req.method === 'POST') {
+      const body = await readBody(req);
+      const result = driver.pruneImages(body);
+      return json(res, 200, {
+        hostId: process.env.HOST_ID || 'host_local',
+        ...result,
+      });
+    }
+
+    let mImg = match(url, req.method, {
+      method: 'DELETE',
+      re: /^\/v1\/images\/(?<tag>[^/]+)$/,
+    });
+    if (mImg) {
+      const result = driver.deleteImage(decodeURIComponent(mImg.tag));
+      return json(res, 200, {
+        hostId: process.env.HOST_ID || 'host_local',
+        ...result,
+      });
     }
 
     if (url === '/v1/deploy' && req.method === 'POST') {

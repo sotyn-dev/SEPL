@@ -5,14 +5,7 @@ const { getDb } = require('./db');
 const AGENT_TOKEN = process.env.AGENT_TOKEN || 'dev-agent-token';
 const DEFAULT_HOST_ID = 'host_local';
 
-function getLocalHost() {
-  const row = getDb().prepare('SELECT * FROM hosts WHERE id = ?').get(DEFAULT_HOST_ID)
-    || getDb().prepare('SELECT * FROM hosts ORDER BY created_at ASC LIMIT 1').get();
-  if (!row) {
-    const err = new Error('No worker host registered');
-    err.status = 503;
-    throw err;
-  }
+function rowToHost(row) {
   return {
     id: row.id,
     label: row.label,
@@ -21,22 +14,53 @@ function getLocalHost() {
   };
 }
 
+/** All registered worker hosts (day‑1: host_local; later: VPS‑2+). */
+function listHosts() {
+  return getDb()
+    .prepare('SELECT * FROM hosts ORDER BY created_at ASC')
+    .all()
+    .map(rowToHost);
+}
+
+function getHost(hostId) {
+  const id = hostId || DEFAULT_HOST_ID;
+  let row = getDb().prepare('SELECT * FROM hosts WHERE id = ?').get(id);
+  if (!row && (!hostId || hostId === DEFAULT_HOST_ID)) {
+    row = getDb().prepare('SELECT * FROM hosts ORDER BY created_at ASC LIMIT 1').get();
+  }
+  if (!row) {
+    const err = new Error(hostId ? `Host not found: ${hostId}` : 'No worker host registered');
+    err.status = hostId ? 404 : 503;
+    throw err;
+  }
+  return rowToHost(row);
+}
+
+function getLocalHost() {
+  return getHost(DEFAULT_HOST_ID);
+}
+
+/**
+ * Call a worker agent. Pass hostId to target a specific VPS (multi-host ready).
+ * Omitting hostId uses host_local / first registered host.
+ */
 async function agentFetch(path, options = {}) {
-  const host = getLocalHost();
+  const { hostId, ...fetchOpts } = options;
+  const host = getHost(hostId);
   const url = `${host.agentUrl}${path.startsWith('/') ? path : `/${path}`}`;
   const headers = {
     Authorization: `Bearer ${AGENT_TOKEN}`,
-    ...(options.headers || {}),
+    ...(fetchOpts.headers || {}),
   };
-  if (options.body && !headers['Content-Type']) {
+  if (fetchOpts.body && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
 
   let res;
   try {
-    res = await fetch(url, { ...options, headers });
+    res = await fetch(url, { ...fetchOpts, headers });
   } catch (e) {
-    const err = new Error(`Agent unreachable at ${host.agentUrl}: ${e.message}`);
+    const err = new Error(`Agent unreachable at ${host.agentUrl} (${host.id}): ${e.message}`);
     err.status = 502;
     throw err;
   }
@@ -61,6 +85,9 @@ async function agentFetch(path, options = {}) {
 
 module.exports = {
   AGENT_TOKEN,
+  DEFAULT_HOST_ID,
+  listHosts,
+  getHost,
   getLocalHost,
   agentFetch,
 };
