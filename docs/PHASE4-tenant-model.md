@@ -111,11 +111,15 @@ Today (before cutover): one PM2 app `erp` at `/root/erp`, `PORT=5000`, relative 
   data/                                 ← SECURED ONLY — leave forever on disk
     erp.db  chat.db  uploads/ …         ← bind-mounted into secured container
 
+/root/erp-backups/                      ← SECURED ERP backup zips (outside data/)
+
 /var/lib/sotyn/tenants/                 ← OTHER orgs’ disk homes (LOCKED)
   pharma/
     data/                               ← that org’s erp.db, uploads, …
+    backups/                            ← that org’s backup-<ts>.zip
   acme/
     data/
+    backups/
 
 /var/lib/sotyn/platform/                ← control-plane state (outside tenant data)
   platform.db                           ← registry, entitlements, hosts, ports, container ids
@@ -123,13 +127,13 @@ Today (before cutover): one PM2 app `erp` at `/root/erp`, `PORT=5000`, relative 
 
 | Piece | How it works |
 |---|---|
-| **Secured** | **Docker from day 1** — same image; volume `/root/erp/data` → container `data/` (e.g. `/app/data`). URL: `secured-erp.sotyn.com` → nginx → published port. **No data move.** Cutover: stop PM2 → start container with that mount. |
-| **New org** | **Docker** from the **same image**; host `/var/lib/sotyn/tenants/{slug}/data` → container `data/`. |
-| **Data resonance** | Inside every container the app only knows `data/*` — zero path logic change. Host path differs per org. |
+| **Secured** | **Docker from day 1** — same image; volumes `/root/erp/data` → `/app/data` and `/root/erp-backups` → `/app/backups`. URL: `secured-erp.sotyn.com` → nginx → published port. **No data move.** Cutover: stop PM2 → start container with those mounts. |
+| **New org** | **Docker** from the **same image**; host `/var/lib/sotyn/tenants/{slug}/data` → `/app/data` and `…/backups` → `/app/backups`. |
+| **Data resonance** | Inside every container the app only knows `data/*` and `ERP_BACKUP_DIR=/app/backups` — zero path logic change. Host path differs per org. |
 | **Code** | One image built from `/root/erp` (or CI). No `/root/erp-pharma` code copy. Per worker VPS: one `/root/erp` checkout as build/pull context. |
 | **URL** | `{slug}-erp.sotyn.com` → nginx → that org’s container port |
 | **S3** | Per-org prefix = slug (set in container env) |
-| **Forbidden** | Moving/copying secured `data/*`; forking the repo per customer; one Node process multiplexing all tenant DBs |
+| **Forbidden** | Moving/copying secured `data/*`; deleting host `backups/` on deploy/recreate; forking the repo per customer; one Node process multiplexing all tenant DBs |
 
 **Why Docker:** isolation + each org’s own disk tree **without** teaching the app multi-root paths and **without** relocating secured’s live files. A volume mount makes “another folder on the VPS” look like the same relative `data/*`.
 
@@ -139,19 +143,21 @@ Today (before cutover): one PM2 app `erp` at `/root/erp`, `PORT=5000`, relative 
 # Secured (legacy host path)
 image:   sotyn-erp:<git-sha>
 name:    erp-secured
-env:     PORT=5000  S3_KEY_PREFIX=secured   # or tenant_sepl — pick once, keep stable
+env:     PORT=5000  S3_KEY_PREFIX=secured  ERP_BACKUP_DIR=/app/backups
 ports:   127.0.0.1:5000:5000
 volume:  /root/erp/data  →  /app/data
+volume:  /root/erp-backups  →  /app/backups
 
 # New org
 image:   sotyn-erp:<git-sha>
 name:    erp-pharma
-env:     PORT=5000  S3_KEY_PREFIX=pharma
+env:     PORT=5000  S3_KEY_PREFIX=pharma  ERP_BACKUP_DIR=/app/backups
 ports:   127.0.0.1:5101:5000
 volume:  /var/lib/sotyn/tenants/pharma/data  →  /app/data
+volume:  /var/lib/sotyn/tenants/pharma/backups  →  /app/backups
 ```
 
-(App cwd inside image is wherever `data/` is relative today — mount must land on that exact path. Watch container UID vs existing file ownership on `/root/erp/data`.)
+(App cwd inside image is wherever `data/` is relative today — mount must land on that exact path. Watch container UID vs existing file ownership on `/root/erp/data`. Backup zips stay outside `data/`.)
 
 **Edge (nginx):** wildcard cert `*-erp.sotyn.com`; generated map `host → 127.0.0.1:port` (all Docker org ports, including secured).
 
@@ -172,7 +178,7 @@ Platform **never** talks to Docker/nginx directly. It always calls a **worker ag
 1. Operator on the main VPS: `git pull origin main` only. Platform and agent **never** run git.
 2. Platform **Deploy** → local worker agent: `docker build -t sotyn-erp:$TAG -t sotyn-erp:latest` (from already-pulled checkout) → recreate **every** tenant container on that host (same port, volume, `--env-file`, new image).
 3. **Rollback** = same Deploy with an older existing tag and `build: false` (no rebuild).
-4. **Hard rule:** deploy / recreate / rollback may only `docker rm -f` the **container**. Host bind-mounted `data/` is never removed, emptied, or passed through `wipeData`. Multi-VPS fan-out (same button → all agents) is later; day‑1 is **host_local only**.
+4. **Hard rule:** deploy / recreate / rollback may only `docker rm -f` the **container**. Host bind-mounted `data/` and `backups/` are never removed, emptied, or passed through `wipeData` (wipeData may only clear non-secured `data/`). Multi-VPS fan-out (same button → all agents) is later; day‑1 is **host_local only**.
 5. **Image prune / delete (locked):** after successful deploy/rollback, agent auto-prunes unused tags on **that host** (`keepLatest` default **4**; `pruneAfter:false` to skip). Platform Deploy UI also has manual Delete + optional Prune. Always host-scoped (`hostId`). Never delete in-use tags; keep in-use + `:latest` + N newest unused. Adding VPS‑2 = register another `hosts` row and pick it in the same UI.
 
 **Day‑1 host (locked):** one VPS runs **platform + local worker agent + Docker orgs (including secured)**. Agent is `localhost` to platform — identical provision path when VPS‑2 joins (agent is remote). No “platform drives Docker itself” shortcut.
@@ -592,7 +598,7 @@ platform.sotyn.com  --HTTPS-->  platform process
 
 1. **HTTP API** — verbs below (JSON in/out)  
 2. **Docker driver** — Docker Engine CLI (`docker run` / start / stop / rm); same on local smoke and prod. Host data bind-mounted to container `/app/data`.  
-3. **Filesystem** — `mkdir` under `TENANTS_ROOT/{slug}/data` for new orgs; secured: adopt `SECURED_DATA_PATH` (local repo `data/`, prod `/root/erp/data`), never mkdir-as-new under `tenants/secured`  
+3. **Filesystem** — `mkdir` under `TENANTS_ROOT/{slug}/data` and `…/backups` for new orgs; secured: adopt `SECURED_DATA_PATH` + `SECURED_BACKUP_PATH` (local repo `data/` + `backups/`; prod `/root/erp/data` + `/root/erp-backups`), never mkdir-as-new under `tenants/secured`
 4. **Entitlements materializer** — write plan file/env from platform payload (not SoT)  
 5. **Nginx map writer** — update host→port fragment + reload  
 6. **Health probe** — HTTP check tenant container’s health URL after start  

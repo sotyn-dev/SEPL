@@ -2,13 +2,14 @@
 
 /**
  * Worker agent — Docker driver for tenant ERP containers.
- * Platform talks here; mounts host data → /app/data (no path surgery in ERP).
- * Deploy recreates containers only — never deletes host data/.
+ * Platform talks here; mounts host data → /app/data and backups → /app/backups.
+ * Deploy recreates containers only — never deletes host data/ or backups/.
  */
 const http = require('http');
 const {
   TENANTS_ROOT,
   SECURED_DATA_PATH,
+  SECURED_BACKUP_PATH,
   PORT_MIN,
   PORT_MAX,
   REPO_ROOT,
@@ -86,6 +87,7 @@ const server = http.createServer(async (req, res) => {
         repoRoot: REPO_ROOT,
         tenantsRoot: TENANTS_ROOT,
         securedDataPath: SECURED_DATA_PATH,
+        securedBackupPath: SECURED_BACKUP_PATH,
         envFile: ERP_ENV_FILE,
         portRange: [PORT_MIN, PORT_MAX],
         image: driver.IMAGE,
@@ -201,5 +203,6 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[worker-agent] docker mode http://127.0.0.1:${PORT}/v1 (Bearer ${TOKEN})`);
   console.log(`[worker-agent] tenantsRoot=${TENANTS_ROOT}`);
   console.log(`[worker-agent] securedDataPath=${SECURED_DATA_PATH}`);
+  console.log(`[worker-agent] securedBackupPath=${SECURED_BACKUP_PATH}`);
   console.log(`[worker-agent] envFile=${ERP_ENV_FILE || '(none)'}`);
 });

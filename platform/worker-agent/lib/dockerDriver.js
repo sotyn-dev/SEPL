@@ -6,12 +6,14 @@ const {
   IMAGE,
   ERP_ENV_FILE,
   CONTAINER_DATA,
+  CONTAINER_BACKUPS,
   CONTAINER_PORT,
   PORT_MIN,
   PORT_MAX,
   REPO_ROOT,
   containerName,
   dataPathFor,
+  backupPathFor,
   assertTag,
   imageRef,
 } = require('./paths');
@@ -89,33 +91,42 @@ function ensureDataDir(slug) {
   return dataPath;
 }
 
+/** Backup zips live outside data/; never wiped by wipeData / recreate. */
+function ensureBackupDir(slug) {
+  const backupPath = backupPathFor(slug);
+  fs.mkdirSync(backupPath, { recursive: true });
+  return backupPath;
+}
+
 /**
- * docker run -d --name … -p host:5000 -v data:/app/data [--env-file] -e TENANT_ID …
- * Never deletes host data paths.
+ * docker run -d --name … -p host:5000
+ *   -v data:/app/data -v backups:/app/backups
+ * Never deletes host data/ or backups/ paths.
  */
-function runContainer({ slug, port, dataPath, image = IMAGE, extraEnv = {} }) {
+function runContainer({ slug, port, dataPath, backupPath, image = IMAGE, extraEnv = {} }) {
   const name = containerName(slug);
   const envArgs = [];
   if (ERP_ENV_FILE && fs.existsSync(ERP_ENV_FILE)) {
     envArgs.push('--env-file', ERP_ENV_FILE);
   }
+  // -e after --env-file wins: enable nightly backups into the bind-mounted folder.
   envArgs.push(
     '-e', `TENANT_ID=${slug}`,
     '-e', `PORT=${CONTAINER_PORT}`,
-    '-e', 'ERP_DISABLE_BACKUP_SCHEDULER=1',
+    '-e', `ERP_BACKUP_DIR=${CONTAINER_BACKUPS}`,
+    '-e', 'ERP_DISABLE_BACKUP_SCHEDULER=',
   );
   for (const [k, v] of Object.entries(extraEnv)) {
     if (v == null) continue;
     envArgs.push('-e', `${k}=${v}`);
   }
 
-  const vol = `${dataPath}:${CONTAINER_DATA}`;
-
   const args = [
     'run', '-d',
     '--name', name,
     '-p', `${port}:${CONTAINER_PORT}`,
-    '-v', vol,
+    '-v', `${dataPath}:${CONTAINER_DATA}`,
+    '-v', `${backupPath}:${CONTAINER_BACKUPS}`,
     ...envArgs,
     image,
   ];
@@ -157,11 +168,13 @@ function provision(body = {}) {
 
   const port = allocatePort(body.port);
   const dataPath = ensureDataDir(slug);
+  const backupPath = ensureBackupDir(slug);
   const image = body.image || IMAGE;
   const { containerId } = runContainer({
     slug,
     port,
     dataPath,
+    backupPath,
     image,
     extraEnv: body.env && typeof body.env === 'object' ? body.env : {},
   });
@@ -169,6 +182,7 @@ function provision(body = {}) {
   const row = state.upsert(slug, {
     port,
     dataPath,
+    backupPath,
     containerName: name,
     containerId,
     image,
@@ -270,6 +284,7 @@ function destroy(slug, { wipeData = false } = {}) {
   }
   const name = row.containerName || containerName(slug);
   docker(['rm', '-f', name]);
+  // wipeData removes live data/ only — never host backups/ (same hard rule as recreate).
   if (wipeData && slug !== 'secured' && row.dataPath) {
     fs.rmSync(row.dataPath, { recursive: true, force: true });
   }
@@ -431,13 +446,15 @@ function pruneImages(body = {}) {
 }
 
 /**
- * Recreate one tenant container on a new image. Container only — never touches data/.
+ * Recreate one tenant container on a new image.
+ * Container only — never touches host data/ or backups/.
  */
 function recreateTenant(row, image) {
   const slug = row.slug;
   const name = row.containerName || containerName(slug);
   const port = row.port;
   const dataPath = row.dataPath || dataPathFor(slug);
+  const backupPath = row.backupPath || ensureBackupDir(slug);
 
   if (!port) {
     const err = new Error(`tenant ${slug} has no stored port`);
@@ -449,13 +466,18 @@ function recreateTenant(row, image) {
     err.status = 500;
     throw err;
   }
+  if (!fs.existsSync(backupPath)) {
+    fs.mkdirSync(backupPath, { recursive: true });
+  }
 
   docker(['rm', '-f', name]);
 
-  const { containerId } = runContainer({ slug, port, dataPath, image });
+  const { containerId } = runContainer({ slug, port, dataPath, backupPath, image });
   return state.upsert(slug, {
     containerId,
     containerName: name,
+    dataPath,
+    backupPath,
     image,
     status: 'running',
     deployedAt: new Date().toISOString(),
@@ -541,7 +563,7 @@ function runDeployJob(jobId, { tag, build, image, tenants, pruneAfter, keepLates
       jobs.addStep(jobId, {
         op: 'recreate',
         slug: row.slug,
-        message: `recreate ${row.slug} (container only; data untouched)`,
+        message: `recreate ${row.slug} (container only; data/ and backups/ untouched)`,
       });
       recreateTenant(row, image);
       jobs.addStep(jobId, { op: 'recreate', slug: row.slug, ok: true });

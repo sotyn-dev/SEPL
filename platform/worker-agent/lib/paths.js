@@ -14,11 +14,19 @@ const SECURED_DATA_PATH = process.env.SECURED_DATA_PATH
   ? path.resolve(process.env.SECURED_DATA_PATH)
   : path.join(REPO_ROOT, 'data');
 
+/** Secured ERP backup zips — adopt today's host folder (never under data/). */
+const SECURED_BACKUP_PATH = process.env.SECURED_BACKUP_PATH
+  ? path.resolve(process.env.SECURED_BACKUP_PATH)
+  : (process.platform === 'win32'
+    ? path.join(REPO_ROOT, 'backups')
+    : path.join('/root', 'erp-backups'));
+
 const PORT_MIN = Number(process.env.AGENT_PORT_MIN || 5101);
 const PORT_MAX = Number(process.env.AGENT_PORT_MAX || 5199);
 
 const IMAGE = process.env.ERP_IMAGE || 'sotyn-erp:local';
 const CONTAINER_DATA = '/app/data';
+const CONTAINER_BACKUPS = '/app/backups';
 const CONTAINER_PORT = 5000;
 
 /** Host env file for tenant containers (--env-file). Empty string disables. */
@@ -42,6 +50,14 @@ function containerName(slug) {
 function dataPathFor(slug) {
   if (slug === 'secured') return SECURED_DATA_PATH;
   return path.join(TENANTS_ROOT, slug, 'data');
+}
+
+/**
+ * Host folder for ERP backup zips (outside data/). secured adopts SECURED_BACKUP_PATH.
+ */
+function backupPathFor(slug) {
+  if (slug === 'secured') return SECURED_BACKUP_PATH;
+  return path.join(TENANTS_ROOT, slug, 'backups');
 }
 
 function assertSlug(slug) {
@@ -68,14 +84,17 @@ module.exports = {
   REPO_ROOT,
   TENANTS_ROOT,
   SECURED_DATA_PATH,
+  SECURED_BACKUP_PATH,
   PORT_MIN,
   PORT_MAX,
   IMAGE,
   ERP_ENV_FILE,
   CONTAINER_DATA,
+  CONTAINER_BACKUPS,
   CONTAINER_PORT,
   containerName,
   dataPathFor,
+  backupPathFor,
   assertSlug,
   assertTag,
   imageRef,

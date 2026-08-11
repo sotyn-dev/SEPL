@@ -12,7 +12,7 @@ Boilerplate for `platform.sotyn.com` — org registry, white-label Brand (live),
 | **B. Multitenant smoke** | 2nd org / secured cutover rehearsal | Docker Desktop + `npm run platform:agent` → agent `docker run` with bind-mounts |
 | **C. Prod day 1** | VPS | All tenant ERPs in Docker incl. **secured** (bind existing `/root/erp/data` — **no move**) |
 
-No ERP `DATA_DIR` / DB-opener surgery — isolation is the mount onto container `/app/data`.
+No ERP `DATA_DIR` / DB-opener surgery — isolation is bind-mounts onto container `/app/data` and `/app/backups`.
 
 ## Layout
 
@@ -109,14 +109,14 @@ Env for containers: `ERP_ENV_FILE` (default repo `.env` if present) passed as `-
 
 Full Docker build/run procedure: root [`README.md`](../README.md).
 
-| Slug | Host bind | Container |
+| Slug | Host data → `/app/data` | Host backups → `/app/backups` |
 |---|---|---|
-| `secured` | `SECURED_DATA_PATH` or `<repo>/data` (adopt, no wipe) | `/app/data` |
-| other | `<repo>/tenants/{slug}/data` (`TENANTS_ROOT`) | `/app/data` |
+| `secured` | `SECURED_DATA_PATH` or `<repo>/data` | `SECURED_BACKUP_PATH` or `<repo>/backups` |
+| other | `<repo>/tenants/{slug}/data` | `<repo>/tenants/{slug}/backups` |
 
 Host ports **5101–5199** → container `5000`. Container name: `sotyn-tenant-{slug}`. Runtime registry: `tenants/.agent/runtimes.json` (gitignored under `/tenants/`).
 
-Prod overrides: `SECURED_DATA_PATH=/root/erp/data`, `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.
+Prod overrides: `SECURED_DATA_PATH=/root/erp/data`, `SECURED_BACKUP_PATH=/root/erp-backups`, `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.
 
 ## Routes — live vs pencil
 
@@ -125,7 +125,7 @@ Prod overrides: `SECURED_DATA_PATH=/root/erp/data`, `TENANTS_ROOT=/var/lib/sotyn
 | `/login` | **Live** — platform JWT |
 | `/invite/:token` · `/reset/:token` | **Live** — set password (invite / admin reset) |
 | `/` Companies list | **Live** list/create draft tenants (`platform.db`) |
-| `/deploy` | **Live** — Deploy / rollback / prune images via worker agent (host picker ready; never wipes `data/`) |
+| `/deploy` | **Live** — Deploy / rollback / prune images via worker agent (host picker ready; never wipes `data/` or `backups/`) |
 | `/operators` | **Live** — invite operators, admin reset links, activate/deactivate |
 | `/backups` | **Live** — `platform.db` zip backups (Backup Now / list / download; nightly 2:00) |
 | `/docs` | **Live** — HTML how‑tos (Deploy · Operators · Backups tabs) |

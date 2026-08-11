@@ -16,16 +16,16 @@ Monorepo layout:
 ## Tenant runtime model
 
 Each organisation runs as its **own Docker container** from image `sotyn-erp`.  
-Inside the container the app always uses `/app/data`. Isolation is a **host bind-mount** (no ERP path surgery).
+Inside the container the app always uses `/app/data` and backup zips at `/app/backups`. Isolation is **host bind-mounts** (no ERP path surgery).
 
-| Tenant | Host path mounted at `/app/data` |
-|---|---|
-| `secured` | Local: `<repo>/data` · Prod: `/root/erp/data` (unchanged; do not move) |
-| Other slugs | Local: `tenants/{slug}/data` · Prod: `/var/lib/sotyn/tenants/{slug}/data` |
+| Tenant | Host `data/` → `/app/data` | Host backups → `/app/backups` |
+|---|---|---|
+| `secured` | Local: `<repo>/data` · Prod: `/root/erp/data` | Local: `<repo>/backups` · Prod: `/root/erp-backups` |
+| Other slugs | Local: `tenants/{slug}/data` · Prod: `/var/lib/sotyn/tenants/{slug}/data` | Local: `tenants/{slug}/backups` · Prod: `/var/lib/sotyn/tenants/{slug}/backups` |
 
 The image is multi-stage: Vite builds the UI **inside Docker**. Host / git `client/dist` is not used for image builds.
 
-**Hard rule:** Deploy / recreate never deletes host `data/` — only the container is replaced.
+**Hard rule:** Deploy / recreate never deletes host `data/` or `backups/` — only the container is replaced.
 
 ---
 
@@ -96,21 +96,23 @@ docker build -t sotyn-erp:local .
 ### Manual one-off container (optional check)
 
 ```bash
-mkdir -p tenants/_manual/data
+mkdir -p tenants/_manual/data tenants/_manual/backups
 docker run -d --name sotyn-smoke \
   -p 5188:5000 \
   -v "$(pwd)/tenants/_manual/data:/app/data" \
+  -v "$(pwd)/tenants/_manual/backups:/app/backups" \
   --env-file .env \
   -e TENANT_ID=smoke \
   -e PORT=5000 \
-  -e ERP_DISABLE_BACKUP_SCHEDULER=1 \
+  -e ERP_BACKUP_DIR=/app/backups \
+  -e ERP_DISABLE_BACKUP_SCHEDULER= \
   sotyn-erp:local
 ```
 
 Check: `http://127.0.0.1:5188/api/health`  
-Cleanup: `docker rm -f sotyn-smoke` (data folder stays unless you delete it yourself).
+Cleanup: `docker rm -f sotyn-smoke` (data/backups folders stay unless you delete them yourself).
 
-PowerShell volume: `-v "${PWD}\tenants\_manual\data:/app/data"`.
+PowerShell volumes: `-v "${PWD}\tenants\_manual\data:/app/data"` and `-v "${PWD}\tenants\_manual\backups:/app/backups"`.
 
 ### Agent: create a tenant box
 
@@ -151,15 +153,17 @@ git pull origin main
 TAG=11-08-2026-v1
 docker build -t sotyn-erp:$TAG -t sotyn-erp:latest .
 
-# For EACH tenant — same port + volume as before (agent remembers these; you must look them up)
+# For EACH tenant — same port + volumes as before (agent remembers these; you must look them up)
 docker rm -f sotyn-tenant-secured
 docker run -d --name sotyn-tenant-secured \
   -p 5101:5000 \
   -v /root/erp/data:/app/data \
+  -v /root/erp-backups:/app/backups \
   --env-file /root/erp/.env \
   -e TENANT_ID=secured \
   -e PORT=5000 \
-  -e ERP_DISABLE_BACKUP_SCHEDULER=1 \
+  -e ERP_BACKUP_DIR=/app/backups \
+  -e ERP_DISABLE_BACKUP_SCHEDULER= \
   sotyn-erp:$TAG
 
 # other slug example
@@ -167,14 +171,16 @@ docker rm -f sotyn-tenant-pharma
 docker run -d --name sotyn-tenant-pharma \
   -p 5102:5000 \
   -v /var/lib/sotyn/tenants/pharma/data:/app/data \
+  -v /var/lib/sotyn/tenants/pharma/backups:/app/backups \
   --env-file /root/erp/.env \
   -e TENANT_ID=pharma \
   -e PORT=5000 \
-  -e ERP_DISABLE_BACKUP_SCHEDULER=1 \
+  -e ERP_BACKUP_DIR=/app/backups \
+  -e ERP_DISABLE_BACKUP_SCHEDULER= \
   sotyn-erp:$TAG
 ```
 
-`docker restart` does **not** pick up a new image — you must `rm` + `run` again. Data on disk is untouched.
+`docker restart` does **not** pick up a new image — you must `rm` + `run` again. Data and backups on disk are untouched.
 
 Rollback: same commands with an older tag. List images: `docker images sotyn-erp`.
 
@@ -201,13 +207,14 @@ If a container is still using that tag, recreate/rollback first (or Docker / the
 | Host `.env` | Secrets (`JWT_SECRET`, Twilio, S3, …) — gitignored |
 | Container start | `--env-file` + tenant `-e` overrides |
 
-Agent uses `ERP_ENV_FILE` (default: repo `.env` if present), then forces `TENANT_ID`, `PORT=5000`, `ERP_DISABLE_BACKUP_SCHEDULER=1`.
+Agent uses `ERP_ENV_FILE` (default: repo `.env` if present), then forces `TENANT_ID`, `PORT=5000`, `ERP_BACKUP_DIR=/app/backups`, and clears `ERP_DISABLE_BACKUP_SCHEDULER` so nightly backups write to the bind-mounted folder.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `ERP_IMAGE` | `sotyn-erp:local` | Image for new provision |
-| `TENANTS_ROOT` | `<repo>/tenants` | New-tenant data root |
-| `SECURED_DATA_PATH` | `<repo>/data` | Secured bind path |
+| `TENANTS_ROOT` | `<repo>/tenants` | New-tenant data + backups root |
+| `SECURED_DATA_PATH` | `<repo>/data` | Secured data bind path |
+| `SECURED_BACKUP_PATH` | `<repo>/backups` (Win) · `/root/erp-backups` (Linux) | Secured backups bind path |
 | `AGENT_PORT` | `7200` | Agent listen port |
 | `AGENT_TOKEN` | `dev-agent-token` | Bearer for agent `/v1/*` |
 | `ERP_ENV_FILE` | `<repo>/.env` if present | Passed into tenant containers |

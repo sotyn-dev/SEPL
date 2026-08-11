@@ -1,4 +1,4 @@
-# Sotyn ERP tenant image — UI built inside Docker; data/ only via bind mount.
+# Sotyn ERP tenant image — UI built inside Docker; data/ + backups/ via bind mounts.
 # Build: docker build -t sotyn-erp:local .
 # Host client/dist is NOT used (isolated image build).
 
@@ -30,10 +30,12 @@ COPY --from=client-build /client/dist ./client/dist
 
 ENV NODE_ENV=production
 ENV PORT=5000
-# Avoid host-side backup cron side effects inside every tenant box by default.
+# Default off until a host backup volume is mounted (agent sets ERP_BACKUP_DIR + clears this).
 ENV ERP_DISABLE_BACKUP_SCHEDULER=1
 
 EXPOSE 5000
 
-# data/ must be supplied: -v <host-data>:/app/data
+# Required mounts (agent does this):
+#   -v <host-data>:/app/data
+#   -v <host-backups>:/app/backups  +  -e ERP_BACKUP_DIR=/app/backups
 CMD ["node", "server/index.js"]

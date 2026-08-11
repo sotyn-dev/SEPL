@@ -28,7 +28,8 @@ function DeployDocsHtml() {
       title="Deploy & image cleanup"
       blurb={
         <>
-          Host <code className="bg-slate-50 px-1 rounded">data/</code> is never deleted by deploy, rollback, delete, or prune.
+          Host <code className="bg-slate-50 px-1 rounded">data/</code> and{' '}
+          <code className="bg-slate-50 px-1 rounded">backups/</code> are never deleted by deploy, rollback, delete, or prune.
           {' '}Open the live UI: <Link to="/deploy" className="text-blue-800 hover:underline">Deploy</Link>.
         </>
       }
@@ -206,7 +207,7 @@ function BackupsDocsHtml() {
       <Section title="Not included">
         <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
           <li>Uploaded branding assets under <code className="text-xs bg-slate-50 px-1 rounded">data/tenants/…/assets/</code> — back those up separately if needed.</li>
-          <li>Tenant ERP databases — use each org’s ERP backups, not this page.</li>
+          <li>Tenant ERP databases — use each org’s ERP Settings → Backups (zips on that tenant’s host <code className="text-xs bg-slate-50 px-1 rounded">backups/</code> mount), not this page.</li>
         </ul>
       </Section>
     </DocCard>
