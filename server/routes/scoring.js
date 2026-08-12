@@ -813,23 +813,48 @@ function computeScorecard(db, userId, weekStart) {
       // ===== Snag List =====
       // auto:snags = a user scored on THEIR OWN assigned snags; auto:snags_all
       // = a process owner scored on the WHOLE punch-list (company-wide).
-      // Plan = snags RAISED this week. Actual = of those, how many were also
-      // APPROVED this same week (mam 2026-08-10: "approved as per planning,
-      // that is complete") — unlike delegations/pms/tickets, this checks
-      // approved_at too, not just current status, so a late approval doesn't
-      // retroactively fix a past week's score once that week has closed.
+      //
+      // Mam 2026-08-12 ("snag list count as per assign"): Plan = the snags
+      // STANDING ASSIGNED to the user during the week — backlog carried in
+      // plus newly raised — NOT just the ones raised this week.  An engineer
+      // sitting on 30 old open snags must see all 30 in his plan, else old
+      // snags cost nothing and get ignored.  Concretely: raised on/before
+      // week end AND not already approved before week start.
+      // Actual = of the user's assigned snags, how many were APPROVED within
+      // THIS week (approved_at checked, mam 2026-08-10: "approved as per
+      // planning, that is complete") — closing an old backlog snag now DOES
+      // count as this week's work, but a late approval still can't
+      // retroactively fix a past week once that week has closed.
+      // (Earlier logic — plan = raised this week only — replaced 2026-08-12,
+      // "snag list performance not correct as per my command".)
       // date(raised_at) instead of raw string BETWEEN — prod snag rows came in
       // via a separate PR + imports, so timestamps may be 'T'-separated ISO or
       // date-only; date() normalizes every ISO variant (raw compare missed them
-      // and the whole KPI silently read 0).
+      // and the whole KPI silently read 0).  Approved rows with a NULL
+      // approved_at (legacy imports) are treated as closed long ago: out of
+      // the plan, never in the actual.
       if (source === 'auto:snags') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ? AND status='approved' AND date(approved_at) BETWEEN ? AND ?`).get(userId, sinceDate, untilDate, sinceDate, untilDate).c;
+        const given = db.prepare(
+          `SELECT COUNT(*) as c FROM snags
+            WHERE assigned_to=? AND date(raised_at) <= ?
+              AND (status != 'approved' OR (approved_at IS NOT NULL AND date(approved_at) >= ?))`
+        ).get(userId, untilDate, sinceDate).c;
+        const done = db.prepare(
+          `SELECT COUNT(*) as c FROM snags
+            WHERE assigned_to=? AND status='approved' AND date(approved_at) BETWEEN ? AND ?`
+        ).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:snags_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ? AND status='approved' AND date(approved_at) BETWEEN ? AND ?`).get(sinceDate, untilDate, sinceDate, untilDate).c;
+        const given = db.prepare(
+          `SELECT COUNT(*) as c FROM snags
+            WHERE date(raised_at) <= ?
+              AND (status != 'approved' OR (approved_at IS NOT NULL AND date(approved_at) >= ?))`
+        ).get(untilDate, sinceDate).c;
+        const done = db.prepare(
+          `SELECT COUNT(*) as c FROM snags
+            WHERE status='approved' AND date(approved_at) BETWEEN ? AND ?`
+        ).get(sinceDate, untilDate).c;
         return { given, done };
       }
 
