@@ -51,6 +51,39 @@ router.get('/:slug', (req, res) => {
   res.json({ tenant: rowToTenant(row) });
 });
 
+/** Update mutable identity fields (hostname). Slug is immutable. */
+router.patch('/:slug', (req, res) => {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
+  if (!row) return res.status(404).json({ error: 'Tenant not found' });
+
+  const { hostname: hostnameIn } = req.body || {};
+  if (hostnameIn === undefined) {
+    return res.status(400).json({ error: 'No fields to update' });
+  }
+
+  let hostname;
+  try {
+    hostname = normalizeHostname(hostnameIn, row.slug);
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
+  }
+
+  const taken = db.prepare(
+    'SELECT slug FROM tenants WHERE hostname = ? AND id != ?'
+  ).get(hostname, row.id);
+  if (taken) {
+    return res.status(409).json({ error: `Hostname already used by ${taken.slug}` });
+  }
+
+  db.prepare(`
+    UPDATE tenants SET hostname = ?, updated_at = datetime('now') WHERE id = ?
+  `).run(hostname, row.id);
+
+  const next = db.prepare('SELECT * FROM tenants WHERE id = ?').get(row.id);
+  res.json({ tenant: rowToTenant(next) });
+});
+
 router.post('/', async (req, res) => {
   const {
     slug,
@@ -77,6 +110,10 @@ router.post('/', async (req, res) => {
   const db = getDb();
   if (db.prepare('SELECT 1 FROM tenants WHERE slug = ?').get(slug)) {
     return res.status(409).json({ error: 'Slug already exists' });
+  }
+  const hostTaken = db.prepare('SELECT slug FROM tenants WHERE hostname = ?').get(hostname);
+  if (hostTaken) {
+    return res.status(409).json({ error: `Hostname already used by ${hostTaken.slug}` });
   }
 
   const host = db.prepare('SELECT * FROM hosts WHERE id = ?').get(hostId || DEFAULT_HOST_ID);
