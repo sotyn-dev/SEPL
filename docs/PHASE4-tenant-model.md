@@ -578,7 +578,7 @@ The agent is the **only** process on a worker that may touch Docker, tenant data
 | **Monorepo** | `platform/worker-agent/` (same SEPL repo as ERP + platform UI) |
 | **Runs on** | Every worker VPS (day‑1: colocated with platform on VPS‑1; later: VPS‑2+ agent-only) |
 | **Process** | Small Node (or similar) HTTP service — **run script** locally; systemd/Docker on prod |
-| **Listen** | `127.0.0.1` on day‑1 (platform on same box). Later: private IP / WireGuard / SSH tunnel — **not** public internet |
+| **Listen** | `127.0.0.1` on day‑1 (platform on same box). Later: private IP / SSH tunnel / VPC — **not** public internet |
 | **Auth** | Shared secret (or mTLS later): `Authorization: Bearer <AGENT_TOKEN>` on every call |
 | **Not** | Not the super-admin UI; not inside a tenant ERP container; no public `*-erp` hostname |
 
@@ -686,6 +686,14 @@ Do not confuse with **tenant ERP** Backups / Audit (chassis inside each org). Th
 - Opt-out: `PLATFORM_DISABLE_AUDIT=1`. Debug: `PLATFORM_AUDIT_DEBUG=1`.
 - Not tenant ERP activity. Reading the audit API itself is skipped.
 
+**3. Exclusive access — Cloudflare Access (🟡 runbook ✅; ops in Cloudflare dashboard)**
+
+- **Decision:** limited trusted operators (≈2–3) reach the platform via **Cloudflare Access** on `platform.sotyn.com` (email OTP / IdP allow list). Free Zero Trust ≤50 seats.
+- **Keep** platform JWT / Operators / Audit — Access does not replace app auth.
+- Tenant `*-erp.sotyn.com` stays public; worker agent stays localhost-only.
+- Runbook: [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md). UI: platform **Docs → Access**.
+- Not an in-app product — Cloudflare dashboard runbook only.
+
 ---
 
 ## Suggested resume order
@@ -701,6 +709,7 @@ Do not confuse with **tenant ERP** Backups / Audit (chassis inside each org). Th
 | 2 | Worker agent (`platform/worker-agent/`): `/v1` API + **Docker driver** (provision/start/stop; secured adopt) | ✅ docker mode |
 | 3 | `platform.db` + host registry + entitlements; platform always calls agent; **local = run script** | 🟡 db + orgs/branding; packs via **gradual ladder** (PHASE4 self-note), not full catalog first |
 | 4 | Super-admin panel on `platform.sotyn.com` | 🟡 local UI pencil; VPS runbook: [`PLATFORM-VPS-deploy.md`](./PLATFORM-VPS-deploy.md) |
+| 4b | **Platform exclusive access** — Cloudflare Access on `platform.sotyn.com`; **keep** platform JWT/operators | 🟡 runbook ✅ [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md); CF policy ops ❌ |
 | 5 | Wildcard DNS/TLS `*-erp.sotyn.com` + nginx host→port | ❌ |
 | 6 | Cutover secured → Docker (bind `/root/erp/data`); canary org #2 on `/var/lib/sotyn/tenants/…` | ❌ |
 | 7 | Remote agent on VPS‑2 + tenant move; optional paths.js hygiene | 🟡 hosts UI + per-host token + provision-to-host ✅; move/fan-out ❌ |

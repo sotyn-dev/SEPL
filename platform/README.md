@@ -152,15 +152,17 @@ HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for 
 
 1. **`platform.db` backup/restore** — ✅ zip-only Backups page (see `/backups`)
 2. **Platform audit** — ✅ middleware + `/api/audit` + Audit page
-3. Persist entitlements to `platform.db` + wire Save
-4. Wire platform Create company → agent provision ✅ (host picker + Provision)
-5. Materialize branding/entitlements into tenant mount; ERP consumes contract
+3. **Platform exclusive access (Cloudflare Access)** — ✅ runbook + Docs tab; **ops:** Zero Trust app + email allow list (do **not** remove app login)
+4. Persist entitlements to `platform.db` + wire Save
+5. Wire platform Create company → agent provision ✅ (host picker + Provision)
+6. Materialize branding/entitlements into tenant mount; ERP consumes contract
    (branding durable store + upload UI already live — materialize still pending)
-6. Multi-VPS Deploy fan-out (same button → remote agents)
-7. Nginx map + wildcard `*-erp.sotyn.com` (prod)
+7. Multi-VPS Deploy fan-out (same button → remote agents)
+8. Nginx map + wildcard `*-erp.sotyn.com` (prod)
 
 ## Related
 
+- [`docs/PLATFORM-Cloudflare-Access.md`](../docs/PLATFORM-Cloudflare-Access.md) — **exclusive platform access** (Cloudflare Access; keep JWT login)
 - [`docs/PLATFORM-VPS-deploy.md`](../docs/PLATFORM-VPS-deploy.md) — **production VPS**: platform + agent (PM2, nginx, secrets)
 - [`docs/PHASE4-tenant-model.md`](../docs/PHASE4-tenant-model.md) — architecture decisions
 - Root [`README.md`](../README.md) — tenant Docker Deploy / rollback / prune

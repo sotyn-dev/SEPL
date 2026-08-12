@@ -16,11 +16,14 @@ Day‑1: one VPS runs platform + local agent + Docker orgs (including secured). 
 | Each org ERP | Docker via agent (bind-mount `data/`) |
 
 ```
-Internet → nginx (platform.sotyn.com)
-              ├─ static  → /root/erp/platform/client/dist
-              └─ /api    → 127.0.0.1:7100  (platform)
-                              └─ AGENT_TOKEN → 127.0.0.1:7200  (agent → Docker)
+Operator browser → Cloudflare Access (email OTP / IdP)
+                      → nginx (platform.sotyn.com)  [DNS orange-clouded]
+                           ├─ static  → /root/erp/platform/client/dist
+                           └─ /api    → 127.0.0.1:7100  (platform)
+                                           └─ AGENT_TOKEN → 127.0.0.1:7200  (agent → Docker)
 ```
+
+**Access model:** **Cloudflare Access** gates who can reach the platform. Keep platform JWT login — do not remove app auth. Runbook: [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md).
 
 Do **not** expose the agent on the public internet.
 
@@ -116,6 +119,7 @@ curl -s http://127.0.0.1:7200/v1/health
 - Serve static files from `/root/erp/platform/client/dist`
 - Proxy `/api` to `http://127.0.0.1:7100`
 - TLS (e.g. certbot) as for other Sotyn hosts
+- DNS for this hostname must be **Cloudflare-proxied** (orange cloud) so Access can gate traffic — see [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md)
 
 Example location sketch (adapt to your nginx style):
 
@@ -141,12 +145,23 @@ server {
 }
 ```
 
+### 5b. Cloudflare Access (exclusive platform access)
+
+Before treating platform as production-hardened:
+
+1. Put `platform.sotyn.com` on Cloudflare DNS (proxied).
+2. Zero Trust → Access application + Allow policy (operator emails).
+3. Enable One-time PIN (or your IdP).
+4. Keep platform **login / operators / audit** — Access does not replace app auth.
+
+Runbook: [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md) · platform UI **Docs → Access**.
+
 ### 6. First login
 
-1. Open `https://platform.sotyn.com/login`
-2. Sign in with bootstrap admin
+1. Open `https://platform.sotyn.com` → complete Cloudflare Access (OTP / IdP)
+2. Sign in on platform `/login` with bootstrap admin
 3. **Operators → Set password** — set a strong password immediately
-4. Invite other operators as needed (see platform **Docs → Operators**)
+4. Invite other operators (platform **Docs → Operators**); add their emails to the Access allow list
 
 ---
 
@@ -219,7 +234,8 @@ Image prune/delete is also **per host**. Data/backups on that disk are never del
 | Per-host `agent_token` (falls back to env `AGENT_TOKEN`) | ✅ |
 | Deploy host picker + `hostId` on deploy / images / prune / delete | ✅ |
 | Create company → choose host; optional / later **Provision** via agent | ✅ |
-| Private network / tunnel productization | ❌ (ops: WireGuard / SSH / VPC) |
+| Platform exclusive access (Cloudflare Access runbook) | ✅ docs — [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md); ops in CF dashboard |
+| Private network / tunnel as in-app product | ❌ (infra runbook only; not a platform UI feature) |
 | Auto fan-out (one Deploy → all VPS) | ❌ |
 | Tenant move between VPS | ❌ |
 

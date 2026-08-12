@@ -170,9 +170,9 @@ function MultiVpsDocsHtml() {
             <code className="text-xs bg-slate-50 px-1 rounded"> POST /api/tenants/:slug/provision</code>.
           </li>
           <li>
-            <strong className="font-medium text-amber-800">Still later:</strong> private-network / tunnel as a
-            productized flow (you choose WireGuard / SSH / VPC), auto fan-out Deploy to all VPS, tenant move
-            between hosts.
+            <strong className="font-medium text-amber-800">Still later:</strong> auto fan-out Deploy to all VPS,
+            tenant move between hosts. Platform exclusive access uses Cloudflare Access — see{' '}
+            <Link to="/docs?tab=access" className="text-blue-800 hover:underline">Docs → Access</Link>.
           </li>
           <li>
             When VPS‑2 exists: register it under <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>,
@@ -319,6 +319,85 @@ function BackupsDocsHtml() {
   );
 }
 
+function AccessDocsHtml() {
+  return (
+    <DocCard
+      title="Cloudflare Access — exclusive platform access"
+      blurb={
+        <>
+          Primary gate for the control plane. Browser only (Mac/Windows) — no VPN app.
+          Full runbook: <code className="bg-slate-50 px-1 rounded">docs/PLATFORM-Cloudflare-Access.md</code>.
+          Do <strong className="font-medium text-ink">not</strong> remove platform login — keep JWT / Operators / Audit.
+        </>
+      }
+    >
+      <Section title="Why two layers">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>
+            <strong className="font-medium text-ink">Cloudflare Access</strong> — who can reach the site at all
+            (email OTP / IdP allow list).
+          </li>
+          <li>
+            <strong className="font-medium text-ink">Platform login</strong> — which operator is signed in, invites,
+            deactivate, audit. Already built; leave it on.
+          </li>
+          <li>Tenant ERP URLs stay public. Agent stays on localhost only. Nothing to install in platform npm packages.</li>
+        </ul>
+      </Section>
+
+      <Section title="Prerequisites (once)">
+        <ol className="list-decimal pl-5 space-y-1.5">
+          <li>Domain on Cloudflare DNS; <code className="text-xs bg-slate-50 px-1 rounded">platform.sotyn.com</code> proxied (orange cloud).</li>
+          <li>Platform nginx + TLS on the VPS (see VPS deploy docs).</li>
+          <li>Cloudflare Zero Trust org (free tier OK for ≤50 seats).</li>
+        </ol>
+      </Section>
+
+      <Section title="Cloudflare dashboard">
+        <ol className="list-decimal pl-5 space-y-1.5">
+          <li>Zero Trust → Authentication → enable <strong className="font-medium text-ink">One-time PIN</strong> (simplest).</li>
+          <li>Access → Applications → Add → <strong className="font-medium text-ink">Self-hosted</strong> for <code className="text-xs bg-slate-50 px-1 rounded">platform.sotyn.com</code>.</li>
+          <li>
+            Policy <strong className="font-medium text-ink">Allow</strong> → Include → Emails → your 2–3 operator addresses.
+          </li>
+          <li>Save. Optional later: lock origin firewall to Cloudflare IPs only.</li>
+        </ol>
+      </Section>
+
+      <Section title="Operator day-to-day">
+        <ol className="list-decimal pl-5 space-y-1.5">
+          <li>Open <code className="text-xs bg-slate-50 px-1 rounded">https://platform.sotyn.com</code> in a normal browser.</li>
+          <li>Cloudflare Access: enter email → OTP (or IdP).</li>
+          <li>Then platform <code className="text-xs bg-slate-50 px-1 rounded">/login</code> with username + password.</li>
+        </ol>
+      </Section>
+
+      <Section title="Add / remove an operator">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>
+            <strong className="font-medium text-ink">Add:</strong> put their email on the Access allow list, then invite under{' '}
+            <Link to="/operators" className="text-blue-800 hover:underline">Operators</Link>.
+          </li>
+          <li>
+            <strong className="font-medium text-ink">Remove:</strong> remove email from Access (revoke sessions if needed) +{' '}
+            Operators → Deactivate.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="Smoke test">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>Email not on allow list → cannot pass Access.</li>
+          <li>Allow-listed → OTP → platform login works; wrong platform password still fails.</li>
+          <li>
+            Set <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_PUBLIC_URL=https://platform.sotyn.com</code> for invite/reset links.
+          </li>
+        </ul>
+      </Section>
+    </DocCard>
+  );
+}
+
 function AuditDocsHtml() {
   return (
     <DocCard
@@ -362,6 +441,7 @@ function AuditDocsHtml() {
 const TABS = [
   { id: 'deploy', label: 'Deploy' },
   { id: 'multivps', label: 'Multi‑VPS' },
+  { id: 'access', label: 'Access' },
   { id: 'operators', label: 'Operators' },
   { id: 'backups', label: 'Backups' },
   { id: 'audit', label: 'Audit' },
@@ -404,6 +484,7 @@ export default function DocsPage() {
 
       {tab === 'deploy' && <DeployDocsHtml />}
       {tab === 'multivps' && <MultiVpsDocsHtml />}
+      {tab === 'access' && <AccessDocsHtml />}
       {tab === 'operators' && <OperatorsDocsHtml />}
       {tab === 'backups' && <BackupsDocsHtml />}
       {tab === 'audit' && <AuditDocsHtml />}
