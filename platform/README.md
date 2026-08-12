@@ -158,7 +158,7 @@ HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for 
 5. Wire platform Create company → agent provision ✅ (host picker + Provision)
 6. Materialize branding/entitlements into tenant mount; ERP consumes contract
    (branding durable store + upload UI already live — materialize still pending)
-7. **Tenant container logs in platform (required)** — Overview Logs via agent `docker logs` (replaces PM2 log files for ERP containers)
+7. **Tenant container logs in platform (required)** — ✅ Overview **Container logs** (Load / Refresh → agent `docker logs --tail 200`)
 8. Multi-VPS Deploy fan-out (same button → remote agents)
 9. Nginx map + wildcard `*-erp.sotyn.com` (prod)
 

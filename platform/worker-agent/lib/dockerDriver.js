@@ -734,6 +734,89 @@ function getDeployJob(id) {
   return jobs.getJob(id);
 }
 
+const LOGS_TAIL_DEFAULT = 200;
+const LOGS_TAIL_MAX = 2000;
+
+/** docker logs writes container stdout→CLI stdout and stderr→CLI stderr; merge by timestamp when present. */
+function mergeLogStreams(stdout, stderr) {
+  const parse = (raw) => (raw || '').split(/\r?\n/).filter((l) => l.length > 0);
+  const out = parse(stdout);
+  const err = parse(stderr);
+  if (!err.length) return out;
+  if (!out.length) return err;
+  const ts = (line) => {
+    const m = /^(\d{4}-\d{2}-\d{2}T[^\s]+)/.exec(line);
+    return m ? m[1] : '';
+  };
+  const both = [
+    ...out.map((line) => ({ line, t: ts(line), o: 0 })),
+    ...err.map((line) => ({ line, t: ts(line), o: 1 })),
+  ];
+  both.sort((a, b) => {
+    if (a.t && b.t && a.t !== b.t) return a.t < b.t ? -1 : 1;
+    if (a.t && !b.t) return -1;
+    if (!a.t && b.t) return 1;
+    return a.o - b.o;
+  });
+  return both.map((x) => x.line);
+}
+
+/**
+ * Last N lines of tenant container logs (stdout + stderr).
+ * Fixed day-1 default 200; agent caps at LOGS_TAIL_MAX.
+ */
+function getLogs(slug, { tail } = {}) {
+  const row = state.get(slug);
+  if (!row) {
+    const err = new Error('tenant not found');
+    err.status = 404;
+    throw err;
+  }
+  const avail = dockerAvailable();
+  if (!avail.ok) {
+    const err = new Error(`Docker unavailable: ${avail.error}`);
+    err.status = 503;
+    throw err;
+  }
+
+  let n = Number(tail);
+  if (!Number.isFinite(n) || n < 1) n = LOGS_TAIL_DEFAULT;
+  n = Math.min(LOGS_TAIL_MAX, Math.floor(n));
+
+  const name = row.containerName || containerName(slug);
+  const live = inspectStatus(name);
+  if (!live) {
+    const err = new Error('container not found');
+    err.status = 404;
+    throw err;
+  }
+
+  const r = docker(['logs', '--tail', String(n), '--timestamps', name], {
+    timeout: 20000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (r.error) {
+    const err = new Error(r.error.message);
+    err.status = 502;
+    throw err;
+  }
+  if (r.status !== 0 && !r.stdout && !r.stderr) {
+    const err = new Error(r.stderr || 'docker logs failed');
+    err.status = 502;
+    throw err;
+  }
+
+  const lines = mergeLogStreams(r.stdout, r.stderr);
+  return {
+    slug,
+    containerName: name,
+    containerStatus: live,
+    tail: n,
+    lines,
+    truncated: lines.length >= n,
+  };
+}
+
 module.exports = {
   dockerAvailable,
   provision,
@@ -741,6 +824,7 @@ module.exports = {
   getImportJob,
   listTenants,
   getTenant,
+  getLogs,
   start,
   stop,
   restart,
@@ -752,4 +836,6 @@ module.exports = {
   getDeployJob,
   IMAGE,
   ERP_ENV_FILE,
+  LOGS_TAIL_DEFAULT,
+  LOGS_TAIL_MAX,
 };

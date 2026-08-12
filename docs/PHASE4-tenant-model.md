@@ -242,7 +242,7 @@ Do not run old PM2 and the new container on the same live `data/` at once.
 
 ### Platform ops required (multitenant parity)
 
-4. **Tenant container logs in platform** — **required.** Org Overview (or equivalent) must show per-tenant ERP `docker logs` via worker agent (`GET …/logs` → `docker logs --tail` on that host). Replaces former PM2 `~/.pm2/logs/` access for containerized tenants. Day‑1: last N lines + Refresh; live follow later. Plan: `.cursor/plans/tenant_container_logs_required.plan.md` (local Cursor plan).
+4. **Tenant container logs in platform** — ✅ Org Overview **Container logs**: click Load/Refresh → `GET /api/tenants/:slug/logs` → agent `docker logs --tail 200 --timestamps` on that host. Replaces former PM2 `~/.pm2/logs/` for containerized tenants. No auto-fetch. Live follow later.
 
 ---
 

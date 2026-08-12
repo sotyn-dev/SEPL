@@ -205,6 +205,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { tenant: driver.restart(m.slug) });
     }
 
+    m = match(url, req.method, { method: 'GET', re: /^\/v1\/tenants\/(?<slug>[^/]+)\/logs$/ });
+    if (m) {
+      assertSlug(m.slug);
+      const q = new URL(req.url || '/', 'http://127.0.0.1').searchParams;
+      const tail = q.get('tail');
+      return json(res, 200, driver.getLogs(m.slug, { tail }));
+    }
+
     m = match(url, req.method, { method: 'GET', re: /^\/v1\/tenants\/(?<slug>[^/]+)\/backups$/ });
     if (m) {
       assertSlug(m.slug);

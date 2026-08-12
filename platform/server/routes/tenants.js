@@ -275,6 +275,31 @@ router.post('/:slug/provision', async (req, res) => {
   }
 });
 
+router.get('/:slug/logs', async (req, res) => {
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
+    if (!row) return res.status(404).json({ error: 'Tenant not found' });
+    const hostId = row.host_id || DEFAULT_HOST_ID;
+    const tail = req.query.tail || 200;
+    const { host, data } = await agentFetch(
+      `/v1/tenants/${encodeURIComponent(row.slug)}/logs?tail=${encodeURIComponent(tail)}`,
+      { hostId }
+    );
+    res.json({
+      tenant: rowToTenant(row),
+      hostId: host.id,
+      hostLabel: host.label,
+      ...data,
+    });
+  } catch (e) {
+    res.status(e.status || 502).json({
+      error: e.message || String(e),
+      detail: e.detail,
+    });
+  }
+});
+
 router.get('/:slug/backups', async (req, res) => {
   try {
     const db = getDb();

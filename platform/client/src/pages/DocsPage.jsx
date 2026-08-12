@@ -257,6 +257,11 @@ function DeployDocsHtml() {
             <code className="text-xs bg-slate-50 px-1 rounded">sotyn-erp:&lt;tag&gt;</code> (+{' '}
             <code className="text-xs bg-slate-50 px-1 rounded">:latest</code>), recreates tenant containers, then auto-prunes.
           </li>
+          <li>
+            If a tenant looks down: open that company → Overview → <strong className="font-medium text-ink">Container logs</strong>
+            → <strong className="font-medium text-ink">Load logs</strong> (last 200 lines via agent; replaces SSH{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">docker logs</code> / old PM2 log files for ERP containers).
+          </li>
         </ol>
       </Section>
 

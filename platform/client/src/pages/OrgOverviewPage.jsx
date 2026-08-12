@@ -39,6 +39,10 @@ export default function OrgOverviewPage() {
   const [restoreJob, setRestoreJob] = useState(null);
   const [backupConfirm, setBackupConfirm] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [logsText, setLogsText] = useState(null);
+  const [logsMeta, setLogsMeta] = useState(null);
+  const [logsErr, setLogsErr] = useState('');
+  const [logsLoading, setLogsLoading] = useState(false);
   const pollRef = useRef(null);
 
   const isAdmin = user?.role === 'platform_admin';
@@ -64,6 +68,33 @@ export default function OrgOverviewPage() {
       .finally(() => setBackupsLoading(false));
   };
 
+  const loadLogs = () => {
+    setLogsErr('');
+    setLogsLoading(true);
+    api(`/api/tenants/${slug}/logs?tail=200`)
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Failed to load logs');
+        const lines = Array.isArray(d.lines) ? d.lines : [];
+        setLogsText(lines.length ? lines.join('\n') : '(no log lines)');
+        setLogsMeta({
+          hostId: d.hostId,
+          hostLabel: d.hostLabel,
+          containerName: d.containerName,
+          containerStatus: d.containerStatus,
+          tail: d.tail || 200,
+          truncated: !!d.truncated,
+          fetchedAt: new Date(),
+        });
+      })
+      .catch((e) => {
+        setLogsText(null);
+        setLogsMeta(null);
+        setLogsErr(String(e.message || e));
+      })
+      .finally(() => setLogsLoading(false));
+  };
+
   useEffect(() => {
     setError('');
     setHostMsg('');
@@ -72,6 +103,9 @@ export default function OrgOverviewPage() {
     setRestoreMsg('');
     setRestoreErr('');
     setRestoreJob(null);
+    setLogsText(null);
+    setLogsMeta(null);
+    setLogsErr('');
     stopPoll();
     api('/api/auth/me')
       .then(async (r) => {
@@ -381,6 +415,54 @@ export default function OrgOverviewPage() {
             </a>
           </p>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-ink">Container logs</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Last 200 lines via worker agent (<code className="text-[10px] bg-slate-50 px-1 rounded">docker logs</code>).
+              Click to fetch — nothing loads until then.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={loadLogs}
+            disabled={logsLoading || actionBusy}
+            className="text-xs px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+          >
+            {logsLoading ? 'Loading…' : logsText != null ? 'Refresh' : 'Load logs'}
+          </button>
+        </div>
+        {logsMeta && (
+          <p className="text-[11px] font-mono text-slate-500 break-all">
+            {logsMeta.containerName}
+            {logsMeta.containerStatus ? ` · ${logsMeta.containerStatus}` : ''}
+            {logsMeta.hostLabel || logsMeta.hostId
+              ? ` · ${logsMeta.hostLabel || logsMeta.hostId}`
+              : ''}
+            {` · tail ${logsMeta.tail}`}
+            {logsMeta.truncated ? ' · truncated' : ''}
+            {logsMeta.fetchedAt
+              ? ` · ${logsMeta.fetchedAt.toLocaleTimeString()}`
+              : ''}
+          </p>
+        )}
+        {logsErr && (
+          <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{logsErr}</p>
+        )}
+        {logsText != null ? (
+          <pre className="max-h-80 overflow-auto rounded-lg border border-slate-100 bg-slate-950 text-slate-100 text-[11px] leading-relaxed p-3 whitespace-pre-wrap break-all">
+            {logsText}
+          </pre>
+        ) : (
+          !logsErr && (
+            <p className="text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg px-3 py-6 text-center">
+              No logs loaded yet.
+            </p>
+          )
+        )}
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
