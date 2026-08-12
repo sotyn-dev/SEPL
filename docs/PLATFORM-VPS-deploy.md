@@ -4,6 +4,8 @@ Control plane and agent run as **host Node processes** (PM2 / systemd). They are
 
 Day‑1: one VPS runs platform + local agent + Docker orgs (including secured). See also [`PHASE4-tenant-model.md`](./PHASE4-tenant-model.md) and root [`README.md`](../README.md) for tenant image Deploy / rollback.
 
+**In the platform UI:** **Docs → Env** (same instructions as § Env files below) · **Docs → Multi‑VPS** · **Docs → Deploy**.
+
 ---
 
 ## Architecture (what runs where)
@@ -42,13 +44,23 @@ git pull origin main
 mkdir -p /var/lib/sotyn/platform /var/lib/sotyn/tenants
 ```
 
-### 2. Platform env
+### 2. Env files (platform + agent) — clear day‑1 example
+
+Same content as platform UI **Docs → Env**. Two files on **VPS‑A** — not the same file.
 
 ```bash
 cp platform/.env.example platform/.env
+cp platform/agent.env.example platform/agent.env
 ```
 
-Edit `platform/.env` (generate secrets with `openssl rand -hex 32`):
+Generate two secrets:
+
+```bash
+openssl rand -hex 32   # → PLATFORM_JWT_SECRET
+openssl rand -hex 32   # → AGENT_TOKEN (same value in BOTH files below)
+```
+
+#### A) `platform/.env` (control plane only)
 
 ```bash
 PLATFORM_PORT=7100
@@ -56,7 +68,7 @@ PLATFORM_DATA_DIR=/var/lib/sotyn/platform
 PLATFORM_ADMIN_USER=admin
 PLATFORM_ADMIN_PASSWORD='strong-password-first-boot-only'
 PLATFORM_ADMIN_EMAIL=sotyn.soft@gmail.com
-PLATFORM_JWT_SECRET='paste-openssl-rand-hex-32'
+PLATFORM_JWT_SECRET='paste-first-openssl-rand-hex-32'
 PLATFORM_PUBLIC_URL=https://platform.sotyn.com
 
 # Optional — invite / forgot-password email (Gmail app password etc.)
@@ -66,16 +78,42 @@ PLATFORM_PUBLIC_URL=https://platform.sotyn.com
 # PLATFORM_SMTP_PASS='app-password'
 # PLATFORM_EMAIL_FROM='Sotyn Platform <sotyn.soft@gmail.com>'
 
+# How platform reaches the LOCAL agent on this same VPS
 AGENT_URL=http://127.0.0.1:7200
-AGENT_TOKEN='paste-another-openssl-rand-hex-32'
+AGENT_TOKEN='paste-second-openssl-rand-hex-32'
 ```
+
+#### B) `platform/agent.env` (worker agent only)
+
+Uncommented lines are required. Leave `LEGACY_*` commented until cutover.
+
+```bash
+# Must match platform/.env AGENT_TOKEN on day‑1 (same VPS)
+AGENT_TOKEN='paste-second-openssl-rand-hex-32'
+HOST_ID=host_local
+TENANTS_ROOT=/var/lib/sotyn/tenants
+ERP_ENV_FILE=/root/erp/.env
+
+# One-shot cutover only — leave commented for normal provision
+# LEGACY_IMPORT_SLUG=sepl
+# LEGACY_DATA_DIR=/root/erp/data
+# LEGACY_BACKUP_DIR=/root/erp-backups
+```
+
+| File | Who reads it | Purpose |
+|---|---|---|
+| `platform/.env` | Platform API (`sotyn-platform`) | Login, JWT, SMTP, DB path, default agent URL/token |
+| `platform/agent.env` | Worker agent (`sotyn-agent`) | Token check, tenants disk, ERP `--env-file`, optional legacy rsync |
+| `/root/erp/.env` | ERP containers (`ERP_ENV_FILE`) | JWT/SMTP/S3 for tenant apps — **not** platform/agent secrets |
 
 Notes:
 
+- `AGENT_TOKEN` on day‑1 **must match** in `platform/.env` and `platform/agent.env`.
 - `PLATFORM_ADMIN_PASSWORD` only seeds admin when `platform_users` is empty (first boot). After that use **Operators → Set password** or login **Forgot password** (needs SMTP + admin email).
 - `PLATFORM_ADMIN_EMAIL` defaults to `sotyn.soft@gmail.com` (also backfilled when empty on existing DBs).
 - `PLATFORM_JWT_SECRET` is a random string you invent — not downloaded from a service. Prefer setting it **before** first start so it is not locked to the weak default in `platform.db`.
 - This is **not** the ERP `JWT_SECRET` in `/root/erp/.env`.
+- After any edit to `agent.env`: `pm2 restart sotyn-agent`. After edits to `platform/.env`: `pm2 restart sotyn-platform`.
 
 ### 3. Install + build UI
 
@@ -87,30 +125,42 @@ cd client && npm run build && cd ../..
 
 ### 4. Start API + agent (PM2)
 
-Use the **same** `AGENT_TOKEN` as in `platform/.env`.
-
 ```bash
 cd /root/erp
 
 # Platform API — loads platform/.env
 pm2 start platform/server/index.js --name sotyn-platform
 
-# Worker agent — localhost; needs Docker. Prefer env file:
-#   cp platform/agent.env.example platform/agent.env   # edit once
-#   pm2 start platform/worker-agent/index.js --name sotyn-agent
-#   # later: edit agent.env → pm2 restart sotyn-agent
+# Worker agent — loads platform/agent.env; needs Docker
 pm2 start platform/worker-agent/index.js --name sotyn-agent
 
 pm2 save
 pm2 status
 ```
 
-**sepl / orphan one-shot:** in `platform/agent.env` set `LEGACY_IMPORT_SLUG`, `LEGACY_DATA_DIR`, `LEGACY_BACKUP_DIR` → `pm2 restart sotyn-agent` → downtime → Companies **Rsync from legacy & provision** → remove `LEGACY_IMPORT_SLUG` from the file → restart again.Health checks:
+`sotyn-platform` / `sotyn-agent` are only **PM2 nicknames** (`--name`), not host ids.
+
+Health checks:
 
 ```bash
 curl -s http://127.0.0.1:7100/api/health
 curl -s http://127.0.0.1:7200/v1/health
 ```
+
+### 4b. sepl / orphan one-shot (optional)
+
+Only when cutting over old PM2 data into `tenants/{slug}/`:
+
+1. Edit `platform/agent.env` — uncomment and set:
+   ```bash
+   LEGACY_IMPORT_SLUG=sepl
+   LEGACY_DATA_DIR=/root/erp/data
+   LEGACY_BACKUP_DIR=/root/erp-backups
+   ```
+2. `pm2 restart sotyn-agent`
+3. Stop old PM2 ERP (downtime)
+4. Platform → Companies → draft matching that slug → **Rsync from legacy & provision**
+5. Comment out / remove `LEGACY_IMPORT_SLUG` → `pm2 restart sotyn-agent` again
 
 ### 5. nginx — `platform.sotyn.com`
 
@@ -201,17 +251,37 @@ Details: root [`README.md`](../README.md) · platform UI **Docs → Deploy**.
 
 ## Multi-VPS (adding a worker box)
 
-**Platform stays on VPS‑1.** A new VPS is **agent + Docker tenants only** — same agent API, called remotely from the platform.
+**Platform stays on VPS‑A.** Extra boxes run **agent + Docker tenants only**.
 
-### One-time: stand up VPS‑2
+### Clear example — tokens & files
+
+| Location | File / UI | Example values |
+|---|---|---|
+| **VPS‑A** platform | `platform/.env` | `AGENT_TOKEN=token-a` · `AGENT_URL=http://127.0.0.1:7200` |
+| **VPS‑A** agent | `platform/agent.env` | `AGENT_TOKEN=token-a` · `HOST_ID=host_local` |
+| **VPS‑B** agent | `platform/agent.env` | `AGENT_TOKEN=token-b` · `HOST_ID=host_vps_b` |
+| **Platform UI → Hosts** (stored in `platform.db` on A) | Register host | see table below |
+
+**Hosts UI — fill for VPS‑B:**
+
+| Field | Example |
+|---|---|
+| Host id | `host_vps_b` |
+| Label | `VPS B` |
+| Agent URL | `http://VPS_B_PRIVATE_IP:7200` (must be reachable from A; agent is localhost-only until you open private access) |
+| Agent token | `token-b` (same as B’s `agent.env`) |
+
+No `platform/.env` on B/C — only `agent.env` + Docker. Same tables in UI **Docs → Env** / **Docs → Multi‑VPS**.
+
+### One-time: stand up VPS‑B
 
 1. Install Docker; clone the monorepo (image build context — platform app not required on this box).
-2. Run **worker agent** (PM2) from `platform/agent.env` (copy `agent.env.example`). Edit that file for tokens / one-shot `LEGACY_*`, then `pm2 restart sotyn-agent`.
-3. Register that host in platform UI **Hosts** (id, label, reachable `agent_url`, optional per-host token).
+2. `cp platform/agent.env.example platform/agent.env` → set `AGENT_TOKEN` / `HOST_ID` / paths → `pm2 start … --name sotyn-agent` (later: `pm2 restart sotyn-agent`).
+3. Register that host in platform UI **Hosts** (table above).
 4. Nginx / edge: `{slug}-erp…` → that box’s published container ports.
-5. **Companies → New company** → pick that host → Provision (or draft then Provision).
+5. **Companies → New company** → pick that host → Provision (or draft then Provision / legacy rsync).
 
-Secured usually stays on VPS‑1; new orgs land on VPS‑2 when capacity needs it.
+Secured / sepl usually stays on VPS‑A; new orgs land on VPS‑B when capacity needs it.
 
 ### Everyday code deploy (each VPS, separately)
 

@@ -22,6 +22,210 @@ function Section({ title, children }) {
   );
 }
 
+function CodeBlock({ children }) {
+  return (
+    <pre className="text-xs bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap font-mono text-slate-800">
+      {children}
+    </pre>
+  );
+}
+
+function EnvDocsHtml() {
+  return (
+    <DocCard
+      title="Platform & agent env"
+      blurb={
+        <>
+          Two files on the VPS — not the same. Day‑1 Hostinger box runs both.
+          Markdown twin: <code className="bg-slate-50 px-1 rounded">docs/PLATFORM-VPS-deploy.md</code>.
+        </>
+      }
+    >
+      <Section title="Create the files">
+        <CodeBlock>{`cp platform/.env.example platform/.env
+cp platform/agent.env.example platform/agent.env
+
+openssl rand -hex 32   # → PLATFORM_JWT_SECRET
+openssl rand -hex 32   # → AGENT_TOKEN (same value in BOTH files on day‑1)`}</CodeBlock>
+      </Section>
+
+      <Section title="A) platform/.env — control plane only">
+        <p className="text-slate-600 text-xs">
+          Read by <code className="bg-slate-50 px-1 rounded">sotyn-platform</code> (PM2). After edit:{' '}
+          <code className="bg-slate-50 px-1 rounded">pm2 restart sotyn-platform</code>.
+        </p>
+        <CodeBlock>{`PLATFORM_PORT=7100
+PLATFORM_DATA_DIR=/var/lib/sotyn/platform
+PLATFORM_ADMIN_USER=admin
+PLATFORM_ADMIN_PASSWORD='strong-password-first-boot-only'
+PLATFORM_ADMIN_EMAIL=sotyn.soft@gmail.com
+PLATFORM_JWT_SECRET='paste-first-openssl-rand-hex-32'
+PLATFORM_PUBLIC_URL=https://platform.sotyn.com
+
+# Optional SMTP for invite / forgot-password
+# PLATFORM_SMTP_HOST=smtp.gmail.com
+# PLATFORM_SMTP_PORT=587
+# PLATFORM_SMTP_USER=sotyn.soft@gmail.com
+# PLATFORM_SMTP_PASS='app-password'
+# PLATFORM_EMAIL_FROM='Sotyn Platform <sotyn.soft@gmail.com>'
+
+AGENT_URL=http://127.0.0.1:7200
+AGENT_TOKEN='paste-second-openssl-rand-hex-32'`}</CodeBlock>
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600 mt-2">
+          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded">AGENT_TOKEN</code> here is the default for{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">host_local</code> / hosts with no stored token.
+          </li>
+          <li>
+            Admin password seeds only on first boot (empty users table). Then use{' '}
+            <Link to="/operators" className="text-blue-800 hover:underline">Operators → Set password</Link>.
+          </li>
+          <li>
+            Not the ERP <code className="text-xs bg-slate-50 px-1 rounded">JWT_SECRET</code> in{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">/root/erp/.env</code>.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="B) platform/agent.env — worker agent only">
+        <p className="text-slate-600 text-xs">
+          Read by <code className="bg-slate-50 px-1 rounded">sotyn-agent</code>. Uncommented lines required.
+          Leave <code className="bg-slate-50 px-1 rounded">LEGACY_*</code> commented until cutover. After edit:{' '}
+          <code className="bg-slate-50 px-1 rounded">pm2 restart sotyn-agent</code>.
+        </p>
+        <CodeBlock>{`AGENT_TOKEN='paste-second-openssl-rand-hex-32'
+HOST_ID=host_local
+TENANTS_ROOT=/var/lib/sotyn/tenants
+ERP_ENV_FILE=/root/erp/.env
+
+# One-shot cutover only — leave commented for normal provision
+# LEGACY_IMPORT_SLUG=sepl
+# LEGACY_DATA_DIR=/root/erp/data
+# LEGACY_BACKUP_DIR=/root/erp-backups`}</CodeBlock>
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600 mt-2">
+          <li>
+            Day‑1: <code className="text-xs bg-slate-50 px-1 rounded">AGENT_TOKEN</code> must match{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">platform/.env</code>.
+          </li>
+          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded">ERP_ENV_FILE</code> is the tenant ERP secrets file
+            (JWT/SMTP/S3) passed into Docker — not platform secrets, and not legacy data paths.
+          </li>
+          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-agent</code> is only the PM2 nickname (
+            <code className="text-xs bg-slate-50 px-1 rounded">--name</code>), not a host id.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="Which file is which">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left min-w-[28rem]">
+            <thead>
+              <tr className="text-slate-500 border-b border-slate-100">
+                <th className="py-1.5 pr-3 font-semibold">File</th>
+                <th className="py-1.5 pr-3 font-semibold">Who reads it</th>
+                <th className="py-1.5 font-semibold">Purpose</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-700">
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">platform/.env</td>
+                <td className="py-1.5 pr-3">Platform API</td>
+                <td className="py-1.5">Login, JWT, SMTP, DB path, default agent URL/token</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">platform/agent.env</td>
+                <td className="py-1.5 pr-3">Worker agent</td>
+                <td className="py-1.5">Token check, tenants disk, ERP env-file, optional legacy rsync</td>
+              </tr>
+              <tr>
+                <td className="py-1.5 pr-3 font-mono">/root/erp/.env</td>
+                <td className="py-1.5 pr-3">ERP containers</td>
+                <td className="py-1.5">Tenant app secrets via ERP_ENV_FILE</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
+      <Section title="Start (PM2)">
+        <CodeBlock>{`cd /root/erp
+pm2 start platform/server/index.js --name sotyn-platform
+pm2 start platform/worker-agent/index.js --name sotyn-agent
+pm2 save
+
+curl -s http://127.0.0.1:7100/api/health
+curl -s http://127.0.0.1:7200/v1/health`}</CodeBlock>
+      </Section>
+
+      <Section title="Multi-VPS tokens (clear example)">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left min-w-[32rem]">
+            <thead>
+              <tr className="text-slate-500 border-b border-slate-100">
+                <th className="py-1.5 pr-3 font-semibold">Location</th>
+                <th className="py-1.5 pr-3 font-semibold">File / UI</th>
+                <th className="py-1.5 font-semibold">Example</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-700">
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3">VPS‑A platform</td>
+                <td className="py-1.5 pr-3 font-mono">platform/.env</td>
+                <td className="py-1.5 font-mono">AGENT_TOKEN=token-a</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3">VPS‑A agent</td>
+                <td className="py-1.5 pr-3 font-mono">platform/agent.env</td>
+                <td className="py-1.5 font-mono">AGENT_TOKEN=token-a · HOST_ID=host_local</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3">VPS‑B agent</td>
+                <td className="py-1.5 pr-3 font-mono">platform/agent.env</td>
+                <td className="py-1.5 font-mono">AGENT_TOKEN=token-b · HOST_ID=host_vps_b</td>
+              </tr>
+              <tr>
+                <td className="py-1.5 pr-3">Platform UI</td>
+                <td className="py-1.5 pr-3">
+                  <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>
+                </td>
+                <td className="py-1.5">Register B with URL + token-b (see Multi‑VPS tab)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="text-slate-600 text-xs mt-2">
+          No <code className="bg-slate-50 px-1 rounded">platform/.env</code> on B/C — agent only. Details:{' '}
+          <Link to="/docs?tab=multivps" className="text-blue-800 hover:underline">Docs → Multi‑VPS</Link>.
+        </p>
+      </Section>
+
+      <Section title="sepl / orphan one-shot (optional)">
+        <ol className="list-decimal pl-5 space-y-1.5">
+          <li>
+            In <code className="text-xs bg-slate-50 px-1 rounded">agent.env</code> uncomment:
+            <CodeBlock>{`LEGACY_IMPORT_SLUG=sepl
+LEGACY_DATA_DIR=/root/erp/data
+LEGACY_BACKUP_DIR=/root/erp-backups`}</CodeBlock>
+          </li>
+          <li><code className="text-xs bg-slate-50 px-1 rounded">pm2 restart sotyn-agent</code></li>
+          <li>Stop old PM2 ERP (downtime).</li>
+          <li>
+            <Link to="/orgs" className="text-blue-800 hover:underline">Companies</Link> → draft matching that slug →{' '}
+            <strong className="font-medium text-ink">Rsync from legacy &amp; provision</strong>.
+          </li>
+          <li>Comment out <code className="text-xs bg-slate-50 px-1 rounded">LEGACY_IMPORT_SLUG</code> → restart agent again.</li>
+        </ol>
+        <p className="text-slate-600 text-xs mt-2">
+          Those paths are the old PM2 folders (defaults when <code className="bg-slate-50 px-1 rounded">ERP_BACKUP_DIR</code>{' '}
+          was unset). They are not read from ERP <code className="bg-slate-50 px-1 rounded">.env</code>.
+        </p>
+      </Section>
+    </DocCard>
+  );
+}
+
 function DeployDocsHtml() {
   return (
     <DocCard
@@ -105,19 +309,20 @@ function MultiVpsDocsHtml() {
       title="Multi-VPS (worker hosts)"
       blurb={
         <>
-          Platform stays on VPS‑1. Extra VPS boxes run <strong className="font-medium text-ink">agent + Docker tenants only</strong>.
-          Same Deploy UI; operations are always host-scoped.
+          Platform stays on VPS‑A. Extra boxes run <strong className="font-medium text-ink">agent + Docker tenants only</strong>.
+          Env files / tokens: <Link to="/docs?tab=env" className="text-blue-800 hover:underline">Docs → Env</Link>.
+          Operations are always host-scoped.
         </>
       }
     >
       <Section title="What runs where">
         <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
           <li>
-            <strong className="font-medium text-ink">VPS‑1:</strong> platform API/UI + local agent + usually secured
+            <strong className="font-medium text-ink">VPS‑A:</strong> platform API/UI + local agent + usually sepl/secured
             (+ a few orgs).
           </li>
           <li>
-            <strong className="font-medium text-ink">VPS‑2+:</strong> worker agent + tenant containers + that host’s{' '}
+            <strong className="font-medium text-ink">VPS‑B+:</strong> worker agent + tenant containers + that host’s{' '}
             <code className="text-xs bg-slate-50 px-1 rounded">data/</code> and{' '}
             <code className="text-xs bg-slate-50 px-1 rounded">backups/</code> — no second platform.
           </li>
@@ -125,18 +330,57 @@ function MultiVpsDocsHtml() {
         </ul>
       </Section>
 
+      <Section title="Hosts UI — what to fill for VPS‑B">
+        <p className="text-slate-600 text-xs mb-2">
+          Open <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link> → Register host.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left min-w-[28rem]">
+            <thead>
+              <tr className="text-slate-500 border-b border-slate-100">
+                <th className="py-1.5 pr-3 font-semibold">Field</th>
+                <th className="py-1.5 font-semibold">Example</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-700">
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3">Host id</td>
+                <td className="py-1.5 font-mono">host_vps_b</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3">Label</td>
+                <td className="py-1.5">VPS B</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3">Agent URL</td>
+                <td className="py-1.5 font-mono">http://VPS_B_PRIVATE_IP:7200</td>
+              </tr>
+              <tr>
+                <td className="py-1.5 pr-3">Agent token</td>
+                <td className="py-1.5 font-mono">token-b</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="text-slate-600 text-xs mt-2">
+          Agent token must match B’s <code className="bg-slate-50 px-1 rounded">agent.env</code>. Use{' '}
+          <code className="bg-slate-50 px-1 rounded">http://</code> (not https). Same-VPS agent uses{' '}
+          <code className="bg-slate-50 px-1 rounded">http://127.0.0.1:7200</code>.
+          Agent currently listens on localhost only — remote IP needs private reachability first.
+        </p>
+      </Section>
+
       <Section title="One-time: stand up a new worker VPS">
         <ol className="list-decimal pl-5 space-y-1.5">
           <li>Install Docker; clone the monorepo (build context for <code className="text-xs bg-slate-50 px-1 rounded">sotyn-erp</code> images).</li>
           <li>
-            Run the worker agent (PM2) with its own <code className="text-xs bg-slate-50 px-1 rounded">HOST_ID</code>,
-            matching <code className="text-xs bg-slate-50 px-1 rounded">AGENT_TOKEN</code>,{' '}
-            <code className="text-xs bg-slate-50 px-1 rounded">TENANTS_ROOT</code>,{' '}
-            <code className="text-xs bg-slate-50 px-1 rounded">ERP_ENV_FILE</code>.
+            <code className="text-xs bg-slate-50 px-1 rounded">cp platform/agent.env.example platform/agent.env</code>
+            {' '}→ set token / <code className="text-xs bg-slate-50 px-1 rounded">HOST_ID</code> / paths → PM2 start agent
+            (see <Link to="/docs?tab=env" className="text-blue-800 hover:underline">Env</Link>).
           </li>
           <li>
             Register that host in platform <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>
-            {' '}(id, label, agent URL, optional token) so Deploy / provision can reach it.
+            {' '}(table above) so Deploy / provision can reach it.
           </li>
           <li>Nginx / edge: route <code className="text-xs bg-slate-50 px-1 rounded">{'{slug}'}-erp…</code> → that box’s container ports.</li>
           <li>Provision orgs onto that host via platform → agent → Docker + bind mounts.</li>
@@ -175,7 +419,7 @@ function MultiVpsDocsHtml() {
             <Link to="/docs?tab=access" className="text-blue-800 hover:underline">Docs → Access</Link>.
           </li>
           <li>
-            When VPS‑2 exists: register it under <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>,
+            When VPS‑B exists: register it under <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>,
             Health-check, then create/provision orgs onto that host id.
           </li>
         </ul>
@@ -439,6 +683,7 @@ function AuditDocsHtml() {
 }
 
 const TABS = [
+  { id: 'env', label: 'Env' },
   { id: 'deploy', label: 'Deploy' },
   { id: 'multivps', label: 'Multi‑VPS' },
   { id: 'access', label: 'Access' },
@@ -450,8 +695,8 @@ const TABS = [
 export default function DocsPage() {
   const [params, setParams] = useSearchParams();
   const tab = useMemo(() => {
-    const t = params.get('tab') || 'deploy';
-    return TABS.some((x) => x.id === t) ? t : 'deploy';
+    const t = params.get('tab') || 'env';
+    return TABS.some((x) => x.id === t) ? t : 'env';
   }, [params]);
 
   return (
@@ -463,15 +708,15 @@ export default function DocsPage() {
         </p>
       </div>
 
-      <div className="border-b border-slate-200 flex gap-1" role="tablist" aria-label="Documentation sections">
+      <div className="border-b border-slate-200 flex gap-1 overflow-x-auto" role="tablist" aria-label="Documentation sections">
         {TABS.map((t) => (
           <button
             key={t.id}
             type="button"
             role="tab"
             aria-selected={tab === t.id}
-            onClick={() => setParams(t.id === 'deploy' ? {} : { tab: t.id })}
-            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            onClick={() => setParams(t.id === 'env' ? {} : { tab: t.id })}
+            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
               tab === t.id
                 ? 'border-blue-800 text-blue-900'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -482,6 +727,7 @@ export default function DocsPage() {
         ))}
       </div>
 
+      {tab === 'env' && <EnvDocsHtml />}
       {tab === 'deploy' && <DeployDocsHtml />}
       {tab === 'multivps' && <MultiVpsDocsHtml />}
       {tab === 'access' && <AccessDocsHtml />}
