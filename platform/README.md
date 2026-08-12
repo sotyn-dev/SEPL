@@ -111,12 +111,12 @@ Full Docker build/run procedure: root [`README.md`](../README.md).
 
 | Slug | Host data → `/app/data` | Host backups → `/app/backups` |
 |---|---|---|
-| `secured` | `SECURED_DATA_PATH` or `<repo>/data` | `SECURED_BACKUP_PATH` or `<repo>/backups` |
+| `secured` | `SECURED_DATA_PATH` or `<repo>/data` (**agent** env) | `SECURED_BACKUP_PATH` or `<repo>/backups` |
 | other | `<repo>/tenants/{slug}/data` | `<repo>/tenants/{slug}/backups` |
 
 Host ports **5101–5199** → container `5000`. Container name: `sotyn-tenant-{slug}`. Runtime registry: `tenants/.agent/runtimes.json` (gitignored under `/tenants/`).
 
-Prod overrides: `SECURED_DATA_PATH=/root/erp/data`, `SECURED_BACKUP_PATH=/root/erp-backups`, `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.
+Prod agent overrides: `SECURED_DATA_PATH=/root/erp/data`, `SECURED_BACKUP_PATH=/root/erp-backups`, `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.
 
 ## Routes — live vs pencil
 

@@ -64,6 +64,7 @@ function openDb() {
       status TEXT NOT NULL DEFAULT 'draft',
       host_id TEXT REFERENCES hosts(id),
       data_path TEXT,
+      backup_path TEXT,
       s3_key_prefix TEXT,
       tenant_class TEXT NOT NULL DEFAULT 'mepf_erp',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -133,6 +134,14 @@ function openDb() {
   } catch (_) {
     /* ignore */
   }
+  try {
+    const tenantCols = db.prepare('PRAGMA table_info(tenants)').all().map((c) => c.name);
+    if (!tenantCols.includes('backup_path')) {
+      db.exec('ALTER TABLE tenants ADD COLUMN backup_path TEXT');
+    }
+  } catch (_) {
+    /* ignore */
+  }
   return db;
 }
 
@@ -180,8 +189,16 @@ function seedAdmin(db) {
 }
 
 function seedSecured(db) {
-  const existing = db.prepare('SELECT id FROM tenants WHERE slug = ?').get('secured');
-  if (existing) return existing.id;
+  const existing = db.prepare('SELECT id, backup_path FROM tenants WHERE slug = ?').get('secured');
+  if (existing) {
+    if (!existing.backup_path) {
+      db.prepare('UPDATE tenants SET backup_path = ? WHERE id = ?').run(
+        '/root/erp-backups',
+        existing.id,
+      );
+    }
+    return existing.id;
+  }
 
   const brandingPath = path.join(SEED_ROOT, 'secured', 'branding.json');
   if (!fs.existsSync(brandingPath)) {
@@ -204,16 +221,18 @@ function seedSecured(db) {
     'local'
   );
 
+  // Convention paths for registry display; real mounts come from the worker agent (SECURED_* there).
   db.prepare(`
-    INSERT INTO tenants (id, slug, display_name, status, host_id, data_path, s3_key_prefix, tenant_class)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tenants (id, slug, display_name, status, host_id, data_path, backup_path, s3_key_prefix, tenant_class)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     'secured',
     b.displayName || 'Secured Engineers',
     'live',
     hostId,
-    process.env.SECURED_DATA_PATH || '/root/erp/data',
+    '/root/erp/data',
+    '/root/erp-backups',
     'secured',
     'mepf_erp'
   );

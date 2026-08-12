@@ -15,6 +15,7 @@ function rowToTenant(row) {
     status: row.status,
     hostId: row.host_id,
     dataPath: row.data_path,
+    backupPath: row.backup_path,
     s3KeyPrefix: row.s3_key_prefix,
     tenantClass: row.tenant_class,
     hostname: `${row.slug}-erp.sotyn.com`,
@@ -61,8 +62,8 @@ router.post('/', async (req, res) => {
 
   const id = `tenant_${slug}`;
   db.prepare(`
-    INSERT INTO tenants (id, slug, display_name, status, host_id, s3_key_prefix, tenant_class, data_path)
-    VALUES (?, ?, ?, 'draft', ?, ?, ?, ?)
+    INSERT INTO tenants (id, slug, display_name, status, host_id, data_path, backup_path, s3_key_prefix, tenant_class)
+    VALUES (?, ?, ?, 'draft', ?, NULL, NULL, ?, ?)
   `).run(
     id,
     slug,
@@ -70,7 +71,6 @@ router.post('/', async (req, res) => {
     host.id,
     slug,
     tenantClass,
-    null,
   );
   db.prepare(`
     INSERT INTO tenant_branding (tenant_id, display_name, show_powered_by)
@@ -98,9 +98,7 @@ router.post('/', async (req, res) => {
   res.status(201).json({ tenant: rowToTenant(row), agent });
 });
 
-/**
- * Call worker agent to create the Docker tenant on the org's assigned host.
- */
+/** Call worker agent to create the Docker tenant on the org's assigned host. */
 async function provisionOnHost(tenantRow) {
   const db = getDb();
   const hostId = tenantRow.host_id || DEFAULT_HOST_ID;
@@ -111,11 +109,15 @@ async function provisionOnHost(tenantRow) {
   });
 
   const dataPath = data.dataPath || data.data_path || null;
+  const backupPath = data.backupPath || data.backup_path || null;
   db.prepare(`
     UPDATE tenants
-    SET status = 'live', data_path = COALESCE(?, data_path), updated_at = datetime('now')
+    SET status = 'live',
+        data_path = COALESCE(?, data_path),
+        backup_path = COALESCE(?, backup_path),
+        updated_at = datetime('now')
     WHERE id = ?
-  `).run(dataPath, tenantRow.id);
+  `).run(dataPath, backupPath, tenantRow.id);
 
   const row = db.prepare('SELECT * FROM tenants WHERE id = ?').get(tenantRow.id);
   return {
