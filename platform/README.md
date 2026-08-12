@@ -116,7 +116,6 @@ Full Docker build/run procedure: root [`README.md`](../README.md).
 Host ports **5101–5199** → container `5000`. Container name: `sotyn-tenant-{slug}`. Runtime registry: `tenants/.agent/runtimes.json` (gitignored under `/tenants/`).
 
 Prod agent overrides: `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.
-
 ## Routes — live vs pencil
 
 | Route | Status |
@@ -157,8 +156,9 @@ HTML sketches remain at `docs/multitenancy/super-admin-panel-sketches.html` for 
 5. Wire platform Create company → agent provision ✅ (host picker + Provision)
 6. Materialize branding/entitlements into tenant mount; ERP consumes contract
    (branding durable store + upload UI already live — materialize still pending)
-7. Multi-VPS Deploy fan-out (same button → remote agents)
-8. Nginx map + wildcard `*-erp.sotyn.com` (prod)
+7. **Tenant container logs in platform (required)** — Overview Logs via agent `docker logs` (replaces PM2 log files for ERP containers)
+8. Multi-VPS Deploy fan-out (same button → remote agents)
+9. Nginx map + wildcard `*-erp.sotyn.com` (prod)
 
 ## Related
 

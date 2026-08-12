@@ -240,6 +240,10 @@ Do not run old PM2 and the new container on the same live `data/` at once.
 2. **Fail loud migrations** — stop bare `catch {}` on ALTER / rebuilds; only swallow “already applied”  
 3. **Canary rollout** — after secured is on Docker, first *new* org is one Docker tenant; verify before onboarding more  
 
+### Platform ops required (multitenant parity)
+
+4. **Tenant container logs in platform** — **required.** Org Overview (or equivalent) must show per-tenant ERP `docker logs` via worker agent (`GET …/logs` → `docker logs --tail` on that host). Replaces former PM2 `~/.pm2/logs/` access for containerized tenants. Day‑1: last N lines + Refresh; live follow later. Plan: `.cursor/plans/tenant_container_logs_required.plan.md` (local Cursor plan).
+
 ---
 
 ## Control plane / entitlements (ideation — not built)
