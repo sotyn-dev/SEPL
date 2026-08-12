@@ -10,7 +10,7 @@ Boilerplate for `platform.sotyn.com` — org registry, white-label Brand (live),
 |---|---|---|
 | **A. Everyday** | Code secured / platform UI | `npm run platform` / ERP `npm run server` — **no Docker** |
 | **B. Multitenant smoke** | 2nd org / secured cutover rehearsal | Docker Desktop + `npm run platform:agent` → agent `docker run` with bind-mounts |
-| **C. Prod day 1** | VPS | All tenant ERPs in Docker incl. **secured** (bind existing `/root/erp/data` — **no move**) |
+| **C. Prod day 1** | VPS | All tenant ERPs in Docker under `TENANTS_ROOT/{slug}/` |
 
 No ERP `DATA_DIR` / DB-opener surgery — isolation is bind-mounts onto container `/app/data` and `/app/backups`.
 
@@ -20,7 +20,7 @@ No ERP `DATA_DIR` / DB-opener surgery — isolation is bind-mounts onto containe
 platform/
   server/           Express + SQLite (platform.db)
   client/           Super-admin UI (Vite + React)
-  seed/tenants/     Seed orgs (secured branding extracted from ERP)
+  seed/tenants/     Seed orgs (sepl branding extracted from ERP)
   contracts/        Branding JSON schema + ERP surface checklist
   worker-agent/     /v1 Docker driver (provision / start / stop / deploy)
 ```
@@ -47,7 +47,7 @@ Auth: **platform JWT** (`PLATFORM_JWT_SECRET`, persisted in `platform_settings`)
 
 **Operators (invite / reset / email):** `/operators` — invite creates `/invite/:token` (emailed when SMTP + email set; always copyable once). **Reset link** invalidates the old password and emails when possible. **Forgot password** on login is self-service (does not invalidate until link used). SMTP: `PLATFORM_SMTP_*` — same nodemailer skip-if-unset pattern as ERP `server/lib/email.js`. `PLATFORM_PUBLIC_URL` builds full invite/reset URLs.
 
-Data dir default: `platform/data/platform.db` (gitignored). Seed loads `secured` on first boot.
+Data dir default: `platform/data/platform.db` (gitignored). Seed loads `sepl` on first boot (hostname `secured-erp.sotyn.com`; disk key stays `sepl`). Reset `platform.db` if an old `secured` row remains.
 
 **Brand assets (durable):** uploads write to `platform/data/tenants/{slug}/assets/` (gitignored). Serve order: durable → seed (`platform/seed/tenants/{slug}/assets/`). API: `POST /api/branding/:slug/assets/:kind` multipart field `file` (`logo` | `logoPng` | `icon` | `favicon` | `icons`). Pointers stored in `tenant_branding.assets_json`.
 
@@ -74,17 +74,17 @@ curl -s -X POST http://127.0.0.1:7200/v1/tenants \
   -H "Content-Type: application/json" \
   -d "{\"slug\":\"pharma\"}"
 
-# adopt secured (bind repo data/ — stop npm ERP first so ports/files don’t fight)
+# provision sepl (tenants/sepl/data — same rule as any slug)
 curl -s -X POST http://127.0.0.1:7200/v1/tenants \
   -H "Authorization: Bearer dev-agent-token" \
   -H "Content-Type: application/json" \
-  -d "{\"slug\":\"secured\"}"
+  -d "{\"slug\":\"sepl\"}"
 
 curl -s http://127.0.0.1:7200/v1/tenants -H "Authorization: Bearer dev-agent-token"
 curl -s -X POST http://127.0.0.1:7200/v1/tenants/pharma/stop -H "Authorization: Bearer dev-agent-token"
 curl -s -X POST http://127.0.0.1:7200/v1/tenants/pharma/start -H "Authorization: Bearer dev-agent-token"
 
-# remove container; ?wipeData=1 also deletes tenants/{slug}/data (refused for secured)
+# remove container; ?wipeData=1 also deletes tenants/{slug}/data
 # Deploy never uses wipeData — host data/ is never deleted on deploy/rollback
 curl -s -X DELETE "http://127.0.0.1:7200/v1/tenants/pharma?wipeData=1" \
   -H "Authorization: Bearer dev-agent-token"
@@ -111,12 +111,11 @@ Full Docker build/run procedure: root [`README.md`](../README.md).
 
 | Slug | Host data → `/app/data` | Host backups → `/app/backups` |
 |---|---|---|
-| `secured` | `SECURED_DATA_PATH` or `<repo>/data` (**agent** env) | `SECURED_BACKUP_PATH` or `<repo>/backups` |
-| other | `<repo>/tenants/{slug}/data` | `<repo>/tenants/{slug}/backups` |
+| `{slug}` | `<TENANTS_ROOT>/{slug}/data` | `<TENANTS_ROOT>/{slug}/backups` |
 
 Host ports **5101–5199** → container `5000`. Container name: `sotyn-tenant-{slug}`. Runtime registry: `tenants/.agent/runtimes.json` (gitignored under `/tenants/`).
 
-Prod agent overrides: `SECURED_DATA_PATH=/root/erp/data`, `SECURED_BACKUP_PATH=/root/erp-backups`, `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.
+Prod agent overrides: `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.
 
 ## Routes — live vs pencil
 

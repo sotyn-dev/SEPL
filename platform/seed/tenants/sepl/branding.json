@@ -1,6 +1,6 @@
 {
   "$schema": "../../../contracts/branding.schema.json",
-  "slug": "secured",
+  "slug": "sepl",
   "displayName": "Secured Engineers",
   "shortName": "SEPL",
   "legalName": "Secured Engineers Pvt. Ltd.",
@@ -20,5 +20,5 @@
     "favicon": "assets/favicon.svg",
     "icons": "assets/icons.svg"
   },
-  "notes": "Extracted from ERP client/public + Login/Layout/manifest (Aug 2026). This is tenant branding for slug=secured — NOT the global fallback for other orgs."
+  "notes": "Extracted from ERP client/public + Login/Layout/manifest (Aug 2026). Tenant branding for slug=sepl — NOT the global fallback for other orgs. Public hostname may differ (e.g. secured-erp.sotyn.com)."
 }

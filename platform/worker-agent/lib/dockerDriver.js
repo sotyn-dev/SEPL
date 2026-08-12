@@ -81,12 +81,6 @@ function allocatePort(preferred) {
 
 function ensureDataDir(slug) {
   const dataPath = dataPathFor(slug);
-  if (slug === 'secured') {
-    if (!fs.existsSync(dataPath)) {
-      fs.mkdirSync(dataPath, { recursive: true });
-    }
-    return dataPath;
-  }
   fs.mkdirSync(dataPath, { recursive: true });
   return dataPath;
 }
@@ -279,15 +273,10 @@ function destroy(slug, { wipeData = false } = {}) {
     err.status = 404;
     throw err;
   }
-  if (wipeData && slug === 'secured') {
-    const err = new Error('refuse wipeData for secured');
-    err.status = 403;
-    throw err;
-  }
   const name = row.containerName || containerName(slug);
   docker(['rm', '-f', name]);
   // wipeData removes live data/ only — never host backups/ (same hard rule as recreate).
-  if (wipeData && slug !== 'secured' && row.dataPath) {
+  if (wipeData && row.dataPath) {
     fs.rmSync(row.dataPath, { recursive: true, force: true });
   }
   state.remove(slug);

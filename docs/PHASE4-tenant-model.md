@@ -97,69 +97,42 @@ Disk (100 GB) still fills from uploads — S3/R2 remains the scale lever; DBs st
 
 Older Claude notes that said “512 MB-heap VPS” were about Node memory pressure / small boxes, **not** these confirmed machine specs. Prefer this table going forward.
 
-### Runtime model (locked — Aug 2026): **all orgs Docker from day 1**; secured data stays put
+### Runtime model (locked — Aug 2026): **all orgs Docker**; same path rule
 
-**Hard constraint:** `/root/erp/data/*` **belongs to secured** and must **not** be copied or moved. No “relocate into `data/secured/`”, no symlink flip. Containerizing secured = **bind-mount the existing folder** into the container’s `data/` — same files, different process.
-
-Today (before cutover): one PM2 app `erp` at `/root/erp`, `PORT=5000`, relative `data/*` (= secured).
-
-**Target:**
+**Rule:** every slug (incl. `secured`) → `TENANTS_ROOT/{slug}/data` + `…/backups`. No `SECURED_*` mount env.
 
 ```
 /root/erp/                              ← ONE git checkout + image build context
   server/ client/ …
-  data/                                 ← SECURED ONLY — leave forever on disk
-    erp.db  chat.db  uploads/ …         ← bind-mounted into secured container
+  data/                                 ← legacy PM2 files (until cutover copy)
 
-/root/erp-backups/                      ← SECURED ERP backup zips (outside data/)
+/var/lib/sotyn/tenants/                 ← all Docker tenants
+  secured/data  +  secured/backups
+  pharma/data   +  pharma/backups
 
-/var/lib/sotyn/tenants/                 ← OTHER orgs’ disk homes (LOCKED)
-  pharma/
-    data/                               ← that org’s erp.db, uploads, …
-    backups/                            ← that org’s backup-<ts>.zip
-  acme/
-    data/
-    backups/
-
-/var/lib/sotyn/platform/                ← control-plane state (outside tenant data)
-  platform.db                           ← registry, entitlements, hosts, ports, container ids
+/var/lib/sotyn/platform/platform.db     ← control plane
 ```
 
 | Piece | How it works |
 |---|---|
-| **Secured** | **Docker from day 1** — same image; volumes `/root/erp/data` → `/app/data` and `/root/erp-backups` → `/app/backups`. URL: `secured-erp.sotyn.com` → nginx → published port. **No data move.** Cutover: stop PM2 → start container with those mounts. |
-| **New org** | **Docker** from the **same image**; host `/var/lib/sotyn/tenants/{slug}/data` → `/app/data` and `…/backups` → `/app/backups`. |
-| **Data resonance** | Inside every container the app only knows `data/*` and `ERP_BACKUP_DIR=/app/backups` — zero path logic change. Host path differs per org. |
-| **Code** | One image built from `/root/erp` (or CI). No `/root/erp-pharma` code copy. Per worker VPS: one `/root/erp` checkout as build/pull context. |
-| **URL** | `{slug}-erp.sotyn.com` → nginx → that org’s container port |
-| **S3** | Per-org prefix = slug. Agent always sets `-e S3_KEY_PREFIX={slug}` on provision/recreate (harmless while `STORAGE_DRIVER=local`) |
-| **Forbidden** | Moving/copying secured `data/*`; deleting host `backups/` on deploy/recreate; forking the repo per customer; one Node process multiplexing all tenant DBs |
+| **Any org** | Agent `mkdir` under `TENANTS_ROOT/{slug}/` → `docker run` with those binds → `{slug}-erp.sotyn.com` |
+| **Cutover (secured / orphan)** | Empty provision first → downtime copy from old paths → 301 old URL → subdomain |
+| **In-container** | App always sees `/app/data` + `/app/backups` |
+| **Code** | One image from `/root/erp`. No per-customer repo forks |
+| **S3** | `-e S3_KEY_PREFIX={slug}` (harmless while `STORAGE_DRIVER=local`) |
+| **Forbidden** | Delete host `data/` or `backups/` on deploy/recreate |
 
-**Why Docker:** isolation + each org’s own disk tree **without** teaching the app multi-root paths and **without** relocating secured’s live files. A volume mount makes “another folder on the VPS” look like the same relative `data/*`.
-
-**Container shapes (illustrative):**
+**Container shape (any slug):**
 
 ```text
-# Secured (legacy host path)
-image:   sotyn-erp:<git-sha>
-name:    erp-secured
-env:     PORT=5000  TENANT_ID=secured  S3_KEY_PREFIX=secured  ERP_BACKUP_DIR=/app/backups
-ports:   127.0.0.1:5000:5000
-volume:  /root/erp/data  →  /app/data
-volume:  /root/erp-backups  →  /app/backups
-
-# New org
-image:   sotyn-erp:<git-sha>
-name:    erp-pharma
-env:     PORT=5000  TENANT_ID=pharma  S3_KEY_PREFIX=pharma  ERP_BACKUP_DIR=/app/backups
-ports:   127.0.0.1:5101:5000
-volume:  /var/lib/sotyn/tenants/pharma/data  →  /app/data
-volume:  /var/lib/sotyn/tenants/pharma/backups  →  /app/backups
+name:    sotyn-tenant-{slug}
+ports:   127.0.0.1:51xx:5000
+volume:  /var/lib/sotyn/tenants/{slug}/data     →  /app/data
+volume:  /var/lib/sotyn/tenants/{slug}/backups  →  /app/backups
+env:     TENANT_ID={slug}  S3_KEY_PREFIX={slug}  ERP_BACKUP_DIR=/app/backups
 ```
 
-(App cwd inside image is wherever `data/` is relative today — mount must land on that exact path. Watch container UID vs existing file ownership on `/root/erp/data`. Backup zips stay outside `data/`.)
-
-**Edge (nginx):** wildcard cert `*-erp.sotyn.com`; generated map `host → 127.0.0.1:port` (all Docker org ports, including secured).
+**Edge (nginx):** wildcard cert `*-erp.sotyn.com`; map `host → 127.0.0.1:port`.
 
 **Super-admin panel (all automatic on onboard):**
 
@@ -178,7 +151,7 @@ Platform **never** talks to Docker/nginx directly. It always calls a **worker ag
 1. Operator on the main VPS: `git pull origin main` only. Platform and agent **never** run git.
 2. Platform **Deploy** → local worker agent: `docker build -t sotyn-erp:$TAG -t sotyn-erp:latest` (from already-pulled checkout) → recreate **every** tenant container on that host (same port, volume, `--env-file`, new image).
 3. **Rollback** = same Deploy with an older existing tag and `build: false` (no rebuild).
-4. **Hard rule:** deploy / recreate / rollback may only `docker rm -f` the **container**. Host bind-mounted `data/` and `backups/` are never removed, emptied, or passed through `wipeData` (wipeData may only clear non-secured `data/`). Multi-VPS fan-out (same button → all agents) is later; day‑1 is **host_local only**.
+4. **Hard rule:** deploy / recreate / rollback may only `docker rm -f` the **container**. Host bind-mounted `data/` and `backups/` are never removed on deploy. Explicit `wipeData` on destroy may clear that tenant’s `data/` only (never `backups/`). Multi-VPS fan-out later; day‑1 is **host_local only**.
 5. **Image prune / delete (locked):** after successful deploy/rollback, agent auto-prunes unused tags on **that host** (`keepLatest` default **4**; `pruneAfter:false` to skip). Platform Deploy UI also has manual Delete + optional Prune. Always host-scoped (`hostId`). Never delete in-use tags; keep in-use + `:latest` + N newest unused. Adding VPS‑2 = register another `hosts` row and pick it in the same UI.
 
 **Day‑1 host (locked):** one VPS runs **platform + local worker agent + Docker orgs (including secured)**. Agent is `localhost` to platform — identical provision path when VPS‑2 joins (agent is remote). No “platform drives Docker itself” shortcut.
@@ -198,21 +171,21 @@ Platform **never** talks to Docker/nginx directly. It always calls a **worker ag
 | Platform | run script (`npm run platform`) — **not** Docker |
 | Worker agent | run script (`npm run platform:agent`); tenant ERP boxes via **`docker run`** |
 | New org data | `./tenants/{slug}/data` (gitignored) → mount `/app/data` |
-| Secured adopt (smoke) | repo `data/` → mount `/app/data` (stop npm first; **no file move**) |
+| Secured (Docker smoke) | same: `./tenants/secured/data` |
 
 Compose is optional for fixed control-plane stacks later — **not** the onboarder (agent provisions tenants).
 
-**Local sim (privacy-safe):** export RBAC + entitlements (secret-filtered) via panel → seed into local `data/` or `./tenants/{slug}/data` via script.
+**Local sim (privacy-safe):** export RBAC + entitlements (secret-filtered) via panel → seed into local `./tenants/{slug}/data` via script.
 
-**What we explicitly dropped:** moving secured into `data/secured/` or symlink-flipping `/root/erp/data`. Product owner rejected it. Containerize-in-place via bind mount is the allowed path. Child-process + `DATA_DIR` opener surgery is also rejected.
+No `DATA_DIR` opener surgery.
 
 ### Also locked
 
 | Decision | Choice |
 |---|---|
-| Secured data | **`/root/erp/data/*` stays** — no move, no copy, no symlink flip |
-| Secured runtime | **Docker from day 1** — bind-mount `/root/erp/data` → container `data/` |
-| New orgs | **Docker** + bind-mount `/var/lib/sotyn/tenants/{slug}/data` → container `data/` |
+| Tenant disk | **`TENANTS_ROOT/{slug}/data` + `…/backups`** — slug fixed forever |
+| Public hostname | Stored on tenant row; mutable; may differ from slug (e.g. slug `sepl` → `secured-erp.sotyn.com`) |
+| New orgs | **Docker** + bind-mount under `TENANTS_ROOT` |
 | Tenancy shape | Separate folder + DB per org; never shared DB + `tenant_id` |
 | Entitlements | Authoritative in `platform.db` only |
 | Entitlement API | Coarse **packs** `GET/PUT /api/tenants/:slug/entitlements` — not per-widget |
@@ -221,8 +194,8 @@ Compose is optional for fixed control-plane stacks later — **not** the onboard
 | Effective access chain | **Platform entitlement → Module availability → RBAC matrix** (entitlement overrides Roles popup kill-switches; saved flags/matrix not wiped) |
 | Code | One monorepo → ERP image + platform app + worker agent; never fork/copy per org |
 | Local default | **Run scripts** for ERP, platform, agent; Docker optional for provision tests only |
-| Slug resonance | `pharma` → `pharma-erp.sotyn.com` → `/var/lib/sotyn/tenants/pharma/data` → S3 prefix `pharma` |
-| Tenant data root (new orgs) | **`/var/lib/sotyn/tenants/{slug}/data` only** — no alternate host roots |
+| Slug resonance | slug → disk + `TENANT_ID` + S3; hostname → browser URL (separate, mutable) |
+| Tenant data root | **`TENANTS_ROOT/{slug}/data` only** — no alternate host roots |
 | Control plane | One `platform.sotyn.com` + one `platform.db` (not per worker) |
 | Worker agent | **From day 1** — local agent on the platform VPS; same agent on every later worker VPS. See **Worker agent** section |
 | Multi-VPS | Extra workers (ERP + agent only); platform stays on its home host |
@@ -231,7 +204,7 @@ Compose is optional for fixed control-plane stacks later — **not** the onboard
 | What subdomain means | **Tenant slot** — not “must be MEPF ERP customer” |
 | What you sell | **Packs / apps** via panel; one image; exclusive apps = pack OFF everywhere except listed tenants |
 | Tenant classes | **MEPF/ERP** · **feature-only** · **exclusive-app** (see *What you are selling*) |
-| Secured’s place | **A tenant like any other** for product/branding — not “the default org.” Special cases only: legacy `/root/erp/data` bind-mount + **all packs entitled**. See **White-label** / entitlements |
+| Secured’s place | **A tenant like any other** for product/branding — not “the default org.” Special case: **all packs entitled** at seed. See **White-label** / entitlements |
 | White-label | Per-tenant display name + logo (platform sets → tenant shell/login/prints). No hardcoded Secured-as-default chrome |
 | Field access | **PWA / WebView** on tenant URL + home-screen icons from tenant branding; optional **mini downloadable wrapper** for some tenants only — no separate field backend |
 
@@ -248,16 +221,16 @@ Compose is optional for fixed control-plane stacks later — **not** the onboard
 
 ## Prerequisite before multi-org Docker (gate)
 
-**Secured does not need a `TENANT_ID` / data move.** Isolation = Docker + bind mounts (secured uses legacy path; new orgs use `/var/lib/sotyn/tenants/…`).
+Isolation = Docker + bind mounts under `TENANTS_ROOT/{slug}/` (secured included).
 
-Still worth doing in the shared codebase (helps the image + future hygiene):
+Still worth doing in the shared codebase:
 
-1. Prefer `paths.js` (`DATA_ROOT` / `DB_PATH` / `uploadsSub`) over hardcoded `…/data/…` so the image has one place that resolves `data/`  
-2. **Dockerfile** that runs the app with `data/` at a fixed in-container path ready to bind-mount  
-3. Hardening before org #2: schema version stamp, fail-loud migrations, canary  
-4. Careful secured cutover: stop PM2 → container with `/root/erp/data` mount → confirm UID/permissions  
+1. Prefer `paths.js` (`DATA_ROOT` / `DB_PATH` / `uploadsSub`) over hardcoded `…/data/…`
+2. **Dockerfile** with fixed in-container `data/` ready to bind-mount
+3. Hardening before org #2: schema version stamp, fail-loud migrations, canary
+4. Cutover: stop old process → copy into empty `tenants/{slug}/…` → container → 301
 
-**Do not** relocate live secured `data/*` as part of this work.
+Do not run old PM2 and the new container on the same live `data/` at once.
 
 ---
 
@@ -362,7 +335,7 @@ Together these define selling from one image + wildcard tenancy:
 3. App gates with existing `isModuleEnabled` / `ModuleGate` / `requireModuleEnabled`  
 4. Tenant admins still own **who** inside the org may use an entitled feature (RBAC)  
 5. Plans encode **tenant class** (MEPF/ERP vs feature-only vs exclusive) or empty baseline — never force hollow BB/Items nav on a salon  
-6. **Secured (`secured`)** seeds with **all packs ON** — full surface as today’s single-org app (legacy data path remains the only other Secured special case)
+6. **SEPL (`sepl`)** seeds with **all packs ON** — full surface as today’s single-org app; default hostname `secured-erp.sotyn.com`
 
 Same shape later: Solar to X, Payables to Y, remove Champions from Z, Chat-only salon group, partner-only exclusive module.
 
@@ -447,7 +420,7 @@ See also [module-depends-graph.md](multitenancy/module-depends-graph.md) (hubs /
 
 ### White-label — org name & logo (locked notes — Aug 2026)
 
-**Secured is a tenant, not the default.** Product chrome must not assume “Secured Engineers / SEPL logo” is the fallback for every slug. Secured gets the same branding fields as Pharma or a salon; its only special case remains the **legacy data path** (`/root/erp/data` bind-mount), not identity.
+**Secured is a tenant, not the default.** Same branding fields as any org; same disk layout rule.
 
 | | **Platform (super-admin)** | **Tenant app (client module)** |
 |---|---|---|
@@ -539,7 +512,7 @@ Evidence: GPS/selfie, `capture="environment"`, site-engineer scoping, pinned Cha
 2. Tenant `erp.db` — roles, `role_permissions`, tenant-owned settings (on that org’s mounted `data/`)  
 3. Optional disposable cache of entitlements — never trusted after restore  
 
-**Onboarding:** platform → agent → `mkdir` host data dir → start container with volume → first boot seeds empty schema → nginx map → monitor. Secured: adopt existing `/root/erp/data` mount (no mkdir of a new pantry).
+**Onboarding:** platform → agent → `mkdir` under `TENANTS_ROOT/{slug}/` → `docker run` → nginx map. Cutover tenants: copy into those dirs during downtime before go-live.
 
 ### Entitlement propagation (locked — Aug 2026)
 
@@ -598,7 +571,7 @@ platform.sotyn.com  --HTTPS-->  platform process
 
 1. **HTTP API** — verbs below (JSON in/out)  
 2. **Docker driver** — Docker Engine CLI (`docker run` / start / stop / rm); same on local smoke and prod. Host data bind-mounted to container `/app/data`.  
-3. **Filesystem** — `mkdir` under `TENANTS_ROOT/{slug}/data` and `…/backups` for new orgs; secured: adopt `SECURED_DATA_PATH` + `SECURED_BACKUP_PATH` (local repo `data/` + `backups/`; prod `/root/erp/data` + `/root/erp-backups`), never mkdir-as-new under `tenants/secured`
+3. **Filesystem** — `mkdir` `TENANTS_ROOT/{slug}/data` + `…/backups` for every slug
 4. **Entitlements materializer** — write plan file/env from platform payload (not SoT)  
 5. **Nginx map writer** — update host→port fragment + reload  
 6. **Health probe** — HTTP check tenant container’s health URL after start  
@@ -614,7 +587,7 @@ Base path illustrative: `http://127.0.0.1:7200/v1`. All require Bearer token.
 | `GET` | `/v1/host` | Host id, free ports hint, disk/RAM snapshot (coarse) |
 | `GET` | `/v1/tenants` | List org runtimes this host knows (slug, status, port, image) |
 | `GET` | `/v1/tenants/:slug` | One org: container state + last health |
-| `POST` | `/v1/tenants` | **Provision** — body: `{ slug, image, port, env, entitlements, dataPath? }` → mkdir (if new), materialize entitlements, `docker run`, nginx map, healthcheck. Secured: `dataPath=/root/erp/data`, skip mkdir |
+| `POST` | `/v1/tenants` | **Provision** — body: `{ slug, image, port, env, entitlements }` → mkdir under `TENANTS_ROOT/{slug}/`, materialize entitlements, `docker run`, nginx map, healthcheck |
 | `POST` | `/v1/tenants/:slug/start` | Start stopped container |
 | `POST` | `/v1/tenants/:slug/stop` | Stop (pause org) |
 | `POST` | `/v1/tenants/:slug/restart` | Restart / recreate **same** volume + image (or refreshed entitlements) |
@@ -706,19 +679,19 @@ Do not confuse with **tenant ERP** Backups / Audit (chassis inside each org). Th
 | 0e | Platform operators: invite + admin reset link + Operators UI | ✅ |
 | 0d | **Platform audit** write path + Audit UI (after entitlements/agent mutations grow; thin stub OK earlier) | ✅ middleware + `/api/audit` + Audit page |
 | 1 | Dockerfile: same app, bind-mount `data/` (`Dockerfile` + `.dockerignore`) | ✅ |
-| 2 | Worker agent (`platform/worker-agent/`): `/v1` API + **Docker driver** (provision/start/stop; secured adopt) | ✅ docker mode |
+| 2 | Worker agent (`platform/worker-agent/`): `/v1` API + **Docker driver** | ✅ docker mode |
 | 3 | `platform.db` + host registry + entitlements; platform always calls agent; **local = run script** | 🟡 db + orgs/branding; packs via **gradual ladder** (PHASE4 self-note), not full catalog first |
 | 4 | Super-admin panel on `platform.sotyn.com` | 🟡 local UI pencil; VPS runbook: [`PLATFORM-VPS-deploy.md`](./PLATFORM-VPS-deploy.md) |
 | 4b | **Platform exclusive access** — Cloudflare Access on `platform.sotyn.com`; **keep** platform JWT/operators | 🟡 runbook ✅ [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md); CF policy ops ❌ |
 | 5 | Wildcard DNS/TLS `*-erp.sotyn.com` + nginx host→port | ❌ |
-| 6 | Cutover secured → Docker (bind `/root/erp/data`); canary org #2 on `/var/lib/sotyn/tenants/…` | ❌ |
+| 6 | Cutover secured/orphan → Docker + canary org #2 | ❌ |
 | 7 | Remote agent on VPS‑2 + tenant move; optional paths.js hygiene | 🟡 hosts UI + per-host token + provision-to-host ✅; move/fan-out ❌ |
 
 ---
 
 ## Explicit non-goals
 
-- Moving or copying secured `/root/erp/data/*`  
+- Deleting host tenant `data/` or `backups/` on deploy/recreate  
 - Forking / copying the repo into `/root/<app-name>` per customer  
 - One Node process serving all tenants’ DBs  
 - Putting entitlements only in tenant `erp.db` as source of truth  

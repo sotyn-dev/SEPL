@@ -6,6 +6,22 @@ const { agentFetch, DEFAULT_HOST_ID } = require('../lib/agentClient');
 
 const router = express.Router();
 
+const HOSTNAME_RE = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/;
+
+function defaultHostname(slug) {
+  return `${slug}-erp.sotyn.com`;
+}
+
+function normalizeHostname(raw, slug) {
+  const h = String(raw || '').trim().toLowerCase() || defaultHostname(slug);
+  if (!HOSTNAME_RE.test(h) || h.includes('..')) {
+    const err = new Error('Invalid hostname');
+    err.status = 400;
+    throw err;
+  }
+  return h;
+}
+
 function rowToTenant(row) {
   if (!row) return null;
   return {
@@ -18,7 +34,7 @@ function rowToTenant(row) {
     backupPath: row.backup_path,
     s3KeyPrefix: row.s3_key_prefix,
     tenantClass: row.tenant_class,
-    hostname: `${row.slug}-erp.sotyn.com`,
+    hostname: row.hostname || defaultHostname(row.slug),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -42,12 +58,20 @@ router.post('/', async (req, res) => {
     tenantClass = 'mepf_erp',
     hostId = DEFAULT_HOST_ID,
     provision = false,
+    hostname: hostnameIn,
   } = req.body || {};
   if (!slug || !/^[a-z0-9]([a-z0-9-]{0,46}[a-z0-9])?$/.test(slug)) {
     return res.status(400).json({ error: 'Invalid slug' });
   }
   if (!displayName || !String(displayName).trim()) {
     return res.status(400).json({ error: 'displayName required' });
+  }
+
+  let hostname;
+  try {
+    hostname = normalizeHostname(hostnameIn, slug);
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
   }
 
   const db = getDb();
@@ -62,13 +86,14 @@ router.post('/', async (req, res) => {
 
   const id = `tenant_${slug}`;
   db.prepare(`
-    INSERT INTO tenants (id, slug, display_name, status, host_id, data_path, backup_path, s3_key_prefix, tenant_class)
-    VALUES (?, ?, ?, 'draft', ?, NULL, NULL, ?, ?)
+    INSERT INTO tenants (id, slug, display_name, status, host_id, data_path, backup_path, hostname, s3_key_prefix, tenant_class)
+    VALUES (?, ?, ?, 'draft', ?, NULL, NULL, ?, ?, ?)
   `).run(
     id,
     slug,
     String(displayName).trim(),
     host.id,
+    hostname,
     slug,
     tenantClass,
   );

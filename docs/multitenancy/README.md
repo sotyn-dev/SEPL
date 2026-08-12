@@ -2,7 +2,7 @@
 
 Design-only docs. Nothing here is implemented in the app.
 
-**Product vision:** `{slug}-erp.sotyn.com` is a **tenant slot** (wildcard DNS + auto SSL) — may or may not be an **MEPF ERP** customer. Sell **packs/apps** from the super-admin panel (Chat→Pharma, feature-only salon, later exclusive apps). **All orgs Docker from day 1** — secured bind-mounts `/root/erp/data/*` (no move); new orgs `/var/lib/sotyn/tenants/{slug}/data`. **Platform** at `platform.sotyn.com` drives a **worker agent**. **Local default:** run scripts. **First VPS capacity:** secured + ~2–3 other orgs on 4 GB RAM.
+**Product vision:** `{slug}-erp.sotyn.com` tenant slots; all orgs Docker under `TENANTS_ROOT/{slug}/data` (incl. secured). Platform at `platform.sotyn.com` drives a worker agent. Local default: run scripts.
 
 | File | What it is |
 |---|---|

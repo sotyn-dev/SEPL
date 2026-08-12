@@ -98,7 +98,6 @@ pm2 start platform/server/index.js --name sotyn-platform
 # Worker agent — localhost; needs Docker
 AGENT_TOKEN='same-as-platform-env' \
 HOST_ID=host_local \
-SECURED_DATA_PATH=/root/erp/data \
 TENANTS_ROOT=/var/lib/sotyn/tenants \
 ERP_ENV_FILE=/root/erp/.env \
 pm2 start platform/worker-agent/index.js --name sotyn-agent

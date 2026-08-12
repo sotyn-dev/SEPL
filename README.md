@@ -20,8 +20,7 @@ Inside the container the app always uses `/app/data` and backup zips at `/app/ba
 
 | Tenant | Host `data/` → `/app/data` | Host backups → `/app/backups` |
 |---|---|---|
-| `secured` | Local: `<repo>/data` · Prod: `/root/erp/data` | Local: `<repo>/backups` · Prod: `/root/erp-backups` |
-| Other slugs | Local: `tenants/{slug}/data` · Prod: `/var/lib/sotyn/tenants/{slug}/data` | Local: `tenants/{slug}/backups` · Prod: `/var/lib/sotyn/tenants/{slug}/backups` |
+| Any slug (incl. `secured`) | Local: `tenants/{slug}/data` · Prod: `/var/lib/sotyn/tenants/{slug}/data` | Local: `tenants/{slug}/backups` · Prod: `/var/lib/sotyn/tenants/{slug}/backups` |
 
 The image is multi-stage: Vite builds the UI **inside Docker**. Host / git `client/dist` is not used for image builds.
 
@@ -157,8 +156,8 @@ docker build -t sotyn-erp:$TAG -t sotyn-erp:latest .
 docker rm -f sotyn-tenant-secured
 docker run -d --name sotyn-tenant-secured \
   -p 5101:5000 \
-  -v /root/erp/data:/app/data \
-  -v /root/erp-backups:/app/backups \
+  -v /var/lib/sotyn/tenants/secured/data:/app/data \
+  -v /var/lib/sotyn/tenants/secured/backups:/app/backups \
   --env-file /root/erp/.env \
   -e TENANT_ID=secured \
   -e PORT=5000 \
@@ -212,9 +211,7 @@ Agent uses `ERP_ENV_FILE` (default: repo `.env` if present), then forces `TENANT
 | Variable | Default | Meaning |
 |---|---|---|
 | `ERP_IMAGE` | `sotyn-erp:local` | Image for new provision |
-| `TENANTS_ROOT` | `<repo>/tenants` | New-tenant data + backups root |
-| `SECURED_DATA_PATH` | `<repo>/data` | Secured data bind path |
-| `SECURED_BACKUP_PATH` | `<repo>/backups` (Win) · `/root/erp-backups` (Linux) | Secured backups bind path |
+| `TENANTS_ROOT` | `<repo>/tenants` | All-tenant data + backups root (`{slug}/data`, `{slug}/backups`) |
 | `AGENT_PORT` | `7200` | Agent listen port |
 | `AGENT_TOKEN` | `dev-agent-token` | Bearer for agent `/v1/*` |
 | `ERP_ENV_FILE` | `<repo>/.env` if present | Passed into tenant containers |

@@ -14,13 +14,13 @@ Priority matches `docs/PHASE4-tenant-model.md` § White-label.
 
 **Deferred:** per-tenant theme/colors (ERP keeps one shared palette); every help string; custom domain.
 
-**Assets extracted (seed for slug=`secured` only):**
+**Assets extracted (seed for slug=`sepl` only):**
 
-- `platform/seed/tenants/secured/assets/logo.webp` ← `client/public/sepl-logo.webp`
-- `platform/seed/tenants/secured/assets/logo.png` ← `client/public/sepl-logo.png`
-- `platform/seed/tenants/secured/assets/icon.svg` ← `client/public/icon.svg`
-- `platform/seed/tenants/secured/assets/favicon.svg` ← `client/public/favicon.svg`
-- `platform/seed/tenants/secured/assets/icons.svg` ← `client/public/icons.svg`
-- `platform/seed/tenants/secured/branding.json` — field values from Login / Layout / manifest
+- `platform/seed/tenants/sepl/assets/logo.webp` ← `client/public/sepl-logo.webp`
+- `platform/seed/tenants/sepl/assets/logo.png` ← `client/public/sepl-logo.png`
+- `platform/seed/tenants/sepl/assets/icon.svg` ← `client/public/icon.svg`
+- `platform/seed/tenants/sepl/assets/favicon.svg` ← `client/public/favicon.svg`
+- `platform/seed/tenants/sepl/assets/icons.svg` ← `client/public/icons.svg`
+- `platform/seed/tenants/sepl/branding.json` — field values from Login / Layout / manifest
 
 **Integration shape (later):** platform writes branding → agent materializes onto tenant config mount → ERP reads once at boot (same family as entitlements). Until then, ERP keeps its hardcoded Secured chrome; platform Brand tab is the pencil SoT.

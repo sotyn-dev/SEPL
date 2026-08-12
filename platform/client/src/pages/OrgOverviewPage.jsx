@@ -7,7 +7,6 @@ import { modulesOnDisplay, planLabelForClass } from '../fixtures/packs.js';
 
 function dataPathFor(t) {
   if (t?.dataPath) return t.dataPath;
-  if (t?.slug === 'secured') return '/root/erp/data';
   return `/var/lib/sotyn/tenants/${t?.slug || '…'}/data`;
 }
 
@@ -51,7 +50,11 @@ export default function OrgOverviewPage() {
           <Link to="/" className="text-xs text-blue-800 hover:underline">← Companies</Link>
           <h1 className="font-display text-2xl sm:text-3xl font-semibold text-ink mt-1 break-words">{tenant.displayName}</h1>
           <p className="font-mono text-xs text-slate-500 mt-1 break-all">
-            {tenant.id} · {tenant.hostname}
+            slug <span className="text-ink">{tenant.slug}</span>
+            {' · '}
+            {tenant.hostname}
+            {' · '}
+            {tenant.id}
           </p>
         </div>
         <div className="flex flex-col xs:flex-row sm:flex-row gap-2 w-full sm:w-auto">
@@ -86,6 +89,12 @@ export default function OrgOverviewPage() {
             </span>
             Plan: <strong>{plan}</strong>
             <span className="text-slate-400 text-xs ml-2">(display from class — not a saved plan row)</span>
+          </p>
+          <p className="text-sm text-slate-600 break-all">
+            Slug (data key): <code className="text-xs bg-slate-50 px-1 rounded">{tenant.slug}</code>
+          </p>
+          <p className="text-sm text-slate-600 break-all">
+            Hostname (URL): <code className="text-xs bg-slate-50 px-1 rounded">{tenant.hostname}</code>
           </p>
           <p className="text-sm text-slate-600 break-all">
             Data path: <code className="text-xs bg-slate-50 px-1 rounded">{dataPathFor(tenant)}</code>

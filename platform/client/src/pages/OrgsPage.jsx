@@ -14,10 +14,12 @@ export default function OrgsPage() {
   const [form, setForm] = useState({
     slug: '',
     displayName: '',
+    hostname: '',
     tenantClass: 'mepf_erp',
     hostId: 'host_local',
     provision: false,
   });
+  const [hostnameTouched, setHostnameTouched] = useState(false);
 
   const load = () => {
     api('/api/tenants')
@@ -65,10 +67,12 @@ export default function OrgsPage() {
       setForm((f) => ({
         slug: '',
         displayName: '',
+        hostname: '',
         tenantClass: 'mepf_erp',
         hostId: f.hostId,
         provision: false,
       }));
+      setHostnameTouched(false);
       setShowCreate(false);
       load();
     } catch (err) {
@@ -106,8 +110,7 @@ export default function OrgsPage() {
         <div className="min-w-0">
           <h1 className="font-display text-2xl sm:text-3xl font-semibold text-ink">Companies</h1>
           <p className="text-slate-600 mt-1 text-sm max-w-2xl">
-            Home of the control room. Every hosted company is a row —{' '}
-            <code className="text-xs bg-white px-1 rounded break-all">{`{slug}-erp.sotyn.com`}</code>.
+            Home of the control room. Slug is the fixed data key; hostname is the public URL (editable).
           </p>
         </div>
         <button
@@ -162,7 +165,7 @@ export default function OrgsPage() {
         ))}
         {!tenants.length && (
           <p className="rounded-xl border border-slate-200 bg-white px-4 py-8 text-center text-slate-500 text-sm">
-            No tenants yet — start the platform API so secured can seed.
+            No tenants yet — start the platform API so sepl can seed.
           </p>
         )}
       </div>
@@ -224,7 +227,7 @@ export default function OrgsPage() {
             {!tenants.length && (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
-                  No tenants yet — start the platform API so secured can seed.
+                  No tenants yet — start the platform API so sepl can seed.
                 </td>
               </tr>
             )}
@@ -244,12 +247,20 @@ export default function OrgsPage() {
               <input
                 className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm"
                 value={form.slug}
-                onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }))}
+                onChange={(e) => {
+                  const slug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+                  setForm((f) => ({
+                    ...f,
+                    slug,
+                    hostname: hostnameTouched ? f.hostname : (slug ? `${slug}-erp.sotyn.com` : ''),
+                  }));
+                }}
                 placeholder="pharma"
                 required
                 autoCapitalize="none"
                 autoCorrect="off"
               />
+              <span className="font-normal text-slate-400">Fixed disk / TENANT_ID key — do not rename later</span>
             </label>
             <label className="text-xs font-semibold text-slate-600 space-y-1 block">
               Display name
@@ -262,9 +273,25 @@ export default function OrgsPage() {
               />
             </label>
           </div>
-          <p className="text-[11px] text-slate-500 font-mono break-all">
-            Hostname preview: {form.slug || '…'}-erp.sotyn.com
-          </p>
+          <label className="text-xs font-semibold text-slate-600 space-y-1 block">
+            Hostname
+            <input
+              className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm font-mono"
+              value={form.hostname}
+              onChange={(e) => {
+                setHostnameTouched(true);
+                setForm((f) => ({
+                  ...f,
+                  hostname: e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ''),
+                }));
+              }}
+              placeholder="pharma-erp.sotyn.com"
+              required
+              autoCapitalize="none"
+              autoCorrect="off"
+            />
+            <span className="font-normal text-slate-400">Public URL — can differ from slug (e.g. concern-pharma.sotyn.com)</span>
+          </label>
           <label className="text-xs font-semibold text-slate-600 space-y-1 block">
             Worker host
             <select

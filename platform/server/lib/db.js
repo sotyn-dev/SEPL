@@ -65,6 +65,7 @@ function openDb() {
       host_id TEXT REFERENCES hosts(id),
       data_path TEXT,
       backup_path TEXT,
+      hostname TEXT,
       s3_key_prefix TEXT,
       tenant_class TEXT NOT NULL DEFAULT 'mepf_erp',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -139,6 +140,9 @@ function openDb() {
     if (!tenantCols.includes('backup_path')) {
       db.exec('ALTER TABLE tenants ADD COLUMN backup_path TEXT');
     }
+    if (!tenantCols.includes('hostname')) {
+      db.exec('ALTER TABLE tenants ADD COLUMN hostname TEXT');
+    }
   } catch (_) {
     /* ignore */
   }
@@ -188,25 +192,17 @@ function seedAdmin(db) {
   }
 }
 
-function seedSecured(db) {
-  const existing = db.prepare('SELECT id, backup_path FROM tenants WHERE slug = ?').get('secured');
-  if (existing) {
-    if (!existing.backup_path) {
-      db.prepare('UPDATE tenants SET backup_path = ? WHERE id = ?').run(
-        '/root/erp-backups',
-        existing.id,
-      );
-    }
-    return existing.id;
-  }
+function seedSepl(db) {
+  const existing = db.prepare('SELECT id FROM tenants WHERE slug = ?').get('sepl');
+  if (existing) return existing.id;
 
-  const brandingPath = path.join(SEED_ROOT, 'secured', 'branding.json');
+  const brandingPath = path.join(SEED_ROOT, 'sepl', 'branding.json');
   if (!fs.existsSync(brandingPath)) {
-    console.warn('[platform] secured seed branding.json missing — skip seed');
+    console.warn('[platform] sepl seed branding.json missing — skip seed');
     return null;
   }
   const b = JSON.parse(fs.readFileSync(brandingPath, 'utf8'));
-  const id = 'tenant_secured';
+  const id = 'tenant_sepl';
   const hostId = 'host_local';
 
   const insertHost = db.prepare(`
@@ -221,19 +217,18 @@ function seedSecured(db) {
     'local'
   );
 
-  // Convention paths for registry display; real mounts come from the worker agent (SECURED_* there).
+  // Paths NULL until agent provision. Hostname is public URL (may differ from slug).
   db.prepare(`
-    INSERT INTO tenants (id, slug, display_name, status, host_id, data_path, backup_path, s3_key_prefix, tenant_class)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tenants (id, slug, display_name, status, host_id, data_path, backup_path, hostname, s3_key_prefix, tenant_class)
+    VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
   `).run(
     id,
-    'secured',
+    'sepl',
     b.displayName || 'Secured Engineers',
     'live',
     hostId,
-    '/root/erp/data',
-    '/root/erp-backups',
-    'secured',
+    'secured-erp.sotyn.com',
+    'sepl',
     'mepf_erp'
   );
 
@@ -254,7 +249,7 @@ function seedSecured(db) {
     JSON.stringify(b.assets || {})
   );
 
-  console.log('[platform] seeded tenant secured (white-label from seed/)');
+  console.log('[platform] seeded tenant sepl (white-label from seed/)');
   return id;
 }
 
@@ -264,7 +259,7 @@ function getDb() {
     _db = openDb();
     ensureHostLocal(_db);
     seedAdmin(_db);
-    seedSecured(_db);
+    seedSepl(_db);
   }
   return _db;
 }

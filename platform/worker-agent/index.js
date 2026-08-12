@@ -8,8 +8,6 @@
 const http = require('http');
 const {
   TENANTS_ROOT,
-  SECURED_DATA_PATH,
-  SECURED_BACKUP_PATH,
   PORT_MIN,
   PORT_MAX,
   REPO_ROOT,
@@ -86,8 +84,6 @@ const server = http.createServer(async (req, res) => {
         dockerError: d.ok ? undefined : d.error,
         repoRoot: REPO_ROOT,
         tenantsRoot: TENANTS_ROOT,
-        securedDataPath: SECURED_DATA_PATH,
-        securedBackupPath: SECURED_BACKUP_PATH,
         envFile: ERP_ENV_FILE,
         portRange: [PORT_MIN, PORT_MAX],
         image: driver.IMAGE,
@@ -202,7 +198,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[worker-agent] docker mode http://127.0.0.1:${PORT}/v1 (Bearer ${TOKEN})`);
   console.log(`[worker-agent] tenantsRoot=${TENANTS_ROOT}`);
-  console.log(`[worker-agent] securedDataPath=${SECURED_DATA_PATH}`);
-  console.log(`[worker-agent] securedBackupPath=${SECURED_BACKUP_PATH}`);
   console.log(`[worker-agent] envFile=${ERP_ENV_FILE || '(none)'}`);
 });

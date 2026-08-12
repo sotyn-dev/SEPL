@@ -10,17 +10,6 @@ const TENANTS_ROOT = process.env.TENANTS_ROOT
   ? path.resolve(process.env.TENANTS_ROOT)
   : path.join(REPO_ROOT, 'tenants');
 
-const SECURED_DATA_PATH = process.env.SECURED_DATA_PATH
-  ? path.resolve(process.env.SECURED_DATA_PATH)
-  : path.join(REPO_ROOT, 'data');
-
-/** Secured ERP backup zips — adopt today's host folder (never under data/). */
-const SECURED_BACKUP_PATH = process.env.SECURED_BACKUP_PATH
-  ? path.resolve(process.env.SECURED_BACKUP_PATH)
-  : (process.platform === 'win32'
-    ? path.join(REPO_ROOT, 'backups')
-    : path.join('/root', 'erp-backups'));
-
 const PORT_MIN = Number(process.env.AGENT_PORT_MIN || 5101);
 const PORT_MAX = Number(process.env.AGENT_PORT_MAX || 5199);
 
@@ -44,19 +33,13 @@ function containerName(slug) {
   return `sotyn-tenant-${slug}`;
 }
 
-/**
- * Host folder to bind-mount. secured = adopt existing path (no tenants/secured).
- */
+/** Host folder to bind-mount: TENANTS_ROOT/{slug}/data */
 function dataPathFor(slug) {
-  if (slug === 'secured') return SECURED_DATA_PATH;
   return path.join(TENANTS_ROOT, slug, 'data');
 }
 
-/**
- * Host folder for ERP backup zips (outside data/). secured adopts SECURED_BACKUP_PATH.
- */
+/** Host folder for ERP backup zips: TENANTS_ROOT/{slug}/backups */
 function backupPathFor(slug) {
-  if (slug === 'secured') return SECURED_BACKUP_PATH;
   return path.join(TENANTS_ROOT, slug, 'backups');
 }
 
@@ -83,8 +66,6 @@ function imageRef(tag) {
 module.exports = {
   REPO_ROOT,
   TENANTS_ROOT,
-  SECURED_DATA_PATH,
-  SECURED_BACKUP_PATH,
   PORT_MIN,
   PORT_MAX,
   IMAGE,
