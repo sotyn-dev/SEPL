@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare, FiUpload, FiClock, FiAlertTriangle, FiExternalLink, FiCalendar, FiHelpCircle, FiTrendingUp } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import ErpMantraBanner from '../components/ErpMantraBanner';
+import DashHero3D from '../components/DashHero3D';
 import { fmtDate } from '../utils/datetime';
 
 export default function Dashboard() {
@@ -94,19 +95,11 @@ export default function Dashboard() {
   const greeting = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
 
   return (
-    <div className="space-y-6">
-      {/* Greeting + today's date — a warm personal header (mam 2026-07-01:
-          "make dashboard attractive"). */}
-      <div className="flex items-end justify-between flex-wrap gap-2">
-        <div>
-          <h2 className="text-2xl font-extrabold text-gray-800 tracking-tight">
-            {greeting}, {(user?.name || 'there').split(' ')[0]} <span className="align-middle">👋</span>
-          </h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-          </p>
-        </div>
-      </div>
+    <div className="dash3d space-y-6">
+      {/* 3D hero banner — greeting + date on a navy drafting sheet with a
+          floating iso tower (mam 2026-08-12: "dashboard look like 3d type").
+          Also injects the .dash3d card-depth styles used page-wide. */}
+      <DashHero3D greeting={greeting} name={(user?.name || 'there').split(' ')[0]} />
 
       {/* Daily SOTYN.AI-culture mantra — rotates by day-of-year so the whole
           team sees the same quote in their morning standup. */}
@@ -145,7 +138,7 @@ export default function Dashboard() {
           ? (teamAvgVals.length ? Math.round(teamAvgVals.reduce((a, b) => a + b, 0) / teamAvgVals.length) : 0)
           : Math.round(ranked.reduce((a, u) => a + (u.score || 0), 0) / ranked.length);
         return (
-          <div className="rounded-2xl shadow-sm border border-gray-100 overflow-hidden bg-white">
+          <div className="d3-card rounded-2xl shadow-sm border border-gray-100 overflow-hidden bg-white">
             <div className="bg-gradient-to-r from-indigo-600 via-indigo-500 to-red-500 px-5 py-4 flex items-center justify-between">
               <div className="flex items-center gap-2.5 text-white">
                 <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center"><FiTrendingUp size={20} /></div>
