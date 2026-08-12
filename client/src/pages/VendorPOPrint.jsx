@@ -115,11 +115,14 @@ export default function VendorPOPrint() {
   const freightAmount = +po.freight_amount || 0;
   const taxable = subtotal + freightAmount;
 
-  // GST split. Same-state vendor → CGST 9% + SGST 9% (intra). Different
-  // state → IGST 18%. Defaults to intra-state when state is missing,
-  // matching mam's sample (Punjab buyer, Punjab vendor).
+  // GST split. Same-state vendor → CGST + SGST (half each, intra). Different
+  // state → IGST (full). Defaults to intra-state when state is missing,
+  // matching mam's sample (Punjab buyer, Punjab vendor). The rate comes from
+  // the PO's editable gst_pct (mam 2026-08-12: "gst 18% but some time 5%"),
+  // falling back to 18% for older POs saved before the column existed.
   const sameState = !po.state || String(po.state).trim().toLowerCase() === COMPANY.state.toLowerCase();
-  const gstRate = 0.18;
+  const gstPct = (po.gst_pct != null && Number.isFinite(+po.gst_pct)) ? +po.gst_pct : 18;
+  const gstRate = gstPct / 100;
   const cgst = sameState ? taxable * (gstRate / 2) : 0;
   const sgst = sameState ? taxable * (gstRate / 2) : 0;
   const igst = sameState ? 0 : taxable * gstRate;
@@ -442,19 +445,19 @@ export default function VendorPOPrint() {
               <>
                 <tr className="text-gray-600">
                   <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">CGST @ 9%</td>
+                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">CGST @ {+(gstPct / 2).toFixed(2)}%</td>
                   <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(cgst)}</td>
                 </tr>
                 <tr className="text-gray-600">
                   <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">SGST @ 9%</td>
+                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">SGST @ {+(gstPct / 2).toFixed(2)}%</td>
                   <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(sgst)}</td>
                 </tr>
               </>
             ) : (
               <tr className="text-gray-600">
                 <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">IGST @ 18%</td>
+                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">IGST @ {+gstPct.toFixed(2)}%</td>
                 <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(igst)}</td>
               </tr>
             )}

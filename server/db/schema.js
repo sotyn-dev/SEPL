@@ -3339,6 +3339,11 @@ function initializeDatabase() {
     // applies on it, matching how vendors bill freight.
     ['vendor_pos', 'freight_terms TEXT'],                 // 'Ex-Works' | 'FOR' | NULL
     ['vendor_pos', 'freight_amount REAL DEFAULT 0'],      // ₹ freight added to the PO total
+    // GST % on the PO (mam 2026-08-12: "gst 18% but some time 5%") —
+    // default 18, editable per PO on the Create/Edit modals; drives the
+    // print page split (CGST/SGST = half each, or IGST = full) and the
+    // live display_total on the list.
+    ['vendor_pos', 'gst_pct REAL DEFAULT 18'],
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
     // Material acceptance at bill entry (mam 2026-06-04): 'approved' (default)

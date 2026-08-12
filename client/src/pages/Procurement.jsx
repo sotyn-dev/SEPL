@@ -470,6 +470,8 @@ export default function Procurement() {
       // Freight terms + charge (mam 2026-06-12).
       freight_terms: v.freight_terms || '',
       freight_amount: v.freight_amount || '',
+      // GST % (mam 2026-08-12) — default 18, editable per PO.
+      gst_pct: v.gst_pct ?? 18,
     });
     setEditPoItems([]);
     setEditPoLocked(false);
@@ -1482,6 +1484,7 @@ export default function Procurement() {
       total_amount: '',
       remarks: '',
       po_file: null,
+      gst_pct: 18,
     });
     setIndentItemsForPo([]);
     setPoItemSelection({});
@@ -1547,6 +1550,8 @@ export default function Procurement() {
     if (!s.checked) return sum;
     return sum + poLineQtyForAmount(it, s) * (+s.rate || 0);
   }, 0);
+  // Effective GST % for the Create-PO preview — blank/invalid falls back to 18.
+  const poGstPct = (form.gst_pct !== '' && form.gst_pct != null && +form.gst_pct >= 0) ? +form.gst_pct : 18;
 
   // Upload a Tally Vendor PO. The backend endpoint is multipart/form-data —
   // metadata fields + an optional file + a JSON-encoded items array for the
@@ -1589,6 +1594,9 @@ export default function Procurement() {
     // Freight terms + charge (mam 2026-06-12) — printed on the PDF PO.
     if (form.freight_terms) fd.append('freight_terms', form.freight_terms);
     if (+form.freight_amount > 0) fd.append('freight_amount', form.freight_amount);
+    // GST % (mam 2026-08-12) — default 18, editable (e.g. 5). Server
+    // falls back to 18 on blank/invalid.
+    if (form.gst_pct !== undefined && form.gst_pct !== '') fd.append('gst_pct', form.gst_pct);
     if (items.length) fd.append('items', JSON.stringify(items));
     if (form.po_file) fd.append('file', form.po_file);
     // Internal payment-block fields (mam 2026-05-27). Never printed on PO.
@@ -2181,7 +2189,7 @@ export default function Procurement() {
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
             if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
-            if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
+            if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, (+v.display_total || +v.total_amount || 0), v.status]));
             if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
             if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
             if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
@@ -3954,7 +3962,7 @@ export default function Procurement() {
                   </td>
                   <td>{v.po_date || <span className="text-gray-300">—</span>}</td>
                   <td>{v.vendor_name}</td>
-                  <td>Rs {v.total_amount?.toLocaleString()}</td>
+                  <td>Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</td>
                   <td>
                     <div className="flex flex-col gap-1">
                       <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-xs flex items-center gap-1">
@@ -4092,7 +4100,7 @@ export default function Procurement() {
                   </div>
                   <div className="text-right">
                     <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                    <div className="font-semibold text-emerald-700">Rs {(+v.total_amount || 0).toLocaleString('en-IN')}</div>
+                    <div className="font-semibold text-emerald-700">Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</div>
                   </div>
                 </div>
                 {/* Links row */}
@@ -4634,7 +4642,7 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center">{chip}</td>
-                          {/* Show the LIVE computed total (items × 1.18 GST)
+                          {/* Show the LIVE computed total (items + the PO's GST %)
                               from display_total — matches what the PO print
                               shows.  Mam, 2026-05-16: header total drifted from
                               the line items.  Drift chip warns when the stored
@@ -4642,7 +4650,7 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
                             Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
                             {+po.total_amount_drift > 1 && (
-                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + 18% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
                                 ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
                               </div>
                             )}
@@ -5300,7 +5308,7 @@ export default function Procurement() {
                         <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
                           Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
                           {+po.total_amount_drift > 1 && (
-                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + 18% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
                               ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
                             </div>
                           )}
@@ -6640,6 +6648,13 @@ export default function Procurement() {
               <input className="input text-right" type="number" step="0.01" min="0" placeholder="0" value={form.freight_amount || ''} onChange={e => setForm({...form, freight_amount: e.target.value})} />
               <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
             </div>
+            {/* GST % (mam 2026-08-12: "gst 18% but some time 5%") — default 18,
+                editable per PO. Drives the print page GST split + list total. */}
+            <div>
+              <label className="label">GST % <span className="text-gray-400 font-normal">(default 18)</span></label>
+              <input className="input text-right" type="number" step="0.01" min="0" max="100" placeholder="18" value={form.gst_pct ?? 18} onChange={e => setForm({...form, gst_pct: e.target.value})} />
+              <p className="text-[10px] text-gray-400 mt-0.5">Change when the material attracts a different slab (e.g. 5%). Used on the PO print &amp; totals.</p>
+            </div>
           </div>
 
           {/* Optional item linking — when an indent is picked, the uploader
@@ -6715,8 +6730,12 @@ export default function Procurement() {
                         <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
                             <td className="px-2 py-1 text-right text-gray-700">Rs {(+form.freight_amount).toLocaleString()}</td></tr>
                       )}
-                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total:</td>
+                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total (taxable):</td>
                           <td className="px-2 py-2 text-right font-bold text-red-700">Rs {(poTotal + (+form.freight_amount || 0)).toLocaleString()}</td></tr>
+                      <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">GST @ {poGstPct}%:</td>
+                          <td className="px-2 py-1 text-right text-gray-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (poGstPct / 100)).toLocaleString()}</td></tr>
+                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
+                          <td className="px-2 py-2 text-right font-bold text-red-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (1 + poGstPct / 100)).toLocaleString()}</td></tr>
                     </tfoot>
                   </table>
                 </div>
@@ -7867,6 +7886,13 @@ export default function Procurement() {
                        onChange={e => setEditPoForm({ ...editPoForm, freight_amount: e.target.value })} />
                 <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
               </div>
+              <div>
+                <label className="label">GST %</label>
+                <input className="input text-right" type="number" step="0.01" min="0" max="100" placeholder="18"
+                       value={editPoForm.gst_pct ?? 18}
+                       onChange={e => setEditPoForm({ ...editPoForm, gst_pct: e.target.value })} />
+                <p className="text-[10px] text-gray-400 mt-0.5">Default 18 — change when the material attracts a different slab (e.g. 5%). Used on the PO print &amp; totals.</p>
+              </div>
             </div>
 
             {/* Payment-before-material (INTERNAL — mam 2026-05-27).
@@ -8002,9 +8028,9 @@ export default function Procurement() {
                         </td>
                       </tr>
                       <tr className="bg-blue-50 font-semibold text-blue-800">
-                        <td colSpan="6" className="px-2 py-2 text-right">+ 18% GST · Grand Total</td>
+                        <td colSpan="6" className="px-2 py-2 text-right">+ {(editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18}% GST · Grand Total</td>
                         <td className="px-2 py-2 text-right">
-                          ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * 1.18).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * (1 + ((editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18) / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     </tfoot>
@@ -8012,7 +8038,7 @@ export default function Procurement() {
                 </div>
                 {!editPoLocked && (
                   <p className="text-[10px] text-gray-500 mt-1">
-                    Saving will auto-recompute the PO's Total Amount from these line items (× 1.18 GST).
+                    Saving will auto-recompute the PO's Total Amount from these line items (+ the GST % above).
                   </p>
                 )}
               </div>

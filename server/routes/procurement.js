@@ -3107,8 +3107,9 @@ router.get('/indents/:id', (req, res) => {
 // always right; the list endpoint was naively returning the stale
 // header value.
 //
-// Fix: compute display_total live from vendor_po_items + 18% GST
-// (matches the print logic).  Store side-by-side with the original
+// Fix: compute display_total live from vendor_po_items + the PO's GST %
+// (default 18, editable per PO — matches the print logic).  Store
+// side-by-side with the original
 // total_amount so admins can see drift.  Frontend uses display_total
 // for the Amount column.  Drift > ₹1 also surfaces in /audit later
 // as its own exception type (TODO).
@@ -3123,7 +3124,7 @@ router.get('/vendor-po', (req, res) => {
            pcu.name as payment_cleared_by_name,
            l1u.name as po_l1_by_name, l2u.name as po_l2_by_name, rju.name as po_reject_by_name,
            COALESCE((
-             SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
+             SELECT ROUND(SUM(vpi.amount) * (1 + COALESCE(vp.gst_pct, 18) / 100.0), 2)
              FROM vendor_po_items vpi
              WHERE vpi.vendor_po_id = vp.id
            ), vp.total_amount) as display_total
@@ -3816,6 +3817,11 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   const freight_terms = VALID_FREIGHT.includes(b.freight_terms) ? b.freight_terms : null;
   const freight_amount = +b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0;
 
+  // GST % (mam 2026-08-12): default 18, editable per PO (e.g. 5 for some
+  // materials). 0 is a valid choice; blank/garbage falls back to 18.
+  const gst_pct = (b.gst_pct !== undefined && b.gst_pct !== '' && Number.isFinite(+b.gst_pct) && +b.gst_pct >= 0 && +b.gst_pct <= 100)
+    ? Math.round(+b.gst_pct * 100) / 100 : 18;
+
   // Total: prefer what the user typed (matches the Tally printout). Fall back
   // to the computed sum of line items if blank.  Freight is always added on
   // top of either base so the stored total reflects the full PO value.
@@ -3870,11 +3876,11 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         `INSERT INTO vendor_pos
            (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
             payment_block_type, payment_block_amount, payment_block_notes, payment_block_status,
-            payment_terms, credit_days, freight_terms, freight_amount, po_approval)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
+            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, po_approval)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
             pmtType, pmtAmount, pmtNotes, pmtStatus,
-            payment_terms, credit_days, freight_terms, freight_amount);
+            payment_terms, credit_days, freight_terms, freight_amount, gst_pct);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.
@@ -4057,6 +4063,16 @@ router.put('/vendor-po/:id', (req, res) => {
     ? (+b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0)
     : (+cur.freight_amount || 0);
 
+  // GST % (mam 2026-08-12): editable per PO, default 18. Same validation as
+  // create; the effective value also drives the total recompute below.
+  let gstForTotal = (cur.gst_pct != null && Number.isFinite(+cur.gst_pct)) ? +cur.gst_pct : 18;
+  if (b.gst_pct !== undefined) {
+    const g = (b.gst_pct !== '' && Number.isFinite(+b.gst_pct) && +b.gst_pct >= 0 && +b.gst_pct <= 100)
+      ? Math.round(+b.gst_pct * 100) / 100 : 18;
+    set('gst_pct', g);
+    gstForTotal = g;
+  }
+
   // High-impact edits: blocked when bills exist (would invalidate them)
   if (b.total_amount !== undefined) {
     if (billCount > 0) {
@@ -4108,23 +4124,25 @@ router.put('/vendor-po/:id', (req, res) => {
         const r = updLine.run(qty, rate, amount, desc, hsn, itemId, id);
         itemUpdates += r.changes;
       }
-      // Auto-recompute total_amount = sum(line amounts) × 1.18 (GST) + freight.
+      // Auto-recompute total_amount = sum(line amounts) × (1 + GST%) + freight.
       // Skips if caller explicitly set total_amount above (avoid double-set).
       if (b.total_amount === undefined) {
-        const newTotal = db.prepare(
-          'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
+        const sum = db.prepare(
+          'SELECT COALESCE(SUM(amount), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
         ).get(id).t;
+        const newTotal = Math.round(sum * (1 + gstForTotal / 100) * 100) / 100;
         db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
       }
     });
     try { tx(); }
     catch (err) { return res.status(500).json({ error: 'Line items update failed: ' + err.message }); }
-  } else if (b.freight_amount !== undefined && b.total_amount === undefined && billCount === 0) {
-    // Freight changed without touching line items — refresh the stored total
-    // so the Vendor PO list reflects the new freight (sum × 1.18 + freight).
-    const newTotal = db.prepare(
-      'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
+  } else if ((b.freight_amount !== undefined || b.gst_pct !== undefined) && b.total_amount === undefined && billCount === 0) {
+    // Freight or GST% changed without touching line items — refresh the stored
+    // total so the Vendor PO list reflects it (sum × (1 + GST%) + freight).
+    const sum = db.prepare(
+      'SELECT COALESCE(SUM(amount), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
     ).get(id).t;
+    const newTotal = Math.round(sum * (1 + gstForTotal / 100) * 100) / 100;
     db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
   }
 
