@@ -130,7 +130,8 @@ Prod agent overrides: `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.
 | `/backups` | **Live** — `platform.db` zip backups (Backup Now / list / download; nightly 2:00) |
 | `/audit` | **Live** — operator audit log (`platform_audit`; mirrors ERP Admin → Audit) |
 | `/docs` | **Live** — HTML how‑tos (Deploy · Multi‑VPS · Operators · Backups · Audit) |
-| `/orgs/:slug` Overview | **Pencil** — layout + real tenant fields; Pause not wired |
+| `/orgs/:slug` Overview | **Live** — hostname edit; **Take backup** + **Restore** via agent (`platform_admin`, warning confirms) |
+
 | `/orgs/:slug/entitlements` | **Pencil** — fixture pack toggles; Save does not persist |
 | `/orgs/:slug/brand` | **Live** — branding API + **upload** to durable store (`data/tenants/{slug}/assets/`); seed = fallback |
 | `/plans` | **Pencil / later** — pricing stub |

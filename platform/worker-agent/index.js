@@ -15,6 +15,7 @@ const {
   assertSlug,
 } = require('./lib/paths');
 const driver = require('./lib/dockerDriver');
+const restore = require('./lib/restore');
 
 const PORT = Number(process.env.AGENT_PORT || 7200);
 const TOKEN = process.env.AGENT_TOKEN || 'dev-agent-token';
@@ -87,6 +88,7 @@ const server = http.createServer(async (req, res) => {
         envFile: ERP_ENV_FILE,
         portRange: [PORT_MIN, PORT_MAX],
         image: driver.IMAGE,
+        legacyBackupDir: process.env.LEGACY_BACKUP_DIR || null,
       });
     }
 
@@ -168,6 +170,41 @@ const server = http.createServer(async (req, res) => {
     if (m) {
       assertSlug(m.slug);
       return json(res, 200, { tenant: driver.restart(m.slug) });
+    }
+
+    m = match(url, req.method, { method: 'GET', re: /^\/v1\/tenants\/(?<slug>[^/]+)\/backups$/ });
+    if (m) {
+      assertSlug(m.slug);
+      return json(res, 200, restore.listBackups(m.slug));
+    }
+
+    m = match(url, req.method, { method: 'POST', re: /^\/v1\/tenants\/(?<slug>[^/]+)\/restore$/ });
+    if (m) {
+      assertSlug(m.slug);
+      const body = await readBody(req);
+      const result = restore.startRestore(m.slug, body.file || body.filename);
+      return json(res, 202, result);
+    }
+
+    m = match(url, req.method, { method: 'POST', re: /^\/v1\/tenants\/(?<slug>[^/]+)\/backup$/ });
+    if (m) {
+      assertSlug(m.slug);
+      const result = restore.startBackup(m.slug);
+      return json(res, 202, result);
+    }
+
+    m = match(url, req.method, {
+      method: 'GET',
+      re: /^\/v1\/tenants\/(?<slug>[^/]+)\/(?:restore\/)?jobs\/(?<id>[a-f0-9]+)$/,
+    });
+    if (m) {
+      assertSlug(m.slug);
+      const job = restore.getRestoreJob(m.id);
+      if (!job) return json(res, 404, { error: 'job not found' });
+      if (job.slug && job.slug !== m.slug) {
+        return json(res, 404, { error: 'job not found' });
+      }
+      return json(res, 200, { job });
     }
 
     m = match(url, req.method, { method: 'DELETE', re: /^\/v1\/tenants\/(?<slug>[^/]+)$/ });

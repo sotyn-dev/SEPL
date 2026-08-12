@@ -3,6 +3,7 @@
 const express = require('express');
 const { getDb } = require('../lib/db');
 const { agentFetch, DEFAULT_HOST_ID } = require('../lib/agentClient');
+const { requireAdmin } = require('./users');
 
 const router = express.Router();
 
@@ -213,6 +214,139 @@ router.post('/:slug/provision', async (req, res) => {
     const fresh = db.prepare('SELECT * FROM tenants WHERE id = ?').get(row.id);
     const result = await provisionOnHost(fresh);
     res.json({ tenant: rowToTenant(result.row), agent: result.agent });
+  } catch (e) {
+    res.status(e.status || 502).json({
+      error: e.message || String(e),
+      detail: e.detail,
+    });
+  }
+});
+
+router.get('/:slug/backups', async (req, res) => {
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
+    if (!row) return res.status(404).json({ error: 'Tenant not found' });
+    const hostId = row.host_id || DEFAULT_HOST_ID;
+    const { host, data } = await agentFetch(
+      `/v1/tenants/${encodeURIComponent(row.slug)}/backups`,
+      { hostId }
+    );
+    res.json({
+      tenant: rowToTenant(row),
+      hostId: host.id,
+      hostLabel: host.label,
+      ...data,
+    });
+  } catch (e) {
+    res.status(e.status || 502).json({
+      error: e.message || String(e),
+      detail: e.detail,
+    });
+  }
+});
+
+router.post('/:slug/restore', requireAdmin, async (req, res) => {
+  try {
+    const file = req.body?.file || req.body?.filename;
+    if (!file) return res.status(400).json({ error: 'file required' });
+
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
+    if (!row) return res.status(404).json({ error: 'Tenant not found' });
+    const hostId = row.host_id || DEFAULT_HOST_ID;
+    const { host, data } = await agentFetch(
+      `/v1/tenants/${encodeURIComponent(row.slug)}/restore`,
+      {
+        hostId,
+        method: 'POST',
+        body: JSON.stringify({ file }),
+      }
+    );
+    res.status(202).json({
+      tenant: rowToTenant(row),
+      hostId: host.id,
+      hostLabel: host.label,
+      jobId: data.jobId,
+      status: data.status,
+      file: data.file,
+      source: data.source,
+    });
+  } catch (e) {
+    res.status(e.status || 502).json({
+      error: e.message || String(e),
+      detail: e.detail,
+    });
+  }
+});
+
+router.post('/:slug/backup', requireAdmin, async (req, res) => {
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
+    if (!row) return res.status(404).json({ error: 'Tenant not found' });
+    const hostId = row.host_id || DEFAULT_HOST_ID;
+    const { host, data } = await agentFetch(
+      `/v1/tenants/${encodeURIComponent(row.slug)}/backup`,
+      {
+        hostId,
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    );
+    res.status(202).json({
+      tenant: rowToTenant(row),
+      hostId: host.id,
+      hostLabel: host.label,
+      jobId: data.jobId,
+      status: data.status,
+    });
+  } catch (e) {
+    res.status(e.status || 502).json({
+      error: e.message || String(e),
+      detail: e.detail,
+    });
+  }
+});
+
+router.get('/:slug/restore/jobs/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
+    if (!row) return res.status(404).json({ error: 'Tenant not found' });
+    const hostId = row.host_id || DEFAULT_HOST_ID;
+    const { host, data } = await agentFetch(
+      `/v1/tenants/${encodeURIComponent(row.slug)}/jobs/${encodeURIComponent(req.params.id)}`,
+      { hostId }
+    );
+    res.json({
+      hostId: host.id,
+      hostLabel: host.label,
+      job: data.job,
+    });
+  } catch (e) {
+    res.status(e.status || 502).json({
+      error: e.message || String(e),
+      detail: e.detail,
+    });
+  }
+});
+
+router.get('/:slug/jobs/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
+    if (!row) return res.status(404).json({ error: 'Tenant not found' });
+    const hostId = row.host_id || DEFAULT_HOST_ID;
+    const { host, data } = await agentFetch(
+      `/v1/tenants/${encodeURIComponent(row.slug)}/jobs/${encodeURIComponent(req.params.id)}`,
+      { hostId }
+    );
+    res.json({
+      hostId: host.id,
+      hostLabel: host.label,
+      job: data.job,
+    });
   } catch (e) {
     res.status(e.status || 502).json({
       error: e.message || String(e),

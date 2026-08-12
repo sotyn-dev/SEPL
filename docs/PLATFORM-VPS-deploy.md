@@ -100,6 +100,7 @@ AGENT_TOKEN='same-as-platform-env' \
 HOST_ID=host_local \
 TENANTS_ROOT=/var/lib/sotyn/tenants \
 ERP_ENV_FILE=/root/erp/.env \
+LEGACY_BACKUP_DIR=/root/erp-backups \
 pm2 start platform/worker-agent/index.js --name sotyn-agent
 
 pm2 save
@@ -207,7 +208,7 @@ Details: root [`README.md`](../README.md) · platform UI **Docs → Deploy**.
 ### One-time: stand up VPS‑2
 
 1. Install Docker; clone the monorepo (image build context — platform app not required on this box).
-2. Run **worker agent** (PM2) with its own `HOST_ID`, same `AGENT_TOKEN` as platform (for now), `TENANTS_ROOT`, `ERP_ENV_FILE`.
+2. Run **worker agent** (PM2) with its own `HOST_ID`, same `AGENT_TOKEN` as platform (for now), `TENANTS_ROOT`, `ERP_ENV_FILE`, and optionally `LEGACY_BACKUP_DIR` (e.g. `/root/erp-backups`) so Org Overview can restore old dated `.db` / zip files from that folder.
 3. Register that host in platform UI **Hosts** (id, label, reachable `agent_url`, optional per-host token).
 4. Nginx / edge: `{slug}-erp…` → that box’s published container ports.
 5. **Companies → New company** → pick that host → Provision (or draft then Provision).

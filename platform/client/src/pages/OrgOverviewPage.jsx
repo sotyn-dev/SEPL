@@ -1,13 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import PencilBanner from '../components/PencilBanner.jsx';
 import ExportDevConfigDialog from '../components/ExportDevConfigDialog.jsx';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import { modulesOnDisplay, planLabelForClass } from '../fixtures/packs.js';
 
 function dataPathFor(t) {
   if (t?.dataPath) return t.dataPath;
   return `/var/lib/sotyn/tenants/${t?.slug || '…'}/data`;
+}
+
+function formatBytes(n) {
+  if (n == null || Number.isNaN(n)) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function OrgOverviewPage() {
@@ -20,12 +28,58 @@ export default function OrgOverviewPage() {
   const [hostMsg, setHostMsg] = useState('');
   const [hostErr, setHostErr] = useState('');
   const [hostSaving, setHostSaving] = useState(false);
+  const [user, setUser] = useState(null);
+  const [backups, setBackups] = useState([]);
+  const [backupsErr, setBackupsErr] = useState('');
+  const [backupsLoading, setBackupsLoading] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreMsg, setRestoreMsg] = useState('');
+  const [restoreErr, setRestoreErr] = useState('');
+  const [restoreJob, setRestoreJob] = useState(null);
+  const [backupConfirm, setBackupConfirm] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const pollRef = useRef(null);
+
+  const isAdmin = user?.role === 'platform_admin';
+  const actionBusy = restoreBusy || backupBusy;
+
+  const stopPoll = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const loadBackups = () => {
+    setBackupsErr('');
+    setBackupsLoading(true);
+    api(`/api/tenants/${slug}/backups`)
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Failed to list backups');
+        setBackups(d.backups || []);
+      })
+      .catch((e) => setBackupsErr(String(e.message || e)))
+      .finally(() => setBackupsLoading(false));
+  };
 
   useEffect(() => {
     setError('');
     setHostMsg('');
     setHostErr('');
     setHostUnlocked(false);
+    setRestoreMsg('');
+    setRestoreErr('');
+    setRestoreJob(null);
+    stopPoll();
+    api('/api/auth/me')
+      .then(async (r) => {
+        if (!r.ok) return;
+        const d = await r.json();
+        setUser(d.user || null);
+      })
+      .catch(() => {});
     api(`/api/tenants/${slug}`)
       .then(async (r) => {
         const d = await r.json();
@@ -34,6 +88,9 @@ export default function OrgOverviewPage() {
         setHostname(d.tenant.hostname || '');
       })
       .catch((e) => setError(String(e.message || e)));
+    loadBackups();
+    return () => stopPoll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
   const lockHostname = (value) => {
@@ -62,6 +119,95 @@ export default function OrgOverviewPage() {
       setHostErr(String(err.message || err));
     } finally {
       setHostSaving(false);
+    }
+  };
+
+  const pollJob = (jobId, { onOk }) => {
+    stopPoll();
+    pollRef.current = setInterval(async () => {
+      try {
+        const r = await api(`/api/tenants/${slug}/jobs/${jobId}`);
+        const d = await r.json();
+        if (!r.ok) {
+          setRestoreErr(d.error || 'Job poll failed');
+          stopPoll();
+          setRestoreBusy(false);
+          setBackupBusy(false);
+          return;
+        }
+        setRestoreJob(d.job);
+        if (d.job?.status === 'ok' || d.job?.status === 'error') {
+          stopPoll();
+          setRestoreBusy(false);
+          setBackupBusy(false);
+          if (d.job.status === 'error') {
+            setRestoreErr(d.job.error || 'Job failed');
+          } else {
+            onOk?.(d.job);
+            loadBackups();
+          }
+        }
+      } catch (e) {
+        setRestoreErr(String(e.message || e));
+        stopPoll();
+        setRestoreBusy(false);
+        setBackupBusy(false);
+      }
+    }, 1200);
+  };
+
+  const confirmRestore = async () => {
+    if (!restoreTarget || !isAdmin) return;
+    setRestoreBusy(true);
+    setRestoreErr('');
+    setRestoreMsg('');
+    setRestoreJob(null);
+    try {
+      const r = await api(`/api/tenants/${slug}/restore`, {
+        method: 'POST',
+        body: JSON.stringify({ file: restoreTarget.filename }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Restore failed to start');
+      setRestoreTarget(null);
+      setRestoreJob({ id: d.jobId, status: d.status || 'queued', file: d.file, type: 'restore' });
+      const restoredName = d.file;
+      pollJob(d.jobId, {
+        onOk: (job) => {
+          setRestoreMsg(`Restored ${job.file || restoredName || 'backup'} — undo = restore a newer backup from this list.`);
+        },
+      });
+    } catch (e) {
+      setRestoreErr(String(e.message || e));
+      setRestoreBusy(false);
+      setRestoreTarget(null);
+    }
+  };
+
+  const confirmTakeBackup = async () => {
+    if (!isAdmin) return;
+    setBackupBusy(true);
+    setBackupConfirm(false);
+    setRestoreErr('');
+    setRestoreMsg('');
+    setRestoreJob(null);
+    try {
+      const r = await api(`/api/tenants/${slug}/backup`, { method: 'POST', body: '{}' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Backup failed to start');
+      setRestoreJob({ id: d.jobId, status: d.status || 'queued', type: 'backup' });
+      pollJob(d.jobId, {
+        onOk: (job) => {
+          setRestoreMsg(
+            job.file
+              ? `Backup saved: ${job.file} — use Restore on that row to undo a later restore.`
+              : 'Backup finished — refresh the list if the new zip is not visible yet.'
+          );
+        },
+      });
+    } catch (e) {
+      setRestoreErr(String(e.message || e));
+      setBackupBusy(false);
     }
   };
 
@@ -237,6 +383,125 @@ export default function OrgOverviewPage() {
         </div>
       </div>
 
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-ink">Backups / restore</h2>
+          <button
+            type="button"
+            onClick={loadBackups}
+            disabled={backupsLoading || actionBusy}
+            className="text-xs px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+          >
+            {backupsLoading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
+
+        <fieldset className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 space-y-2">
+          <legend className="text-xs font-semibold text-slate-700 px-1">Actions</legend>
+          <p className="text-xs text-slate-500">
+            Take backup first if you may need undo, then Restore an older file from the list.
+            Backup runs inside the tenant container (online). Restore stops the container briefly.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            {isAdmin ? (
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => {
+                  setRestoreErr('');
+                  setRestoreMsg('');
+                  setBackupConfirm(true);
+                }}
+                className="text-sm px-3 py-1.5 rounded-lg bg-teal-700 text-white hover:bg-teal-800 disabled:opacity-40"
+              >
+                {backupBusy ? 'Backing up…' : 'Take backup'}
+              </button>
+            ) : (
+              <span className="text-[10px] text-slate-400">Take backup / Restore — admin only</span>
+            )}
+            <span className="text-[11px] text-slate-400">
+              Restore is per row below →
+            </span>
+          </div>
+        </fieldset>
+
+        <p className="text-xs text-slate-500">
+          Host backups for this org (tenant folder + optional legacy dir on the agent).
+        </p>
+        {backupsErr && (
+          <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{backupsErr}</p>
+        )}
+        {restoreMsg && <p className="text-xs text-teal-800">{restoreMsg}</p>}
+        {restoreErr && <p className="text-xs text-red-700">{restoreErr}</p>}
+        {restoreJob && (
+          <p className="text-xs font-mono text-slate-500">
+            Job {restoreJob.id}
+            {restoreJob.type ? ` (${restoreJob.type})` : ''}
+            : {restoreJob.status}
+            {restoreJob.steps?.length ? ` · ${restoreJob.steps[restoreJob.steps.length - 1]?.message || ''}` : ''}
+          </p>
+        )}
+        <div className="overflow-x-auto border border-slate-100 rounded-lg">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-semibold">File</th>
+                <th className="px-3 py-2 font-semibold">Source</th>
+                <th className="px-3 py-2 font-semibold">Size</th>
+                <th className="px-3 py-2 font-semibold">Modified</th>
+                <th className="px-3 py-2 font-semibold w-28" />
+              </tr>
+            </thead>
+            <tbody>
+              {backups.map((b) => (
+                <tr key={`${b.source}-${b.filename}`} className="border-t border-slate-100">
+                  <td className="px-3 py-2 font-mono text-xs break-all">{b.filename}</td>
+                  <td className="px-3 py-2">
+                    <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] border ${
+                      b.source === 'legacy'
+                        ? 'bg-amber-50 text-amber-800 border-amber-100'
+                        : 'bg-slate-50 text-slate-600 border-slate-200'
+                    }`}
+                    >
+                      {b.source}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">{formatBytes(b.size)}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
+                    {b.createdAt ? new Date(b.createdAt).toLocaleString() : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {isAdmin ? (
+                      <button
+                        type="button"
+                        disabled={actionBusy}
+                        onClick={() => {
+                          setRestoreErr('');
+                          setRestoreMsg('');
+                          setRestoreTarget(b);
+                        }}
+                        className="text-xs px-2.5 py-1 rounded-lg border border-amber-200 text-amber-900 bg-amber-50 hover:bg-amber-100 disabled:opacity-40"
+                      >
+                        Restore
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-slate-400">admin only</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!backups.length && !backupsLoading && (
+                <tr>
+                  <td colSpan={5} className="px-3 py-4 text-xs text-slate-400 text-center">
+                    No backups found — use Take backup above, or wait for nightly ERP backups.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <p className="text-xs text-slate-500 border-l-2 border-slate-200 pl-3">
         Layer 2 (users, roles, preferences) is edited inside the company app — not here.
         This panel only governs allowance and platform ops.
@@ -248,6 +513,34 @@ export default function OrgOverviewPage() {
           onClose={() => setExportOpen(false)}
         />
       )}
+
+      <ConfirmDialog
+        open={backupConfirm}
+        tone="warning"
+        title="Take backup now?"
+        message={`Creates a new backup-*.zip for “${tenant.displayName}” on the host (same folder as nightly backups).\n\nContainer stays up. Use this before Restore if you want a clean undo from this list.`}
+        note="platform_admin only · runs backup-db.js inside the tenant container"
+        confirmLabel="Take backup"
+        busy={backupBusy}
+        onCancel={() => { if (!backupBusy) setBackupConfirm(false); }}
+        onConfirm={confirmTakeBackup}
+      />
+
+      <ConfirmDialog
+        open={!!restoreTarget}
+        tone="warning"
+        title="Restore will stop this tenant"
+        message={
+          restoreTarget
+            ? `This stops the ERP container for “${tenant.displayName}”, replaces live databases with:\n${restoreTarget.filename}\n\nUsers will see downtime. Tip: Take backup first, then Restore that new zip later to undo. Backups folder is not deleted.`
+            : ''
+        }
+        note="platform_admin only · DNS / nginx unchanged"
+        confirmLabel="Stop & restore"
+        busy={restoreBusy}
+        onCancel={() => { if (!restoreBusy) setRestoreTarget(null); }}
+        onConfirm={confirmRestore}
+      />
     </div>
   );
 }
