@@ -12,8 +12,22 @@ function publicHost(row) {
   return rowToHost(row);
 }
 
-router.get('/', (_req, res) => {
-  res.json({ hosts: listHosts() });
+router.get('/', async (_req, res) => {
+  const hosts = listHosts();
+  // Best-effort: attach legacyImportSlug from each agent /v1/host (UI one-shot button).
+  await Promise.all(
+    hosts.map(async (h) => {
+      try {
+        const { data } = await agentFetch('/v1/host', { hostId: h.id });
+        h.legacyImportSlug = data.legacyImportSlug || null;
+        h.legacyDataDir = data.legacyDataDir || null;
+        h.legacyBackupDir = data.legacyBackupDir || null;
+      } catch {
+        h.legacyImportSlug = null;
+      }
+    })
+  );
+  res.json({ hosts });
 });
 
 router.post('/', (req, res) => {

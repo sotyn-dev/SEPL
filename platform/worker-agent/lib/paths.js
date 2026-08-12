@@ -43,6 +43,34 @@ function backupPathFor(slug) {
   return path.join(TENANTS_ROOT, slug, 'backups');
 }
 
+function resolveExistingDir(envKey) {
+  const raw = process.env[envKey];
+  if (!raw || !String(raw).trim()) return null;
+  const p = path.resolve(String(raw).trim());
+  try {
+    if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** One-shot import: which slug may rsync from LEGACY_* then provision. */
+function legacyImportSlug() {
+  const raw = process.env.LEGACY_IMPORT_SLUG;
+  if (!raw || !String(raw).trim()) return null;
+  const s = String(raw).trim().toLowerCase();
+  return SLUG_RE.test(s) ? s : null;
+}
+
+function legacyDataDir() {
+  return resolveExistingDir('LEGACY_DATA_DIR');
+}
+
+function legacyBackupDir() {
+  return resolveExistingDir('LEGACY_BACKUP_DIR');
+}
+
 function assertSlug(slug) {
   if (!slug || typeof slug !== 'string' || !SLUG_RE.test(slug)) {
     const err = new Error('Invalid slug (lowercase letters, digits, hyphens; max 48)');
@@ -76,6 +104,9 @@ module.exports = {
   containerName,
   dataPathFor,
   backupPathFor,
+  legacyImportSlug,
+  legacyDataDir,
+  legacyBackupDir,
   assertSlug,
   assertTag,
   imageRef,

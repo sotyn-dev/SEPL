@@ -2,6 +2,7 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const {
   IMAGE,
   ERP_ENV_FILE,
@@ -14,6 +15,9 @@ const {
   containerName,
   dataPathFor,
   backupPathFor,
+  legacyImportSlug,
+  legacyDataDir,
+  legacyBackupDir,
   assertTag,
   imageRef,
 } = require('./paths');
@@ -137,7 +141,46 @@ function runContainer({ slug, port, dataPath, backupPath, image = IMAGE, extraEn
   return { containerId: r.stdout, name };
 }
 
+function destHasDb(dataPath) {
+  if (!dataPath || !fs.existsSync(dataPath)) return false;
+  try {
+    return fs.readdirSync(dataPath).some((f) => f.endsWith('.db'));
+  } catch {
+    return false;
+  }
+}
+
+/** Copy src/ → dest/ (rsync -a when available, else fs.cpSync). No --delete. */
+function syncDir(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  const r = spawnSync('rsync', ['-a', `${src}${path.sep}`, `${dest}${path.sep}`], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (!r.error && r.status === 0) return { method: 'rsync' };
+  fs.cpSync(src, dest, { recursive: true });
+  return { method: 'cpSync', rsyncError: (r.stderr || r.error?.message || '').trim() || undefined };
+}
+
 function provision(body = {}) {
+  const slug = String(body.slug || '').trim();
+  const { assertSlug } = require('./paths');
+  assertSlug(slug);
+
+  const importSlug = legacyImportSlug();
+  if (importSlug && slug === importSlug) {
+    const err = new Error(
+      `slug ${slug} is LEGACY_IMPORT_SLUG — use importLegacy (rsync from legacy & provision)`
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  return provisionSync(body);
+}
+
+/** Immediate docker provision (no legacy rsync). */
+function provisionSync(body = {}) {
   const slug = String(body.slug || '').trim();
   const { assertSlug } = require('./paths');
   assertSlug(slug);
@@ -187,6 +230,100 @@ function provision(body = {}) {
   });
 
   return enrich(row);
+}
+
+/**
+ * One-shot: rsync LEGACY_* → TENANTS_ROOT/{slug}/ then provision.
+ * Returns { jobId, status } — poll via jobs.getJob.
+ */
+function startImportProvision(body = {}) {
+  const slug = String(body.slug || '').trim();
+  const { assertSlug } = require('./paths');
+  assertSlug(slug);
+
+  const importSlug = legacyImportSlug();
+  if (!importSlug || slug !== importSlug) {
+    const err = new Error(
+      importSlug
+        ? `importLegacy only allowed for LEGACY_IMPORT_SLUG=${importSlug}`
+        : 'LEGACY_IMPORT_SLUG not set on agent'
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const srcData = legacyDataDir();
+  const srcBackup = legacyBackupDir();
+  if (!srcData || !srcBackup) {
+    const err = new Error(
+      'importLegacy requires LEGACY_DATA_DIR and LEGACY_BACKUP_DIR (existing directories)'
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  if (state.get(slug)) {
+    const err = new Error(`tenant ${slug} already provisioned`);
+    err.status = 409;
+    throw err;
+  }
+
+  const destData = dataPathFor(slug);
+  if (destHasDb(destData)) {
+    const err = new Error(
+      `refusing import: ${destData} already has .db files — one-shot already done or dest not empty`
+    );
+    err.status = 409;
+    throw err;
+  }
+
+  const avail = dockerAvailable();
+  if (!avail.ok) {
+    const err = new Error(`Docker unavailable: ${avail.error}`);
+    err.status = 503;
+    throw err;
+  }
+
+  const job = jobs.createJob({ type: 'import-provision', slug });
+  setImmediate(() => runImportProvisionJob(job.id, {
+    slug,
+    srcData,
+    srcBackup,
+    port: body.port,
+    image: body.image,
+    env: body.env,
+  }));
+
+  return { jobId: job.id, status: job.status, slug };
+}
+
+function runImportProvisionJob(jobId, { slug, srcData, srcBackup, port, image, env }) {
+  jobs.patchJob(jobId, { status: 'running' });
+  try {
+    const destData = ensureDataDir(slug);
+    const destBackup = ensureBackupDir(slug);
+
+    jobs.addStep(jobId, { op: 'rsync-data', message: `${srcData} → ${destData}` });
+    const d = syncDir(srcData, destData);
+    jobs.addStep(jobId, { op: 'rsync-data', ok: true, ...d });
+
+    jobs.addStep(jobId, { op: 'rsync-backups', message: `${srcBackup} → ${destBackup}` });
+    const b = syncDir(srcBackup, destBackup);
+    jobs.addStep(jobId, { op: 'rsync-backups', ok: true, ...b });
+
+    jobs.addStep(jobId, { op: 'provision', message: `docker run for ${slug}` });
+    const tenant = provisionSync({ slug, port, image, env });
+    jobs.addStep(jobId, { op: 'provision', ok: true });
+    jobs.patchJob(jobId, { status: 'ok', tenant });
+    jobs.addStep(jobId, { op: 'done', message: `imported + provisioned ${slug}` });
+  } catch (e) {
+    jobs.patchJob(jobId, { status: 'error', error: e.message || String(e) });
+    jobs.addStep(jobId, { op: 'error', message: e.message || String(e) });
+  }
+}
+
+function getImportJob(id) {
+  return jobs.getJob(id);
 }
 
 function enrich(row) {
@@ -600,6 +737,8 @@ function getDeployJob(id) {
 module.exports = {
   dockerAvailable,
   provision,
+  startImportProvision,
+  getImportJob,
   listTenants,
   getTenant,
   start,

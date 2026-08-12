@@ -5,6 +5,30 @@
  * Platform talks here; mounts host data → /app/data and backups → /app/backups.
  * Deploy recreates containers only — never deletes host data/ or backups/.
  */
+const fs = require('fs');
+const path = require('path');
+
+/** Load platform/agent.env before paths/driver read process.env (file wins only if unset). */
+(function loadAgentEnv() {
+  const file = path.join(__dirname, '..', 'agent.env');
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const i = t.indexOf('=');
+    if (i < 1) continue;
+    const k = t.slice(0, i).trim();
+    let v = t.slice(i + 1).trim();
+    if (
+      (v.startsWith('"') && v.endsWith('"'))
+      || (v.startsWith("'") && v.endsWith("'"))
+    ) {
+      v = v.slice(1, -1);
+    }
+    if (process.env[k] === undefined) process.env[k] = v;
+  }
+})();
+
 const http = require('http');
 const {
   TENANTS_ROOT,
@@ -13,6 +37,9 @@ const {
   REPO_ROOT,
   ERP_ENV_FILE,
   assertSlug,
+  legacyImportSlug,
+  legacyDataDir,
+  legacyBackupDir,
 } = require('./lib/paths');
 const driver = require('./lib/dockerDriver');
 const restore = require('./lib/restore');
@@ -88,7 +115,9 @@ const server = http.createServer(async (req, res) => {
         envFile: ERP_ENV_FILE,
         portRange: [PORT_MIN, PORT_MAX],
         image: driver.IMAGE,
-        legacyBackupDir: process.env.LEGACY_BACKUP_DIR || null,
+        legacyImportSlug: legacyImportSlug(),
+        legacyDataDir: legacyDataDir(),
+        legacyBackupDir: legacyBackupDir(),
       });
     }
 
@@ -142,6 +171,10 @@ const server = http.createServer(async (req, res) => {
 
     if (url === '/v1/tenants' && req.method === 'POST') {
       const body = await readBody(req);
+      if (body.importLegacy || body.import_legacy) {
+        const result = driver.startImportProvision(body);
+        return json(res, 202, result);
+      }
       const tenant = driver.provision(body);
       return json(res, 201, { tenant });
     }

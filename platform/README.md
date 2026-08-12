@@ -113,6 +113,8 @@ Full Docker build/run procedure: root [`README.md`](../README.md).
 |---|---|---|
 | `{slug}` | `<TENANTS_ROOT>/{slug}/data` | `<TENANTS_ROOT>/{slug}/backups` |
 
+**One-shot legacy import:** agent env `LEGACY_IMPORT_SLUG` + `LEGACY_DATA_DIR` + `LEGACY_BACKUP_DIR` → Companies draft matching that slug gets **Rsync from legacy & provision** (copy into `tenants/{slug}/`, then Docker). No platform DB flag. After success, unset `LEGACY_IMPORT_SLUG`.
+
 Host ports **5101–5199** → container `5000`. Container name: `sotyn-tenant-{slug}`. Runtime registry: `tenants/.agent/runtimes.json` (gitignored under `/tenants/`).
 
 Prod agent overrides: `TENANTS_ROOT=/var/lib/sotyn/tenants`, `ERP_IMAGE=…`.

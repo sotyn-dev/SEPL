@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api.js';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import { modulesOnDisplay, planLabelForClass } from '../fixtures/packs.js';
 
 export default function OrgsPage() {
@@ -11,6 +12,7 @@ export default function OrgsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [provisionBusy, setProvisionBusy] = useState('');
+  const [importTarget, setImportTarget] = useState(null);
   const [form, setForm] = useState({
     slug: '',
     displayName: '',
@@ -20,6 +22,14 @@ export default function OrgsPage() {
     provision: false,
   });
   const [hostnameTouched, setHostnameTouched] = useState(false);
+  const pollRef = useRef(null);
+
+  const stopPoll = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
 
   const load = () => {
     api('/api/tenants')
@@ -39,7 +49,16 @@ export default function OrgsPage() {
       .catch(() => {});
   };
 
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    return () => stopPoll();
+  }, []);
+
+  const hostLabel = (id) => hosts.find((h) => h.id === id)?.label || id;
+  const needsLegacyImport = (t) => {
+    const h = hosts.find((x) => x.id === t.hostId);
+    return !!(h?.legacyImportSlug && h.legacyImportSlug === t.slug);
+  };
 
   const create = async (e) => {
     e.preventDefault();
@@ -82,6 +101,36 @@ export default function OrgsPage() {
     }
   };
 
+  const pollImportJob = (slug, jobId) => {
+    stopPoll();
+    pollRef.current = setInterval(async () => {
+      try {
+        const r = await api(`/api/tenants/${encodeURIComponent(slug)}/jobs/${jobId}`);
+        const d = await r.json();
+        if (!r.ok) {
+          setError(d.error || 'Import job poll failed');
+          stopPoll();
+          setProvisionBusy('');
+          return;
+        }
+        if (d.job?.status === 'ok' || d.job?.status === 'error') {
+          stopPoll();
+          setProvisionBusy('');
+          if (d.job.status === 'error') {
+            setError(d.job.error || 'Legacy import failed');
+          } else {
+            setNotice(`Imported + provisioned ${slug} under tenants/${slug}/.`);
+            load();
+          }
+        }
+      } catch (e) {
+        setError(String(e.message || e));
+        stopPoll();
+        setProvisionBusy('');
+      }
+    }, 1200);
+  };
+
   const provision = async (t) => {
     setError('');
     setNotice('');
@@ -102,7 +151,77 @@ export default function OrgsPage() {
     }
   };
 
-  const hostLabel = (id) => hosts.find((h) => h.id === id)?.label || id;
+  const confirmLegacyImport = async () => {
+    const t = importTarget;
+    if (!t) return;
+    setImportTarget(null);
+    setError('');
+    setNotice('');
+    setProvisionBusy(t.slug);
+    try {
+      const r = await api(`/api/tenants/${encodeURIComponent(t.slug)}/provision`, {
+        method: 'POST',
+        body: JSON.stringify({ hostId: t.hostId, importLegacy: true }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Import failed to start');
+      if (d.jobId) {
+        setNotice(`Import job ${d.jobId} running…`);
+        pollImportJob(t.slug, d.jobId);
+        return;
+      }
+      setNotice(`Provisioned ${d.tenant.slug}.`);
+      load();
+      setProvisionBusy('');
+    } catch (err) {
+      setError(String(err.message || err));
+      setProvisionBusy('');
+    }
+  };
+
+  const draftActions = (t, { mobile = false } = {}) => {
+    if (t.status !== 'draft') return null;
+    const legacy = needsLegacyImport(t);
+    const busyRow = provisionBusy === t.slug;
+    if (legacy) {
+      return (
+        <button
+          type="button"
+          className={
+            mobile
+              ? 'mt-3 text-xs font-medium text-amber-900 hover:underline'
+              : 'text-xs text-amber-900 font-medium hover:underline'
+          }
+          disabled={!!provisionBusy}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setImportTarget(t);
+          }}
+        >
+          {busyRow ? 'Importing…' : 'Rsync from legacy & provision'}
+        </button>
+      );
+    }
+    return (
+      <button
+        type="button"
+        className={
+          mobile
+            ? 'mt-3 text-xs font-medium text-blue-800 hover:underline'
+            : 'text-xs text-blue-800 font-medium hover:underline'
+        }
+        disabled={!!provisionBusy}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          provision(t);
+        }}
+      >
+        {busyRow ? 'Provisioning…' : (mobile ? 'Provision on host' : 'Provision')}
+      </button>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -129,7 +248,6 @@ export default function OrgsPage() {
         <p className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 break-words">{notice}</p>
       )}
 
-      {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {tenants.map((t) => (
           <Link
@@ -151,16 +269,7 @@ export default function OrgsPage() {
               <span className="font-mono">{hostLabel(t.hostId)}</span>
               <span className="font-mono">{modulesOnDisplay(t.tenantClass)}</span>
             </div>
-            {t.status === 'draft' && (
-              <button
-                type="button"
-                className="mt-3 text-xs font-medium text-blue-800 hover:underline"
-                disabled={!!provisionBusy}
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); provision(t); }}
-              >
-                {provisionBusy === t.slug ? 'Provisioning…' : 'Provision on host'}
-              </button>
-            )}
+            {draftActions(t, { mobile: true })}
           </Link>
         ))}
         {!tenants.length && (
@@ -170,7 +279,6 @@ export default function OrgsPage() {
         )}
       </div>
 
-      {/* Desktop table */}
       <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-sm min-w-[640px]">
           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -205,16 +313,7 @@ export default function OrgsPage() {
                   <span className="block text-[10px] text-slate-400 normal-case">fixture estimate</span>
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap space-x-3">
-                  {t.status === 'draft' && (
-                    <button
-                      type="button"
-                      className="text-xs text-blue-800 font-medium hover:underline"
-                      disabled={!!provisionBusy}
-                      onClick={() => provision(t)}
-                    >
-                      {provisionBusy === t.slug ? 'Provisioning…' : 'Provision'}
-                    </button>
-                  )}
+                  {draftActions(t)}
                   <Link
                     className="text-blue-800 font-medium hover:underline text-sm"
                     to={`/orgs/${t.slug}`}
@@ -328,6 +427,9 @@ export default function OrgsPage() {
               Provision on host now
               <span className="block text-xs text-slate-500">
                 Calls the agent to create data/backups mounts + container. Requires Docker image on that host.
+                {hosts.find((h) => h.id === form.hostId)?.legacyImportSlug === form.slug && form.slug
+                  ? ' This slug is LEGACY_IMPORT_SLUG — create as draft, then use Rsync from legacy & provision.'
+                  : ''}
               </span>
             </span>
           </label>
@@ -345,6 +447,22 @@ export default function OrgsPage() {
           </div>
         </form>
       )}
+
+      <ConfirmDialog
+        open={!!importTarget}
+        tone="warning"
+        title="Rsync from legacy & provision?"
+        message={
+          importTarget
+            ? `Stops relying on old PM2 paths. Copies agent LEGACY_DATA_DIR + LEGACY_BACKUP_DIR into tenants/${importTarget.slug}/, then starts the Docker container.\n\nTake downtime first (stop processes using the old data). One-shot only.`
+            : ''
+        }
+        note="Requires LEGACY_IMPORT_SLUG + LEGACY_* dirs on the agent"
+        confirmLabel="Rsync & provision"
+        busy={!!provisionBusy}
+        onCancel={() => { if (!provisionBusy) setImportTarget(null); }}
+        onConfirm={confirmLegacyImport}
+      />
     </div>
   );
 }

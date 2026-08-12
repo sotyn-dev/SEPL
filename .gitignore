@@ -2,6 +2,8 @@ node_modules/
 /data/
 /backups/
 .env
+platform/agent.env
+
 client/dist/
 client/node_modules/
 platform/data/

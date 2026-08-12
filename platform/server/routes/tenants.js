@@ -146,6 +146,15 @@ router.post('/', async (req, res) => {
   if (provision) {
     try {
       const result = await provisionOnHost(row);
+      if (result.async) {
+        return res.status(202).json({
+          tenant: rowToTenant(result.row),
+          jobId: result.jobId,
+          status: result.status,
+          note: 'Draft created; legacy import job started — poll jobs until live.',
+          importLegacy: true,
+        });
+      }
       row = result.row;
       agent = result.agent;
     } catch (e) {
@@ -162,17 +171,32 @@ router.post('/', async (req, res) => {
 });
 
 /** Call worker agent to create the Docker tenant on the org's assigned host. */
-async function provisionOnHost(tenantRow) {
+async function provisionOnHost(tenantRow, { importLegacy = false } = {}) {
   const db = getDb();
   const hostId = tenantRow.host_id || DEFAULT_HOST_ID;
+  const body = { slug: tenantRow.slug };
+  if (importLegacy) body.importLegacy = true;
+
   const { host, data } = await agentFetch('/v1/tenants', {
     hostId,
     method: 'POST',
-    body: JSON.stringify({ slug: tenantRow.slug }),
+    body: JSON.stringify(body),
   });
 
-  const dataPath = data.dataPath || data.data_path || null;
-  const backupPath = data.backupPath || data.backup_path || null;
+  // Async one-shot: rsync + provision job — caller polls; mark live when job ok.
+  if (data.jobId) {
+    return {
+      async: true,
+      jobId: data.jobId,
+      status: data.status || 'queued',
+      host,
+      row: tenantRow,
+    };
+  }
+
+  const agentTenant = data.tenant || data;
+  const dataPath = agentTenant.dataPath || agentTenant.data_path || null;
+  const backupPath = agentTenant.backupPath || agentTenant.backup_path || null;
   db.prepare(`
     UPDATE tenants
     SET status = 'live',
@@ -184,13 +208,29 @@ async function provisionOnHost(tenantRow) {
 
   const row = db.prepare('SELECT * FROM tenants WHERE id = ?').get(tenantRow.id);
   return {
+    async: false,
     row,
     agent: {
       hostId: host.id,
       hostLabel: host.label,
-      tenant: data,
+      tenant: agentTenant,
     },
   };
+}
+
+function markTenantLiveFromAgent(tenantRow, agentTenant) {
+  const db = getDb();
+  const dataPath = agentTenant?.dataPath || agentTenant?.data_path || null;
+  const backupPath = agentTenant?.backupPath || agentTenant?.backup_path || null;
+  db.prepare(`
+    UPDATE tenants
+    SET status = 'live',
+        data_path = COALESCE(?, data_path),
+        backup_path = COALESCE(?, backup_path),
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(dataPath, backupPath, tenantRow.id);
+  return db.prepare('SELECT * FROM tenants WHERE id = ?').get(tenantRow.id);
 }
 
 router.post('/:slug/provision', async (req, res) => {
@@ -212,7 +252,20 @@ router.post('/:slug/provision', async (req, res) => {
     }
 
     const fresh = db.prepare('SELECT * FROM tenants WHERE id = ?').get(row.id);
-    const result = await provisionOnHost(fresh);
+    const importLegacy = !!(req.body?.importLegacy || req.body?.import_legacy);
+    const result = await provisionOnHost(fresh, { importLegacy });
+
+    if (result.async) {
+      return res.status(202).json({
+        tenant: rowToTenant(result.row),
+        jobId: result.jobId,
+        status: result.status,
+        hostId: result.host.id,
+        hostLabel: result.host.label,
+        importLegacy: true,
+      });
+    }
+
     res.json({ tenant: rowToTenant(result.row), agent: result.agent });
   } catch (e) {
     res.status(e.status || 502).json({
@@ -342,10 +395,23 @@ router.get('/:slug/jobs/:id', async (req, res) => {
       `/v1/tenants/${encodeURIComponent(row.slug)}/jobs/${encodeURIComponent(req.params.id)}`,
       { hostId }
     );
+    let tenant = rowToTenant(row);
+    const job = data.job;
+    if (
+      job
+      && job.status === 'ok'
+      && job.type === 'import-provision'
+      && job.tenant
+      && row.status !== 'live'
+    ) {
+      const live = markTenantLiveFromAgent(row, job.tenant);
+      tenant = rowToTenant(live);
+    }
     res.json({
       hostId: host.id,
       hostLabel: host.label,
-      job: data.job,
+      job,
+      tenant,
     });
   } catch (e) {
     res.status(e.status || 502).json({

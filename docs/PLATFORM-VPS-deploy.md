@@ -95,19 +95,17 @@ cd /root/erp
 # Platform API — loads platform/.env
 pm2 start platform/server/index.js --name sotyn-platform
 
-# Worker agent — localhost; needs Docker
-AGENT_TOKEN='same-as-platform-env' \
-HOST_ID=host_local \
-TENANTS_ROOT=/var/lib/sotyn/tenants \
-ERP_ENV_FILE=/root/erp/.env \
-LEGACY_BACKUP_DIR=/root/erp-backups \
+# Worker agent — localhost; needs Docker. Prefer env file:
+#   cp platform/agent.env.example platform/agent.env   # edit once
+#   pm2 start platform/worker-agent/index.js --name sotyn-agent
+#   # later: edit agent.env → pm2 restart sotyn-agent
 pm2 start platform/worker-agent/index.js --name sotyn-agent
 
 pm2 save
 pm2 status
 ```
 
-Health checks:
+**sepl / orphan one-shot:** in `platform/agent.env` set `LEGACY_IMPORT_SLUG`, `LEGACY_DATA_DIR`, `LEGACY_BACKUP_DIR` → `pm2 restart sotyn-agent` → downtime → Companies **Rsync from legacy & provision** → remove `LEGACY_IMPORT_SLUG` from the file → restart again.Health checks:
 
 ```bash
 curl -s http://127.0.0.1:7100/api/health
@@ -208,7 +206,7 @@ Details: root [`README.md`](../README.md) · platform UI **Docs → Deploy**.
 ### One-time: stand up VPS‑2
 
 1. Install Docker; clone the monorepo (image build context — platform app not required on this box).
-2. Run **worker agent** (PM2) with its own `HOST_ID`, same `AGENT_TOKEN` as platform (for now), `TENANTS_ROOT`, `ERP_ENV_FILE`, and optionally `LEGACY_BACKUP_DIR` (e.g. `/root/erp-backups`) so Org Overview can restore old dated `.db` / zip files from that folder.
+2. Run **worker agent** (PM2) from `platform/agent.env` (copy `agent.env.example`). Edit that file for tokens / one-shot `LEGACY_*`, then `pm2 restart sotyn-agent`.
 3. Register that host in platform UI **Hosts** (id, label, reachable `agent_url`, optional per-host token).
 4. Nginx / edge: `{slug}-erp…` → that box’s published container ports.
 5. **Companies → New company** → pick that host → Provision (or draft then Provision).
