@@ -66,6 +66,8 @@ function verifyToken(token) {
 }
 
 function requireAuth(req, res, next) {
+  // SPA / static UI (PLATFORM_SERVE_STATIC) — not API.
+  if (!req.path.startsWith('/api')) return next();
   // Brand asset previews are loaded via <img src> (no Authorization header).
   if (req.method === 'GET' && /^\/api\/branding\/[^/]+\/assets\//.test(req.path)) {
     return next();

@@ -1,0 +1,54 @@
+# Platform + worker agent (no edge proxy — nginx stays on the host).
+# From repo root:
+#   docker compose -f platform/docker-compose.yml up -d --build
+#
+# Agent mounts the host Docker socket and the same TENANTS_ROOT path on host
+# and in-container so `docker run -v` bind mounts resolve correctly.
+
+services:
+  platform:
+    build:
+      context: ..
+      dockerfile: platform/Dockerfile
+    image: sotyn-platform:local
+    container_name: sotyn-platform
+    restart: unless-stopped
+    ports:
+      - "${PLATFORM_PUBLISH_PORT:-7100}:7100"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PLATFORM_BIND: "0.0.0.0"
+      PLATFORM_SERVE_STATIC: "1"
+      PLATFORM_DATA_DIR: /var/lib/sotyn/platform
+      AGENT_URL: http://agent:7200
+      AGENT_TOKEN: ${AGENT_TOKEN:-dev-agent-token}
+    volumes:
+      - ${SOTYN_PLATFORM_DATA:-/var/lib/sotyn/platform}:/var/lib/sotyn/platform
+    depends_on:
+      - agent
+
+  agent:
+    build:
+      context: ..
+      dockerfile: platform/worker-agent/Dockerfile
+    image: sotyn-agent:local
+    container_name: sotyn-agent
+    restart: unless-stopped
+    ports:
+      - "${AGENT_PUBLISH_PORT:-7200}:7200"
+    env_file:
+      - path: agent.env
+        required: false
+    environment:
+      AGENT_BIND: "0.0.0.0"
+      AGENT_TOKEN: ${AGENT_TOKEN:-dev-agent-token}
+      HOST_ID: ${HOST_ID:-host_local}
+      TENANTS_ROOT: /var/lib/sotyn/tenants
+      ERP_ENV_FILE: ${ERP_ENV_FILE:-/var/lib/sotyn/erp.env}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path host ↔ container (required for tenant bind mounts).
+      - ${SOTYN_TENANTS_ROOT:-/var/lib/sotyn/tenants}:/var/lib/sotyn/tenants
+      - ${SOTYN_ERP_ENV:-../.env}:/var/lib/sotyn/erp.env:ro

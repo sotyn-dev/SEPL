@@ -36,7 +36,8 @@ function EnvDocsHtml() {
       title="Platform & agent env"
       blurb={
         <>
-          Two files on the VPS — not the same. Day‑1 Hostinger box runs both.
+          Two files on the VPS — not the same. Day‑1 box runs both (PM2 or{' '}
+          <Link to="/docs?tab=docker" className="text-blue-800 hover:underline">Docker Compose</Link>).
           Markdown twin: <code className="bg-slate-50 px-1 rounded">docs/PLATFORM-VPS-deploy.md</code>.
         </>
       }
@@ -51,8 +52,9 @@ openssl rand -hex 32   # → AGENT_TOKEN (same value in BOTH files on day‑1)`}
 
       <Section title="A) platform/.env — control plane only">
         <p className="text-slate-600 text-xs">
-          Read by <code className="bg-slate-50 px-1 rounded">sotyn-platform</code> (PM2). After edit:{' '}
-          <code className="bg-slate-50 px-1 rounded">pm2 restart sotyn-platform</code>.
+          Read by the platform API (PM2 <code className="bg-slate-50 px-1 rounded">sotyn-platform</code> or Compose
+          service <code className="bg-slate-50 px-1 rounded">platform</code>). After edit: PM2 restart, or{' '}
+          <code className="bg-slate-50 px-1 rounded">docker compose -f platform/docker-compose.yml up -d</code>.
         </p>
         <CodeBlock>{`PLATFORM_PORT=7100
 PLATFORM_DATA_DIR=/var/lib/sotyn/platform
@@ -69,7 +71,10 @@ PLATFORM_PUBLIC_URL=https://platform.sotyn.com
 # PLATFORM_SMTP_PASS='app-password'
 # PLATFORM_EMAIL_FROM='Sotyn Platform <sotyn.soft@gmail.com>'
 
+# Host Node / PM2 (same machine):
 AGENT_URL=http://127.0.0.1:7200
+# Compose (platform + agent on the same Docker network):
+# AGENT_URL=http://agent:7200
 AGENT_TOKEN='paste-second-openssl-rand-hex-32'`}</CodeBlock>
         <ul className="list-disc pl-5 space-y-1.5 text-slate-600 mt-2">
           <li>
@@ -89,9 +94,9 @@ AGENT_TOKEN='paste-second-openssl-rand-hex-32'`}</CodeBlock>
 
       <Section title="B) platform/agent.env — worker agent only">
         <p className="text-slate-600 text-xs">
-          Read by <code className="bg-slate-50 px-1 rounded">sotyn-agent</code>. Uncommented lines required.
-          Leave <code className="bg-slate-50 px-1 rounded">LEGACY_*</code> commented until cutover. After edit:{' '}
-          <code className="bg-slate-50 px-1 rounded">pm2 restart sotyn-agent</code>.
+          Read by the worker agent (PM2 or Compose <code className="bg-slate-50 px-1 rounded">agent</code>).
+          Uncommented lines required. Leave <code className="bg-slate-50 px-1 rounded">LEGACY_*</code> commented until
+          cutover. After edit: PM2 restart, or recreate the agent container.
         </p>
         <CodeBlock>{`AGENT_TOKEN='paste-second-openssl-rand-hex-32'
 HOST_ID=host_local
@@ -112,12 +117,13 @@ ERP_ENV_FILE=/root/erp/.env
             (JWT/SMTP/S3) passed into Docker — not platform secrets, and not legacy data paths.
           </li>
           <li>
-            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-agent</code> is only the PM2 nickname (
-            <code className="text-xs bg-slate-50 px-1 rounded">--name</code>), not a host id.
+            Under Compose, tenants path must be the <strong className="font-medium text-ink">same host path</strong> inside
+            the agent container (default <code className="text-xs bg-slate-50 px-1 rounded">/var/lib/sotyn/tenants</code>)
+            so bind mounts work. See{' '}
+            <Link to="/docs?tab=docker" className="text-blue-800 hover:underline">Docs → Docker</Link>.
           </li>
         </ul>
       </Section>
-
       <Section title="Which file is which">
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left min-w-[28rem]">
@@ -131,25 +137,38 @@ ERP_ENV_FILE=/root/erp/.env
             <tbody className="text-slate-700">
               <tr className="border-b border-slate-50">
                 <td className="py-1.5 pr-3 font-mono">platform/.env</td>
-                <td className="py-1.5 pr-3">Platform API</td>
+                <td className="py-1.5 pr-3">Platform API (PM2 or Compose <code className="bg-slate-50 px-1 rounded">platform</code>)</td>
                 <td className="py-1.5">Login, JWT, SMTP, DB path, default agent URL/token</td>
               </tr>
               <tr className="border-b border-slate-50">
                 <td className="py-1.5 pr-3 font-mono">platform/agent.env</td>
-                <td className="py-1.5 pr-3">Worker agent</td>
+                <td className="py-1.5 pr-3">Worker agent (PM2 or Compose <code className="bg-slate-50 px-1 rounded">agent</code>)</td>
                 <td className="py-1.5">Token check, tenants disk, ERP env-file, optional legacy rsync</td>
               </tr>
               <tr>
                 <td className="py-1.5 pr-3 font-mono">/root/erp/.env</td>
                 <td className="py-1.5 pr-3">ERP containers</td>
-                <td className="py-1.5">Tenant app secrets via ERP_ENV_FILE</td>
+                <td className="py-1.5">Tenant app secrets via ERP_ENV_FILE — never platform secrets</td>
               </tr>
             </tbody>
           </table>
         </div>
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600 mt-2">
+          <li>
+            After edit (PM2): <code className="text-xs bg-slate-50 px-1 rounded">pm2 restart sotyn-platform</code> /{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-agent</code>.
+          </li>
+          <li>
+            After edit (Compose):{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">docker compose -f platform/docker-compose.yml up -d</code>.
+          </li>
+          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-platform</code> /{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-agent</code> are process/container names — not host ids.
+          </li>
+        </ul>
       </Section>
-
-      <Section title="Start (PM2)">
+      <Section title="Start (PM2 — host Node)">
         <CodeBlock>{`cd /root/erp
 pm2 start platform/server/index.js --name sotyn-platform
 pm2 start platform/worker-agent/index.js --name sotyn-agent
@@ -157,8 +176,12 @@ pm2 save
 
 curl -s http://127.0.0.1:7100/api/health
 curl -s http://127.0.0.1:7200/v1/health`}</CodeBlock>
+        <p className="text-slate-600 text-xs mt-2">
+          Prefer containers?{' '}
+          <Link to="/docs?tab=docker" className="text-blue-800 hover:underline">Docs → Docker</Link>
+          {' '}(<code className="bg-slate-50 px-1 rounded">platform/docker-compose.yml</code>).
+        </p>
       </Section>
-
       <Section title="Multi-VPS tokens (clear example)">
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left min-w-[32rem]">
@@ -209,7 +232,7 @@ curl -s http://127.0.0.1:7200/v1/health`}</CodeBlock>
 LEGACY_DATA_DIR=/root/erp/data
 LEGACY_BACKUP_DIR=/root/erp-backups`}</CodeBlock>
           </li>
-          <li><code className="text-xs bg-slate-50 px-1 rounded">pm2 restart sotyn-agent</code></li>
+          <li><code className="text-xs bg-slate-50 px-1 rounded">pm2 restart sotyn-agent</code> (or recreate the agent container)</li>
           <li>Stop old PM2 ERP (downtime).</li>
           <li>
             <Link to="/orgs" className="text-blue-800 hover:underline">Companies</Link> → draft matching that slug →{' '}
@@ -223,6 +246,221 @@ LEGACY_BACKUP_DIR=/root/erp-backups`}</CodeBlock>
         </p>
       </Section>
     </DocCard>
+  );
+}
+
+function DockerDocsHtml() {
+  return (
+    <DocCard
+      title="Docker — platform + agent"
+      blurb={
+        <>
+          Run control plane and worker agent as containers. Tenant ERPs stay separate images via the agent.
+          Env files: <Link to="/docs?tab=env" className="text-blue-800 hover:underline">Docs → Env</Link>.
+          No edge proxy in this compose — host nginx later.
+        </>
+      }
+    >
+      <Section title="What you get">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-platform</code> — API + built UI on{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">:7100</code> (
+            <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_SERVE_STATIC=1</code>).
+          </li>
+          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-agent</code> —{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">:7200</code>, Docker socket + tenants disk.
+          </li>
+          <li>
+            Compose sets <code className="text-xs bg-slate-50 px-1 rounded">AGENT_URL=http://agent:7200</code> for the
+            platform service (override in <code className="text-xs bg-slate-50 px-1 rounded">platform/.env</code> if you
+            need the host-Node URL).
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="Env files (same rules as PM2)">
+        <p className="text-slate-600 text-xs mb-2">
+          Still <strong className="font-medium text-ink">two files</strong> — not one. Full field list:{' '}
+          <Link to="/docs?tab=env" className="text-blue-800 hover:underline">Docs → Env</Link>.
+        </p>
+        <div className="overflow-x-auto mb-2">
+          <table className="w-full text-xs text-left min-w-[28rem]">
+            <thead>
+              <tr className="text-slate-500 border-b border-slate-100">
+                <th className="py-1.5 pr-3 font-semibold">File</th>
+                <th className="py-1.5 pr-3 font-semibold">Compose loads as</th>
+                <th className="py-1.5 font-semibold">Purpose</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-700">
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">platform/.env</td>
+                <td className="py-1.5 pr-3">
+                  <code className="bg-slate-50 px-1 rounded">env_file</code> on service{' '}
+                  <code className="bg-slate-50 px-1 rounded">platform</code>
+                </td>
+                <td className="py-1.5">Login, JWT, SMTP, DB path, default agent token</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">platform/agent.env</td>
+                <td className="py-1.5 pr-3">
+                  <code className="bg-slate-50 px-1 rounded">env_file</code> on service{' '}
+                  <code className="bg-slate-50 px-1 rounded">agent</code>
+                </td>
+                <td className="py-1.5">Token check, tenants disk, ERP env-file, optional legacy</td>
+              </tr>
+              <tr>
+                <td className="py-1.5 pr-3 font-mono">/root/erp/.env</td>
+                <td className="py-1.5 pr-3">
+                  Mount → <code className="bg-slate-50 px-1 rounded">ERP_ENV_FILE</code>
+                </td>
+                <td className="py-1.5">Tenant ERP secrets only — not platform/agent</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>
+            Day‑1: <code className="text-xs bg-slate-50 px-1 rounded">AGENT_TOKEN</code> in{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">platform/.env</code> and{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">platform/agent.env</code>{' '}
+            <strong className="font-medium text-ink">must match</strong> (same as PM2).
+          </li>
+          <li>
+            Compose forces <code className="text-xs bg-slate-50 px-1 rounded">AGENT_URL=http://agent:7200</code> on the
+            platform service (Docker DNS). For PM2 on the host keep{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">http://127.0.0.1:7200</code>.
+          </li>
+          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_JWT_SECRET</code> / admin seed / SMTP live only in{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">platform/.env</code> — not in{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">agent.env</code> or ERP{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">.env</code>.
+          </li>
+          <li>
+            After editing either file, recreate so containers pick up env:{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">docker compose -f platform/docker-compose.yml up -d</code>
+            {' '}(PM2 equivalent:{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">pm2 restart sotyn-platform</code> /{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-agent</code>).
+          </li>
+          <li>
+            Default compose maps host ERP env via{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">SOTYN_ERP_ENV</code> (default repo{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">.env</code>) to{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">/var/lib/sotyn/erp.env</code> inside the agent and sets{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">ERP_ENV_FILE</code> there. On a classic VPS checkout that is
+            usually <code className="text-xs bg-slate-50 px-1 rounded">/root/erp/.env</code> — set{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">SOTYN_ERP_ENV=/root/erp/.env</code> if needed.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="One-time dirs + copy env">
+        <CodeBlock>{`mkdir -p /var/lib/sotyn/platform /var/lib/sotyn/tenants
+cd /root/erp   # monorepo root
+cp platform/.env.example platform/.env
+cp platform/agent.env.example platform/agent.env
+
+openssl rand -hex 32   # → PLATFORM_JWT_SECRET (platform/.env only)
+openssl rand -hex 32   # → AGENT_TOKEN (SAME value in platform/.env AND agent.env)
+
+# platform/.env — Compose networking (optional if you rely on compose environment:):
+# AGENT_URL=http://agent:7200`}</CodeBlock>
+      </Section>
+
+      <Section title="Build &amp; start">
+        <CodeBlock>{`# from monorepo root
+docker compose -f platform/docker-compose.yml up -d --build
+
+curl -s http://127.0.0.1:7100/api/health
+curl -s http://127.0.0.1:7200/v1/health
+# UI: http://127.0.0.1:7100`}</CodeBlock>
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600 mt-2">
+          <li>
+            Files: <code className="text-xs bg-slate-50 px-1 rounded">platform/Dockerfile</code>,{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">platform/worker-agent/Dockerfile</code>,{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">platform/docker-compose.yml</code>.
+          </li>
+          <li>
+            Do <strong className="font-medium text-ink">not</strong> also PM2-start platform/agent on the same ports —
+            pick Compose <em>or</em> PM2.
+          </li>
+        </ul>
+      </Section>
+      <Section title="Volumes (important)">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left min-w-[28rem]">
+            <thead>
+              <tr className="text-slate-500 border-b border-slate-100">
+                <th className="py-1.5 pr-3 font-semibold">Mount</th>
+                <th className="py-1.5 font-semibold">Why</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-700">
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">/var/run/docker.sock</td>
+                <td className="py-1.5">Agent drives tenant containers on the host engine</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">/var/lib/sotyn/tenants</td>
+                <td className="py-1.5">Same path host↔agent so docker -v bind mounts resolve</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">/var/lib/sotyn/platform</td>
+                <td className="py-1.5">platform.db + durable brand assets</td>
+              </tr>
+              <tr>
+                <td className="py-1.5 pr-3 font-mono">ERP .env → erp.env</td>
+                <td className="py-1.5">Tenant container secrets via ERP_ENV_FILE</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="text-slate-600 text-xs mt-2">
+          Override paths with env:{' '}
+          <code className="bg-slate-50 px-1 rounded">SOTYN_PLATFORM_DATA</code>,{' '}
+          <code className="bg-slate-50 px-1 rounded">SOTYN_TENANTS_ROOT</code>,{' '}
+          <code className="bg-slate-50 px-1 rounded">SOTYN_ERP_ENV</code>.
+        </p>
+      </Section>
+
+      <Section title="Stop / logs">
+        <CodeBlock>{`docker compose -f platform/docker-compose.yml logs -f platform agent
+docker compose -f platform/docker-compose.yml down`}</CodeBlock>
+        <p className="text-slate-600 text-xs mt-2">
+          Tenant ERP logs stay under each company → Overview → Container logs (not these compose logs).
+        </p>
+      </Section>
+
+      <Section title="Worker-only box (Multi‑VPS)">
+        <p className="text-slate-600 text-xs mb-2">
+          On VPS‑B you can run <strong className="font-medium text-ink">agent only</strong> (no platform service):
+        </p>
+        <CodeBlock>{`docker build -f platform/worker-agent/Dockerfile -t sotyn-agent:local .
+docker run -d --name sotyn-agent --restart unless-stopped \\
+  -p 7200:7200 \\
+  -e AGENT_BIND=0.0.0.0 \\
+  -e AGENT_TOKEN=token-b \\
+  -e HOST_ID=host_vps_b \\
+  -e TENANTS_ROOT=/var/lib/sotyn/tenants \\
+  -e ERP_ENV_FILE=/var/lib/sotyn/erp.env \\
+  -v /var/run/docker.sock:/var/run/docker.sock \\
+  -v /var/lib/sotyn/tenants:/var/lib/sotyn/tenants \\
+  -v /root/erp/.env:/var/lib/sotyn/erp.env:ro \\
+  sotyn-agent:local`}</CodeBlock>
+        <p className="text-slate-600 text-xs mt-2">
+          Then register the host in{' '}
+          <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>
+          {' '}with the same <code className="bg-slate-50 px-1 rounded">token-b</code> — see{' '}
+          <Link to="/docs?tab=multivps" className="text-blue-800 hover:underline">Multi‑VPS</Link>.
+          Prefer file-based config: mount{' '}
+          <code className="bg-slate-50 px-1 rounded">platform/agent.env</code> and skip duplicating{' '}
+          <code className="bg-slate-50 px-1 rounded">-e</code> flags (token still must match Hosts UI).
+        </p>
+      </Section>    </DocCard>
   );
 }
 
@@ -368,10 +606,13 @@ function MultiVpsDocsHtml() {
           </table>
         </div>
         <p className="text-slate-600 text-xs mt-2">
-          Agent token must match B’s <code className="bg-slate-50 px-1 rounded">agent.env</code>. Use{' '}
-          <code className="bg-slate-50 px-1 rounded">http://</code> (not https). Same-VPS agent uses{' '}
-          <code className="bg-slate-50 px-1 rounded">http://127.0.0.1:7200</code>.
-          Agent currently listens on localhost only — remote IP needs private reachability first.
+          Agent token must match B’s <code className="bg-slate-50 px-1 rounded">agent.env</code> (or container{' '}
+          <code className="bg-slate-50 px-1 rounded">AGENT_TOKEN</code>). Use{' '}
+          <code className="bg-slate-50 px-1 rounded">http://</code> (not https). Same-VPS agent:{' '}
+          <code className="bg-slate-50 px-1 rounded">http://127.0.0.1:7200</code> (host Node) or compose service URL
+          from the platform container. Remote workers need{' '}
+          <code className="bg-slate-50 px-1 rounded">AGENT_BIND=0.0.0.0</code> and private network reachability to{' '}
+          <code className="bg-slate-50 px-1 rounded">:7200</code>.
         </p>
       </Section>
 
@@ -379,19 +620,20 @@ function MultiVpsDocsHtml() {
         <ol className="list-decimal pl-5 space-y-1.5">
           <li>Install Docker; clone the monorepo (build context for <code className="text-xs bg-slate-50 px-1 rounded">sotyn-erp</code> images).</li>
           <li>
-            <code className="text-xs bg-slate-50 px-1 rounded">cp platform/agent.env.example platform/agent.env</code>
-            {' '}→ set token / <code className="text-xs bg-slate-50 px-1 rounded">HOST_ID</code> / paths → PM2 start agent
-            (see <Link to="/docs?tab=env" className="text-blue-800 hover:underline">Env</Link>).
+            Start the agent via Compose/Docker (
+            <Link to="/docs?tab=docker" className="text-blue-800 hover:underline">Docs → Docker</Link>
+            {' '}→ worker-only) or PM2 (
+            <Link to="/docs?tab=env" className="text-blue-800 hover:underline">Env</Link>
+            ) — set token / <code className="text-xs bg-slate-50 px-1 rounded">HOST_ID</code> / paths.
           </li>
           <li>
             Register that host in platform <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link>
             {' '}(table above) so Deploy / provision can reach it.
           </li>
-          <li>Nginx / edge: route <code className="text-xs bg-slate-50 px-1 rounded">{'{slug}'}-erp…</code> → that box’s container ports.</li>
+          <li>Nginx / edge: route tenant hostnames → that box’s container ports.</li>
           <li>Provision orgs onto that host via platform → agent → Docker + bind mounts.</li>
         </ol>
       </Section>
-
       <Section title="Everyday code deploy (each VPS)">
         <ol className="list-decimal pl-5 space-y-1.5">
           <li>
@@ -416,9 +658,10 @@ function MultiVpsDocsHtml() {
             <strong className="font-medium text-emerald-800">Ready:</strong>{' '}
             <Link to="/hosts" className="text-blue-800 hover:underline">Hosts</Link> registry (add / edit / remove /
             health), per-host agent token, Deploy host picker, create company with host + optional provision,
-            <code className="text-xs bg-slate-50 px-1 rounded"> POST /api/tenants/:slug/provision</code>.
-          </li>
-          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded"> POST /api/tenants/:slug/provision</code>,
+            Compose images for platform + agent (
+            <Link to="/docs?tab=docker" className="text-blue-800 hover:underline">Docs → Docker</Link>).
+          </li>          <li>
             <strong className="font-medium text-amber-800">Still later:</strong> auto fan-out Deploy to all VPS,
             tenant move between hosts. Platform exclusive access uses Cloudflare Access — see{' '}
             <Link to="/docs?tab=access" className="text-blue-800 hover:underline">Docs → Access</Link>.
@@ -689,6 +932,7 @@ function AuditDocsHtml() {
 
 const TABS = [
   { id: 'env', label: 'Env' },
+  { id: 'docker', label: 'Docker' },
   { id: 'deploy', label: 'Deploy' },
   { id: 'multivps', label: 'Multi‑VPS' },
   { id: 'access', label: 'Access' },
@@ -733,6 +977,7 @@ export default function DocsPage() {
       </div>
 
       {tab === 'env' && <EnvDocsHtml />}
+      {tab === 'docker' && <DockerDocsHtml />}
       {tab === 'deploy' && <DeployDocsHtml />}
       {tab === 'multivps' && <MultiVpsDocsHtml />}
       {tab === 'access' && <AccessDocsHtml />}

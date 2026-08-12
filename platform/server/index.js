@@ -18,6 +18,10 @@ const { auditMiddleware } = require('./lib/audit');
 const { scheduleNightly } = require('./lib/backup');
 
 const PORT = Number(process.env.PLATFORM_PORT || 7100);
+const BIND = process.env.PLATFORM_BIND || '127.0.0.1';
+const SERVE_STATIC = process.env.PLATFORM_SERVE_STATIC === '1'
+  || process.env.PLATFORM_SERVE_STATIC === 'true';
+const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
 const app = express();
 
 app.use(cors({ origin: true }));
@@ -37,6 +41,10 @@ app.use('/api/auth', authRouter);
 // Zip download allows ?token= for browser <a> streaming (before global JWT gate)
 app.get('/api/backups/:file/download', backups.downloadHandler);
 
+if (SERVE_STATIC) {
+  app.use(express.static(CLIENT_DIST));
+}
+
 app.use(requireAuth);
 app.use(auditMiddleware);
 
@@ -48,10 +56,19 @@ app.use('/api/users', usersRouter.router);
 app.use('/api/backups', backups.router);
 app.use('/api/audit', auditRouter);
 
+if (SERVE_STATIC) {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(CLIENT_DIST, 'index.html'), (err) => {
+      if (err) next(err);
+    });
+  });
+}
+
 // Warm DB + seed on boot
 getDb();
 scheduleNightly();
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`[platform] http://127.0.0.1:${PORT}  db=${DB_PATH}`);
+app.listen(PORT, BIND, () => {
+  console.log(`[platform] http://${BIND}:${PORT}  db=${DB_PATH}${SERVE_STATIC ? '  static=on' : ''}`);
 });

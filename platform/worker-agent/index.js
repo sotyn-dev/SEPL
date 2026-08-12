@@ -45,6 +45,7 @@ const driver = require('./lib/dockerDriver');
 const restore = require('./lib/restore');
 
 const PORT = Number(process.env.AGENT_PORT || 7200);
+const BIND = process.env.AGENT_BIND || '127.0.0.1';
 const TOKEN = process.env.AGENT_TOKEN || 'dev-agent-token';
 
 function json(res, code, body) {
@@ -273,8 +274,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[worker-agent] docker mode http://127.0.0.1:${PORT}/v1 (Bearer ${TOKEN})`);
+server.listen(PORT, BIND, () => {
+  console.log(`[worker-agent] docker mode http://${BIND}:${PORT}/v1 (Bearer ${TOKEN})`);
   console.log(`[worker-agent] tenantsRoot=${TENANTS_ROOT}`);
   console.log(`[worker-agent] envFile=${ERP_ENV_FILE || '(none)'}`);
 });

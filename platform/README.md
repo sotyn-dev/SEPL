@@ -41,6 +41,27 @@ npm run platform:client
 npm run platform:agent    # :7200 Docker driver
 ```
 
+## Docker (platform + agent)
+
+No proxy in this compose — host nginx (or local curl) in front later.
+
+```bash
+# Linux VPS (default data paths). From repo root:
+mkdir -p /var/lib/sotyn/platform /var/lib/sotyn/tenants
+docker compose -f platform/docker-compose.yml up -d --build
+
+curl -s http://127.0.0.1:7100/api/health
+curl -s http://127.0.0.1:7200/v1/health
+# UI: http://127.0.0.1:7100  (PLATFORM_SERVE_STATIC=1)
+```
+
+| Service | Image | Notes |
+|---|---|---|
+| `platform` | `sotyn-platform:local` | API + UI on `:7100`, data in `SOTYN_PLATFORM_DATA` |
+| `agent` | `sotyn-agent:local` | `:7200`, Docker socket + `SOTYN_TENANTS_ROOT` (same path host↔container) |
+
+`AGENT_URL` inside compose is `http://agent:7200`. Match `AGENT_TOKEN` in `platform/.env` and `platform/agent.env` (or compose `AGENT_TOKEN`).
+
 Local defaults: first boot seeds operator `admin` / `sotyn-dev` with email `sotyn.soft@gmail.com` into `platform_users` (bcrypt). Override with `PLATFORM_ADMIN_USER` / `PLATFORM_ADMIN_PASSWORD` / `PLATFORM_ADMIN_EMAIL` **before first boot**, or change via **Operators → Set password** / login **Forgot password**. See [`platform/.env.example`](.env.example).
 
 Auth: **platform JWT** (`PLATFORM_JWT_SECRET`, persisted in `platform_settings`) — separate from ERP `JWT_SECRET`. Client sends `Authorization: Bearer <token>`.
