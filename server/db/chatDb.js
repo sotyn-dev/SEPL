@@ -112,6 +112,17 @@ function getChatDb() {
     const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
     if (!mcols.includes('is_system')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN is_system INTEGER DEFAULT 0");
   } catch (e) { /* ignore */ }
+  // Soft-delete columns (mam 2026-08-13: groups + messages were being wiped —
+  // "code so that anything dont delete"). A "deleted" message keeps its row;
+  // deleted_at drives the client tombstone, deleted_by(+name) records who.
+  // Body/attachment stay in the DB for admin recovery but are stripped from
+  // API responses.
+  try {
+    const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
+    if (!mcols.includes('deleted_at')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN deleted_at DATETIME");
+    if (!mcols.includes('deleted_by')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN deleted_by INTEGER");
+    if (!mcols.includes('deleted_by_name')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN deleted_by_name TEXT");
+  } catch (e) { /* ignore */ }
   // archived_at: soft archive — the group drops out of the sidebar and the unread
   // badge but keeps every row, so it is restorable instantly and scrolling back
   // through an ARCHIVED group still works. NULL = active. Deliberately NOT a

@@ -87,7 +87,7 @@ function enrichGroups(db, uid, groups, { withMembers = true } = {}) {
   let lastBy = {}, memBy = {}, unreadBy = {};
   if (gids.length) {
     const ph = gids.map(() => '?').join(',');
-    lastBy = Object.fromEntries(db.prepare(`SELECT group_id,body,attachment_name,sender_name,created_at FROM chat_messages WHERE id IN (SELECT MAX(id) FROM chat_messages WHERE group_id IN (${ph}) GROUP BY group_id)`).all(...gids).map(l => [l.group_id, l]));
+    lastBy = Object.fromEntries(db.prepare(`SELECT group_id, CASE WHEN deleted_at IS NULL THEN body ELSE '🚫 Message deleted' END AS body, CASE WHEN deleted_at IS NULL THEN attachment_name ELSE NULL END AS attachment_name, sender_name, created_at FROM chat_messages WHERE id IN (SELECT MAX(id) FROM chat_messages WHERE group_id IN (${ph}) GROUP BY group_id)`).all(...gids).map(l => [l.group_id, l]));
     if (withMembers) {
       memBy = Object.fromEntries(db.prepare(`SELECT group_id,COUNT(*) c FROM chat_group_members WHERE group_id IN (${ph}) GROUP BY group_id`).all(...gids).map(c => [c.group_id, c.c]));
     }
@@ -401,20 +401,16 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
   const grp = db.prepare('SELECT * FROM chat_groups WHERE id=?').get(g);
   if (!grp) return res.status(404).json({ error: 'Not found' });
   if (grp.created_by !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'Only the creator or an admin can delete the group' });
-  // Grab attachment URLs before the rows vanish so we can quarantine the files
-  // (reversible — restored on serve if a DB revert re-references them).
-  const atts = db.prepare('SELECT attachment_url FROM chat_messages WHERE group_id=? AND attachment_url IS NOT NULL').all(g);
-  db.transaction(() => {
-    db.prepare('DELETE FROM chat_messages WHERE group_id=?').run(g);
-    db.prepare('DELETE FROM chat_group_members WHERE group_id=?').run(g);
-    db.prepare('DELETE FROM chat_reads WHERE group_id=?').run(g);
-    db.prepare('DELETE FROM chat_groups WHERE id=?').run(g);
-  })();
-  // Fire-and-forget: quarantine is async now, so the rejection must be swallowed on the
-  // promise — a sync catch would no longer see it, and an unhandled rejection kills Node.
-  for (const a of atts) { try { quarantine.quarantineUrl(a.attachment_url).catch(() => {}); } catch (e) { /* best-effort */ } }
+  // NOTHING hard-deletes any more (mam 2026-08-13: whole groups + their
+  // messages were wiped today — "code so that anything dont delete").
+  // "Delete" now = archive: the group disappears from every list exactly
+  // like before, but ALL messages, members, reads and files stay in the DB
+  // and an admin can bring it back instantly via /unarchive.  The audit
+  // line goes in FIRST so the restored group shows who "deleted" it.
+  postSystem(db, g, req.user, `${req.user.name || 'Someone'} deleted the group (recoverable by admin)`);
+  db.prepare('UPDATE chat_groups SET archived_at=CURRENT_TIMESTAMP WHERE id=? AND archived_at IS NULL').run(g);
   emitChat(g, 'group_deleted', { groupId: g });
-  res.json({ ok: true });
+  res.json({ ok: true, archived: true });
 });
 
 router.get('/:groupId', (req, res) => {
@@ -455,6 +451,12 @@ router.get('/:groupId', (req, res) => {
   const reads = Object.fromEntries(readRows.map(r => [r.user_id, r.last_read_id]));
   const readsAt = Object.fromEntries(readRows.map(r => [r.user_id, r.updated_at]));  // for Message Info read-time
   markRead(db, g, req.user.id);
+  // Soft-deleted messages keep their row for the tombstone ("deleted by X")
+  // but their CONTENT never leaves the server — body + attachment stripped
+  // here, recoverable only by admin directly in the DB (mam 2026-08-13).
+  const strip = (m) => m.deleted_at ? { ...m, body: null, attachment_url: null, attachment_name: null } : m;
+  messages = messages.map(strip);
+  quotedParents = quotedParents.map(strip);
   // NOTE: deliberately do NOT emitChat('changed') here. Loading a thread used
   // to broadcast 'changed' to the room, but the client reloads the thread on
   // 'changed' → which re-GETs → which re-emits: an infinite self-reinforcing
@@ -614,6 +616,7 @@ router.put('/:groupId/messages/:msgId', (req, res) => {
   const msg = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.msgId);
   if (!msg) return res.status(404).json({ error: 'Not found' });
   if (msg.is_system) return res.status(403).json({ error: 'System messages cannot be edited' });
+  if (msg.deleted_at) return res.status(403).json({ error: 'This message was deleted' });
   if (msg.sender_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own messages' });
   const body = req.body?.body;
   if (!body || !String(body).trim()) return res.status(400).json({ error: 'Message cannot be empty' });
@@ -632,9 +635,13 @@ router.delete('/:groupId/messages/:msgId', (req, res) => {
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
   const msg = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.msgId);
   if (!msg) return res.status(404).json({ error: 'Not found' });
+  if (msg.is_system) return res.status(403).json({ error: 'Audit lines cannot be deleted' });
   if (msg.sender_id !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'You can only delete your own messages' });
-  db.prepare('DELETE FROM chat_messages WHERE id=?').run(req.params.msgId);
-  if (msg.attachment_url) { try { quarantine.quarantineUrl(msg.attachment_url).catch(() => {}); } catch (e) { /* best-effort */ } }
+  // SOFT delete only (mam 2026-08-13: messages were being wiped — "anything
+  // dont delete"). The row + body + file stay in the DB (admin-recoverable);
+  // clients render a "deleted by X" tombstone; API responses strip content.
+  db.prepare('UPDATE chat_messages SET deleted_at=CURRENT_TIMESTAMP, deleted_by=?, deleted_by_name=? WHERE id=?')
+    .run(req.user.id, req.user.name || '', msg.id);
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
 });

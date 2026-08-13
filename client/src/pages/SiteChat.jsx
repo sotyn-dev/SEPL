@@ -160,6 +160,18 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
               );
             }
             const own = m.sender_id === userId;
+            // Soft-deleted message → WhatsApp-style tombstone. The server has
+            // already stripped body/attachment; deleted_by_name says who
+            // (mam 2026-08-13: nothing hard-deletes, everything stays visible).
+            if (m.deleted_at) {
+              return (
+                <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 ${own ? 'justify-end' : 'justify-start'}`}>
+                  <div className="max-w-[78%] rounded-lg px-2.5 py-1.5 text-[11px] italic text-gray-400 bg-gray-50 border border-gray-100 shadow-sm">
+                    🚫 Message deleted{m.deleted_by_name ? ` by ${m.deleted_by_name}` : ''}
+                  </div>
+                </div>
+              );
+            }
             // Read-receipt state (the ✓✓ + "Read by…" tooltip) renders ONLY on your own
             // messages, so compute it only then — skips an O(members) scan on every other row.
             const readers = own ? others.filter(o => (reads[o.user_id] || 0) >= m.id) : null;
