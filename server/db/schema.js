@@ -2795,6 +2795,352 @@ function initializeDatabase() {
       submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(checklist_id, user_id, completion_date)
     );
+
+    -- ================================================================
+    -- DRAWING TRACKER (2026-08)
+    --
+    -- Two tables, deliberately split:
+    --   drawings           the document IDENTITY (one row per drawing number)
+    --   drawing_revisions  one row per uploaded version, NEVER updated in place
+    --
+    -- The whole point of the module: uploading Rev 11 must leave Rev 10's row
+    -- and file completely untouched and still downloadable. Nothing here ever
+    -- overwrites or deletes a revision.
+    --
+    -- Project comes from EITHER existing master (they are unlinked in this
+    -- schema): business_book (booked orders — sites.business_book_id points
+    -- here, so the Site dropdown can cascade) or proj_projects (the thin
+    -- name/owner list). project_source says which one project_id refers to.
+    -- No new project or site master is created.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS drawings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_source TEXT NOT NULL DEFAULT 'business_book'
+        CHECK(project_source IN ('business_book','proj_project')),
+      project_id INTEGER,
+      -- Names denormalised alongside the id so a historical drawing still
+      -- reads correctly if the master row is later renamed or deactivated.
+      project_name TEXT,
+      site_id INTEGER,
+      site_name TEXT,
+      drawing_number TEXT NOT NULL,
+      title TEXT,
+      discipline TEXT,
+      drawing_type TEXT,
+      current_revision_id INTEGER,      -- pointer to the live revision
+      remarks TEXT,
+      created_by INTEGER, created_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- Project + Drawing Number identifies the document (spec rule).
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_dwg_identity
+      ON drawings(project_source, project_id, drawing_number);
+    CREATE INDEX IF NOT EXISTS idx_dwg_site       ON drawings(site_id);
+    CREATE INDEX IF NOT EXISTS idx_dwg_discipline ON drawings(discipline);
+    CREATE INDEX IF NOT EXISTS idx_dwg_number     ON drawings(drawing_number);
+
+    CREATE TABLE IF NOT EXISTS drawing_revisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      drawing_id INTEGER NOT NULL REFERENCES drawings(id) ON DELETE CASCADE,
+      revision_no INTEGER NOT NULL,     -- 0,1,2…N — no maximum, never reused
+      revision_date DATE,
+      revision_description TEXT NOT NULL,
+      revision_reason TEXT,
+      status TEXT NOT NULL DEFAULT 'current'
+        CHECK(status IN ('current','superseded','cancelled')),
+      file_url TEXT NOT NULL,
+      file_name TEXT, file_type TEXT, file_size INTEGER,
+      uploaded_by INTEGER, uploaded_by_name TEXT,
+      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      -- Unused today (no approval step by design), but present so an approval
+      -- workflow can be layered on later without a migration.
+      approved_by INTEGER, approved_by_name TEXT, approved_at DATETIME,
+      remarks TEXT,
+      -- Makes a duplicate "Rev 5" impossible, and makes two simultaneous
+      -- uploads safe: the loser hits this constraint and is retried with the
+      -- next free number instead of silently overwriting.
+      UNIQUE(drawing_id, revision_no)
+    );
+    -- Exactly ONE current revision per drawing, enforced by the database
+    -- rather than by route code — SQLite ignores NULLs/non-matching rows in a
+    -- partial unique index, so superseded rows are unconstrained while two
+    -- Currents cannot exist even momentarily mid-transaction.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_dr_current
+      ON drawing_revisions(drawing_id) WHERE status = 'current';
+    CREATE INDEX IF NOT EXISTS idx_dr_drawing ON drawing_revisions(drawing_id, revision_no DESC);
+    CREATE INDEX IF NOT EXISTS idx_dr_uploaded ON drawing_revisions(uploaded_at DESC);
+
+    -- ================================================================
+    -- LABOUR MANAGEMENT SYSTEM (2026-08)
+    --
+    -- The LMS is the existing Indent Labour Payment pipeline, renamed and
+    -- extended — NOT a second system. It already owns Projects, Work Orders,
+    -- Muster Roll, Measurement Book and Contractor RA Bills across 12 proj_*
+    -- tables. Only the genuinely missing pieces are added here:
+    --
+    --   labour_quotations    quotation + threshold rule -> approval -> WO
+    --   labour_rate_master   HR-owned crew rates (the Labour Rate Window)
+    --   labour_rate_history  append-only audit + version history
+    --   proj_wo_labour       labour lines on a Work Order, rate SNAPSHOTTED
+    --
+    -- No duplicate Work Order, labour register or contractor-bill table is
+    -- created; those already exist and are reused as-is.
+    --
+    -- Client / contractor / project references point at the modules that own
+    -- that data (customers, sub_contractors, proj_projects, business_book)
+    -- rather than copying it. Names are denormalised alongside the id purely
+    -- so a historical quotation still reads correctly if a master row is
+    -- later renamed or deactivated.
+    -- ================================================================
+
+    CREATE TABLE IF NOT EXISTS labour_quotations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      quotation_number TEXT UNIQUE,
+      project_id INTEGER REFERENCES proj_projects(id) ON DELETE SET NULL,
+      project_name TEXT,
+      business_book_id INTEGER,          -- CRM lead / site, when quoted off one
+      site_name TEXT,
+      customer_id INTEGER,               -- customers(id) — CRM owns the master
+      client_name TEXT,
+      contractor_id INTEGER,             -- sub_contractors(id) — Procurement owns it
+      contractor_name TEXT,
+      labour_category TEXT,
+      description TEXT,
+      amount REAL NOT NULL DEFAULT 0 CHECK(amount >= 0),
+      -- Snapshotted from settings at creation, so a later change to the
+      -- company threshold never rewrites the rule an old quotation was
+      -- judged under.
+      threshold REAL DEFAULT 0,
+      rule_no INTEGER,
+      status TEXT NOT NULL DEFAULT 'draft'
+        CHECK(status IN ('draft','below_threshold','waiting_approval','approved','rejected','wo_generated')),
+      approved_by INTEGER, approved_by_name TEXT, approved_at DATETIME,
+      rejected_by INTEGER, rejected_by_name TEXT, rejected_at DATETIME,
+      reject_reason TEXT,
+      work_order_id INTEGER REFERENCES proj_work_orders(id) ON DELETE SET NULL,
+      remarks TEXT,
+      created_by INTEGER, created_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_lq_status  ON labour_quotations(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_lq_project ON labour_quotations(project_id);
+    CREATE INDEX IF NOT EXISTS idx_lq_wo      ON labour_quotations(work_order_id);
+
+    CREATE TABLE IF NOT EXISTS labour_rate_master (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      labour_category TEXT NOT NULL,        -- Electrician / Helper / Supervisor
+      labour_type TEXT,
+      trade TEXT,
+      department TEXT,
+      skill_level TEXT,
+      unit TEXT NOT NULL DEFAULT 'Day'
+        CHECK(unit IN ('Day','Hour','Month')),
+      standard_rate REAL NOT NULL DEFAULT 0 CHECK(standard_rate >= 0),
+      overtime_rate REAL DEFAULT 0 CHECK(overtime_rate IS NULL OR overtime_rate >= 0),
+      effective_from DATE NOT NULL,
+      effective_to DATE,                    -- NULL = open-ended
+      status TEXT NOT NULL DEFAULT 'active'
+        CHECK(status IN ('active','inactive')),
+      remarks TEXT,
+      created_by INTEGER, created_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_by INTEGER, updated_by_name TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- "Only one active rate per labour category and effective date." Enforced
+    -- by a partial UNIQUE index rather than a route check, so a concurrent
+    -- double-submit cannot slip a second active rate through. Scoped by trade
+    -- and department too: an Electrician in Fire-Fighting and one in
+    -- Electrical are legitimately different rates on the same date.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_lrm_active_effective
+      ON labour_rate_master(labour_category, COALESCE(trade,''), COALESCE(department,''), effective_from)
+      WHERE status = 'active';
+    CREATE INDEX IF NOT EXISTS idx_lrm_status ON labour_rate_master(status, effective_from DESC);
+    CREATE INDEX IF NOT EXISTS idx_lrm_cat    ON labour_rate_master(labour_category);
+    CREATE INDEX IF NOT EXISTS idx_lrm_dept   ON labour_rate_master(department);
+    CREATE INDEX IF NOT EXISTS idx_lrm_trade  ON labour_rate_master(trade);
+
+    -- Append-only: every create / edit / status change writes one row, so
+    -- "who changed this rate, from what, to what, and why" is always
+    -- answerable. Never updated, never deleted.
+    CREATE TABLE IF NOT EXISTS labour_rate_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rate_id INTEGER REFERENCES labour_rate_master(id) ON DELETE CASCADE,
+      labour_category TEXT,
+      action TEXT NOT NULL
+        CHECK(action IN ('created','updated','activated','deactivated','deleted')),
+      old_rate REAL, new_rate REAL,
+      old_overtime_rate REAL, new_overtime_rate REAL,
+      before_json TEXT, after_json TEXT,
+      reason TEXT,
+      changed_by INTEGER, changed_by_name TEXT,
+      changed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_lrh_rate    ON labour_rate_history(rate_id, changed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_lrh_changed ON labour_rate_history(changed_at DESC);
+
+    -- Labour lines on a Work Order.
+    --
+    -- Every rate field is a SNAPSHOT taken when the line was added, not a join
+    -- to labour_rate_master. That is what makes "existing Work Orders retain
+    -- the rates used at the time of creation" true: if HR raises the
+    -- Electrician rate next month, a WO signed today still shows — and is
+    -- still payable at — what it was signed at. rate_id is kept for
+    -- traceability back to the master row, never for pricing.
+    CREATE TABLE IF NOT EXISTS proj_wo_labour (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_order_id INTEGER NOT NULL REFERENCES proj_work_orders(id) ON DELETE CASCADE,
+      rate_id INTEGER,                      -- provenance only
+      labour_category TEXT NOT NULL,
+      labour_type TEXT, trade TEXT, department TEXT, skill_level TEXT,
+      unit TEXT DEFAULT 'Day',
+      rate_snapshot REAL NOT NULL DEFAULT 0 CHECK(rate_snapshot >= 0),
+      overtime_rate_snapshot REAL DEFAULT 0,
+      rate_effective_from DATE,
+      quantity REAL NOT NULL DEFAULT 1 CHECK(quantity > 0),   -- number of labourers
+      days REAL NOT NULL DEFAULT 1 CHECK(days > 0),
+      overtime_hours REAL DEFAULT 0 CHECK(overtime_hours IS NULL OR overtime_hours >= 0),
+      -- Stored rather than derived on read, so a WO total can never drift if
+      -- the rounding rule changes. Recomputed server-side on every write.
+      amount REAL NOT NULL DEFAULT 0,
+      overtime_amount REAL DEFAULT 0,
+      remarks TEXT,
+      created_by INTEGER, created_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pwol_wo   ON proj_wo_labour(work_order_id);
+    CREATE INDEX IF NOT EXISTS idx_pwol_rate ON proj_wo_labour(rate_id);
+
+    -- ================================================================
+    -- Labour Management System — Module 3: Labour Master + attendance.
+    --
+    -- labour_master        one row per individual worker (ID/name/mobile/
+    --                      Aadhaar/trade/daily wage) — the roster proj_muster_roll
+    --                      never had (that table stores labour_name as free text).
+    -- labour_attendance    per-worker per-day present/absent/half-day +
+    --                      overtime hours. Wage register is a REPORT over
+    --                      this + labour_master, not a separate table.
+    -- labour_transfers     site-to-site move log, append-only.
+    -- labour_daily_progress  one row per site per day — brief progress note
+    --                      + headcount, distinct from the full DPR module.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS labour_master (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      labour_code TEXT UNIQUE,
+      name TEXT NOT NULL,
+      mobile TEXT,
+      aadhaar_number TEXT,
+      trade TEXT,
+      department TEXT,
+      daily_wage REAL NOT NULL DEFAULT 0 CHECK(daily_wage >= 0),
+      site_id INTEGER REFERENCES sites(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','inactive')),
+      remarks TEXT,
+      created_by INTEGER, created_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_lm_site   ON labour_master(site_id);
+    CREATE INDEX IF NOT EXISTS idx_lm_status ON labour_master(status);
+    CREATE INDEX IF NOT EXISTS idx_lm_trade  ON labour_master(trade);
+
+    CREATE TABLE IF NOT EXISTS labour_attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      labour_id INTEGER NOT NULL REFERENCES labour_master(id) ON DELETE CASCADE,
+      site_id INTEGER REFERENCES sites(id),
+      work_order_id INTEGER REFERENCES proj_work_orders(id),
+      date DATE NOT NULL,
+      status TEXT NOT NULL DEFAULT 'present' CHECK(status IN ('present','absent','half_day')),
+      overtime_hours REAL DEFAULT 0 CHECK(overtime_hours IS NULL OR overtime_hours >= 0),
+      remarks TEXT,
+      recorded_by INTEGER, recorded_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- One attendance row per worker per day — a re-submit edits it, never
+    -- duplicates it, so the wage register can never double-count a day.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_la_labour_date ON labour_attendance(labour_id, date);
+    CREATE INDEX IF NOT EXISTS idx_la_site_date ON labour_attendance(site_id, date);
+    CREATE INDEX IF NOT EXISTS idx_la_date      ON labour_attendance(date);
+
+    CREATE TABLE IF NOT EXISTS labour_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      labour_id INTEGER NOT NULL REFERENCES labour_master(id) ON DELETE CASCADE,
+      from_site_id INTEGER REFERENCES sites(id),
+      to_site_id INTEGER NOT NULL REFERENCES sites(id),
+      transfer_date DATE NOT NULL,
+      reason TEXT,
+      transferred_by INTEGER, transferred_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_lt_labour ON labour_transfers(labour_id, transfer_date DESC);
+
+    CREATE TABLE IF NOT EXISTS labour_daily_progress (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site_id INTEGER NOT NULL REFERENCES sites(id),
+      work_order_id INTEGER REFERENCES proj_work_orders(id),
+      date DATE NOT NULL,
+      labourers_present INTEGER DEFAULT 0,
+      progress_notes TEXT,
+      progress_pct REAL CHECK(progress_pct IS NULL OR (progress_pct >= 0 AND progress_pct <= 100)),
+      recorded_by INTEGER, recorded_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_ldp_site_date ON labour_daily_progress(site_id, date);
+
+    -- ================================================================
+    -- Labour Management System — Modules 4-6: Bill Verification chain,
+    -- Bills & Finance, Payments.
+    --
+    -- These are ONE continuous pipeline over the EXISTING
+    -- proj_contractor_ra_bills (raised/payment/paid) — not a parallel bill
+    -- system. current_stage tracks progress through the 6-stage chain;
+    -- the existing 3-state 'status' column still gates the coarse
+    -- raised->payment->paid lifecycle other code already reads.
+    --
+    -- proj_bill_stage_log   append-only — one row per Verify/Reject/Send
+    --                       Back action, at any stage. This is both the
+    --                       audit trail and what "Bill submitted" /
+    --                       "pending at X" notifications are built from.
+    -- vendor_ledger         one row per bill (debit) or payment (credit)
+    --                       per contractor — Module 6's ledger + the data
+    --                       source for "Contractor payment history".
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS proj_bill_stage_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ra_bill_id INTEGER NOT NULL REFERENCES proj_contractor_ra_bills(id) ON DELETE CASCADE,
+      stage TEXT NOT NULL CHECK(stage IN
+        ('site_engineer','site_head','project_manager','finance','accounts','payment')),
+      action TEXT NOT NULL CHECK(action IN ('verified','rejected','sent_back')),
+      photos_json TEXT,             -- array of uploaded photo URLs (site engineer stage)
+      measurement_notes TEXT,
+      quantity_verified REAL,
+      remarks TEXT,
+      acted_by INTEGER, acted_by_name TEXT,
+      acted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pbsl_bill  ON proj_bill_stage_log(ra_bill_id, acted_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pbsl_stage ON proj_bill_stage_log(stage);
+
+    CREATE TABLE IF NOT EXISTS vendor_ledger (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contractor_id INTEGER REFERENCES sub_contractors(id),
+      contractor_name TEXT,
+      ra_bill_id INTEGER REFERENCES proj_contractor_ra_bills(id),
+      entry_type TEXT NOT NULL CHECK(entry_type IN ('bill','payment')),
+      amount REAL NOT NULL DEFAULT 0,
+      gst_amount REAL DEFAULT 0,
+      tds_amount REAL DEFAULT 0,
+      payment_mode TEXT,            -- Bank Transfer / Cheque / UPI / Cash
+      transaction_id TEXT,
+      remarks TEXT,
+      created_by INTEGER, created_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_vl_contractor ON vendor_ledger(contractor_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_vl_bill       ON vendor_ledger(ra_bill_id);
   `);
 
   // Safe schema migrations for columns added after initial release
@@ -3783,6 +4129,42 @@ function initializeDatabase() {
     // "After Photo" — the resolution photo, still Ajmer-only via
     // POST /:id/document.
     ['client_snags', 'before_photo_url TEXT'],
+    // Labour Management System (2026-08). Links a Work Order back to the
+    // quotation it was generated from. Additive and nullable — every existing
+    // WO keeps working with this unset. No REFERENCES clause on purpose: the
+    // priced_by/approved_by migration used one, some SQLite builds reject that
+    // inside ALTER ... ADD COLUMN, this loop's silent try/catch swallowed the
+    // error, and the whole Item Master list 500'd (see itemmaster.js:45-62).
+    ['proj_work_orders', 'quotation_id INTEGER'],
+    // Modules 4-6 (2026-08): the 6-stage bill verification chain rides on
+    // the existing proj_contractor_ra_bills row rather than a new bill
+    // table. current_stage tracks the chain; invoice/gst/tax/previous-
+    // payment flags are Module 5's "Bills & Finance" checks, captured on
+    // the same row since they're properties of ONE bill, not a child entity.
+    ['proj_contractor_ra_bills', "current_stage TEXT DEFAULT 'contractor_uploaded'"],
+    ['proj_contractor_ra_bills', 'invoice_number TEXT'],
+    ['proj_contractor_ra_bills', 'gst_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'tax_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'previous_payment_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'payment_mode TEXT'],
+    ['proj_contractor_ra_bills', 'transaction_id TEXT'],
+    ['proj_contractor_ra_bills', 'contractor_id INTEGER'],
+    // Module 5 (2026-08): Hold — pause a bill in place, resumable.
+    ['proj_contractor_ra_bills', 'hold_reason TEXT'],
+    ['proj_contractor_ra_bills', 'held_by INTEGER'],
+    ['proj_contractor_ra_bills', 'held_by_name TEXT'],
+    ['proj_contractor_ra_bills', 'held_at DATETIME'],
+    ['proj_contractor_ra_bills', 'resumed_by INTEGER'],
+    ['proj_contractor_ra_bills', 'resumed_by_name TEXT'],
+    ['proj_contractor_ra_bills', 'resumed_at DATETIME'],
+    // Work Order routing (2026-08): "send to Site Engineer -> send to
+    // Contractor" after save. One WO can be routed more than once as it
+    // moves along, so this holds only the MOST RECENT hop — full history
+    // lives in audit_log via logAuditEvent.
+    ['proj_work_orders', 'routed_to TEXT'],
+    ['proj_work_orders', 'routed_by INTEGER'],
+    ['proj_work_orders', 'routed_by_name TEXT'],
+    ['proj_work_orders', 'routed_at DATETIME'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index
@@ -4468,6 +4850,164 @@ function initializeDatabase() {
     console.error('[migration] indents CHECK relax failed:', e.message);
   }
 
+  // Module 5 (2026-08): "Hold" pauses a contractor bill at whatever stage
+  // it's currently at, without rejecting it or sending it back to the
+  // contractor. Needs a new status value + two new stage_log actions.
+  // Same rebuild pattern as indents/leave_requests above.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_contractor_ra_bills'").get();
+    if (row && /CHECK\s*\(\s*status\s+IN/i.test(row.sql) && !/on_hold/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_contractor_ra_bills/i, 'CREATE TABLE proj_contractor_ra_bills_new')
+        .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(status IN ('raised','payment','paid','cancelled','on_hold'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_contractor_ra_bills_new (${shared}) SELECT ${shared} FROM proj_contractor_ra_bills`);
+      db.exec('DROP TABLE proj_contractor_ra_bills');
+      db.exec('ALTER TABLE proj_contractor_ra_bills_new RENAME TO proj_contractor_ra_bills');
+      db.exec('COMMIT');
+      console.log('[migration] proj_contractor_ra_bills.status CHECK relaxed to allow on_hold');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_contractor_ra_bills CHECK relax failed:', e.message);
+  }
+
+  // Bug fix (2026-08): proj_contractor_ra_bills.project_id was declared
+  // REFERENCES business_book(id) — a pre-existing convention shared with
+  // proj_mb_sheets/proj_client_ra_bills. But server/routes/billVerification.js
+  // (this session's Bill Verification chain) creates bills from a Work
+  // Order, and stamps project_id with wo.project_id — a proj_projects(id),
+  // NOT a business_book(id). With foreign_keys=ON (schema.js:31) this FK
+  // silently rejects bill creation for any real project whose id doesn't
+  // coincidentally also exist in business_book — it only appeared to work
+  // in early testing because both tables had small overlapping ids in an
+  // empty dev DB. Fix: drop the FK on this column; the trustworthy link for
+  // this chain is bill.work_order_id -> proj_work_orders.project_id, which
+  // every query in billVerification.js already joins through.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_contractor_ra_bills'").get();
+    if (row && /project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book/i.test(row.sql)) {
+      // FKs OFF for the rebuild — real bill rows already have children in
+      // vendor_ledger / proj_bill_stage_log / proj_contractor_ra_deductions
+      // (all REFERENCES proj_contractor_ra_bills(id)), and the DROP TABLE
+      // step below fails under foreign_keys=ON with rows like that present.
+      // Matches the support_tickets/payment_requests rebuilds elsewhere.
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS proj_contractor_ra_bills_new'); } catch (_) {}
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+"?proj_contractor_ra_bills"?/i, 'CREATE TABLE proj_contractor_ra_bills_new')
+        .replace(/project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book\(id\)/i, 'project_id INTEGER');
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_contractor_ra_bills_new (${shared}) SELECT ${shared} FROM proj_contractor_ra_bills`);
+      db.exec('DROP TABLE proj_contractor_ra_bills');
+      db.exec('ALTER TABLE proj_contractor_ra_bills_new RENAME TO proj_contractor_ra_bills');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pcra_project ON proj_contractor_ra_bills(project_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pcra_wo      ON proj_contractor_ra_bills(work_order_id)');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+      console.log('[migration] proj_contractor_ra_bills.project_id FK to business_book removed (mismatched with Bill Verification chain usage)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] proj_contractor_ra_bills project_id FK fix failed:', e.message);
+  }
+
+  // Same bug, same fix, for proj_mb_sheets (2026-08): the Phase 5 MB/CDPR
+  // endpoints in indentLabourPayment.js stamp project_id with a proj_projects
+  // id (the route is /projects/:pid/mb), but the column was declared
+  // REFERENCES business_book(id) — the same pre-existing convention that
+  // broke proj_contractor_ra_bills above. Trustworthy link stays
+  // proj_mb_lines.work_order_id -> proj_work_orders.project_id.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_mb_sheets'").get();
+    if (row && /project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book/i.test(row.sql)) {
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS proj_mb_sheets_new'); } catch (_) {}
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+"?proj_mb_sheets"?/i, 'CREATE TABLE proj_mb_sheets_new')
+        .replace(/project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book\(id\)/i, 'project_id INTEGER');
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_mb_sheets)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_mb_sheets_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_mb_sheets_new (${shared}) SELECT ${shared} FROM proj_mb_sheets`);
+      db.exec('DROP TABLE proj_mb_sheets');
+      db.exec('ALTER TABLE proj_mb_sheets_new RENAME TO proj_mb_sheets');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pmb_project ON proj_mb_sheets(project_id)');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+      console.log('[migration] proj_mb_sheets.project_id FK to business_book removed (mismatched with MB/CDPR usage)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] proj_mb_sheets project_id FK fix failed:', e.message);
+  }
+
+  // Work Order status expansion (2026-08): spec wants
+  // Draft -> Submitted -> Approved -> Work Started -> In Progress -> Completed.
+  // Legacy 'active'/'closed' kept (never remove a value old rows may still
+  // hold) — 'active' becomes a synonym existing WOs already use, 'closed'
+  // stays as an alternate terminal state alongside the new 'completed'.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_work_orders'").get();
+    if (row && /CHECK\s*\(\s*status\s+IN/i.test(row.sql) && !/work_started/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_work_orders/i, 'CREATE TABLE proj_work_orders_new')
+        .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(status IN ('draft','submitted','approved','work_started','in_progress','completed','active','closed','cancelled'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_work_orders)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_work_orders_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_work_orders_new (${shared}) SELECT ${shared} FROM proj_work_orders`);
+      db.exec('DROP TABLE proj_work_orders');
+      db.exec('ALTER TABLE proj_work_orders_new RENAME TO proj_work_orders');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pwo_project ON proj_work_orders(project_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pwo_subcon  ON proj_work_orders(sub_contractor_id)');
+      db.exec('COMMIT');
+      console.log('[migration] proj_work_orders.status CHECK expanded to the full lifecycle');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_work_orders CHECK expand failed:', e.message);
+  }
+
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_bill_stage_log'").get();
+    if (row && /CHECK\s*\(\s*action\s+IN/i.test(row.sql) && !/held/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_bill_stage_log/i, 'CREATE TABLE proj_bill_stage_log_new')
+        .replace(/CHECK\s*\(\s*action\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(action IN ('verified','rejected','sent_back','held','resumed'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_bill_stage_log)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_bill_stage_log_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_bill_stage_log_new (${shared}) SELECT ${shared} FROM proj_bill_stage_log`);
+      db.exec('DROP TABLE proj_bill_stage_log');
+      db.exec('ALTER TABLE proj_bill_stage_log_new RENAME TO proj_bill_stage_log');
+      db.exec('COMMIT');
+      console.log('[migration] proj_bill_stage_log.action CHECK relaxed to allow held/resumed');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_bill_stage_log CHECK relax failed:', e.message);
+  }
+
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
@@ -4509,6 +5049,28 @@ function initializeDatabase() {
     // people auto-counted by AI to fill the manpower count. Guarded for DBs
     // whose contractor_attendance table was created before this column existed.
     try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) {}
+    // Labour quotation supporting document (2026-08): the raiser can attach a
+    // PDF/photo of the client's BOQ, contractor's rate card, or site photo —
+    // same upload endpoint AnnouncementBell already uses, just a new column.
+    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN attachment_url TEXT`); } catch (_) {}
+    // Work Order — contractor contact, site location, and who approved it
+    // (2026-08). approved_by is a fixed name picklist, not a users(id) FK —
+    // the approvers here are managers who may not all hold ERP logins.
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contact_number TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN location TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN approved_by TEXT`); } catch (_) {}
+    // Contractor's own document (ID proof / registration / agreement) —
+    // separate from work_order_file_url, which is the WO document itself.
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contractor_document_url TEXT`); } catch (_) {}
+    // Labour Master — type of manpower (2026-08): distinguishes contractor
+    // manpower from SEPL's own team and daily-wage hires, since wage
+    // register and cost rollups treat each differently.
+    try { db.exec(`ALTER TABLE labour_master ADD COLUMN manpower_type TEXT`); } catch (_) {}
+    // Worker's own document (ID proof / Aadhaar card / photo) — 2026-08.
+    try { db.exec(`ALTER TABLE labour_master ADD COLUMN document_url TEXT`); } catch (_) {}
+    // Labour quotation — contractor is now free text (2026-08), no longer
+    // forced through the Sub-Contractors master, plus their Aadhaar.
+    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN contractor_aadhaar TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) {}
@@ -5776,6 +6338,8 @@ in your first week. If a process feels broken, raise a Help Ticket
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
     'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets',
     'sub_contractors','ai_agent','crm_funnel','cheques','fire_noc','rental_tools','influencers','crm_kitting',
+    // Drawing Tracker (2026-08) — project drawings + permanent revision history.
+    'drawing_tracker',
     // Mam (2026-05-21): "add all module in roles& permission" — the
     // four modules below existed in the sidebar / routes / permission
     // checks but were missing from the server's seed list, so newly
@@ -5841,6 +6405,15 @@ in your first week. If a process feels broken, raise a Help Ticket
     // identity gate (client_snag_gate_users, see server/db/schema.js's
     // client_snag tables) and intentionally don't run through can_approve.
     'client_snag',
+    // Labour Management System (2026-08).
+    //   labour_quotation    — raise / approve labour quotations
+    //   labour_rate_master  — HR-only write; everyone else reads the rates
+    //                         through the Labour Rate Window
+    // The existing 'indent_labour_payment' key is deliberately NOT renamed:
+    // roles already carry grants against it, and changing the key would
+    // silently revoke access for every user who has it. The module is renamed
+    // in the UI only.
+    'labour_quotation', 'labour_rate_master', 'labour_master', 'bill_verification',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
