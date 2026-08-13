@@ -105,7 +105,10 @@ export default function TallyBills() {
   const { canCreate, canEdit, canDelete, canApprove, isAdmin } = useAuth();
   const admin = isAdmin();          // isAdmin is a function — call once, use the boolean
   const M = 'tally_bills';
-  const [tab, setTab] = useUrlTab(['register', 'reports'], 'register');
+  // Param is 'view', NOT 'tab': this page also renders embedded as a tab
+  // inside Collections, whose own useUrlTab owns '?tab=' — sharing the key
+  // would bounce the user out of the embed when switching to Reports.
+  const [tab, setTab] = useUrlTab(['register', 'reports'], 'register', 'view');
   const [cat, setCat] = useUrlTab('', 'cat');
 
   const [bills, setBills] = useState([]);

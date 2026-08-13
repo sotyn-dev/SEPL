@@ -1,7 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import ResponsibilityTab from '../components/ResponsibilityTab';
+// Tally Bill workflow surfaced as a tab here too (Director CR 2026-08-13 named
+// /collections as the location; the standalone /tally-bills page stays the
+// canonical home). Lazy so Collections' own chunk doesn't grow.
+const TallyBills = lazy(() => import('./TallyBills'));
 import { useUrlTab } from '../hooks/useUrlTab';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
@@ -11,7 +15,7 @@ import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 
 export default function Collections() {
-  const { canDelete } = useAuth();
+  const { canDelete, canView } = useAuth();
   const [tab, setTab] = useUrlTab('list');
   const [receivables, setReceivables] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -167,10 +171,18 @@ export default function Collections() {
   return (
     <div className="space-y-6">
       <div className="flex gap-2 flex-wrap">
-        <button onClick={() => setTab('list')} className={`btn ${tab === 'responsible' ? 'btn-secondary' : 'btn-primary'}`}>Receivables</button>
+        <button onClick={() => setTab('list')} className={`btn ${tab === 'responsible' || tab === 'tally' ? 'btn-secondary' : 'btn-primary'}`}>Receivables</button>
+        {/* Only for users who can actually see the module — avoids 403 toasts */}
+        {canView('tally_bills') && (
+          <button onClick={() => setTab('tally')} className={`btn ${tab === 'tally' ? 'btn-primary' : 'btn-secondary'}`}>Tally Bills</button>
+        )}
         <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
       </div>
-      {tab === 'responsible' ? (
+      {tab === 'tally' && canView('tally_bills') ? (
+        <Suspense fallback={<div className="text-center py-10 text-gray-400">Loading Tally Bills…</div>}>
+          <TallyBills />
+        </Suspense>
+      ) : tab === 'responsible' ? (
         <ResponsibilityTab module="collections" title="Collections (Receivables)" />
       ) : (
       <>
