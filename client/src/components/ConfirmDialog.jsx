@@ -17,7 +17,7 @@ export default function ConfirmDialog({
     : 'bg-amber-100 text-amber-600';
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={onCancel}>
+    <div className="!m-0 fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={onCancel}>
       <div
         className="bg-white rounded-xl shadow-xl w-full max-w-sm p-5"
         onClick={e => e.stopPropagation()}

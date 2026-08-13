@@ -56,14 +56,45 @@ app.set('trust proxy', 1);
 
 // File uploads
 const multer = require('multer');
-const fs = require('fs');
-const uploadsDir = path.join(__dirname, '..', 'data', 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`)
+const { UPLOADS_ROOT, SWEEP_FOLDERS, uploadsSub, ensureDir } = require('./lib/paths');
+const quarantine = require('./lib/quarantine');
+const storage = require('./lib/storage');
+const uploadsDir = ensureDir(UPLOADS_ROOT);
+// Uploads for these modules go into their own subfolder (whitelisted, so no path
+// traversal) so the orphan sweep can target only them; everything else stays flat.
+const UPLOAD_FOLDER_WHITELIST = new Set(SWEEP_FOLDERS);
+const uploadFolder = (req) => {
+  const f = String((req.query && req.query.folder) || '');
+  return UPLOAD_FOLDER_WHITELIST.has(f) ? f : '';
+};
+// diskStorage, NOT memoryStorage. This is the busiest upload path in the app (site-chat,
+// help-tickets, sotyn-flow, avatars, Business Book, Checklists, DPR), and memoryStorage
+// buffers the whole file in RAM before it is written anywhere — 20 MB x concurrent
+// uploads on a 1-2 GB VPS. diskStorage streams the request straight to disk, so memory
+// stays flat no matter how many people upload at once.
+//
+// Reaching S3 is then storage.adoptLocalFile()'s job (see the handler): it streams the
+// file up and unlinks it. Inline S3 without ever holding a file in memory.
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const f = uploadFolder(req);
+      cb(null, f ? ensureDir(uploadsSub(f)) : uploadsDir);
+    },
+    // <epoch>-<rand>-<sanitised name>. The random block matters: with only a timestamp,
+    // two people uploading "photo.jpg" in the SAME millisecond produced the same name and
+    // the second silently overwrote the first — on disk before, and in the bucket now.
+    // The other upload routes (kit-/rt-/hr-) already do this; this brings /api/upload in
+    // line. Only NEW filenames change; existing DB rows and objects are untouched.
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+// multer has already chosen the filename; the seam key is just <folder>/<that name>.
+const uploadKey = (req, file) => {
+  const f = uploadFolder(req);
+  return f ? `${f}/${file.filename}` : file.filename;
+};
 
 // Initialize DB
 initializeDatabase();
@@ -140,6 +171,61 @@ if (!process.env.ERP_DISABLE_BACKUP_SCHEDULER) {
   } catch (e) {
     console.warn('[backup] Scheduler not started:', e.message);
   }
+}
+
+// Nightly DB compaction — checkpoints the WAL into each DB and VACUUMs when
+// there's meaningful free space, so erp.db/chat.db actually shrink after
+// deletes instead of only ever growing.
+//
+// DEFAULT-OFF (opt-in, not opt-out): VACUUM's temp rewrite may route through
+// RAM (temp_store=MEMORY is set on erp.db) and this hasn't been measured
+// against prod's real DB size on the VPS's 1-2 GB RAM. better-sqlite3 is also
+// synchronous, so VACUUM blocks the whole Node event loop for its duration —
+// unmeasured how long that is at scale. Until a VACUUM has been run against a
+// copy of prod erp.db with RSS watched, leave this off and run
+// `node server/scripts/db-maintenance.js` by hand when reclaiming is actually
+// wanted. Set ERP_ENABLE_DB_MAINTENANCE=1 to arm the nightly scheduler.
+if (process.env.ERP_ENABLE_DB_MAINTENANCE) {
+  try {
+    const { scheduleNightlyMaintenance } = require('./scripts/db-maintenance');
+    scheduleNightlyMaintenance();
+  } catch (e) {
+    console.warn('[db-maint] Scheduler not started:', e.message);
+  }
+} else {
+  console.log('[db-maint] Scheduler not started: set ERP_ENABLE_DB_MAINTENANCE=1 to enable.');
+}
+
+// Nightly uploads → S3 migration at 02:30. Ordering is deliberate: 02:00 backup
+// captures the DB rows that reference these files, 02:15 compaction settles the DBs,
+// and only THEN are files moved off local disk — so a restore point always exists
+// before anything leaves. Never move this earlier.
+//
+// It self-disables (no timer at all) unless STORAGE_DRIVER=s3, so on the local driver
+// this is inert. It exists to cover the feature routes that still write to local disk —
+// they need no code change — plus any file whose inline push failed while the bucket was
+// unreachable. Skip in dev via ERP_DISABLE_UPLOADS_BACKFILL=1.
+if (!process.env.ERP_DISABLE_UPLOADS_BACKFILL) {
+  try {
+    const { scheduleNightlyBackfill } = require('./scripts/backfill-uploads-s3');
+    scheduleNightlyBackfill();
+  } catch (e) {
+    console.warn('[backfill] Scheduler not started:', e.message);
+  }
+}
+
+// 02:20 orphan sweep — slots between 02:15 compaction and the 02:30 S3 backfill, so
+// orphans are quarantined BEFORE we pay to upload them, and after the 02:00 backup has
+// captured the rows that reference them.
+//
+// Opt-in twice over: no timer at all unless ERP_ENABLE_SWEEP_CRON=1, and dry-run even
+// then unless ERP_SWEEP_CRON_DRYRUN=0. Without this the QUARANTINE_TTL never fired
+// outside a manual admin run, so quarantined files accumulated forever.
+try {
+  const { scheduleNightlySweep } = require('./scripts/sweep-uploads');
+  scheduleNightlySweep();
+} catch (e) {
+  console.warn('[sweep] Scheduler not started:', e.message);
 }
 
 // Daily 07:30 AM audit JSON snapshot — TOC v3 P0 #5.  Writes the same
@@ -359,8 +445,13 @@ app.post('/api/admin/cmd-email/send-now', _authMw, (req, res) => {
 const { auditMiddleware } = require('./middleware/audit');
 app.use(auditMiddleware);
 
+// Module availability — the global on/off switch for whole features, one layer above
+// role permissions (see lib/features.js). Mounted before the feature routes it gates.
+const { requireModuleEnabled } = require('./lib/features');
+
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/module-flags', require('./routes/moduleFlags'));
 app.use('/api/admin/audit', require('./routes/audit'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/leads', require('./routes/leads'));
@@ -419,6 +510,7 @@ app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
 app.use('/api/admin/backups', require('./routes/backups'));
+app.use('/api/admin/uploads', require('./routes/uploadsSweep'));
 app.use('/api/admin/word-count', require('./routes/wordcount'));
 app.use('/api/admin/changelog', require('./routes/changelog'));
 app.use('/api/admin/locations', require('./routes/locations'));
@@ -443,7 +535,15 @@ app.use('/api/collections', require('./routes/collections'));
 // AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
-app.use('/api/site-chat', require('./routes/siteChat'));
+// requireModuleEnabled: admin can switch the whole module off (see lib/features.js);
+// when off every endpoint 404s, so a pasted URL has nothing to load. NOTE this gates
+// the chat FEATURE only — initChatSocket() below must still start, because SOTYN Flow
+// and WebRTC call signalling both ride that same io.
+app.use('/api/site-chat', requireModuleEnabled('site_chat'), require('./routes/siteChat'));
+// SOTYN Flow — task boards (own DB sotynflow.db + shared socket)
+app.use('/api/sotyn-flow', requireModuleEnabled('sotyn_flow'), require('./routes/sotynFlow'));
+// System Requirements — product evolution tracker (upload-heavy; swept/quarantined)
+app.use('/api/system-requirements', requireModuleEnabled('system_requirements'), require('./routes/systemRequirements'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 
@@ -457,12 +557,63 @@ app.use('/audit', require('./routes/auditReport'));
 
 // File upload endpoint
 const { authMiddleware } = require('./middleware/auth');
-app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
+app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ url: `/uploads/${req.file.filename}`, filename: req.file.originalname, size: req.file.size });
+  const key = uploadKey(req, req.file);
+  // On local this is a no-op (multer already wrote the file where it belongs). On s3 it
+  // streams the file into the bucket and removes the local copy — so uploads land in
+  // object storage inline, at request time.
+  //
+  // It never throws for a storage failure: if the bucket is unreachable the file stays on
+  // disk, the /uploads resolver serves it via dual-read, and the migration job moves it
+  // later. The user's upload succeeds either way.
+  const url = await storage.adoptLocalFile(req.file.path, key, req.file.mimetype);
+  // Always "/uploads/<key>" under BOTH drivers, so the value stored in the DB is
+  // identical to what this endpoint has always returned.
+  res.json({ url, filename: req.file.originalname, size: req.file.size });
 });
 
 // Serve uploaded files
+// Lazy restore: if a requested upload is missing from disk but sitting in
+// quarantine (e.g. a chat/ticket was deleted, then a DB revert re-referenced its
+// file), pull it back out of quarantine and serve it — automatic recovery, no
+// manual sweep needed. Runs before express.static so the restored file is served.
+app.use('/uploads', async (req, res, next) => {
+  let key = null;
+  try {
+    key = quarantine.normalizeKey(decodeURIComponent(req.path.replace(/^\/+/, '')));
+  } catch (e) { return next(); }          // undecodable path — let static 404 it
+  if (!key) return next();
+
+  try {
+    // Lazy restore, driver-agnostic: absent from live storage but sitting in
+    // quarantine → pull it back before serving.
+    if (!(await storage.exists(key)) && await quarantine.isQuarantined(key)) {
+      await quarantine.restoreKey(key);
+    }
+  } catch (e) { /* ignore — fall through */ }
+
+  // Local driver: nothing more to do, express.static below serves the file exactly as
+  // it always has. This keeps the live path byte-for-byte the pre-seam behaviour.
+  if (!storage.isRemote) return next();
+
+  try {
+    // A public bucket/CDN can serve the bytes directly — cheaper than proxying.
+    if (process.env.S3_PUBLIC_BASE_URL) {
+      return res.redirect(302, `${process.env.S3_PUBLIC_BASE_URL.replace(/\/+$/, '')}/${key}`);
+    }
+    const buf = await storage.getObject(key);
+    if (buf) {
+      res.type(path.extname(key) || 'application/octet-stream');
+      return res.send(buf);
+    }
+  } catch (e) { /* fall through to the local fallback */ }
+
+  // DUAL-READ: the object isn't in the bucket (or the bucket errored), so fall through
+  // to express.static and serve the local copy. This is what makes the cutover
+  // zero-downtime — files not yet migrated keep serving while the backfill runs.
+  return next();
+});
 app.use('/uploads', express.static(uploadsDir));
 
 // Health check for deployment platforms
@@ -553,7 +704,17 @@ const serverPort = process.env.PORT || 5000;
 // it — the chat uses its own DB + this socket, separate from the rest (mam
 // 2026-06-18). Falls back gracefully if the socket layer fails to start.
 const httpServer = require('http').createServer(app);
-try { require('./lib/chatSocket').initChatSocket(httpServer); console.log('[chat] Socket.IO ready'); }
+try {
+  const io = require('./lib/chatSocket').initChatSocket(httpServer);
+  console.log('[chat] Socket.IO ready');
+  // SOTYN Flow reuses the SAME io (board rooms f:<id> + flow:* events) — chat is
+  // untouched. seeAll lets a non-admin super-viewer (can_see_all on sotyn_flow)
+  // join any board room; resolved from erp.db here so the socket file stays clean.
+  const { getDb } = require('./db/schema');
+  const flowSeeAll = (uid) => { try { return !!getDb().prepare("SELECT MAX(rp.can_see_all) a FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE ur.user_id=? AND rp.module='sotyn_flow'").get(uid)?.a; } catch { return false; } };
+  require('./lib/sotynFlowSocket').registerBoardSocket(io, flowSeeAll);
+  console.log('[flow] Socket.IO ready');
+}
 catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
 httpServer.listen(serverPort, '0.0.0.0', () => {
   console.log(`\n======================================`);

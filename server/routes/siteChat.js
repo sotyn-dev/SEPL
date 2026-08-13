@@ -8,6 +8,7 @@ const { getChatDb } = require('../db/chatDb');       // separate chat database
 const { emitChat } = require('../lib/chatSocket');   // real-time push
 const { rateLimit } = require('../lib/rateLimit');   // in-memory send backpressure
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const quarantine = require('../lib/quarantine');     // reversible cleanup of deleted attachments
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -45,6 +46,12 @@ const markRead = (db, g, uid, knownMax) => {
 const accessWhereFor = (admin) => admin
   ? 'g.is_dm=0 OR g.id IN (SELECT group_id FROM chat_group_members WHERE user_id=?)'
   : 'g.id IN (SELECT group_id FROM chat_group_members WHERE user_id=?)';
+
+// Soft-archive predicate. ALWAYS combined with accessWhereFor() wrapped in its own
+// parentheses — the admin variant is a bare `A OR B`, so an unparenthesised
+// `... OR B AND archived_at IS NULL` would bind the AND to B alone and leak
+// archived groups back into an admin's list.
+const archiveWhere = (archived) => (archived ? 'g.archived_at IS NOT NULL' : 'g.archived_at IS NULL');
 
 // Shared enrichment: DM display name/avatar + last-message/member-count/unread
 // per group, scoped to EXACTLY the ids passed in (a full list for the legacy
@@ -99,11 +106,11 @@ const GROUP_MAX = 100;
 // `last_id < ?` is safe. Phase 2's key (name) is NOT unique — group names can
 // collide — so it uses a COMPOUND (name, id) keyset; a bare `name > ?` would
 // skip the rest of a run of identically-named groups straddling a page edge.
-function pageOfGroups(db, { uid, admin, limit, q, cursor }) {
+function pageOfGroups(db, { uid, admin, limit, q, cursor, archived }) {
   const accessWhere = accessWhereFor(admin);
   const qWhere = q ? ' AND (g.name LIKE ? OR EXISTS (SELECT 1 FROM chat_group_members m2 WHERE m2.group_id=g.id AND m2.user_id<>? AND m2.user_name LIKE ?))' : '';
   const qParams = q ? [`%${q}%`, uid, `%${q}%`] : [];
-  const candidateSql = `SELECT g.id, g.name, g.is_dm, (SELECT MAX(id) FROM chat_messages m WHERE m.group_id=g.id) AS last_id FROM chat_groups g WHERE (${accessWhere})${qWhere}`;
+  const candidateSql = `SELECT g.id, g.name, g.is_dm, g.archived_at, (SELECT MAX(id) FROM chat_messages m WHERE m.group_id=g.id) AS last_id FROM chat_groups g WHERE (${accessWhere}) AND ${archiveWhere(archived)}${qWhere}`;
   const phase = cursor?.phase === 2 ? 2 : 1;
 
   if (phase === 1) {
@@ -162,12 +169,15 @@ router.get('/groups', (req, res) => {
   // sidebar "Only chats I'm in" toggle). Treating the admin as a non-admin here
   // reuses the exact member-only predicate; pagination/search/counts all follow.
   const db = getChatDb(); const uid = req.user.id; const admin = isAdmin(req) && req.query.mine !== '1';
+  // ?archived=1 → the Archived view (same access rules; an admin still never
+  // sees someone else's DM, because accessWhereFor already excludes them).
+  const archived = req.query.archived === '1';
   // No ?limit → legacy full-list behaviour, unchanged (kept for any other
   // caller that still wants everything at once). Admin here IS every non-DM
   // group + own DMs, same rule as before this perf pass; only the paginated
   // branch below avoids materialising + enriching all of them on every load.
   if (req.query.limit == null) {
-    const groups = db.prepare(`SELECT g.id, g.name, g.is_dm FROM chat_groups g WHERE ${accessWhereFor(admin)} ORDER BY g.name`).all(uid);
+    const groups = db.prepare(`SELECT g.id, g.name, g.is_dm, g.archived_at FROM chat_groups g WHERE (${accessWhereFor(admin)}) AND ${archiveWhere(archived)} ORDER BY g.name`).all(uid);
     return res.json(sortGroups(enrichGroups(db, uid, groups)));
   }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || GROUP_PAGE, 1), GROUP_MAX);
@@ -175,7 +185,7 @@ router.get('/groups', (req, res) => {
   const cursor = req.query.phase
     ? { phase: parseInt(req.query.phase, 10), after_last_id: req.query.after_last_id != null ? parseInt(req.query.after_last_id, 10) : null, after_name: req.query.after_name != null ? String(req.query.after_name) : null, after_id: req.query.after_id != null ? parseInt(req.query.after_id, 10) : null }
     : null;
-  const { rows, hasMore, nextCursor } = pageOfGroups(db, { uid, admin, limit, q, cursor });
+  const { rows, hasMore, nextCursor } = pageOfGroups(db, { uid, admin, limit, q, cursor, archived });
   const groups = sortGroups(enrichGroups(db, uid, rows)).map(({ last_id, ...g }) => g);
   res.json({ groups, hasMore, nextCursor });
 });
@@ -189,7 +199,9 @@ router.get('/groups', (req, res) => {
 const UNREAD_GROUPS_CAP = 30;
 router.get('/unread-count', (req, res) => {
   const db = getChatDb(); const uid = req.user.id; const admin = isAdmin(req);
-  const accessIdsSql = `SELECT g.id FROM chat_groups g WHERE ${accessWhereFor(admin)}`;
+  // Archived groups raise no badge and no toast — that is the point of archiving.
+  // Parenthesised: see archiveWhere()'s note on the bare OR in the admin variant.
+  const accessIdsSql = `SELECT g.id FROM chat_groups g WHERE (${accessWhereFor(admin)}) AND ${archiveWhere(false)}`;
   const unreadCountSql = `SELECT cm.group_id, COUNT(*) c FROM chat_messages cm
       WHERE cm.group_id IN (${accessIdsSql}) AND cm.sender_id<>?
         AND cm.id > COALESCE((SELECT last_read_id FROM chat_reads r WHERE r.group_id=cm.group_id AND r.user_id=?),0)
@@ -221,11 +233,11 @@ router.post('/groups', requirePermission('site_chat', 'create'), (req, res) => {
 // Direct message — open (or create) a 1-on-1 chat with another user. Open to
 // EVERY signed-in user (no create permission needed): personal connect like
 // WhatsApp (mam 2026-06-19 "if monika wants send to sushila she can direct").
-router.post('/dm', (req, res) => {
-  const db = getChatDb();
-  const me = req.user.id, other = +req.body?.user_id;
-  if (!other || other === me) return res.status(400).json({ error: 'Pick a different person to message' });
-  // Reuse an existing DM between exactly these two people, if any.
+// Find the 1-on-1 DM between two people, creating it if it doesn't exist yet.
+// Shared by POST /dm and POST /forward so "message someone new" and "forward to
+// someone new" can never drift into two different behaviours.
+function ensureDm(db, me, myName, other) {
+  if (!other || other === me) throw new Error('Pick a different person to message');
   const existing = db.prepare(`
     SELECT g.id FROM chat_groups g
     WHERE g.is_dm=1
@@ -233,13 +245,107 @@ router.post('/dm', (req, res) => {
       AND EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)
       AND EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)
     LIMIT 1`).get(me, other);
-  if (existing) return res.json({ id: existing.id, name: userName(other) });
-  const otherName = userName(other), myName = req.user.name || '';
-  const gid = db.prepare('INSERT INTO chat_groups (name, is_dm, created_by, created_by_name) VALUES (?,1,?,?)').run(otherName || 'Direct message', me, myName).lastInsertRowid;
+  if (existing) return existing.id;
+  const otherName = userName(other);
+  const gid = db.prepare('INSERT INTO chat_groups (name, is_dm, created_by, created_by_name) VALUES (?,1,?,?)')
+    .run(otherName || 'Direct message', me, myName).lastInsertRowid;
   const ins = db.prepare('INSERT OR IGNORE INTO chat_group_members (group_id, user_id, user_name, added_by) VALUES (?,?,?,?)');
   db.transaction(() => { ins.run(gid, me, myName, me); ins.run(gid, other, otherName, me); })();
   emitChat(gid, 'changed', { groupId: gid });
-  res.json({ id: gid, name: otherName });
+  return gid;
+}
+
+router.post('/dm', (req, res) => {
+  const db = getChatDb();
+  const me = req.user.id, other = +req.body?.user_id;
+  if (!other || other === me) return res.status(400).json({ error: 'Pick a different person to message' });
+  const gid = ensureDm(db, me, req.user.name || '', other);
+  res.json({ id: gid, name: userName(other) });
+});
+
+// ─── FORWARD DIALOG ──────────────────────────────────────────────────────
+// Everything the forward picker needs in ONE request: every group you're in,
+// PLUS every active colleague — including people you have never messaged, so
+// you never have to open a chat before you can forward to someone.
+//
+// Rows are merged on identity: a person you already DM comes back once, as a
+// 'group' row (the existing DM) rather than twice.
+router.get('/forward-targets', (req, res) => {
+  const db = getChatDb(), erp = getDb(), me = req.user.id;
+
+  const groups = db.prepare(`
+    SELECT g.id, g.name, g.is_dm,
+           (SELECT MAX(created_at) FROM chat_messages m WHERE m.group_id=g.id) AS last_at,
+           (SELECT COUNT(*) FROM chat_group_members m WHERE m.group_id=g.id)   AS members
+      FROM chat_groups g
+     WHERE EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)`).all(me);
+
+  // The other participant of each DM, so a DM row can be de-duped against the
+  // person row and can show their department/phone.
+  const dmIds = groups.filter(g => g.is_dm).map(g => g.id);
+  const dmPeer = {};
+  if (dmIds.length) {
+    const ph = dmIds.map(() => '?').join(',');
+    for (const r of db.prepare(`SELECT group_id, user_id FROM chat_group_members WHERE group_id IN (${ph}) AND user_id<>?`).all(...dmIds, me)) {
+      dmPeer[r.group_id] = r.user_id;
+    }
+  }
+
+  const people = erp.prepare(
+    `SELECT id, name, username, department, role, phone, email, avatar_url
+       FROM users WHERE COALESCE(active,1)=1 AND COALESCE(archived,0)=0 AND id<>?`).all(me);
+  const byId = new Map(people.map(u => [u.id, u]));
+
+  const favRows = db.prepare('SELECT target_type, target_id FROM chat_forward_favorites WHERE user_id=?').all(me);
+  const favs = new Set(favRows.map(f => `${f.target_type}:${f.target_id}`));
+  const statRows = db.prepare('SELECT target_type, target_id, forward_count, last_forwarded_at FROM chat_forward_stats WHERE user_id=?').all(me);
+  const stats = new Map(statRows.map(s => [`${s.target_type}:${s.target_id}`, s]));
+  const decorate = (type, id, row) => {
+    const k = `${type}:${id}`;
+    const s = stats.get(k);
+    return { ...row, favorite: favs.has(k), forwardCount: s?.forward_count || 0, lastForwardedAt: s?.last_forwarded_at || null };
+  };
+
+  const out = [];
+  const coveredUsers = new Set();
+  for (const g of groups) {
+    const peer = g.is_dm ? byId.get(dmPeer[g.id]) : null;
+    if (g.is_dm && !peer) continue;                     // peer deactivated — hide the DM
+    if (peer) coveredUsers.add(peer.id);
+    out.push(decorate('group', g.id, {
+      targetType: 'group', targetId: g.id, groupId: g.id, isDm: !!g.is_dm,
+      name: peer ? peer.name : g.name,
+      subtitle: peer ? [peer.department, peer.role].filter(Boolean).join(' · ') : `${g.members} members`,
+      phone: peer?.phone || null, email: peer?.email || null,
+      avatarUserId: peer?.id || null, lastAt: g.last_at || null,
+    }));
+  }
+  // Colleagues with no DM yet — the whole point of the redesign.
+  for (const u of people) {
+    if (coveredUsers.has(u.id)) continue;
+    out.push(decorate('user', u.id, {
+      targetType: 'user', targetId: u.id, groupId: null, isDm: true,
+      name: u.name, subtitle: [u.department, u.role].filter(Boolean).join(' · '),
+      phone: u.phone || null, email: u.email || null,
+      avatarUserId: u.id, lastAt: null, username: u.username || null,
+    }));
+  }
+  res.json(out);
+});
+
+// Pin / unpin a forward target. Toggle — the client doesn't track which way.
+router.post('/forward-favorite', (req, res) => {
+  const db = getChatDb(), me = req.user.id;
+  const type = req.body?.target_type === 'user' ? 'user' : 'group';
+  const id = +req.body?.target_id;
+  if (!id) return res.status(400).json({ error: 'target_id required' });
+  const row = db.prepare('SELECT id FROM chat_forward_favorites WHERE user_id=? AND target_type=? AND target_id=?').get(me, type, id);
+  if (row) {
+    db.prepare('DELETE FROM chat_forward_favorites WHERE id=?').run(row.id);
+    return res.json({ favorite: false });
+  }
+  db.prepare('INSERT INTO chat_forward_favorites (user_id, target_type, target_id) VALUES (?,?,?)').run(me, type, id);
+  res.json({ favorite: true });
 });
 
 // Rename a group — same privilege as managing members (create). DMs can't be
@@ -255,17 +361,46 @@ router.put('/:groupId', requirePermission('site_chat', 'create'), (req, res) => 
   res.json({ ok: true });
 });
 
+// Archive / restore — the reversible alternative to DELETE. Deleting a group is
+// permanent (its rows are gone; only the attachments are recoverable, via
+// quarantine), so archiving is what "remove this from the list" should normally
+// mean. Same privilege as delete, since it hides the group for every member.
+// Nothing is deleted, so this reclaims NO disk — it is list hygiene, not cleanup.
+// A DM cannot be archived: one participant archiving would hide it for the other
+// too, and per-user archive would need its own table. Same rule as rename.
+const setArchived = (req, res, archived) => {
+  const db = getChatDb(); const g = +req.params.groupId;
+  const grp = db.prepare('SELECT * FROM chat_groups WHERE id=?').get(g);
+  if (!grp) return res.status(404).json({ error: 'Not found' });
+  if (grp.is_dm) return res.status(400).json({ error: 'A direct message cannot be archived' });
+  if (grp.created_by !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'Only the creator or an admin can archive the group' });
+  db.prepare('UPDATE chat_groups SET archived_at=? WHERE id=?').run(archived ? new Date().toISOString() : null, g);
+  // On archive reuse 'group_deleted' — for a client it means exactly "this group
+  // has left your list", so the sidebar refreshes AND an open thread is closed.
+  // On restore 'changed' triggers the same loadGroups() reconcile.
+  emitChat(g, archived ? 'group_deleted' : 'changed', { groupId: g });
+  res.json({ ok: true, archived });
+};
+router.post('/:groupId/archive', requirePermission('site_chat', 'delete'), (req, res) => setArchived(req, res, true));
+router.post('/:groupId/unarchive', requirePermission('site_chat', 'delete'), (req, res) => setArchived(req, res, false));
+
 router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   const grp = db.prepare('SELECT * FROM chat_groups WHERE id=?').get(g);
   if (!grp) return res.status(404).json({ error: 'Not found' });
   if (grp.created_by !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'Only the creator or an admin can delete the group' });
+  // Grab attachment URLs before the rows vanish so we can quarantine the files
+  // (reversible — restored on serve if a DB revert re-references them).
+  const atts = db.prepare('SELECT attachment_url FROM chat_messages WHERE group_id=? AND attachment_url IS NOT NULL').all(g);
   db.transaction(() => {
     db.prepare('DELETE FROM chat_messages WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_group_members WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_reads WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_groups WHERE id=?').run(g);
   })();
+  // Fire-and-forget: quarantine is async now, so the rejection must be swallowed on the
+  // promise — a sync catch would no longer see it, and an unhandled rejection kills Node.
+  for (const a of atts) { try { quarantine.quarantineUrl(a.attachment_url).catch(() => {}); } catch (e) { /* best-effort */ } }
   emitChat(g, 'group_deleted', { groupId: g });
   res.json({ ok: true });
 });
@@ -273,7 +408,7 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
 router.get('/:groupId', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
-  const group = db.prepare('SELECT id, name, is_dm FROM chat_groups WHERE id=?').get(g);
+  const group = db.prepare('SELECT id, name, is_dm, archived_at FROM chat_groups WHERE id=?').get(g);
   if (!group) return res.status(404).json({ error: 'Group not found' });
   // Cursor pagination (backward-compatible): a client that passes ?limit=N gets
   // the most-recent N (or N older than ?before=<id>) via idx_cmsg_group_id; a
@@ -326,12 +461,64 @@ const sendLimiter = rateLimit({
   message: 'You are sending messages too fast — take a breath and try again in a moment.',
 });
 
+// Forward one message to MANY targets in a single call.
+// A 'user' target with no DM yet gets one created here, so forwarding to
+// someone you've never messaged just works.
+router.post('/forward', sendLimiter, (req, res) => {
+  const db = getChatDb(), me = req.user.id;
+  const { body, attachment_url, attachment_name, targets } = req.body || {};
+  if (!Array.isArray(targets) || !targets.length) return res.status(400).json({ error: 'Pick at least one chat' });
+  if ((!body || !String(body).trim()) && !attachment_url) return res.status(400).json({ error: 'Nothing to forward' });
+  if (targets.length > 25) return res.status(400).json({ error: 'Forward to at most 25 chats at once' });
+
+  const myName = req.user.name || '';
+  // forwarded=1 so the recipient's bubble carries the "Forwarded" label.
+  const insMsg = db.prepare('INSERT INTO chat_messages (group_id, body, attachment_url, attachment_name, sender_id, sender_name, forwarded) VALUES (?,?,?,?,?,?,1)');
+  const bump = db.prepare(`
+    INSERT INTO chat_forward_stats (user_id, target_type, target_id, forward_count, last_forwarded_at)
+    VALUES (?,?,?,1,CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, target_type, target_id)
+    DO UPDATE SET forward_count = forward_count + 1, last_forwarded_at = CURRENT_TIMESTAMP`);
+
+  const sent = [], failed = [];
+  for (const t of targets) {
+    const type = t?.target_type === 'user' ? 'user' : 'group';
+    const tid = +t?.target_id;
+    if (!tid) { failed.push({ ...t, error: 'bad target' }); continue; }
+    try {
+      let gid;
+      if (type === 'group') {
+        if (!canAccess(db, req, tid)) { failed.push({ ...t, error: 'not a member' }); continue; }
+        gid = tid;
+      } else {
+        gid = ensureDm(db, me, myName, tid);            // creates the DM if absent
+      }
+      const info = insMsg.run(gid, body ? String(body).trim() : null, attachment_url || null, attachment_name || null, me, myName);
+      markRead(db, gid, me, info.lastInsertRowid);
+      bump.run(me, type, tid);
+      const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(info.lastInsertRowid);
+      emitChat(gid, 'message', row);
+      emitChat(gid, 'changed', { groupId: gid });
+      sent.push({ target_type: type, target_id: tid, group_id: gid, message: row });
+    } catch (e) {
+      failed.push({ target_type: type, target_id: tid, error: e.message });
+    }
+  }
+  res.json({ sent: sent.length, failed, results: sent });
+});
+
 // Any MEMBER can post — gated by group membership ONLY, not any site_chat
 // module permission, so anyone added to a group can reply by default
 // (mam 2026-06-19: "user add monika she is not able to reply").
 router.post('/:groupId', sendLimiter, (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
+  // An archived group is read-only. Without this a client holding the thread open
+  // could still post into it — the message would land in a group that shows in no
+  // list and raises no unread badge, i.e. silently lost to everyone.
+  if (db.prepare('SELECT archived_at FROM chat_groups WHERE id=?').get(g)?.archived_at) {
+    return res.status(409).json({ error: 'This group is archived. Restore it to send messages.' });
+  }
   const { body, attachment_url, attachment_name, reply_to_id } = req.body;
   if ((!body || !String(body).trim()) && !attachment_url) return res.status(400).json({ error: 'Type a message or attach a file' });
   // Quoted reply — only accept an id that belongs to THIS group (mam 2026-06-25).
@@ -408,6 +595,7 @@ router.delete('/:groupId/messages/:msgId', (req, res) => {
   if (!msg) return res.status(404).json({ error: 'Not found' });
   if (msg.sender_id !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'You can only delete your own messages' });
   db.prepare('DELETE FROM chat_messages WHERE id=?').run(req.params.msgId);
+  if (msg.attachment_url) { try { quarantine.quarantineUrl(msg.attachment_url).catch(() => {}); } catch (e) { /* best-effort */ } }
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
 });

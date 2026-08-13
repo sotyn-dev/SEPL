@@ -27,10 +27,11 @@ export default function HelpTicket() {
   const [tickets, setTickets] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '' });
+  const [form, setForm] = useState({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', deadline_date: '' });
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [adminResponse, setAdminResponse] = useState('');
   const [reassign, setReassign] = useState('');
+  const [deadlineEdit, setDeadlineEdit] = useState('');
   // Delegation-style proof upload state for the open ticket.
   const [proof, setProof] = useState({ url: '', notes: '', uploading: false, pct: 0 });
 
@@ -74,7 +75,7 @@ export default function HelpTicket() {
       const res = await api.post('/support', payload);
       toast.success(`Ticket ${res.data.ticket_no} created${form.assigned_to ? ' — assigned' : ''}`);
       setModal(null);
-      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', _file: null });
+      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', deadline_date: '', _file: null });
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -172,7 +173,7 @@ export default function HelpTicket() {
                 <button onClick={() => setModal('new')} className="w-full btn btn-primary text-xs py-2 flex items-center justify-center gap-1"><FiPlus size={12}/> Raise New Ticket</button>
                 {tickets.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No tickets yet</p>}
                 {tickets.map(t => (
-                  <div key={t.id} onClick={() => { setSelectedTicket(t); setAdminResponse(t.admin_response || ''); setReassign(t.assigned_to || ''); setProof({ url: '', notes: '', uploading: false, pct: 0 }); setModal('view'); }} className="p-2.5 border rounded-lg hover:bg-red-50/40 cursor-pointer text-xs">
+                  <div key={t.id} onClick={() => { setSelectedTicket(t); setAdminResponse(t.admin_response || ''); setReassign(t.assigned_to || ''); setDeadlineEdit((t.deadline_date || '').slice(0, 10)); setProof({ url: '', notes: '', uploading: false, pct: 0 }); setModal('view'); }} className="p-2.5 border rounded-lg hover:bg-red-50/40 cursor-pointer text-xs">
                     <div className="flex justify-between items-start">
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-red-600">{t.ticket_no}</p>
@@ -180,6 +181,9 @@ export default function HelpTicket() {
                         {isAdmin && <p className="text-[10px] text-gray-400">by {t.user_name}</p>}
                         {t.assigned_to_name && (
                           <p className="text-[10px] text-indigo-600 font-semibold">→ {t.assigned_to_name}{t.assigned_to === user?.id && <span className="text-emerald-600"> (you)</span>}</p>
+                        )}
+                        {t.deadline_date && (
+                          <p className="text-[10px] text-amber-700 font-medium">📅 Due: {t.deadline_date.slice(0, 10)}</p>
                         )}
                       </div>
                       <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${statusColors[t.status]}`}>{t.status}</span>
@@ -228,6 +232,15 @@ export default function HelpTicket() {
                 onChange={(u) => setForm({ ...form, assigned_to: u?.id || '' })}
               />
             </div>
+            <div className="col-span-2">
+              <label className="label">Deadline Date <span className="text-gray-400 font-normal text-[10px]">(optional — target completion date)</span></label>
+              <input
+                type="date"
+                className="input"
+                value={form.deadline_date || ''}
+                onChange={e => setForm({ ...form, deadline_date: e.target.value })}
+              />
+            </div>
           </div>
           <div><label className="label">Description *</label><textarea className="input" rows="4" value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Describe your issue or request in detail..." required /></div>
           <div>
@@ -257,9 +270,14 @@ export default function HelpTicket() {
                 <span className={`text-xs font-bold ${priorityColors[selectedTicket.priority]}`}>{selectedTicket.priority.toUpperCase()}</span>
               </div>
             </div>
-            <div className="flex gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="bg-gray-100 px-2 py-1 rounded">{selectedTicket.category}</span>
               {selectedTicket.module && <span className="bg-red-100 px-2 py-1 rounded">{selectedTicket.module}</span>}
+              {selectedTicket.deadline_date && (
+                <span className="bg-amber-100 text-amber-800 font-semibold px-2 py-1 rounded border border-amber-200">
+                  📅 Due: {selectedTicket.deadline_date.slice(0, 10)}
+                </span>
+              )}
             </div>
             <div className="bg-gray-50 p-3 rounded text-sm whitespace-pre-wrap">{selectedTicket.description}</div>
             {selectedTicket.attachment_link && (
@@ -323,6 +341,18 @@ export default function HelpTicket() {
                 <p className="text-sm whitespace-pre-wrap">{selectedTicket.admin_response}</p>
               </div>
             )}
+
+            {/* Deadline editor for raiser, assignee, or admin */}
+            {(canFollowAll || selectedTicket.assigned_to === user?.id || selectedTicket.user_id === user?.id) && (
+              <div className="border-t pt-3 space-y-1">
+                <label className="label text-[11px]">Set / Edit Deadline Date</label>
+                <div className="flex gap-2 items-center">
+                  <input type="date" className="input text-xs py-1 flex-1" value={deadlineEdit} onChange={e => setDeadlineEdit(e.target.value)} />
+                  <button type="button" onClick={() => updateTicket(selectedTicket.id, { deadline_date: deadlineEdit || null })} disabled={(deadlineEdit || '') === (selectedTicket.deadline_date || '').slice(0, 10)} className="btn btn-secondary text-xs whitespace-nowrap disabled:opacity-50">Save Deadline</button>
+                </div>
+              </div>
+            )}
+
             {/* Assignee (non-admin) can move to in_progress + leave a response */}
             {!isAdmin && selectedTicket.assigned_to === user?.id && selectedTicket.status !== 'closed' && selectedTicket.status !== 'resolved' && (
               <div className="border-t pt-4 space-y-3">

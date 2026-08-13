@@ -15,18 +15,21 @@
 
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
+const storage = require('../lib/storage');
+const { uploadsSub, ensureDir } = require('../lib/paths');
 
 const router = express.Router();
 router.use(authMiddleware);
 
 // Resume / offer-letter / training video uploads land here.
-const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'hr');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+// uploadsSub() honours DATA_ROOT (lib/paths) instead of hardcoding data/uploads. diskStorage
+// keeps memory flat; storage.adoptLocalFile pushes to the bucket when the driver is s3.
+const UPLOAD_FOLDER = 'hr';
+const uploadDir = ensureDir(uploadsSub(UPLOAD_FOLDER));
 const upload = multer({
   storage: multer.diskStorage({
     destination: uploadDir,
@@ -464,9 +467,11 @@ router.post('/candidates/:id/status', requirePermission('hr_system', 'edit'), (r
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.post('/candidates/:id/resume', requirePermission('hr_system', 'edit'), upload.single('file'), (req, res) => {
+router.post('/candidates/:id/resume', requirePermission('hr_system', 'edit'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const url = `/uploads/hr/${path.basename(req.file.path)}`;
+  // Pushed to the bucket here (s3 driver) or left where multer put it (local). The DB
+  // value is "/uploads/hr/<file>" either way.
+  const url = await storage.adoptLocalFile(req.file.path, `${UPLOAD_FOLDER}/${path.basename(req.file.path)}`, req.file.mimetype);
   const db = getDb();
   try {
     db.prepare('UPDATE hr_candidates SET resume_url=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(url, req.params.id);
