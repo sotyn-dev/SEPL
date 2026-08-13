@@ -64,6 +64,10 @@ export default function Delegation() {
   const [proofPct, setProofPct] = useState(0);
   const [rejectReason, setRejectReason] = useState('');
   const [extendForm, setExtendForm] = useState({ requested_due_date: '', reason: '' });
+  // Proof remarks are clamped to 2 lines to keep rows scannable, which hides
+  // anything longer behind "…" — tap the remark to read all of it (hover
+  // tooltips don't exist on the phones this is mostly used from).
+  const [remarksOpen, setRemarksOpen] = useState({}); // { taskId: true } — full remark shown
   // Voice input
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef(null);
@@ -298,7 +302,7 @@ export default function Delegation() {
           if (ev.total) setProofPct(Math.round((ev.loaded / ev.total) * 100));
         },
       });
-      setSubmitForm({ proof_url: res.data.url, uploading: false });
+      setSubmitForm(s => ({ ...s, proof_url: res.data.url, uploading: false }));
       setProofPct(100);
       toast.success('File uploaded — click Submit');
     } catch {
@@ -675,7 +679,11 @@ export default function Delegation() {
                         <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1 whitespace-nowrap"><FiExternalLink size={11} className="shrink-0" /> View</a>
                       )}
                       {t.proof_remarks && (
-                        <span className="text-[10px] text-gray-500 italic line-clamp-2 break-words" title={t.proof_remarks}>{t.proof_remarks}</span>
+                        <span
+                          onClick={() => setRemarksOpen(p => ({ ...p, [t.id]: !p[t.id] }))}
+                          className={`text-[10px] text-gray-500 italic break-words cursor-pointer ${remarksOpen[t.id] ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}
+                          title={remarksOpen[t.id] ? 'Tap to collapse' : t.proof_remarks}
+                        >{t.proof_remarks}</span>
                       )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
                         <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
@@ -709,6 +717,7 @@ export default function Delegation() {
                   <td className="align-top">
                     {isEA ? (
                       <textarea
+                        key={`${t.id}:${t.followup_remarks || ''}`}
                         defaultValue={t.followup_remarks || ''}
                         placeholder="— add note —"
                         rows={2}

@@ -55,6 +55,9 @@ const SotynFlow = lazy(() => import('./pages/SotynFlow'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
 const IndentLabourPayment = lazy(() => import('./pages/IndentLabourPayment'));
+const LabourManagementSystem = lazy(() => import('./pages/LabourManagementSystem'));
+const LabourMaster = lazy(() => import('./pages/LabourMaster'));
+const BillVerification = lazy(() => import('./pages/BillVerification'));
 const Delegation = lazy(() => import('./pages/Delegation'));
 const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
@@ -71,6 +74,10 @@ const DrawingTracker = lazy(() => import('./pages/DrawingTracker'));
 const DrawingDetail = lazy(() => import('./pages/DrawingDetail'));
 const DrawingRegisterPrint = lazy(() => import('./pages/DrawingRegisterPrint'));
 const DrawingRevisionView = lazy(() => import('./pages/DrawingRevisionView'));
+const WorkOrderPrint = lazy(() => import('./pages/WorkOrderPrint'));
+const LabourRateMasterPrint = lazy(() => import('./pages/LabourRateMasterPrint'));
+const WageRegisterPrint = lazy(() => import('./pages/WageRegisterPrint'));
+const BillPrint = lazy(() => import('./pages/BillPrint'));
 const SiteSlipPrint = lazy(() => import('./pages/SiteSlipPrint'));
 const QuotationPrint = lazy(() => import('./pages/QuotationPrint'));
 const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
@@ -153,6 +160,10 @@ export default function App() {
       {/* Full-page revision viewer — outside the Layout shell so the drawing
           gets the whole window when opened in its own tab. */}
       <Route path="/drawing-view/:id" element={<ProtectedRoute><DrawingRevisionView /></ProtectedRoute>} />
+      <Route path="/work-order-print/:id" element={<ProtectedRoute><WorkOrderPrint /></ProtectedRoute>} />
+      <Route path="/labour-rate-master-print" element={<ProtectedRoute><LabourRateMasterPrint /></ProtectedRoute>} />
+      <Route path="/wage-register-print" element={<ProtectedRoute><WageRegisterPrint /></ProtectedRoute>} />
+      <Route path="/bill-print/:id" element={<ProtectedRoute><BillPrint /></ProtectedRoute>} />
       {/* SPOS site-store GRN slips (mam 2026-07-31): printable Issue/Return slip */}
       <Route path="/site-slip/:id/print" element={<ProtectedRoute><SiteSlipPrint /></ProtectedRoute>} />
       <Route path="/quotation/:indentId/print" element={<ProtectedRoute><QuotationPrint /></ProtectedRoute>} />
@@ -206,6 +217,9 @@ export default function App() {
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
         <Route path="indent-labour-payment" element={<ModuleRoute module="indent_labour_payment"><IndentLabourPayment /></ModuleRoute>} />
+        <Route path="labour-management" element={<ModuleRoute module="labour_quotation"><LabourManagementSystem /></ModuleRoute>} />
+        <Route path="labour-master" element={<ModuleRoute module="labour_master"><LabourMaster /></ModuleRoute>} />
+        <Route path="bill-verification" element={<ModuleRoute module="bill_verification"><BillVerification /></ModuleRoute>} />
         <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />
         <Route path="pms-tasks" element={<ModuleRoute module="pms_tasks"><PMSTasks /></ModuleRoute>} />
         {/* Other Modules */}
