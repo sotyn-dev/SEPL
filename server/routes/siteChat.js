@@ -38,6 +38,17 @@ const markRead = (db, g, uid, knownMax) => {
   return max;
 };
 
+// Permanent server-side trail for every destructive/membership chat action —
+// shows in `pm2 logs erp | grep chat-audit` even if the UI trail is missed.
+// Records the account AND the IP, so a teammate's script using a borrowed
+// token is identifiable by source address (mam 2026-08-13).
+const chatAudit = (req, action, groupId, extra) => {
+  try {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || '?';
+    console.log(`[chat-audit] ${new Date().toISOString()} user=${req.user.id}(${req.user.name || '?'}) ip=${ip} action=${action} group=${groupId}${extra ? ` :: ${extra}` : ''}`);
+  } catch (e) { /* never let logging break the action */ }
+};
+
 // In-chat audit line for membership changes (mam 2026-08-13: people were being
 // silently removed from groups and re-added later with no trace). Every
 // add/remove now announces itself INSIDE the group, WhatsApp-style, naming the
@@ -386,6 +397,13 @@ const setArchived = (req, res, archived) => {
   if (!grp) return res.status(404).json({ error: 'Not found' });
   if (grp.is_dm) return res.status(400).json({ error: 'A direct message cannot be archived' });
   if (grp.created_by !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'Only the creator or an admin can archive the group' });
+  // Audit line BEFORE flipping the flag — an archived group that comes back
+  // shows exactly who hid it and who restored it (mam 2026-08-13: groups were
+  // "vanishing" and reappearing; archive was the last untraced path).
+  chatAudit(req, archived ? 'archive-group' : 'unarchive-group', g, grp.name);
+  postSystem(db, g, req.user, archived
+    ? `${req.user.name || 'Someone'} archived the group (hidden for everyone until restored)`
+    : `${req.user.name || 'Someone'} restored the group`);
   db.prepare('UPDATE chat_groups SET archived_at=? WHERE id=?').run(archived ? new Date().toISOString() : null, g);
   // On archive reuse 'group_deleted' — for a client it means exactly "this group
   // has left your list", so the sidebar refreshes AND an open thread is closed.
@@ -407,6 +425,7 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
   // like before, but ALL messages, members, reads and files stay in the DB
   // and an admin can bring it back instantly via /unarchive.  The audit
   // line goes in FIRST so the restored group shows who "deleted" it.
+  chatAudit(req, 'delete-group(->archive)', g, grp.name);
   postSystem(db, g, req.user, `${req.user.name || 'Someone'} deleted the group (recoverable by admin)`);
   db.prepare('UPDATE chat_groups SET archived_at=CURRENT_TIMESTAMP WHERE id=? AND archived_at IS NULL').run(g);
   emitChat(g, 'group_deleted', { groupId: g });
@@ -579,7 +598,10 @@ router.post('/:groupId/members', requirePermission('site_chat', 'create'), (req,
       if (ch) { added += ch; addedNames.push(nm || `#${u}`); }
     }
   })();
-  if (added > 0) postSystem(db, g, req.user, `${req.user.name || 'Someone'} added ${addedNames.join(', ')}`);
+  if (added > 0) {
+    chatAudit(req, 'add-members', g, addedNames.join(', '));
+    postSystem(db, g, req.user, `${req.user.name || 'Someone'} added ${addedNames.join(', ')}`);
+  }
   emitChat(g, 'changed', { groupId: g });
   res.json({ added });
 });
@@ -600,6 +622,7 @@ router.delete('/:groupId/members/:userId', requirePermission('site_chat', 'creat
   const nm = db.prepare('SELECT user_name FROM chat_group_members WHERE group_id=? AND user_id=?').get(g, target)?.user_name;
   const ch = db.prepare('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?').run(g, target).changes;
   if (ch) {
+    chatAudit(req, self ? 'leave-group' : 'remove-member', g, nm || `#${target}`);
     postSystem(db, g, req.user, self
       ? `${req.user.name || 'Someone'} left the group`
       : `${req.user.name || 'Someone'} removed ${nm || 'a member'}`);
@@ -640,6 +663,7 @@ router.delete('/:groupId/messages/:msgId', (req, res) => {
   // SOFT delete only (mam 2026-08-13: messages were being wiped — "anything
   // dont delete"). The row + body + file stay in the DB (admin-recoverable);
   // clients render a "deleted by X" tombstone; API responses strip content.
+  chatAudit(req, 'delete-message', g, `msg#${msg.id} by ${msg.sender_name || '?'}`);
   db.prepare('UPDATE chat_messages SET deleted_at=CURRENT_TIMESTAMP, deleted_by=?, deleted_by_name=? WHERE id=?')
     .run(req.user.id, req.user.name || '', msg.id);
   emitChat(g, 'changed', { groupId: g });
