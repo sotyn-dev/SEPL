@@ -45,21 +45,34 @@ function isApprover(db, user) {
 function siteScopeWhere(db, user) {
   if (isApprover(db, user)) return null;
   const uname = db.prepare('SELECT name FROM users WHERE id=?').get(user.id)?.name || '';
-  const ids = db.prepare(`
-    SELECT id FROM sites WHERE site_engineer_id = ? OR supervisor_id = ?
+  // The user's sites as id + NAME pairs.  Imported / WhatsApp-raised snags
+  // often carry ONLY site_name text (site_id NULL — e.g. "CONSERN PHARMA"),
+  // so matching by id alone showed an engineer an empty list (mam
+  // 2026-08-13: "consern side site eng i select but not showing him snag").
+  // Junior engineers on the PO (jr_site_engineer_ids CSV) count too.
+  const rows = db.prepare(`
+    SELECT id, name FROM sites WHERE site_engineer_id = ? OR supervisor_id = ?
     UNION
-    SELECT id FROM sites WHERE LOWER(TRIM(COALESCE(supervisor,''))) = LOWER(TRIM(?))
+    SELECT id, name FROM sites WHERE LOWER(TRIM(COALESCE(supervisor,''))) = LOWER(TRIM(?))
     UNION
-    SELECT s.id FROM sites s
+    SELECT s.id, s.name FROM sites s
     JOIN purchase_orders po ON po.id = s.po_id
     WHERE po.site_engineer_id = ?
        OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ?
-  `).all(user.id, user.id, uname, user.id, `%,${user.id},%`).map(r => r.id).filter(Boolean);
-  const sitePart = ids.length ? `s.site_id IN (${ids.join(',')}) OR ` : '';
-  return {
-    where: `(${sitePart}s.raised_by = ? OR s.assigned_to = ? OR (s.assigned_to IS NULL AND s.assigned_to_name = ?) OR CAST(s.assigned_to AS TEXT) = ?)`,
-    params: [user.id, user.id, uname, uname],
-  };
+       OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+  `).all(user.id, user.id, uname, user.id, `%,${user.id},%`, `%,${user.id},%`);
+  const ids = rows.map(r => r.id).filter(Boolean);
+  const names = [...new Set(rows.map(r => String(r.name || '').trim().toLowerCase()).filter(Boolean))];
+  const parts = [];
+  const params = [];
+  if (ids.length) parts.push(`s.site_id IN (${ids.join(',')})`);
+  if (names.length) {
+    parts.push(`LOWER(TRIM(COALESCE(s.site_name,''))) IN (${names.map(() => '?').join(',')})`);
+    params.push(...names);
+  }
+  parts.push('s.raised_by = ?', 's.assigned_to = ?', '(s.assigned_to IS NULL AND s.assigned_to_name = ?)', 'CAST(s.assigned_to AS TEXT) = ?');
+  params.push(user.id, user.id, uname, uname);
+  return { where: `(${parts.join(' OR ')})`, params };
 }
 
 // Shared filtered-list query — used by the JSON list AND the .xlsx export so
