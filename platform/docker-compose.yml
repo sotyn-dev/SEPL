@@ -54,6 +54,9 @@ services:
       HOST_ID: ${HOST_ID:-host_local}
       TENANTS_ROOT: /var/lib/sotyn/tenants
       ERP_ENV_FILE: ${ERP_ENV_FILE:-/var/lib/sotyn/erp.env}
+      # Local compose → platform on host: ws://host.docker.internal:7100/api/agent/v1/ws
+      # Same compose network: ws://platform:7100/api/agent/v1/ws
+      PLATFORM_WS_URL: ${PLATFORM_WS_URL:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Same path host ↔ container (required for tenant bind mounts).

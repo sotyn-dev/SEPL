@@ -1,6 +1,7 @@
 'use strict';
 
 const { getDb } = require('./db');
+const hub = require('./agentHub');
 
 const DEFAULT_HOST_ID = 'host_local';
 const ENV_TOKEN = process.env.AGENT_TOKEN || 'dev-agent-token';
@@ -14,6 +15,10 @@ function rowToHost(row, { includeToken = false } = {}) {
     agentUrl: (row.agent_url || '').replace(/\/$/, ''),
     status: row.status,
     hasToken: !!(row.agent_token || ENV_TOKEN),
+    agentVersion: row.agent_version || null,
+    lastHeartbeatAt: row.last_heartbeat_at || null,
+    lastSeenAt: row.last_seen_at || null,
+    wsOnline: hub.isOnline(row.id),
     createdAt: row.created_at,
   };
   if (includeToken) out.agentToken = token;
@@ -90,7 +95,48 @@ async function agentFetch(path, options = {}) {
     throw err;
   }
 
-  return { host, data, status: res.status };
+  return { host, data, status: res.status, via: 'http' };
+}
+
+/**
+ * Prefer WSS when that host's agent is connected; else HTTP :7200.
+ */
+async function agentDispatch(path, options = {}) {
+  const { hostId, method = 'GET', body, type } = options;
+  const host = getHost(hostId);
+
+  if (hub.isOnline(host.id)) {
+    let parsedBody = body;
+    if (typeof body === 'string') {
+      try {
+        parsedBody = body ? JSON.parse(body) : null;
+      } catch {
+        parsedBody = null;
+      }
+    }
+    const result = await hub.enqueueAndDispatch({
+      hostId: host.id,
+      type: type || 'http',
+      method,
+      path: path.startsWith('/') ? path : `/${path}`,
+      body: parsedBody,
+      wait: true,
+    });
+    return {
+      host,
+      data: result.data,
+      status: result.status,
+      via: 'wss',
+      commandId: result.command && result.command.id,
+    };
+  }
+
+  return agentFetch(path, {
+    hostId: host.id,
+    method,
+    body: body != null && typeof body !== 'string' ? JSON.stringify(body) : body,
+    headers: options.headers,
+  });
 }
 
 module.exports = {
@@ -101,5 +147,6 @@ module.exports = {
   getHostRow,
   getLocalHost,
   agentFetch,
+  agentDispatch,
   rowToHost,
 };

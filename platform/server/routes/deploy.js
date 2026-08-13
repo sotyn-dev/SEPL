@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { agentFetch, getHost, listHosts } = require('../lib/agentClient');
+const { agentDispatch, getHost, listHosts } = require('../lib/agentClient');
 
 const router = express.Router();
 
@@ -35,7 +35,7 @@ router.get('/host', (req, res) => {
 router.get('/images', async (req, res) => {
   try {
     const hostId = resolveHostId(req);
-    const { host, data } = await agentFetch('/v1/images', { hostId });
+    const { host, data } = await agentDispatch('/v1/images', { hostId });
     res.json({ hostId: host.id, hostLabel: host.label, images: data.images || [] });
   } catch (e) {
     res.status(e.status || 502).json({ error: e.message, detail: e.detail });
@@ -46,7 +46,7 @@ router.delete('/images/:tag', async (req, res) => {
   try {
     const hostId = resolveHostId(req);
     const tag = encodeURIComponent(req.params.tag);
-    const { host, data } = await agentFetch(`/v1/images/${tag}`, {
+    const { host, data } = await agentDispatch(`/v1/images/${tag}`, {
       method: 'DELETE',
       hostId,
     });
@@ -60,7 +60,7 @@ router.post('/images/prune', async (req, res) => {
   try {
     const hostId = resolveHostId(req);
     const { keepLatest, keepLatestTag } = req.body || {};
-    const { host, data } = await agentFetch('/v1/images/prune', {
+    const { host, data } = await agentDispatch('/v1/images/prune', {
       method: 'POST',
       hostId,
       body: JSON.stringify({ keepLatest, keepLatestTag }),
@@ -75,7 +75,7 @@ router.post('/', async (req, res) => {
   try {
     const { tag, build, hostId: bodyHostId, keepLatest, pruneAfter } = req.body || {};
     const hostId = bodyHostId || resolveHostId(req);
-    const { host, data, status } = await agentFetch('/v1/deploy', {
+    const { host, data, status } = await agentDispatch('/v1/deploy', {
       method: 'POST',
       hostId,
       body: JSON.stringify({ tag, build, keepLatest, pruneAfter }),
@@ -93,7 +93,7 @@ router.post('/', async (req, res) => {
 router.get('/jobs/:id', async (req, res) => {
   try {
     const hostId = resolveHostId(req);
-    const { host, data } = await agentFetch(
+    const { host, data } = await agentDispatch(
       `/v1/deploy/jobs/${encodeURIComponent(req.params.id)}`,
       { hostId }
     );

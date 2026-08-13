@@ -14,20 +14,24 @@ Day‑1: one VPS runs platform + local agent + Docker orgs (including secured). 
 |---|---|
 | Platform API (`:7100`) | Host Node (PM2) |
 | Platform UI | Built static files + nginx |
-| Worker agent (`:7200`) | Host Node (PM2), **localhost only** |
+| Worker agent (`:7200`) | Host Node (PM2), **localhost only** (+ outbound WSS) |
 | Each org ERP | Docker via agent (bind-mount `data/`) |
 
 ```
 Operator browser → Cloudflare Access (email OTP / IdP)
-                      → nginx (platform.sotyn.com)  [DNS orange-clouded]
+                      → nginx (platform.sotyn.ai)  [DNS orange-clouded]
                            ├─ static  → /root/erp/platform/client/dist
                            └─ /api    → 127.0.0.1:7100  (platform)
-                                           └─ AGENT_TOKEN → 127.0.0.1:7200  (agent → Docker)
+
+Worker agent → outbound WSS → agents.sotyn.ai :443 → Platform /api/agent/v1/ws
+             (HTTP :7200 kept as local fallback)
 ```
 
-**Access model:** **Cloudflare Access** gates who can reach the platform. Keep platform JWT login — do not remove app auth. Runbook: [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md).
+**Access model:** **Cloudflare Access** gates who can reach the **human** platform host. Keep platform JWT login — do not remove app auth. Runbook: [`PLATFORM-Cloudflare-Access.md`](./PLATFORM-Cloudflare-Access.md).
 
-Do **not** expose the agent on the public internet.
+**Agent control plane (WSS):** [`PLATFORM-agents-wss.md`](./PLATFORM-agents-wss.md) — local `ws://127.0.0.1:7100/...`, deploy `wss://agents.sotyn.ai/...`. Do **not** put Access OTP on `agents.sotyn.ai`.
+
+Do **not** expose the agent HTTP port on the public internet.
 
 ---
 

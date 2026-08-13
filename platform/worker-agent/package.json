@@ -1,0 +1,10 @@
+{
+  "name": "@sotyn/worker-agent",
+  "private": true,
+  "version": "0.2.0",
+  "main": "index.js",
+  "dependencies": {
+    "business-erp": "file:../..",
+    "ws": "^8.18.0"
+  }
+}

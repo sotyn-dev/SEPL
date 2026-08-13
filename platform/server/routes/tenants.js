@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { getDb } = require('../lib/db');
-const { agentFetch, DEFAULT_HOST_ID } = require('../lib/agentClient');
+const { agentDispatch, DEFAULT_HOST_ID } = require('../lib/agentClient');
 const { syncTenantEdge } = require('../lib/gatewayClient');
 const { requireAdmin } = require('./users');
 
@@ -180,7 +180,7 @@ async function provisionOnHost(tenantRow, { importLegacy = false } = {}) {
   const body = { slug: tenantRow.slug };
   if (importLegacy) body.importLegacy = true;
 
-  const { host, data } = await agentFetch('/v1/tenants', {
+  const { host, data } = await agentDispatch('/v1/tenants', {
     hostId,
     method: 'POST',
     body: JSON.stringify(body),
@@ -294,7 +294,7 @@ router.get('/:slug/logs', async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Tenant not found' });
     const hostId = row.host_id || DEFAULT_HOST_ID;
     const tail = req.query.tail || 200;
-    const { host, data } = await agentFetch(
+    const { host, data } = await agentDispatch(
       `/v1/tenants/${encodeURIComponent(row.slug)}/logs?tail=${encodeURIComponent(tail)}`,
       { hostId }
     );
@@ -318,7 +318,7 @@ router.get('/:slug/backups', async (req, res) => {
     const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
     if (!row) return res.status(404).json({ error: 'Tenant not found' });
     const hostId = row.host_id || DEFAULT_HOST_ID;
-    const { host, data } = await agentFetch(
+    const { host, data } = await agentDispatch(
       `/v1/tenants/${encodeURIComponent(row.slug)}/backups`,
       { hostId }
     );
@@ -345,7 +345,7 @@ router.post('/:slug/restore', requireAdmin, async (req, res) => {
     const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
     if (!row) return res.status(404).json({ error: 'Tenant not found' });
     const hostId = row.host_id || DEFAULT_HOST_ID;
-    const { host, data } = await agentFetch(
+    const { host, data } = await agentDispatch(
       `/v1/tenants/${encodeURIComponent(row.slug)}/restore`,
       {
         hostId,
@@ -376,7 +376,7 @@ router.post('/:slug/backup', requireAdmin, async (req, res) => {
     const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
     if (!row) return res.status(404).json({ error: 'Tenant not found' });
     const hostId = row.host_id || DEFAULT_HOST_ID;
-    const { host, data } = await agentFetch(
+    const { host, data } = await agentDispatch(
       `/v1/tenants/${encodeURIComponent(row.slug)}/backup`,
       {
         hostId,
@@ -405,7 +405,7 @@ router.get('/:slug/restore/jobs/:id', async (req, res) => {
     const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
     if (!row) return res.status(404).json({ error: 'Tenant not found' });
     const hostId = row.host_id || DEFAULT_HOST_ID;
-    const { host, data } = await agentFetch(
+    const { host, data } = await agentDispatch(
       `/v1/tenants/${encodeURIComponent(row.slug)}/jobs/${encodeURIComponent(req.params.id)}`,
       { hostId }
     );
@@ -428,7 +428,7 @@ router.get('/:slug/jobs/:id', async (req, res) => {
     const row = db.prepare('SELECT * FROM tenants WHERE slug = ?').get(req.params.slug);
     if (!row) return res.status(404).json({ error: 'Tenant not found' });
     const hostId = row.host_id || DEFAULT_HOST_ID;
-    const { host, data } = await agentFetch(
+    const { host, data } = await agentDispatch(
       `/v1/tenants/${encodeURIComponent(row.slug)}/jobs/${encodeURIComponent(req.params.id)}`,
       { hostId }
     );

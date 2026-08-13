@@ -2,14 +2,17 @@
 
 const express = require('express');
 const { getDb } = require('../lib/db');
-const { agentFetch, listHosts, getHostRow, rowToHost, DEFAULT_HOST_ID } = require('../lib/agentClient');
+const { agentDispatch, listHosts, getHostRow, rowToHost, DEFAULT_HOST_ID } = require('../lib/agentClient');
+const hub = require('../lib/agentHub');
 
 const router = express.Router();
 
 const HOST_ID_RE = /^[a-z][a-z0-9_]{1,47}$/;
 
 function publicHost(row) {
-  return rowToHost(row);
+  const h = rowToHost(row);
+  if (h) h.wsOnline = hub.isOnline(row.id);
+  return h;
 }
 
 router.get('/', async (_req, res) => {
@@ -18,7 +21,7 @@ router.get('/', async (_req, res) => {
   await Promise.all(
     hosts.map(async (h) => {
       try {
-        const { data } = await agentFetch('/v1/host', { hostId: h.id });
+        const { data } = await agentDispatch('/v1/host', { hostId: h.id });
         h.legacyImportSlug = data.legacyImportSlug || null;
         h.legacyDataDir = data.legacyDataDir || null;
         h.legacyBackupDir = data.legacyBackupDir || null;
@@ -147,22 +150,23 @@ router.delete('/:id', (req, res) => {
 router.post('/:id/health', async (req, res) => {
   try {
     getHostRow(req.params.id);
-    const { host, data } = await agentFetch('/v1/health', { hostId: req.params.id });
+    const { host, data } = await agentDispatch('/v1/health', { hostId: req.params.id });
     let detail = data;
     try {
-      const h = await agentFetch('/v1/host', { hostId: req.params.id });
+      const h = await agentDispatch('/v1/host', { hostId: req.params.id });
       detail = { ...data, host: h.data };
     } catch {
       /* health alone is enough */
     }
     getDb().prepare('UPDATE hosts SET status = ? WHERE id = ?').run(
-      data.docker === false ? 'degraded' : 'ok',
+      data.docker === false ? 'degraded' : (hub.isOnline(req.params.id) ? 'online' : 'ok'),
       req.params.id,
     );
     res.json({
       ok: true,
       hostId: host.id,
       agentUrl: host.agentUrl,
+      wsOnline: hub.isOnline(req.params.id),
       health: detail,
     });
   } catch (e) {

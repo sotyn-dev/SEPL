@@ -103,6 +103,9 @@ HOST_ID=host_local
 TENANTS_ROOT=/var/lib/sotyn/tenants
 ERP_ENV_FILE=/root/erp/.env
 
+# Outbound WSS to Platform (local). Deploy: wss://agents.sotyn.ai/api/agent/v1/ws
+PLATFORM_WS_URL=ws://127.0.0.1:7100/api/agent/v1/ws
+
 # One-shot cutover only — leave commented for normal provision
 # LEGACY_IMPORT_SLUG=sepl
 # LEGACY_DATA_DIR=/root/erp/data
@@ -111,6 +114,11 @@ ERP_ENV_FILE=/root/erp/.env
           <li>
             Day‑1: <code className="text-xs bg-slate-50 px-1 rounded">AGENT_TOKEN</code> must match{' '}
             <code className="text-xs bg-slate-50 px-1 rounded">platform/.env</code>.
+          </li>
+          <li>
+            <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_WS_URL</code> enables outbound control to
+            Platform (preferred). Leave unset to use HTTP <code className="text-xs bg-slate-50 px-1 rounded">:7200</code>{' '}
+            only. See <code className="text-xs bg-slate-50 px-1 rounded">docs/PLATFORM-agents-wss.md</code>.
           </li>
           <li>
             <code className="text-xs bg-slate-50 px-1 rounded">ERP_ENV_FILE</code> is the tenant ERP secrets file
@@ -566,6 +574,20 @@ function MultiVpsDocsHtml() {
         </>
       }
     >
+      <Section title="WSS control plane (local first)">
+        <p className="text-slate-600 text-xs mb-2">
+          Worker agents dial out to Platform over WebSocket. Local:{' '}
+          <code className="bg-slate-50 px-1 rounded">ws://127.0.0.1:7100/api/agent/v1/ws</code>. Deploy:{' '}
+          <code className="bg-slate-50 px-1 rounded">wss://agents.sotyn.ai/...</code> (no Cloudflare Access).
+          Full guide: <code className="bg-slate-50 px-1 rounded">docs/PLATFORM-agents-wss.md</code>.
+        </p>
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>Set <code className="text-xs bg-slate-50 px-1 rounded">PLATFORM_WS_URL</code> in agent.env (see Env tab).</li>
+          <li>Auth: Bearer token + <code className="text-xs bg-slate-50 px-1 rounded">X-Sotyn-Host-Id</code> (not query string).</li>
+          <li>Commands persist in platform.db; HTTP <code className="text-xs bg-slate-50 px-1 rounded">:7200</code> remains as fallback.</li>
+        </ul>
+      </Section>
+
       <Section title="What runs where">
         <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
           <li>

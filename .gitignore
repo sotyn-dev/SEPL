@@ -12,6 +12,7 @@ platform/data/
 platform/backups/
 platform/server/node_modules/
 platform/client/node_modules/
+platform/worker-agent/node_modules/
 platform/client/dist/
 /tenants/
 .claude/worktrees/

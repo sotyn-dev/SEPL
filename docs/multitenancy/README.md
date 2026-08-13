@@ -11,6 +11,7 @@ Design-only docs. Nothing here is implemented in the app.
 | [../PHASE4-tenant-model.md](../PHASE4-tenant-model.md) | Engineering resume notes (decisions, open forks, prerequisites). |
 | [../GATEWAY-wildcard-companion.md](../GATEWAY-wildcard-companion.md) | Companion note: primary nginx `*.sotyn.ai` gateway vs SEPL (no Caddy; multi-VPS via private upstreams). |
 | [../GATEWAY-agent-plan.md](../GATEWAY-agent-plan.md) | Locked plan: single gateway agent, HTTP-01, Compose profile `gateway`. |
+| [../PLATFORM-agents-wss.md](../PLATFORM-agents-wss.md) | Platform ↔ worker agent outbound WSS (`agents.sotyn.ai` / local ws). |
 | [module-depends-graph.md](module-depends-graph.md) | Traced cross-module `dependsOn` graph (hubs, hard/soft edges, pack sketch). |
 
 Source of the ideation HTML (outside this repo): `D:\projects\observations\tenant-model-ideation.html`.

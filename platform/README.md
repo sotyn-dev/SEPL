@@ -85,8 +85,12 @@ Prereqs: **Docker Desktop** running; ERP image built once from repo root (multi-
 
 ```bash
 docker build -t sotyn-erp:local .
+# Optional WSS control (platform must be running on :7100):
+#   set PLATFORM_WS_URL=ws://127.0.0.1:7100/api/agent/v1/ws
 npm run platform:agent
 ```
+
+See [`docs/PLATFORM-agents-wss.md`](../docs/PLATFORM-agents-wss.md) for local/deploy WSS.
 
 Bearer token default: `dev-agent-token` (`AGENT_TOKEN`).
 

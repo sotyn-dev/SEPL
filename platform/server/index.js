@@ -3,6 +3,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const path = require('path');
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const { getDb, DB_PATH } = require('./lib/db');
@@ -16,6 +17,7 @@ const auditRouter = require('./routes/audit');
 const { router: authRouter, requireAuth } = require('./routes/auth');
 const { auditMiddleware } = require('./lib/audit');
 const { scheduleNightly } = require('./lib/backup');
+const { attachAgentWs } = require('./lib/agentWs');
 
 const PORT = Number(process.env.PLATFORM_PORT || 7100);
 const BIND = process.env.PLATFORM_BIND || '127.0.0.1';
@@ -69,6 +71,10 @@ if (SERVE_STATIC) {
 getDb();
 scheduleNightly();
 
-app.listen(PORT, BIND, () => {
+const server = http.createServer(app);
+attachAgentWs(server);
+
+server.listen(PORT, BIND, () => {
   console.log(`[platform] http://${BIND}:${PORT}  db=${DB_PATH}${SERVE_STATIC ? '  static=on' : ''}`);
+  console.log(`[platform] agent WSS path /api/agent/v1/ws (local: ws://${BIND}:${PORT}/api/agent/v1/ws)`);
 });

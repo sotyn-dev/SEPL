@@ -117,6 +117,25 @@ function openDb() {
     CREATE INDEX IF NOT EXISTS idx_platform_audit_user ON platform_audit(user_id, at DESC);
     CREATE INDEX IF NOT EXISTS idx_platform_audit_entity ON platform_audit(entity_type, entity_id);
     CREATE INDEX IF NOT EXISTS idx_platform_audit_action ON platform_audit(action);
+
+    CREATE TABLE IF NOT EXISTS agent_commands (
+      id TEXT PRIMARY KEY,
+      host_id TEXT NOT NULL REFERENCES hosts(id),
+      type TEXT NOT NULL,
+      method TEXT NOT NULL DEFAULT 'GET',
+      path TEXT NOT NULL,
+      body_json TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      leased_at TEXT,
+      finished_at TEXT,
+      error_text TEXT,
+      result_json TEXT,
+      result_status INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_commands_host_status
+      ON agent_commands(host_id, status, created_at);
   `);
   // Soft migrate older DBs created before email / tokens / host agent_token
   try {
@@ -131,6 +150,15 @@ function openDb() {
     const hostCols = db.prepare('PRAGMA table_info(hosts)').all().map((c) => c.name);
     if (!hostCols.includes('agent_token')) {
       db.exec('ALTER TABLE hosts ADD COLUMN agent_token TEXT');
+    }
+    if (!hostCols.includes('agent_version')) {
+      db.exec('ALTER TABLE hosts ADD COLUMN agent_version TEXT');
+    }
+    if (!hostCols.includes('last_heartbeat_at')) {
+      db.exec('ALTER TABLE hosts ADD COLUMN last_heartbeat_at TEXT');
+    }
+    if (!hostCols.includes('last_seen_at')) {
+      db.exec('ALTER TABLE hosts ADD COLUMN last_seen_at TEXT');
     }
   } catch (_) {
     /* ignore */
