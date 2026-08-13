@@ -342,6 +342,20 @@ function computeScorecard(db, userId, weekStart) {
         const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
+      // Snag List — SAME shape and SAME position as delegations (mam
+      // 2026-08-12: "u do snaglist same as delegation").  MUST stay above the
+      // site-scope gate further down: snags are per-assignee like delegations,
+      // not site-scoped, and when this block sat below the gate every user
+      // with no site mapping silently read 0/0.
+      // Mam's verbatim formula: Plan = raise date BETWEEN week start/end AND
+      // assigned = user; Actual = same + status='approved' (current status
+      // only, NO approved_at window — a later approval still counts toward
+      // the raised week).  date(raised_at) normalizes mixed import formats.
+      if (source === 'auto:snags') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ? AND status='approved'`).get(userId, sinceDate, untilDate).c;
+        return { given, done };
+      }
 
       // ── Owner / company-wide variants — for a PROCESS OWNER scored on the
       // WHOLE process, not just their own records (mam 2026-06-29: Sushila owns
@@ -359,6 +373,13 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:tickets_all') {
         const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
         const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(since, until).c;
+        return { given, done };
+      }
+      if (source === 'auto:snags_all') {
+        // Company-wide twin of auto:snags — same formula, no assignee filter.
+        // Kept beside the other *_all owner sources, above the site gate.
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       // ERP module coverage — how many of the tracked modules had ANY activity
@@ -808,41 +829,6 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:leaves_applied') {
         const c = db.prepare(`SELECT COUNT(*) as c FROM leave_requests WHERE user_id=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
         return { given: null, done: c };
-      }
-
-      // ===== Snag List =====
-      // auto:snags = a user scored on THEIR OWN assigned snags; auto:snags_all
-      // = a process owner scored on the WHOLE punch-list (company-wide).
-      //
-      // Mam's EXACT formula (2026-08-12 evening, given verbatim after two
-      // wrong interpretations — do not "improve" this):
-      //   Plan   = raise date BETWEEN week start/end AND assigned = user.
-      //   Actual = same window + assigned = user AND status = 'approved'.
-      // Current STATUS only — deliberately NO approved_at window: a snag
-      // raised this week and approved any time later still counts toward the
-      // week it was raised in (supersedes the 2026-08-10 same-week-approval
-      // rule and the 2026-08-12 morning standing-workload version).
-      // date(raised_at) instead of raw string BETWEEN — prod snag rows came in
-      // via a separate PR + imports, so timestamps may be 'T'-separated ISO or
-      // date-only; date() normalizes every ISO variant (raw compare missed them
-      // and the whole KPI silently read 0).
-      if (source === 'auto:snags') {
-        const given = db.prepare(
-          `SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ?`
-        ).get(userId, sinceDate, untilDate).c;
-        const done = db.prepare(
-          `SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ? AND status='approved'`
-        ).get(userId, sinceDate, untilDate).c;
-        return { given, done };
-      }
-      if (source === 'auto:snags_all') {
-        const given = db.prepare(
-          `SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ?`
-        ).get(sinceDate, untilDate).c;
-        const done = db.prepare(
-          `SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ? AND status='approved'`
-        ).get(sinceDate, untilDate).c;
-        return { given, done };
       }
 
       // ===== Complaints =====
