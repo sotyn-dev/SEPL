@@ -40,6 +40,15 @@ const ALL_MODULES = [
   { key: 'quotations', label: 'BOQ & Quotations' },
   { key: 'ai_quotation', label: 'AI Auto-Quotation' },
   { key: 'labour_rates', label: 'Labour Rate Sheet' },
+
+  // — Labour Management System (2026-08).
+  // 'indent_labour_payment' above already gates Projects & Work Orders and is
+  // deliberately left alone: roles already carry grants against that key, and
+  // renaming it would silently revoke access for everyone who has it.
+  { key: 'labour_quotation', label: 'Labour Quotations — can_approve generates the Work Order' },
+  { key: 'labour_rate_master', label: 'Labour Rate Master — HR maintains; others read-only' },
+  { key: 'labour_master', label: 'Labour Master — roster, attendance, transfers, wage register' },
+  { key: 'bill_verification', label: 'Bill Verification — 6-stage chain, Bills & Finance, Payments' },
   { key: 'business_book', label: 'Business Book' },
 
   // — Solar Division (PR #2: Funnel / Quotation / Projects / Masters)

@@ -65,7 +65,21 @@
       "Bash(npm config *)",
       "Bash(npm rebuild *)",
       "Bash(git check-ignore *)",
-      "Bash(node -c server/routes/dpr.js)"
+      "Bash(node -c server/routes/dpr.js)",
+      "Read(//tmp/**)",
+      "Bash(curl -s http://localhost:5000/api/labour-quotations/reference -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s -X POST http://localhost:5000/api/labour-quotations -H 'Authorization: Bearer __TRACKED_VAR__' -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(tee /tmp/sepl-quotation.json)",
+      "Bash(curl -s -X POST http://localhost:5000/api/labour-quotations/6/approve -H 'Authorization: Bearer __TRACKED_VAR__' -H 'Content-Type: application/json' -d '{}')",
+      "Bash(tee /tmp/sepl-approve.json)",
+      "Bash(curl -s -X POST http://localhost:5000/api/labour-master -H 'Authorization: Bearer __TRACKED_VAR__' -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(tee /tmp/sepl-bill.json)",
+      "Bash(curl -s -X POST http://localhost:5000/api/labour-quotations/9/approve -H 'Authorization: Bearer __TRACKED_VAR__' -H 'Content-Type: application/json' -d '{}')",
+      "Bash(node -c server/routes/indentLabourPayment.js)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\).rows[0];console.log\\('contractor_name:', r.contractor_name, '| contractor_aadhaar:', r.contractor_aadhaar\\)}\\)\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);const w=r.find\\(x=>x.sub_contractor_name==='Doc Test Contractor'\\);console.log\\('work_order_file_url:', w.work_order_file_url, '| contractor_document_url:', w.contractor_document_url\\)}\\)\")",
+      "Bash(npx esbuild *)",
+      "Bash(netstat -ano)"
     ]
   }
 }
