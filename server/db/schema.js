@@ -3301,6 +3301,10 @@ function initializeDatabase() {
     //   extra_non_schedule — No BOQ link, picked free from Item Master
     //   rental             — Rented tools, validated against buy-outright cost
     ['indents', "indent_category TEXT DEFAULT 'material'"],
+    // Department the indent is raised for (FF / LV / ELE / CCTV / AC / NET /
+    // SOL / PLB / UT / OTHER — same codes as item_master.department). Free
+    // text, optional — filters/reporting can group indents by department.
+    ['indents', 'department TEXT'],
     // Per-line flags so listing + downstream reports can tell extra rows
     // apart from regular ones without re-deriving from indents.indent_category.
     ['indent_items', 'is_extra_schedule INTEGER DEFAULT 0'],

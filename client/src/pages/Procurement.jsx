@@ -18,6 +18,11 @@ import { fmtDateTime as fmtIST } from '../utils/datetime';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
+// Department picker for Raise Indent — same codes/labels as Item Master's
+// department field so indents and the catalogue stay on one vocabulary.
+const DEPARTMENTS = ['FF', 'LV', 'ELE', 'CCTV', 'AC', 'NET', 'SOL', 'PLB', 'UT', 'OTHER'];
+const DEPT_LABELS = { FF: 'Fire Fighting', LV: 'Low Voltage', ELE: 'Electrical', CCTV: 'CCTV', AC: 'Access Control', NET: 'Networking', SOL: 'Solar', PLB: 'Plumbing', UT: 'Utensils', OTHER: 'Other' };
+
 // Canonical division for a category / department string. Normalises the messy
 // real-world codes (SOLAR vs SOL, PLU vs PLUMB, CIVIL vs CIV, …) into ONE key so
 // the Sub-Item picker can scope Item Master to the project's / BOQ's division.
@@ -421,6 +426,21 @@ export default function Procurement() {
   // master_name, make}.
   const [receiveItems, setReceiveItems] = useState([]);
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
+  // PPE Kit category — inline "item not in the list" quick-add. Creates the
+  // item in Item Master (type=PPE_KIT) on the spot and drops it straight
+  // into the indent, so raising an indent never blocks on someone else
+  // populating the catalogue first.
+  const [ppeQuickAdd, setPpeQuickAdd] = useState({ open: false, name: '', qty: 1, saving: false });
+  // Site + Department category lock. Rule is keyed on whether ANY indent
+  // has ever been raised for this exact site+department pair — NOT on
+  // whether a PPE Kit exists:
+  //   exists === true  → this pair already has indent history → PPE Kit
+  //                       locked, every other category unlocked.
+  //   exists === false → brand-new pair → PPE Kit is the ONLY unlocked
+  //                       category (raise the PPE Kit indent first).
+  //   exists === null  → not checked yet (no site/department picked, or
+  //                       the check is in flight) → everything locked.
+  const [siteDeptStatus, setSiteDeptStatus] = useState({ checking: false, exists: null, error: null });
   // Editable per-line items for the Sales Bill / Delivery Note modal.
   // Pre-filled from Client PO (po_items) so the rate column shows the
   // SELLING price (what we invoice the client), not vendor cost. Mam can
@@ -805,6 +825,42 @@ export default function Procurement() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Site + Department category lock — recheck every time either changes
+  // while the Raise Indent modal is open. Never reuse a stale result: a
+  // different site or a different department is a different pair.
+  useEffect(() => {
+    if (modal !== 'indent') return;
+    const site = (form.site_name || '').trim();
+    const dept = (form.department || '').trim();
+    if (!site || !dept) {
+      setSiteDeptStatus({ checking: false, exists: null, error: null });
+      return;
+    }
+    let cancelled = false;
+    setSiteDeptStatus({ checking: true, exists: null, error: null });
+    api.get('/procurement/site-department-status', { params: { siteId: site, departmentId: dept } })
+      .then(r => { if (!cancelled) setSiteDeptStatus({ checking: false, exists: !!r.data.exists, error: null }); })
+      .catch(err => { if (!cancelled) setSiteDeptStatus({ checking: false, exists: null, error: err.response?.data?.error || 'Could not check Site + Department' }); });
+    return () => { cancelled = true; };
+  }, [modal, form.site_name, form.department]);
+
+  // Whenever the lock result changes, if the currently-picked category is
+  // no longer allowed, snap to an allowed one and clear the item rows
+  // (their shape differs between PPE Kit and the BOQ-based categories).
+  // PPE Kit is never forced away from — it's always allowed.
+  useEffect(() => {
+    // Skip while editing an existing indent — its category was already
+    // valid when raised (server excludes the indent's own row from the
+    // exists-check), so don't yank the category out from under an edit.
+    if (modal !== 'indent' || editingIndentId || siteDeptStatus.checking || siteDeptStatus.exists === null) return;
+    const cur = form.indent_category || 'material';
+    if (cur === 'ppe_kit' || siteDeptStatus.exists) return;
+    setForm(f => ({ ...f, indent_category: 'ppe_kit' }));
+    setIndentItems([{ ...EMPTY_ITEM }]);
+    setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteDeptStatus.checking, siteDeptStatus.exists, modal]);
+
   // Tab switch → lazy fetch the new tab's data (cached if already loaded).
   // Raise-Indent is a live dashboard — its UNIT / RATE / LINE BUDGET pull
   // the CURRENT Item Master UOM + price — so always refetch it fresh
@@ -953,6 +1009,31 @@ export default function Procurement() {
     }
   };
 
+  // PPE Kit quick-add — creates the item in Item Master (type=PPE_KIT) and
+  // drops it straight into the current indent as a new row, so an item that
+  // isn't catalogued yet doesn't block raising the indent.
+  const submitPpeQuickAdd = async () => {
+    const name = ppeQuickAdd.name.trim();
+    if (!name) return toast.error('Item name is required');
+    const qty = +ppeQuickAdd.qty || 0;
+    if (!(qty > 0)) return toast.error('Quantity must be greater than 0');
+    setPpeQuickAdd(s => ({ ...s, saving: true }));
+    try {
+      const r = await api.post('/item-master', { item_name: name, uom: 'nos', type: 'PPE_KIT', department: 'PPE' });
+      const newMaster = { id: r.data.id, item_code: r.data.item_code, item_name: name, display_name: name, type: 'PPE_KIT', uom: 'nos', current_price: 0 };
+      setMasterItems(prev => [...prev, newMaster]);
+      setIndentItems(prev => {
+        const withoutBlankRow = prev.filter(it => it.item_master_id);
+        return [...withoutBlankRow, { ...EMPTY_ITEM, item_master_id: newMaster.id, item_type: 'PPE_KIT', unit: 'nos', quantity: qty }];
+      });
+      toast.success(`"${name}" added to Item Master and this indent`);
+      setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to add item');
+      setPpeQuickAdd(s => ({ ...s, saving: false }));
+    }
+  };
+
   // Picking a BOQ item for this row — fills description / unit / type / make
   // and copies BOQ qty + remaining so the UI can show "BOQ 100 · Rem 60"
   // like DPR does. FOC items have remaining = null (hidden in UI).
@@ -978,11 +1059,27 @@ export default function Procurement() {
   const saveIndent = async (e) => {
     e.preventDefault();
     if (!form.site_name) return toast.error('Site Name is required');
+    if (!form.department) return toast.error('Department is required');
     if (!form.raised_by_name) return toast.error('Raised By is required');
     // ─── Per-category client-side validation (mam's spec 2026-05-26) ───
     // Server enforces the same rules, but failing fast in the UI gives
     // a better error UX (row number + specific cause).
     const cat = form.indent_category || 'material';
+    // Site + Department category lock — fail fast client-side too (server
+    // re-checks with the authoritative same-instant query in case this
+    // went stale, e.g. someone else raised the pair's first indent
+    // between the last check and Submit). Skipped while editing: this
+    // indent's own row makes the frontend's un-excluded check unreliable
+    // (the server's exists-check excludes the row being edited, this one
+    // can't without a second round-trip) — the backend is authoritative there.
+    if (!editingIndentId) {
+      if (siteDeptStatus.checking || siteDeptStatus.exists === null) {
+        return toast.error('Still checking this Site + Department — wait a moment and try again.');
+      }
+      if (!siteDeptStatus.exists && cat !== 'ppe_kit') {
+        return toast.error('This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.');
+      }
+    }
     // RGP no longer requires BOQ (mam 2026-05-27): returnable material is
     // picked directly from Item Master, not tied to the Client PO BOQ.
     const needsBoq = (cat === 'material' || cat === 'extra_schedule');
@@ -1046,6 +1143,7 @@ export default function Procurement() {
       raised_by_name: form.raised_by_name,
       notes: form.notes || '',
       indent_category: cat,
+      department: form.department || '',
       is_emergency: form.is_emergency ? 1 : 0,
       emergency_reason: (form.emergency_reason || '').trim(),
       items: indentItems.map(it => ({
@@ -1099,6 +1197,7 @@ export default function Procurement() {
           : (user?.name || ''),
         notes: data.notes || '',
         indent_category: data.indent_category || 'material',
+        department: data.department || '',
       });
       // Fetch BOQ items inline so we have the list synchronously available
       // for the back-fill below.  reloadBoq() sets state but doesn't return
@@ -2269,7 +2368,7 @@ export default function Procurement() {
               const raiseClosed = !!raiseWindow && !raiseWindow.allowed;
               return (
                 <button
-                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', is_emergency: false, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
+                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', department: '', is_emergency: false, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
                   title={raiseClosed ? 'Off-day — opens as an EMERGENCY indent (reason required)' : ''}
                   className={`btn flex items-center gap-2 ${raiseClosed ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
                   <FiPlus /> {raiseClosed ? 'Raise Emergency Indent' : 'Raise Indent'}
@@ -2429,6 +2528,7 @@ export default function Procurement() {
                 <option value="extra_schedule">Extra · Schedule</option>
                 <option value="extra_non_schedule">Extra · Non-Schedule</option>
                 <option value="rental">Rental</option>
+                <option value="ppe_kit">PPE Kit</option>
               </select>
             </div>
             <div>
@@ -2645,6 +2745,7 @@ export default function Procurement() {
                           extra_schedule:     { label: 'Extra · Sched', color: 'bg-amber-50 text-amber-700 border-amber-200' },
                           extra_non_schedule: { label: 'Extra · Non',   color: 'bg-orange-50 text-orange-700 border-orange-200' },
                           rental:             { label: 'Rental',       color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+                          ppe_kit:            { label: 'PPE Kit',      color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
                         }[c] || { label: c, color: 'bg-gray-50 text-gray-700 border-gray-200' };
                         return <span className={`inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${cfg.color}`}>{cfg.label}</span>;
                       })()}
@@ -2829,6 +2930,7 @@ export default function Procurement() {
                         extra_schedule:     { label: 'Extra · Sched', color: 'bg-amber-50 text-amber-700 border-amber-200' },
                         extra_non_schedule: { label: 'Extra · Non',   color: 'bg-orange-50 text-orange-700 border-orange-200' },
                         rental:             { label: 'Rental',       color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+                        ppe_kit:            { label: 'PPE Kit',      color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
                       }[c] || { label: c, color: 'bg-gray-50 text-gray-700 border-gray-200' };
                       return <span className={`inline-block text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${cfg.color}`}>{cfg.label}</span>;
                     })()}
@@ -5905,6 +6007,13 @@ export default function Procurement() {
                   ? (boqLoading ? 'Loading BOQ…' : `${boqItems.length} BOQ item${boqItems.length === 1 ? '' : 's'} available for this site`)
                   : 'Pick a site first — its BOQ items will load below.'}
               </p>
+              <div className="mt-3">
+                <label className="label">Department</label>
+                <select className="select" value={form.department || ''} onChange={e => setForm({ ...form, department: e.target.value })}>
+                  <option value="">All Departments</option>
+                  {DEPARTMENTS.map(d => <option key={d} value={d}>{d} — {DEPT_LABELS[d] || d}</option>)}
+                </select>
+              </div>
             </div>
             <div>
               <label className="label">Raised By *</label>
@@ -5928,6 +6037,34 @@ export default function Procurement() {
               capture (days × rate/day with the rent-vs-buy block). */}
           <div>
             <label className="label">Category *</label>
+            {/* ─── Site + Department category lock ──────────────────────
+                PPE Kit is ALWAYS selectable. The other 5 categories need
+                the site+department pair to already have indent history:
+                  pair exists     → Material / RGP / Extra / Rental open
+                  pair is new     → Material / RGP / Extra / Rental locked,
+                                     raise the PPE Kit indent first
+                  not checked yet → same 5 locked (pick site+dept first) */}
+            {(!form.site_name || !form.department) ? (
+              <div className="text-[11px] rounded-lg border border-gray-200 bg-gray-50 text-gray-500 px-2.5 py-1.5 mb-1.5">
+                Pick a Site and Department above to unlock Material / RGP / Extra / Rental. PPE Kit is always available.
+              </div>
+            ) : siteDeptStatus.checking ? (
+              <div className="text-[11px] rounded-lg border border-blue-200 bg-blue-50 text-blue-700 px-2.5 py-1.5 mb-1.5 flex items-center gap-1.5">
+                <FiRefreshCw size={12} className="animate-spin" /> Checking Site + Department…
+              </div>
+            ) : siteDeptStatus.error ? (
+              <div className="text-[11px] rounded-lg border border-red-200 bg-red-50 text-red-700 px-2.5 py-1.5 mb-1.5">
+                Could not check Site + Department: {siteDeptStatus.error}
+              </div>
+            ) : siteDeptStatus.exists ? (
+              <div className="text-[11px] rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 px-2.5 py-1.5 mb-1.5">
+                This Site + Department combination already exists — every category is available.
+              </div>
+            ) : (
+              <div className="text-[11px] rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-800 px-2.5 py-1.5 mb-1.5">
+                This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock the rest.
+              </div>
+            )}
             <div className="flex gap-1 flex-wrap">
               {[
                 { id: 'material',           label: 'Material',         hint: 'BOQ items (PO + FOC). RGP hidden.' },
@@ -5935,24 +6072,38 @@ export default function Procurement() {
                 { id: 'extra_schedule',     label: 'Extra · Schedule', hint: 'BOQ item exists, qty cap removed (over-BOQ).' },
                 { id: 'extra_non_schedule', label: 'Extra · Non-Schedule', hint: 'Item outside BOQ — pick free from Item Master (PO + FOC).' },
                 { id: 'rental',             label: 'Rental',           hint: 'Rented tool — Days × Rate/Day. Blocks if rental ≥ buying outright.' },
+                { id: 'ppe_kit',            label: 'PPE Kit',          hint: 'PPE Kit items — no BOQ. Item name + Quantity. Always available.' },
               ].map(c => {
                 const active = (form.indent_category || 'material') === c.id;
+                // PPE Kit is never gated. The other 5 need the site+department
+                // pair to already have indent history.
+                const notCheckedYet = !form.site_name || !form.department || siteDeptStatus.checking || siteDeptStatus.exists === null;
+                const locked = c.id !== 'ppe_kit' && (notCheckedYet || !siteDeptStatus.exists);
+                const lockReason = notCheckedYet
+                  ? 'Pick a Site and Department first.'
+                  : 'This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.';
                 return (
                   <button
                     key={c.id}
                     type="button"
+                    disabled={locked}
+                    aria-disabled={locked}
                     onClick={() => {
+                      if (locked) return;
                       // Reset items when category changes — different categories
                       // have incompatible row shapes (BOQ vs flat Item Master).
                       setForm(f => ({ ...f, indent_category: c.id }));
                       setIndentItems([{ ...EMPTY_ITEM }]);
+                      setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
                     }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
-                      active
-                        ? 'bg-blue-700 text-white border-blue-700 shadow-sm'
-                        : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:text-blue-700'
+                      locked
+                        ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
+                        : active
+                          ? 'bg-blue-700 text-white border-blue-700 shadow-sm'
+                          : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:text-blue-700'
                     }`}
-                    title={c.hint}
+                    title={locked ? lockReason : c.hint}
                   >
                     {c.label}
                   </button>
@@ -5967,6 +6118,7 @@ export default function Procurement() {
                 if (c === 'extra_schedule')     return 'BOQ item exists but the site needs MORE qty than BOQ allows. Qty cap is removed — L1+L2 will see the over-commit.';
                 if (c === 'extra_non_schedule') return 'Item is completely outside the BOQ. Pick directly from Item Master (PO + FOC types).';
                 if (c === 'rental')             return 'Rented tool. Per row: Days × Rate/Day. Server BLOCKS the indent if rental cost ≥ buying outright cost.';
+                if (c === 'ppe_kit')            return 'PPE Kit items — no BOQ. Pick the item (type = PPE_KIT) and set Quantity. Not in the list? Use "+ Add new item" to create it.';
                 return '';
               })()}
             </p>
@@ -5979,6 +6131,7 @@ export default function Procurement() {
                 const c = form.indent_category || 'material';
                 if (c === 'extra_non_schedule') return '(direct pick from Item Master — no BOQ)';
                 if (c === 'rental')             return '(Item Master + Days × Rate/Day)';
+                if (c === 'ppe_kit')            return '(Item name + Quantity — no BOQ)';
                 return '(BOQ item from Client PO → then sub-item from Item Master)';
               })()}
             </span>
@@ -6154,6 +6307,79 @@ export default function Procurement() {
                     <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM, rental_days: 0, rental_rate_per_day: 0 }])} className="btn btn-secondary text-xs">
                       + Add another {isRental ? 'rental' : isRgp ? 'RGP item' : 'item'}
                     </button>
+                  </div>
+                );
+              })()}
+
+              {/* ─── PPE Kit layout — 2 columns: Item name, Quantity ───────
+                  No BOQ, no rate/make/date clutter. Item is picked straight
+                  from Item Master (type='PPE_KIT'). If the item isn't
+                  catalogued yet, "+ Add new item" creates it on the spot
+                  (POST /item-master) and drops it into the indent. */}
+              {form.indent_category === 'ppe_kit' && (() => {
+                const ppeMasterItems = masterItems.filter(m => String(m.type || '').toUpperCase() === 'PPE_KIT');
+                return (
+                  <div className="space-y-2">
+                    <div className="hidden md:grid grid-cols-[1fr_140px_28px] gap-2 px-1">
+                      <div className="text-[10px] font-bold text-gray-500 uppercase">Item Name</div>
+                      <div className="text-[10px] font-bold text-gray-500 uppercase">Quantity</div>
+                      <div />
+                    </div>
+                    {indentItems.map((item, i) => (
+                      <div key={i} className="border rounded-lg p-3 bg-white grid grid-cols-1 md:grid-cols-[1fr_140px_28px] gap-2 md:items-center">
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5 md:hidden">
+                            Item Name <span className="text-red-500">*</span>
+                          </label>
+                          <SearchableSelect
+                            options={ppeMasterItems.map(x => ({ id: x.id, label: x.display_name || x.item_name, ...x }))}
+                            value={item.item_master_id || null} valueKey="id" displayKey="label"
+                            placeholder="Search PPE item…"
+                            onChange={(picked) => pickMasterItem(i, picked)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5 md:hidden">Quantity *</label>
+                          <NumInput className="input text-base font-bold text-right" min="0" value={item.quantity} emitZeroOnEmpty onChange={v => { const n = [...indentItems]; n[i].quantity = v; setIndentItems(n); }} />
+                        </div>
+                        <div className="flex justify-end md:justify-center">
+                          {indentItems.length > 1 && (
+                            <button type="button" onClick={() => setIndentItems(indentItems.filter((_, x) => x !== i))} className="p-1 text-gray-400 hover:text-red-600" title="Remove row">
+                              <FiTrash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM }])} className="btn btn-secondary text-xs">
+                        + Add another item
+                      </button>
+                      <button type="button" onClick={() => setPpeQuickAdd({ open: true, name: '', qty: 1, saving: false })} className="btn btn-secondary text-xs">
+                        + Add new item (not in list)
+                      </button>
+                    </div>
+                    {ppeQuickAdd.open && (
+                      <div className="border-2 border-dashed border-blue-300 rounded-lg p-3 bg-blue-50 space-y-2">
+                        <div className="text-xs font-bold text-blue-800">New PPE item — saved to Item Master and added to this indent</div>
+                        <div className="grid grid-cols-1 md:grid-cols-[1fr_140px] gap-2">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Item Name *</label>
+                            <input autoFocus className="input text-sm" placeholder="e.g. Safety Harness" value={ppeQuickAdd.name} onChange={e => setPpeQuickAdd(s => ({ ...s, name: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Quantity *</label>
+                            <NumInput className="input text-base font-bold text-right" min="0" value={ppeQuickAdd.qty} emitZeroOnEmpty onChange={v => setPpeQuickAdd(s => ({ ...s, qty: v }))} />
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button type="button" disabled={ppeQuickAdd.saving} onClick={submitPpeQuickAdd} className="btn btn-primary text-xs">
+                            {ppeQuickAdd.saving ? 'Adding…' : 'Add Item'}
+                          </button>
+                          <button type="button" onClick={() => setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false })} className="btn btn-secondary text-xs">Cancel</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
