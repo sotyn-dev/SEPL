@@ -65,18 +65,7 @@
       "Bash(npm config *)",
       "Bash(npm rebuild *)",
       "Bash(git check-ignore *)",
-      "Bash(node -c server/routes/dpr.js)",
-      "Bash(netstat -ano)",
-      "Bash(node -e \"require\\('./server/routes/procurement.js'\\)\")",
-      "Bash(taskkill //PID 7660 //F)",
-      "Bash(curl -s \"http://localhost:5000/api/procurement/site-department-status?siteId=X&departmentId=Y\" -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\")",
-      "PowerShell(Get-Process -Id 21188)",
-      "Read(//tmp/**)",
-      "Bash(curl -s 'http://localhost:5000/api/procurement/site-department-status?siteId=X&departmentId=Y' -H 'Authorization: Bearer __CMDSUB_OUTPUT__' -w '\\\\nSTATUS:%{http_code}\\\\n')",
-      "Bash(curl -s 'http://localhost:5000/api/procurement/site-department-status?siteId=X&departmentId=Y' -H 'Authorization: Bearer __TRACKED_VAR__' -w '\\\\nSTATUS:%{http_code}\\\\n')",
-      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId = 21188\")",
-      "Bash(taskkill //PID 21188 //F)",
-      "Bash(taskkill //PID 15624 //F)"
+      "Bash(node -c server/routes/dpr.js)"
     ]
   }
 }
