@@ -4616,6 +4616,10 @@ function initializeDatabase() {
       db.exec(`INSERT INTO proj_bill_stage_log_new (${shared}) SELECT ${shared} FROM proj_bill_stage_log`);
       db.exec('DROP TABLE proj_bill_stage_log');
       db.exec('ALTER TABLE proj_bill_stage_log_new RENAME TO proj_bill_stage_log');
+      // DROP TABLE took the indexes with it — recreate them, same as the
+      // ra_bills / mb_sheets / work_orders rebuilds above.
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pbsl_bill  ON proj_bill_stage_log(ra_bill_id, acted_at DESC)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pbsl_stage ON proj_bill_stage_log(stage)');
       db.exec('COMMIT');
       console.log('[migration] proj_bill_stage_log.action CHECK relaxed to allow held/resumed');
     }
