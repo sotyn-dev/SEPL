@@ -488,6 +488,13 @@ app.use('/api/snags', require('./routes/snags'));
 app.use('/api/labour-payment', require('./routes/labourPayment'));
 // Indent Labour Payment — Phase 1 (mam 2026-06-01).
 app.use('/api/indent-labour-payment', require('./routes/indentLabourPayment'));
+// Labour Management System (2026-08) — the Indent Labour Payment pipeline
+// extended with quotations and HR-owned crew rates. Mounted alongside it, not
+// replacing it: the existing routes and permission key are untouched.
+app.use('/api/labour-quotations', require('./routes/labourQuotations'));
+app.use('/api/labour-rate-master', require('./routes/labourRateMaster'));
+app.use('/api/labour-master', require('./routes/labourMaster'));
+app.use('/api/bill-verification', require('./routes/billVerification'));
 app.use('/api/company-assets', require('./routes/companyAssets'));
 app.use('/api/push', require('./routes/push'));
 
