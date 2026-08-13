@@ -376,9 +376,18 @@ router.post('/forward-favorite', (req, res) => {
 router.put('/:groupId', requirePermission('site_chat', 'create'), (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
-  if (db.prepare('SELECT is_dm FROM chat_groups WHERE id=?').get(g)?.is_dm) return res.status(400).json({ error: 'A direct message cannot be renamed' });
+  const grp = db.prepare('SELECT * FROM chat_groups WHERE id=?').get(g);
+  if (!grp) return res.status(404).json({ error: 'Not found' });
+  if (grp.is_dm) return res.status(400).json({ error: 'A direct message cannot be renamed' });
+  // Creator/admin-only + audited (mam 2026-08-13: a group was renamed to
+  // "XXXXXX" — any member could silently rename before).
+  if (grp.created_by !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'Only the group creator or an admin can rename the group' });
   const name = String(req.body?.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Name required' });
+  if (name !== grp.name) {
+    chatAudit(req, 'rename-group', g, `"${grp.name}" -> "${name}"`);
+    postSystem(db, g, req.user, `${req.user.name || 'Someone'} renamed the group from "${grp.name}" to "${name}"`);
+  }
   db.prepare('UPDATE chat_groups SET name=? WHERE id=?').run(name, g);
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
