@@ -350,10 +350,27 @@ function computeScorecard(db, userId, weekStart) {
       // Mam's verbatim formula: Plan = raise date BETWEEN week start/end AND
       // assigned = user; Actual = same + status='approved' (current status
       // only, NO approved_at window — a later approval still counts toward
-      // the raised week).  date(raised_at) normalizes mixed import formats.
+      // the raised week).
+      // Two hard-won correctness rules (mam 2026-08-13 "ur calculation is
+      // wrong" — Vivek's snags landed one week off / counted as nobody's):
+      // 1) IST week bucketing: raised_at is stored UTC, so date() alone puts
+      //    a Monday-morning IST snag on Sunday = last week.  '+330 minutes'
+      //    shifts UTC → IST before taking the calendar date, matching the
+      //    dates the Snags page displays.  (Date-only imports are unaffected:
+      //    00:00 + 5h30 stays the same date.)
+      // 2) Tolerant assignee match: app-created rows link assigned_to =
+      //    users.id, but imported/WhatsApp rows carry only the NAME (either
+      //    in assigned_to_name with a NULL id, or the name string sitting in
+      //    the id column itself) — match all three shapes.
       if (source === 'auto:snags') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ? AND status='approved'`).get(userId, sinceDate, untilDate).c;
+        const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
+        const who = `(assigned_to=? OR (assigned_to IS NULL AND assigned_to_name=?) OR CAST(assigned_to AS TEXT)=?)`;
+        const given = db.prepare(
+          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND date(raised_at, '+330 minutes') BETWEEN ? AND ?`
+        ).get(userId, uname, uname, sinceDate, untilDate).c;
+        const done = db.prepare(
+          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND date(raised_at, '+330 minutes') BETWEEN ? AND ? AND status='approved'`
+        ).get(userId, uname, uname, sinceDate, untilDate).c;
         return { given, done };
       }
 
@@ -378,8 +395,10 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:snags_all') {
         // Company-wide twin of auto:snags — same formula, no assignee filter.
         // Kept beside the other *_all owner sources, above the site gate.
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
+        // Same IST shift as auto:snags so both views bucket a snag into the
+        // same week the Snags page displays.
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at, '+330 minutes') BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at, '+330 minutes') BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       // ERP module coverage — how many of the tracked modules had ANY activity
