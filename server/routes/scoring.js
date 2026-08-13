@@ -524,12 +524,13 @@ function computeScorecard(db, userId, weekStart) {
       const inSites = `(${siteIds.join(',')})`;
 
       if (source === 'auto:dpr_profit') {
-        // Sum of profit_loss across DPRs in the week. Planned = sum of
-        // grand_total_b (planned cost), Actual = sum of grand_total_a
-        // (actual revenue). Score = (a - b) / b × 100 → matches "DPR
-        // Profit" KPI on the Site Eng template.
+        // Planned = sum of grand_total_b (planned cost) × 1.5, Actual = sum
+        // of grand_total_a (actual revenue).  Mam 2026-08-13: "weekly dpr
+        // cost 1 plann cost (DPR table) if 1 than here calculate 1.5" — the
+        // revenue TARGET is 1.5× the planned cost, so a site is on plan only
+        // when it bills one-and-a-half times what it planned to spend.
         const r = db.prepare(`SELECT COALESCE(SUM(grand_total_b),0) as planned, COALESCE(SUM(grand_total_a),0) as actual FROM dpr WHERE site_id IN ${inSites} AND report_date BETWEEN ? AND ?`).get(sinceDate, untilDate);
-        return { given: r.planned, done: r.actual };
+        return { given: Math.round(r.planned * 1.5 * 100) / 100, done: r.actual };
       }
       if (source === 'auto:dpr_count') {
         // DPRs submitted this week (planned = 6 days, actual = count)

@@ -90,7 +90,7 @@ const SOURCE_INFO = {
   'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },
   'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
   // DPR
-  'auto:dpr_profit':            { plan: 'Σ planned cost (DPR Table B)',       actual: 'Σ actual cost (DPR Table B)' },
+  'auto:dpr_profit':            { plan: 'Σ planned cost (DPR Table B) × 1.5', actual: 'Σ actual (DPR Table A)' },
   'auto:dpr_count':             { plan: '6 days/week target',                 actual: 'DPR submissions for this site' },
   'auto:dpr_by_user':           { plan: '6 DPRs/week target',                 actual: 'DPRs submitted BY this user' },
   'auto:dpr_profit_by_user':    { plan: 'You set (Target column)',            actual: 'Σ profit/loss across user\'s DPRs' },
