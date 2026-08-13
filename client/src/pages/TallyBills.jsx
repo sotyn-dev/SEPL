@@ -379,7 +379,9 @@ export default function TallyBills() {
 
 // ─── Stage 1: upload modal ───────────────────────────────────────────
 function UploadModal({ meta, onClose, onSaved }) {
-  const [form, setForm] = useState({ project_id: '', site_id: '', category: 'material', vendor_id: '', vendor_name: '', bill_number: '', bill_date: '', bill_amount: '', remarks: '' });
+  // Vendor dropped from the form (mam 2026-08-13 "no need here vendor") —
+  // the server stores '' and the duplicate rule becomes bill-number-only.
+  const [form, setForm] = useState({ project_id: '', site_id: '', category: 'material', bill_number: '', bill_date: '', bill_amount: '', remarks: '' });
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
 
@@ -397,11 +399,6 @@ function UploadModal({ meta, onClose, onSaved }) {
     } catch (err) {
       toast.error(err.response?.data?.error || 'Upload failed');
     } finally { setBusy(false); }
-  };
-
-  const pickVendor = (id) => {
-    const v = (meta.vendors || []).find(x => String(x.id) === String(id));
-    setForm(f => ({ ...f, vendor_id: id, vendor_name: v ? (v.firm_name || v.name) : f.vendor_name }));
   };
 
   return (
@@ -424,18 +421,9 @@ function UploadModal({ meta, onClose, onSaved }) {
             </select>
           </div>
           <div>
-            <label className="label">Vendor *</label>
-            <select className="select" value={form.vendor_id} onChange={e => pickVendor(e.target.value)}>
-              <option value="">— pick from master —</option>
-              {(meta.vendors || []).map(v => <option key={v.id} value={v.id}>{v.firm_name || v.name}</option>)}
-            </select>
-            <input className="input mt-1 text-sm" placeholder="…or type vendor name" value={form.vendor_name}
-              onChange={e => setForm(f => ({ ...f, vendor_name: e.target.value, vendor_id: '' }))} required />
-          </div>
-          <div>
             <label className="label">Bill Number *</label>
             <input className="input" value={form.bill_number} onChange={e => setForm(f => ({ ...f, bill_number: e.target.value }))} required />
-            <p className="text-[10px] text-gray-400 mt-0.5">Must be unique for this vendor</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Must be unique</p>
           </div>
           <div>
             <label className="label">Bill Date *</label>

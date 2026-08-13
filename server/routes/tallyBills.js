@@ -324,7 +324,7 @@ function syncTaskCompletion(db, billId, actor = null) {
   notify(db, coord?.id, {
     type: 'tally_bill_approval',
     title: `Bill ${fresh.register_no} ready for approval`,
-    body: `${fresh.vendor_name} · ${CATEGORIES[fresh.category]} · Rs ${num(fresh.bill_amount).toLocaleString('en-IN')}`,
+    body: [fresh.vendor_name, CATEGORIES[fresh.category], `Rs ${num(fresh.bill_amount).toLocaleString('en-IN')}`].filter(Boolean).join(' · '),
     link: `/tally-bills?bill=${billId}`,
     dedupe: `tally-approval-${billId}`,
   });
@@ -481,7 +481,9 @@ router.post('/', requirePermission('tally_bills', 'create'),
 
     if (!CATEGORIES[category]) { cleanup(); return res.status(400).json({ error: 'Category must be Material, Testing & Commissioning or Handover' }); }
     if (!b.project_id)  { cleanup(); return res.status(400).json({ error: 'Project / Site is required' }); }
-    if (!vendorName)    { cleanup(); return res.status(400).json({ error: 'Vendor Name is required' }); }
+    // Vendor is OPTIONAL (mam 2026-08-13 "no need here vendor"). With no
+    // vendor the unique index's LOWER(TRIM('')) leg still holds, so the
+    // duplicate rule degrades to bill-number-only among vendor-less bills.
     if (!billNumber)    { cleanup(); return res.status(400).json({ error: 'Bill Number is required' }); }
     if (!b.bill_date)   { cleanup(); return res.status(400).json({ error: 'Bill Date is required' }); }
     if (!(num(b.bill_amount) > 0)) { cleanup(); return res.status(400).json({ error: 'Bill Amount must be greater than zero' }); }
@@ -496,7 +498,11 @@ router.post('/', requirePermission('tally_bills', 'create'),
     ).get(vendorName, billNumber);
     if (dupe) {
       cleanup();
-      return res.status(400).json({ error: `Bill ${billNumber} already exists for ${vendorName} (${dupe.register_no})` });
+      return res.status(400).json({
+        error: vendorName
+          ? `Bill ${billNumber} already exists for ${vendorName} (${dupe.register_no})`
+          : `Bill ${billNumber} already exists (${dupe.register_no})`,
+      });
     }
 
     const project = db.prepare(
@@ -531,7 +537,7 @@ router.post('/', requirePermission('tally_bills', 'create'),
     audit(db, billId, 'create', [
       { field: 'status', old: null, new: 'pending_task_creation', note: 'Bill uploaded — T0, SLA clock started' },
       { field: 'bill_amount', old: null, new: round2(b.bill_amount) },
-      { field: 'vendor_name', old: null, new: vendorName },
+      vendorName ? { field: 'vendor_name', old: null, new: vendorName } : null,
       { field: 'bill_number', old: null, new: billNumber },
       { field: 'category', old: null, new: category },
       { field: 'attachments', old: null, new: `${stored.length} file(s)` },
@@ -542,7 +548,7 @@ router.post('/', requirePermission('tally_bills', 'create'),
     notify(db, coord?.id, {
       type: 'tally_bill_uploaded',
       title: `New bill ${registerNo} — create PMS tasks`,
-      body: `${vendorName} · ${CATEGORIES[category]} · Rs ${round2(b.bill_amount).toLocaleString('en-IN')} · due ${t1Due} UTC`,
+      body: [vendorName, CATEGORIES[category], `Rs ${round2(b.bill_amount).toLocaleString('en-IN')}`, `due ${t1Due} UTC`].filter(Boolean).join(' · '),
       link: `/tally-bills?bill=${billId}`,
       dedupe: `tally-upload-${billId}`,
     });
@@ -863,7 +869,7 @@ function finaliseApproval(db, bill, { approved, remark, variance, variancePct, r
   notify(db, eng?.id, {
     type: 'tally_bill_approved',
     title: `Bill ${bill.register_no} approved — payment due ${expectedDate}`,
-    body: `Rs ${approved.toLocaleString('en-IN')} to ${bill.vendor_name}`,
+    body: `Rs ${approved.toLocaleString('en-IN')}${bill.vendor_name ? ` to ${bill.vendor_name}` : ''}`,
     link: `/tally-bills?bill=${bill.id}`,
     dedupe: `tally-approved-${bill.id}`,
   });
