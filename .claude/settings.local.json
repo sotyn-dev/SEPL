@@ -65,8 +65,7 @@
       "Bash(npm config *)",
       "Bash(npm rebuild *)",
       "Bash(git check-ignore *)",
-      "Bash(node -c server/routes/dpr.js)",
-      "Bash(gh pr *)"
+      "Bash(node -c server/routes/dpr.js)"
     ]
   }
 }
