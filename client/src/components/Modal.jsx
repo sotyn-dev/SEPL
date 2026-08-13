@@ -3,7 +3,7 @@ import { FiX } from 'react-icons/fi';
 export default function Modal({ isOpen, onClose, title, children, wide, xwide }) {
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+    <div className="!m-0 fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
         className={`bg-white rounded-xl shadow-xl w-[95vw] ${xwide ? 'sm:max-w-[720px] md:max-w-[960px] lg:max-w-[1040px]' : wide ? 'sm:max-w-[640px] md:max-w-[800px]' : 'sm:max-w-[500px]'} max-h-[90vh] overflow-y-auto mx-2`}
         onClick={e => e.stopPropagation()}

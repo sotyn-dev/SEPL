@@ -22,13 +22,17 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { addBusinessHours, addBusinessDays } = require('../lib/businessHours');
+const storage = require('../lib/storage');
+const { uploadsSub, ensureDir } = require('../lib/paths');
 
 const router = express.Router();
 router.use(authMiddleware);
 
 // Photo upload for Stage 2 — mam picked "Live camera + GPS lat/lng"
-const photoDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'rental-tools');
-if (!fs.existsSync(photoDir)) fs.mkdirSync(photoDir, { recursive: true });
+// uploadsSub() honours DATA_ROOT (lib/paths) instead of hardcoding data/uploads. diskStorage
+// keeps memory flat; storage.adoptLocalFile pushes to the bucket when the driver is s3.
+const PHOTO_FOLDER = 'rental-tools';
+const photoDir = ensureDir(uploadsSub(PHOTO_FOLDER));
 const photoUpload = multer({
   storage: multer.diskStorage({
     destination: photoDir,
@@ -359,7 +363,7 @@ router.post('/enquiries/:id/finalise-rate', requirePermission('rental_tools', 'v
 // ── POST /api/rental-tools/enquiries/:id/material-received ─────
 // Stage 2 → Stage 3.  Site engineer uploads live photo + GPS;
 // return target date = today + days_required (business days).
-router.post('/enquiries/:id/material-received', requirePermission('rental_tools', 'edit'), photoUpload.single('photo'), (req, res) => {
+router.post('/enquiries/:id/material-received', requirePermission('rental_tools', 'edit'), photoUpload.single('photo'), async (req, res) => {
   const db = getDb();
   const id = +req.params.id;
   const enquiry = db.prepare(`SELECT * FROM rental_tool_enquiry WHERE id=?`).get(id);
@@ -376,7 +380,9 @@ router.post('/enquiries/:id/material-received', requirePermission('rental_tools'
     try { fs.unlinkSync(req.file.path); } catch (_) {}
     return res.status(400).json({ error: 'latitude + longitude are required (allow GPS in browser)' });
   }
-  const photoUrl = `/uploads/rental-tools/${req.file.filename}`;
+  // Pushed to the bucket here (s3 driver) or left where multer put it (local). The DB
+  // value is "/uploads/rental-tools/<file>" either way.
+  const photoUrl = await storage.adoptLocalFile(req.file.path, `${PHOTO_FOLDER}/${req.file.filename}`, req.file.mimetype);
   const now = new Date();
   const returnTarget = addBusinessDays(now, enquiry.days_required);
 

@@ -9,6 +9,10 @@ const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Word cap on the proof remarks the assignee submits. Mirrored in the UI
+// (client/src/pages/Delegation.jsx) — keep the two in sync if it changes.
+const REMARKS_WORD_LIMIT = 300;
+
 // ─── Voice-note → text (self-hosted, mam 2026-06-17: "give me free") ──────
 // Upload a recorded audio file; the server converts it to 16kHz mono WAV with
 // ffmpeg and runs whisper.cpp locally (no API key, no per-use cost). Paths are
@@ -227,22 +231,38 @@ router.get('/', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
+// Last N company working days (Mon–Sat; Sunday off), ending on/before `todayYmd` (YYYY-MM-DD, UTC).
+function lastWorkingDays(todayYmd, n = 6) {
+  const days = [];
+  const d = new Date(todayYmd + 'T00:00:00Z');
+  while (days.length < n) {
+    // 0 = Sunday — skip; Mon–Sat count
+    if (d.getUTCDay() !== 0) days.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+  return days;
+}
+
 // Per-person workload dashboard. mam's spec — one row per assignee with:
-//   Total Tasks · Active · Completed · Delayed · Avg Delay (days) · WIP Limit · Status
+//   Total Tasks · Active · Avg/Day · Completed · Delayed · Avg Delay (days) · WIP Limit · Status
 // Status:
-//   Overloaded — active_tasks > wip_limit
+//   Overloaded — avg_per_day > wip_limit (assignments over last 6 working days Mon–Sat)
 //   Constraint — >= 25% of tasks delayed OR avg_delay > 5 days
 //   OK         — neither
-// WIP limit is 5 by default for everyone; can be made per-user later.
+// WIP limit is 3 per day (avg) by default for everyone; can be made per-user later.
 router.get('/dashboard', (req, res) => {
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
-  const WIP_LIMIT_DEFAULT = 5;
+  const WIP_LIMIT_DEFAULT = 3;
+  const WIP_WINDOW_DAYS = 6;
+  const windowDays = lastWorkingDays(today, WIP_WINDOW_DAYS);
+  const windowPlaceholders = windowDays.map(() => '?').join(',');
 
   const rows = db.prepare(`
     SELECT u.id, u.name as person, u.role, u.department,
            COUNT(d.id) as total_tasks,
            SUM(CASE WHEN d.status IN ('pending','submitted','rejected') THEN 1 ELSE 0 END) as active_tasks,
+           SUM(CASE WHEN date(d.created_at) IN (${windowPlaceholders}) THEN 1 ELSE 0 END) as tasks_window,
            SUM(CASE WHEN d.status = 'approved' THEN 1 ELSE 0 END) as completed,
            SUM(CASE WHEN d.status IN ('pending','submitted')
                      AND d.due_date IS NOT NULL AND d.due_date < ? THEN 1 ELSE 0 END) as delayed_tasks,
@@ -255,13 +275,15 @@ router.get('/dashboard', (req, res) => {
      GROUP BY u.id
     HAVING total_tasks > 0
      ORDER BY active_tasks DESC, delayed_tasks DESC, person
-  `).all(today, today, today);
+  `).all(...windowDays, today, today, today);
 
   const out = rows.map(r => {
     const wip = WIP_LIMIT_DEFAULT;
+    const tasksWindow = r.tasks_window || 0;
+    const avgPerDay = Math.round((tasksWindow / WIP_WINDOW_DAYS) * 10) / 10;
     const delayedRatio = r.total_tasks > 0 ? r.delayed_tasks / r.total_tasks : 0;
     let status = 'OK';
-    if (r.active_tasks > wip) status = 'Overloaded';
+    if (avgPerDay > wip) status = 'Overloaded';
     else if (delayedRatio >= 0.25 || (r.avg_delay || 0) > 5) status = 'Constraint';
     return {
       id: r.id,
@@ -270,6 +292,8 @@ router.get('/dashboard', (req, res) => {
       department: r.department,
       total_tasks: r.total_tasks || 0,
       active_tasks: r.active_tasks || 0,
+      tasks_window: tasksWindow,
+      avg_per_day: avgPerDay,
       completed: r.completed || 0,
       delayed_tasks: r.delayed_tasks || 0,
       avg_delay: r.avg_delay || 0,
@@ -464,7 +488,7 @@ router.post('/:id/reject-extension', (req, res) => {
 // behalf of the assignee too — mam asked for this so her EA can upload
 // proof for team members who send photos/PDFs over WhatsApp.
 router.post('/:id/submit', (req, res) => {
-  const { proof_url } = req.body;
+  const { proof_url, proof_remarks } = req.body;
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
@@ -473,9 +497,17 @@ router.post('/:id/submit', (req, res) => {
     return res.status(403).json({ error: 'Only the assignee, admin or EA can submit proof' });
   }
   if (!proof_url) return res.status(400).json({ error: 'Proof file is required' });
+  // Remarks are optional — blank stays NULL so the list doesn't show an
+  // empty note. Re-submitting after a rejection overwrites the old remark.
+  // The 300-WORD cap is enforced here as well as in the UI, so a stale tab
+  // or a direct API call can't slip a wall of text past it.
+  const remarks = (proof_remarks || '').trim() || null;
+  if (remarks && remarks.split(/\s+/).filter(Boolean).length > REMARKS_WORD_LIMIT) {
+    return res.status(400).json({ error: `Remarks cannot exceed ${REMARKS_WORD_LIMIT} words` });
+  }
   db.prepare(
-    `UPDATE delegations SET status='submitted', proof_url=?, submitted_at=CURRENT_TIMESTAMP, reject_reason=NULL WHERE id=?`
-  ).run(proof_url, req.params.id);
+    `UPDATE delegations SET status='submitted', proof_url=?, proof_remarks=?, submitted_at=CURRENT_TIMESTAMP, reject_reason=NULL WHERE id=?`
+  ).run(proof_url, remarks, req.params.id);
   res.json({ message: 'Proof submitted, awaiting approval' });
 });
 

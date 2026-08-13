@@ -3,8 +3,26 @@ const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
+const quarantine = require('../lib/quarantine');     // reversible cleanup of deleted ticket files
 const stUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const stDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
+// Deadline date validation, shared by POST and PUT.
+// Returns: null when the field is absent/blank (deadline is optional — every
+// legacy ticket has none), the YYYY-MM-DD string when it's a real calendar
+// date, or INVALID_DATE so the caller can 400. The calendar round-trip check
+// rejects 2026-02-30 and 2025-02-29, which a regex alone would let through.
+const INVALID_DATE = Symbol('invalid-date');
+function normalizeDeadline(value) {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return INVALID_DATE;
+  const [y, m, d] = raw.split('-').map(Number);
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) return INVALID_DATE;
+  return raw;
+}
+
 // Admin OR the help_tickets follow-up role (can_see_all / can_approve) may
 // triage any ticket — approve/reject proof, submit on behalf of an
 // unassigned ticket. Mirrors the inline canFollowAll checks in GET / PUT.
@@ -93,35 +111,65 @@ router.get('/mine', (req, res) => {
   res.json({ active: active.c, recent });
 });
 
-// GET stats (admin dashboard)
+// GET stats (summary cards + admin dashboard)
+//
+// One GROUP BY instead of the four separate COUNT(*) scans this used to run —
+// same numbers, a single pass over the table.
+//
+// The page shows THREE cards but the workflow has six statuses, so they are
+// bucketed. The buckets are exhaustive on purpose: open + processing + closed
+// always equals total, so a ticket can never go missing from the summary.
+//   open       → open
+//   processing → in_progress, submitted (proof awaiting approval), rejected
+//                (sent back, still being worked)
+//   closed     → resolved, closed
+// 'resolved' MUST count as closed: the table's "Close" button sets
+// status='resolved', so counting only status='closed' would show 0 for tickets
+// the user just closed.
 router.get('/stats', (req, res) => {
   const db = getDb();
-  const total = db.prepare('SELECT COUNT(*) as c FROM support_tickets').get();
-  const open = db.prepare("SELECT COUNT(*) as c FROM support_tickets WHERE status='open'").get();
-  const inProgress = db.prepare("SELECT COUNT(*) as c FROM support_tickets WHERE status='in_progress'").get();
-  const resolved = db.prepare("SELECT COUNT(*) as c FROM support_tickets WHERE status='resolved'").get();
-  const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM support_tickets GROUP BY category").all();
-  res.json({ total: total.c, open: open.c, inProgress: inProgress.c, resolved: resolved.c, byCategory });
+  const rows = db.prepare('SELECT status, COUNT(*) AS c FROM support_tickets GROUP BY status').all();
+  const by = Object.fromEntries(rows.map(r => [r.status || 'open', r.c]));
+  const n = (...keys) => keys.reduce((sum, k) => sum + (by[k] || 0), 0);
+
+  const open = n('open');
+  const processing = n('in_progress', 'submitted', 'rejected');
+  const closed = n('resolved', 'closed');
+  const byCategory = db.prepare('SELECT category, COUNT(*) as count FROM support_tickets GROUP BY category').all();
+
+  res.json({
+    open,
+    processing,
+    closed,
+    total: rows.reduce((s, r) => s + r.c, 0),
+    // Legacy keys kept so nothing that already reads this endpoint breaks.
+    inProgress: n('in_progress'),
+    resolved: n('resolved'),
+    byCategory,
+  });
 });
 
 // POST new ticket. `assigned_to` is optional; when set, that user sees the
 // ticket on their dashboard + can respond to it.
 router.post('/', (req, res) => {
-  const { subject, description, category, priority, attachment_link, module, assigned_to } = req.body;
+  const { subject, description, category, priority, attachment_link, module, assigned_to, deadline_date } = req.body;
   if (!subject || !description) return res.status(400).json({ error: 'Subject and description required' });
+  const deadline = normalizeDeadline(deadline_date);
+  if (deadline === INVALID_DATE) return res.status(400).json({ error: 'Deadline must be a valid date (YYYY-MM-DD)' });
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
   const ticketNo = nextSequence(db, 'support_tickets', 'ticket_no', 'TK-', { startFrom: 1000, pad: 5 });
   const r = db.prepare(
-    'INSERT INTO support_tickets (ticket_no, user_id, subject, description, category, priority, attachment_link, module, assigned_to) VALUES (?,?,?,?,?,?,?,?,?)'
-  ).run(ticketNo, req.user.id, subject, description, category || 'bug', priority || 'medium', attachment_link, module, assigned_to ? +assigned_to : null);
+    'INSERT INTO support_tickets (ticket_no, user_id, subject, description, category, priority, attachment_link, module, assigned_to, deadline_date) VALUES (?,?,?,?,?,?,?,?,?,?)'
+  ).run(ticketNo, req.user.id, subject, description, category || 'bug', priority || 'medium', attachment_link, module, assigned_to ? +assigned_to : null, deadline);
   // Push to assignee (or every admin if unassigned)
   try {
     const { notify, notifyMany } = require('../lib/push');
+    const dueInfo = deadline ? ` · Due: ${deadline}` : '';
     if (assigned_to) {
       notify(+assigned_to, {
         title: `🆘 ${ticketNo} — ${priority || 'medium'} priority`,
-        body: subject,
+        body: `${subject}${dueInfo}`,
         url: '/help-tickets',
         tag: `ticket-${r.lastInsertRowid}`,
       });
@@ -129,7 +177,7 @@ router.post('/', (req, res) => {
       const admins = db.prepare(`SELECT id FROM users WHERE role='admin' AND COALESCE(active,1)=1`).all().map(u => u.id);
       notifyMany(admins, {
         title: `🆘 New unassigned ticket — ${ticketNo}`,
-        body: subject,
+        body: `${subject}${dueInfo}`,
         url: '/help-tickets',
         tag: `ticket-${r.lastInsertRowid}`,
       });
@@ -142,6 +190,7 @@ router.post('/', (req, res) => {
     category: category || 'bug',
     created_by: req.user.name || '',
     date: new Date().toISOString().slice(0, 10),
+    deadline_date: deadline || '',
     creator_email: req.user.email || stUserEmail(db, req.user.id),
     assignee_email: assigned_to ? stUserEmail(db, +assigned_to) : null,
     director_email: stDirector(),
@@ -157,7 +206,12 @@ router.post('/', (req, res) => {
 //   - Assignee  (assigned_to == current user) -> can mark in_progress and
 //                add a response; CANNOT close (only the raiser/admin can).
 router.put('/:id', (req, res) => {
-  const { status, admin_response, priority, assigned_to } = req.body;
+  const { status, admin_response, priority, assigned_to, deadline_date } = req.body;
+  // Only touch the deadline when the caller actually sent the key, so a
+  // status-only update can't wipe an existing date.
+  const deadlineSent = deadline_date !== undefined;
+  const deadline = deadlineSent ? normalizeDeadline(deadline_date) : null;
+  if (deadline === INVALID_DATE) return res.status(400).json({ error: 'Deadline must be a valid date (YYYY-MM-DD)' });
   const db = getDb();
   const user = db.prepare('SELECT role FROM users WHERE id=?').get(req.user.id);
   const ticket = db.prepare('SELECT * FROM support_tickets WHERE id=?').get(req.params.id);
@@ -195,6 +249,7 @@ router.put('/:id', (req, res) => {
        admin_response = COALESCE(?, admin_response),
        priority = COALESCE(?, priority),
        assigned_to = ${canFollowAll && assigned_to !== undefined ? '?' : 'assigned_to'},
+       deadline_date = ${deadlineSent ? '?' : 'deadline_date'},
        resolved_by = ?,
        resolved_at = ?,
        updated_at = CURRENT_TIMESTAMP
@@ -202,6 +257,7 @@ router.put('/:id', (req, res) => {
   ).run(
     status, admin_response, priority,
     ...(canFollowAll && assigned_to !== undefined ? [assigned_to ? +assigned_to : null] : []),
+    ...(deadlineSent ? [deadline] : []),
     resolvedBy, resolvedAt, req.params.id
   );
   if (closing) {
@@ -324,7 +380,12 @@ router.delete('/:id', (req, res) => {
   const db = getDb();
   const user = db.prepare('SELECT role FROM users WHERE id=?').get(req.user.id);
   if (user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const t = db.prepare('SELECT attachment_link, proof_url FROM support_tickets WHERE id=?').get(req.params.id);
   db.prepare('DELETE FROM support_tickets WHERE id=?').run(req.params.id);
+  // Quarantine the ticket's attachment + proof (reversible cleanup).
+  for (const u of [t && t.attachment_link, t && t.proof_url]) {
+    if (u) { try { quarantine.quarantineUrl(u).catch(() => {}); } catch (e) { /* best-effort */ } }
+  }
   res.json({ message: 'Deleted' });
 });
 

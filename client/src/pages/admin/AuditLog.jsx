@@ -157,7 +157,7 @@ export default function AuditLog() {
 
       {/* Detail panel */}
       {selected && (
-        <div className="fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4" onClick={() => setSelected(null)}>
+        <div className="!m-0 fixed inset-0 bg-black/40 z-40 flex items-center justify-center p-4" onClick={() => setSelected(null)}>
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center p-4 border-b sticky top-0 bg-white">
               <div>

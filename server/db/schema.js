@@ -3439,6 +3439,19 @@ function initializeDatabase() {
     // Optional attachment (brief / drawing / photo / doc) the creator can
     // attach when assigning the task. Stored as a /uploads/<name> URL.
     ['delegations', 'attachment_url TEXT'],
+    // Remarks the assignee types alongside the proof ("what was done", why
+    // the file looks the way it does). Distinct from followup_remarks, which
+    // the approver maintains on the list — this one travels with the
+    // submission so the reviewer reads it while checking the proof.
+    ['delegations', 'proof_remarks TEXT'],
+    // Help ticket target date. Nullable so every existing ticket stays valid
+    // and simply renders "Not Assigned" until someone sets one.
+    ['support_tickets', 'deadline_date DATE'],
+    // Inventory ageing — the date the material started sitting in this
+    // warehouse. Only the DATE is stored; the day count is derived on every
+    // read so it advances on its own without anyone editing the row.
+    // NULL on every existing row, which is what makes the calendar icon show.
+    ['stock_balance', 'aging_start_date DATE'],
     // Mam (2026-05-22): same upload affordance on the New PMS Task
     // modal — pick a brief / drawing / photo when raising.
     ['pms_tasks', 'attachment_url TEXT'],
@@ -3664,6 +3677,13 @@ function initializeDatabase() {
     // Freeze the roster used when this month was finalised so a later roster
     // change on the employee can't retro-shift a locked month's late marks.
     ['payroll_runs', "roster TEXT DEFAULT 'general'"],
+    // att/sun breakdown persistence fix (SEPL 2026-08): present_days and
+    // sunday_worked_pay were computed every calc but never saved into the
+    // finalised snapshot, so a finalised month always showed "att 0 · sun 0"
+    // on the breakdown tooltip. Cosmetic only — paid_days/net_pay were
+    // unaffected — but real since the fields were added (9 June 2026).
+    ['payroll_runs', 'present_days REAL DEFAULT 0'],
+    ['payroll_runs', 'sunday_worked_pay REAL DEFAULT 0'],
     // Sales Billing — 4-type sequential bill flow (mam 2026-06-13).  Added to
     // the existing sales_bills table so legacy delivery-note rows (bill_type
     // NULL) are untouched; the new module only handles bill_type 1-4.
@@ -5719,6 +5739,12 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
+    // SOTYN Flow — Trello-style task boards. Registered ONLY so the "See All"
+    // (can_see_all) toggle exists in Roles & Permissions: ticking it lets a role
+    // see every board (else only boards they're a member of). View/Create/etc.
+    // are not used to gate boards — access is board membership; management is
+    // board-admin.
+    'sotyn_flow',
     // Mam (2026-06-19): Labour Rate Sheet — was sharing the `quotations`
     // permission so it never showed separately in Roles & Permissions.
     // Now its own module so access can be granted/revoked on its own.
@@ -6156,6 +6182,16 @@ in your first week. If a process feels broken, raise a Help Ticket
     runIndentFlowSettingsMigrations(db);
   } catch (e) {
     console.warn('[indent_flow_settings] migrations skipped (non-fatal):', e.message);
+  }
+
+  // System Requirements — product evolution tracker (lean Phase 1).
+  // Open access + dual Business/IT approvers via app_settings.
+  // docs/SYSTEM_REQUIREMENTS.md
+  try {
+    const { runSystemRequirementsMigrations } = require('./systemRequirementsSchema');
+    runSystemRequirementsMigrations(db);
+  } catch (e) {
+    console.warn('[system_requirements] migrations skipped (non-fatal):', e.message);
   }
 
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────

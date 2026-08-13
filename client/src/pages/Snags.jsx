@@ -12,7 +12,7 @@
 //
 // Permission gates: snags.view / create / edit / approve / delete.
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -20,6 +20,15 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
+
+// How many rows we ADD to the DOM each time the user scrolls near the bottom
+// of the table box. This is render-only chunking, NOT pagination: the whole
+// filtered list stays in memory (and drives the summary cards + export) — we
+// just don't mount 200+ <tr>s, each with two thumbnails, up front.
+const CHUNK = 50;
+// Start mounting the next chunk this far before the last row scrolls into
+// view, so rows are ready by the time the user gets to them.
+const PREFETCH_PX = 400;
 
 const STATUS_PILL = {
   open: 'bg-amber-100 text-amber-700',
@@ -52,8 +61,11 @@ export default function Snags() {
   const [form, setForm] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [page, setPage] = useState(1);
-  const PAGE_SIZE = 25;
+  // Rows currently mounted. Grows by CHUNK as the user scrolls; reset back to
+  // one chunk whenever the list itself changes (new filter/search result).
+  const [visibleCount, setVisibleCount] = useState(CHUNK);
+  const scrollBoxRef = useRef(null);   // the table's own overflow container
+  const [lastRowEl, setLastRowEl] = useState(null); // last mounted <tr>
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -76,16 +88,28 @@ export default function Snags() {
     return s;
   }, [snags]);
 
-  // Paginate the table so we never render 300+ rows (each with two image
-  // thumbnails) at once — that was hanging the page. Cards/stats above stay
-  // on the full filtered set; only the table is sliced per page.
-  const totalPages = Math.max(1, Math.ceil(snags.length / PAGE_SIZE));
-  const pageRows = useMemo(
-    () => snags.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [snags, page],
-  );
-  // Jump back to page 1 whenever the filtered list changes.
-  useEffect(() => { setPage(1); }, [filters]);
+  // ─── Scroll-in rendering ────────────────────────────────────────────
+  // Search / status / priority / site / scope all run SERVER-side (see load
+  // above), so `snags` is always the complete matching set — every filter
+  // still searches the whole list, not just what's on screen. All this does
+  // is meter how much of that set is in the DOM at once.
+  const visibleRows = useMemo(() => snags.slice(0, visibleCount), [snags, visibleCount]);
+  const hasMore = visibleCount < snags.length;
+  // A fresh result set (any filter change) starts from the top again.
+  useEffect(() => { setVisibleCount(CHUNK); scrollBoxRef.current?.scrollTo({ top: 0 }); }, [snags]);
+
+  // Watch the last mounted row; when it nears the bottom of the scroll box,
+  // mount the next chunk. Runs as an effect (not a ref callback) so
+  // scrollBoxRef is guaranteed to be attached before the observer is built.
+  useEffect(() => {
+    if (!lastRowEl || !hasMore) return;
+    const io = new IntersectionObserver(
+      entries => { if (entries[0].isIntersecting) setVisibleCount(c => Math.min(c + CHUNK, snags.length)); },
+      { root: scrollBoxRef.current, rootMargin: `0px 0px ${PREFETCH_PX}px 0px` },
+    );
+    io.observe(lastRowEl);
+    return () => io.disconnect();
+  }, [lastRowEl, hasMore, snags.length]);
 
   // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
   // photos embedded. CSV can't carry images, so this hits the server which
@@ -266,7 +290,7 @@ export default function Snags() {
             THIS container's top (Excel-style frozen header), and `freeze-col`
             keeps the Snag-No column fixed during horizontal scroll.
             mam (2026-07-28): "freeze like excel". */}
-        <div className="overflow-auto max-h-[70vh]">
+        <div ref={scrollBoxRef} className="overflow-auto max-h-[70vh]">
         <table className="freeze-head freeze-col w-full">
           <thead>
             <tr>
@@ -279,8 +303,8 @@ export default function Snags() {
             {snags.length === 0 && (
               <tr><td colSpan="10" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
             )}
-            {pageRows.map(s => (
-              <tr key={s.id}>
+            {visibleRows.map((s, i) => (
+              <tr key={s.id} ref={i === visibleRows.length - 1 ? setLastRowEl : undefined}>
                 <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
                 <td className="text-xs">
                   <div>{s.raised_at ? fmtDate(s.raised_at) : '—'}</div>
@@ -298,13 +322,13 @@ export default function Snags() {
                 </td>
                 <td>
                   {s.photo_url
-                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={s.photo_url} alt="" className="w-12 h-12 object-cover rounded" /></a>
+                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={s.photo_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded" /></a>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
                 <td>
                   {s.proof_url
-                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
+                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td>
@@ -335,20 +359,6 @@ export default function Snags() {
           </tbody>
         </table>
         </div>
-        {snags.length > PAGE_SIZE && (
-          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-t text-sm">
-            <span className="text-gray-500">
-              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, snags.length)} of {snags.length}
-            </span>
-            <div className="flex items-center gap-1">
-              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page <= 1} onClick={() => setPage(1)}>« First</button>
-              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹ Prev</button>
-              <span className="px-2 whitespace-nowrap">Page {page} / {totalPages}</span>
-              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>Next ›</button>
-              <button className="btn btn-secondary text-xs px-2 py-1" disabled={page >= totalPages} onClick={() => setPage(totalPages)}>Last »</button>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* RAISE / EDIT MODAL */}
@@ -378,7 +388,7 @@ export default function Snags() {
               <label className="label">Snag Photo</label>
               {form.photo_url ? (
                 <div className="flex items-start gap-3">
-                  <img src={form.photo_url} alt="" className="w-32 h-32 object-cover rounded border" />
+                  <img src={form.photo_url} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
                   <button type="button" onClick={() => setForm(f => ({ ...f, photo_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (
@@ -445,7 +455,7 @@ export default function Snags() {
               <label className="label">Proof Photo *</label>
               {proofForm.proof_url ? (
                 <div className="flex items-start gap-3">
-                  <img src={proofForm.proof_url} alt="" className="w-32 h-32 object-cover rounded border" />
+                  <img src={proofForm.proof_url} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
                   <button type="button" onClick={() => setProofForm(f => ({ ...f, proof_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (

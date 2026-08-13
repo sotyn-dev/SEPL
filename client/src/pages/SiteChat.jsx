@@ -5,10 +5,11 @@ import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, mem
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
+import ConfirmDialog from '../components/ConfirmDialog2';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage, FiEdit2 } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiCornerUpRight, FiDownload, FiImage, FiEdit2, FiStar, FiArchive, FiRotateCcw, FiMoreVertical } from 'react-icons/fi';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
@@ -64,7 +65,35 @@ const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attach
 // component with stable props, so composer keystrokes, context refreshes, and
 // Layout re-renders DON'T redraw the whole conversation (perf pass). The @mention
 // regex and the "others" (read-receipt) set are computed ONCE here, not per row.
-const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit }) {
+// Filter chips above the forward list.
+const FWD_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'recent', label: 'Recent' },
+  { key: 'frequent', label: 'Frequently used' },
+  { key: 'favorites', label: 'Favorites' },
+  { key: 'people', label: 'People' },
+  { key: 'groups', label: 'Groups' },
+];
+
+// Typed one-line summary of the message being forwarded, so the preview reads
+// "🖼 Photo" / "📄 BOQ.pdf" rather than a raw URL. Kind is inferred from the
+// attachment extension — the same signal isImg()/isAudio() already use.
+function previewOf(m) {
+  const url = m?.attachment_url || '';
+  const name = m?.attachment_name || '';
+  const text = (m?.body || '').trim();
+  const ext = (name || url).split('?')[0].split('.').pop()?.toLowerCase() || '';
+  if (!url) return { icon: '💬', label: 'Message', text };
+  if (/^(png|jpe?g|gif|webp|bmp|heic)$/.test(ext)) return { icon: '🖼', label: name || 'Photo', text };
+  if (/^(mp4|mov|webm|mkv|avi)$/.test(ext)) return { icon: '🎥', label: name || 'Video', text };
+  if (/^(mp3|wav|ogg|m4a|webm|opus)$/.test(ext)) return { icon: '🎤', label: name || 'Voice message', text };
+  if (ext === 'pdf') return { icon: '📄', label: name || 'PDF', text };
+  if (/^(xlsx?|csv)$/.test(ext)) return { icon: '📊', label: name || 'Spreadsheet', text };
+  if (/^(docx?|rtf|txt)$/.test(ext)) return { icon: '📝', label: name || 'Document', text };
+  return { icon: '📎', label: name || 'Attachment', text };
+}
+
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit, onForward }) {
   // Current-date labels for the Today/Yesterday separators — an intentional read
   // of "now" at render time (the one impure call, isolated).
   // eslint-disable-next-line react-hooks/purity
@@ -130,6 +159,13 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                 {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
                 <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'} ${editingId === m.id ? 'ring-2 ring-amber-400' : ''}`}>
                   {!own && <div className="text-[11px] font-semibold text-blue-700 mb-0.5">{m.sender_name}</div>}
+                  {/* WhatsApp-style "Forwarded" tag — sits inside the bubble,
+                      above the content, so it reads as one combined message. */}
+                  {!!m.forwarded && (
+                    <div className="flex items-center gap-1 text-[10px] text-gray-500 italic mb-0.5">
+                      <FiCornerUpRight size={10} className="shrink-0" /> Forwarded
+                    </div>
+                  )}
                   {m.reply_to_id && (() => {
                     const q = msgById[m.reply_to_id];
                     return (
@@ -149,6 +185,14 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                   {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
                   <div className="flex items-center justify-end gap-1.5 mt-0.5">
                     <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Reply"><FiCornerUpLeft size={11} /></button>
+                    <button onClick={() => onForward(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Forward"><FiCornerUpRight size={11} /></button>
+                    {/* Native download of the attachment. `download` works because
+                        /uploads is served from the same origin; the filename falls
+                        back to the stored name so it doesn't save as a hash. */}
+                    {m.attachment_url && (
+                      <a href={m.attachment_url} download={m.attachment_name || ''} target="_blank" rel="noreferrer"
+                        className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Download"><FiDownload size={11} /></a>
+                    )}
                     <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Message info"><FiInfo size={11} /></button>
                     {canEdit && <button onClick={() => onEdit(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Edit"><FiEdit2 size={11} /></button>}
                     {(own || isAdmin) && <button onClick={() => onDelete(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
@@ -173,16 +217,19 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
 // Search is now server-driven (perf pass — admin-slowness fix): `groups` is
 // already the filtered/paginated page from the server, not the full list, so
 // there's no client-side .filter() left here — just render + scroll-to-load-more.
-const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, hasMore, loadingMore, onLoadMore, onSelect }) {
+const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, archived, hasMore, loadingMore, onLoadMore, onSelect }) {
   const onScroll = (e) => {
     const el = e.currentTarget;
     if (hasMore && !loadingMore && el.scrollHeight - el.scrollTop - el.clientHeight < 120) onLoadMore();
   };
   return (
     <div className="overflow-y-auto flex-1" onScroll={onScroll}>
-      {groups.length === 0 && <div className="text-center text-gray-400 text-sm py-8">{q ? 'No groups match your search.' : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}</div>}
+      {groups.length === 0 && <div className="text-center text-gray-400 text-sm py-8">{q ? 'No groups match your search.' : archived ? 'No archived groups.' : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}</div>}
+      {/* is_dm / archived_at ride along in onSelect: the thread needs them BEFORE
+          its first fetch resolves, to hide Archive on a DM and to render an
+          archived group read-only instead of briefly offering a composer that 409s. */}
       {groups.map(g => (
-        <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name })}
+        <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name, is_dm: g.is_dm, archived_at: g.archived_at || null })}
           className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${selId === g.id ? 'bg-blue-50' : ''}`}>
           <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
           <div className="min-w-0 flex-1">
@@ -220,6 +267,7 @@ export default function SiteChat() {
   const [groups, setGroups] = useState([]);
   const [q, setQ] = useState('');
   const [mineOnly, setMineOnly] = useState(false);  // admin-only "Only chats I'm in" filter
+  const [showArchived, setShowArchived] = useState(false);  // Archived view — same list, archived_at IS NOT NULL
   const [sel, setSel] = useState(null);            // selected group {id, name}
   const [msgs, setMsgs] = useState([]);
   const [members, setMembers] = useState([]);
@@ -237,10 +285,26 @@ export default function SiteChat() {
   const [busy, setBusy] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
   const [memOpen, setMemOpen] = useState(false);
+  const [groupMenu, setGroupMenu] = useState(false);   // ⋮ group-actions dropdown in the thread header
+  const [confirmKind, setConfirmKind] = useState(null);  // null | 'archive' | 'delete'
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [pendingDelMsg, setPendingDelMsg] = useState(null);   // message staged for the delete confirm
   const [memSearch, setMemSearch] = useState('');
   const [renameVal, setRenameVal] = useState('');
   const [dmOpen, setDmOpen] = useState(false);     // "new direct message" picker
   const [dmSearch, setDmSearch] = useState('');
+  const [fwdMsg, setFwdMsg] = useState(null);      // message being forwarded
+  const [fwdSearch, setFwdSearch] = useState('');
+  const [fwdBusy, setFwdBusy] = useState(false);
+  const [fwdTargets, setFwdTargets] = useState([]); // groups + ALL colleagues
+  const [fwdPicked, setFwdPicked] = useState([]);   // multi-select
+  const [fwdFilter, setFwdFilter] = useState('all');
+  const [fwdCursor, setFwdCursor] = useState(0);    // keyboard highlight
+  // True while the Create-group modal was opened FROM the forward dialog.
+  // The forward payload stays mounted underneath, so creating a group never
+  // makes you start the forward over.
+  const [fwdGroupFlow, setFwdGroupFlow] = useState(false);
+  const fwdSearchRef = useRef(null);
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newSel, setNewSel] = useState([]);
@@ -276,6 +340,9 @@ export default function SiteChat() {
   const searchTimerRef = useRef(null);          // debounce timer for server-side group search
   const searchMountedRef = useRef(false);       // skip the debounce effect's own fetch on first mount
   const mineOnlyRef = useRef(false);            // current "only my chats" toggle, read inside loadGroups without a stale closure
+  const archivedRef = useRef(false);            // current Archived-view toggle, same stale-closure reason
+  const archivedMountedRef = useRef(false);
+  const loadGroupsRef = useRef(null);           // holds loadGroups so it can re-run itself after a scope change
   const mineMountedRef = useRef(false);         // skip the toggle effect's own fetch on first mount
 
   // Keyset-paginated group list (perf pass — admin-slowness fix). Default: fetch
@@ -290,9 +357,11 @@ export default function SiteChat() {
     const more = !!opts.more;
     const requestQ = qRef.current;
     const requestMine = mineOnlyRef.current;
+    const requestArchived = archivedRef.current;
     const params = { limit: more ? GROUP_PAGE : Math.min(GROUP_MAX, Math.max(GROUP_PAGE, groupsLenRef.current || GROUP_PAGE)) };
     if (requestQ) params.q = requestQ;
     if (requestMine) params.mine = 1;
+    if (requestArchived) params.archived = 1;
     if (more && groupsCursorRef.current) {
       params.phase = groupsCursorRef.current.phase;
       if (groupsCursorRef.current.after_last_id != null) params.after_last_id = groupsCursorRef.current.after_last_id;
@@ -301,14 +370,30 @@ export default function SiteChat() {
     }
     groupsLoadingRef.current = true; setLoadingGroups(true);
     return api.get('/site-chat/groups', { params }).then(r => {
-      if (requestQ !== qRef.current || requestMine !== mineOnlyRef.current) return;   // a newer search/toggle superseded this response — drop it
+      if (requestQ !== qRef.current || requestMine !== mineOnlyRef.current || requestArchived !== archivedRef.current) return;   // a newer search/toggle superseded this response — drop it
       const { groups: incoming = [], hasMore: incomingHasMore = false, nextCursor = null } = r.data || {};
       if (more) setGroups(gs => { const seen = new Set(gs.map(g => g.id)); return [...gs, ...incoming.filter(g => !seen.has(g.id))]; });
       else setGroups(incoming);
       setGroupsHasMore(incomingHasMore);
       groupsCursorRef.current = nextCursor;
-    }).catch(() => {}).finally(() => { groupsLoadingRef.current = false; setLoadingGroups(false); });
+    }).catch(() => {}).finally(() => {
+      groupsLoadingRef.current = false; setLoadingGroups(false);
+      // Scope changed WHILE this request was in flight, so two things already went
+      // wrong: the response above was discarded as superseded, AND the toggle's own
+      // loadGroups() was dropped by the in-flight guard at the top. Neither fired,
+      // so the list would sit in the OLD scope indefinitely — "Only chats I'm in"
+      // reads ON while every group is still listed, and nothing self-heals until
+      // the next socket event. Re-run now that the slot is free; each re-run
+      // re-reads the refs, so a burst of toggling converges instead of looping.
+      const stale = qRef.current !== requestQ
+        || mineOnlyRef.current !== requestMine
+        || archivedRef.current !== requestArchived;
+      if (stale) { groupsCursorRef.current = null; loadGroupsRef.current?.(); }
+    });
   }, []);
+  // Self-reference for the re-run above, kept in a ref so the useCallback stays
+  // dependency-free (a direct call would make loadGroups depend on itself).
+  loadGroupsRef.current = loadGroups;
   const reloadUsers = useCallback(() => api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}), []);
   // Cursor pagination (perf pass — S2-B). Default: fetch the most-recent PAGE and
   // REPLACE (thread open / reconnect). { before }: fetch the PAGE older than that
@@ -335,7 +420,9 @@ export default function SiteChat() {
       } else {
         setMsgs(incoming); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
         setQuotedParents(qp); setHasMore(!!r.data.hasMore);
-        if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
+        // archived_at re-syncs here too, so a group archived by someone else while
+        // you had it open turns read-only on the next reconcile rather than on reload.
+        if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm, archived_at: r.data.group.archived_at || null } : s));
         // Opening/polling a thread marks it read — clear its unread badge locally
         // instead of re-fetching the whole groups list every 6s (perf pass). The
         // list's own 12s timer + socket 'changed' still refresh names/last-message.
@@ -410,6 +497,7 @@ export default function SiteChat() {
   useLayoutEffect(() => {
     if (!sel) return;
     setText(''); setMention(null); setReplyTo(null); setEditingId(null);   // drop the composer draft + reply + edit when switching threads
+    setGroupMenu(false);                                                    // ...and never leave the ⋮ menu open over a different group
     justSentRef.current = { body: '', at: 0 };         // disarm the send-guard for the new thread
     setMsgs([]); setThreadLoading(true);               // clear the previous thread + show the loader immediately
   }, [sel?.id]);
@@ -457,6 +545,15 @@ export default function SiteChat() {
     if (!mineMountedRef.current) { mineMountedRef.current = true; return; }
     groupsCursorRef.current = null; loadGroups();
   }, [mineOnly, loadGroups]);
+  // Archived view toggle — same shape as mineOnly: reset the cursor, refetch the
+  // first page in the new scope, and drop any open thread (it belongs to the
+  // other scope). Skips its own mount run so it never double-fetches.
+  useEffect(() => {
+    archivedRef.current = showArchived;
+    if (!archivedMountedRef.current) { archivedMountedRef.current = true; return; }
+    setSel(null);
+    groupsCursorRef.current = null; loadGroups();
+  }, [showArchived, loadGroups]);
   // After a scroll-up page prepends older messages, anchor the scroll so the
   // messages the user was reading stay in place (runs before paint = no jump).
   useLayoutEffect(() => {
@@ -532,7 +629,9 @@ export default function SiteChat() {
       // hang the chat (mam 2026-06-25). Keep the original display name.
       const toSend = await compressImage(file);
       const fd = new FormData(); fd.append('file', toSend);
-      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // ?folder=site-chat routes it into its own uploads subfolder so the orphan
+      // sweep can target chat attachments (avatar upload below stays flat).
+      const r = await api.post('/upload?folder=site-chat', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       await send({ attachment_url: r.data.url, attachment_name: r.data.filename || file.name });
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
@@ -620,11 +719,16 @@ export default function SiteChat() {
   };
   // (renderBody / @mention highlighting now lives in the memoised MessageList.)
 
-  const delMsg = useCallback(async (m) => {
-    if (!confirm('Delete this message?')) return;
-    try { await api.delete(`/site-chat/${sel.id}/messages/${m.id}`); loadThread(sel.id); }
+  // Stages the message, then the shared ConfirmDialog does the asking — same
+  // dialog as group archive/delete, so nothing in this page pops a native alert.
+  const delMsg = useCallback((m) => setPendingDelMsg(m), []);
+  const doDelMsg = async () => {
+    if (!pendingDelMsg || !sel) return;
+    setConfirmBusy(true);
+    try { await api.delete(`/site-chat/${sel.id}/messages/${pendingDelMsg.id}`); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  }, [sel?.id, loadThread]);
+    finally { setConfirmBusy(false); setPendingDelMsg(null); }
+  };
   // Edit reuses the bottom composer (WhatsApp-style): load the text into the field,
   // show an "Editing message" bar with an ✕ to cancel, and the send button confirms.
   const startEdit = useCallback((m) => {
@@ -662,22 +766,164 @@ export default function SiteChat() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed to start chat'); }
   };
 
+  // ── Forward dialog ────────────────────────────────────────────────────
+  // Opening the dialog pulls groups AND every colleague in one request, so a
+  // person you've never messaged is still forwardable — the DM is created
+  // server-side on send.
+  const openForward = (m) => {
+    setFwdMsg(m); setFwdSearch(''); setFwdPicked([]); setFwdFilter('all'); setFwdCursor(0);
+    api.get('/site-chat/forward-targets').then(r => setFwdTargets(r.data || [])).catch(() => setFwdTargets([]));
+  };
+  const closeForward = () => { setFwdMsg(null); setFwdSearch(''); setFwdPicked([]); setFwdCursor(0); };
+
+  const togglePick = (t) => setFwdPicked(prev => prev.some(x => x.targetType === t.targetType && x.targetId === t.targetId)
+    ? prev.filter(x => !(x.targetType === t.targetType && x.targetId === t.targetId))
+    : [...prev, t]);
+
+  const toggleFwdFavorite = async (t) => {
+    // Optimistic — a pin is trivial to undo and the list shouldn't stutter.
+    setFwdTargets(prev => prev.map(x => x.targetType === t.targetType && x.targetId === t.targetId ? { ...x, favorite: !x.favorite } : x));
+    try { await api.post('/site-chat/forward-favorite', { target_type: t.targetType, target_id: t.targetId }); }
+    catch { setFwdTargets(prev => prev.map(x => x.targetType === t.targetType && x.targetId === t.targetId ? { ...x, favorite: t.favorite } : x)); }
+  };
+
+  // One request forwards to every picked target; the server creates any missing
+  // DM, bumps the usage counters and broadcasts each new message.
+  // `override` lets the just-created group be forwarded to immediately, without
+  // waiting a render for setFwdPicked to land (React state isn't synchronous).
+  const forwardNow = async (override) => {
+    // Array.isArray guard: bound straight to onClick this would receive the
+    // click event, and `event || fwdPicked` silently swallowed the send.
+    const picks = Array.isArray(override) ? override : fwdPicked;
+    if (!fwdMsg || !picks.length || fwdBusy) return;
+    setFwdBusy(true);
+    try {
+      const r = await api.post('/site-chat/forward', {
+        body: fwdMsg.body || null,
+        attachment_url: fwdMsg.attachment_url || null,
+        attachment_name: fwdMsg.attachment_name || null,
+        targets: picks.map(t => ({ target_type: t.targetType, target_id: t.targetId })),
+      });
+      // Anything landing in the chat you're looking at should appear at once.
+      (r.data?.results || []).forEach(x => { if (sel && x.group_id === sel.id && x.message) appendMsg(x.message); });
+      const n = r.data?.sent || 0;
+      const failed = r.data?.failed?.length || 0;
+      // Name the destination when there's exactly one — "Forwarded to
+      // Project Team" reads better than "Forwarded to 1 chat".
+      const where = picks.length === 1 ? `"${picks[0].name}"` : `${n} chat${n === 1 ? '' : 's'}`;
+      toast[failed ? 'error' : 'success'](failed ? `Forwarded to ${n}, ${failed} failed` : `Message forwarded to ${where}`);
+      closeForward();
+      loadGroups();
+    } catch (err) {
+      // Keep the dialog open and the payload intact so the user can retry.
+      toast.error(err.response?.data?.error || 'Failed to forward — nothing was sent, try again');
+    } finally { setFwdBusy(false); }
+  };
+
+  // Filter + group into sections. Everything is client-side over one payload —
+  // at ERP headcount that's instant, and it keeps typing latency at zero.
+  const fwdSections = useMemo(() => {
+    const q = fwdSearch.trim().toLowerCase();
+    const hit = (t) => !q || [t.name, t.subtitle, t.phone, t.email, t.username]
+      .some(v => String(v || '').toLowerCase().includes(q));
+    let rows = fwdTargets.filter(hit);
+    if (fwdFilter === 'favorites') rows = rows.filter(t => t.favorite);
+    else if (fwdFilter === 'frequent') rows = rows.filter(t => t.forwardCount > 0);
+    else if (fwdFilter === 'recent') rows = rows.filter(t => t.lastAt);
+    else if (fwdFilter === 'people') rows = rows.filter(t => t.isDm);
+    else if (fwdFilter === 'groups') rows = rows.filter(t => !t.isDm);
+
+    const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+    const out = [];
+    const push = (title, list) => { if (list.length) out.push({ title, rows: list }); };
+    if (fwdFilter === 'all') {
+      const fav = rows.filter(t => t.favorite).sort(byName);
+      const rest = rows.filter(t => !t.favorite);
+      const freq = rest.filter(t => t.forwardCount > 0).sort((a, b) => b.forwardCount - a.forwardCount).slice(0, 5);
+      const freqKeys = new Set(freq.map(t => `${t.targetType}:${t.targetId}`));
+      const recent = rest.filter(t => t.lastAt && !freqKeys.has(`${t.targetType}:${t.targetId}`))
+        .sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
+      const others = rest.filter(t => !t.lastAt && !freqKeys.has(`${t.targetType}:${t.targetId}`)).sort(byName);
+      push('Pinned', fav); push('Frequently used', freq); push('Recent chats', recent); push('All contacts', others);
+    } else {
+      push(FWD_FILTERS.find(f => f.key === fwdFilter)?.label || 'Results', rows.sort(byName));
+    }
+    return out;
+  }, [fwdTargets, fwdSearch, fwdFilter]);
+
+  // Flattened order backing arrow-key navigation.
+  const fwdFlat = useMemo(
+    () => fwdSections.flatMap(s => s.rows.map(t => ({ key: `${t.targetType}:${t.targetId}`, t }))),
+    [fwdSections]);
+
+  const onFwdKeyDown = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setFwdCursor(c => Math.min(c + 1, fwdFlat.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setFwdCursor(c => Math.max(c - 1, 0)); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      // Enter picks the highlighted row; Enter with a selection already made sends.
+      if (e.ctrlKey || e.metaKey || !fwdFlat[fwdCursor]) forwardNow();
+      else togglePick(fwdFlat[fwdCursor].t);
+    } else if (e.key === 'Escape') { e.preventDefault(); closeForward(); }
+  };
+
   const createGroup = async () => {
     if (!newName.trim()) return toast.error('Give the group a name');
     if (busy) return;                                   // guard against double-submit
     setBusy(true);
     try {
       const r = await api.post('/site-chat/groups', { name: newName.trim(), member_ids: newSel });
+      const created = { id: r.data.id, name: r.data.name || newName.trim() };
       setNewOpen(false); setNewName(''); setNewSel([]); setNewSearch('');
-      loadGroups(); setSel({ id: r.data.id, name: r.data.name });
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed to create group'); }
+      loadGroups();
+      if (fwdGroupFlow) {
+        // Came from the Forward dialog — which is still mounted underneath with
+        // the message intact. Add the group to the list, select it, and send
+        // straight away so the user never restarts the forward.
+        setFwdGroupFlow(false);
+        const target = {
+          targetType: 'group', targetId: created.id, groupId: created.id, isDm: false,
+          name: created.name, subtitle: `${(newSel?.length || 0) + 1} members`,
+          phone: null, email: null, avatarUserId: null, lastAt: null,
+          favorite: false, forwardCount: 0, lastForwardedAt: null,
+        };
+        setFwdTargets(prev => [target, ...prev]);
+        setFwdPicked(prev => [...prev, target]);
+        // Pass the target explicitly: setFwdPicked hasn't committed yet.
+        await forwardNow([...fwdPicked, target]);
+        return;                                   // stay in chat, don't switch view
+      }
+      setSel(created);
+    } catch (err) {
+      // Group creation failed — the Forward dialog is still open with the
+      // message preserved, so the user can retry or pick an existing chat.
+      toast.error(err.response?.data?.error || 'Failed to create group');
+    }
     finally { setBusy(false); }
   };
-  const delGroup = async () => {
-    if (!sel || !confirm(`Delete the group "${sel.name}" and all its messages?`)) return;
-    try { await api.delete(`/site-chat/${sel.id}`); setSel(null); setMemOpen(false); loadGroups(); }
+  // Both destructive-ish actions go through the SAME confirm dialog, so the only
+  // difference the user sees is the wording and the button colour — which is
+  // exactly the difference that matters (reversible vs permanent). Restore is NOT
+  // confirmed: it only ever puts a group back.
+  const doDelete = async () => {
+    if (!sel) return;
+    setConfirmBusy(true);
+    try { await api.delete(`/site-chat/${sel.id}`); toast.success('Group deleted'); setSel(null); setMemOpen(false); loadGroups(); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setConfirmBusy(false); setConfirmKind(null); }
   };
+  const doArchive = async (archive) => {
+    if (!sel) return;
+    setConfirmBusy(true);
+    try {
+      await api.post(`/site-chat/${sel.id}/${archive ? 'archive' : 'unarchive'}`);
+      toast.success(archive ? 'Group archived' : 'Group restored');
+      setSel(null); setMemOpen(false); loadGroups();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setConfirmBusy(false); setConfirmKind(null); }
+  };
+  const delGroup = () => setConfirmKind('delete');
+  const archiveGroup = (archive) => (archive ? setConfirmKind('archive') : doArchive(false));
 
   // Hidden file input for the profile photo — kept at the top level so BOTH the
   // desktop header button and the mobile (chat-list) avatar button can trigger
@@ -738,8 +984,26 @@ export default function SiteChat() {
               </label>
             )}
           </div>
-          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')}
+          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')} archived={showArchived}
             hasMore={groupsHasMore} loadingMore={loadingGroups} onLoadMore={() => loadGroups({ more: true })} onSelect={setSel} />
+          {/* Archived switch — pinned to the FOOT of the list column, not up beside
+              the search box where it read as a filter on the search and was easy to
+              leave on by accident. Outside GroupList's scroll container, so it stays
+              put however far the list scrolls.
+              A SWITCH with a fixed label, not a button whose label flips: the label
+              stays "Show archived" in both states so it never has to be re-read, and
+              it matches the role="switch" idiom "Only chats I'm in" already uses
+              directly above. The whole bar is the hit target, and it goes amber when
+              on — the list you're looking at is NOT your normal one, and that has to
+              be unmissable. */}
+          <button type="button" role="switch" aria-checked={showArchived} onClick={() => setShowArchived(v => !v)}
+            className={`flex-shrink-0 border-t px-3 py-2.5 flex items-center justify-center gap-2 text-xs font-semibold transition-colors ${
+              showArchived ? 'bg-amber-100 text-amber-900 hover:bg-amber-200' : 'text-gray-500 hover:bg-gray-50'}`}>
+            <FiArchive size={14} /> <span>Show archived</span>
+            <span className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${showArchived ? 'bg-amber-500' : 'bg-gray-300'}`}>
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showArchived ? 'translate-x-4' : ''}`} />
+            </span>
+          </button>
         </div>
 
         {/* ── Thread ────────────────────────────────────── */}
@@ -777,6 +1041,24 @@ export default function SiteChat() {
                       <div className="text-[11px] text-white/80 truncate">{members.length ? members.map(m => m.name).filter(Boolean).slice(0, 5).join(', ') : 'tap to add members'}</div>
                     </button>
                     <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="Members"><FiUsers size={18} /></button>
+                    {/* Group actions — same ⋮ dropdown SOTYN Flow uses for a board, so
+                        the two modules behave alike. Archive/Delete live here rather
+                        than buried under the members modal, which is where you go to
+                        manage PEOPLE. Non-DM only: a DM can't be archived, and the
+                        members modal it would sit beside doesn't exist for DMs. */}
+                    {canDelete('site_chat') && (
+                      <div className="relative">
+                        <button onClick={() => setGroupMenu(o => !o)} className="p-1.5 rounded hover:bg-white/15" title="Group actions"><FiMoreVertical size={18} /></button>
+                        {groupMenu && (
+                          <div className="absolute right-0 z-30 mt-1 w-44 rounded-lg bg-white shadow-lg border text-gray-700 py-1 text-sm" onMouseLeave={() => setGroupMenu(false)}>
+                            {sel?.archived_at
+                              ? <button onClick={() => { setGroupMenu(false); archiveGroup(false); }} className="w-full text-left px-3 py-2 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2"><FiRotateCcw size={14} /> Restore group</button>
+                              : <button onClick={() => { setGroupMenu(false); archiveGroup(true); }} className="w-full text-left px-3 py-2 hover:bg-amber-50 text-amber-700 flex items-center gap-2"><FiArchive size={14} /> Archive group</button>}
+                            <button onClick={() => { setGroupMenu(false); delGroup(); }} className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2 border-t"><FiTrash2 size={14} /> Delete group</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -799,7 +1081,7 @@ export default function SiteChat() {
                       day-group spacing MessageList relies on is preserved. Keyed on
                       threadLoading only (not msgs), so new messages append without re-fading. */}
                   <div className={`space-y-1.5 transition-opacity duration-300 ${threadLoading ? 'opacity-0' : 'opacity-100 delay-150'}`}>
-                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} />
+                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} onForward={openForward} />
                   </div>
 
                   <div ref={endRef} />
@@ -850,6 +1132,14 @@ export default function SiteChat() {
                   <button onClick={cancelEdit} className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-700" title="Cancel edit"><FiX size={16} /></button>
                 </div>
               )}
+              {/* An archived group is read-only — the server rejects a send with
+                  409, so the composer is replaced rather than left to fail. The
+                  thread above stays fully scrollable and searchable. */}
+              {sel?.archived_at ? (
+              <div className="border-t px-3 py-3 bg-amber-50 text-center text-xs text-amber-800 flex items-center justify-center gap-2">
+                <FiArchive size={14} /> This group is archived — read-only. Restore it to send messages.
+              </div>
+              ) : (
               <div className="border-t p-2 flex items-end gap-2 bg-gray-50 relative">
                 {/* @-mention picker — floats above the composer */}
                 {mention && mentionList.length > 0 && (
@@ -899,13 +1189,136 @@ export default function SiteChat() {
                   </>
                 )}
               </div>
+              )}
             </>
           )}
         </div>
       </div>
 
       {/* ── New group ─────────────────────────────────────── */}
-      <Modal isOpen={newOpen} onClose={() => setNewOpen(false)} title="New group">
+      <Modal isOpen={dmOpen} onClose={() => setDmOpen(false)} title="New direct message">
+        <div className="space-y-2 text-sm">
+          <p className="text-xs text-gray-500">Pick a person to message directly — a private 1-on-1 chat.</p>
+          <input className="input" placeholder="Search people…" value={dmSearch} onChange={e => setDmSearch(e.target.value)} autoFocus />
+          <div className="space-y-0.5 max-h-72 overflow-y-auto border rounded p-1">
+            {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).map(u => (
+              <button key={u.id} onClick={() => startDm(u.id, u.name)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-blue-50">
+                <Avatar url={userAvatars[u.id]} name={u.name} size={28} />
+                <span className="truncate">{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
+              </button>
+            ))}
+            {allUsers.filter(u => u.id !== user?.id).length === 0 && <div className="text-center text-gray-400 text-xs py-4">No other users found</div>}
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Forward ───────────────────────────────────────── */}
+      <Modal isOpen={!!fwdMsg} onClose={closeForward} title="Forward to…">
+        <div className="text-sm">
+          {/* New group — reuses the SAME create-group modal as the sidebar's +
+              button, so there's one group-creation flow, not two. Lives in the
+              body rather than beside the X because Modal has no header-actions
+              slot and it's shared by every page. */}
+          {canCreate('site_chat') && (
+            <div className="flex justify-end -mt-1 mb-1">
+              <button type="button" title="New group"
+                onClick={() => { setFwdGroupFlow(true); setNewOpen(true); }}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-full border border-gray-200 text-[11px] text-gray-600 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 transition">
+                <FiUsers size={12} /> New group
+              </button>
+            </div>
+          )}
+          {/* Fixed preview — forwarding the wrong photo into the wrong group
+              is not undoable, so you always see WHAT is being sent. */}
+          {fwdMsg && (() => {
+            const p = previewOf(fwdMsg);
+            return (
+              <div className="rounded-lg border bg-gray-50 px-2.5 py-2 mb-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-blue-700">
+                  <span>{p.icon}</span><span className="truncate">{p.label}</span>
+                </div>
+                {p.text && <div className="text-xs text-gray-600 line-clamp-2 whitespace-pre-wrap break-words mt-0.5">{p.text}</div>}
+              </div>
+            );
+          })()}
+
+          {/* Search — name, username, department, role, phone, email. */}
+          <input ref={fwdSearchRef} className="input" placeholder="Search name, department, phone…"
+            value={fwdSearch} onChange={e => { setFwdSearch(e.target.value); setFwdCursor(0); }}
+            onKeyDown={onFwdKeyDown} autoFocus />
+
+          {/* Filter chips */}
+          <div className="flex flex-wrap gap-1 mt-2">
+            {FWD_FILTERS.map(f => (
+              <button key={f.key} type="button" onClick={() => { setFwdFilter(f.key); setFwdCursor(0); }}
+                className={`px-2 py-0.5 rounded-full text-[11px] border transition ${fwdFilter === f.key
+                  ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-2 max-h-[46vh] overflow-y-auto border rounded-lg divide-y">
+            {fwdSections.map(sec => (
+              <div key={sec.title}>
+                <div className="px-2.5 py-1 bg-gray-50 text-[10px] uppercase tracking-wide text-gray-400 font-semibold sticky top-0">
+                  {sec.title}
+                </div>
+                {sec.rows.map(t => {
+                  const key = `${t.targetType}:${t.targetId}`;
+                  const picked = fwdPicked.some(x => x.targetType === t.targetType && x.targetId === t.targetId);
+                  const active = fwdFlat[fwdCursor] && fwdFlat[fwdCursor].key === key;
+                  return (
+                    <div key={key} role="option" aria-selected={picked}
+                      className={`flex items-center gap-2 px-2.5 py-1.5 cursor-pointer ${active ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                      onClick={() => togglePick(t)}>
+                      <input type="checkbox" readOnly checked={picked} className="w-4 h-4 shrink-0 accent-blue-600" />
+                      <Avatar url={userAvatars[t.avatarUserId]} name={t.name} size={30} />
+                      <div className="flex-1 min-w-0">
+                        <div className="truncate flex items-center gap-1">
+                          {t.name}
+                          {sel && t.groupId === sel.id && <span className="text-[10px] text-gray-400">· current chat</span>}
+                        </div>
+                        <div className="text-[11px] text-gray-400 truncate">
+                          {[t.subtitle, t.phone].filter(Boolean).join(' · ') || (t.isDm ? 'No chat yet' : '')}
+                        </div>
+                      </div>
+                      {/* Pin — stopPropagation so starring doesn't also select. */}
+                      <button type="button" title={t.favorite ? 'Unpin' : 'Pin to top'}
+                        onClick={(e) => { e.stopPropagation(); toggleFwdFavorite(t); }}
+                        className={`p-1 rounded shrink-0 ${t.favorite ? 'text-amber-500' : 'text-gray-300 hover:text-amber-500'}`}>
+                        <FiStar size={13} fill={t.favorite ? 'currentColor' : 'none'} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+            {fwdFlat.length === 0 && <div className="text-center text-gray-400 text-xs py-6">No chats or people match</div>}
+          </div>
+
+          {/* Sticky selection bar */}
+          <div className="flex items-center justify-between gap-2 pt-2 mt-2 border-t">
+            <div className="text-xs text-gray-500 min-w-0 truncate">
+              {fwdPicked.length === 0 ? 'Pick one or more chats' : (
+                <><span className="font-semibold text-gray-700">{fwdPicked.length} selected</span>
+                  <span className="text-gray-400"> · {fwdPicked.map(p => p.name).join(', ')}</span></>
+              )}
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button type="button" className="btn btn-secondary text-xs" onClick={closeForward}>Cancel</button>
+              <button type="button" className="btn btn-primary text-xs disabled:opacity-50"
+                disabled={!fwdPicked.length || fwdBusy} onClick={() => forwardNow()}>
+                {fwdBusy ? 'Forwarding…' : `Forward${fwdPicked.length > 1 ? ` (${fwdPicked.length})` : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+      {/* Rendered AFTER the Forward modal so it stacks above it (same z-50 —
+          later sibling wins). Cancelling drops back to Forward with the
+          message still selected. */}
+      <Modal isOpen={newOpen} onClose={() => { setNewOpen(false); setFwdGroupFlow(false); }} title="New group">
         <div className="space-y-3 text-sm">
           <div><label className="label">Group name *</label><input className="input" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Hero Homes Site, Accounts Team…" autoFocus /></div>
           <div>
@@ -925,27 +1338,42 @@ export default function SiteChat() {
           </div>
           <div className="flex gap-2 pt-1">
             <button onClick={createGroup} disabled={busy} className="btn btn-primary flex-1 disabled:opacity-50">{busy ? 'Creating…' : 'Create group'}</button>
-            <button onClick={() => setNewOpen(false)} className="btn border">Cancel</button>
+            <button onClick={() => { setNewOpen(false); setFwdGroupFlow(false); }} className="btn border">Cancel</button>
           </div>
         </div>
       </Modal>
 
       {/* ── New direct message ────────────────────────────── */}
-      <Modal isOpen={dmOpen} onClose={() => setDmOpen(false)} title="New direct message">
-        <div className="space-y-2 text-sm">
-          <p className="text-xs text-gray-500">Pick a person to message directly — a private 1-on-1 chat.</p>
-          <input className="input" placeholder="Search people…" value={dmSearch} onChange={e => setDmSearch(e.target.value)} autoFocus />
-          <div className="space-y-0.5 max-h-72 overflow-y-auto border rounded p-1">
-            {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).map(u => (
-              <button key={u.id} onClick={() => startDm(u.id, u.name)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-blue-50">
-                <Avatar url={userAvatars[u.id]} name={u.name} size={28} />
-                <span className="truncate">{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
-              </button>
-            ))}
-            {allUsers.filter(u => u.id !== user?.id).length === 0 && <div className="text-center text-gray-400 text-xs py-4">No other users found</div>}
-          </div>
-        </div>
-      </Modal>
+
+
+      {/* ── Archive / Delete confirmation ─────────────────── */}
+      {/* Same component for both; the wording carries the difference. Archive
+          says what changes AND that nothing is lost; Delete says permanent. */}
+      <ConfirmDialog
+        open={!!confirmKind && !!sel}
+        busy={confirmBusy}
+        tone={confirmKind === 'delete' ? 'danger' : 'warning'}
+        title={confirmKind === 'delete' ? <>Delete “{sel?.name}”?</> : <>Archive “{sel?.name}”?</>}
+        confirmLabel={confirmKind === 'delete' ? 'Delete' : 'Archive'}
+        message={confirmKind === 'delete'
+          ? <>The chat and <strong>all its messages</strong> go, for everyone.</>
+          : <>It moves to <strong>Archived</strong> — out of the list, no badges, read-only.</>}
+        note={confirmKind === 'delete'
+          ? "Can't be undone. Archive it instead if you just want it out of the way."
+          : 'Nothing is deleted. Bring it back any time.'}
+        onCancel={() => setConfirmKind(null)}
+        onConfirm={() => (confirmKind === 'delete' ? doDelete() : doArchive(true))}
+      />
+      <ConfirmDialog
+        open={!!pendingDelMsg}
+        busy={confirmBusy}
+        title="Delete this message?"
+        confirmLabel="Delete"
+        message="It disappears for everyone in the chat."
+        note="Can't be undone."
+        onCancel={() => setPendingDelMsg(null)}
+        onConfirm={doDelMsg}
+      />
 
       {/* ── Members ───────────────────────────────────────── */}
       {sel && (
@@ -987,7 +1415,10 @@ export default function SiteChat() {
                 </div>
               </div>
             )}
-            {canDelete('site_chat') && <button onClick={delGroup} className="text-xs text-red-600 font-semibold flex items-center gap-1.5 pt-1"><FiTrash2 size={13} /> Delete group</button>}
+            {/* Archive / Delete deliberately NOT here — they live in the ⋮ menu in
+                the thread header. This modal is for managing PEOPLE; keeping the
+                destructive actions in one place avoids two routes to the same
+                irreversible button. */}
           </div>
         </Modal>
       )}
