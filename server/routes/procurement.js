@@ -1277,9 +1277,30 @@ router.put('/indent-raise-window', (req, res) => {
   res.json(indentRaiseWindow(db));
 });
 
+// Site + Department existence check — drives the category lock on the
+// Raise Purchase Indent screen. Rule (not derivable from PPE Kit presence,
+// only from whether ANY indent has ever been raised for this exact
+// site+department pair):
+//   exists=true  → this site+department already has indent history →
+//                  PPE Kit locked, all other categories unlocked.
+//   exists=false → brand-new site+department pair → PPE Kit is the ONLY
+//                  category unlocked (mam's "raise PPE Kit first" rule).
+router.get('/site-department-status', (req, res) => {
+  const siteId = String(req.query.siteId || req.query.site_name || '').trim();
+  const departmentId = String(req.query.departmentId || req.query.department || '').trim();
+  if (!siteId || !departmentId) {
+    return res.status(400).json({ error: 'siteId and departmentId are both required' });
+  }
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT 1 FROM indents WHERE site_name = ? AND department = ? LIMIT 1`
+  ).get(siteId, departmentId);
+  res.json({ exists: !!row, siteId, departmentId });
+});
+
 router.post('/indents', (req, res) => {
   const db = getDb();
-  const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category } = req.body;
+  const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category, department } = req.body;
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
   }
@@ -1314,12 +1335,32 @@ router.post('/indents', (req, res) => {
   //   extra_non_schedule — No BOQ, Sub-Item from Item Master (PO+FOC only)
   //   rental             — No BOQ, Item Master + days + rate/day,
   //                         total rental MUST stay below qty × current_price
-  const VALID_CATEGORIES = ['material', 'rgp', 'extra_schedule', 'extra_non_schedule', 'rental'];
+  const VALID_CATEGORIES = ['material', 'rgp', 'extra_schedule', 'extra_non_schedule', 'rental', 'ppe_kit'];
   const category = VALID_CATEGORIES.includes(indent_category) ? indent_category : 'material';
   const isExtraSchedule    = category === 'extra_schedule';
   const isExtraNonSchedule = category === 'extra_non_schedule';
   const isRental           = category === 'rental';
   const isRgp              = category === 'rgp';
+  // PPE Kit — no BOQ, Item Master type='PPE_KIT' only. Off-BOQ, pick from
+  // Item Master shape (same as RGP/Rental), mirrored end-to-end below.
+  const isPpeKit            = category === 'ppe_kit';
+
+  // ─── Site + Department category lock (backend enforcement) ────────────
+  // Mirrors the frontend lock so a direct API call can't bypass it. PPE Kit
+  // is ALWAYS allowed. The other 5 categories need ANY indent to already
+  // exist for this exact site_name + department pair:
+  //   pair already has indent history → every category open
+  //   pair has never been indented    → only PPE Kit is open
+  const deptForLock = String(department || '').trim();
+  if (!deptForLock) {
+    return res.status(400).json({ error: 'Department is required — it determines whether the non-PPE-Kit categories are available for this Site.' });
+  }
+  const siteDeptExists = !!db.prepare(
+    'SELECT 1 FROM indents WHERE site_name = ? AND department = ? LIMIT 1'
+  ).get(site_name, deptForLock);
+  if (!siteDeptExists && !isPpeKit) {
+    return res.status(400).json({ error: 'This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.' });
+  }
   // Master-price lookup reused by the rental block check. Returns
   // 0 if no rate has ever been recorded, which triggers a clear error
   // instead of silently letting the indent through.
@@ -1365,7 +1406,7 @@ router.post('/indents', (req, res) => {
   //   - A BOQ with neither PO nor FOC (untyped) is rejected — pick one.
   //   - Only applies to BOQ-linked categories (material + extra_schedule).
   //     Off-BOQ categories (rgp / extra_non_schedule / rental) skip this.
-  if (!isRgp && !isExtraNonSchedule && !isRental) {
+  if (!isRgp && !isExtraNonSchedule && !isRental && !isPpeKit) {
     const subItemsPerBoq = new Map(); // poId → { po: n, foc: n, rgp: n }
     for (const it of items) {
       const poId = Number.isInteger(+it.po_item_id) && +it.po_item_id > 0 ? +it.po_item_id : null;
@@ -1403,10 +1444,10 @@ router.post('/indents', (req, res) => {
     // RGP joined the no-BOQ group on 2026-05-27: returnable material has no
     // Client PO BOQ counterpart; user picks straight from Item Master
     // (filtered to type='RGP' on the client).
-    if (isRgp || isExtraNonSchedule || isRental) {
+    if (isRgp || isExtraNonSchedule || isRental || isPpeKit) {
       // No BOQ link required. Sub-Item REQUIRED so the catalogue / pricing
       // trail is intact. No qty cap (these are by definition off-BOQ).
-      const flowLabel = isRental ? 'Rental' : isRgp ? 'RGP' : 'Non-Schedule';
+      const flowLabel = isRental ? 'Rental' : isRgp ? 'RGP' : isPpeKit ? 'PPE Kit' : 'Non-Schedule';
       if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: pick a Sub-Item (Item Master) — ${flowLabel} indents don't use BOQ` });
 
       // RGP enforces type=RGP on the picked Item Master (the client filters
@@ -1416,6 +1457,14 @@ router.post('/indents', (req, res) => {
         const mt = String(getMasterType.get(+it.item_master_id)?.type || '').toUpperCase();
         if (mt !== 'RGP') {
           return res.status(400).json({ error: `Row ${i + 1}: Item Master type must be RGP for an RGP indent (got '${mt || 'unknown'}')` });
+        }
+      }
+
+      // PPE Kit — same defense-in-depth pattern as RGP.
+      if (isPpeKit) {
+        const mt = String(getMasterType.get(+it.item_master_id)?.type || '').toUpperCase();
+        if (mt !== 'PPE_KIT') {
+          return res.status(400).json({ error: `Row ${i + 1}: Item Master type must be PPE_KIT for a PPE Kit indent (got '${mt || 'unknown'}')` });
         }
       }
 
@@ -1532,8 +1581,8 @@ router.post('/indents', (req, res) => {
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
-        approval_policy, l1_status, l2_status, indent_category, crm_status, is_emergency, emergency_reason)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        approval_policy, l1_status, l2_status, indent_category, crm_status, is_emergency, emergency_reason, department)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     resolvedPlanningId, indentNum, 'submitted',
     notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id,
@@ -1549,6 +1598,7 @@ router.post('/indents', (req, res) => {
     policy === 'crm_two_level' ? 'pending' : 'n/a',
     isEmergency,
     isEmergency ? (emergencyReason || 'Admin emergency window (day-open)') : null,
+    department || null,
   );
 
   // Seed the indent_tracker with the approval_pending stage so the IndentFMS
@@ -1713,7 +1763,7 @@ router.post('/indents', (req, res) => {
 //      Vendor PO has been created against it. Once approved or POed,
 //      it's frozen.
 router.put('/indents/:id', (req, res) => {
-  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides, store_qty_per_item, unit_overrides, crm_margin_pct } = req.body;
+  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides, store_qty_per_item, unit_overrides, crm_margin_pct, department } = req.body;
   const db = getDb();
   const id = req.params.id;
 
@@ -2681,7 +2731,7 @@ router.put('/indents/:id', (req, res) => {
 
   // Full edit path
   if (items) {
-    const cur = db.prepare('SELECT status, indent_category FROM indents WHERE id=?').get(id);
+    const cur = db.prepare('SELECT status, indent_category, site_name, department FROM indents WHERE id=?').get(id);
     if (!cur) return res.status(404).json({ error: 'Indent not found' });
     if (cur.status === 'approved') {
       return res.status(400).json({ error: 'Cannot edit an approved indent' });
@@ -2691,6 +2741,24 @@ router.put('/indents/:id', (req, res) => {
     ).get(id).c;
     if (vpoCount > 0) {
       return res.status(400).json({ error: `Cannot edit — ${vpoCount} active Vendor PO(s) reference this indent` });
+    }
+
+    // ─── Site + Department category lock (backend enforcement, edit path) ──
+    // Same rule as create: PPE Kit is ALWAYS allowed. The other 5 need ANY
+    // OTHER indent to already exist for this site_name + department pair.
+    // Excludes this indent's own row so re-saving the very first indent
+    // raised for a pair doesn't see itself as "already exists".
+    const editSiteName = String(site_name || cur.site_name || '').trim();
+    const editDept = String(department || cur.department || '').trim();
+    if (!editDept) {
+      return res.status(400).json({ error: 'Department is required — it determines whether the non-PPE-Kit categories are available for this Site.' });
+    }
+    const editSiteDeptExists = !!db.prepare(
+      'SELECT 1 FROM indents WHERE site_name = ? AND department = ? AND id <> ? LIMIT 1'
+    ).get(editSiteName, editDept, id);
+    const editIsPpeKit = String(cur.indent_category || 'material').toLowerCase() === 'ppe_kit';
+    if (!editSiteDeptExists && !editIsPpeKit) {
+      return res.status(400).json({ error: 'This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.' });
     }
 
     // Same per-row validation as POST — including PO qty cap (mam 2026-05-25).
@@ -2713,7 +2781,7 @@ router.put('/indents/:id', (req, res) => {
     //   (mam 2026-05-25 + 2026-05-27 follow-up). Off-BOQ categories
     //   (rgp / extra_non_schedule / rental) skip this check.
     const editCat = String(cur.indent_category || 'material').toLowerCase();
-    const editSkipBoqCheck = editCat === 'rgp' || editCat === 'extra_non_schedule' || editCat === 'rental';
+    const editSkipBoqCheck = editCat === 'rgp' || editCat === 'extra_non_schedule' || editCat === 'rental' || editCat === 'ppe_kit';
     if (!editSkipBoqCheck) {
       const subItemsPerBoqEdit = new Map();
       for (const it of items) {
@@ -2786,10 +2854,10 @@ router.put('/indents/:id', (req, res) => {
 
     const tx = db.transaction(() => {
       db.prepare(
-        `UPDATE indents SET site_name=?, raised_by_name=?, client_name=?, notes=?,
+        `UPDATE indents SET site_name=?, raised_by_name=?, client_name=?, notes=?, department=?,
                             status = CASE WHEN status='rejected' THEN 'submitted' ELSE status END
          WHERE id=?`
-      ).run(site_name || '', raised_by_name || '', site_name || '', notes || '', id);
+      ).run(site_name || '', raised_by_name || '', site_name || '', notes || '', department || null, id);
 
       db.prepare('DELETE FROM indent_items WHERE indent_id=?').run(id);
 
