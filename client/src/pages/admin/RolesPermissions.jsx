@@ -61,6 +61,7 @@ const ALL_MODULES = [
   // — Execution / Site
   { key: 'installation', label: 'Installation' },
   { key: 'billing', label: 'Billing' },
+  { key: 'client_snag', label: 'Client Snag — bill missing client signature (upload = Ajmer only, approve/reject = Lovely Sharma only, see the Reassign panel on the page)' },
   { key: 'complaints', label: 'Complaints' },
   { key: 'snags', label: 'Snag List' },
   { key: 'company_assets', label: 'Company Assets' },

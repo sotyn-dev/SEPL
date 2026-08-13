@@ -1887,6 +1887,74 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Client Snag — a client-facing snag (e.g. a bill that came back
+    -- without the client's signature). Same raise/assign/photo/approve
+    -- shape as the 'snags' table above, plus a client_name field, but with
+    -- two IDENTITY-gated actions instead of a role-permission-gated
+    -- approver: Ajmer uploads the snag photo; Lovely Sharma approves or
+    -- rejects it (see client_snag_gate_users below).
+    --
+    -- Status flow:
+    --   awaiting_document → Ajmer hasn't uploaded the snag photo yet
+    --   pending_approval   → Ajmer submitted; awaiting Lovely Sharma
+    --   approved            → Lovely Sharma accepted — locked
+    --   rejected            → Lovely Sharma rejected with a reason;
+    --                         Ajmer re-uploads and resubmits (back to
+    --                         awaiting_document, not a dead end)
+    CREATE TABLE IF NOT EXISTS client_snags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      snag_no TEXT UNIQUE,                        -- CS-YYYY-####
+      client_name TEXT,
+      assigned_to INTEGER REFERENCES users(id),
+      assigned_to_name TEXT,                      -- snapshot
+      site_name TEXT,
+      location TEXT,                               -- e.g. "2nd floor accounts desk"
+      description TEXT NOT NULL,
+      photo_url TEXT,                              -- the Snag Photo — Ajmer-only upload
+      priority TEXT DEFAULT 'medium' CHECK(priority IN ('low','medium','high','critical')),
+      status TEXT DEFAULT 'awaiting_document'
+        CHECK(status IN ('awaiting_document','pending_approval','approved','rejected')),
+      uploaded_by INTEGER REFERENCES users(id),
+      uploaded_at DATETIME,
+      submitted_at DATETIME,
+      approved_by INTEGER REFERENCES users(id),
+      approved_at DATETIME,
+      rejected_by INTEGER REFERENCES users(id),
+      rejected_at DATETIME,
+      rejection_reason TEXT,
+      raised_by INTEGER REFERENCES users(id),
+      raised_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Per-record timeline for a Client Snag (separate from the global
+    -- audit_log so the detail page can render a cheap in-page history
+    -- without querying a much larger shared table).
+    CREATE TABLE IF NOT EXISTS client_snag_status_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_snag_id INTEGER NOT NULL REFERENCES client_snags(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,          -- CREATED / DOCUMENT_UPLOADED / SUBMITTED / APPROVED / REJECTED / RESUBMITTED
+      user_id INTEGER REFERENCES users(id),
+      from_status TEXT,
+      to_status TEXT,
+      note TEXT,                     -- rejection reason, etc.
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Admin-editable gate: exactly one user may act as 'uploader' (Ajmer)
+    -- and one as 'approver' (Lovely Sharma). Deliberately NO auto-seed row
+    -- here — same reasoning as indent_to_dispatch_setting_users: the
+    -- resolver (server/routes/clientSnag.js) falls back to a name lookup
+    -- ('Ajmer' / 'Lovely Sharma') when a role has no row here, so nothing
+    -- breaks before an admin visits Client Snag's Reassign control and
+    -- sets the real row via PUT /client-snag/settings/gate — which then
+    -- takes priority over the name fallback, with no redeploy needed.
+    CREATE TABLE IF NOT EXISTS client_snag_gate_users (
+      role_key TEXT PRIMARY KEY CHECK(role_key IN ('uploader','approver')),
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_by INTEGER REFERENCES users(id)
+    );
+
     -- Rental properties — flats / houses / guest-houses we rent for
     -- staff accommodation (site engineers / supervisors stationed at
     -- project locations). One row per property, agreement-level info.
@@ -3709,6 +3777,12 @@ function initializeDatabase() {
     ['rent_requests', 'pincode TEXT'],
     ['rent_requests', 'pincode_city TEXT'],
     ['rent_requests', 'metro_type TEXT'],
+    // Client Snag — Before Photo: documents the problem (e.g. the
+    // unsigned bill) at raise time, captured by whoever raises the snag
+    // (not identity-gated). The existing photo_url column becomes the
+    // "After Photo" — the resolution photo, still Ajmer-only via
+    // POST /:id/document.
+    ['client_snags', 'before_photo_url TEXT'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index
@@ -5761,6 +5835,12 @@ in your first week. If a process feels broken, raise a Help Ticket
     //                              and the HR-alert recipient group (cron).
     //   attendance_grid.can_view → view the Attendance Monthly Grid tab (marking needs attendance.can_approve).
     'employee_salary','hr_team','attendance_grid',
+    // Client Snag — bills missing a client signature. Ordinary view/create/
+    // edit/delete are role-gated here as normal; the upload (Ajmer-only)
+    // and approve/reject (Lovely Sharma-only) actions are a SEPARATE
+    // identity gate (client_snag_gate_users, see server/db/schema.js's
+    // client_snag tables) and intentionally don't run through can_approve.
+    'client_snag',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

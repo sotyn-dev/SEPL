@@ -49,6 +49,8 @@ import {
   FiGitBranch,
   // SOTYN Flow · task boards pinned link (mam 2026-07)
   FiTrello,
+  // Client Snag · bill missing client signature (2026-08-11)
+  FiCamera,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -133,6 +135,7 @@ const SIDEBAR_GROUPS = [
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
     { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
+    { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag' },
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
     { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
     // Expenses module removed from the menu (mam 2026-07-03). Route + page kept

@@ -65,7 +65,20 @@
       "Bash(npm config *)",
       "Bash(npm rebuild *)",
       "Bash(git check-ignore *)",
-      "Bash(node -c server/routes/dpr.js)"
+      "Bash(node -c server/routes/dpr.js)",
+      "Bash(git show *)",
+      "Bash(node -c /tmp/schema_head.js)",
+      "Bash(grep -c '`' server/db/schema.js)",
+      "Read(//tmp/**)",
+      "Bash(grep -n '`' server/db/schema.js)",
+      "Bash(awk -F: '{print $1}')",
+      "Bash(grep -c '`')",
+      "Bash(awk 'NR>=1889 && NR<=1960 && /`/ {print NR\": \"$0}' server/db/schema.js)",
+      "Bash(node -c server/routes/clientSnag.js)",
+      "Bash(./node_modules/.bin/eslint src/pages/ClientSnag.jsx src/App.jsx src/components/Layout.jsx src/pages/admin/RolesPermissions.jsx)",
+      "Bash(./node_modules/.bin/eslint src/pages/ClientSnag.jsx src/App.jsx)",
+      "Bash(./node_modules/.bin/eslint src/pages/ClientSnag.jsx)",
+      "Bash(netstat -ano)"
     ]
   }
 }
