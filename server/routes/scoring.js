@@ -993,7 +993,15 @@ function computeScorecard(db, userId, weekStart) {
       //                  you overshoot (planned/actual×100).
       // Always floored at 0 — a scorecard % must never read negative.
       let actualPct = 0;
-      if (planned > 0) {
+      // Mam 2026-08-13: "if plan 0 actual 0 then actual % will be 0" — an
+      // empty cohort (nothing planned, nothing done) is ON PLAN, not a
+      // failure.  Engine achievement = 100 so the page's variance display
+      // (which subtracts 100) reads 0%.  Before this, 0/0 rows read as 0
+      // achievement → a wall of −100% red and weighted scores tanked for
+      // people who simply had nothing assigned that week.
+      if (+planned === 0 && +actual === 0) {
+        actualPct = 100;
+      } else if (planned > 0) {
         if (k.direction === 'lower_better') {
           actualPct = actual <= planned ? 100 : Math.round((planned / actual) * 100);
         } else {
