@@ -17,6 +17,7 @@
     "platform:server": "npm run server --prefix platform",
     "platform:client": "npm run client --prefix platform",
     "platform:agent": "npm run agent --prefix platform",
+    "platform:gateway": "npm run gateway --prefix platform",
     "postinstall": "npm run build"
   },
   "dependencies": {

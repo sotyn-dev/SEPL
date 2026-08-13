@@ -257,7 +257,9 @@ function DockerDocsHtml() {
         <>
           Run control plane and worker agent as containers. Tenant ERPs stay separate images via the agent.
           Env files: <Link to="/docs?tab=env" className="text-blue-800 hover:underline">Docs → Env</Link>.
-          No edge proxy in this compose — host nginx later.
+          No edge proxy in the default compose — optional{' '}
+          <Link to="/docs?tab=gateway" className="text-blue-800 hover:underline">Docs → Gateway</Link>
+          {' '}(<code className="bg-slate-50 px-1 rounded">--profile gateway</code>).
         </>
       }
     >
@@ -271,6 +273,12 @@ function DockerDocsHtml() {
           <li>
             <code className="text-xs bg-slate-50 px-1 rounded">sotyn-agent</code> —{' '}
             <code className="text-xs bg-slate-50 px-1 rounded">:7200</code>, Docker socket + tenants disk.
+          </li>
+          <li>
+            Optional profile <code className="text-xs bg-slate-50 px-1 rounded">gateway</code>:{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-gateway</code> +{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn-gateway-nginx</code> — see{' '}
+            <Link to="/docs?tab=gateway" className="text-blue-800 hover:underline">Docs → Gateway</Link>.
           </li>
           <li>
             Compose sets <code className="text-xs bg-slate-50 px-1 rounded">AGENT_URL=http://agent:7200</code> for the
@@ -930,9 +938,156 @@ function AuditDocsHtml() {
   );
 }
 
+function GatewayDocsHtml() {
+  return (
+    <DocCard
+      title="Gateway agent — routes + HTTP-01"
+      blurb={
+        <>
+          Single primary-only agent for nginx host→port and Let’s Encrypt HTTP-01.
+          Not the worker agent (Docker). Plan note:{' '}
+          <code className="bg-slate-50 px-1 rounded">docs/GATEWAY-agent-plan.md</code>.
+        </>
+      }
+    >
+      <Section title="What it is">
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li>
+            <strong className="font-medium text-ink">One</strong> gateway agent on the box with public{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">:443</code>.
+          </li>
+          <li>
+            Writes Sotyn nginx fragments under{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">sotyn.d/</code>, runs Certbot webroot, then{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">nginx -t</code> / reload.
+          </li>
+          <li>Worker agents stay N (one per Docker VPS). Gateway never starts containers.</li>
+          <li>
+            Cert mode v1: <strong className="font-medium text-ink">HTTP-01</strong> (no GoDaddy API). ~15–90s per new hostname.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="Dedicated Sotyn VPS vs together with xyz.in">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left min-w-[28rem]">
+            <thead>
+              <tr className="text-slate-500 border-b border-slate-100">
+                <th className="py-1.5 pr-3 font-semibold">Layout</th>
+                <th className="py-1.5 font-semibold">Nginx</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-700">
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3">Dedicated Sotyn VPS</td>
+                <td className="py-1.5">
+                  Compose <code className="bg-slate-50 px-1 rounded">gateway-nginx</code> — old VPS{' '}
+                  <code className="bg-slate-50 px-1 rounded">xyz.in</code> untouched
+                </td>
+              </tr>
+              <tr>
+                <td className="py-1.5 pr-3">Together on old VPS</td>
+                <td className="py-1.5">
+                  Host nginx + manual <code className="bg-slate-50 px-1 rounded">include sotyn.d/</code>; do not start
+                  compose nginx on :80/:443 (port clash). Shared reload risk.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
+      <Section title="Compose (profile gateway)">
+        <CodeBlock>{`# from repo root — platform + worker + gateway + nginx
+docker compose -f platform/docker-compose.yml --profile gateway up -d --build
+
+curl -s http://127.0.0.1:7300/v1/health
+# Bearer calls need GATEWAY_TOKEN (default dev-gateway-token)`}</CodeBlock>
+        <ul className="list-disc pl-5 space-y-1.5 text-slate-600 mt-2">
+          <li>
+            Without <code className="text-xs bg-slate-50 px-1 rounded">--profile gateway</code>, only platform + worker
+            agent (same as before).
+          </li>
+          <li>
+            Copy <code className="text-xs bg-slate-50 px-1 rounded">platform/gateway.env.example</code> →{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">gateway.env</code>; set{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">GATEWAY_CERTBOT_EMAIL</code>.
+          </li>
+          <li>
+            Platform edge sync: set <code className="text-xs bg-slate-50 px-1 rounded">GATEWAY_URL</code> in{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">platform/.env</code> (compose defaults to{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">http://gateway:7300</code>). Unset = skip cert/route.
+          </li>
+          <li>
+            Upstream host for nginx→tenant:{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">GATEWAY_UPSTREAM_HOST</code> (compose:{' '}
+            <code className="text-xs bg-slate-50 px-1 rounded">host.docker.internal</code>).
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="API">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left min-w-[28rem]">
+            <thead>
+              <tr className="text-slate-500 border-b border-slate-100">
+                <th className="py-1.5 pr-3 font-semibold">Call</th>
+                <th className="py-1.5 font-semibold">Body / notes</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-700">
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">GET /v1/health</td>
+                <td className="py-1.5">No auth</td>
+              </tr>
+              <tr className="border-b border-slate-50">
+                <td className="py-1.5 pr-3 font-mono">POST /v1/routes/sync</td>
+                <td className="py-1.5 font-mono">{'{ "hostname", "upstream": "host:port" }'}</td>
+              </tr>
+              <tr>
+                <td className="py-1.5 pr-3 font-mono">POST /v1/certs/ensure</td>
+                <td className="py-1.5">HTTP-01; HTTPS nginx block added after cert exists</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <CodeBlock>{`curl -s -X POST http://127.0.0.1:7300/v1/routes/sync \\
+  -H "Authorization: Bearer dev-gateway-token" \\
+  -H "Content-Type: application/json" \\
+  -d '{"hostname":"pharma.sotyn.ai","upstream":"host.docker.internal:5103"}'
+
+curl -s -X POST http://127.0.0.1:7300/v1/certs/ensure \\
+  -H "Authorization: Bearer dev-gateway-token" \\
+  -H "Content-Type: application/json" \\
+  -d '{"hostname":"pharma.sotyn.ai"}'`}</CodeBlock>
+      </Section>
+
+      <Section title="Provision flow">
+        <ol className="list-decimal pl-5 space-y-1.5 text-slate-600">
+          <li>Platform → worker agent → Docker container + port.</li>
+          <li>
+            If <code className="text-xs bg-slate-50 px-1 rounded">GATEWAY_URL</code> set → platform calls gateway route
+            sync + cert ensure (best-effort; response includes <code className="text-xs bg-slate-50 px-1 rounded">edge</code>).
+          </li>
+          <li>DNS <code className="text-xs bg-slate-50 px-1 rounded">*.sotyn.ai</code> must already point at this primary.</li>
+        </ol>
+      </Section>
+
+      <Section title="Local without real LE">
+        <p className="text-slate-600 text-xs">
+          Set <code className="bg-slate-50 px-1 rounded">GATEWAY_DRY_RUN=1</code> in{' '}
+          <code className="bg-slate-50 px-1 rounded">gateway.env</code> — writes fragments, skips Certbot / reload.
+          Host Node: <code className="bg-slate-50 px-1 rounded">npm run platform:gateway</code>.
+        </p>
+      </Section>
+    </DocCard>
+  );
+}
+
 const TABS = [
   { id: 'env', label: 'Env' },
   { id: 'docker', label: 'Docker' },
+  { id: 'gateway', label: 'Gateway' },
   { id: 'deploy', label: 'Deploy' },
   { id: 'multivps', label: 'Multi‑VPS' },
   { id: 'access', label: 'Access' },
@@ -978,6 +1133,7 @@ export default function DocsPage() {
 
       {tab === 'env' && <EnvDocsHtml />}
       {tab === 'docker' && <DockerDocsHtml />}
+      {tab === 'gateway' && <GatewayDocsHtml />}
       {tab === 'deploy' && <DeployDocsHtml />}
       {tab === 'multivps' && <MultiVpsDocsHtml />}
       {tab === 'access' && <AccessDocsHtml />}

@@ -1,6 +1,7 @@
-# Platform + worker agent (no edge proxy — nginx stays on the host).
+# Platform + worker agent. Optional edge: --profile gateway (gateway agent + nginx).
 # From repo root:
 #   docker compose -f platform/docker-compose.yml up -d --build
+#   docker compose -f platform/docker-compose.yml --profile gateway up -d --build
 #
 # Agent mounts the host Docker socket and the same TENANTS_ROOT path on host
 # and in-container so `docker run -v` bind mounts resolve correctly.
@@ -24,8 +25,14 @@ services:
       PLATFORM_DATA_DIR: /var/lib/sotyn/platform
       AGENT_URL: http://agent:7200
       AGENT_TOKEN: ${AGENT_TOKEN:-dev-agent-token}
+      # Set GATEWAY_URL=http://gateway:7300 in platform/.env when using --profile gateway
+      GATEWAY_URL: ${GATEWAY_URL:-}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-dev-gateway-token}
+      GATEWAY_UPSTREAM_HOST: ${GATEWAY_UPSTREAM_HOST:-host.docker.internal}
     volumes:
       - ${SOTYN_PLATFORM_DATA:-/var/lib/sotyn/platform}:/var/lib/sotyn/platform
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - agent
 
@@ -52,3 +59,57 @@ services:
       # Same path host ↔ container (required for tenant bind mounts).
       - ${SOTYN_TENANTS_ROOT:-/var/lib/sotyn/tenants}:/var/lib/sotyn/tenants
       - ${SOTYN_ERP_ENV:-../.env}:/var/lib/sotyn/erp.env:ro
+
+  gateway:
+    profiles: ["gateway"]
+    build:
+      context: ..
+      dockerfile: platform/gateway-agent/Dockerfile
+    image: sotyn-gateway:local
+    container_name: sotyn-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PUBLISH_PORT:-7300}:7300"
+    env_file:
+      - path: gateway.env
+        required: false
+    environment:
+      GATEWAY_BIND: "0.0.0.0"
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-dev-gateway-token}
+      GATEWAY_SOTYN_DIR: /etc/nginx/sotyn.d
+      GATEWAY_WEBROOT: /var/www/certbot
+      GATEWAY_STATE_FILE: /var/lib/sotyn/gateway/routes.json
+      GATEWAY_CERT_LIVE_ROOT: /etc/letsencrypt/live
+      GATEWAY_NGINX_CONTAINER: sotyn-gateway-nginx
+      GATEWAY_CERTBOT_EMAIL: ${GATEWAY_CERTBOT_EMAIL:-ops@sotyn.ai}
+      GATEWAY_DRY_RUN: ${GATEWAY_DRY_RUN:-0}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gateway_sotyn_d:/etc/nginx/sotyn.d
+      - gateway_acme:/var/www/certbot
+      - gateway_state:/var/lib/sotyn/gateway
+      - gateway_letsencrypt:/etc/letsencrypt
+    depends_on:
+      - gateway-nginx
+
+  gateway-nginx:
+    profiles: ["gateway"]
+    image: nginx:1.27-alpine
+    container_name: sotyn-gateway-nginx
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_HTTP_PORT:-80}:80"
+      - "${GATEWAY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./gateway-agent/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - gateway_sotyn_d:/etc/nginx/sotyn.d
+      - gateway_acme:/var/www/certbot
+      - gateway_letsencrypt:/etc/letsencrypt:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  gateway_sotyn_d:
+  gateway_acme:
+  gateway_state:
+  gateway_letsencrypt:

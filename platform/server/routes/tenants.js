@@ -3,6 +3,7 @@
 const express = require('express');
 const { getDb } = require('../lib/db');
 const { agentFetch, DEFAULT_HOST_ID } = require('../lib/agentClient');
+const { syncTenantEdge } = require('../lib/gatewayClient');
 const { requireAdmin } = require('./users');
 
 const router = express.Router();
@@ -142,6 +143,7 @@ router.post('/', async (req, res) => {
 
   let row = db.prepare('SELECT * FROM tenants WHERE id = ?').get(id);
   let agent = null;
+  let edge = null;
 
   if (provision) {
     try {
@@ -157,6 +159,7 @@ router.post('/', async (req, res) => {
       }
       row = result.row;
       agent = result.agent;
+      edge = result.edge;
     } catch (e) {
       return res.status(e.status || 502).json({
         tenant: rowToTenant(row),
@@ -167,7 +170,7 @@ router.post('/', async (req, res) => {
     }
   }
 
-  res.status(201).json({ tenant: rowToTenant(row), agent });
+  res.status(201).json({ tenant: rowToTenant(row), agent, edge });
 });
 
 /** Call worker agent to create the Docker tenant on the org's assigned host. */
@@ -207,6 +210,10 @@ async function provisionOnHost(tenantRow, { importLegacy = false } = {}) {
   `).run(dataPath, backupPath, tenantRow.id);
 
   const row = db.prepare('SELECT * FROM tenants WHERE id = ?').get(tenantRow.id);
+  const port = agentTenant.port || agentTenant.publishedPort;
+  const edge = port
+    ? await syncTenantEdge(row, { port })
+    : { skipped: true, reason: 'no port from agent' };
   return {
     async: false,
     row,
@@ -215,6 +222,7 @@ async function provisionOnHost(tenantRow, { importLegacy = false } = {}) {
       hostLabel: host.label,
       tenant: agentTenant,
     },
+    edge,
   };
 }
 
@@ -266,7 +274,11 @@ router.post('/:slug/provision', async (req, res) => {
       });
     }
 
-    res.json({ tenant: rowToTenant(result.row), agent: result.agent });
+    res.json({
+      tenant: rowToTenant(result.row),
+      agent: result.agent,
+      edge: result.edge,
+    });
   } catch (e) {
     res.status(e.status || 502).json({
       error: e.message || String(e),

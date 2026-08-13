@@ -3,6 +3,8 @@ node_modules/
 /backups/
 .env
 platform/agent.env
+platform/gateway.env
+platform/gateway-agent/data/
 
 client/dist/
 client/node_modules/

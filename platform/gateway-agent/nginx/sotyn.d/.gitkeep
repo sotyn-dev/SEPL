@@ -1,0 +1,2 @@
+# Placeholder so include does not fail before first route sync.
+# Gateway agent replaces/adds per-hostname fragments here.

@@ -23,6 +23,7 @@ platform/
   seed/tenants/     Seed orgs (sepl branding extracted from ERP)
   contracts/        Branding JSON schema + ERP surface checklist
   worker-agent/     /v1 Docker driver (provision / start / stop / deploy)
+  gateway-agent/    /v1 primary edge (nginx fragments + HTTP-01 certbot)
 ```
 
 ## Local run
@@ -39,16 +40,19 @@ npm run platform          # API :7100 + UI :7101
 npm run platform:server
 npm run platform:client
 npm run platform:agent    # :7200 Docker driver
+npm run platform:gateway  # :7300 edge (optional; GATEWAY_DRY_RUN=1 locally)
 ```
 
 ## Docker (platform + agent)
 
-No proxy in this compose — host nginx (or local curl) in front later.
+Default compose has no public edge. Optional profile **`gateway`** adds gateway agent + nginx — see Docs → Gateway / [`docs/GATEWAY-agent-plan.md`](../docs/GATEWAY-agent-plan.md).
 
 ```bash
 # Linux VPS (default data paths). From repo root:
 mkdir -p /var/lib/sotyn/platform /var/lib/sotyn/tenants
 docker compose -f platform/docker-compose.yml up -d --build
+# with edge:
+# docker compose -f platform/docker-compose.yml --profile gateway up -d --build
 
 curl -s http://127.0.0.1:7100/api/health
 curl -s http://127.0.0.1:7200/v1/health
@@ -59,6 +63,7 @@ curl -s http://127.0.0.1:7200/v1/health
 |---|---|---|
 | `platform` | `sotyn-platform:local` | API + UI on `:7100`, data in `SOTYN_PLATFORM_DATA` |
 | `agent` | `sotyn-agent:local` | `:7200`, Docker socket + `SOTYN_TENANTS_ROOT` (same path host↔container) |
+| `gateway` + `gateway-nginx` | profile `gateway` | `:7300` + `:80`/`:443` — HTTP-01 + route fragments |
 
 `AGENT_URL` inside compose is `http://agent:7200`. Match `AGENT_TOKEN` in `platform/.env` and `platform/agent.env` (or compose `AGENT_TOKEN`).
 
