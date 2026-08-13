@@ -104,6 +104,14 @@ function getChatDb() {
     const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
     if (!mcols.includes('edited_at')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN edited_at DATETIME");
   } catch (e) { /* ignore */ }
+  // is_system: 1 for auto-inserted membership audit lines ("X added Y" /
+  // "X removed Y") — rendered as a centred grey pill, never editable (mam
+  // 2026-08-13: members were being silently removed/re-added from groups;
+  // every membership change must now be visible in-chat with the actor).
+  try {
+    const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
+    if (!mcols.includes('is_system')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN is_system INTEGER DEFAULT 0");
+  } catch (e) { /* ignore */ }
   // archived_at: soft archive — the group drops out of the sidebar and the unread
   // badge but keeps every row, so it is restorable instantly and scrolling back
   // through an ARCHIVED group still works. NULL = active. Deliberately NOT a

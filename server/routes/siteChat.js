@@ -38,6 +38,18 @@ const markRead = (db, g, uid, knownMax) => {
   return max;
 };
 
+// In-chat audit line for membership changes (mam 2026-08-13: people were being
+// silently removed from groups and re-added later with no trace). Every
+// add/remove now announces itself INSIDE the group, WhatsApp-style, naming the
+// actor. sender_id records WHO acted (or whose token a script used), so the
+// trail survives even if display names change later.
+const postSystem = (db, g, actor, text) => {
+  const info = db.prepare('INSERT INTO chat_messages (group_id, body, sender_id, sender_name, is_system) VALUES (?,?,?,?,1)')
+    .run(g, text, actor.id, actor.name || '');
+  markRead(db, g, actor.id, info.lastInsertRowid);   // the actor has "seen" their own line
+  emitChat(g, 'message', db.prepare('SELECT * FROM chat_messages WHERE id=?').get(info.lastInsertRowid));
+};
+
 // Same "which groups can this user reach" rule as canAccess(), expressed as a
 // reusable SQL fragment (exactly one `?` for uid) instead of a materialized id
 // list — lets /groups and /unread-count push the admin-vs-member predicate
@@ -556,14 +568,40 @@ router.post('/:groupId/members', requirePermission('site_chat', 'create'), (req,
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Only a member or admin can add members' });
   const ids = Array.isArray(req.body?.user_ids) ? req.body.user_ids : [];
   const ins = db.prepare('INSERT OR IGNORE INTO chat_group_members (group_id, user_id, user_name, added_by) VALUES (?,?,?,?)');
-  let added = 0; db.transaction(() => { for (const u of ids) added += ins.run(g, +u, userName(+u), req.user.id).changes; })();
+  const addedNames = [];
+  let added = 0;
+  db.transaction(() => {
+    for (const u of ids) {
+      const nm = userName(+u);
+      const ch = ins.run(g, +u, nm, req.user.id).changes;
+      if (ch) { added += ch; addedNames.push(nm || `#${u}`); }
+    }
+  })();
+  if (added > 0) postSystem(db, g, req.user, `${req.user.name || 'Someone'} added ${addedNames.join(', ')}`);
   emitChat(g, 'changed', { groupId: g });
   res.json({ added });
 });
 router.delete('/:groupId/members/:userId', requirePermission('site_chat', 'create'), (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Only a member or admin can remove members' });
-  db.prepare('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?').run(g, +req.params.userId);
+  const target = +req.params.userId;
+  const self = target === req.user.id;
+  // Removing SOMEONE ELSE is creator/admin-only (mam 2026-08-13: any member
+  // could silently remove any other member — that is exactly how people were
+  // "vanishing" from groups). Leaving the group yourself stays open to all.
+  if (!self) {
+    const grp = db.prepare('SELECT created_by FROM chat_groups WHERE id=?').get(g);
+    if (grp?.created_by !== req.user.id && !isAdmin(req)) {
+      return res.status(403).json({ error: 'Only the group creator or an admin can remove members' });
+    }
+  }
+  const nm = db.prepare('SELECT user_name FROM chat_group_members WHERE group_id=? AND user_id=?').get(g, target)?.user_name;
+  const ch = db.prepare('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?').run(g, target).changes;
+  if (ch) {
+    postSystem(db, g, req.user, self
+      ? `${req.user.name || 'Someone'} left the group`
+      : `${req.user.name || 'Someone'} removed ${nm || 'a member'}`);
+  }
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
 });
@@ -575,6 +613,7 @@ router.put('/:groupId/messages/:msgId', (req, res) => {
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
   const msg = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.msgId);
   if (!msg) return res.status(404).json({ error: 'Not found' });
+  if (msg.is_system) return res.status(403).json({ error: 'System messages cannot be edited' });
   if (msg.sender_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own messages' });
   const body = req.body?.body;
   if (!body || !String(body).trim()) return res.status(400).json({ error: 'Message cannot be empty' });

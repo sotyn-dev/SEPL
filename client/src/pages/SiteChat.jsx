@@ -146,6 +146,19 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
             <span className="text-[10px] font-medium bg-white/90 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(group.ts)}</span>
           </div>
           {group.items.map(m => {
+            // Membership audit line ("X added Y" / "X removed Y") — centred
+            // grey pill like the day label: no bubble, avatar or receipts
+            // (mam 2026-08-13: every member add/remove must be visible
+            // in-chat with the actor's name).
+            if (m.is_system) {
+              return (
+                <div key={m.id} id={`msg-${m.id}`} className="flex justify-center">
+                  <span className="text-[10px] bg-gray-100 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">
+                    {m.body} · {fmtTime(m.created_at)}
+                  </span>
+                </div>
+              );
+            }
             const own = m.sender_id === userId;
             // Read-receipt state (the ✓✓ + "Read by…" tooltip) renders ONLY on your own
             // messages, so compute it only then — skips an O(members) scan on every other row.
