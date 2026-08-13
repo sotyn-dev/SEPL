@@ -126,6 +126,9 @@ const SIDEBAR_GROUPS = [
     // WhatsApp moved OUT of this group → pinned at the bottom of the sidebar,
     // just above Change Password (mam 2026-06-19). See SIDEBAR footer render.
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
+    // Director CR 2026-08-13: Tally bill → PMS task → approval → payment
+    // lifecycle with SLA clocks (11.5-working-day target).
+    { path: '/tally-bills',  label: 'Tally Bills',      icon: FiFileText,    module: 'tally_bills' },
     { path: '/installation', label: 'Sales Billing',     icon: FiTool,        module: 'installation' },
   ]},
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [

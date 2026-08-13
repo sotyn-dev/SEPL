@@ -381,6 +381,18 @@ try {
   console.warn('[procsch-reminder] Scheduler not started:', e.message);
 }
 
+// Tally Bill SLA escalation cron — Director CR (2026-08-13 §6):
+// reminder at 80% of a stage SLA, reporting manager at 100%, Director at
+// 150%.  Every 15 min (the Stage-4 approval SLA is only 4 business hours, so
+// an hourly tick would deliver the 80% reminder after the fact).  Dedup table
+// makes re-runs safe.  Skip via ERP_DISABLE_TALLY_SLA_CRON=1.
+try {
+  const { scheduleTallySlaCron } = require('./scripts/tallySlaCron');
+  scheduleTallySlaCron();
+} catch (e) {
+  console.warn('[tally-sla] Scheduler not started:', e.message);
+}
+
 // Daily 09:00 CMD audit email — audit item B20 + TOC v3 P0 #5.
 // Reads the 07:30 snapshot JSON (falls back to live /audit/kpi if
 // the snapshot folder is missing) and emails the director address
@@ -502,6 +514,7 @@ app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
+app.use('/api/tally-bills', require('./routes/tallyBills'));
 app.use('/api/admin/backups', require('./routes/backups'));
 app.use('/api/admin/uploads', require('./routes/uploadsSweep'));
 app.use('/api/admin/word-count', require('./routes/wordcount'));

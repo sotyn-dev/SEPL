@@ -43,6 +43,7 @@ const ModuleOwners = lazy(() => import('./pages/ModuleOwners'));
 const Tools = lazy(() => import('./pages/Tools'));
 const Rentals = lazy(() => import('./pages/Rentals'));
 const Snags = lazy(() => import('./pages/Snags'));
+const TallyBills = lazy(() => import('./pages/TallyBills'));
 const CompanyAssets = lazy(() => import('./pages/CompanyAssets'));
 const Employees = lazy(() => import('./pages/Employees'));
 const Expenses = lazy(() => import('./pages/Expenses'));
@@ -225,6 +226,7 @@ export default function App() {
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
         <Route path="snags" element={<ModuleRoute module="snags"><Snags /></ModuleRoute>} />
+        <Route path="tally-bills" element={<ModuleRoute module="tally_bills"><TallyBills /></ModuleRoute>} />
         <Route path="company-assets" element={<ModuleRoute module="company_assets"><CompanyAssets /></ModuleRoute>} />
         <Route path="hr" element={<ModuleRoute module="hr"><HR /></ModuleRoute>} />
         <Route path="payroll" element={<ModuleRoute module="payroll"><Payroll /></ModuleRoute>} />

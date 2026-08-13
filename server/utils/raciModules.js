@@ -550,6 +550,76 @@ const MODULE_DEFS = {
       });
     },
   },
+
+  // ── Tally Bills (Upload → Tasks Created → Tasks Done → Approved → Paid) ──
+  // Director CR 2026-08-13. The module owns a real SLA engine of its own
+  // (lib/tallySla.js), so this def exists purely so the bill lifecycle shows on
+  // the shared Responsible board and feeds the scorecard the same way every
+  // other module does. Step owners come off the actual actor columns, so the
+  // board fills without anyone hand-assigning names.
+  tally_bills: {
+    label: 'Tally Bills',
+    steps: [
+      { key: 'upload', label: 'Bill Uploaded' },
+      { key: 'tasks_created', label: 'Tasks Created' },
+      { key: 'tasks_done', label: 'Tasks Completed' },
+      { key: 'approved', label: 'Approved' },
+      { key: 'paid', label: 'Payment Received' },
+    ],
+    rows(db) {
+      const steps = this.steps;
+      const bills = safeAll(db, `
+        SELECT id, register_no, bill_number, vendor_name, project_name, category,
+               created_by, approved_by, created_at,
+               t0_uploaded_at, t1_tasks_created_at, t2_tasks_completed_at,
+               t3_approved_at, t4_closed_at, status
+          FROM tally_bills ORDER BY created_at DESC LIMIT 500`);
+      if (!bills.length) return [];
+
+      // Who actually closed the task stage = the reviewer of the last linked
+      // PMS task to be approved.
+      const ids = bills.map(b => b.id);
+      const doneBy = {};
+      for (let i = 0; i < ids.length; i += 400) {
+        const chunk = ids.slice(i, i + 400);
+        const ph = chunk.map(() => '?').join(',');
+        for (const t of safeAll(db, `
+          SELECT tally_bill_id, reviewer_id, reviewed_at FROM pms_tasks
+           WHERE tally_bill_id IN (${ph}) AND status='approved'
+           ORDER BY reviewed_at ASC`, ...chunk)) {
+          doneBy[t.tally_bill_id] = t.reviewer_id;   // ASC scan → last write wins
+        }
+      }
+
+      return bills.map(b => {
+        const stamps = {
+          upload: b.t0_uploaded_at || b.created_at || null,
+          tasks_created: b.t1_tasks_created_at || null,
+          tasks_done: b.t2_tasks_completed_at || null,
+          approved: b.t3_approved_at || null,
+          paid: b.t4_closed_at || null,
+        };
+        // Rejected bills are terminal — nothing is still "waiting" on anyone.
+        const dead = b.status === 'rejected';
+        return {
+          id: b.id,
+          title: b.register_no || b.bill_number || ('Bill #' + b.id),
+          subtitle: [b.vendor_name, b.project_name].filter(Boolean).join(' · ') || '—',
+          created_at: b.t0_uploaded_at || b.created_at,
+          owner_id: b.created_by || null,
+          step_owners: {
+            upload: b.created_by || null,
+            tasks_created: b.created_by || null,
+            tasks_done: doneBy[b.id] || null,
+            approved: b.approved_by || null,
+            paid: b.created_by || null,
+          },
+          stamps,
+          current_key: dead ? null : firstOpen(steps, stamps),
+        };
+      });
+    },
+  },
 };
 
 // RACI → scoring. Per-person weekly accountability across EVERY module, using

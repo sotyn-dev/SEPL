@@ -2727,10 +2727,188 @@ function initializeDatabase() {
       submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(checklist_id, user_id, completion_date)
     );
+
+    -- ============================================
+    -- TALLY BILL → PMS TASK → APPROVAL → PAYMENT
+    -- ============================================
+    -- Director change request 2026-08-13.  One SLA-driven lifecycle from
+    -- Tally bill upload to payment realisation, target 11.5 working days
+    -- (2 + 2 + 0.5 + 7).  Clock/holiday math lives in lib/tallySla.js.
+    --
+    -- ONE shared record set across the Material / T&C / Handover tabs
+    -- (spec §3) — the tab is a filter on the category column, never a separate table.
+    CREATE TABLE IF NOT EXISTS tally_bills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      register_no TEXT UNIQUE,                    -- internal TB-YYYY-#### handle
+      project_id INTEGER REFERENCES business_book(id),
+      project_name TEXT,                          -- snapshot at upload
+      site_id INTEGER REFERENCES sites(id),
+      site_name TEXT,
+      category TEXT NOT NULL CHECK(category IN ('material','testing','handover')),
+      vendor_id INTEGER REFERENCES vendors(id),
+      vendor_name TEXT NOT NULL,                  -- snapshot; duplicate key with bill_number
+      bill_number TEXT NOT NULL,
+      bill_date DATE NOT NULL,
+      bill_amount REAL NOT NULL DEFAULT 0,
+      remarks TEXT,
+      status TEXT NOT NULL DEFAULT 'pending_task_creation'
+        CHECK(status IN ('pending_task_creation','tasks_in_progress','pending_approval',
+                         'payment_pending','partially_paid','closed','on_hold','rejected')),
+      status_before_hold TEXT,                    -- restored when the hold is released
+
+      -- Stage timestamps T0..T4 (spec §4).  Never backdated — always CURRENT_TIMESTAMP.
+      t0_uploaded_at DATETIME,
+      t1_tasks_created_at DATETIME,
+      t2_tasks_completed_at DATETIME,
+      t3_approved_at DATETIME,
+      t4_closed_at DATETIME,
+      -- Due times, frozen at the moment each stage starts so history can't drift
+      -- when an admin later edits an SLA setting.
+      t1_due_at DATETIME,
+      t2_due_at DATETIME,
+      t3_due_at DATETIME,
+      t4_due_at DATETIME,
+
+      -- Stage 4: approval + payment release
+      approved_amount REAL,
+      approval_remark TEXT,                       -- mandatory when amount is edited
+      variance_amount REAL,                       -- bill_amount - approved_amount
+      variance_pct REAL,
+      approved_by INTEGER REFERENCES users(id),
+      second_approval_required INTEGER DEFAULT 0, -- approved_amount over threshold → Director
+      second_approved_by INTEGER REFERENCES users(id),
+      second_approved_at DATETIME,
+      second_approval_remark TEXT,
+
+      -- Hold / reject
+      hold_reason TEXT,
+      held_at DATETIME,
+      held_by INTEGER REFERENCES users(id),
+      reject_reason TEXT,
+      rejected_by INTEGER REFERENCES users(id),
+      rejected_at DATETIME,
+
+      -- Stage 5: payment realisation (rolled up from tally_bill_payments)
+      amount_received REAL DEFAULT 0,
+      payment_expected_date DATE,
+
+      -- Post-approval lock (§9): amount + attachments frozen unless a Director
+      -- override with reason unlocks them.
+      locked INTEGER DEFAULT 0,
+      unlock_reason TEXT,
+      unlocked_by INTEGER REFERENCES users(id),
+      unlocked_at DATETIME,
+
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Partial payments (§4 Stage 5).  Balance = approved_amount - SUM(amount);
+    -- the bill only turns 'closed' when that balance reaches zero.
+    -- Declared BEFORE tally_bill_files because that table's payment_id FK
+    -- points here and foreign_keys is ON.
+    CREATE TABLE IF NOT EXISTS tally_bill_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      received_date DATE NOT NULL,
+      amount REAL NOT NULL,
+      utr_ref TEXT,
+      proof_url TEXT,
+      remarks TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Multi-file attachments: the Tally bill itself and per-payment proofs.
+    CREATE TABLE IF NOT EXISTS tally_bill_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      payment_id INTEGER REFERENCES tally_bill_payments(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'bill' CHECK(kind IN ('bill','payment_proof')),
+      file_url TEXT NOT NULL,
+      file_name TEXT,
+      file_size INTEGER,
+      uploaded_by INTEGER REFERENCES users(id),
+      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Hold windows.  The SLA clock pauses for the duration of each row and the
+    -- stage due-time is pushed out by exactly as much (§6).
+    CREATE TABLE IF NOT EXISTS tally_bill_holds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      stage_key TEXT,
+      reason TEXT,
+      from_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      to_at DATETIME,                             -- NULL while still on hold
+      held_by INTEGER REFERENCES users(id),
+      released_by INTEGER REFERENCES users(id),
+      release_remark TEXT
+    );
+
+    -- Immutable field-level audit (§9).  The global audit_log middleware records
+    -- the REQUEST; this records the FIELD — old value, new value, who, when —
+    -- which is what the spec's acceptance criterion 8 actually asks for.
+    -- Append-only: nothing in the app issues UPDATE or DELETE against it.
+    CREATE TABLE IF NOT EXISTS tally_bill_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,                       -- 'create' | 'update' | 'stage' | 'payment' | 'hold' | ...
+      field TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      note TEXT,
+      user_id INTEGER REFERENCES users(id),
+      user_name TEXT,
+      at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Escalation ledger + dedupe.  One row per (bill, stage, level) so the cron
+    -- can run every 15 min without re-sending the 80% reminder each tick.
+    CREATE TABLE IF NOT EXISTS tally_bill_escalations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      stage_key TEXT NOT NULL,
+      level INTEGER NOT NULL,                     -- 80 | 100 | 150
+      notified_user_id INTEGER REFERENCES users(id),
+      channel TEXT,
+      sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(bill_id, stage_key, level)
+    );
   `);
+
+  // Duplicate guard (§4 Stage 1 rule / acceptance criterion 4): the SAME bill
+  // number may legitimately exist for two different vendors, so uniqueness is on
+  // the PAIR. Case- and whitespace-insensitive, because "INV-001" typed with a
+  // trailing space is the same bill to a human.
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tally_bills_vendor_billno
+             ON tally_bills (LOWER(TRIM(vendor_name)), LOWER(TRIM(bill_number)))`);
+  } catch (e) {
+    console.warn('[tally-bills] duplicate index not created (non-fatal):', e.message);
+  }
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tally_bills_status   ON tally_bills (status);
+      CREATE INDEX IF NOT EXISTS idx_tally_bills_category ON tally_bills (category);
+      CREATE INDEX IF NOT EXISTS idx_tally_bills_project  ON tally_bills (project_id);
+      CREATE INDEX IF NOT EXISTS idx_tally_files_bill     ON tally_bill_files (bill_id);
+      CREATE INDEX IF NOT EXISTS idx_tally_pay_bill       ON tally_bill_payments (bill_id);
+      CREATE INDEX IF NOT EXISTS idx_tally_holds_bill     ON tally_bill_holds (bill_id);
+      CREATE INDEX IF NOT EXISTS idx_tally_audit_bill     ON tally_bill_audit (bill_id, at);
+    `);
+    // pms_tasks.tally_bill_id is added by the migrations array below, so its
+    // index lives in safeIndexes (post-migration) like audit_log's do.
+  } catch (e) {
+    console.warn('[tally-bills] indexes not created (non-fatal):', e.message);
+  }
 
   // Safe schema migrations for columns added after initial release
   const migrations = [
+    // Tally Bill workflow: a PMS task raised from a bill carries the link back,
+    // so Stage 3 can tell when the LAST linked task closes (spec §4 Stage 3).
+    ['pms_tasks', 'tally_bill_id INTEGER'],
     // Labour Rate sheet: specification + size, alongside item_name/uom
     // (mam 2026-06-11: "add specs, size also" to the labour item form).
     ['labour_rates', 'specification TEXT'],
@@ -5259,6 +5437,10 @@ function initializeDatabase() {
     'CREATE INDEX IF NOT EXISTS idx_po_items_item ON po_items(item_master_id)',
     // (CRM Kitting's (project_key, checkpoint_id, uploaded_at) lookup is
     // already indexed by idx_kit_entry_proj in routes/crmKitting.js.)
+    // Tally Bills: linkedTasks()/RACI look up PMS tasks by bill; the column
+    // comes from the migrations array, hence post-migration here. Partial —
+    // the overwhelming majority of pms_tasks rows (no tally link) cost nothing.
+    'CREATE INDEX IF NOT EXISTS idx_pms_tasks_tally_bill ON pms_tasks(tally_bill_id) WHERE tally_bill_id IS NOT NULL',
   ];
   for (const sql of safeIndexes) {
     try { db.exec(sql); } catch (e) { /* column missing on a stale DB — non-fatal */ }
@@ -5766,6 +5948,17 @@ in your first week. If a process feels broken, raise a Help Ticket
     //                              and the HR-alert recipient group (cron).
     //   attendance_grid.can_view → view the Attendance Monthly Grid tab (marking needs attendance.can_approve).
     'employee_salary','hr_team','attendance_grid',
+    // Director (2026-08-13): Tally Bill → PMS Task → Approval → Payment.
+    // One key gates the whole lifecycle; the per-stage actor comes from the
+    // action verb, so the roles stay configurable rather than name-bound (§2):
+    //   can_create  → Stage 1 upload a Tally bill (Site Engineer)
+    //   can_edit    → Stage 5 record payment received (Site Engineer)
+    //   can_approve → Stage 2 mark task-creation complete + Stage 4 approve /
+    //                 hold / reject (PMS Coordinator)
+    //   admin       → Director: second-level approval + post-approval unlock
+    // Stage 3 needs no permission — it belongs to whoever the PMS task is
+    // assigned to, enforced by the pms_tasks module itself.
+    'tally_bills',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -5912,6 +6105,43 @@ in your first week. If a process feels broken, raise a Help Ticket
          AND role_id IN (SELECT id FROM roles WHERE name='Site Engineer')`
     ).run();
   } catch (e) {}
+
+  // One-time seed for the Tally Bill workflow (Director 2026-08-13).  The
+  // per-role loops above only run on a virgin DB (existingPerms.c === 0), so a
+  // module added later would exist in Roles & Permissions with every box
+  // unticked and the page would 403 for everyone but Admin.  Seed the three
+  // spec roles to their stage, then leave the matrix alone — later hand-edits
+  // in Roles & Permissions must not be stomped on every boot, so this is
+  // guarded by a run-once flag rather than an unconditional UPDATE.
+  try {
+    const already = db.prepare("SELECT value FROM app_settings WHERE key='tally_bills_perm_seeded'").get();
+    if (!already) {
+      const grant = db.prepare(
+        `UPDATE role_permissions SET can_view=?, can_create=?, can_edit=?, can_delete=?, can_approve=?
+          WHERE module='tally_bills' AND role_id IN (SELECT id FROM roles WHERE name=?)`
+      );
+      // Site Engineer — Stage 1 upload + Stage 5 payment update.
+      grant.run(1, 1, 1, 0, 0, 'Site Engineer');
+      // Accountant / Billing Engineer — the coordinator seat: task-creation
+      // sign-off (Stage 2) and approval + release (Stage 4).
+      grant.run(1, 1, 1, 0, 1, 'Accountant');
+      grant.run(1, 1, 1, 0, 1, 'Billing Engineer');
+      // Everyone else who can already see money modules gets read-only, so the
+      // Bill Register is visible without handing out approval rights.
+      db.prepare(
+        `UPDATE role_permissions SET can_view=1
+          WHERE module='tally_bills' AND can_view=0
+            AND role_id IN (SELECT id FROM roles WHERE name IN
+                ('Purchase Manager','Sales Manager','HR Manager','Data Entry','Viewer'))`
+      ).run();
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('tally_bills_perm_seeded','1',CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET value='1'`
+      ).run();
+    }
+  } catch (e) {
+    console.warn('[tally-bills] permission seed skipped (non-fatal):', e.message);
+  }
 
   // Seed default admin user
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@erp.com');
