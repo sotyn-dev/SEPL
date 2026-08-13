@@ -432,6 +432,19 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
   res.json({ ok: true, archived: true });
 });
 
+// Admin-only: the DB-level membership trail (trigger-fed, catches even
+// direct-DB writes). Rows here with NO matching [chat-audit] pm2 log line
+// = the change bypassed the API = someone/something with server access.
+// MUST stay above the '/:groupId' route or 'admin' parses as a group id.
+router.get('/admin/member-audit', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'Admin only' });
+  const db = getChatDb();
+  const rows = db.prepare(`SELECT a.id, a.at, a.action, a.user_name, a.user_id, a.group_id, g.name AS group_name
+                             FROM chat_member_audit a LEFT JOIN chat_groups g ON g.id=a.group_id
+                            ORDER BY a.id DESC LIMIT 200`).all();
+  res.json(rows);
+});
+
 router.get('/:groupId', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });

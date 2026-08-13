@@ -131,6 +131,32 @@ function getChatDb() {
     const gcols = chatDb.prepare("PRAGMA table_info(chat_groups)").all().map(c => c.name);
     if (!gcols.includes('archived_at')) chatDb.exec("ALTER TABLE chat_groups ADD COLUMN archived_at DATETIME");
   } catch (e) { /* ignore */ }
+  // DB-LEVEL membership audit (mam 2026-08-13: members still "vanishing" even
+  // after route-level auditing — option "1").  SQLite TRIGGERS record every
+  // single insert/delete on chat_group_members INSIDE the database file, so
+  // even a script or person writing to chat.db DIRECTLY (bypassing the API
+  // entirely) leaves a timestamped row here.  Rows present in this table but
+  // absent from the [chat-audit] server log prove non-API access — i.e.
+  // someone with server/file access, not an app user.
+  try {
+    chatDb.exec(`
+      CREATE TABLE IF NOT EXISTS chat_member_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER, user_id INTEGER, user_name TEXT,
+        action TEXT, at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TRIGGER IF NOT EXISTS trg_cgm_audit_del AFTER DELETE ON chat_group_members
+      BEGIN
+        INSERT INTO chat_member_audit (group_id, user_id, user_name, action)
+        VALUES (old.group_id, old.user_id, old.user_name, 'removed');
+      END;
+      CREATE TRIGGER IF NOT EXISTS trg_cgm_audit_ins AFTER INSERT ON chat_group_members
+      BEGIN
+        INSERT INTO chat_member_audit (group_id, user_id, user_name, action)
+        VALUES (new.group_id, new.user_id, new.user_name, 'added');
+      END;
+    `);
+  } catch (e) { console.warn('[chat-db] member audit triggers:', e.message); }
   return chatDb;
 }
 
