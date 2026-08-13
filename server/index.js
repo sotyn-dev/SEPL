@@ -465,6 +465,7 @@ app.use('/api/raci', require('./routes/raci').router);
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/item-master', require('./routes/itemmaster'));
+app.use('/api/drawing-tracker', require('./routes/drawingTracker'));
 app.use('/api/pipe-weights', require('./routes/pipeweights'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/customers', require('./routes/customers'));
