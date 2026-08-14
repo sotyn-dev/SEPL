@@ -12,7 +12,7 @@ import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw, FiLock } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
 
@@ -269,6 +269,13 @@ export default function Procurement() {
   // the purchase team / admin role only. Matches mam's request (2026-04-23).
   const canPurchaseOps = isAdmin() || canApprove('procurement');
   const canRaiseIndent = isAdmin() || canCreate('procurement');
+  // "Payment before material" is a FINANCE call, not a purchase call — whether
+  // a vendor gets an advance, or is held until old dues clear, is decided by
+  // the finance team. Purchase still raises the PO; they just see this one
+  // block read-only. Gated on payment_required.approve (the finance approval
+  // module the Accountant role already holds) and enforced again server-side
+  // in routes/procurement.js, so a stale tab can't post around it.
+  const canSetPaymentBlock = isAdmin() || canApprove('payment_required');
   // Tab + sub-tab state synced with URL ?tab=...&subtab=... so refresh /
   // back-button preserves where the user is, and tabs become bookmarkable
   // (mam 2026-05-25: "when i refresh then it go to front page which is
@@ -4085,7 +4092,7 @@ export default function Procurement() {
                         (only when already cancelled), Delete (hard, only when
                         no bills / delivery notes block it). */}
                     <div className="flex items-center gap-1">
-                      {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur
+                      {/* PO approval (mam 2026-06-19): L1 Parul Goyal → L2 Ankur
                           Kaplesh. Approve/Reject show only to the pending-level
                           approver (or admin / COO). */}
                       {!v.cancelled && canApprovePo(v) && (
@@ -4207,7 +4214,7 @@ export default function Procurement() {
                   </a>
                   {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 PDF</a>}
                 </div>
-                {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur Kaplesh */}
+                {/* PO approval (mam 2026-06-19): L1 Parul Goyal → L2 Ankur Kaplesh */}
                 {!v.cancelled && canApprovePo(v) && (
                   <div className="flex gap-2 mt-1">
                     <button onClick={() => approvePo(v)} className="btn btn-success text-sm py-2 px-3 flex-1">✓ Approve {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</button>
@@ -6959,10 +6966,20 @@ export default function Procurement() {
                 • Old payment — vendor blocks until old dues clear
           */}
           <div className="border border-amber-200 bg-amber-50/40 rounded-lg p-3 space-y-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[10px] uppercase font-bold tracking-wide text-amber-700">⚠ Internal — not printed on vendor PO</span>
+              {!canSetPaymentBlock && (
+                <span className="text-[10px] font-bold uppercase tracking-wide text-gray-600 bg-gray-200 rounded px-1.5 py-0.5 flex items-center gap-1">
+                  <FiLock size={9} className="shrink-0" /> Finance only
+                </span>
+              )}
             </div>
             <div className="text-xs font-semibold text-gray-700">Payment before material</div>
+            {!canSetPaymentBlock && (
+              <p className="text-[11px] text-gray-600">
+                Set by the Finance team — raise the PO as usual and ask finance to fill this in.
+              </p>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
               {[
                 { id: 'no_advance',        label: 'No advance',          hint: 'Vendor ships on credit (default)' },
@@ -6974,8 +6991,10 @@ export default function Procurement() {
                   <button
                     key={opt.id}
                     type="button"
+                    disabled={!canSetPaymentBlock}
+                    title={canSetPaymentBlock ? undefined : 'Only the finance team can set payment before material'}
                     onClick={() => setForm(f => ({ ...f, payment_block_type: opt.id, payment_block_amount: opt.id === 'no_advance' ? '' : f.payment_block_amount }))}
-                    className={`text-left rounded-lg border px-3 py-2 transition ${active ? 'bg-amber-600 text-white border-amber-700 shadow' : 'bg-white text-gray-700 border-gray-200 hover:border-amber-400'}`}
+                    className={`text-left rounded-lg border px-3 py-2 transition ${active ? 'bg-amber-600 text-white border-amber-700 shadow' : 'bg-white text-gray-700 border-gray-200'} ${canSetPaymentBlock ? 'hover:border-amber-400' : 'opacity-60 cursor-not-allowed'}`}
                   >
                     <div className="font-semibold text-[12px]">{opt.label}</div>
                     <div className={`text-[10px] ${active ? 'text-white/90' : 'text-gray-500'}`}>{opt.hint}</div>
@@ -6991,8 +7010,9 @@ export default function Procurement() {
                   </label>
                   <input
                     type="number" min="1" step="0.01"
-                    className="input text-xs"
+                    className="input text-xs disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="e.g. 50000"
+                    disabled={!canSetPaymentBlock}
                     value={form.payment_block_amount || ''}
                     onChange={e => setForm(f => ({ ...f, payment_block_amount: e.target.value }))}
                   />
@@ -7001,8 +7021,9 @@ export default function Procurement() {
                   <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Internal notes (optional)</label>
                   <input
                     type="text"
-                    className="input text-xs"
+                    className="input text-xs disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder='e.g. "Last 3 bills overdue 45 days" or "50% advance, balance on delivery"'
+                    disabled={!canSetPaymentBlock}
                     value={form.payment_block_notes || ''}
                     onChange={e => setForm(f => ({ ...f, payment_block_notes: e.target.value }))}
                     maxLength={500}
@@ -8100,8 +8121,20 @@ export default function Procurement() {
                 mid-deal (e.g. they get paid for old dues, advance no
                 longer needed) — editing here re-syncs the chip. */}
             <div className="border border-amber-200 bg-amber-50/40 rounded-lg p-3 space-y-2">
-              <div className="text-[10px] uppercase font-bold tracking-wide text-amber-700">⚠ Internal — not printed on vendor PO</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] uppercase font-bold tracking-wide text-amber-700">⚠ Internal — not printed on vendor PO</span>
+                {!canSetPaymentBlock && (
+                  <span className="text-[10px] font-bold uppercase tracking-wide text-gray-600 bg-gray-200 rounded px-1.5 py-0.5 flex items-center gap-1">
+                    <FiLock size={9} className="shrink-0" /> Finance only
+                  </span>
+                )}
+              </div>
               <div className="text-xs font-semibold text-gray-700">Payment before material</div>
+              {!canSetPaymentBlock && (
+                <p className="text-[11px] text-gray-600">
+                  Set by the Finance team — ask finance to update this PO.
+                </p>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                 {[
                   { id: 'no_advance',        label: 'No advance',          hint: 'Vendor ships on credit (default)' },
@@ -8113,8 +8146,10 @@ export default function Procurement() {
                     <button
                       key={opt.id}
                       type="button"
+                      disabled={!canSetPaymentBlock}
+                      title={canSetPaymentBlock ? undefined : 'Only the finance team can set payment before material'}
                       onClick={() => setEditPoForm(f => ({ ...f, payment_block_type: opt.id, payment_block_amount: opt.id === 'no_advance' ? '' : f.payment_block_amount }))}
-                      className={`text-left rounded-lg border px-3 py-2 transition ${active ? 'bg-amber-600 text-white border-amber-700 shadow' : 'bg-white text-gray-700 border-gray-200 hover:border-amber-400'}`}
+                      className={`text-left rounded-lg border px-3 py-2 transition ${active ? 'bg-amber-600 text-white border-amber-700 shadow' : 'bg-white text-gray-700 border-gray-200'} ${canSetPaymentBlock ? 'hover:border-amber-400' : 'opacity-60 cursor-not-allowed'}`}
                     >
                       <div className="font-semibold text-[12px]">{opt.label}</div>
                       <div className={`text-[10px] ${active ? 'text-white/90' : 'text-gray-500'}`}>{opt.hint}</div>
@@ -8130,8 +8165,9 @@ export default function Procurement() {
                     </label>
                     <input
                       type="number" min="1" step="0.01"
-                      className="input text-xs"
+                      className="input text-xs disabled:bg-gray-100 disabled:cursor-not-allowed"
                       placeholder="e.g. 50000"
+                      disabled={!canSetPaymentBlock}
                       value={editPoForm.payment_block_amount || ''}
                       onChange={e => setEditPoForm(f => ({ ...f, payment_block_amount: e.target.value }))}
                     />
@@ -8140,8 +8176,9 @@ export default function Procurement() {
                     <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Internal notes (optional)</label>
                     <input
                       type="text"
-                      className="input text-xs"
+                      className="input text-xs disabled:bg-gray-100 disabled:cursor-not-allowed"
                       placeholder='e.g. "Last 3 bills overdue 45 days"'
+                      disabled={!canSetPaymentBlock}
                       value={editPoForm.payment_block_notes || ''}
                       onChange={e => setEditPoForm(f => ({ ...f, payment_block_notes: e.target.value }))}
                       maxLength={500}

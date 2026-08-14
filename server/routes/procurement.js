@@ -68,6 +68,24 @@ function fireIndent(db, indentId, eventKey, extra = {}) {
 // mam's requirement (2026-04-23): site can create indent, nothing else.
 const needsApprove = requirePermission('procurement', 'approve');
 
+// "Payment before material" (advance / old-dues hold) is a FINANCE decision,
+// not a purchase one — purchase raises the PO, finance says whether money
+// moves before material does. Mirrors canSetPaymentBlock in Procurement.jsx;
+// enforced here too so a stale tab or a direct API call can't set it.
+// payment_required.approve is the finance approval permission the Accountant
+// role already carries.
+function isFinance(db, user) {
+  if (user?.role === 'admin') return true;
+  try {
+    const r = db.prepare(`
+      SELECT MAX(rp.can_approve) AS ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+      WHERE ur.user_id = ? AND rp.module = 'payment_required'
+    `).get(user.id);
+    return !!r?.ok;
+  } catch (_) { return false; }
+}
+
 // Indent → Dispatch approval gates — the catalogue + the only reader of the
 // gate settings tables. Every "who may act here" question routes through it.
 const approvalGates = require('../utils/indentToDispatchGates');
@@ -3212,7 +3230,7 @@ router.get('/vendor-po', (req, res) => {
   //
   // The DISPLAY name falls all the way back to the hardcoded PO_APPROVERS label,
   // even when that name doesn't resolve to a user — so the badge always reads
-  // "Pending L1 · Nitin Jain" like the old PO_NEXT did, never a blank "· ". The
+  // "Pending L1 · Parul Goyal" like the old PO_NEXT did, never a blank "· ". The
   // ids array does NOT get this string fallback (you can't gate a button to a
   // non-user): if the name resolves, its id is there; if not, only admin + the
   // stand-in can act — which is exactly what the server gate enforces too.
@@ -3923,7 +3941,13 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   // before shipping, or is fine to ship on credit. Never printed on the
   // vendor PO; surfaces only on the internal Vendor PO list/detail. NULL
   // when the user doesn't pick (= legacy/unset, not "no_advance").
+  // Finance-only (see isFinance above). Purchase can still raise the PO —
+  // they just can't decide the payment stance, so a non-finance caller that
+  // sends one is rejected rather than silently ignored.
   const VALID_BLOCK_TYPES = ['advance', 'old_payment_clear', 'no_advance'];
+  if (VALID_BLOCK_TYPES.includes(b.payment_block_type) && !isFinance(db, req.user)) {
+    return res.status(403).json({ error: 'Only the finance team can set payment before material. Raise the PO and ask finance to fill it in.' });
+  }
   const pmtType = VALID_BLOCK_TYPES.includes(b.payment_block_type) ? b.payment_block_type : null;
   const pmtAmount = (pmtType === 'advance' || pmtType === 'old_payment_clear') && +b.payment_block_amount > 0
     ? +b.payment_block_amount : null;
@@ -3993,7 +4017,12 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
 // SELECT * FROM indent_to_dispatch_setting_users WHERE key LIKE 'approval.po_%').
 // Until then they are the only thing standing between a fresh DB and admin-only
 // PO approval.
-const PO_APPROVERS = { 1: 'Nitin Jain', 2: 'Ankur Kaplesh' };
+// PO L1 is Parul Goyal (was Nitin Jain, then briefly Aanchal), L2 stays Ankur
+// Kaplesh. Spelled with the full name as it appears everywhere else in the
+// codebase, because resolvePoUserByName() looks this string up against
+// users.name — a name that doesn't resolve leaves only admin / the COO
+// stand-in able to sign L1.
+const PO_APPROVERS = { 1: 'Parul Goyal', 2: 'Ankur Kaplesh' };
 const poGateKey = (level) => (level === 1 ? 'po_l1' : 'po_l2');
 function resolvePoUserByName(db, name) {
   if (!name) return null;
@@ -4098,6 +4127,20 @@ router.put('/vendor-po/:id', (req, res) => {
   // same form; if the user switches type from 'advance' → 'no_advance'
   // we reset status to 'na' and zero the amount so the chip doesn't
   // dangle. Clearing happens via the dedicated PATCH endpoint below.
+  // Finance-only, same as on create (see isFinance above). The Edit modal
+  // POSTs the whole form back, so a purchase user editing (say) remarks
+  // re-sends the UNCHANGED payment fields — compare against what's stored and
+  // only reject a real change, otherwise ordinary edits would 403.
+  {
+    const norm = (v) => (v === undefined || v === null || v === '') ? null : String(v).trim();
+    const changed =
+      (b.payment_block_type   !== undefined && norm(b.payment_block_type)   !== norm(cur.payment_block_type))   ||
+      (b.payment_block_amount !== undefined && norm(b.payment_block_amount) !== norm(cur.payment_block_amount)) ||
+      (b.payment_block_notes  !== undefined && norm(b.payment_block_notes)  !== norm(cur.payment_block_notes));
+    if (changed && !isFinance(db, req.user)) {
+      return res.status(403).json({ error: 'Only the finance team can change payment before material.' });
+    }
+  }
   if (b.payment_block_type !== undefined) {
     const VALID = ['advance', 'old_payment_clear', 'no_advance'];
     const pmtType = VALID.includes(b.payment_block_type) ? b.payment_block_type : null;
