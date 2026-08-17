@@ -179,7 +179,8 @@ function liveFillLink(db, token) {
   if (!token || String(token).length < 16) return { err: [400, 'Invalid link'] };
   const link = db.prepare('SELECT * FROM employee_fill_links WHERE token=?').get(String(token));
   if (!link) return { err: [404, 'This link is not valid or has been replaced by a newer one'] };
-  if (link.used_at) return { err: [409, 'Details were already submitted through this link. Ask HR for a fresh link if something needs correcting.'] };
+  // A standing new-joiner link (multi_use) serves every joiner — never consumed.
+  if (link.used_at && !link.multi_use) return { err: [409, 'Details were already submitted through this link. Ask HR for a fresh link if something needs correcting.'] };
   const expired = db.prepare("SELECT 1 ok FROM employee_fill_links WHERE id=? AND expires_at IS NOT NULL AND expires_at < datetime('now')").get(link.id);
   if (expired) return { err: [410, 'This link has expired. Ask HR to send a fresh one.'] };
   return { link };
@@ -245,6 +246,13 @@ router.post('/employee-fill/:token', (req, res) => {
       if (!vals.aadhar_file)        return res.status(400).json({ error: 'Please upload your Aadhar card' });
       if (!vals.pan_file)           return res.status(400).json({ error: 'Please upload your PAN card' });
       if (!vals.qualification_file) return res.status(400).json({ error: 'Please upload your highest qualification certificate' });
+      // Duplicate guard: same mobile number already in the directory → don't
+      // create a second row (and never let a public link OVERWRITE an existing
+      // employee) — the person contacts HR instead.
+      const dupe = db.prepare(
+        `SELECT id FROM employees WHERE REPLACE(REPLACE(COALESCE(phone,''),' ',''),'-','') = ? AND ? <> ''`
+      ).get(vals.phone.replace(/[\s-]/g, ''), vals.phone.replace(/[\s-]/g, ''));
+      if (dupe) return res.status(409).json({ error: 'This mobile number is already registered with HR. Please contact HR to update your details.' });
       const { istToday } = require('../lib/istDate');
       const r = db.prepare(`INSERT INTO employees (name, phone, email, designation, department, join_date,
                               aadhar_file, pan_file, qualification_file)
@@ -253,8 +261,14 @@ router.post('/employee-fill/:token', (req, res) => {
              vals.join_date || istToday(), vals.aadhar_file, vals.pan_file, vals.qualification_file);
       employeeId = r.lastInsertRowid;
     }
-    db.prepare('UPDATE employee_fill_links SET used_at=CURRENT_TIMESTAMP, submitted_name=? WHERE id=?')
-      .run(vals.name || null, link.id);
+    // Single-use links are consumed; a standing (multi_use) new-joiner link
+    // stays live for the next joiner — only the latest submitter name is noted.
+    if (link.multi_use) {
+      db.prepare('UPDATE employee_fill_links SET submitted_name=? WHERE id=?').run(vals.name || null, link.id);
+    } else {
+      db.prepare('UPDATE employee_fill_links SET used_at=CURRENT_TIMESTAMP, submitted_name=? WHERE id=?')
+        .run(vals.name || null, link.id);
+    }
   } catch (e) {
     console.error('[publicHr] employee-fill failed:', e.message);
     return res.status(500).json({ error: 'Could not save your details — please contact HR' });

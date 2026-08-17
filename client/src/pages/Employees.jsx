@@ -78,9 +78,9 @@ export default function Employees() {
       try { await navigator.clipboard.writeText(url); } catch { /* http or old browser */ }
       toast.success(
         emp
-          ? `Self-fill link for ${emp.name} copied — paste into WhatsApp / email (valid 7 days)`
-          : 'New-joiner form link copied — paste into WhatsApp / email (valid 7 days)',
-        { duration: 6000 }
+          ? `Self-fill link for ${emp.name} copied — paste into WhatsApp / email (one-time, valid 7 days)`
+          : 'New-joiner form link copied — REUSABLE: share once with all new joiners, every submission lands in this page (valid 30 days)',
+        { duration: 8000 }
       );
       // Clipboard can silently fail on http — always show the link too
       window.prompt('Share this link with the employee:', url);

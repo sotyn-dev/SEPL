@@ -4632,6 +4632,10 @@ function initializeDatabase() {
     // Contractor attendance photo (mam 2026-06-22): per-contractor site photo,
     // people auto-counted by AI to fill the manpower count. Guarded for DBs
     // whose contractor_attendance table was created before this column existed.
+    // Employee self-fill standing link (mam 2026-08-17 "if new person join he
+    // will fill data"): multi_use=1 links are shared ONCE with all new joiners
+    // and never consumed by a submission. Guarded for DBs created before this.
+    try { db.exec(`ALTER TABLE employee_fill_links ADD COLUMN multi_use INTEGER DEFAULT 0`); } catch (_) {}
     try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}

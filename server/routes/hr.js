@@ -811,10 +811,22 @@ router.post('/employees/fill-link', (req, res) => {
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
   }
   const token = require('crypto').randomBytes(24).toString('base64url');
-  if (employeeId) db.prepare('DELETE FROM employee_fill_links WHERE employee_id=? AND used_at IS NULL').run(employeeId);
-  db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at)
-              VALUES (?,?,?, datetime('now','+7 days'))`).run(token, employeeId, req.user.id);
-  res.json({ token, path: `/employee-fill/${token}`, expires_in_days: 7 });
+  if (employeeId) {
+    // Tied link: single-use, 7 days; a new one replaces older unused ones.
+    db.prepare('DELETE FROM employee_fill_links WHERE employee_id=? AND used_at IS NULL').run(employeeId);
+    db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at)
+                VALUES (?,?,?, datetime('now','+7 days'))`).run(token, employeeId, req.user.id);
+    return res.json({ token, path: `/employee-fill/${token}`, expires_in_days: 7, multi_use: false });
+  }
+  // New-joiner link (mam 2026-08-17 "if new person join he will fill data and
+  // automatically go details in employees"): a STANDING link — share it once
+  // (WhatsApp group / joining kit) and EVERY new joiner submits through it,
+  // each creating their own employee row. Valid 30 days; generating a new one
+  // rotates (kills) the previous standing link.
+  db.prepare('DELETE FROM employee_fill_links WHERE employee_id IS NULL AND COALESCE(multi_use,0)=1').run();
+  db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at, multi_use)
+              VALUES (?,NULL,?, datetime('now','+30 days'), 1)`).run(token, req.user.id);
+  res.json({ token, path: `/employee-fill/${token}`, expires_in_days: 30, multi_use: true });
 });
 
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
