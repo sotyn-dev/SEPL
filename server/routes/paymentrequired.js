@@ -1094,6 +1094,28 @@ router.put('/:id/reject', (req, res) => {
 
 router.delete('/:id', requirePermission('payment_required', 'delete'), (req, res) => {
   const db = getDb();
+  const request = db.prepare('SELECT id, status, request_no, amount FROM payment_requests WHERE id=?').get(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Not found' });
+  // Audit 2026-08-17: a RELEASED request is a record of money that actually
+  // left the company — deleting it erased the trail. Only an admin may force
+  // it (?force=1), and the force itself is logged before the rows go.
+  if (request.status === 'final_approved') {
+    if (req.user.role !== 'admin' || req.query.force !== '1') {
+      return res.status(409).json({
+        error: 'This payment was already released — deleting it would erase the money trail. Only an admin can force-delete it.',
+        needs_force: req.user.role === 'admin',
+      });
+    }
+    try {
+      require('../middleware/audit').logAuditEvent({
+        user: req.user, action: 'FORCE_DELETE', entity_type: 'payment_requests',
+        entity_id: request.id,
+        entity_label: `FORCE-deleted RELEASED payment ${request.request_no} (Rs ${(+request.amount || 0).toLocaleString('en-IN')})`,
+        method: 'DELETE', path: req.originalUrl,
+        before: request,
+      });
+    } catch (_) {}
+  }
   db.prepare('DELETE FROM payment_approvals WHERE request_id=?').run(req.params.id);
   db.prepare('DELETE FROM payment_requests WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
