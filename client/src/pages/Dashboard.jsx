@@ -182,16 +182,31 @@ export default function Dashboard() {
                           </div>
                         </div>
                       </div>
-                      <div className="mt-2 pl-10 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+                      {/* Members as ranked mini bar-chart, good → bad (mam
+                          2026-08-17 "bar chart wise good to bad"). Server
+                          pre-sorts by rank → score → name; no-score sinks
+                          last with an empty track. */}
+                      <div className="mt-2 pl-10 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
                         {t.members.map((m, mi) => {
                           const champ = mi < 3 && m.score > 0;
+                          const raw = m.score != null ? Math.max(0, Math.round(m.score)) : null;
+                          // 0 achievement still shows a visible red sliver —
+                          // distinct from the empty gray track of "no data".
+                          const w = raw == null ? 0 : Math.max(2, Math.min(100, raw));
                           return (
-                            <div key={m.user_id} className={`flex justify-between items-center gap-2 text-xs ${champ ? 'font-semibold' : ''}`}>
-                              <span className="flex items-center gap-1.5 min-w-0">
-                                <span className="w-4 text-center flex-shrink-0 text-[11px]">{champ ? medal(mi) : <span className="text-gray-300">{mi + 1}</span>}</span>
-                                <span className={`truncate ${champ ? 'text-gray-800' : 'text-gray-600'}`}>{m.name}</span>
-                              </span>
-                              <span className={`flex-shrink-0 ${m.score != null ? (champ ? 'text-emerald-600' : 'text-gray-700') : 'text-gray-300'}`}>{m.score != null ? vsPlan(m.score) : '—'}</span>
+                            <div key={m.user_id} className={champ ? 'font-semibold' : ''}>
+                              <div className="flex justify-between items-baseline gap-2 text-xs">
+                                <span className="flex items-center gap-1.5 min-w-0">
+                                  <span className="w-4 text-center flex-shrink-0 text-[11px]">{champ ? medal(mi) : <span className="text-gray-300">{mi + 1}</span>}</span>
+                                  <span className={`truncate ${champ ? 'text-gray-800' : 'text-gray-600'}`}>{m.name}</span>
+                                </span>
+                                <span className={`flex-shrink-0 ${m.score != null ? (champ ? 'text-emerald-600' : 'text-gray-700') : 'text-gray-300'}`}>{m.score != null ? vsPlan(m.score) : '—'}</span>
+                              </div>
+                              <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-0.5 ml-[22px]">
+                                {raw != null && (
+                                  <div className={`h-full rounded-full bg-gradient-to-r ${bar(raw)} transition-all duration-700`} style={{ width: `${w}%` }} />
+                                )}
+                              </div>
                             </div>
                           );
                         })}
