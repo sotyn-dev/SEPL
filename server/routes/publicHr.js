@@ -248,11 +248,16 @@ router.post('/employee-fill/:token', (req, res) => {
       if (!vals.qualification_file) return res.status(400).json({ error: 'Please upload your highest qualification certificate' });
       // Duplicate guard: same mobile number already in the directory → don't
       // create a second row (and never let a public link OVERWRITE an existing
-      // employee) — the person contacts HR instead.
-      const dupe = db.prepare(
-        `SELECT id FROM employees WHERE REPLACE(REPLACE(COALESCE(phone,''),' ',''),'-','') = ? AND ? <> ''`
-      ).get(vals.phone.replace(/[\s-]/g, ''), vals.phone.replace(/[\s-]/g, ''));
-      if (dupe) return res.status(409).json({ error: 'This mobile number is already registered with HR. Please contact HR to update your details.' });
+      // employee) — the person contacts HR instead. Compare on the LAST 10
+      // DIGITS so '+91 90000 00101', '090000 00101' and '9000000101' all
+      // match the same stored number.
+      const last10 = (s) => String(s || '').replace(/\D/g, '').slice(-10);
+      const mine = last10(vals.phone);
+      if (mine.length === 10) {
+        const dupe = db.prepare('SELECT id, phone FROM employees').all()
+          .find(e => last10(e.phone) === mine);
+        if (dupe) return res.status(409).json({ error: 'This mobile number is already registered with HR. Please contact HR to update your details.' });
+      }
       const { istToday } = require('../lib/istDate');
       const r = db.prepare(`INSERT INTO employees (name, phone, email, designation, department, join_date,
                               aadhar_file, pan_file, qualification_file)
