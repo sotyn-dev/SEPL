@@ -9,6 +9,49 @@ import { LuIndianRupee } from 'react-icons/lu';
 import ErpMantraBanner from '../components/ErpMantraBanner';
 import DashHero3D from '../components/DashHero3D';
 import { fmtDate } from '../utils/datetime';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as ChartTooltip, ReferenceLine, Cell, LabelList } from 'recharts';
+
+// Vertical bar chart of member scores, good → bad (mam 2026-08-17: "this is
+// called barchart" — proper columns like a school chart, not progress lines).
+// Bars = achievement % (100 = hit plan, dashed line); axis + labels shown as
+// the familiar vs-plan variance (−100…+100). Wide teams scroll horizontally.
+function MemberBarChart({ members }) {
+  const data = (members || [])
+    .filter(m => m.score != null)
+    .map(m => ({
+      name: String(m.name || '').split(' ')[0],
+      full: m.name,
+      score: Math.max(0, Math.round(m.score)),
+    }));
+  if (!data.length) {
+    return <div className="text-[11px] text-gray-300 py-3 text-center">No scores last week</div>;
+  }
+  const fill = (s) => (s >= 80 ? '#10b981' : s >= 50 ? '#f59e0b' : '#ef4444');
+  return (
+    <div className="overflow-x-auto">
+      <div style={{ width: Math.max(data.length * 58, 300), height: 205 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 16, right: 8, left: -14, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" vertical={false} />
+            <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} angle={-30} textAnchor="end" height={44} />
+            <YAxis tick={{ fontSize: 9 }} domain={[0, (max) => Math.max(110, max + 15)]} tickFormatter={v => `${v - 100}%`} />
+            <ChartTooltip
+              formatter={(v, _n, p) => [`${v - 100}% vs plan`, p?.payload?.full]}
+              labelFormatter={() => ''}
+              contentStyle={{ fontSize: 11, borderRadius: 8 }}
+            />
+            {/* Dashed line = ON PLAN (0% variance) */}
+            <ReferenceLine y={100} stroke="#94a3b8" strokeDasharray="4 4" />
+            <Bar dataKey="score" radius={[4, 4, 0, 0]} maxBarSize={34}>
+              {data.map((d, i) => <Cell key={i} fill={fill(d.score)} />)}
+              <LabelList dataKey="score" position="top" formatter={v => `${v - 100}%`} style={{ fontSize: 9, fill: '#475569' }} />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const { isAdmin, user } = useAuth();
@@ -127,10 +170,8 @@ export default function Dashboard() {
           ...(perf.individuals || []),
           ...(perf.not_qualified || []).filter(u => u.score != null).sort((a, b) => b.score - a.score),
         ];
-        const top = ranked.slice(0, 8);
         const medal = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
         const bar = (s) => (s >= 80 ? 'from-emerald-400 to-emerald-600' : s >= 50 ? 'from-amber-400 to-amber-500' : 'from-rose-400 to-rose-500');
-        const av = ['bg-indigo-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-sky-500', 'bg-violet-500', 'bg-teal-500', 'bg-orange-500'];
         // Display scores as VARIANCE vs plan (achievement − 100): on plan reads 0%,
         // behind reads negative, ahead reads +ve (mam 2026-07-04: "performance in
         // negative"). Bars, medals, sort + the Champions engine stay on the raw
@@ -182,34 +223,20 @@ export default function Dashboard() {
                           </div>
                         </div>
                       </div>
-                      {/* Members as ranked mini bar-chart, good → bad (mam
-                          2026-08-17 "bar chart wise good to bad"). Server
-                          pre-sorts by rank → score → name; no-score sinks
-                          last with an empty track. */}
-                      <div className="mt-2 pl-10 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-                        {t.members.map((m, mi) => {
-                          const champ = mi < 3 && m.score > 0;
-                          const raw = m.score != null ? Math.max(0, Math.round(m.score)) : null;
-                          // 0 achievement still shows a visible red sliver —
-                          // distinct from the empty gray track of "no data".
-                          const w = raw == null ? 0 : Math.max(2, Math.min(100, raw));
+                      {/* Members as a REAL vertical bar chart, good → bad
+                          (mam 2026-08-17 "this is called barchart"). */}
+                      <div className="mt-2 pl-2">
+                        <MemberBarChart members={t.members} />
+                        {(() => {
+                          const notScored = t.members.filter(m => m.score == null);
+                          if (!notScored.length) return null;
+                          const names = notScored.slice(0, 6).map(m => String(m.name || '').split(' ')[0]).join(', ');
                           return (
-                            <div key={m.user_id} className={champ ? 'font-semibold' : ''}>
-                              <div className="flex justify-between items-baseline gap-2 text-xs">
-                                <span className="flex items-center gap-1.5 min-w-0">
-                                  <span className="w-4 text-center flex-shrink-0 text-[11px]">{champ ? medal(mi) : <span className="text-gray-300">{mi + 1}</span>}</span>
-                                  <span className={`truncate ${champ ? 'text-gray-800' : 'text-gray-600'}`}>{m.name}</span>
-                                </span>
-                                <span className={`flex-shrink-0 ${m.score != null ? (champ ? 'text-emerald-600' : 'text-gray-700') : 'text-gray-300'}`}>{m.score != null ? vsPlan(m.score) : '—'}</span>
-                              </div>
-                              <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-0.5 ml-[22px]">
-                                {raw != null && (
-                                  <div className={`h-full rounded-full bg-gradient-to-r ${bar(raw)} transition-all duration-700`} style={{ width: `${w}%` }} />
-                                )}
-                              </div>
-                            </div>
+                            <p className="text-[10px] text-gray-400 mt-1">
+                              No scorecard yet: {names}{notScored.length > 6 ? ` +${notScored.length - 6} more` : ''}
+                            </p>
                           );
-                        })}
+                        })()}
                         {t.members.length === 0 && <div className="text-[11px] text-gray-300">No members yet</div>}
                       </div>
                     </div>
@@ -217,26 +244,8 @@ export default function Dashboard() {
                 })}
               </div>
             ) : (
-              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
-                {top.map((u, i) => {
-                  const raw = Math.max(0, Math.round(u.score || 0));
-                  const s = Math.min(100, raw);
-                  return (
-                    <div key={u.user_id} className="flex items-center gap-3">
-                      <div className="w-6 text-center text-sm font-bold text-gray-400">{medal(i)}</div>
-                      <div className={`w-8 h-8 rounded-full ${av[i % av.length]} text-white flex items-center justify-center text-xs font-bold flex-shrink-0`}>{(u.name || '?').charAt(0).toUpperCase()}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-baseline gap-2">
-                          <span className="font-semibold text-sm text-gray-800 truncate">{u.name}</span>
-                          <span className="text-sm font-bold text-gray-700 flex-shrink-0">{vsPlan(raw)}</span>
-                        </div>
-                        <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
-                          <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${Math.min(100, s)}%` }} />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="p-4">
+                <MemberBarChart members={ranked} />
               </div>
             )}
             <div className="px-4 pb-3 pt-1 flex justify-between items-center border-t border-gray-50">
