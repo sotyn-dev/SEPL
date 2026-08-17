@@ -1065,7 +1065,13 @@ function computeScorecard(db, userId, weekStart) {
       };
     });
 
-    const score = totalWeight > 0 ? Math.round((totalScore / totalWeight) * 100) / 100 : 0;
+    // Zero-weight template (audit 2026-08-17: prod's 'Everyone' template has
+    // 0% weight on every KPI): score = plain unweighted average of the KPI
+    // achievement %s, instead of a constant 0 (which displayed as an eternal
+    // -100% and made Champions treat the whole template as unscoreable).
+    const score = totalWeight > 0
+      ? Math.round((totalScore / totalWeight) * 100) / 100
+      : (result.length ? Math.round((result.reduce((s, r) => s + (r.actual_pct || 0), 0) / result.length) * 100) / 100 : 0);
 
     // Total auto work units this week — the Champions League min-activity gate
     // uses this to decide whether a week counts toward a player's score (so a
@@ -1164,7 +1170,10 @@ router.get('/scorecard-range', (req, res) => {
       totalScore += (k.weightage || 0) * pct;
       return k;
     });
-    const score = totalWeight > 0 ? Math.round((totalScore / totalWeight) * 100) / 100 : 0;
+    // Same zero-weight-template rule as the weekly compute above.
+    const score = totalWeight > 0
+      ? Math.round((totalScore / totalWeight) * 100) / 100
+      : (kpis.length ? Math.round((kpis.reduce((s, r) => s + (r.actual_pct || 0), 0) / kpis.length) * 100) / 100 : 0);
 
     res.json({
       user_id: userId, period: true, from, to,

@@ -157,7 +157,10 @@ function userPeriodScore(db, userId, weeks, minActivity, cache) {
       try { sc = computeScorecard(db, userId, wk); } catch (_) { sc = null; }
       cache.set(ck, sc);
     }
-    if (!sc || !sc.template || sc.total_weight <= 0) continue;
+    // Zero-weight templates count too (audit 2026-08-17: prod 'Everyone'
+    // template weighs 0 → whole staff showed '—'); computeScorecard now
+    // scores those as the unweighted KPI average.
+    if (!sc || !sc.template || !(sc.kpis || []).length) continue;
     hasTemplate = true;
     // Weekly scorecard % is now "achievement vs plan" (100 = hit your plan,
     // above = beat it), so it already IS the Champions Score — no +100 offset.
