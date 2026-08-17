@@ -20,6 +20,7 @@
 // (tally_owner_* app_settings), so Aanchal/Lovely/Sushila are data, not code.
 
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -223,7 +224,7 @@ function billEmailCtx(db, bill) {
     amount: bill.bill_amount,
     approved_amount: bill.approved_amount ?? '',
     status: STATUS_LABEL[bill.status] || bill.status,
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     site_engineer_email: mail('site_engineer'),
     coordinator_email: mail('coordinator'),
     executor_email: mail('executor'),
@@ -416,9 +417,15 @@ router.get('/meta', requirePermission('tally_bills', 'view'), (req, res) => {
   try {
     const db = getDb();
     res.json({
+      // Business Book PROJECT NAMES ONLY (mam 2026-08-13) — no client-name
+      // fallback (it filled the picker with client names and junk rows), and
+      // exact duplicate names collapse to the most recent entry.
       projects: db.prepare(
-        `SELECT id, COALESCE(NULLIF(project_name,''), client_name) AS name, client_name
-           FROM business_book ORDER BY id DESC LIMIT 800`).all(),
+        `SELECT MAX(id) AS id, TRIM(project_name) AS name
+           FROM business_book
+          WHERE project_name IS NOT NULL AND TRIM(project_name) <> ''
+          GROUP BY LOWER(TRIM(project_name))
+          ORDER BY name COLLATE NOCASE`).all(),
       vendors: db.prepare(`SELECT id, name, firm_name FROM vendors ORDER BY name LIMIT 1000`).all(),
       sites: db.prepare(`SELECT id, name FROM sites WHERE status='active' ORDER BY name`).all(),
       users: db.prepare(`SELECT id, name, email FROM users WHERE COALESCE(active,1)=1 AND COALESCE(archived,0)=0 ORDER BY name`).all(),
