@@ -279,10 +279,14 @@ export default function Scorecard() {
   // the week containing From through the week containing To.
   const [rangeFrom, setRangeFrom] = useState('');
   const [rangeTo, setRangeTo] = useState('');
+  // Mam 2026-08-17: "period select and give apply button" — typing a date no
+  // longer triggers a half-picked calculation; the score computes only when
+  // Apply is pressed (rangeApplied snapshots the dates at that moment).
+  const [rangeApplied, setRangeApplied] = useState(null);
   const [rangeStat, setRangeStat] = useState(null);
   useEffect(() => {
-    if (!rangeFrom || !rangeTo) { setRangeStat(null); return; }
-    let from = mondayOf(rangeFrom), to = mondayOf(rangeTo);
+    if (!rangeApplied) { setRangeStat(null); return; }
+    let from = mondayOf(rangeApplied.from), to = mondayOf(rangeApplied.to);
     if (!from || !to) { setRangeStat(null); return; }
     if (from > to) [from, to] = [to, from];            // swapped dates — just fix them
     const nWeeks = Math.min(53, Math.round((new Date(to) - new Date(from)) / (7 * 864e5)) + 1);
@@ -299,7 +303,7 @@ export default function Scorecard() {
       })
       .catch(() => { if (on) setRangeStat(null); });
     return () => { on = false; };
-  }, [rangeFrom, rangeTo, viewUserId]);
+  }, [rangeApplied, viewUserId]);
 
   // Mam 2026-08-17: "add option for print this scoring also". Browser-print of
   // just the scorecard area — a body class + CSS in index.css hides the rest
@@ -381,8 +385,15 @@ export default function Scorecard() {
               <span className="text-xs text-gray-400">→</span>
               <input type="date" className="input text-xs w-auto py-1.5" title="Period to"
                 value={rangeTo} onChange={e => setRangeTo(e.target.value)} />
-              {(rangeFrom || rangeTo) && (
-                <button onClick={() => { setRangeFrom(''); setRangeTo(''); }}
+              <button
+                onClick={() => setRangeApplied({ from: rangeFrom, to: rangeTo })}
+                disabled={!rangeFrom || !rangeTo}
+                className="btn btn-primary text-xs py-1.5 disabled:opacity-40"
+                title="Calculate the score for this period">
+                Apply
+              </button>
+              {(rangeFrom || rangeTo || rangeApplied) && (
+                <button onClick={() => { setRangeFrom(''); setRangeTo(''); setRangeApplied(null); }}
                   className="text-gray-400 hover:text-red-600 text-sm px-1" title="Clear period">✕</button>
               )}
             </div>
