@@ -149,6 +149,7 @@ function weekStartsIn(start, end) {
 // only the weeks where they were active enough to qualify.
 function userPeriodScore(db, userId, weeks, minActivity, cache) {
   let sum = 0, n = 0, hasTemplate = false, totalActivity = 0;
+  let rawSum = 0, rawN = 0;   // every templated week, NO activity gate
   for (const wk of weeks) {
     const ck = userId + '|' + wk;
     let sc = cache.get(ck);
@@ -158,17 +159,22 @@ function userPeriodScore(db, userId, weeks, minActivity, cache) {
     }
     if (!sc || !sc.template || sc.total_weight <= 0) continue;
     hasTemplate = true;
-    const act = sc.activity || 0;
-    if (act < minActivity) continue;          // week doesn't count
     // Weekly scorecard % is now "achievement vs plan" (100 = hit your plan,
     // above = beat it), so it already IS the Champions Score — no +100 offset.
     // (mam 2026-07-03: the scorecard % switched from variance to achievement;
     // for higher-better KPIs this yields the exact same Champions numbers.)
     const cs = Math.max(0, Math.min(200, (sc.score || 0)));
+    // Raw score = every templated week, so an ASSIGNED person always has a
+    // number to show (mam 2026-08-17: "show all person scoring who is
+    // assigned") — the min-activity gate below only decides who can WIN.
+    rawSum += cs; rawN += 1;
+    const act = sc.activity || 0;
+    if (act < minActivity) continue;          // week doesn't count toward awards
     sum += cs; n += 1; totalActivity += act;
   }
-  if (n === 0) return { qualified: false, hasTemplate, score: null, weeks_counted: 0, activity: totalActivity };
-  return { qualified: true, hasTemplate: true, score: Math.round((sum / n) * 10) / 10, weeks_counted: n, activity: totalActivity };
+  const rawScore = rawN > 0 ? Math.round((rawSum / rawN) * 10) / 10 : null;
+  if (n === 0) return { qualified: false, hasTemplate, score: null, raw_score: rawScore, weeks_counted: 0, activity: totalActivity };
+  return { qualified: true, hasTemplate: true, score: Math.round((sum / n) * 10) / 10, raw_score: rawScore, weeks_counted: n, activity: totalActivity };
 }
 
 // Small TTL cache so re-loading a heavy period (a full year = ~52 weeks ×
@@ -212,7 +218,12 @@ router.get('/leaderboard', (req, res) => {
       const row = {
         user_id: u.id, name: u.name, role: u.role, department: u.department,
         team_id: teamOf[u.id]?.team_id || null, team_name: teamOf[u.id]?.team_name || null,
-        score: r.score, weeks_counted: r.weeks_counted, activity: r.activity, qualified: r.qualified,
+        // Not-qualified players still carry their real (raw) score so every
+        // ASSIGNED person shows a number (mam 2026-08-17); qualified=false
+        // keeps them out of ranks/awards.
+        score: r.qualified ? r.score : r.raw_score,
+        raw_score: r.raw_score,
+        weeks_counted: r.weeks_counted, activity: r.activity, qualified: r.qualified,
       };
       (r.qualified ? qualified : notQualified).push(row);
     }
@@ -222,6 +233,8 @@ router.get('/leaderboard', (req, res) => {
     // Teams = average of qualified members' scores
     const teams = db.prepare('SELECT t.id, t.name, t.motto, COUNT(tm.user_id) AS member_count FROM gam_team t LEFT JOIN gam_team_member tm ON tm.team_id = t.id GROUP BY t.id ORDER BY t.name').all();
     const rankByUser = {}; qualified.forEach(r => { rankByUser[r.user_id] = { rank: r.rank, score: r.score }; });
+    // Below-activity players: no rank, but their raw score still shows.
+    notQualified.forEach(r => { if (r.score != null && !rankByUser[r.user_id]) rankByUser[r.user_id] = { rank: null, score: r.score }; });
     // Full roster per team — so the dashboard can show every member with their
     // team (e.g. "Ankit Raj · Naye Nawab") and rank, even those without a score.
     const membersByTeam = {};
@@ -231,8 +244,16 @@ router.get('/leaderboard', (req, res) => {
     const teamRows = teams.map(t => {
       const memScores = qualified.filter(r => r.team_id === t.id).map(r => r.score);
       const avg = memScores.length ? Math.round((memScores.reduce((a, b) => a + b, 0) / memScores.length) * 10) / 10 : null;
-      const members = (membersByTeam[t.id] || []).sort((a, b) => (a.rank == null ? 1e9 : a.rank) - (b.rank == null ? 1e9 : b.rank) || String(a.name).localeCompare(String(b.name)));
-      return { team_id: t.id, name: t.name, motto: t.motto, member_count: t.member_count, qualified_count: memScores.length, score: avg, members };
+      // score_all = average over EVERY assigned member (raw scores included) —
+      // the dashboard's honest team number; `score` stays qualified-only so
+      // Champions team ranking/awards keep the activity-fairness rule.
+      const allScores = [...qualified, ...notQualified].filter(r => r.team_id === t.id && r.score != null).map(r => r.score);
+      const avgAll = allScores.length ? Math.round((allScores.reduce((a, b) => a + b, 0) / allScores.length) * 10) / 10 : null;
+      const members = (membersByTeam[t.id] || []).sort((a, b) =>
+        (a.rank == null ? 1e9 : a.rank) - (b.rank == null ? 1e9 : b.rank) ||
+        (b.score ?? -1) - (a.score ?? -1) ||
+        String(a.name).localeCompare(String(b.name)));
+      return { team_id: t.id, name: t.name, motto: t.motto, member_count: t.member_count, qualified_count: memScores.length, score: avg, score_all: avgAll, members };
     });
     teamRows.sort((a, b) => (b.score == null ? -1 : b.score) - (a.score == null ? -1 : a.score));
     teamRows.forEach((t, i) => { t.rank = t.score == null ? null : i + 1; });

@@ -120,8 +120,13 @@ export default function Dashboard() {
           scoring average") — the same real scorecard scores as /champions and
           each person's Scorecard page, not the old ad-hoc activity counter.
           Admin-only, hidden when there's no data. */}
-      {isAdmin() && (perf?.individuals?.length > 0 || perf?.teams?.length > 0) && (() => {
-        const ranked = perf.individuals || [];          // engine-sorted, qualified players
+      {isAdmin() && (perf?.individuals?.length > 0 || perf?.not_qualified?.length > 0 || perf?.teams?.length > 0) && (() => {
+        // Every ASSIGNED person shows their score (mam 2026-08-17): qualified
+        // players first (engine-ranked), then below-activity players by score.
+        const ranked = [
+          ...(perf.individuals || []),
+          ...(perf.not_qualified || []).filter(u => u.score != null).sort((a, b) => b.score - a.score),
+        ];
         const top = ranked.slice(0, 8);
         const medal = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
         const bar = (s) => (s >= 80 ? 'from-emerald-400 to-emerald-600' : s >= 50 ? 'from-amber-400 to-amber-500' : 'from-rose-400 to-rose-500');
@@ -135,9 +140,10 @@ export default function Dashboard() {
         // qualified members' engine scores; members sorted by rank, unscored last).
         const teamRows = (perf.teams || []).map(t => ({
           id: t.team_id, name: t.name, motto: t.motto,
-          avg: t.score != null ? Math.round(t.score) : null,
+          // score_all = average of every assigned member (qualified or not)
+          avg: (t.score_all ?? t.score) != null ? Math.round(t.score_all ?? t.score) : null,
           members: t.members || [],
-        }));
+        })).sort((a, b) => (b.avg ?? -1e9) - (a.avg ?? -1e9));
         const hasTeams = teamRows.some(t => t.members.length > 0);
         // Header = last week's scoring average across all qualified players.
         const headerAvg = ranked.length
