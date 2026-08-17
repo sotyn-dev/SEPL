@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2 } from 'react-icons/fi';
 
 export default function Employees() {
-  const { canDelete, isAdmin, canView } = useAuth();
+  const { canDelete, canCreate, canEdit, isAdmin, canView } = useAuth();
   // Salary is confidential — only admins and holders of employee_salary.can_view see it
   const canSeeSalary = isAdmin() || canView('employee_salary');
   const [employees, setEmployees] = useState([]);
@@ -64,6 +64,28 @@ export default function Employees() {
       }
       // 400 payroll guard (or anything else) → show the server's reason verbatim
       toast.error(err.response?.data?.error || 'Delete failed');
+    }
+  };
+
+  // Self-fill link (mam 2026-08-17): tokenized public URL the employee opens
+  // WITHOUT logging in to submit their own details + documents. No arg =
+  // new-joiner link (creates a row on submit); with an employee = tied link
+  // (prefills + updates that row). Copies to clipboard for WhatsApp/email.
+  const shareFillLink = async (emp) => {
+    try {
+      const r = await api.post('/hr/employees/fill-link', emp ? { employee_id: emp.id } : {});
+      const url = `${window.location.origin}${r.data.path}`;
+      try { await navigator.clipboard.writeText(url); } catch { /* http or old browser */ }
+      toast.success(
+        emp
+          ? `Self-fill link for ${emp.name} copied — paste into WhatsApp / email (valid 7 days)`
+          : 'New-joiner form link copied — paste into WhatsApp / email (valid 7 days)',
+        { duration: 6000 }
+      );
+      // Clipboard can silently fail on http — always show the link too
+      window.prompt('Share this link with the employee:', url);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not create link');
     }
   };
 
@@ -236,6 +258,12 @@ export default function Employees() {
           <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export CSV</button>
           <button onClick={autoLink} className="btn btn-secondary flex items-center gap-2 text-sm" title="Link unlinked employees to users by matching email"><FiLink2 size={15} /> Auto-Link by Email</button>
           <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>
+          {canCreate('employees') && (
+            <button onClick={() => shareFillLink(null)} className="btn btn-secondary flex items-center gap-2 text-sm"
+              title="Create a public form link a new joiner fills themselves — their details land here">
+              <FiLink size={15} /> Self-Fill Link
+            </button>
+          )}
           <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
         </div>
       </div>
@@ -289,6 +317,12 @@ export default function Employees() {
               <td><StatusBadge status={e.status} /></td>
               <td><div className="flex gap-1">
                 <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
+                {canEdit('employees') && (
+                  <button onClick={() => shareFillLink(e)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600"
+                    title={`Share a self-fill link with ${e.name} — they update their own details, no login`}>
+                    <FiLink size={15} />
+                  </button>
+                )}
                 {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
               </div></td>
             </tr>
@@ -349,6 +383,11 @@ export default function Employees() {
               <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
                 <FiEdit2 size={11} /> Edit
               </button>
+              {canEdit('employees') && (
+                <button onClick={() => shareFillLink(e)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                  <FiLink size={11} /> Fill Link
+                </button>
+              )}
               {canDelete('employees') && (
                 <button onClick={() => deleteEmployee(e)} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
                   <FiTrash2 size={11} /> Delete

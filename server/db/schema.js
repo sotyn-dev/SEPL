@@ -1075,6 +1075,21 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Employee self-fill links (2026-08-17): HR shares a tokenized public URL,
+    -- the employee fills their own details (no login) and the data lands in
+    -- the Employees directory. employee_id NULL = new-joiner link (creates a
+    -- row on submit); set = tied link (prefills + updates that employee).
+    CREATE TABLE IF NOT EXISTS employee_fill_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token TEXT UNIQUE NOT NULL,
+      employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME,
+      used_at DATETIME,
+      submitted_name TEXT
+    );
+
     -- Sub-Contractors
     CREATE TABLE IF NOT EXISTS sub_contractors (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

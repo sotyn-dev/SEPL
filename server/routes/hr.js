@@ -791,6 +791,32 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
   res.json({ added, errors, total: employees.length });
 });
 
+// Self-fill link (2026-08-17): generate a tokenized public URL the employee
+// fills WITHOUT logging in (like the offer-accept link). Two flavours:
+//   body {}               → new-joiner link (submit CREATES an employee row)
+//   body { employee_id }  → tied link (prefills + UPDATES that employee)
+// Generating rotates: older unused links for the same target are dropped so
+// exactly one live link exists per target. Valid 7 days, single-use.
+router.post('/employees/fill-link', (req, res) => {
+  const employeeId = req.body?.employee_id || null;
+  // Dynamic permission: a tied link edits an employee, a blank link creates one.
+  const perms = getUserPermissions(req.user.id);
+  const needed = employeeId ? 'can_edit' : 'can_create';
+  if (req.user.role !== 'admin' && !perms['employees']?.[needed]) {
+    return res.status(403).json({ error: `No ${employeeId ? 'edit' : 'create'} permission for employees` });
+  }
+  const db = getDb();
+  if (employeeId) {
+    const emp = db.prepare('SELECT id, name FROM employees WHERE id=?').get(employeeId);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+  }
+  const token = require('crypto').randomBytes(24).toString('base64url');
+  if (employeeId) db.prepare('DELETE FROM employee_fill_links WHERE employee_id=? AND used_at IS NULL').run(employeeId);
+  db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at)
+              VALUES (?,?,?, datetime('now','+7 days'))`).run(token, employeeId, req.user.id);
+  res.json({ token, path: `/employee-fill/${token}`, expires_in_days: 7 });
+});
+
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
           aadhar_file, pan_file, qualification_file, roster } = req.body;

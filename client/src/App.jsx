@@ -97,6 +97,7 @@ const OfferLetterPrint = lazy(() => import('./pages/OfferLetterPrint'));
 const NDAPrint = lazy(() => import('./pages/NDAPrint'));
 const EmploymentAgreementPrint = lazy(() => import('./pages/EmploymentAgreementPrint'));
 const PublicOffer = lazy(() => import('./pages/PublicOffer'));
+const PublicEmployeeFill = lazy(() => import('./pages/PublicEmployeeFill'));
 const Induction = lazy(() => import('./pages/Induction'));
 const Training = lazy(() => import('./pages/Training'));
 
@@ -158,6 +159,9 @@ export default function App() {
           ProtectedRoute wrapper.  Candidate uses the token in the
           URL as the identity; no SEPL login required. */}
       <Route path="/offer/:token" element={<PublicOffer />} />
+      {/* Mam (2026-08-17): public employee self-fill form — employee fills
+          their own details via a shared token link, no login. */}
+      <Route path="/employee-fill/:token" element={<PublicEmployeeFill />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         {/* TOC v3 role dashboards — admin-only for now, dark-navy CMD

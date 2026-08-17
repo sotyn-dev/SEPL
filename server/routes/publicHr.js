@@ -170,4 +170,115 @@ function respondHrSystemOffer(db, token, decision, note, res) {
   res.json({ ok: true, decision, status: newStatus });
 }
 
+// ── Employee self-fill (2026-08-17) ──────────────────────────────
+// HR shares /employee-fill/<token>; the employee fills their own details
+// with no login (same trust model as the offer link: the token IS the
+// identity). Single-use + 7-day expiry, enforced here.
+
+function liveFillLink(db, token) {
+  if (!token || String(token).length < 16) return { err: [400, 'Invalid link'] };
+  const link = db.prepare('SELECT * FROM employee_fill_links WHERE token=?').get(String(token));
+  if (!link) return { err: [404, 'This link is not valid or has been replaced by a newer one'] };
+  if (link.used_at) return { err: [409, 'Details were already submitted through this link. Ask HR for a fresh link if something needs correcting.'] };
+  const expired = db.prepare("SELECT 1 ok FROM employee_fill_links WHERE id=? AND expires_at IS NOT NULL AND expires_at < datetime('now')").get(link.id);
+  if (expired) return { err: [410, 'This link has expired. Ask HR to send a fresh one.'] };
+  return { link };
+}
+
+router.get('/employee-fill/:token', (req, res) => {
+  const db = getDb();
+  const { link, err } = liveFillLink(db, req.params.token);
+  if (err) return res.status(err[0]).json({ error: err[1] });
+  let employee = null;
+  if (link.employee_id) {
+    const e = db.prepare(`SELECT name, phone, email, designation, department, join_date,
+                                 aadhar_file, pan_file, qualification_file
+                            FROM employees WHERE id=?`).get(link.employee_id);
+    if (!e) return res.status(404).json({ error: 'This link is no longer valid' });
+    // Prefill basics; docs only as has-flags (never leak stored file URLs publicly)
+    employee = {
+      name: e.name, phone: e.phone, email: e.email,
+      designation: e.designation, department: e.department, join_date: e.join_date,
+      has_aadhar: !!e.aadhar_file, has_pan: !!e.pan_file, has_qualification: !!e.qualification_file,
+    };
+  }
+  res.json({ ok: true, mode: link.employee_id ? 'update' : 'create', employee });
+});
+
+router.post('/employee-fill/:token', (req, res) => {
+  const db = getDb();
+  const { link, err } = liveFillLink(db, req.params.token);
+  if (err) return res.status(err[0]).json({ error: err[1] });
+
+  const b = req.body || {};
+  const s = (v, max = 200) => (v === undefined || v === null) ? undefined : String(v).trim().slice(0, max);
+  // Uploaded docs must be OUR uploads (from the token-scoped public upload
+  // endpoint) — an arbitrary external URL is rejected.
+  const doc = (v) => {
+    const u = s(v, 500);
+    if (u === undefined || u === '') return undefined;
+    return u.startsWith('/uploads/') ? u : undefined;
+  };
+  const vals = {
+    name: s(b.name), phone: s(b.phone, 20), email: s(b.email),
+    designation: s(b.designation), department: s(b.department),
+    join_date: s(b.join_date, 10),
+    aadhar_file: doc(b.aadhar_file), pan_file: doc(b.pan_file), qualification_file: doc(b.qualification_file),
+  };
+
+  let employeeId = link.employee_id;
+  try {
+    if (employeeId) {
+      const existing = db.prepare('SELECT * FROM employees WHERE id=?').get(employeeId);
+      if (!existing) return res.status(404).json({ error: 'This link is no longer valid' });
+      // Update only what was actually filled — blank/omitted keeps stored value.
+      const pick = (k) => (vals[k] !== undefined && vals[k] !== '') ? vals[k] : existing[k];
+      db.prepare(`UPDATE employees SET name=?, phone=?, email=?, designation=?, department=?,
+                     join_date=?, aadhar_file=?, pan_file=?, qualification_file=?
+                   WHERE id=?`)
+        .run(pick('name'), pick('phone'), pick('email'), pick('designation'), pick('department'),
+             pick('join_date'), pick('aadhar_file'), pick('pan_file'), pick('qualification_file'), employeeId);
+    } else {
+      // New joiner — same mandate as HR's own create form: identity + all 3 docs.
+      if (!vals.name || vals.name.length < 2) return res.status(400).json({ error: 'Please enter your full name' });
+      if (!vals.phone || vals.phone.replace(/\D/g, '').length < 6) return res.status(400).json({ error: 'Please enter a valid phone number' });
+      if (!vals.aadhar_file)        return res.status(400).json({ error: 'Please upload your Aadhar card' });
+      if (!vals.pan_file)           return res.status(400).json({ error: 'Please upload your PAN card' });
+      if (!vals.qualification_file) return res.status(400).json({ error: 'Please upload your highest qualification certificate' });
+      const { istToday } = require('../lib/istDate');
+      const r = db.prepare(`INSERT INTO employees (name, phone, email, designation, department, join_date,
+                              aadhar_file, pan_file, qualification_file)
+                            VALUES (?,?,?,?,?,?,?,?,?)`)
+        .run(vals.name, vals.phone, vals.email || '', vals.designation || '', vals.department || '',
+             vals.join_date || istToday(), vals.aadhar_file, vals.pan_file, vals.qualification_file);
+      employeeId = r.lastInsertRowid;
+    }
+    db.prepare('UPDATE employee_fill_links SET used_at=CURRENT_TIMESTAMP, submitted_name=? WHERE id=?')
+      .run(vals.name || null, link.id);
+  } catch (e) {
+    console.error('[publicHr] employee-fill failed:', e.message);
+    return res.status(500).json({ error: 'Could not save your details — please contact HR' });
+  }
+
+  try {
+    require('../middleware/audit').logAuditEvent({
+      user: { id: null, name: `${vals.name || 'Employee'} (self-fill link)`, role: 'public' },
+      action: link.employee_id ? 'SELF_FILL_UPDATE' : 'SELF_FILL_CREATE',
+      entity_type: 'employees', entity_id: employeeId,
+      entity_label: `Employee details submitted via self-fill link (shared by user #${link.created_by})`,
+      method: 'POST', path: req.originalUrl, body: vals,
+    });
+  } catch (_) {}
+  try {
+    const { notify } = require('../lib/push');
+    notify(link.created_by, {
+      title: `📝 Employee details received`,
+      body: `${vals.name || 'An employee'} submitted their details via your self-fill link`,
+      url: '/employees',
+    });
+  } catch (_) {}
+
+  res.json({ ok: true, mode: link.employee_id ? 'updated' : 'created' });
+});
+
 module.exports = router;

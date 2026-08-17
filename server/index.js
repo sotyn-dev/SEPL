@@ -579,6 +579,36 @@ app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) 
   res.json({ url, filename: req.file.originalname, size: req.file.size });
 });
 
+// Public, token-scoped upload for the employee self-fill form (2026-08-17).
+// No login — the fill token IS the authorization: it must exist, be unused
+// and unexpired, and only document-ish types are accepted. The token check
+// runs BEFORE multer so invalid callers can't even write a temp file.
+const FILL_UPLOAD_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+app.post('/api/public/employee-upload/:token',
+  (req, res, next) => {
+    try {
+      const { getDb } = require('./db/schema');
+      const link = getDb().prepare(
+        `SELECT id FROM employee_fill_links
+          WHERE token=? AND used_at IS NULL
+            AND (expires_at IS NULL OR expires_at >= datetime('now'))`
+      ).get(String(req.params.token || ''));
+      if (!link) return res.status(403).json({ error: 'This link is not valid any more' });
+      next();
+    } catch (e) { res.status(500).json({ error: 'Upload unavailable' }); }
+  },
+  upload.single('file'),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!FILL_UPLOAD_TYPES.has(req.file.mimetype)) {
+      try { require('fs').unlinkSync(req.file.path); } catch (_) {}
+      return res.status(400).json({ error: 'Only JPG / PNG / WEBP images or PDF files are allowed' });
+    }
+    const key = uploadKey(req, req.file);
+    const url = await storage.adoptLocalFile(req.file.path, key, req.file.mimetype);
+    res.json({ url, filename: req.file.originalname, size: req.file.size });
+  });
+
 // Serve uploaded files
 // Lazy restore: if a requested upload is missing from disk but sitting in
 // quarantine (e.g. a chat/ticket was deleted, then a DB revert re-referenced its
