@@ -29,8 +29,18 @@ function tsMs(s) {
 
 // First step (in declared order) whose stamp is still null = the one in flight.
 // Returns null when every step is done (record fully closed).
+//
+// Calculation audit (mam 2026-08-17 "95 planned vs 11 actual indents — but
+// calculation check"): a step with no stamp of its own but with a LATER step
+// already stamped is NOT in flight — the flow demonstrably passed it (legacy
+// rows from before the stamp columns existed, alternate approval paths that
+// skip a stamp). Counting those made e.g. fully-approved old indents sit
+// "pending at L1 Approval" forever and inflated Planned on the scorecard.
+// The in-flight step is the first unstamped one AFTER the furthest stamp.
 function firstOpen(steps, stamps) {
-  for (const s of steps) if (!stamps[s.key]) return s.key;
+  let last = -1;
+  for (let i = 0; i < steps.length; i++) if (stamps[steps[i].key]) last = i;
+  for (let i = last + 1; i < steps.length; i++) if (!stamps[steps[i].key]) return steps[i].key;
   return null;
 }
 
@@ -290,7 +300,7 @@ const MODULE_DEFS = {
       const steps = stepsFor(db, 'indent_to_dispatch');
       return safeAll(db, `
         SELECT i.id, i.indent_number, i.site_name, i.created_at, i.created_by,
-               i.l1_at, i.l2_at, i.crm_at, i.approved_at, i.status,
+               i.l1_at, i.l2_at, i.crm_at, i.approved_at, i.status, i.l1_status,
                (SELECT MIN(vp.po_l1_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l1_at,
                (SELECT MIN(vp.po_l2_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l2_at,
                (SELECT MIN(dn.created_at) FROM delivery_notes dn
@@ -306,9 +316,15 @@ const MODULE_DEFS = {
           po_l1: r.po_l1_at || null, po_l2: r.po_l2_at || null, dispatch: r.dispatch_at || null,
           purchase_bill: r.bill_at || null,
         };
+        // A rejected/cancelled indent is TERMINAL — nothing is waiting on
+        // anyone (audit 2026-08-17: rejected indents sat "pending" at their
+        // next step forever, inflating RACI Planned; tally_bills already
+        // handled this, the indent module didn't).
+        const dead = r.status === 'rejected' || r.status === 'cancelled' || r.l1_status === 'rejected';
         return {
           id: r.id, title: r.indent_number || ('IND #' + r.id), subtitle: r.site_name || '—',
-          created_at: r.created_at, owner_id: r.created_by || null, stamps, current_key: firstOpen(steps, stamps),
+          created_at: r.created_at, owner_id: r.created_by || null, stamps,
+          current_key: dead ? null : firstOpen(steps, stamps),
         };
       });
     },
@@ -671,7 +687,6 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
       // so no step is in-flight → nothing pending on anyone for it.
       const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
-      let sawOpen = false;                             // only the FIRST open step is in-flight
       for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
@@ -679,12 +694,12 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
         // Completion = manual "mark done" stamp, else the module's native date.
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
         if (!stampRaw) {
-          // First unstamped step = the one in flight now. If it is on this user
-          // and the record is still active, it is pending work on them (Planned).
-          if (!sawOpen) {
-            sawOpen = true;
-            if (!recClosed && responsibleId === userId) openOnUser += 1;
-          }
+          // Pending counts ONLY at the record's actual in-flight step
+          // (current_key — same one the board shows). An unstamped step the
+          // flow already passed (a later stamp exists) is history, not
+          // workload (audit 2026-08-17: legacy approved indents sat "pending
+          // at L1" forever and inflated Planned).
+          if (!recClosed && s.key === rec.current_key && responsibleId === userId) openOnUser += 1;
           continue;                                    // open → don't advance prev / don't close
         }
         const atMs = tsMs(stampRaw);
@@ -753,20 +768,19 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
       const recRaci = raciByRec[rec.id] || {};
       const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
-      let sawOpen = false;
       for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
         const responsibleId = responsibleOf(s, cfg, m, rec);
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
         if (!stampRaw) {
-          if (!sawOpen) {
-            sawOpen = true;
-            if (!recClosed && responsibleId === userId) {
-              const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
-              t.planned += 1; t.pending += 1;
-              if (t.pending_records.length < 8) t.pending_records.push(rec.title);
-            }
+          // Same rule as raciUserWeek: pending only at the record's actual
+          // in-flight step (audit 2026-08-17 — no phantom "pending at L1"
+          // for records the flow already moved past).
+          if (!recClosed && s.key === rec.current_key && responsibleId === userId) {
+            const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
+            t.planned += 1; t.pending += 1;
+            if (t.pending_records.length < 8) t.pending_records.push(rec.title);
           }
           continue;
         }
