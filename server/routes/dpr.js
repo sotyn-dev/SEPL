@@ -50,7 +50,7 @@ router.get('/contractor-attendance/records', (req, res) => {
   res.json(db.prepare(sql).all(...p));
 });
 
-router.post('/contractor-attendance', (req, res) => {
+router.post('/contractor-attendance', requirePermission('dpr', 'create'), (req, res) => {
   const { site_id, date, rows } = req.body;
   if (!site_id || !date) return res.status(400).json({ error: 'site_id and date required' });
   const db = getDb();
@@ -74,7 +74,7 @@ router.post('/contractor-attendance', (req, res) => {
 // a photo of the contractor's gang; Claude vision counts the people and returns
 // the head-count, which pre-fills the manpower field. Image is already on disk
 // (uploaded via /upload); we pass its path in as photo_url.
-router.post('/contractor-attendance/count-photo', async (req, res) => {
+router.post('/contractor-attendance/count-photo', requirePermission('dpr', 'create'), async (req, res) => {
   const { photo_url } = req.body;
   if (!photo_url) return res.status(400).json({ error: 'photo_url required' });
   // Resolve to the on-disk file. Uploads live at <repo>/data/uploads (see
@@ -221,7 +221,7 @@ router.get('/sites', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-router.post('/sites', (req, res) => {
+router.post('/sites', requirePermission('dpr', 'create'), (req, res) => {
   const db = getDb();
   const { name, address, client_name, po_id, site_engineer_id, supervisor } = req.body;
   // Auto-resolve business_book_id so the new site is wired to BOQ items
@@ -246,7 +246,7 @@ router.post('/sites', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, business_book_id: bbId });
 });
 
-router.put('/sites/:id', (req, res) => {
+router.put('/sites/:id', requirePermission('dpr', 'edit'), (req, res) => {
   const { name, address, client_name, site_engineer_id, supervisor, supervisor_id, status } = req.body;
   const db = getDb();
   db.prepare(
@@ -636,7 +636,7 @@ router.get('/', (req, res) => {
 // Dashboard summary
 router.get('/summary', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayIso();
   // Use the normalized site key so phantom-duplicate rows (Excel paste
   // junk) don't inflate the active-site count or the missing-DPR list.
   const activeSites = db.prepare(
@@ -1331,7 +1331,7 @@ router.post('/weekly-plans/:id/approve', requirePermission('dpr', 'approve'), (r
         site: plan.site_name,
         amount: '0',
         raised_by: 'Weekly Plan (auto)',
-        date: new Date().toISOString().slice(0, 10),
+        date: istTodayIso(),
         raiser_email: result.auto_indent.raiser_email,
       });
     } catch (_) {}
@@ -2110,7 +2110,7 @@ try { getDb().exec(`ALTER TABLE dpr ADD COLUMN loss_addressed_proof_url TEXT`); 
 // Mark a loss as followed-up / addressed.  Optional proof_url (a
 // file URL from POST /api/upload) stored so management can later
 // click through to verify the issue was actually fixed.
-router.patch('/:id/loss-addressed', (req, res) => {
+router.patch('/:id/loss-addressed', requirePermission('dpr', 'approve'), (req, res) => {
   const db = getDb();
   const { addressed, note, proof_url } = req.body || {};
   const next = addressed ? 1 : 0;
@@ -2154,7 +2154,7 @@ router.get('/engineer-compliance', (req, res) => {
   // this site in the filter range".
 
   // Default range: last 30 days inclusive of today.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istTodayIso();
   const thirtyAgo = (() => {
     const d = new Date(); d.setDate(d.getDate() - 29);
     return d.toISOString().slice(0, 10);
@@ -2556,7 +2556,7 @@ router.put('/:id/approve', requirePermission('dpr', 'approve'), (req, res) => {
 });
 
 // Delete DPR (cascade child tables)
-router.delete('/:id', (req, res) => {
+router.delete('/:id', requirePermission('dpr', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   db.prepare('DELETE FROM dpr_work_items WHERE dpr_id=?').run(id);
@@ -2567,7 +2567,7 @@ router.delete('/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-router.delete('/sites/:id', (req, res) => {
+router.delete('/sites/:id', requirePermission('dpr', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const dprCount = db.prepare('SELECT COUNT(*) as c FROM dpr WHERE site_id=?').get(id).c;
@@ -2778,7 +2778,7 @@ function progressHandler(req, res) {
 // No DPR = no payment check
 router.get('/payment-check/:site_id', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayIso();
   const dpr = db.prepare('SELECT id FROM dpr WHERE site_id=? AND report_date=?').get(req.params.site_id, today);
   res.json({ site_id: req.params.site_id, dpr_submitted: !!dpr, payment_allowed: !!dpr,
     message: dpr ? 'DPR submitted - payment can proceed' : 'NO DPR submitted today - payment NOT allowed' });

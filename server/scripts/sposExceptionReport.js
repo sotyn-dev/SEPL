@@ -10,11 +10,12 @@
 // Sunday off. Skip via ERP_DISABLE_SPOS_REPORT=1.
 
 const { getDb } = require('../db/schema');
+const { istToday } = require('../lib/istDate');
 
 const TARGET_HOUR = 18;
 const TARGET_MIN = 30;
 
-function todayIso() { return new Date().toISOString().slice(0, 10); }
+function todayIso() { return istToday(); }
 function isSunday() { return new Date().getDay() === 0; }
 
 async function runOnce() {

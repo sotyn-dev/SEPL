@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../db/schema');
 const { generateToken, authMiddleware, adminOnly, getUserPermissions } = require('../middleware/auth');
@@ -168,7 +169,7 @@ router.get('/users/export.xlsx', authMiddleware, adminOnly, (req, res) => {
     XLSX.utils.book_append_sheet(wb, ws, 'Active Users');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="active-users-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="active-users-${istToday()}.xlsx"`);
     res.send(buf);
   } catch (e) {
     console.error('[users export] failed:', e.message);

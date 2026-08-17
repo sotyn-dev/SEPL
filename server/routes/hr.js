@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -336,7 +337,7 @@ const resumeUpload = multer({
 //   3. Return parsed fields + the saved file URL.
 // Frontend pre-fills the form fields and stores resume_file so when
 // admin clicks Add Candidate the URL is sent along.
-router.post('/candidates/parse-resume', resumeUpload.single('file'), async (req, res) => {
+router.post('/candidates/parse-resume', requirePermission('hr', 'create'), resumeUpload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const url = `/uploads/hr-resumes/${path.basename(req.file.path)}`;
   try {
@@ -407,7 +408,7 @@ router.post('/candidates/check-duplicates', (req, res) => {
   res.json({ duplicates: findDuplicates(getDb(), { email, phone, excludeId }) });
 });
 
-router.post('/candidates', (req, res) => {
+router.post('/candidates', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { name, phone, email, source, position, notes, resume_file,
             address, linkedin_url, tags, hiring_request_id } = req.body;
@@ -450,7 +451,7 @@ router.post('/candidates', (req, res) => {
   }
 });
 
-router.put('/candidates/:id', (req, res) => {
+router.put('/candidates/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { name, phone, email, source, position, status, notes, resume_file,
           address, linkedin_url } = req.body;
   getDb().prepare(
@@ -464,7 +465,7 @@ router.put('/candidates/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/candidates/:id', (req, res) => {
+router.delete('/candidates/:id', requirePermission('hr', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM candidates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -483,7 +484,7 @@ router.delete('/candidates/:id', (req, res) => {
 //            uploaded; rejected → 'rejected'.
 //  Stage 5 — Mark accepted / onboarded as the candidate joins.
 
-router.post('/candidates/:id/schedule-interview', (req, res) => {
+router.post('/candidates/:id/schedule-interview', requirePermission('hr', 'edit'), (req, res) => {
   const { interviewer_id, interview_date, resume_file, notes } = req.body;
   if (!interviewer_id) return res.status(400).json({ error: 'Pick an interviewer (employee)' });
   if (!interview_date) return res.status(400).json({ error: 'Interview date required' });
@@ -533,7 +534,7 @@ router.post('/candidates/:id/interview-done', (req, res) => {
   res.json({ message: 'Interview decision recorded' });
 });
 
-router.post('/candidates/:id/schedule-md-interview', (req, res) => {
+router.post('/candidates/:id/schedule-md-interview', requirePermission('hr', 'edit'), (req, res) => {
   const { md_interview_date, notes } = req.body;
   if (!md_interview_date) return res.status(400).json({ error: 'MD interview date required' });
   // Status stays 'qualified' — md_interview_date being set marks the MD round.
@@ -550,7 +551,7 @@ router.post('/candidates/:id/schedule-md-interview', (req, res) => {
   res.json({ message: 'MD interview scheduled' });
 });
 
-router.post('/candidates/:id/md-decision', (req, res) => {
+router.post('/candidates/:id/md-decision', requirePermission('hr', 'approve'), (req, res) => {
   const { decision, notes, offer_letter_file,
           offered_position, offered_salary, joining_date, reporting_to,
           salary_breakup } = req.body;
@@ -615,7 +616,7 @@ router.get('/candidates/:id', (req, res) => {
   res.json(c);
 });
 
-router.post('/candidates/:id/finalize', (req, res) => {
+router.post('/candidates/:id/finalize', requirePermission('hr', 'edit'), (req, res) => {
   // Mark candidate as 'accepted' (offer accepted) or 'onboarded' (joined).
   const { final_status, notes } = req.body;
   if (!['accepted','onboarded','rejected'].includes(final_status)) {
@@ -647,7 +648,7 @@ router.get('/candidates/:id/timeline', (req, res) => {
   res.json(rows);
 });
 
-router.put('/candidates/:id/tags', (req, res) => {
+router.put('/candidates/:id/tags', requirePermission('hr', 'edit'), (req, res) => {
   const { tags } = req.body || {};
   // Normalise: split on comma, trim, drop empties, re-join.
   const csv = String(tags || '')
@@ -661,7 +662,7 @@ router.put('/candidates/:id/tags', (req, res) => {
   res.json({ ok: true, tags: csv });
 });
 
-router.post('/candidates/:id/hold', (req, res) => {
+router.post('/candidates/:id/hold', requirePermission('hr', 'edit'), (req, res) => {
   const { is_on_hold, reason } = req.body || {};
   const flag = is_on_hold ? 1 : 0;
   const db = getDb();
@@ -921,21 +922,21 @@ router.get('/sub-contractors', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM sub_contractors ORDER BY name').all());
 });
 
-router.post('/sub-contractors', (req, res) => {
+router.post('/sub-contractors', requirePermission('hr', 'create'), (req, res) => {
   const { name, phone, email, specialization, rate, rate_unit, notes } = req.body;
   const r = getDb().prepare('INSERT INTO sub_contractors (name,phone,email,specialization,rate,rate_unit,notes) VALUES (?,?,?,?,?,?,?)')
     .run(name, phone, email, specialization, rate, rate_unit, notes);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/sub-contractors/:id', (req, res) => {
+router.put('/sub-contractors/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { name, phone, email, specialization, rate, rate_unit, status, notes } = req.body;
   getDb().prepare('UPDATE sub_contractors SET name=?,phone=?,email=?,specialization=?,rate=?,rate_unit=?,status=?,notes=? WHERE id=?')
     .run(name, phone, email, specialization, rate, rate_unit, status, notes, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/sub-contractors/:id', (req, res) => {
+router.delete('/sub-contractors/:id', requirePermission('hr', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM sub_contractors WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -1001,7 +1002,7 @@ router.put('/expenses/:id', requirePermission('expenses', 'edit'), (req, res) =>
       next.approved_by = req.user.id;
       if (existing.status === 'paid') next.paid_date = null; // un-mark paid
     } else if (status === 'paid') {
-      next.paid_date = new Date().toISOString().split('T')[0];
+      next.paid_date = istToday();
     } else if (status === 'pending') {
       next.approved_by = null;
       next.paid_date = null;
@@ -1099,7 +1100,7 @@ router.get('/checklists/bulk-template.xlsx', (req, res) => {
 
 // Parse an uploaded .xlsx and return the rows as JSON.
 // (Client decides whether to commit them via /checklists/bulk.)
-router.post('/checklists/parse-excel', checklistsExcelUpload.single('file'), (req, res) => {
+router.post('/checklists/parse-excel', requirePermission('checklists', 'create'), checklistsExcelUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   let wb;
   try { wb = XLSX.readFile(req.file.path); }
@@ -1432,7 +1433,7 @@ router.delete('/checklists/:id', requirePermission('checklists', 'delete'), (req
 // whether proof has been uploaded.
 router.get('/checklists/my-today', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   const d = new Date(today + 'T00:00:00');
   const todayDow = d.getDay();            // 0..6
   const todayDom = d.getDate();           // 1..31
@@ -1492,7 +1493,7 @@ router.post('/checklists/:id/complete', (req, res) => {
   const { proof_url, notes } = req.body;
   let date = req.body.completion_date && String(req.body.completion_date).trim()
     ? String(req.body.completion_date).trim().slice(0, 10)
-    : new Date().toISOString().split('T')[0];
+    : istToday();
 
   const db = getDb();
   const c = db.prepare('SELECT * FROM checklists WHERE id=?').get(req.params.id);
@@ -1540,7 +1541,7 @@ router.post('/checklists/:id/complete', (req, res) => {
 // own assignments.
 router.get('/checklists/by-date', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const date = req.query.date || istToday();
   let canManage = req.user.role === 'admin';
   if (!canManage) {
     const _cp = db.prepare("SELECT rp.can_see_all, rp.can_edit, rp.can_create FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'checklists'").get(req.user.id);
@@ -1963,7 +1964,7 @@ router.get('/jd-templates', (req, res) => {
   res.json(rows.map(r => ({ ...r, template_content: safeParseJson(r.template_content) })));
 });
 
-router.post('/jd-templates', (req, res) => {
+router.post('/jd-templates', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { name, description, template_content, is_default } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Template name is required' });
@@ -1985,7 +1986,7 @@ router.post('/jd-templates', (req, res) => {
   }
 });
 
-router.put('/jd-templates/:id', (req, res) => {
+router.put('/jd-templates/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { name, description, template_content, is_default } = req.body || {};
   const db = getDb();
   if (is_default) db.prepare('UPDATE jd_templates SET is_default = 0 WHERE id != ?').run(req.params.id);
@@ -2005,7 +2006,7 @@ router.put('/jd-templates/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/jd-templates/:id', (req, res) => {
+router.delete('/jd-templates/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM jd_templates WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2042,7 +2043,7 @@ router.get('/job-descriptions/:id', (req, res) => {
   res.json(row);
 });
 
-router.post('/job-descriptions', (req, res) => {
+router.post('/job-descriptions', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { hiring_request_id, template_id, title, description, responsibilities,
             required_skills, required_experience, education_required,
@@ -2070,7 +2071,7 @@ router.post('/job-descriptions', (req, res) => {
   }
 });
 
-router.put('/job-descriptions/:id', (req, res) => {
+router.put('/job-descriptions/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { hiring_request_id, template_id, title, description, responsibilities,
           required_skills, required_experience, education_required,
           internal_jd, public_job_post, status } = req.body || {};
@@ -2100,7 +2101,7 @@ router.put('/job-descriptions/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/job-descriptions/:id', (req, res) => {
+router.delete('/job-descriptions/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM job_descriptions WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2166,7 +2167,7 @@ router.post('/candidates/:id/scorecard', (req, res) => {
   }
 });
 
-router.delete('/scorecards/:id', (req, res) => {
+router.delete('/scorecards/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM interview_scorecards WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2206,7 +2207,7 @@ router.get('/final-round-questions/pick', (req, res) => {
   res.json(getDb().prepare(sql).all(...args));
 });
 
-router.post('/final-round-questions', (req, res) => {
+router.post('/final-round-questions', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { category, question_text, for_role, difficulty, notes, is_active } = req.body || {};
     if (!category || !String(category).trim())       return res.status(400).json({ error: 'Category is required' });
@@ -2229,7 +2230,7 @@ router.post('/final-round-questions', (req, res) => {
   }
 });
 
-router.put('/final-round-questions/:id', (req, res) => {
+router.put('/final-round-questions/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { category, question_text, for_role, difficulty, notes, is_active } = req.body || {};
   getDb().prepare(`
     UPDATE final_round_questions SET
@@ -2249,7 +2250,7 @@ router.put('/final-round-questions/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/final-round-questions/:id', (req, res) => {
+router.delete('/final-round-questions/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM final_round_questions WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2270,7 +2271,7 @@ router.get('/induction', (req, res) => {
   res.json(getDb().prepare(sql).all());
 });
 
-router.post('/induction', (req, res) => {
+router.post('/induction', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { section, title, content_type, content_url, content_text, order_index } = req.body || {};
     if (!section || !title) return res.status(400).json({ error: 'Section and title required' });
@@ -2287,7 +2288,7 @@ router.post('/induction', (req, res) => {
   }
 });
 
-router.put('/induction/:id', (req, res) => {
+router.put('/induction/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { section, title, content_type, content_url, content_text, order_index, is_active } = req.body || {};
   getDb().prepare(`
     UPDATE induction_items SET
@@ -2309,7 +2310,7 @@ router.put('/induction/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/induction/:id', (req, res) => {
+router.delete('/induction/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM induction_items WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2332,7 +2333,7 @@ router.get('/training/videos', (req, res) => {
   res.json(getDb().prepare(sql).all(...args));
 });
 
-router.post('/training/videos', (req, res) => {
+router.post('/training/videos', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { title, description, video_url, training_type, duration_minutes,
             target_dept, target_role, is_mandatory } = req.body || {};
@@ -2354,7 +2355,7 @@ router.post('/training/videos', (req, res) => {
   }
 });
 
-router.put('/training/videos/:id', (req, res) => {
+router.put('/training/videos/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { title, description, video_url, training_type, duration_minutes,
           target_dept, target_role, is_mandatory, is_active } = req.body || {};
   getDb().prepare(`
@@ -2389,7 +2390,7 @@ router.delete('/training/videos/:id', (req, res) => {
 
 // Assign a video to one or more employees (bulk).
 // Body: { employee_ids: [...] }  → upserts (UNIQUE on employee_id+video_id)
-router.post('/training/videos/:id/assign', (req, res) => {
+router.post('/training/videos/:id/assign', requirePermission('hr', 'edit'), (req, res) => {
   const { employee_ids } = req.body || {};
   if (!Array.isArray(employee_ids) || employee_ids.length === 0) {
     return res.status(400).json({ error: 'employee_ids required' });
@@ -2419,7 +2420,7 @@ router.get('/training/videos/:id/assignments', (req, res) => {
   res.json(rows);
 });
 
-router.delete('/training/assignments/:id', (req, res) => {
+router.delete('/training/assignments/:id', requirePermission('hr', 'edit'), (req, res) => {
   const r = getDb().prepare('DELETE FROM training_assignments WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Unassigned' });
@@ -2522,7 +2523,7 @@ router.get('/screening-questions', (req, res) => {
   res.json(rows.map(r => ({ ...r, options: safeParseJson(r.options) })));
 });
 
-router.post('/screening-questions', (req, res) => {
+router.post('/screening-questions', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { hiring_request_id, question_text, question_type, options,
             is_mandatory, auto_reject_op, auto_reject_value,
@@ -2555,7 +2556,7 @@ router.post('/screening-questions', (req, res) => {
   }
 });
 
-router.put('/screening-questions/:id', (req, res) => {
+router.put('/screening-questions/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { hiring_request_id, question_text, question_type, options,
           is_mandatory, auto_reject_op, auto_reject_value,
           auto_reject_reason, order_index, is_active } = req.body || {};
@@ -2587,7 +2588,7 @@ router.put('/screening-questions/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/screening-questions/:id', (req, res) => {
+router.delete('/screening-questions/:id', requirePermission('hr', 'delete'), (req, res) => {
   const db = getDb();
   // Cascade deletes answers via ON DELETE CASCADE.
   const r = db.prepare('DELETE FROM screening_questions WHERE id = ?').run(req.params.id);
@@ -2627,7 +2628,7 @@ function evalRule(answerRaw, op, value) {
 }
 
 // ── ANSWER SUBMIT + AUTO-EVALUATE ──
-router.post('/candidates/:id/screening-answers', (req, res) => {
+router.post('/candidates/:id/screening-answers', requirePermission('hr', 'edit'), (req, res) => {
   try {
     const candidateId = +req.params.id;
     const { answers } = req.body || {};        // [{ question_id, answer_text }]
@@ -2786,7 +2787,7 @@ router.get('/candidates/:id/docs', (req, res) => {
   res.json(rows);
 });
 
-router.post('/candidates/:id/docs', (req, res) => {
+router.post('/candidates/:id/docs', requirePermission('hr', 'edit'), (req, res) => {
   const { doc_type, doc_label, file_url, status, notes } = req.body || {};
   if (!doc_type || !String(doc_type).trim()) return res.status(400).json({ error: 'doc_type is required' });
   const st = ['pending','received','verified','rejected'].includes(status) ? status : 'pending';
@@ -2797,7 +2798,7 @@ router.post('/candidates/:id/docs', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/docs/:id', (req, res) => {
+router.put('/docs/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { doc_label, file_url, status, notes } = req.body || {};
   const db = getDb();
   const cur = db.prepare('SELECT * FROM candidate_docs WHERE id=?').get(req.params.id);
@@ -2829,7 +2830,7 @@ router.put('/docs/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/docs/:id', (req, res) => {
+router.delete('/docs/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM candidate_docs WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });

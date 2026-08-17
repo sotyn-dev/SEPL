@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { validatePoNumber } = require('../utils/validate');
@@ -245,7 +246,7 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
 
   // Auto-create Cash Flow entry for advance
   if (b.advance_received && b.advance_received > 0) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = istToday();
     let daily = db.prepare('SELECT id FROM cash_flow_daily WHERE date=?').get(today);
     if (!daily) {
       const prev = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE date < ? ORDER BY date DESC LIMIT 1').get(today);
@@ -280,20 +281,44 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
 
 // PUT update
 router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
-  const b = req.body;
+  const raw = req.body || {};
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM business_book WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Business Book entry not found' });
+
+  // Lost-update guard (audit 2026-08-17): two people editing the same order
+  // meant the SECOND save silently wiped the first person's changes across
+  // all 49 columns. The edit form round-trips the row's updated_at; if the
+  // row changed since this form was opened, refuse with 409 instead of
+  // overwriting — the client toast shows this message as-is.
+  if (raw.updated_at && existing.updated_at && String(raw.updated_at) !== String(existing.updated_at)) {
+    return res.status(409).json({
+      error: 'This order was edited by someone else while you had it open. Please reload the row and re-apply your change.',
+      stale: true,
+    });
+  }
+
+  // Merge-don't-blank: a field the client didn't send keeps its stored value
+  // instead of becoming NULL (partial payloads used to silently erase data).
+  // An explicitly sent '' still clears the field — only `undefined` preserves.
+  const b = { ...existing };
+  for (const k of Object.keys(raw)) { if (raw[k] !== undefined) b[k] = raw[k]; }
+
   // Same PO regex guard on edit so historical junk can't be re-saved.
-  if (b.po_number !== undefined && b.po_number !== null && String(b.po_number).trim() !== '') {
-    const poErr = validatePoNumber(b.po_number);
+  if (raw.po_number !== undefined && raw.po_number !== null && String(raw.po_number).trim() !== '') {
+    const poErr = validatePoNumber(raw.po_number);
     if (poErr) return res.status(400).json({ error: poErr });
   }
   // Force PO = NET Sale × 1.18 (mam, 2026-05-21 + discount 2026-06-16).
   // Override any value the client sent so edits can't drift from the rule.
+  // Runs on MERGED values — a payload missing sale_amount no longer zeroes
+  // po_amount (it recomputes from the stored sale figure instead).
   const fin = computeFinance(b.sale_amount_without_gst, b.management_discount_pct, b.management_discount_amount);
   b.po_amount = fin.poAmount;
   b.management_discount_pct = fin.discountPct;
   b.management_discount_amount = fin.discountAmount;
   b.net_sale_amount = fin.netSale;
-  const computedBalance = b.balance_amount !== undefined ? b.balance_amount : (b.po_amount || 0) - (b.advance_received || 0);
+  const computedBalance = raw.balance_amount !== undefined ? raw.balance_amount : (b.po_amount || 0) - (b.advance_received || 0);
 
   getDb().prepare(`UPDATE business_book SET
     lead_type=?, client_name=?, company_name=?, project_name=?, client_contact=?, client_email=?, email_address=?,

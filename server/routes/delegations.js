@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -252,7 +253,7 @@ function lastWorkingDays(todayYmd, n = 6) {
 // WIP limit is 3 per day (avg) by default for everyone; can be made per-user later.
 router.get('/dashboard', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   const WIP_LIMIT_DEFAULT = 3;
   const WIP_WINDOW_DAYS = 6;
   const windowDays = lastWorkingDays(today, WIP_WINDOW_DAYS);

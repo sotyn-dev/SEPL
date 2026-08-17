@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
@@ -806,7 +807,7 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     site: b.site_name || '',
     purpose: b.purpose || '',
     requested_by: b.employee_name || req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     requester_email: req.user.email || userEmail(db, req.user.id),
     director_email: directorEmail(),
   });
@@ -851,7 +852,7 @@ function advanceToNextStep(db, request, approvedBy) {
     db.prepare('UPDATE payment_requests SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run('final_approved', request.id);
     // Add to cash flow outflow
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = istToday();
       let daily = db.prepare('SELECT id FROM cash_flow_daily WHERE date=?').get(today);
       if (!daily) {
         const prev = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE date < ? ORDER BY date DESC LIMIT 1').get(today);
@@ -985,7 +986,7 @@ router.put('/:id/approve', (req, res) => {
     category: request.category || '',
     step: stepInfo.name || '',
     approved_by: req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     requester_email: userEmail(db, request.created_by),
     director_email: directorEmail(),
   });
@@ -1084,7 +1085,7 @@ router.put('/:id/reject', (req, res) => {
     category: request.category || '',
     rejected_by: req.user.name || '',
     reason: remarks,
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     requester_email: userEmail(db, request.created_by),
     director_email: directorEmail(),
   });

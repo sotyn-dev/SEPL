@@ -116,6 +116,16 @@ router.put('/:id', requirePermission('crm_funnel', 'edit'), boqUpload.single('bo
   const existing = db.prepare('SELECT * FROM crm_funnel WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
+  // Lost-update guard (audit 2026-08-17): stale form → 409 instead of
+  // overwriting a colleague's in-between edit. Merge semantics below
+  // already preserve unsent fields.
+  if (b.updated_at && existing.updated_at && String(b.updated_at) !== String(existing.updated_at)) {
+    return res.status(409).json({
+      error: 'This lead was edited by someone else while you had it open. Please reload and re-apply your change.',
+      stale: true,
+    });
+  }
+
   // Stamp dates on the transition (Y/N → Y or final_status set the first time).
   const isSubmittedNow = b.quotation_submitted == '1' || b.quotation_submitted === true || b.quotation_submitted === 1;
   const becomingSubmitted = !existing.quotation_submitted && isSubmittedNow;

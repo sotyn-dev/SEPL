@@ -1,10 +1,11 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -260,7 +261,7 @@ async function matchBoqFile(filePath, originalName) {
 }
 
 // Upload a BOQ file → match (the original route).
-router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
+router.post('/auto-match-boq', requirePermission('quotations', 'view'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     res.json(await matchBoqFile(req.file.path, req.file.originalname));
@@ -336,7 +337,7 @@ router.get('/boq', (req, res) => {
     LEFT JOIN leads l ON b.lead_id=l.id LEFT JOIN users u ON b.created_by=u.id ORDER BY b.created_at DESC`).all());
 });
 
-router.post('/boq', (req, res) => {
+router.post('/boq', requirePermission('quotations', 'create'), (req, res) => {
   const { lead_id, title, drawing_required, items } = req.body;
   const db = getDb();
   const total = (items || []).reduce((s, i) => s + (i.quantity * i.rate), 0);
@@ -379,7 +380,7 @@ router.get('/', (req, res) => {
     LEFT JOIN leads l ON q.lead_id=l.id LEFT JOIN users u ON q.created_by=u.id ORDER BY q.created_at DESC`).all());
 });
 
-router.post('/', (req, res) => {
+router.post('/', requirePermission('quotations', 'create'), (req, res) => {
   const { lead_id, boq_id, total_amount, discount, final_amount, valid_until, notes } = req.body;
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
@@ -390,14 +391,14 @@ router.post('/', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, quotation_number: qNum });
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const { total_amount, discount, final_amount, status, valid_until, notes } = req.body;
   getDb().prepare('UPDATE quotations SET total_amount=?, discount=?, final_amount=?, status=?, valid_until=?, notes=? WHERE id=?')
     .run(total_amount, discount, final_amount, status, valid_until, notes, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', requirePermission('quotations', 'delete'), (req, res) => {
   const db = getDb();
   const poCount = db.prepare('SELECT COUNT(*) as c FROM purchase_orders WHERE quotation_id=?').get(req.params.id).c;
   if (poCount > 0) return res.status(409).json({ error: 'Cannot delete: Purchase Orders reference this quotation' });
@@ -405,7 +406,7 @@ router.delete('/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-router.delete('/boq/:id', (req, res) => {
+router.delete('/boq/:id', requirePermission('quotations', 'delete'), (req, res) => {
   const db = getDb();
   const qCount = db.prepare('SELECT COUNT(*) as c FROM quotations WHERE boq_id=?').get(req.params.id).c;
   if (qCount > 0) return res.status(409).json({ error: 'Cannot delete: Quotations reference this BOQ' });
@@ -505,7 +506,7 @@ router.get('/po-foc/:id', (req, res) => {
   res.json(liveResolvePoFoc(r, buildLiveMaps(db)));
 });
 
-router.post('/po-foc', (req, res) => {
+router.post('/po-foc', requirePermission('quotations', 'create'), (req, res) => {
   const c = computePoFoc(req.body);
   const r = getDb().prepare(
     `INSERT INTO po_foc_entries (po_item_id, po_name, po_rate, qty, labour, labour_item_id, labour_name, labour_margin, margin, focs_json, cost, tpa, status, created_by)
@@ -516,7 +517,7 @@ router.post('/po-foc', (req, res) => {
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
 
-router.put('/po-foc/:id', (req, res) => {
+router.put('/po-foc/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const db = getDb();
   const cur = db.prepare('SELECT status FROM po_foc_entries WHERE id=?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
@@ -532,7 +533,7 @@ router.put('/po-foc/:id', (req, res) => {
   res.json({ message: 'Updated', status: newStatus });
 });
 
-router.post('/po-foc/:id/approve', (req, res) => {
+router.post('/po-foc/:id/approve', requirePermission('quotations', 'approve'), (req, res) => {
   const db = getDb();
   const cur = db.prepare('SELECT id FROM po_foc_entries WHERE id=?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
@@ -541,7 +542,7 @@ router.post('/po-foc/:id/approve', (req, res) => {
   res.json({ message: 'Approved' });
 });
 
-router.delete('/po-foc/:id', (req, res) => {
+router.delete('/po-foc/:id', requirePermission('quotations', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM po_foc_entries WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -557,7 +558,7 @@ router.get('/labour-rates', (req, res) => {
   res.json(db.prepare(`SELECT * FROM labour_rates ${where} ORDER BY category, item_name`).all(...args));
 });
 
-router.post('/labour-rates', (req, res) => {
+router.post('/labour-rates', requirePermission('quotations', 'create'), (req, res) => {
   const { item_name, specification, size, rate, uom, category } = req.body;
   if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'Item name is required' });
   const r = getDb().prepare('INSERT INTO labour_rates (item_name, specification, size, rate, uom, category, created_by) VALUES (?,?,?,?,?,?,?)')
@@ -565,7 +566,7 @@ router.post('/labour-rates', (req, res) => {
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
 
-router.put('/labour-rates/:id', (req, res) => {
+router.put('/labour-rates/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const { item_name, specification, size, rate, uom, category } = req.body;
   if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'Item name is required' });
   getDb().prepare('UPDATE labour_rates SET item_name=?, specification=?, size=?, rate=?, uom=?, category=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
@@ -573,7 +574,7 @@ router.put('/labour-rates/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/labour-rates/:id', (req, res) => {
+router.delete('/labour-rates/:id', requirePermission('quotations', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM labour_rates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -628,7 +629,7 @@ router.get('/labour-rates/duplicates', (req, res) => {
 
 // Merge duplicate labour rows: repoint every PO/FOC kit from the removed rows
 // onto the kept row, then delete the removed rows (one transaction).
-router.post('/labour-rates/merge', (req, res) => {
+router.post('/labour-rates/merge', requirePermission('quotations', 'edit'), (req, res) => {
   const keepId = Number(req.body.keep_id);
   const removeIds = (Array.isArray(req.body.remove_ids) ? req.body.remove_ids : []).map(Number).filter(id => id && id !== keepId);
   if (!keepId || !removeIds.length) return res.status(400).json({ error: 'keep_id and at least one remove_id required' });
@@ -645,7 +646,7 @@ router.post('/labour-rates/merge', (req, res) => {
 
 // Bulk import from an uploaded .xlsx / .xls / .csv. First row = headers;
 // columns matched case-insensitively. Item Name required; others optional.
-router.post('/labour-rates/import', upload.single('file'), (req, res) => {
+router.post('/labour-rates/import', requirePermission('quotations', 'create'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const db = getDb();
   let rows;
@@ -687,7 +688,7 @@ router.get('/estimates/:id', (req, res) => {
   if (!r) return res.status(404).json({ error: 'Not found' });
   res.json({ ...r, margins: JSON.parse(r.margins_json || '{}'), rows: JSON.parse(r.rows_json || '[]'), manpower: JSON.parse(r.manpower_json || '[]'), payment_terms: JSON.parse(r.payment_terms_json || '{}') });
 });
-router.post('/estimates', (req, res) => {
+router.post('/estimates', requirePermission('quotations', 'create'), (req, res) => {
   const b = req.body || {};
   const r = getDb().prepare(`INSERT INTO estimate_quotations (title, lead_id, client_name, acc_pct, margins_json, rows_json, manpower_json, payment_terms_json, cost, sp, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(b.title || '', b.lead_id || null, b.client_name || '', Number(b.acc_pct) || 0,
@@ -695,7 +696,7 @@ router.post('/estimates', (req, res) => {
     Number(b.cost) || 0, Number(b.sp) || 0, req.user.id);
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
-router.put('/estimates/:id', (req, res) => {
+router.put('/estimates/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const b = req.body || {};
   const ex = getDb().prepare('SELECT id FROM estimate_quotations WHERE id=?').get(req.params.id);
   if (!ex) return res.status(404).json({ error: 'Not found' });
@@ -705,7 +706,7 @@ router.put('/estimates/:id', (req, res) => {
       Number(b.cost) || 0, Number(b.sp) || 0, req.params.id);
   res.json({ message: 'Updated' });
 });
-router.delete('/estimates/:id', (req, res) => {
+router.delete('/estimates/:id', requirePermission('quotations', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM estimate_quotations WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -742,7 +743,7 @@ async function buildStyledQuotation(ExcelJS, d) {
     ['B4', 'Website: www.securedengineers.com', { size: 9, color: { argb: 'FF555555' } }]];
   co.forEach(([a, v, f], i) => { sum.mergeCells(`${a}:E${i + 1}`); sum.getCell(a).value = v; sum.getCell(a).font = f; });
   sum.mergeCells('A6:E6'); const tb = sum.getCell('A6'); tb.value = `QUOTATION FOR ${d.title || 'WORK'}`; tb.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }; tb.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } }; tb.alignment = { horizontal: 'center', vertical: 'middle' }; sum.getRow(6).height = 24;
-  const info = [['NAME', d.client_name, 'Date', new Date().toISOString().slice(0, 10)], ['ADDRESS', d.client_address, 'Quotation No', d.quotation_no], ['PREP BY', d.prep_by, 'Revision No', 'R0']];
+  const info = [['NAME', d.client_name, 'Date', istToday()], ['ADDRESS', d.client_address, 'Quotation No', d.quotation_no], ['PREP BY', d.prep_by, 'Revision No', 'R0']];
   let rr = 8;
   info.forEach(([k, v, k2, v2]) => { sum.getCell(`A${rr}`).value = k; sum.getCell(`A${rr}`).font = { bold: true }; sum.getCell(`B${rr}`).value = v; sum.getCell(`B${rr}`).alignment = { wrapText: true }; sum.getCell(`D${rr}`).value = k2; sum.getCell(`D${rr}`).font = { bold: true }; sum.getCell(`E${rr}`).value = v2; rr++; });
   rr++;
@@ -783,7 +784,7 @@ async function buildStyledQuotation(ExcelJS, d) {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-router.post('/estimate-export', async (req, res) => {
+router.post('/estimate-export', requirePermission('quotations', 'view'), async (req, res) => {
   const { title = '', client_name = '', client_address = '', quotation_no = '', prep_by = '',
     rows = [], manpower = [] } = req.body || {};
   const sendBuf = (buf) => {
@@ -831,7 +832,7 @@ router.post('/estimate-export', async (req, res) => {
     sum.push(['C.O : 58/A/1, First Floor, Kalu Sarai, New Delhi - 110016']);
     sum.push(['Website : www.securedengineers.com']);
     sum.push([`QUOTATION FOR ${title || 'WORK'}`]);
-    sum.push(['NAME', client_name, '', 'Date-:', new Date().toISOString().slice(0, 10)]);
+    sum.push(['NAME', client_name, '', 'Date-:', istToday()]);
     sum.push(['ADDRESS', client_address, '', 'Quotation No', quotation_no]);
     sum.push(['PREP BY', prep_by, '', 'Revision No', 'R0']);
     sum.push([]);

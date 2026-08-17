@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
@@ -189,7 +190,7 @@ router.post('/', (req, res) => {
     priority: priority || 'medium',
     category: category || 'bug',
     created_by: req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     deadline_date: deadline || '',
     creator_email: req.user.email || stUserEmail(db, req.user.id),
     assignee_email: assigned_to ? stUserEmail(db, +assigned_to) : null,
@@ -265,7 +266,7 @@ router.put('/:id', (req, res) => {
       ticket_no: ticket.ticket_no,
       subject: ticket.subject || '',
       resolved_by: req.user.name || '',
-      date: new Date().toISOString().slice(0, 10),
+      date: istToday(),
       creator_email: stUserEmail(db, ticket.user_id),
       assignee_email: stUserEmail(db, ticket.assigned_to),
       director_email: stDirector(),
@@ -330,7 +331,7 @@ router.post('/:id/approve', (req, res) => {
     ticket_no: ticket.ticket_no,
     subject: ticket.subject || '',
     resolved_by: req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     creator_email: stUserEmail(db, ticket.user_id),
     assignee_email: stUserEmail(db, ticket.assigned_to),
     director_email: stDirector(),

@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
@@ -179,7 +180,7 @@ router.post('/', requirePermission('complaints', 'create'), (req, res) => {
     category: b.category || '',
     problem: b.problem_detail || '',
     created_by: req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     creator_email: req.user.email || ceUserEmail(db, req.user.id),
     director_email: ceDirector(),
   });
@@ -280,7 +281,7 @@ router.post('/:id/assign', requirePermission('complaints', 'edit'), (req, res) =
     complaint_no: c.complaint_number,
     client: c.client_name || '',
     engineer: eng.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     engineer_email: ceUserEmail(db, engId),
     creator_email: ceUserEmail(db, c.created_by),
     director_email: ceDirector(),
@@ -354,7 +355,7 @@ router.post('/:id/verify-otp', requirePermission('complaints', 'edit'), (req, re
     complaint_no: full?.complaint_number || '',
     client: full?.client_name || '',
     engineer: db.prepare('SELECT name FROM users WHERE id=?').get(full?.assigned_engineer_id)?.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     creator_email: ceUserEmail(db, full?.created_by),
     engineer_email: ceUserEmail(db, full?.assigned_engineer_id),
     director_email: ceDirector(),

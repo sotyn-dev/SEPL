@@ -17,6 +17,7 @@
 //   delete   — delete a snag (audit-friendly, admins typically only)
 
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db/schema');
@@ -232,7 +233,7 @@ router.get('/export.xlsx', requirePermission('snags', 'view'), async (req, res) 
 
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="snags-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="snags-${istToday()}.xlsx"`);
     res.send(buf);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

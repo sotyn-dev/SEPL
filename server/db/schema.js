@@ -6143,6 +6143,36 @@ in your first week. If a process feels broken, raise a Help Ticket
     console.warn('[tally-bills] permission seed skipped (non-fatal):', e.message);
   }
 
+  // One-time seed for the 2026-08-17 endpoint-gating audit. ~90 previously
+  // auth-only mutating endpoints now enforce requirePermission (cashflow
+  // ledger, quotations, indent_fms GRN, hr, installation, complaints, dpr
+  // sites). Rule: any non-Viewer role that can already VIEW one of these
+  // modules keeps create+edit — everyone who could reach the page keeps
+  // working exactly as before; only direct-API writes from users who never
+  // saw the page get blocked. can_delete / can_approve are deliberately NOT
+  // promoted (they were the SoD holes — admin retains them; mam grants per
+  // role in Roles & Permissions). Run-once flag so later hand-unticks stick.
+  try {
+    const already = db.prepare("SELECT value FROM app_settings WHERE key='endpoint_gate_2026_08_17_seeded_v2'").get();
+    if (!already) {
+      const viewer = db.prepare("SELECT id FROM roles WHERE name='Viewer'").get();
+      const promote = db.prepare(
+        `UPDATE role_permissions SET can_create=1, can_edit=1
+          WHERE module=? AND can_view=1 AND (can_create=0 OR can_edit=0) AND role_id != ?`
+      );
+      for (const m of ['cashflow', 'quotations', 'indent_fms', 'hr', 'checklists', 'installation', 'complaints', 'dpr', 'procurement']) {
+        promote.run(m, viewer ? viewer.id : -1);
+      }
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('endpoint_gate_2026_08_17_seeded_v2','1',CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET value='1'`
+      ).run();
+      console.log('[perm-seed] endpoint-gate audit: view→create/edit promoted on 9 modules (run-once)');
+    }
+  } catch (e) {
+    console.warn('[perm-seed] endpoint-gate seed skipped (non-fatal):', e.message);
+  }
+
   // Seed default admin user
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@erp.com');
   if (!existing) {

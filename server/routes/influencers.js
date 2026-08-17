@@ -21,6 +21,7 @@
 //   GET    /api/influencers/export         — .xlsx download
 
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -300,7 +301,7 @@ router.get('/import/template', requirePermission('influencers', 'view'), (req, r
     'linkedin.com/in/rajeshkumar', 'fb.com/kumararch', '@kumar.architects', '', 'youtube.com/c/kumarArch', '', '',
     'Referral', 'Mr Singh', '2026-01-15', 'Active', 'Commercial Interiors', '50 L - 2 Cr', 5, 12500000, 2, 'Prompt',
     '2% on completion', 'Patel Designs, M+R Studio',
-    new Date().toISOString().slice(0,10), 'Admin', '',
+    istToday(), 'Admin', '',
   ];
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
@@ -325,7 +326,7 @@ router.get('/export', requirePermission('influencers', 'view'), (req, res) => {
   XLSX.utils.book_append_sheet(wb, ws, 'Influencers');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="influencers-export-${new Date().toISOString().slice(0,10)}.xlsx"`);
+  res.setHeader('Content-Disposition', `attachment; filename="influencers-export-${istToday()}.xlsx"`);
   res.send(buf);
 });
 

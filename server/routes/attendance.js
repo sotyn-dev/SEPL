@@ -110,7 +110,7 @@ router.get('/my-month', (req, res) => {
 
   // Build a per-day map of status. Key = YYYY-MM-DD.
   // Order of precedence: attendance row wins; else leave; else (past weekdays) absent; future = blank.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istTodayStr();
   const todayObj = new Date(today);
   const days = [];
   const byStatus = { present: 0, late: 0, half_day: 0, short_day: 0, absent: 0, on_leave: 0, weekend: 0, future: 0 };
@@ -1105,7 +1105,7 @@ router.post('/leave', (req, res) => {
     to_date: to_date || from_date,
     days: String(days),
     reason: reason || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istTodayStr(),
     requester_email: req.user.email || atUserEmail(db, req.user.id),
     director_email: atDirector(),
   });
@@ -1148,7 +1148,7 @@ router.put('/leave/:id/approve', requirePermission('attendance', 'approve'), (re
     leave_type: lr?.leave_type || '',
     status: status || '',
     decided_by: req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istTodayStr(),
     requester_email: atUserEmail(db, lr?.user_id),
     director_email: atDirector(),
   });

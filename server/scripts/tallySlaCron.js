@@ -19,6 +19,7 @@
 // Skip via ERP_DISABLE_TALLY_SLA_CRON=1.
 
 const { getDb } = require('../db/schema');
+const { istToday } = require('../lib/istDate');
 const push = require('../lib/push');
 const sla = require('../lib/tallySla');
 
@@ -163,7 +164,7 @@ function runOnce() {
           pct: String(stage.pct),
           due_at: stage.due_at || '',
           delay: String(stage.delay),
-          date: new Date().toISOString().slice(0, 10),
+          date: istToday(),
           owner_email: ownerId ? (db.prepare('SELECT email FROM users WHERE id=?').get(ownerId)?.email || null) : null,
           director_email: (() => {
             const d = ownerIdFor(db, 'director', bill);

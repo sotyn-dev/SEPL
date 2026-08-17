@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
@@ -46,7 +47,7 @@ function buildIndentContext(db, indentId, extra = {}) {
       site: row.site_name,
       amount: Math.round(+row.amount || 0).toLocaleString('en-IN'),
       raised_by: row.raised_by_name,
-      date: new Date().toISOString().slice(0, 10),
+      date: istToday(),
       raiser_email: row.raiser_email,
       crm_owner_email: crmOwnerEmail,
       director_email: director,
@@ -342,7 +343,7 @@ router.get('/vendors', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM vendors WHERE active=1 ORDER BY name').all());
 });
 
-router.post('/vendors', (req, res) => {
+router.post('/vendors', requirePermission('procurement', 'create'), (req, res) => {
   const b = req.body;
   if (!b.name) return res.status(400).json({ error: 'Vendor name required' });
   const db = getDb();
@@ -396,7 +397,7 @@ router.post('/vendors', (req, res) => {
 //   - no match → INSERTS a new vendor (auto-codes a blank Vendor Code).
 // Excel users save the sheet as CSV; the client parses it (quote-aware) and
 // posts the rows here.
-router.post('/vendors/bulk', (req, res) => {
+router.post('/vendors/bulk', requirePermission('procurement', 'create'), (req, res) => {
   const rows = Array.isArray(req.body?.vendors) ? req.body.vendors : [];
   if (!rows.length) return res.status(400).json({ error: 'No vendors to import' });
   const db = getDb();
@@ -475,17 +476,31 @@ router.post('/vendors/bulk', (req, res) => {
   res.json({ added, updated, skipped, errors, total: rows.length });
 });
 
-router.put('/vendors/:id', (req, res) => {
-  const b = req.body;
+router.put('/vendors/:id', requirePermission('procurement', 'edit'), (req, res) => {
+  const raw = req.body || {};
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM vendors WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Vendor not found' });
+  // Lost-update guard (audit 2026-08-17, same pattern as Business Book):
+  // stale form → 409 instead of silently wiping the other editor's changes;
+  // fields the client didn't send keep their stored values.
+  if (raw.updated_at && existing.updated_at && String(raw.updated_at) !== String(existing.updated_at)) {
+    return res.status(409).json({
+      error: 'This vendor was edited by someone else while you had it open. Please reload and re-apply your change.',
+      stale: true,
+    });
+  }
+  const b = { ...existing };
+  for (const k of Object.keys(raw)) { if (raw[k] !== undefined) b[k] = raw[k]; }
   const rating = (b.rating === '' || b.rating === null || b.rating === undefined)
     ? null
     : Math.max(0, Math.min(10, Number(b.rating) || 0));
-  getDb().prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,makes=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+  db.prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,makes=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
     .run(b.vendor_code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.sub_category, rating, normaliseMakes(b.makes), b.active !== undefined ? (b.active ? 1 : 0) : 1, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/vendors/:id', (req, res) => {
+router.delete('/vendors/:id', requirePermission('procurement', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const uses = db.prepare(`SELECT
@@ -511,7 +526,7 @@ router.get('/vendor-rates', (req, res) => {
   res.json(getDb().prepare(sql).all(...params));
 });
 
-router.post('/vendor-rates', (req, res) => {
+router.post('/vendor-rates', requirePermission('procurement', 'create'), (req, res) => {
   const { planning_id, item_description, vendor1_id, vendor1_rate, vendor2_id, vendor2_rate, vendor3_id, vendor3_rate, final_rate, selected_vendor_id } = req.body;
   const r = getDb().prepare(
     'INSERT INTO vendor_rates (planning_id,item_description,vendor1_id,vendor1_rate,vendor2_id,vendor2_rate,vendor3_id,vendor3_rate,final_rate,selected_vendor_id) VALUES (?,?,?,?,?,?,?,?,?,?)'
@@ -519,15 +534,17 @@ router.post('/vendor-rates', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.delete('/vendor-rates/:id', (req, res) => {
+router.delete('/vendor-rates/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM vendor_rates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
 
-router.put('/vendor-rates/:id/approve', (req, res) => {
-  const { approval_status, approved_by } = req.body;
+router.put('/vendor-rates/:id/approve', requirePermission('procurement', 'approve'), (req, res) => {
+  const { approval_status } = req.body;
+  // approved_by is ALWAYS the logged-in approver — a client-supplied name
+  // could stamp someone else's approval (audit 2026-08-17 SoD fix).
   getDb().prepare('UPDATE vendor_rates SET approval_status=?, approved_by=? WHERE id=?')
-    .run(approval_status, approved_by || req.user.name, req.params.id);
+    .run(approval_status, req.user.name, req.params.id);
   res.json({ message: 'Updated' });
 });
 
@@ -1277,7 +1294,7 @@ router.put('/indent-raise-window', (req, res) => {
   res.json(indentRaiseWindow(db));
 });
 
-router.post('/indents', (req, res) => {
+router.post('/indents', requirePermission('procurement', 'create'), (req, res) => {
   const db = getDb();
   const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category } = req.body;
   if (!items || items.length === 0) {
@@ -1515,7 +1532,7 @@ router.post('/indents', (req, res) => {
   // before L1/L2 sign off on the spend.  Policy becomes 'crm_two_level'.
   // Material / RGP / Rental keep the existing two_level path.
   const TWO_LEVEL_CUTOFF = '2026-05-25';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday();
   const isBillable = category === 'extra_schedule' || category === 'extra_non_schedule';
   const basePolicy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
   // RGP now follows the normal L1 → L2 chain like Material (mam 2026-06-06:
@@ -2550,7 +2567,7 @@ router.put('/indents/:id', (req, res) => {
               item_type: p.item_type || '',
             }));
             const billable = storePlans.some(p => String(p.item_type || '').toUpperCase() === 'PO');
-            const today = new Date().toISOString().slice(0, 10);
+            const today = istToday();
             const chRes = db.prepare(
               `INSERT INTO delivery_notes
                  (vendor_po_id, indent_id, stock_issue_note_id, source, delivery_date,
@@ -2604,7 +2621,7 @@ router.put('/indents/:id', (req, res) => {
               const exists = db.prepare("SELECT id FROM delivery_notes WHERE indent_id=? AND source='rgp'").get(id);
               if (!exists) {
                 const { nextSequence } = require('../db/nextSequence');
-                const gpDate = new Date().toISOString().slice(0, 10);
+                const gpDate = istToday();
                 const gpNum = nextSequence(db, 'delivery_notes', 'document_number', `RGP/${new Date().getFullYear()}/`, { pad: 4 });
                 const gpItems = rgpRows.map(r => ({
                   description: [r.name, r.size, r.specification].filter(Boolean).join(' / '),
@@ -2948,7 +2965,7 @@ router.post('/indents/:id/reset-store-issue', (req, res) => {
 //   indent_tracker   → audit-only, safe to delete alongside (mam 2026-05-25
 //                      "73 indent approved but now admin is unable to delete"
 //                      — the FK constraint failed BECAUSE of this table)
-router.delete('/indents/:id', (req, res) => {
+router.delete('/indents/:id', requirePermission('procurement', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
 
@@ -3607,7 +3624,7 @@ router.get('/indents/:id/billable-print', (req, res) => {
   <div class="title">BILLABLE STATEMENT (ITEM-WISE)</div>
   <div class="meta">
     <div><b>Indent No:</b> ${esc(indent.indent_number)}<br><b>Site / Project:</b> ${esc(indent.site_name || (bb && bb.project_name) || '—')}</div>
-    <div><b>Date:</b> ${esc(String(indent.indent_date || indent.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10))}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
+    <div><b>Date:</b> ${esc(String(indent.indent_date || indent.created_at || '').slice(0, 10) || istToday())}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
   </div>
   ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
   <table>
@@ -3706,7 +3723,7 @@ router.get('/vendor-po/:id/budget-print', (req, res) => {
   <div class="title">SALES BILL BUDGET — VENDOR PO</div>
   <div class="meta">
     <div><b>Vendor PO:</b> ${esc(vp.po_number)}<br><b>Vendor:</b> ${esc(vp.vendor_name || '—')}<br><b>Indent No:</b> ${esc(vp.indent_number || '—')}</div>
-    <div><b>Date:</b> ${esc(String(vp.po_date || vp.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10))}<br><b>Site / Project:</b> ${esc(vp.site_name || (bb && bb.project_name) || '—')}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
+    <div><b>Date:</b> ${esc(String(vp.po_date || vp.created_at || '').slice(0, 10) || istToday())}<br><b>Site / Project:</b> ${esc(vp.site_name || (bb && bb.project_name) || '—')}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
   </div>
   ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
   <table>
@@ -4007,7 +4024,7 @@ router.post('/vendor-po/:id/po-reject', (req, res) => {
 //   - Cancelled POs must be uncancelled before editing.
 //   - PO with linked Purchase Bills can edit dates / remarks but
 //     NOT total_amount / vendor_id (those would invalidate the bill).
-router.put('/vendor-po/:id', (req, res) => {
+router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const b = req.body || {};
@@ -4156,7 +4173,7 @@ router.put('/vendor-po/:id', (req, res) => {
 // 'pending' → 'cleared' + audit stamp (who clicked, when). Lets the
 // purchase team know material is unblocked. Re-runnable: if already
 // cleared, returns the existing cleared row unchanged.
-router.patch('/vendor-po/:id/clear-payment', (req, res) => {
+router.patch('/vendor-po/:id/clear-payment', requirePermission('procurement', 'edit'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const cur = db.prepare('SELECT id, payment_block_type, payment_block_status FROM vendor_pos WHERE id=?').get(id);
@@ -4229,7 +4246,7 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
   res.json({ po, items, bill_count: billCount, dn_count: dnCount, edit_locked: billCount > 0 || dnCount > 0 });
 });
 
-router.delete('/vendor-po/:id', (req, res) => {
+router.delete('/vendor-po/:id', requirePermission('procurement', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(id).c;
@@ -4416,7 +4433,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     let autoDnId = null, autoDnNumber = null;
     const { nextSequence } = require('../db/nextSequence');
     const dnYear = new Date().getFullYear();
-    const dnToday = new Date().toISOString().slice(0, 10);
+    const dnToday = istToday();
     if (vendor_po_id) {
       const existingDn = db.prepare(
         'SELECT id, document_number FROM delivery_notes WHERE vendor_po_id = ? LIMIT 1'
@@ -4601,7 +4618,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   }
 });
 
-router.delete('/purchase-bills/:id', (req, res) => {
+router.delete('/purchase-bills/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM purchase_bills WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -4689,7 +4706,7 @@ router.get('/debit-notes', (req, res) => {
   res.json(rows);
 });
 
-router.post('/debit-notes', (req, res) => {
+router.post('/debit-notes', requirePermission('procurement', 'create'), (req, res) => {
   const db = getDb();
   const b = req.body || {};
   const VALID = ['rejected', 'extra_rate', 'short_supply'];
@@ -4713,7 +4730,7 @@ router.post('/debit-notes', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, dn_number: dnNum, amount });
 });
 
-router.patch('/debit-notes/:id', (req, res) => {
+router.patch('/debit-notes/:id', requirePermission('procurement', 'edit'), (req, res) => {
   const db = getDb();
   const b = req.body || {};
   if (b.status && ['open', 'sent', 'settled', 'cancelled'].includes(b.status)) {
@@ -4722,7 +4739,7 @@ router.patch('/debit-notes/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/debit-notes/:id', (req, res) => {
+router.delete('/debit-notes/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM debit_notes WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -4881,7 +4898,7 @@ router.put('/vendor-po/:id/received-qty', needsApprove, (req, res) => {
   const { nextSequence } = require('../db/nextSequence');
   const year = new Date().getFullYear();
   const dnNum = nextSequence(db, 'delivery_notes', 'document_number', `DC/${year}/`, { pad: 4 });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday();
   const ins = db.prepare(`INSERT INTO delivery_notes (vendor_po_id, delivery_date, document_type, document_number, status, notes, items_json) VALUES (?, ?, 'challan', ?, 'pending', 'Received qty edited', ?)`).run(vendor_po_id, today, dnNum, recvJson);
   res.json({ ok: true, delivery_note_id: ins.lastInsertRowid, document_number: dnNum });
 });
@@ -5080,7 +5097,7 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
   const { nextSequence } = require('../db/nextSequence');
   const year = new Date().getFullYear();
   const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday();
   const sb = db.prepare(`
     INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
     VALUES (?, ?, ?, ?, 'sales_bill', ?, 'pending', ?, ?, ?)
@@ -5394,7 +5411,7 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
           const { nextSequence } = require('../db/nextSequence');
           const year = new Date().getFullYear();
           const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
-          const today = new Date().toISOString().slice(0, 10);
+          const today = istToday();
           const sb = db.prepare(`
             INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
             VALUES (?, ?, 'po', ?, 'sales_bill', ?, 'pending', ?, ?, ?)
@@ -5413,13 +5430,13 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
   }
 });
 
-router.put('/delivery-notes/:id', (req, res) => {
+router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req, res) => {
   const { status, notes } = req.body;
   getDb().prepare('UPDATE delivery_notes SET status=?, notes=? WHERE id=?').run(status, notes, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/delivery-notes/:id', (req, res) => {
+router.delete('/delivery-notes/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM delivery_notes WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -5597,7 +5614,7 @@ function autoGenerateSalesBillForPO(db, vendorPoId, userId) {
         place_of_supply, state_code, reverse_charge, cgst_pct, sgst_pct, igst_pct,
         freight_amount, round_off_amount, subtotal_amount, grand_total_amount, items_json, sales_bill_pending)
      VALUES (?, ?, ?, 'sales_bill', ?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, ?, 0)`
-  ).run(vendorPoId, new Date().toISOString().slice(0, 10), userId || null, document_number,
+  ).run(vendorPoId, istToday(), userId || null, document_number,
         bt.client_state || null, bt.client_state_code || null,
         cgst_pct, sgst_pct, igst_pct, subtotal, grand, JSON.stringify(payloadItems));
   return { id: ins.lastInsertRowid, document_number };
@@ -6588,7 +6605,7 @@ router.get('/sales-bills', (req, res) => {
     LEFT JOIN purchase_orders po ON sb.po_id=po.id ORDER BY sb.created_at DESC`).all());
 });
 
-router.post('/sales-bills', (req, res) => {
+router.post('/sales-bills', requirePermission('procurement', 'create'), (req, res) => {
   const db = getDb();
   const { po_id, bill_date, amount, gst_amount, total_amount } = req.body;
   const { nextSequence } = require('../db/nextSequence');
@@ -6598,7 +6615,7 @@ router.post('/sales-bills', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, bill_number: billNum });
 });
 
-router.delete('/sales-bills/:id', (req, res) => {
+router.delete('/sales-bills/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM sales_bills WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -6978,7 +6995,7 @@ const bulkUpload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 102
 // BOQ was uploaded during PO creation; items either weren't saved to po_items
 // or were never saved because the final 'Update Purchase Order' step was
 // skipped. This endpoint fishes the items out and persists them to po_items.
-router.post('/fetch-existing-boq', (req, res) => {
+router.post('/fetch-existing-boq', requirePermission('procurement', 'view'), (req, res) => {
   const siteName = String(req.body?.site_name || '').trim();
   if (!siteName) return res.status(400).json({ error: 'site_name is required' });
   const db = getDb();
@@ -7067,7 +7084,7 @@ router.post('/fetch-existing-boq', (req, res) => {
   res.json({ message: 'Items fetched', items_saved: src.items.length, source: src.name, po_number: src.po_number || null });
 });
 
-router.post('/upload-boq-for-site', bulkUpload.single('file'), (req, res) => {
+router.post('/upload-boq-for-site', requirePermission('procurement', 'create'), bulkUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const siteName = String(req.body?.site_name || '').trim();
   if (!siteName) {

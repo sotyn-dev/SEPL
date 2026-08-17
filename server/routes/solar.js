@@ -3,6 +3,7 @@
 // engineering factors + settings, and saved solar quotations. Gated by the
 // `solar_quotation` module permission. Tables created/seeded by db/seedSolar.js.
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -179,7 +180,7 @@ router.post('/quotations/export', requirePermission('solar_quotation', 'view'), 
     q.push(['Secured Engineers India']);
     q.push([`QUOTATION FOR ${sysTitle}`]);
     q.push([]);
-    q.push(['NAME', b.client_name || '', '', 'Date', new Date().toISOString().slice(0, 10)]);
+    q.push(['NAME', b.client_name || '', '', 'Date', istToday()]);
     q.push(['ADDRESS', b.address || '', '', 'Quotation No', b.quote_no || '']);
     q.push([]);
     q.push(['S No.', 'Description', 'Amount (In Rupees)']);
