@@ -247,12 +247,6 @@ export default function Scorecard() {
   };
 
   // Group KPIs by group_name for the table render
-  const grouped = (scorecard?.kpis || []).reduce((acc, k) => {
-    const g = k.group_name || 'Other';
-    if (!acc[g]) acc[g] = [];
-    acc[g].push(k);
-    return acc;
-  }, {});
 
   // Mam 2026-08-17: "one time last 6 months score count show" — ONE aggregate
   // figure: the average weekly vs-plan variance across the last 26 weeks
@@ -284,6 +278,17 @@ export default function Scorecard() {
   // Apply is pressed (rangeApplied snapshots the dates at that moment).
   const [rangeApplied, setRangeApplied] = useState(null);
   const [rangeStat, setRangeStat] = useState(null);
+  // The FULL scorecard aggregated over the applied period — when set, the MIS
+  // table shows these summed values instead of the single week (read-only).
+  const [periodCard, setPeriodCard] = useState(null);
+  useEffect(() => {
+    if (!rangeApplied) { setPeriodCard(null); return; }
+    let on = true;
+    api.get(`/scoring/scorecard-range?user_id=${viewUserId}&from=${rangeApplied.from}&to=${rangeApplied.to}`)
+      .then(r => { if (on) setPeriodCard(r.data); })
+      .catch(() => { if (on) setPeriodCard(null); });
+    return () => { on = false; };
+  }, [rangeApplied, viewUserId]);
   useEffect(() => {
     if (!rangeApplied) { setRangeStat(null); return; }
     let from = mondayOf(rangeApplied.from), to = mondayOf(rangeApplied.to);
@@ -304,6 +309,16 @@ export default function Scorecard() {
       .catch(() => { if (on) setRangeStat(null); });
     return () => { on = false; };
   }, [rangeApplied, viewUserId]);
+
+  // Period mode: the applied From→To aggregate replaces the weekly card in the
+  // table + banner (read-only — entries/commitments are per-week concepts).
+  const displayCard = periodCard || scorecard;
+  const grouped = (displayCard?.kpis || []).reduce((acc, k) => {
+    const g = k.group_name || 'Other';
+    if (!acc[g]) acc[g] = [];
+    acc[g].push(k);
+    return acc;
+  }, {});
 
   // Mam 2026-08-17: "add option for print this scoring also". Browser-print of
   // just the scorecard area — a body class + CSS in index.css hides the rest
@@ -415,22 +430,30 @@ export default function Scorecard() {
           {/* Letterhead — appears only on the printed sheet */}
           <div className="hidden print:block text-center border-b-2 border-gray-800 pb-3">
             <div className="text-xl font-bold tracking-wide">SECURED ENGINEERS PVT. LTD.</div>
-            <div className="text-sm font-semibold mt-1">Weekly Scorecard — {scorecard.user?.name || ''}</div>
-            <div className="text-xs text-gray-600">{fmtRange(weekStart)} · Template: {scorecard.template?.name || '—'}</div>
+            <div className="text-sm font-semibold mt-1">{periodCard ? 'Period' : 'Weekly'} Scorecard — {scorecard.user?.name || ''}</div>
+            <div className="text-xs text-gray-600">
+              {periodCard ? `${fmtRange(periodCard.from)} → ${fmtRange(periodCard.to)} (${periodCard.weeks_counted} weeks)` : fmtRange(weekStart)}
+              {' '}· Template: {displayCard.template?.name || '—'}
+            </div>
           </div>
           <div className="card p-4 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-indigo-50 to-blue-50">
             <div>
               <p className="text-xs text-gray-500">Template</p>
-              <p className="text-lg font-bold">{scorecard.template?.name || <span className="text-amber-600">No template assigned</span>}</p>
-              {scorecard.template?.description && <p className="text-xs text-gray-500">{scorecard.template.description}</p>}
+              <p className="text-lg font-bold">{displayCard.template?.name || <span className="text-amber-600">No template assigned</span>}</p>
+              {displayCard.template?.description && <p className="text-xs text-gray-500">{displayCard.template.description}</p>}
+              {periodCard && (
+                <span className="inline-block mt-1 text-[11px] font-bold px-2 py-0.5 rounded bg-indigo-600 text-white">
+                  PERIOD {fmtRange(periodCard.from).replace(/ \d{4}$/, '')} → {fmtRange(periodCard.to)} · {periodCard.weeks_counted} wks
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-3">
-              {scorecard.template && (scorecard.kpis || []).length > 0 && (
+              {displayCard.template && (displayCard.kpis || []).length > 0 && (
                 <button
                   onClick={() => exportCsv(
-                    `scorecard-${(scorecard.user?.name || 'user').replace(/\s+/g, '-')}-${weekStart}`,
+                    `scorecard-${(scorecard.user?.name || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
                     ['Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Total Up-to-date', 'Pending', 'Commitment'],
-                    (scorecard.kpis || []).map(k => [
+                    (displayCard.kpis || []).map(k => [
                       k.group_name || 'Other',
                       k.metric_name || '',
                       k.weightage ?? '',
@@ -454,15 +477,16 @@ export default function Scorecard() {
                 ><FiPrinter size={14} /> Print</button>
               )}
               <div className="text-right">
-                <p className="text-xs text-gray-500">Weekly Score <span className="text-gray-400">vs plan</span></p>
+                <p className="text-xs text-gray-500">{periodCard ? 'Period Score' : 'Weekly Score'} <span className="text-gray-400">vs plan</span></p>
                 {(() => {
                   // Headline = variance from plan (achievement% − 100), 2 decimals:
                   // 0% = on plan, negative = behind, positive = ahead (mam 2026-07-04).
                   // Engine score stays the raw achievement % so the Champions League /
                   // War Room keep ranking higher-better; this is display-only.
-                  if (!scorecard.template) return <p className="text-3xl font-bold text-gray-300">—</p>;
-                  const headVs = (scorecard.score ?? 0) - 100;
-                  return <p className={`text-3xl font-bold ${vsClr(scorecard.score)}`}>{headVs > 0 ? '+' : ''}{headVs.toFixed(2)}%</p>;
+                  // In period mode this is the weighted score of the SUMMED table.
+                  if (!displayCard.template) return <p className="text-3xl font-bold text-gray-300">—</p>;
+                  const headVs = (displayCard.score ?? 0) - 100;
+                  return <p className={`text-3xl font-bold ${vsClr(displayCard.score)}`}>{headVs > 0 ? '+' : ''}{headVs.toFixed(2)}%</p>;
                 })()}
               </div>
               {/* Mam 2026-08-17: one-shot 6-month aggregate — avg of the weekly
@@ -505,13 +529,13 @@ export default function Scorecard() {
             <CommitmentPanel viewUserId={viewUserId} weekStart={weekStart} />
           </div>
 
-          {!scorecard.template && (
+          {!displayCard.template && (
             <div className="card p-6 text-center text-gray-400 text-sm">
               No template assigned to this user yet. {isAdmin() && <span>Open the <button className="text-blue-600 underline" onClick={() => setTab('assign')}>Assign Templates</button> tab to set one.</span>}
             </div>
           )}
 
-          {scorecard.template && Object.keys(grouped).map(groupName => (
+          {displayCard.template && Object.keys(grouped).map(groupName => (
             <div key={groupName} className="card p-0 overflow-x-auto">
               <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 font-bold text-amber-800 text-sm">{groupName}</div>
               <table className="w-full text-xs">
@@ -537,9 +561,9 @@ export default function Scorecard() {
                           kpi={k}
                           saving={savingKpi === k.kpi_id}
                           onSave={(patch) => saveEntry(k, patch)}
-                          readOnly={viewUserId !== user.id && !isAdmin()}
-                          onStepWise={isRaci ? toggleRaci : null}
-                          stepWiseOpen={isRaci && raci.open}
+                          readOnly={!!periodCard || (viewUserId !== user.id && !isAdmin())}
+                          onStepWise={isRaci && !periodCard ? toggleRaci : null}
+                          stepWiseOpen={isRaci && !periodCard && raci.open}
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">

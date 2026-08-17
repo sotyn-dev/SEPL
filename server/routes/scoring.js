@@ -1099,6 +1099,84 @@ router.get('/scorecard', (req, res) => {
   }
 });
 
+// GET the WHOLE scorecard aggregated over a From→To period (mam 2026-08-17:
+// "if i apply this value not changed" — Apply must recalculate the table, not
+// just the banner tile). Runs the normal weekly compute for every week in the
+// range — every hard-won weekly rule (IST bucketing, cohorts, 0/0=on-plan,
+// per-user overrides) applies unchanged — then sums Planned/Actual per KPI
+// and recomputes % and the weighted score from the summed values.
+router.get('/scorecard-range', (req, res) => {
+  try {
+    const userId = parseInt(req.query.user_id, 10) || req.user.id;
+    const ok = (s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+    if (!ok(req.query.from) || !ok(req.query.to)) {
+      return res.status(400).json({ error: 'from and to (yyyy-mm-dd) required' });
+    }
+    // Snap both ends to their week's Monday (scoring weeks are Mon-Sat).
+    const monday = (s) => {
+      const d = new Date(`${s}T00:00:00Z`);
+      const dow = d.getUTCDay();
+      d.setUTCDate(d.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
+      return d.toISOString().slice(0, 10);
+    };
+    let from = monday(req.query.from), to = monday(req.query.to);
+    if (from > to) [from, to] = [to, from];
+    const nWeeks = Math.min(53, Math.round((new Date(to) - new Date(from)) / (7 * 864e5)) + 1);
+
+    const db = getDb();
+    const byKpi = new Map();   // kpi_id → aggregated row
+    let template = null, weeksCounted = 0;
+    for (let i = 0; i < nWeeks; i++) {
+      const w = shiftWeek(from, 7 * i);
+      const sc = computeScorecard(db, userId, w);
+      if (!sc || !sc.template) continue;
+      template = sc.template;
+      weeksCounted++;
+      for (const k of sc.kpis) {
+        const agg = byKpi.get(k.kpi_id);
+        if (!agg) {
+          byKpi.set(k.kpi_id, { ...k, planned: +k.planned || 0, actual: +k.actual || 0,
+            last_week_pct: null, total_uptodate: null, pending_uptodate: null,
+            pending_work: null, pending_pct: null, commitment: null, notes: null });
+        } else {
+          agg.planned += +k.planned || 0;
+          agg.actual += +k.actual || 0;
+          // keep the latest week's definition (name/weight/direction may evolve)
+          agg.group_name = k.group_name; agg.metric_name = k.metric_name;
+          agg.weightage = k.weightage; agg.direction = k.direction;
+        }
+      }
+    }
+
+    // Same % + weighted-score math as the weekly compute, on the summed values.
+    let totalScore = 0, totalWeight = 0;
+    const kpis = [...byKpi.values()].map(k => {
+      let pct = 0;
+      if (+k.planned === 0 && +k.actual === 0) pct = 100;
+      else if (k.planned > 0) {
+        pct = k.direction === 'lower_better'
+          ? (k.actual <= k.planned ? 100 : Math.round((k.planned / k.actual) * 100))
+          : Math.round((k.actual / k.planned) * 100);
+        if (pct < 0) pct = 0;
+      }
+      k.actual_pct = pct;
+      totalWeight += k.weightage || 0;
+      totalScore += (k.weightage || 0) * pct;
+      return k;
+    });
+    const score = totalWeight > 0 ? Math.round((totalScore / totalWeight) * 100) / 100 : 0;
+
+    res.json({
+      user_id: userId, period: true, from, to,
+      week_end: shiftWeek(to, 5), weeks_counted: weeksCounted,
+      template, kpis, score, total_weight: totalWeight,
+    });
+  } catch (err) {
+    console.error('scorecard-range get error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET step-wise breakdown of the "RACI Steps (All Modules)" row for one
 // user × week — powers the scorecard drill-down (mam 2026-06-27: "show step
 // wise"). Splits the single Planned/Actual total into one line per (module,
