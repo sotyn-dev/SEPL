@@ -11,7 +11,7 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget } from 'react-icons/fi';
+import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, Cell,
@@ -244,6 +244,35 @@ export default function Scorecard() {
     return acc;
   }, {});
 
+  // Mam 2026-08-17: "one time last 6 months score count show" — ONE aggregate
+  // figure: the average weekly vs-plan variance across the last 26 weeks
+  // (weeks without a scored template are skipped, count shown alongside).
+  const [sixMonth, setSixMonth] = useState(null);
+  useEffect(() => {
+    let on = true;
+    setSixMonth(null);
+    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${weekStart}&weeks=26`)
+      .then(r => {
+        if (!on) return;
+        const vals = (r.data?.weeks || []).map(w => w.actual_pct).filter(v => v != null);
+        setSixMonth(vals.length
+          ? { avg: Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100, n: vals.length }
+          : { avg: null, n: 0 });
+      })
+      .catch(() => { if (on) setSixMonth({ avg: null, n: 0 }); });
+    return () => { on = false; };
+  }, [viewUserId, weekStart]);
+
+  // Mam 2026-08-17: "add option for print this scoring also". Browser-print of
+  // just the scorecard area — a body class + CSS in index.css hides the rest
+  // of the app (sidebar, tabs, pickers) while printing.
+  const printScorecard = () => {
+    document.body.classList.add('print-scorecard');
+    const done = () => { document.body.classList.remove('print-scorecard'); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done);
+    setTimeout(() => window.print(), 60);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -283,10 +312,26 @@ export default function Scorecard() {
             <label className="label">Week starting (Monday)</label>
             <input type="date" className="input" value={weekStart} onChange={e => setWeekStart(e.target.value)} />
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1 flex-wrap items-center">
             <button onClick={() => setWeekStart(lastMonday(1))} className="btn btn-secondary text-xs">Last Week</button>
             <button onClick={() => setWeekStart(lastMonday(0))} className="btn btn-secondary text-xs">This Week</button>
             <button onClick={() => setWeekStart(lastMonday(2))} className="btn btn-secondary text-xs">Two Weeks Ago</button>
+            {/* Mam 2026-08-17: "add with two weeks last 6 months also" — jump
+                to any week of the last 6 months without date-picker gymnastics. */}
+            <select
+              className="input text-xs w-auto py-1.5"
+              value={Array.from({ length: 26 }, (_, i) => lastMonday(i)).includes(weekStart) ? weekStart : ''}
+              onChange={e => e.target.value && setWeekStart(e.target.value)}>
+              <option value="" disabled>Last 6 months…</option>
+              {Array.from({ length: 26 }, (_, i) => {
+                const m = lastMonday(i);
+                return (
+                  <option key={m} value={m}>
+                    {fmtRange(m)}{i === 0 ? ' · this week' : ''}
+                  </option>
+                );
+              })}
+            </select>
           </div>
           {/* Admin-only employee switcher — pick anyone to inspect their MIS
               without leaving the My Scorecard tab. */}
@@ -301,7 +346,13 @@ export default function Scorecard() {
 
       {/* MY SCORECARD */}
       {(tab === 'my' || tab === 'view') && scorecard && (
-        <>
+        <div id="scorecard-print-area" className="space-y-6">
+          {/* Letterhead — appears only on the printed sheet */}
+          <div className="hidden print:block text-center border-b-2 border-gray-800 pb-3">
+            <div className="text-xl font-bold tracking-wide">SECURED ENGINEERS PVT. LTD.</div>
+            <div className="text-sm font-semibold mt-1">Weekly Scorecard — {scorecard.user?.name || ''}</div>
+            <div className="text-xs text-gray-600">{fmtRange(weekStart)} · Template: {scorecard.template?.name || '—'}</div>
+          </div>
           <div className="card p-4 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-indigo-50 to-blue-50">
             <div>
               <p className="text-xs text-gray-500">Template</p>
@@ -327,9 +378,15 @@ export default function Scorecard() {
                       k.commitment || '',
                     ])
                   )}
-                  className="btn btn-secondary text-xs flex items-center gap-1"
+                  className="btn btn-secondary text-xs flex items-center gap-1 print:hidden"
                   title="Download this scorecard as CSV (opens in Excel)"
                 ><FiDownload size={14} /> Export Excel</button>
+              )}
+              {scorecard.template && (scorecard.kpis || []).length > 0 && (
+                <button onClick={printScorecard}
+                  className="btn btn-secondary text-xs flex items-center gap-1 print:hidden"
+                  title="Print this scorecard (or save as PDF)"
+                ><FiPrinter size={14} /> Print</button>
               )}
               <div className="text-right">
                 <p className="text-xs text-gray-500">Weekly Score <span className="text-gray-400">vs plan</span></p>
@@ -343,13 +400,27 @@ export default function Scorecard() {
                   return <p className={`text-3xl font-bold ${vsClr(scorecard.score)}`}>{headVs > 0 ? '+' : ''}{headVs.toFixed(2)}%</p>;
                 })()}
               </div>
+              {/* Mam 2026-08-17: one-shot 6-month aggregate — avg of the weekly
+                  vs-plan variances over the 26 weeks ending at the viewed week. */}
+              <div className="text-right border-l border-indigo-200 pl-3">
+                <p className="text-xs text-gray-500">Last 6 Months <span className="text-gray-400">avg vs plan</span></p>
+                {sixMonth == null
+                  ? <p className="text-2xl font-bold text-gray-300">…</p>
+                  : sixMonth.avg == null
+                    ? <p className="text-2xl font-bold text-gray-300">—</p>
+                    : <p className={`text-2xl font-bold ${vsClr(sixMonth.avg + 100)}`}>{sixMonth.avg > 0 ? '+' : ''}{sixMonth.avg.toFixed(2)}%</p>}
+                {sixMonth?.n > 0 && <p className="text-[10px] text-gray-400">across {sixMonth.n} scored week{sixMonth.n === 1 ? '' : 's'}</p>}
+              </div>
             </div>
           </div>
 
           {/* Weekly commitment — the employee's promise for the coming week,
               last week's committed target, and a committed-vs-delivered graph
-              so they SEE the gap (mam 2026-07-06). */}
-          <CommitmentPanel viewUserId={viewUserId} weekStart={weekStart} />
+              so they SEE the gap (mam 2026-07-06). Print shows the MIS tables
+              only, so this interactive panel stays screen-only. */}
+          <div className="print:hidden">
+            <CommitmentPanel viewUserId={viewUserId} weekStart={weekStart} />
+          </div>
 
           {!scorecard.template && (
             <div className="card p-6 text-center text-gray-400 text-sm">
@@ -403,7 +474,7 @@ export default function Scorecard() {
               </table>
             </div>
           ))}
-        </>
+        </div>
       )}
 
       {/* TEAM OVERVIEW (existing weekly aggregator) */}
@@ -494,12 +565,14 @@ function CommitmentPanel({ viewUserId, weekStart }) {
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
+  // Mam 2026-08-17: graph range — 8 weeks (default, fast) or the last 6 months.
+  const [range, setRange] = useState(8);
 
   const load = useCallback(() => {
-    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${weekStart}&weeks=8`)
+    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${weekStart}&weeks=${range}`)
       .then(r => { setData(r.data); setDraft(r.data?.next?.committed_pct ?? ''); })
       .catch(() => setData(null));
-  }, [viewUserId, weekStart]);
+  }, [viewUserId, weekStart, range]);
   useEffect(() => { load(); }, [load]);
 
   const save = async () => {
@@ -594,6 +667,16 @@ function CommitmentPanel({ viewUserId, weekStart }) {
       {/* Graph — the emotional angle: bars (delivered) against the dashed
           promise line, red where they fall short. */}
       <div>
+        <div className="flex justify-end gap-1 mb-1">
+          <button onClick={() => setRange(8)}
+            className={`text-[11px] px-2 py-1 rounded font-semibold ${range === 8 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            8 Weeks
+          </button>
+          <button onClick={() => setRange(26)}
+            className={`text-[11px] px-2 py-1 rounded font-semibold ${range === 26 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            Last 6 Months
+          </button>
+        </div>
         {hasData ? (
           <ResponsiveContainer width="100%" height={260}>
             <ComposedChart data={chart} margin={{ top: 10, right: 12, left: -12, bottom: 0 }}>
