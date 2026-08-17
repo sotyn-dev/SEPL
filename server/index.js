@@ -667,6 +667,36 @@ app.get('/api/health', (req, res) => {
 //   - Hashed asset files (under /assets/*) → cache forever (immutable)
 //   - index.html + other root files → no-cache so a refresh ALWAYS
 //     fetches the current bundle name.
+// /join — the PERMANENT new-joiner URL (mam 2026-08-17 "only make link"):
+// short enough to print in the joining kit / pin in WhatsApp. Redirects to
+// the currently ACTIVE standing self-fill link, so rotating the token from
+// the Employees page never changes the URL people share. No active link →
+// the invalid-link card explains to contact HR.
+app.get('/join', (req, res) => {
+  try {
+    const { getDb } = require('./db/schema');
+    const db = getDb();
+    let link = db.prepare(
+      `SELECT token FROM employee_fill_links
+        WHERE employee_id IS NULL AND COALESCE(multi_use,0)=1 AND used_at IS NULL
+          AND (expires_at IS NULL OR expires_at >= datetime('now'))
+        ORDER BY id DESC LIMIT 1`
+    ).get();
+    if (!link) {
+      // Self-healing: /join must always work — provision a fresh standing
+      // link when none is active (expired / first boot). HR can still rotate
+      // it any time from the Employees page (new token, same /join URL).
+      const token = require('crypto').randomBytes(24).toString('base64url');
+      db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at, multi_use)
+                  VALUES (?,NULL,NULL, datetime('now','+30 days'), 1)`).run(token);
+      link = { token };
+    }
+    res.redirect(302, `/employee-fill/${link.token}`);
+  } catch (e) {
+    res.redirect(302, '/employee-fill/none-active');
+  }
+});
+
 const clientBuild = path.join(__dirname, '..', 'client', 'dist');
 const fs2 = require('fs');
 if (fs2.existsSync(clientBuild)) {
