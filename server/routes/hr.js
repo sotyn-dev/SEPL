@@ -512,6 +512,21 @@ router.post('/candidates/:id/interview-done', (req, res) => {
   if (!['shortlisted','rejected','on_hold'].includes(decision)) {
     return res.status(400).json({ error: 'decision must be shortlisted / rejected / on_hold' });
   }
+  // Audit follow-up 2026-08-17: was auth-only — ANY logged-in user could
+  // shortlist/reject candidates. Allowed: the ASSIGNED interviewer (an
+  // interviewer needn't hold hr permissions — rentalTools pattern), anyone
+  // with hr.can_edit, or admin.
+  {
+    const db0 = getDb();
+    const cand = db0.prepare('SELECT interviewer_id FROM candidates WHERE id=?').get(req.params.id);
+    if (!cand) return res.status(404).json({ error: 'Candidate not found' });
+    const myEmployeeIds = db0.prepare('SELECT id FROM employees WHERE user_id=?').all(req.user.id).map(r => r.id);
+    const isInterviewer = cand.interviewer_id != null && myEmployeeIds.includes(cand.interviewer_id);
+    const isHr = req.user.role === 'admin' || !!getUserPermissions(req.user.id)['hr']?.can_edit;
+    if (!isInterviewer && !isHr) {
+      return res.status(403).json({ error: 'Only the assigned interviewer or HR can record the interview decision' });
+    }
+  }
   // shortlisted → 'qualified' (waiting for MD round)
   // rejected    → 'rejected'
   // on_hold     → stays 'interview_done' for HR to come back later
@@ -2420,7 +2435,9 @@ router.put('/training/videos/:id', requirePermission('hr', 'edit'), (req, res) =
   res.json({ message: 'Updated' });
 });
 
-router.delete('/training/videos/:id', (req, res) => {
+// Audit follow-up 2026-08-17: was auth-only — ANY logged-in user could
+// delete training videos. Same gate as its create/edit siblings.
+router.delete('/training/videos/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM training_videos WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2480,7 +2497,25 @@ router.get('/training/mine', (req, res) => {
   res.json(rows);
 });
 
+// Audit follow-up 2026-08-17: start/complete had NO ownership check — anyone
+// could mark ANYONE's training complete (fake completions). Self-service =
+// only the assigned employee themselves; HR (hr.can_edit) and admin may act
+// on behalf (e.g. marking an offline session done).
+function canTouchAssignment(req, res, assignmentId) {
+  const db = getDb();
+  const a = db.prepare(
+    `SELECT a.id, e.user_id AS owner_user_id FROM training_assignments a
+      LEFT JOIN employees e ON e.id = a.employee_id WHERE a.id = ?`
+  ).get(assignmentId);
+  if (!a) { res.status(404).json({ error: 'Assignment not found' }); return null; }
+  const isOwner = a.owner_user_id != null && a.owner_user_id === req.user.id;
+  const isHr = req.user.role === 'admin' || !!getUserPermissions(req.user.id)['hr']?.can_edit;
+  if (!isOwner && !isHr) { res.status(403).json({ error: 'This training is not assigned to you' }); return null; }
+  return a;
+}
+
 router.post('/training/assignments/:id/start', (req, res) => {
+  if (!canTouchAssignment(req, res, req.params.id)) return;
   getDb().prepare(`UPDATE training_assignments
                      SET started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
                    WHERE id = ?`).run(req.params.id);
@@ -2488,6 +2523,7 @@ router.post('/training/assignments/:id/start', (req, res) => {
 });
 
 router.post('/training/assignments/:id/complete', (req, res) => {
+  if (!canTouchAssignment(req, res, req.params.id)) return;
   const { note } = req.body || {};
   getDb().prepare(`UPDATE training_assignments
                      SET completed_at = CURRENT_TIMESTAMP,

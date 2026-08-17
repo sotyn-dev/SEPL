@@ -5,7 +5,7 @@ const fs = require('fs');
 const XLSX = require('xlsx');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
 const { nextSequence } = require('../db/nextSequence');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
@@ -2698,8 +2698,20 @@ router.put('/indents/:id', (req, res) => {
 
   // Full edit path
   if (items) {
-    const cur = db.prepare('SELECT status, indent_category FROM indents WHERE id=?').get(id);
+    const cur = db.prepare('SELECT status, indent_category, created_by FROM indents WHERE id=?').get(id);
     if (!cur) return res.status(404).json({ error: 'Indent not found' });
+    // Audit follow-up 2026-08-17: the items-edit path was auth-only — any
+    // logged-in user could rewrite a pending indent's items/quantities.
+    // Allowed: the indent's creator, procurement.can_edit holders, admin.
+    // Approver flows are untouched — quantity/unit overrides ride the
+    // status (approve) branch above, never this items branch.
+    {
+      const isCreator = cur.created_by != null && cur.created_by === req.user.id;
+      const canEditProc = req.user.role === 'admin' || !!getUserPermissions(req.user.id)['procurement']?.can_edit;
+      if (!isCreator && !canEditProc) {
+        return res.status(403).json({ error: 'Only the indent creator or procurement can edit this indent' });
+      }
+    }
     if (cur.status === 'approved') {
       return res.status(400).json({ error: 'Cannot edit an approved indent' });
     }
