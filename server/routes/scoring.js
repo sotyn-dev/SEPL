@@ -1195,8 +1195,9 @@ router.get('/commitments', (req, res) => {
       ? req.query.week_start
       : defaultWeekStart();
     let weeks = parseInt(req.query.weeks, 10) || 8;
-    // Cap 26 = the "Last 6 Months" graph range (mam 2026-08-17).
-    weeks = Math.max(4, Math.min(26, weeks));
+    // Cap 53 = one full year: covers the "Last 6 Months" graph range AND the
+    // manual From→To period score (both mam 2026-08-17).
+    weeks = Math.max(1, Math.min(53, weeks));
     const db = getDb();
 
     // Oldest → newest; newest = the viewed week (so the graph reads left→right).

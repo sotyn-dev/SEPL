@@ -50,6 +50,16 @@ const lastMonday = (offsetWeeks = 0) => {
   return d.toISOString().slice(0, 10);
 };
 
+// Monday of the week containing the given yyyy-mm-dd (scoring weeks are Mon-Sat).
+const mondayOf = (dateStr) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d)) return null;
+  const dow = d.getDay();
+  d.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
 const fmtRange = (start) => {
   const s = new Date(start), e = new Date(start);
   e.setDate(s.getDate() + 5);
@@ -263,6 +273,34 @@ export default function Scorecard() {
     return () => { on = false; };
   }, [viewUserId, weekStart]);
 
+  // Mam 2026-08-17: "give me start to end date manual because in onetime i
+  // want last one month" — a manual From/To range that shows ONE average for
+  // that window. Snaps to whole scoring weeks (Mon-Sat): the range runs from
+  // the week containing From through the week containing To.
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
+  const [rangeStat, setRangeStat] = useState(null);
+  useEffect(() => {
+    if (!rangeFrom || !rangeTo) { setRangeStat(null); return; }
+    let from = mondayOf(rangeFrom), to = mondayOf(rangeTo);
+    if (!from || !to) { setRangeStat(null); return; }
+    if (from > to) [from, to] = [to, from];            // swapped dates — just fix them
+    const nWeeks = Math.min(53, Math.round((new Date(to) - new Date(from)) / (7 * 864e5)) + 1);
+    let on = true;
+    setRangeStat({ loading: true });
+    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${to}&weeks=${nWeeks}`)
+      .then(r => {
+        if (!on) return;
+        const vals = (r.data?.weeks || []).map(w => w.actual_pct).filter(v => v != null);
+        setRangeStat({
+          from, to, n: vals.length,
+          avg: vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 : null,
+        });
+      })
+      .catch(() => { if (on) setRangeStat(null); });
+    return () => { on = false; };
+  }, [rangeFrom, rangeTo, viewUserId]);
+
   // Mam 2026-08-17: "add option for print this scoring also". Browser-print of
   // just the scorecard area — a body class + CSS in index.css hides the rest
   // of the app (sidebar, tabs, pickers) while printing.
@@ -332,6 +370,22 @@ export default function Scorecard() {
                 );
               })}
             </select>
+          </div>
+          {/* Mam 2026-08-17: manual From→To period — one average score for any
+              window (e.g. last one month). Result shows in the score banner. */}
+          <div>
+            <label className="label">Period score (from → to)</label>
+            <div className="flex items-center gap-1">
+              <input type="date" className="input text-xs w-auto py-1.5" title="Period from"
+                value={rangeFrom} onChange={e => setRangeFrom(e.target.value)} />
+              <span className="text-xs text-gray-400">→</span>
+              <input type="date" className="input text-xs w-auto py-1.5" title="Period to"
+                value={rangeTo} onChange={e => setRangeTo(e.target.value)} />
+              {(rangeFrom || rangeTo) && (
+                <button onClick={() => { setRangeFrom(''); setRangeTo(''); }}
+                  className="text-gray-400 hover:text-red-600 text-sm px-1" title="Clear period">✕</button>
+              )}
+            </div>
           </div>
           {/* Admin-only employee switcher — pick anyone to inspect their MIS
               without leaving the My Scorecard tab. */}
@@ -411,6 +465,24 @@ export default function Scorecard() {
                     : <p className={`text-2xl font-bold ${vsClr(sixMonth.avg + 100)}`}>{sixMonth.avg > 0 ? '+' : ''}{sixMonth.avg.toFixed(2)}%</p>}
                 {sixMonth?.n > 0 && <p className="text-[10px] text-gray-400">across {sixMonth.n} scored week{sixMonth.n === 1 ? '' : 's'}</p>}
               </div>
+              {/* One-shot score for the manually picked From→To period. */}
+              {rangeStat && (
+                <div className="text-right border-l border-indigo-200 pl-3">
+                  <p className="text-xs text-gray-500">Selected Period <span className="text-gray-400">avg vs plan</span></p>
+                  {rangeStat.loading
+                    ? <p className="text-2xl font-bold text-gray-300">…</p>
+                    : rangeStat.avg == null
+                      ? <p className="text-2xl font-bold text-gray-300">—</p>
+                      : <p className={`text-2xl font-bold ${vsClr(rangeStat.avg + 100)}`}>{rangeStat.avg > 0 ? '+' : ''}{rangeStat.avg.toFixed(2)}%</p>}
+                  {!rangeStat.loading && (
+                    <p className="text-[10px] text-gray-400">
+                      {rangeStat.n > 0
+                        ? `${fmtRange(rangeStat.from).replace(/ \d{4}$/, '')} → ${fmtRange(rangeStat.to)} · ${rangeStat.n} scored wk${rangeStat.n === 1 ? '' : 's'}`
+                        : 'no scored weeks in this period'}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
