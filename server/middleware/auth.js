@@ -29,12 +29,45 @@ function getSecret() {
   }
 }
 
+// ── Zero-logout key rotation (mam 2026-08-17 "NOT DO IT EVERYONE") ──────────
+// The jwt_secret was rotated away from the public default. Instead of forcing
+// the whole company to re-login, tokens signed with the OLD secret stay valid
+// during a short grace window and are SILENTLY re-issued under the new secret
+// via the existing X-Refresh-Token header the client already swaps in. After
+// the window, legacy signatures die for good (dormant/forged tokens included).
+const LEGACY_SECRET = 'erp-secret-key-change-in-production';
+const LEGACY_ACCEPTED_UNTIL = '2026-08-24';   // IST date, inclusive
+function verifyToken(token) {
+  try { return { decoded: jwt.verify(token, getSecret()), legacy: false }; }
+  catch (e) {
+    if (e && e.name === 'JsonWebTokenError') {
+      const todayIst = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+      if (todayIst <= LEGACY_ACCEPTED_UNTIL && LEGACY_SECRET !== getSecret()) {
+        // Same expiry rules apply — only the signature check uses the old key.
+        return { decoded: jwt.verify(token, LEGACY_SECRET), legacy: true };
+      }
+    }
+    throw e;
+  }
+}
+
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
-    const decoded = jwt.verify(token, getSecret());
+    const { decoded, legacy } = verifyToken(token);
     req.user = decoded;
+    if (legacy) {
+      // Migrate on the spot: hand back a token signed with the NEW secret.
+      // The client's response interceptor swaps it in automatically — the
+      // user notices nothing.
+      try {
+        const fresh = generateToken(decoded);
+        res.setHeader('X-Refresh-Token', fresh);
+        res.setHeader('Access-Control-Expose-Headers', 'X-Refresh-Token');
+      } catch (_) { /* best-effort */ }
+      return next();
+    }
     // Sliding session (mam 2026-06-12: "after some time automatically logout
     // ... very bad"). While the user is active, keep handing back a fresh
     // token once the current one is more than a day old, so an active user
