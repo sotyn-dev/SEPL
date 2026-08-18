@@ -6804,7 +6804,7 @@ router.post('/item-rates/ai-suggest', needsApprove, async (req, res) => {
   try {
     const client = new Anthropic.default({ apiKey, timeout: 45000 });
     const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. Give the LOWEST (minimum) current market PURCHASE rate in INR, per ${item.unit}, for the item below — the cheapest realistic price a buyer could get in the open market. Reply with ONLY a plain number in rupees — no currency symbol, no commas, no words.\n\nItem: ${item.description}${item.make ? `\nMake/Brand: ${item.make}` : ''}\nUnit: ${item.unit}`;
-    const resp = await client.messages.create({ model, max_tokens: 40, messages: [{ role: 'user', content: prompt }] });
+    const resp = await aiCreateWithFallback(client, model, { max_tokens: 40, messages: [{ role: 'user', content: prompt }] });
     const text = (resp?.content || []).map(c => c.text || '').join(' ');
     const m = String(text).replace(/[,\s₹]/g, '').match(/\d+(\.\d+)?/);
     const rate = m ? Math.round(parseFloat(m[0]) * 100) / 100 : 0;
@@ -6813,9 +6813,39 @@ router.post('/item-rates/ai-suggest', needsApprove, async (req, res) => {
     db.prepare('UPDATE indent_item_rates SET marketing_rate=?, updated_at=CURRENT_TIMESTAMP WHERE indent_item_id=?').run(rate, iiId);
     res.json({ marketing_rate: rate, model });
   } catch (err) {
-    res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
+    console.error('[ai-rates] suggest failed:', err.status || '', err.message);
+    res.status(500).json({ error: aiErrorMessage(err) });
   }
 });
+
+// Audit 2026-08-18 (500 × 221 in one day on ai-suggest-bulk): errors were
+// swallowed into an opaque 'AI request failed' with nothing in pm2 — nobody
+// could tell WHY. Now: (1) a stale stored ai_model that 404s is retried once
+// on the current default model (self-healing, mirrors /join), (2) the real
+// cause is logged server-side, (3) the user sees an ACTIONABLE message.
+const AI_FALLBACK_MODEL = 'claude-opus-5';
+async function aiCreateWithFallback(client, model, params) {
+  try {
+    return await client.messages.create({ model, ...params });
+  } catch (err) {
+    // Model not found (stale/typo'd Admin → AI Settings value) → retry once
+    // with the current default so the feature keeps working.
+    if (err && err.status === 404 && model !== AI_FALLBACK_MODEL) {
+      console.warn(`[ai-rates] model '${model}' not found — retrying with ${AI_FALLBACK_MODEL}`);
+      return await client.messages.create({ model: AI_FALLBACK_MODEL, ...params });
+    }
+    throw err;
+  }
+}
+function aiErrorMessage(err) {
+  const s = err?.status;
+  if (s === 401) return 'AI key invalid — check the API key in Admin → AI Settings';
+  if (s === 403) return 'AI key has no access/credits — check billing on the Anthropic console';
+  if (s === 404) return `AI model not available — set a current model (e.g. ${AI_FALLBACK_MODEL}) in Admin → AI Settings`;
+  if (s === 429) return 'AI is rate-limited right now — wait a minute and try again';
+  if (s === 529 || s === 500) return 'AI service is busy — try again shortly';
+  return 'AI request failed: ' + (err?.message || 'error');
+}
 
 // AI "marketing rate" — BULK auto-suggest (mam 2026-06-19 "don't need to click,
 // automatically rate here"). Estimates many items in ONE AI call. Only the ids
@@ -6842,7 +6872,7 @@ router.post('/item-rates/ai-suggest-bulk', needsApprove, async (req, res) => {
     const client = new Anthropic.default({ apiKey, timeout: 90000 });
     const list = items.map(it => `${it.id}|${it.description}${it.make ? ` (Make: ${it.make})` : ''}|per ${it.unit}`).join('\n');
     const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. For EACH item below, give the LOWEST (minimum) current market PURCHASE rate in INR per its unit — the cheapest realistic open-market price a buyer could get. Each line is "id|description|unit". Reply with ONLY a JSON array of objects like [{"id":123,"rate":450}] — one per item, rate a plain number, no commas, no other text.\n\n${list}`;
-    const resp = await client.messages.create({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt }] });
+    const resp = await aiCreateWithFallback(client, model, { max_tokens: 2000, messages: [{ role: 'user', content: prompt }] });
     const text = (resp?.content || []).map(c => c.text || '').join(' ');
     const jm = text.match(/\[[\s\S]*\]/);
     let arr = [];
@@ -6860,7 +6890,8 @@ router.post('/item-rates/ai-suggest-bulk', needsApprove, async (req, res) => {
     })();
     res.json({ results });
   } catch (err) {
-    res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
+    console.error('[ai-rates] bulk suggest failed:', err.status || '', err.message);
+    res.status(500).json({ error: aiErrorMessage(err) });
   }
 });
 
