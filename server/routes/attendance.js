@@ -42,7 +42,7 @@ function isPunchLate(db, whenIso, roster) {
   // the shifted Date — those values are now the actual IST time-of-day.
   const ist = new Date(new Date(whenIso || Date.now()).getTime() + 5.5 * 60 * 60 * 1000);
   const istMin = ist.getUTCHours() * 60 + ist.getUTCMinutes();
-  return istMin > cutoffMin;
+  return istMin >= cutoffMin;   // late_after_time is the FIRST late minute (see payroll.js)
 }
 
 // GET today's attendance for current user.
@@ -138,7 +138,7 @@ router.get('/my-month', (req, res) => {
         const piIst = new Date(new Date(att.punch_in_time).getTime() + 5.5 * 60 * 60 * 1000);
         if (!isNaN(piIst)) {
           const piMin = piIst.getUTCHours() * 60 + piIst.getUTCMinutes();
-          if (piMin > lateCutoffMin) status = 'late';
+          if (piMin >= lateCutoffMin) status = 'late';   // first-late-minute boundary
         }
       }
     } else if (onLeave) {

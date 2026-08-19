@@ -1587,7 +1587,10 @@ function initializeDatabase() {
     -- cutoff, leave allowances, working days, OT rate, etc.
     CREATE TABLE IF NOT EXISTS payroll_settings (
       id INTEGER PRIMARY KEY CHECK(id = 1),
-      late_after_time TEXT DEFAULT '09:46',           -- start of late zone (after this = late mark)
+      late_after_time TEXT DEFAULT '09:46',           -- FIRST LATE MINUTE ("Late Zone Start"): a punch AT or after
+                                                     -- this is a late mark. SEPL rule (mam): on time up to 09:45,
+                                                     -- so 09:46 is 1 minute late. Penalty minutes are counted from
+                                                     -- the last on-time minute (this value - 1).
       half_day_after_time TEXT DEFAULT '10:00',       -- after this time = half day deduction
       min_hours_full_day REAL DEFAULT 8,              -- below this hours = half day
       min_hours_half_day REAL DEFAULT 4,              -- below this hours = absent
@@ -4636,6 +4639,14 @@ function initializeDatabase() {
     // will fill data"): multi_use=1 links are shared ONCE with all new joiners
     // and never consumed by a submission. Guarded for DBs created before this.
     try { db.exec(`ALTER TABLE employee_fill_links ADD COLUMN multi_use INTEGER DEFAULT 0`); } catch (_) {}
+    // Candidate detail fields (mam 2026-08-17 "yes" to DOB/address/emergency/
+    // bank): filled by the joiner on the public form, editable by HR after.
+    try { db.exec(`ALTER TABLE employees ADD COLUMN date_of_birth TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN address TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_name TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_phone TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN bank_account_no TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN bank_ifsc TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}

@@ -49,7 +49,7 @@ const SETTING_GROUPS = [
   {
     title: 'Attendance Cutoffs',
     fields: [
-      { key: 'late_after_time', label: 'Late Zone Start', help: 'Punch-in after this = late mark (e.g. 09:46). Full day; counts toward monthly grace.', type: 'time' },
+      { key: 'late_after_time', label: 'Late Zone Start', help: 'FIRST late minute — punching in AT or after this is a late mark (09:46 = on time until 09:45). Still a full day; counts toward the monthly grace, and penalty minutes are counted from the minute before this.', type: 'time' },
       { key: 'half_day_after_time', label: 'Half-Day After Time', help: 'Punch-in after this = half day, no grace (e.g. 10:00)', type: 'time' },
       { key: 'min_hours_half_day', label: 'Min Hours for Full Day', help: 'Work this many hours or more = full day; less = half day (e.g. 4)', type: 'number', step: 0.5 },
     ]
@@ -433,7 +433,7 @@ export default function Payroll() {
   const lateGrace = +(savedSettings?.late_grace_count ?? 0);
   const lateRate = +(savedSettings?.late_per_minute_rate ?? 0);
   const lateRuleText = savedSettings
-    ? `Arrive after ${savedSettings.late_after_time} (up to ${savedSettings.half_day_after_time}) = a late mark. First ${lateGrace} late marks each month are free; every late day after that is charged Rs ${lateRate} per minute. After ${savedSettings.half_day_after_time} it becomes a half day instead. Change these in Rules / Settings.`
+    ? `Arrive at or after ${savedSettings.late_after_time} (up to ${savedSettings.half_day_after_time}) = a late mark. First ${lateGrace} late marks each month are free; every late day after that is charged Rs ${lateRate} per minute. After ${savedSettings.half_day_after_time} it becomes a half day instead. Change these in Rules / Settings.`
     : 'Late rule loading…';
   const lockTooltip = (r) => {
     if (!r.finalised_at) return 'Finalised';

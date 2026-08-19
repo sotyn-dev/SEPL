@@ -429,11 +429,17 @@ function calculateForEmployee(db, settings, employee, month) {
         dayPay = 0.5;
         dayLabel = veryLate ? 'half_day_late' : 'half_day_low_hours';
       } else {
-        // Late mark check (between late_after and half_day_after)
-        if (punchInMin !== null && lateAfter !== null && punchInMin > lateAfter) {
+        // Late mark check (between late_after and half_day_after).
+        // late_after_time is the FIRST LATE MINUTE — the field is labelled
+        // "Late Zone Start" and mam's rule is "after 09:45", so with 09:46
+        // configured a punch AT 09:46 is already late (it used to need 09:47,
+        // silently letting every 09:46 arrival off free — mam 2026-08-19).
+        // Minutes are therefore counted from the last ON-TIME minute
+        // (lateAfter - 1), so 09:46 = 1 minute late, 09:56 = 11.
+        if (punchInMin !== null && lateAfter !== null && punchInMin >= lateAfter) {
           if (!shortLeaveSavesIt) {
             lateMarks += 1;
-            lateDays.push({ date: dateStr, minutes_late: punchInMin - lateAfter });
+            lateDays.push({ date: dateStr, minutes_late: punchInMin - lateAfter + 1 });
           }
           dayLabel = 'late';
         } else {
