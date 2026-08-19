@@ -537,7 +537,12 @@ export default function Payroll() {
                   Finalised {fmtDateTime(list[0].finalised_at)}
                   {list[0].finalised_by_name && <> by <strong>{list[0].finalised_by_name}</strong></>}.
                   {finaliseEarly && (
-                    <> <strong>Finalised early</strong> — day {finaliseEarly.dayFinalised} of {finaliseEarly.totalDays}, {finaliseEarly.daysExcluded} day{finaliseEarly.daysExcluded === 1 ? '' : 's'} excluded.</>
+                    <> <strong>Finalised early</strong> — day {finaliseEarly.dayFinalised} of {finaliseEarly.totalDays}, {finaliseEarly.daysExcluded} day{finaliseEarly.daysExcluded === 1 ? '' : 's'} excluded.
+                      {' '}These figures are frozen from that day, so attendance marked afterwards is not counted.
+                      {paidCount === 0
+                        ? <> <strong>Click Unlock</strong> to recalculate the full month from attendance.</>
+                        : <> {paidCount} salary already marked paid, so this month can no longer be unlocked.</>}
+                    </>
                   )}
                 </div>
               )}

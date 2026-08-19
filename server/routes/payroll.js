@@ -736,6 +736,29 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
     // re-run from clobbering a frozen, possibly-already-paid month.
     const alreadyFinal = db.prepare('SELECT COUNT(*) AS c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
     if (alreadyFinal > 0) return res.status(409).json({ error: `${month} is already finalised. Unlock it first if you really need to re-finalise.` });
+
+    // ─── Early-finalise guard (mam 2026-08-19) ───────────────────────
+    // Finalising freezes a snapshot; a month frozen before it ends keeps
+    // paying the partial figure forever and every later attendance edit is
+    // silently invisible. July 2026 was finalised on day 2 of 31 and read
+    // "2 paid days" for the whole company weeks later. The UI already
+    // refuses this, but the guard has to live HERE too — a stale browser
+    // bundle or a direct API call bypasses the client entirely.
+    const istNow2 = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const nowY = istNow2.getUTCFullYear(), nowM = istNow2.getUTCMonth() + 1, nowD = istNow2.getUTCDate();
+    const [fy, fmn] = month.split('-').map(Number);
+    if (fy > nowY || (fy === nowY && fmn > nowM)) {
+      return res.status(409).json({ error: `${month} hasn't started yet — finalising it would freeze zero paid days for everyone.` });
+    }
+    if (fy === nowY && fmn === nowM) {
+      const totalDays = daysInMonth(month);
+      const daysLeft = totalDays - nowD;
+      if (daysLeft > 5) {
+        return res.status(409).json({
+          error: `${month} is only on day ${nowD} of ${totalDays} — finalising now would freeze the month and exclude the remaining ${daysLeft} days for everyone. Finalise closer to month-end.`,
+        });
+      }
+    }
     ensureHolidaysTable(db);   // payroll_runs.holiday_days column must exist before the INSERT below is prepared
     const settings = getSettings(db);
     const employees = db.prepare(`SELECT * FROM employees WHERE status='active' AND salary > 0`).all();
