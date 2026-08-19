@@ -29,6 +29,34 @@ function ensureSettingsRow(db) {
   }
 }
 
+// ─── Declared paid holidays (mam 2026-08-19) ─────────────────────────
+// A company-wide holiday list (e.g. 15 Aug Independence Day): everyone is
+// PAID for these dates without needing per-employee admin marking. Shown as
+// its own "Holiday" column — Paid Days = Present + Sunday + CL + Holiday.
+// Self-contained table creation (same pattern as app_settings in
+// middleware/auth.js) so this module owns its own schema.
+let _holidaysReady = false;
+function ensureHolidaysTable(db) {
+  if (_holidaysReady) return;
+  db.exec(`CREATE TABLE IF NOT EXISTS payroll_holidays (
+    date TEXT PRIMARY KEY,          -- 'YYYY-MM-DD'
+    name TEXT NOT NULL,             -- e.g. 'Independence Day'
+    created_by INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`);
+  // Snapshot column for finalised months so locked history keeps its own
+  // holiday count (ALTER is idempotent-guarded; older DBs get the column).
+  try { db.exec(`ALTER TABLE payroll_runs ADD COLUMN holiday_days REAL DEFAULT 0`); } catch (_) { /* exists */ }
+  _holidaysReady = true;
+}
+function getHolidaysForMonth(db, month) {
+  ensureHolidaysTable(db);
+  const rows = db.prepare(`SELECT date, name FROM payroll_holidays WHERE date LIKE ? ORDER BY date`).all(month + '-%');
+  const byDate = {};
+  for (const r of rows) byDate[r.date] = r.name;
+  return byDate;
+}
+
 function getSettings(db) {
   ensureSettingsRow(db);
   return db.prepare('SELECT * FROM payroll_settings WHERE id=1').get();
@@ -156,7 +184,7 @@ function calculateForEmployee(db, settings, employee, month) {
       paid_days: isFuture ? 0 : settings.working_days_per_month,
       half_days: 0, absent_days: 0,
       late_marks: 0, lates_converted_absent: 0, late_penalty: 0, late_days: [],
-      paid_leaves: 0, unpaid_leaves: 0, sunday_count: 0,
+      paid_leaves: 0, unpaid_leaves: 0, sunday_count: 0, holiday_days: 0,
       ot_hours: 0, ot_pay: 0,
       gross_earned: grossEarned,
       basic_pay: basicPay, conveyance, hra, adhoc, misc,
@@ -244,9 +272,13 @@ function calculateForEmployee(db, settings, employee, month) {
 
   let paidDays = 0, halfDays = 0, absentDays = 0, lateMarks = 0;
   let paidLeaves = 0, unpaidLeaves = 0, sundayCount = 0, otHours = 0;
+  let holidayDays = 0; // declared paid holidays (payroll_holidays) + admin 'holiday' marks
   let latePenalty = 0; // accumulated Rs deduction for late punches over grace
   const breakdown = []; // per-day for slip
   const lateDays = []; // [{date, minutes_late, applies_penalty: bool}]
+
+  // Declared company holidays this month (date → name), e.g. 15 Aug.
+  const holidayByDate = getHolidaysForMonth(db, month);
 
   // Roster-aware cutoffs (SEPL 2026-07): a 9:00 (early) roster employee is late
   // 30 min earlier than the 9:30 (general) default. Times still come from the
@@ -265,16 +297,53 @@ function calculateForEmployee(db, settings, employee, month) {
     let dayLabel = 'absent';
     let dayPay = 0; // 1 = full, 0.5 = half, 0 = absent
 
+    const isHoliday = !!holidayByDate[dateStr];
+
     // Sunday
     if (sun && !leaveType && !att) {
       if (settings.sundays_paid) {
         dayPay = 1;
         sundayCount += 1;
         dayLabel = 'sunday_paid';
+      } else if (isHoliday) {
+        // Daily-wage config (Sundays unpaid): a DECLARED holiday landing on a
+        // Sunday is still a paid holiday — otherwise the holiday silently
+        // vanishes for exactly the people Sundays aren't paid for.
+        dayPay = 1;
+        holidayDays += 1;
+        dayLabel = 'holiday_paid';
       } else {
         dayLabel = 'sunday_unpaid';
       }
-      breakdown.push({ date: dateStr, day: 'Sun', label: dayLabel, pay: dayPay });
+      breakdown.push({ date: dateStr, day: 'Sun', label: dayLabel, pay: dayPay, holiday_name: isHoliday ? holidayByDate[dateStr] : undefined });
+      paidDays += dayPay;
+      continue;
+    }
+
+    // ─── Declared company holiday (mam 2026-08-19) ──────────────────
+    // "holiday is all for everyone" — a declared holiday is a full paid day
+    // for every employee, so it WINS over leave and over attendance:
+    //   • on approved leave that day  → paid as holiday, and the leave
+    //     allowance is NOT consumed (otherwise the one person on leave pays
+    //     for the company holiday out of their own CL, or loses the day).
+    //   • punched in that day         → still a full paid day with NO
+    //     half-day and NO late penalty (otherwise turning up on a holiday
+    //     pays LESS than staying home). Overtime hours still accrue.
+    // Placed before the leave / admin-mark / punch branches so the outcome is
+    // the same for everyone regardless of what else is on the day.
+    if (isHoliday) {
+      dayPay = 1;
+      holidayDays += 1;
+      dayLabel = 'holiday_paid';
+      const hrs = att ? (att.total_hours || 0) : 0;
+      if (att && employee.ot_eligible && hrs > settings.ot_threshold_hours) {
+        otHours += hrs - settings.ot_threshold_hours;
+      }
+      breakdown.push({
+        date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay,
+        holiday_name: holidayByDate[dateStr],
+        ...(att ? { punch_in: att.punch_in_time, hours: hrs, holiday_worked: true } : {}),
+      });
       paidDays += dayPay;
       continue;
     }
@@ -319,6 +388,13 @@ function calculateForEmployee(db, settings, employee, month) {
         dayPay = 0.5; halfDays += 1;
         dayLabel = 'admin_' + s;
       } else if (s === 'leave' || s === 'on_leave' || s === 'holiday') {
+        // NOTE: admin-marked 'holiday' deliberately still counts as a paid
+        // leave here, exactly as before. Moving it into the holiday bucket
+        // would change paid_leaves for months that already carry a manual CL
+        // override — effPaidDays = paidDays - paidLeaves + clOverride, so a
+        // drop in paidLeaves silently RAISES pay by one day per admin-holiday
+        // with nobody touching anything. Declared holidays (below) are the
+        // supported mechanism; this legacy path stays pay-neutral.
         dayPay = 1; paidLeaves += 1;
         dayLabel = 'admin_' + s;
       } else { // 'absent' or anything unrecognised
@@ -534,11 +610,13 @@ function calculateForEmployee(db, settings, employee, month) {
     paid_days: round2(effPaidDays),
     paid_days_auto: round2(paidDays),                 // before any manual override
     paid_days_overridden: pdOverridden,
-    // Components of paid_days, so the UI can show "attendance + Sunday + CL"
-    // (mam 2026-06-08). present_days = the REAL worked-day equivalents from
-    // attendance (full=1, half=0.5) — always the auto figure so a manual Paid
-    // Days override doesn't distort the "att" breakdown.
-    present_days: round2(paidDays - sundayCount - paidLeaves - sundayWorkedPay),
+    // Components of paid_days, so the UI can show the full formula
+    // Paid Days = Present + Sunday + CL + Holiday (mam 2026-08-19).
+    // present_days = the REAL worked-day equivalents from attendance
+    // (full=1, half=0.5) — always the auto figure so a manual Paid Days
+    // override doesn't distort the breakdown.
+    present_days: round2(paidDays - sundayCount - paidLeaves - holidayDays - sundayWorkedPay),
+    holiday_days: round2(holidayDays),
     sunday_worked: sundayWorked,            // # of Sundays the person worked
     sunday_worked_pay: round2(sundayWorkedPay), // extra day-equivalents paid for them
     half_days: halfDays,
@@ -658,6 +736,7 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
     // re-run from clobbering a frozen, possibly-already-paid month.
     const alreadyFinal = db.prepare('SELECT COUNT(*) AS c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
     if (alreadyFinal > 0) return res.status(409).json({ error: `${month} is already finalised. Unlock it first if you really need to re-finalise.` });
+    ensureHolidaysTable(db);   // payroll_runs.holiday_days column must exist before the INSERT below is prepared
     const settings = getSettings(db);
     const employees = db.prepare(`SELECT * FROM employees WHERE status='active' AND salary > 0`).all();
 
@@ -666,9 +745,9 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
       absent_days, late_marks, lates_converted_absent, late_penalty, paid_leaves, unpaid_leaves, sundays,
       ot_hours, gross_earned, ot_pay, ot_eligible, ot_per_hour_rate, ot_threshold, net_before_ot, roster, deductions, net_pay,
       basic_pay, conveyance, hra, adhoc, misc, advance,
-      present_days, sunday_worked_pay,
+      present_days, sunday_worked_pay, holiday_days,
       breakdown_json, status, finalised_by, finalised_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
 
     const tx = db.transaction(() => {
       for (const emp of employees) {
@@ -678,7 +757,7 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
           r.absent_days, r.late_marks, r.lates_converted_absent, r.late_penalty, r.paid_leaves, r.unpaid_leaves, r.sunday_count,
           r.ot_hours, r.gross_earned, r.ot_pay, (emp.ot_eligible ? 1 : 0), r.ot_per_hour_rate, r.ot_threshold, r.net_before_ot, (emp.roster || 'general'), r.deductions, r.net_pay,
           r.basic_pay, r.conveyance, r.hra, r.adhoc, r.misc, r.advance,
-          r.present_days, r.sunday_worked_pay,
+          r.present_days, r.sunday_worked_pay, r.holiday_days || 0,
           JSON.stringify(r.breakdown), 'finalised', req.user.id
         );
       }
@@ -974,6 +1053,78 @@ router.post('/leave-balances/rollover', adminOnly, (req, res) => {
     res.json({ message: `Rolled ${year} leftover CL into opening balance for ${rows.length} employees`, count: rows.length });
   } catch (err) {
     console.error('leave-balances rollover error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Declared holidays CRUD (mam 2026-08-19) ───────────────────────────
+// Company-wide paid holidays (e.g. 15 Aug). Everyone with payroll view can
+// read the list; only admin declares/removes. Finalised months are frozen
+// snapshots, so editing the list never changes locked history.
+
+// GET holidays for a month
+router.get('/holidays', requirePermission('payroll', 'view'), (req, res) => {
+  try {
+    const month = req.query.month;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const db = getDb();
+    ensureHolidaysTable(db);
+    res.json(db.prepare(`SELECT date, name FROM payroll_holidays WHERE date LIKE ? ORDER BY date`).all(month + '-%'));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// A real calendar date, not just the right shape: '2026-02-30' / '2026-13-01'
+// pass a regex but would silently never match any day in the payroll loop.
+function isRealDate(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1) return false;
+  return d <= new Date(y, m, 0).getDate();
+}
+// A finalised month is a frozen snapshot — changing its holidays would be a
+// no-op on pay yet make the screen disagree with what was actually paid.
+// Refuse it the same way /advance, /food and /override do.
+function assertMonthOpen(db, date, res) {
+  const month = date.slice(0, 7);
+  const locked = db.prepare('SELECT COUNT(*) AS c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+  if (locked) { res.status(409).json({ error: `${month} is finalised — unlock it first to change its holidays.` }); return false; }
+  return true;
+}
+
+// POST declare a holiday {date:'YYYY-MM-DD', name}
+router.post('/holidays', adminOnly, (req, res) => {
+  try {
+    const date = String(req.body?.date || '').trim();
+    const name = String(req.body?.name || '').trim().slice(0, 60);
+    if (!isRealDate(date)) return res.status(400).json({ error: 'Pick a real calendar date (YYYY-MM-DD)' });
+    if (!name) return res.status(400).json({ error: 'Holiday name is required (e.g. Independence Day)' });
+    const db = getDb();
+    ensureHolidaysTable(db);
+    if (!assertMonthOpen(db, date, res)) return;
+    db.prepare(`INSERT INTO payroll_holidays (date, name, created_by) VALUES (?,?,?)
+                ON CONFLICT(date) DO UPDATE SET name = excluded.name`).run(date, name, req.user.id);
+    logAuditEvent({ user: req.user, action: 'PAYROLL_HOLIDAY_SET', entity_type: 'payroll', entity_label: `${date} ${name}`, method: 'POST', path: '/api/payroll/holidays', status_code: 200 });
+    res.json({ message: `Holiday saved — ${date} ${name}. Everyone is paid for this day.`, date, name });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE a declared holiday
+router.delete('/holidays/:date', adminOnly, (req, res) => {
+  try {
+    const date = String(req.params.date || '').trim();
+    if (!isRealDate(date)) return res.status(400).json({ error: 'Pick a real calendar date (YYYY-MM-DD)' });
+    const db = getDb();
+    ensureHolidaysTable(db);
+    if (!assertMonthOpen(db, date, res)) return;
+    const r = db.prepare('DELETE FROM payroll_holidays WHERE date=?').run(date);
+    if (!r.changes) return res.status(404).json({ error: 'No holiday declared on that date' });
+    logAuditEvent({ user: req.user, action: 'PAYROLL_HOLIDAY_REMOVE', entity_type: 'payroll', entity_label: date, method: 'DELETE', path: '/api/payroll/holidays', status_code: 200 });
+    res.json({ message: `Holiday removed — ${date}` });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
