@@ -427,6 +427,14 @@ export default function Payroll() {
   // every money column cost ~25px each and the column headers already carry ₹
   // (mam 2026-08-19: "payroll column widths are wide").
   const fmtC = (n) => (Math.round(n || 0)).toLocaleString('en-IN');
+  // The ACTIVE late rule, read from the saved settings so the page always shows
+  // what is really being applied (mam 2026-08-19 asked for the rule she already
+  // had — it was running, just invisible on this screen).
+  const lateGrace = +(savedSettings?.late_grace_count ?? 0);
+  const lateRate = +(savedSettings?.late_per_minute_rate ?? 0);
+  const lateRuleText = savedSettings
+    ? `Arrive after ${savedSettings.late_after_time} (up to ${savedSettings.half_day_after_time}) = a late mark. First ${lateGrace} late marks each month are free; every late day after that is charged Rs ${lateRate} per minute. After ${savedSettings.half_day_after_time} it becomes a half day instead. Change these in Rules / Settings.`
+    : 'Late rule loading…';
   const lockTooltip = (r) => {
     if (!r.finalised_at) return 'Finalised';
     const when = fmtDateTime(r.finalised_at);
@@ -585,8 +593,8 @@ export default function Payroll() {
                   <th className="text-right" title="Paid Days = Present + Sunday + CL + Holiday (+ extra days for Sundays worked)">Paid Days</th>
                   <th className="text-center">Half</th>
                   <th className="text-center">Absent</th>
-                  <th className="text-center" title="Late count — informational only, no pay impact">Late</th>
-                  <th className="text-right" title="Late deduction (charged from late time)">Late ₹</th>
+                  <th className="text-center" title={`Number of late arrivals this month. ${lateRuleText}`}>Late</th>
+                  <th className="text-right" title={lateRuleText}>Late ₹</th>
                   <th className="text-center">Leaves</th>
                   <th className="text-right" title="Overtime for hours worked beyond 9/day, paid at salary ÷ days ÷ 9 per hour">OT (&gt;9h)</th>
                   <th className="text-right" title="Salary before overtime is added">Before OT ₹</th>
@@ -641,8 +649,16 @@ export default function Payroll() {
                     <td className="text-center text-amber-600" title="Late count only — does not reduce pay. See Late ₹ for the deduction.">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
                     <td className="text-right text-amber-700">
                       {isAdmin && !r.locked
-                        ? ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-16', step: '10', title: 'Late deduction ₹ — type to override, clear to reset to auto' })
-                        : (r.late_penalty ? fmt(r.late_penalty) : '-')}
+                        ? ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-16', step: '10', title: `Late deduction — auto. ${lateRuleText}` })
+                        : (r.late_penalty ? fmtC(r.late_penalty) : '-')}
+                      {r.late_marks > 0 && (
+                        <div className="text-[9px] font-normal text-gray-400"
+                          title={`${r.late_marks} late arrival(s) this month. ${lateRuleText}`}>
+                          {r.late_marks <= lateGrace
+                            ? `${r.late_marks}/${lateGrace} free`
+                            : `${r.late_marks - lateGrace} of ${r.late_marks} charged`}
+                        </div>
+                      )}
                     </td>
                     <td className="text-center text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</td>
                     <td className="text-right text-blue-600" title={!r.ot_eligible ? 'Not OT-eligible (set in Leaves & Balances)' : ((r.ot_hours || r.ot_pay) ? `Rs ${otRate(r)}/hr × ${r.ot_hours || 0}h — paid only for hours beyond ${r.ot_threshold || 9}h/day` : 'No overtime this month')}>
