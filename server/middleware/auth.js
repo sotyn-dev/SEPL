@@ -31,20 +31,83 @@ function getSecret() {
 
 // ── Zero-logout key rotation (mam 2026-08-17 "NOT DO IT EVERYONE") ──────────
 // The jwt_secret was rotated away from the public default. Instead of forcing
-// the whole company to re-login, tokens signed with the OLD secret stay valid
+// the whole company to re-login, tokens signed with an OLD secret stay valid
 // during a short grace window and are SILENTLY re-issued under the new secret
 // via the existing X-Refresh-Token header the client already swaps in. After
 // the window, legacy signatures die for good (dormant/forged tokens included).
-const LEGACY_SECRET = 'erp-secret-key-change-in-production';
-const LEGACY_ACCEPTED_UNTIL = '2026-08-24';   // IST date, inclusive
+//
+// 2026-08-19 — mass-logout loop root cause: rotate-jwt-secret.sh mints a NEW
+// RANDOM secret every run. If it ran more than once, tokens signed with an
+// in-between random secret ("the unrecoverable middle-generation key") match
+// NEITHER the current secret NOR the single hard-coded public default this
+// bridge used to know — so those users 401 on every request and the client's
+// instant /auth/me probe logs them straight back out, again and again.
+//
+// Fix: accept a LIST of legacy secrets, not one. Sources, in order:
+//   1. app_settings.jwt_legacy_secrets  (comma/newline-separated) — the RELIABLE
+//      source: a DB row survives pm2's env caching (the same reason getSecret()
+//      trusts the DB over .env). This is how a RANDOM old secret is fed back in
+//      WITHOUT hard-coding it — on the VPS the rotation script left each old
+//      value in .env.bak-*; drop them into this row and every stuck session
+//      migrates to the current secret with ZERO logout. See recover-jwt-sessions.sh.
+//   2. env JWT_LEGACY_SECRETS  (comma-separated) — belt-and-suspenders.
+//   3. the KNOWN in-repo secrets prod may have run on before the first rotation.
+// The current secret is never treated as legacy. A token matching none still dies.
+//
+// Two windows, because an in-repo secret is PUBLICLY KNOWN (forgeable) while a
+// rotated random secret is not:
+//   • known in-repo secrets → accepted only until PUBLIC_DEFAULT_UNTIL (kept tight
+//     — the whole point of rotating was to close that forgery hole).
+//   • recovered random secrets (DB/env) → accepted until RECOVERED_UNTIL, a bit
+//     longer, so weekly/dormant users still migrate silently. Safe: not public.
+//
+// PUBLIC_LEGACY_SECRETS lists EVERY signing secret that has ever appeared in the
+// repo, because the original single-value bridge (a69ee976) only knew the code
+// default and prod actually ran on the .env value 'sepl-erp-secret-key-2026'
+// (len 24) before the 2026-08-17 rotation — so pre-rotation tokens were NOT being
+// bridged. Both are listed now; whichever prod really used, those tokens migrate.
+const PUBLIC_LEGACY_SECRETS = [
+  'erp-secret-key-change-in-production',   // getSecret() hard-coded seed / local-dev value (len 35)
+  'sepl-erp-secret-key-2026',              // deploy-vps.sh .env — prod's pre-rotation secret (len 24)
+];
+const PUBLIC_DEFAULT_UNTIL = '2026-08-24';   // IST, inclusive — unchanged from the original bridge
+const RECOVERED_UNTIL = '2026-08-31';        // IST, inclusive — non-public old secrets
+
+function istDateStr() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); }
+
+let _legacyCache = null, _legacyCacheAt = 0;
+// Returns [{ secret, until }] — every accepted-legacy secret with its own deadline.
+function legacySecrets() {
+  // Re-read at most once a minute so a fresh app_settings write (during recovery)
+  // takes effect without a restart, but we don't hit the DB on every request.
+  const now = Date.now();
+  if (_legacyCache && (now - _legacyCacheAt) < 60000) return _legacyCache;
+  const recovered = [];
+  const add = (raw) => { if (!raw) return; for (const s of String(raw).split(/[,\n]/)) { const v = s.trim(); if (v) recovered.push(v); } };
+  try {
+    const row = getDb().prepare("SELECT value FROM app_settings WHERE key='jwt_legacy_secrets'").get();
+    add(row && row.value);
+  } catch (_) { /* DB not ready — env + default below still apply */ }
+  add(process.env.JWT_LEGACY_SECRETS);
+  const cur = getSecret();
+  const list = [];
+  for (const s of new Set(recovered)) if (s && s !== cur) list.push({ secret: s, until: RECOVERED_UNTIL });
+  for (const s of PUBLIC_LEGACY_SECRETS) if (s !== cur) list.push({ secret: s, until: PUBLIC_DEFAULT_UNTIL });
+  _legacyCache = list;
+  _legacyCacheAt = now;
+  return _legacyCache;
+}
+
 function verifyToken(token) {
   try { return { decoded: jwt.verify(token, getSecret()), legacy: false }; }
   catch (e) {
     if (e && e.name === 'JsonWebTokenError') {
-      const todayIst = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-      if (todayIst <= LEGACY_ACCEPTED_UNTIL && LEGACY_SECRET !== getSecret()) {
+      const today = istDateStr();
+      for (const { secret, until } of legacySecrets()) {
+        if (today > until) continue;                 // this secret's window has closed
         // Same expiry rules apply — only the signature check uses the old key.
-        return { decoded: jwt.verify(token, LEGACY_SECRET), legacy: true };
+        try { return { decoded: jwt.verify(token, secret), legacy: true }; }
+        catch (_) { /* signature didn't match this one — try the next */ }
       }
     }
     throw e;

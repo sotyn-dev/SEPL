@@ -22,20 +22,6 @@ api.interceptors.request.use(config => {
   return config;
 });
 
-// On-demand session arbitration (mam 2026-08-18): when a data endpoint rejects
-// the current token, fire ONE /auth/me probe instead of waiting up to 2 min for
-// the periodic poll. /auth/me's own 401 handler (above) is still the ONLY thing
-// that ends a session — this just triggers that check immediately. Debounced so
-// a burst of failing requests probes once; skipped on the login page.
-let _lastProbe = 0;
-function maybeProbeSession() {
-  const now = Date.now();
-  if (now - _lastProbe < 8000) return;                 // one probe per 8s max
-  if (window.location.pathname.startsWith('/login')) return;
-  _lastProbe = now;
-  api.get('/auth/me').catch(() => {});                 // result handled by the interceptor
-}
-
 api.interceptors.response.use(
   res => {
     // Sliding session: the server hands back a fresh token once the current
@@ -92,22 +78,19 @@ api.interceptors.response.use(
       } else if (!isSessionCheck && used && used === current) {
         // A data endpoint rejected the current token. Per mam's standing rule
         // ("automatic logout — very bad"), a single data-endpoint 401 must
-        // NEVER end the session directly — it can be a stale in-flight request,
-        // a flaky call, or an endpoint wrongly 401'ing. We do NOT log out here
-        // (that change, 5d5a6c8, kicked active users out on the first failing
-        // request and was reverted 2026-06-26).
-        //
-        // BUT (mam 2026-08-18, post key-rotation): a phone holding a token
-        // from the unrecoverable middle-generation key gets a wall of "failed"
-        // for up to 2 minutes until the periodic /auth/me poll notices. To make
-        // that instant WITHOUT breaking the iron rule, we don't decide here —
-        // we ASK the arbiter now: fire ONE /auth/me probe. The /auth/me handler
-        // above is still the only thing that can end the session, so a spurious
-        // data 401 on a genuinely-valid token just gets a 200 and changes
-        // nothing. Debounced so a burst of failing calls triggers one probe.
-        maybeProbeSession();
-        // Strip the raw "Invalid token" text so the page shows its own friendly
-        // fallback instead of the internal string.
+        // NEVER end the session — it can be a stale in-flight request, a flaky
+        // call, or an endpoint wrongly 401'ing. We do NOT force an immediate
+        // /auth/me logout here (that change, 5d5a6c8, kicked active users out
+        // on the first failing request and was reverted 2026-06-26; the
+        // 2026-08-18 "instant probe" was a softer take on the same idea but it
+        // amplified a post-rotation signature storm into a login→5s→logout LOOP
+        // for everyone — reverted 2026-08-19, the real cure is server-side: the
+        // multi-legacy-secret bridge silently migrates the stuck tokens so there
+        // is nothing to log out from). The deliberate session check —
+        // AuthContext's /auth/me on mount, on tab focus, and every 2 min — still
+        // catches a genuinely dead token and logs out cleanly. We only strip the
+        // raw "Invalid token" text so the page shows its own friendly fallback
+        // instead of the internal string.
         if (err.response.data && /token/i.test(err.response.data.error || '')) {
           err.response.data = { ...err.response.data, error: null };
         }
