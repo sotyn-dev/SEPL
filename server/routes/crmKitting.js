@@ -334,6 +334,13 @@ try {
 // ── Helpers ────────────────────────────────────────────────────
 const STATUSES = ['yes', 'no', 'partially', 'na'];
 
+// NOTE: checkpoint add / edit / disable used to carry an extra
+// `if (!isAdmin(req)) return 403 'Admin only'` ON TOP of requirePermission.
+// That made the CRM Full Kitting grants in the role matrix pointless — mam
+// ticked view/create/edit/delete/approve/see-all for CRM and the role still
+// could not manage checkpoints (2026-08-19). requirePermission already lets
+// role='admin' through unconditionally, so the grid alone is the control now:
+// untick create/edit/delete for a role and it loses those actions again.
 function isAdmin(req) {
   return !!(req.user && (req.user.is_admin || req.user.role === 'admin'));
 }
@@ -356,7 +363,6 @@ router.get('/checkpoints', requirePermission('crm_kitting', 'view'), (req, res) 
 
 // ── POST /api/crm-kitting/checkpoints ────────────────────────────
 router.post('/checkpoints', requirePermission('crm_kitting', 'create'), (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'Admin only' });
   const { stage_no, section, sort_order, label, description } = req.body || {};
   if (![1, 2, 3].includes(Number(stage_no))) return res.status(400).json({ error: 'stage_no must be 1/2/3' });
   if (!label || !String(label).trim()) return res.status(400).json({ error: 'label required' });
@@ -380,7 +386,6 @@ router.post('/checkpoints', requirePermission('crm_kitting', 'create'), (req, re
 
 // ── PUT /api/crm-kitting/checkpoints/:id ────────────────────────
 router.put('/checkpoints/:id', requirePermission('crm_kitting', 'edit'), (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'Admin only' });
   const id = Number(req.params.id);
   const { stage_no, section, sort_order, label, description, is_active } = req.body || {};
   const db = getDb();
@@ -415,7 +420,6 @@ router.put('/checkpoints/:id', requirePermission('crm_kitting', 'edit'), (req, r
 // ── DELETE /api/crm-kitting/checkpoints/:id ─────────────────────
 // Soft delete — keep entry history intact.
 router.delete('/checkpoints/:id', requirePermission('crm_kitting', 'delete'), (req, res) => {
-  if (!isAdmin(req)) return res.status(403).json({ error: 'Admin only' });
   const id = Number(req.params.id);
   const db = getDb();
   try {

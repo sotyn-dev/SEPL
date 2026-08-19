@@ -68,7 +68,7 @@ const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 const CRM_OWNERS = ['Sushila', 'Lovely'];
 
 export default function CRMKitting() {
-  const { user, isAdmin, canEdit } = useAuth();
+  const { user, isAdmin, canEdit, canCreate, canDelete } = useAuth();
 
   const [matrix, setMatrix] = useState({ projects: [], checkpoints: [], meta: {}, entries: {} });
   const [loading, setLoading] = useState(false);
@@ -103,6 +103,15 @@ export default function CRMKitting() {
   const [metaDraft, setMetaDraft] = useState({});
 
   const editAllowed = canEdit ? canEdit('crm_kitting') : true;
+  // Manage Checkpoints follows the ROLE MATRIX, not the admin role: mam grants
+  // CRM Full Kitting create/edit/delete to a role and expects that role to be
+  // able to manage checkpoints (2026-08-19). Admin still passes because can()
+  // returns true for admins on every module. Each individual action stays
+  // gated server-side by its own permission.
+  const canManageCps = (isAdmin && isAdmin())
+    || (canCreate && canCreate('crm_kitting'))
+    || (canEdit && canEdit('crm_kitting'))
+    || (canDelete && canDelete('crm_kitting'));
 
   // ── Fetch matrix ───────────────────────────────────────────────
   const loadMatrix = useCallback(() => {
@@ -347,7 +356,7 @@ export default function CRMKitting() {
             >
               <FiRefreshCw /> Refresh
             </button>
-            {isAdmin && isAdmin() && (
+            {canManageCps && (
               <button
                 onClick={openManage}
                 className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs flex items-center gap-1.5"

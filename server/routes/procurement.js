@@ -3304,7 +3304,15 @@ router.get('/vendor-po/:id/print', (req, res) => {
            -- Which of the two rate sources was touched last (see the filter
            -- below the query): the PO line itself, or the finalised rate.
            vpi.rate_updated_at as po_rate_updated_at,
-           COALESCE(ir.updated_at, ir.finalized_at) as final_rate_updated_at,
+           -- finalized_at ONLY — deliberately NOT COALESCE(ir.updated_at, …).
+           -- indent_item_rates.updated_at is bumped by writers that never touch
+           -- final_rate (saving any vendor name/rate/terms, AI rate-suggest, and
+           -- the bulk AI suggest the Vendor Rates tab fires automatically), so
+           -- comparing against it means "was the rate ROW touched later", and a
+           -- deliberate PO rate edit would silently revert on the next reprint.
+           -- final_rate moves in exactly one place (finalize), which stamps
+           -- finalized_at in the same UPDATE.
+           ir.finalized_at as final_rate_updated_at,
            -- Payment terms negotiated at the Finalise-Rate step (mam
            -- 2026-06-04: "or may be enter in finalise rate").  Per-item;
            -- the print picks the first non-empty one for the PO header.
@@ -3335,9 +3343,17 @@ router.get('/vendor-po/:id/print', (req, res) => {
   // rate was last touched, the PO wins, so we drop latest_rate for that line and
   // the print falls back to vpi.rate. Lines never edited (no stamp) keep the old
   // behaviour exactly.
+  // ONLY lines carrying an explicit rate_updated_at stamp are re-decided. It is
+  // tempting to fall back to vpi.created_at for lines predating the stamp, but
+  // the Create-PO grid lets the buyer TYPE a rate over the pre-filled finalised
+  // one, so "rate differs from final_rate and there is no stamp" does not imply
+  // a later edit — and there is no audit trail to tell the two apart. That
+  // fallback would silently re-price every historical PO on deploy, including
+  // orders the vendor already holds and acknowledged. A PO edited before this
+  // shipped just needs its rate saved once more to earn a stamp.
   for (const it of items) {
-    if (!it.po_rate_updated_at) continue;
-    if (!it.final_rate_updated_at || String(it.po_rate_updated_at) >= String(it.final_rate_updated_at)) {
+    if (!it.po_rate_updated_at || !it.final_rate_updated_at) continue;
+    if (String(it.po_rate_updated_at) >= String(it.final_rate_updated_at)) {
       it.latest_rate = null;
       it.latest_vendor = null;
     }
