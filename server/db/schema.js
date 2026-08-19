@@ -5271,6 +5271,30 @@ function initializeDatabase() {
     console.warn('[backfill] po_items.po_id link failed:', e.message);
   }
 
+  // PMS tasks raised from a Tally Bill used to save description = NULL. The PMS
+  // Tasks page renders `description` as the task text (the title is never shown
+  // there), so those tasks appeared BLANK to the person they were assigned to
+  // (mam 2026-08-19). New ones now carry the title + bill details; heal the
+  // existing blank ones the same way. Only touches rows that are actually empty,
+  // so it is safe to re-run on every boot.
+  try {
+    const r = db.prepare(`
+      UPDATE pms_tasks
+         SET description = COALESCE(NULLIF(TRIM(title), ''), 'Bill task') || char(10) || (
+               SELECT 'Bill ' || b.register_no || ' · ' || b.bill_number
+                      || COALESCE(' · ' || b.vendor_name, '')
+                      || COALESCE(' · ' || b.project_name, '')
+                 FROM tally_bills b WHERE b.id = pms_tasks.tally_bill_id
+             )
+       WHERE tally_bill_id IS NOT NULL
+         AND (description IS NULL OR TRIM(description) = '')
+         AND EXISTS (SELECT 1 FROM tally_bills b WHERE b.id = pms_tasks.tally_bill_id)
+    `).run();
+    if (r.changes > 0) console.log(`[backfill] pms_tasks.description: filled ${r.changes} blank Tally-Bill task(s) from their title + bill details`);
+  } catch (e) {
+    console.warn('[backfill] pms_tasks.description from tally bill failed:', e.message);
+  }
+
   // ─── One-time: seed item_master.current_price from the LATEST finalized ─────
   // vendor rate per item (mam 2026-07-21: "both … and always auto-update if
   // finalise rate"). NON-PIPE items only — a pipe's rate is ₹/kg, a unit that

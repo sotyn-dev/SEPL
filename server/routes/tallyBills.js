@@ -715,11 +715,28 @@ router.post('/:id/tasks', requirePermission('tally_bills', 'approve'), (req, res
     if (!String(t.title || '').trim()) return res.status(400).json({ error: 'Task title is required' });
     if (!t.assigned_to) return res.status(400).json({ error: 'Task must be assigned to someone' });
 
+    // The PMS Tasks page shows `description` as the task's text — the title is
+    // never rendered there, and its own create form requires a description. A
+    // bill task used to save description=NULL, so it turned up BLANK in PMS
+    // Tasks with no hint of which bill it belonged to (mam 2026-08-19: "title
+    // go to pmstask description"). Carry the typed title into the description
+    // and stamp the bill's own details under it, so the assignee can act on the
+    // task without opening the bill. An explicitly-typed description still wins.
+    const taskTitle = String(t.title).trim();
+    const billRef = [
+      `Bill ${bill.register_no} · ${bill.bill_number}`,
+      bill.vendor_name,
+      bill.bill_amount ? `Rs ${(+bill.bill_amount).toLocaleString('en-IN')}` : null,
+      bill.project_name,
+    ].filter(Boolean).join(' · ');
+    const typed = String(t.description || '').trim();
+    const description = typed ? `${typed}\n${billRef}` : `${taskTitle}\n${billRef}`;
+
     const info = db.prepare(`
       INSERT INTO pms_tasks (title, description, project_id, project_name_snapshot,
                              assigned_by, assigned_to, due_date, status, tally_bill_id)
       VALUES (?,?,?,?,?,?,?,'pending',?)`).run(
-      String(t.title).trim(), t.description || null, bill.project_id, bill.project_name,
+      taskTitle, description, bill.project_id, bill.project_name,
       req.user.id, +t.assigned_to, t.due_date || null, bill.id);
 
     audit(db, bill.id, 'update',
