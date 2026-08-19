@@ -4177,9 +4177,16 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
              amount      = COALESCE(?, amount),
              description = COALESCE(?, description),
              hsn_code    = COALESCE(?, hsn_code),
-             -- Stamp ONLY when the rate actually changed, so a description /
-             -- qty edit doesn't hijack the rate the print page shows.
-             rate_updated_at = CASE WHEN ? IS NOT NULL AND ? <> rate
+             -- Stamp whenever the caller SUBMITS a rate for this line, even if
+             -- the value is unchanged. The Edit PO modal always sends every
+             -- line's rate, so saving it is the user asserting "this PO's rate
+             -- is what I am looking at" — and the PDF must then agree with the
+             -- screen they just approved. Stamping only on a CHANGED value made
+             -- the obvious recovery ("open Edit PO and save it again") do
+             -- nothing for a line edited before the stamp existed: same value in,
+             -- no stamp out, PDF stuck on the old finalised rate (mam 2026-08-19,
+             -- PRIMER on VPO/2026/0198 — screen 246, PDF 161).
+             rate_updated_at = CASE WHEN ? IS NOT NULL
                                     THEN CURRENT_TIMESTAMP ELSE rate_updated_at END
        WHERE id = ? AND vendor_po_id = ?`
     );
@@ -4192,7 +4199,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
         const amount = qty != null && rate != null ? +(qty * rate).toFixed(2) : null;
         const desc = it.description !== undefined ? String(it.description || '') : null;
         const hsn = it.hsn_code !== undefined ? String(it.hsn_code || '') : null;
-        const r = updLine.run(qty, rate, amount, desc, hsn, rate, rate, itemId, id);
+        const r = updLine.run(qty, rate, amount, desc, hsn, rate, itemId, id);
         itemUpdates += r.changes;
       }
       // Auto-recompute total_amount = sum(line amounts) × (1 + GST%) + freight.
