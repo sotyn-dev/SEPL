@@ -2224,6 +2224,23 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Per-PAGE training videos (mam 2026-08-19): admin pastes a YouTube link,
+    -- everyone gets a "Training" button on that module's page. Links only —
+    -- nothing is uploaded, so this costs no disk and no streaming load on the
+    -- VPS. The module column matches the permission module keys
+    -- ('procurement', 'payroll', ...) so one button component works anywhere.
+    -- NOTE the name: training_videos is already taken by the HR Training
+    -- module (a different thing — mandatory courses per department/role).
+    CREATE TABLE IF NOT EXISTS module_help_videos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      module TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      sort_order INTEGER DEFAULT 0,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- ============================================
     -- INVENTORY MANAGEMENT
     -- ============================================

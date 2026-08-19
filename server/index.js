@@ -515,6 +515,7 @@ app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
 app.use('/api/tally-bills', require('./routes/tallyBills'));
+app.use('/api/module-videos', require('./routes/moduleVideos'));
 app.use('/api/admin/backups', require('./routes/backups'));
 app.use('/api/admin/uploads', require('./routes/uploadsSweep'));
 app.use('/api/admin/word-count', require('./routes/wordcount'));
