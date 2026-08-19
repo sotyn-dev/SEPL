@@ -3831,6 +3831,12 @@ function initializeDatabase() {
     // "no such column" → 500 → the Edit modal showed zero line items.
     ['vendor_po_items', 'description TEXT'],
     ['vendor_po_items', 'hsn_code TEXT'],
+    // Stamped when a PO line's RATE is edited via Edit PO. The print page has
+    // to choose between two rate sources — this line and the finalised
+    // 3-vendor rate (indent_item_rates.final_rate) — and used to always prefer
+    // the finalised one, so editing the PO changed nothing on the PDF (mam
+    // 2026-08-19). With this timestamp the newer edit wins either way.
+    ['vendor_po_items', 'rate_updated_at DATETIME'],
     // CRM funnel ← Extra indent link (mam 2026-06-06): Extra-Schedule /
     // Extra-Non-Schedule indents drop a funnel "requirement" at raise time.
     ['crm_funnel', 'source_indent_id INTEGER'],

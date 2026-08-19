@@ -3301,6 +3301,10 @@ router.get('/vendor-po/:id/print', (req, res) => {
            -- (in Vendor Rates step) is reflected on every fresh print.
            ir.final_rate as latest_rate,
            ir.final_vendor_name as latest_vendor,
+           -- Which of the two rate sources was touched last (see the filter
+           -- below the query): the PO line itself, or the finalised rate.
+           vpi.rate_updated_at as po_rate_updated_at,
+           COALESCE(ir.updated_at, ir.finalized_at) as final_rate_updated_at,
            -- Payment terms negotiated at the Finalise-Rate step (mam
            -- 2026-06-04: "or may be enter in finalise rate").  Per-item;
            -- the print picks the first non-empty one for the PO header.
@@ -3320,6 +3324,24 @@ router.get('/vendor-po/:id/print', (req, res) => {
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);
+
+  // ── Which rate does the PDF print? (mam 2026-08-19) ────────────────
+  // Two sources compete: the PO's own line (vendor_po_items.rate, what "Edit
+  // PO" writes) and the finalised 3-vendor rate (indent_item_rates.final_rate).
+  // The print page prefers latest_rate whenever it is set, which was added so
+  // that re-finalising a rate reflected on a fresh print (mam 2026-05-21) — but
+  // it also meant editing the RATE on the PO itself changed nothing on the PDF.
+  // Resolve by recency: if this PO line's rate was edited AFTER the finalised
+  // rate was last touched, the PO wins, so we drop latest_rate for that line and
+  // the print falls back to vpi.rate. Lines never edited (no stamp) keep the old
+  // behaviour exactly.
+  for (const it of items) {
+    if (!it.po_rate_updated_at) continue;
+    if (!it.final_rate_updated_at || String(it.po_rate_updated_at) >= String(it.final_rate_updated_at)) {
+      it.latest_rate = null;
+      it.latest_vendor = null;
+    }
+  }
 
   res.json({ po, items });
 });
@@ -4138,7 +4160,11 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
              rate        = COALESCE(?, rate),
              amount      = COALESCE(?, amount),
              description = COALESCE(?, description),
-             hsn_code    = COALESCE(?, hsn_code)
+             hsn_code    = COALESCE(?, hsn_code),
+             -- Stamp ONLY when the rate actually changed, so a description /
+             -- qty edit doesn't hijack the rate the print page shows.
+             rate_updated_at = CASE WHEN ? IS NOT NULL AND ? <> rate
+                                    THEN CURRENT_TIMESTAMP ELSE rate_updated_at END
        WHERE id = ? AND vendor_po_id = ?`
     );
     const tx = db.transaction(() => {
@@ -4150,7 +4176,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
         const amount = qty != null && rate != null ? +(qty * rate).toFixed(2) : null;
         const desc = it.description !== undefined ? String(it.description || '') : null;
         const hsn = it.hsn_code !== undefined ? String(it.hsn_code || '') : null;
-        const r = updLine.run(qty, rate, amount, desc, hsn, itemId, id);
+        const r = updLine.run(qty, rate, amount, desc, hsn, rate, rate, itemId, id);
         itemUpdates += r.changes;
       }
       // Auto-recompute total_amount = sum(line amounts) × (1 + GST%) + freight.
