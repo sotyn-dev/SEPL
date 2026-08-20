@@ -2282,15 +2282,19 @@ export default function Procurement() {
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="text-sm font-semibold">Raise Indent</h3>
             {(() => {
-              // Admin opened today the whole day (not a real Wed/Sat) —
-              // every indent raised now is auto-flagged EMERGENCY server-
-              // side, so the button says so and pre-ticks the form.
+              // mam 2026-08-20: raising is strictly Wed/Sat — the button is
+              // OFF on any other day. The only way back in on an off-day is
+              // the admin's "Open the whole day" toggle in the banner below
+              // (raiseWindow.allowed flips true), at which point indents
+              // raised are auto-flagged EMERGENCY server-side.
+              const closed = !!raiseWindow && !raiseWindow.allowed;
               const adminEmergencyOpen = !!raiseWindow && raiseWindow.allowed && !raiseWindow.isIndentDay;
               return (
                 <button
+                  disabled={closed}
                   onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', is_emergency: adminEmergencyOpen, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
-                  title={adminEmergencyOpen ? 'Admin opened today — indents raised now are flagged EMERGENCY' : ''}
-                  className={`btn flex items-center gap-2 ${adminEmergencyOpen ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
+                  title={closed ? 'Indents are raised on Wednesday & Saturday only' : adminEmergencyOpen ? 'Admin opened today — indents raised now are flagged EMERGENCY' : ''}
+                  className={`btn flex items-center gap-2 ${closed ? 'btn-secondary opacity-50 cursor-not-allowed' : adminEmergencyOpen ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
                   <FiPlus /> {adminEmergencyOpen ? 'Raise Emergency Indent' : 'Raise Indent'}
                 </button>
               );
