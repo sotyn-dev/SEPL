@@ -2278,11 +2278,20 @@ export default function Procurement() {
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="text-sm font-semibold">Raise Indent</h3>
-            <button
-              onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', is_emergency: false, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
-              className="btn btn-primary flex items-center gap-2">
-              <FiPlus /> Raise Indent
-            </button>
+            {(() => {
+              // Admin opened today the whole day (not a real Wed/Sat) —
+              // every indent raised now is auto-flagged EMERGENCY server-
+              // side, so the button says so and pre-ticks the form.
+              const adminEmergencyOpen = !!raiseWindow && raiseWindow.allowed && !raiseWindow.isIndentDay;
+              return (
+                <button
+                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', is_emergency: adminEmergencyOpen, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
+                  title={adminEmergencyOpen ? 'Admin opened today — indents raised now are flagged EMERGENCY' : ''}
+                  className={`btn flex items-center gap-2 ${adminEmergencyOpen ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
+                  <FiPlus /> {adminEmergencyOpen ? 'Raise Emergency Indent' : 'Raise Indent'}
+                </button>
+              );
+            })()}
           </div>
 
           {/* Raise window banner (mam 2026-06-16): indents only on Saturday;
