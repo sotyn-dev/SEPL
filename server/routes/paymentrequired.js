@@ -1,7 +1,7 @@
 const express = require('express');
 const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
 const { getRaciForRecords } = require('./raci');
@@ -223,6 +223,16 @@ function seedApprovalRoutingDefaults(db) {
   } catch (e) { console.warn('[payables] approval routing seed failed:', e.message); }
 }
 
+// The HR gate is whichever step the flow labels 'HR Approval' — read from the
+// flow definition rather than hard-coding step 0, so renumbering a flow can't
+// silently point this at the wrong stage.
+function isHrApprovalStep(category, step) {
+  const flow = WORKFLOW[category];
+  if (!flow) return false;
+  const st = flow.find(w => w.step === step);
+  return !!st && /^hr approval$/i.test(String(st.name || '').trim());
+}
+
 function getApprovalRoutingFor(db, category, step) {
   seedApprovalRoutingDefaults(db);   // first call in this process fills the defaults
   try {
@@ -241,6 +251,23 @@ function canUserApproveStep(db, userId, category, step) {
   // Explicit override wins.  Only the assigned user (or admin) can
   // approve when an override is set.  No fallback to role-based —
   // that's the point of the override.
+  // ── HR Approval belongs to the HR TEAM (mam 2026-08-20) ──────────
+  // PR-2026-1584: Prabhdeep raised his own TA/DA, so separation of duties
+  // correctly refused him — but the step was pinned to him ALONE, leaving the
+  // request stuck with nobody able to clear it ("hr approval prabhdeep can't
+  // approve, dont use hard code"). The HR gate is a TEAM responsibility, so any
+  // HR-team member may clear it: membership is the hr_team permission in the
+  // role matrix (the same capability hr.js uses for hiring requests), which mam
+  // manages herself — no name in source, and no single point of failure when
+  // that person is the requester, on leave, or has left.
+  // Additive: the assigned/named approver still works exactly as before, and
+  // sodBlockReason still refuses whoever raised the request.
+  if (isHrApprovalStep(category, step)) {
+    try {
+      if (getUserPermissions(userId)['hr_team']?.can_view) return true;
+    } catch (_) { /* fall through to the normal checks */ }
+  }
+
   const overrideUserId = getApprovalRoutingFor(db, category, step);
   if (overrideUserId) {
     if (overrideUserId === userId) return true;
@@ -326,11 +353,16 @@ const publicSteps = (flow) => flow.map(({ step, name }) => ({ step, name }));
 //   default  — the flow's own named approver
 //   role     — open to anyone holding the role
 function stepHolder(db, category, stepInfo, nameById, userForName) {
+  // The HR gate is held by the HR TEAM, so say so instead of printing one
+  // person's name — that label is what made it look like only Prabhdeep could
+  // ever clear it (mam 2026-08-20).
+  const hrStep = isHrApprovalStep(category, stepInfo.step);
   const overrideId = getApprovalRoutingFor(db, category, stepInfo.step);
   if (overrideId) {
     const nm = nameById(overrideId);
-    if (nm) return { approver: nm, approver_kind: 'override' };
+    if (nm) return { approver: hrStep ? `${nm} or HR team` : nm, approver_kind: 'override' };
   }
+  if (hrStep) return { approver: 'HR team', approver_kind: 'override' };
   if (stepInfo.approver_name) {
     return {
       approver: userForName(stepInfo.approver_name)?.name || stepInfo.approver_name,
@@ -449,7 +481,9 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
       row.current_step_name = curStep?.name || null;
       if (curStep) {
         const overrideUserId = routeFor(row.category, row.current_step);
-        if (overrideUserId) row.next_approver_name = nameById(overrideUserId);
+        const hrStep2 = isHrApprovalStep(row.category, curStep.step);
+        if (overrideUserId) row.next_approver_name = nameById(overrideUserId) + (hrStep2 ? ' or HR team' : '');
+        else if (hrStep2) row.next_approver_name = 'HR team';
         else if (curStep.approver_name) { const u = userForName(curStep.approver_name); row.next_approver_name = u?.name || curStep.approver_name; }
         else row.next_approver_name = null;
         row.next_approver_role = curStep.approver_role || null;
@@ -570,7 +604,8 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
     const k = category + '|' + w.step;
     if (!(k in _whoCache)) {
       const ov = getApprovalRoutingFor(db, category, w.step);
-      if (ov) _whoCache[k] = nameById(ov);
+      if (ov) _whoCache[k] = nameById(ov) + (isHrApprovalStep(category, w.step) ? ' or HR team' : '');
+      else if (isHrApprovalStep(category, w.step)) _whoCache[k] = 'HR team';
       else if (w.approver_name) { const u = resolveUserByName(db, w.approver_name); _whoCache[k] = u?.name || w.approver_name; }
       else _whoCache[k] = null;
     }
