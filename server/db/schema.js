@@ -5449,6 +5449,12 @@ function initializeDatabase() {
     'CREATE INDEX IF NOT EXISTS idx_pr_category ON payment_requests(category)',
     'CREATE INDEX IF NOT EXISTS idx_pr_site ON payment_requests(site_id)',
     'CREATE INDEX IF NOT EXISTS idx_pr_creator ON payment_requests(created_by)',
+    'CREATE INDEX IF NOT EXISTS idx_pr_created ON payment_requests(created_at DESC)',
+    // Approval trail — grows ~4-6 rows per request forever and had NO index,
+    // so every WHERE request_id=? (list prefetch, /my-inbox, detail,
+    // preReleaseGap on approve) full-scanned it (2026-08-20 payables hang
+    // audit). Composite covers request_id=? + action='approved' + ORDER BY step.
+    'CREATE INDEX IF NOT EXISTS idx_pa_request ON payment_approvals(request_id, action, step)',
     // Business book
     'CREATE INDEX IF NOT EXISTS idx_bb_company ON business_book(company_name)',
     'CREATE INDEX IF NOT EXISTS idx_bb_employee ON business_book(employee_assigned)',

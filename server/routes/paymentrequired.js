@@ -472,6 +472,13 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
   const nameById = (uid) => { if (!idNameMemo.has(uid)) idNameMemo.set(uid, db.prepare('SELECT name FROM users WHERE id=?').get(uid)?.name || null); return idNameMemo.get(uid); };
   const byNameMemo = new Map();
   const userForName = (nm) => { if (!byNameMemo.has(nm)) byNameMemo.set(nm, resolveUserByName(db, nm) || null); return byNameMemo.get(nm); };
+  // can_approve_current is identical for every row sharing (category,
+  // current_step) for a fixed user — at most ~35 distinct pairs exist.
+  // Un-memoized it re-ran canUserApproveStep's 1-5 queries PER ROW,
+  // re-introducing the exact per-row pattern the 2026-06-25 hang fix
+  // above removed (2026-08-20 payables hang audit).
+  const canMemo = new Map();
+  const canApproveFor = (cat, step) => { const k = cat + '|' + step; if (!canMemo.has(k)) canMemo.set(k, canUserApproveStep(db, req.user.id, cat, step)); return canMemo.get(k); };
 
   for (const row of rows) {
     try {
@@ -526,7 +533,7 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
       // separation of duties), so the UI can never offer an action the server
       // then refuses, and never hides one it would allow.
       row.can_approve_current = (row.status !== 'final_approved' && row.status !== 'rejected')
-        && canUserApproveStep(db, req.user.id, row.category, row.current_step)
+        && canApproveFor(row.category, row.current_step)
         && !sodBlockReason(db, row, req.user.id);
     } catch (e) {
       console.warn('[payment-required GET] enrich failed for row', row.id, e.message);
@@ -612,7 +619,22 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
     return _whoCache[k];
   };
 
-  const inbox = [];
+  // PERF (2026-08-20 payables hang audit): this loop used to run FOUR
+  // separate payment_approvals queries PER inbox row (last approval,
+  // distinct-step count, step amounts, per-step pipeline) — full table
+  // scans until idx_pa_request existed — plus un-memoized routing and
+  // authorisation lookups per row, all synchronous on the event loop.
+  // Same class as the 2026-06-25 list hang, same cure: decide "is mine"
+  // first with memoized checks (only a few distinct (category, step)
+  // pairs exist), then ONE chunked prefetch of the approval rows for the
+  // inbox ids, then enrich from the in-memory map. Response shape is
+  // byte-identical — Bulk Approve renders exactly what it did before.
+  const routingMemo = new Map();
+  const routingFor = (cat, step) => { const k = cat + '|' + step; if (!routingMemo.has(k)) routingMemo.set(k, getApprovalRoutingFor(db, cat, step)); return routingMemo.get(k); };
+  const canMemo = new Map();
+  const canFor = (cat, step) => { const k = cat + '|' + step; if (!canMemo.has(k)) canMemo.set(k, canUserApproveStep(db, uid, cat, step)); return canMemo.get(k); };
+
+  const mine = [];
   for (const row of rows) {
     const workflow = WORKFLOW[row.category];
     if (!workflow) continue;
@@ -621,7 +643,7 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
     // System steps (Velocity Check) never go to a human inbox.
     if (stepInfo.approver_role === 'System') continue;
 
-    const overrideUserId = getApprovalRoutingFor(db, row.category, row.current_step);
+    const overrideUserId = routingFor(row.category, row.current_step);
     let isMine = false;
     if (overrideUserId) {
       // Explicit override — ONLY the assigned user (or admin) is "next".
@@ -632,10 +654,30 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
       // Also surface steps pinned to a NAMED approver (L2/L3/Release) and
       // the COO escalation, using the same check the approve action uses —
       // the role-only test above misses those (mam 2026-06-18).
-      if (!isMine) isMine = canUserApproveStep(db, uid, row.category, row.current_step);
+      if (!isMine) isMine = canFor(row.category, row.current_step);
     }
-    if (!isMine) continue;
+    if (isMine) mine.push({ row, workflow, stepInfo });
+  }
 
+  // One chunked query serves what used to be four per-row lookups — the
+  // same prefetch shape the GET / list endpoint uses.
+  const apprByReq = new Map();        // request_id -> [approval rows], step-ordered
+  const mineIds = mine.map(m => m.row.id);
+  for (let i = 0; i < mineIds.length; i += 900) {
+    const chunk = mineIds.slice(i, i + 900);
+    const ph = chunk.map(() => '?').join(',');
+    for (const a of db.prepare(`
+      SELECT pa.request_id, pa.step, pa.step_name, pa.approved_at, pa.step_amount, u.name AS by_name
+        FROM payment_approvals pa LEFT JOIN users u ON u.id = pa.approved_by
+       WHERE pa.action = 'approved' AND pa.request_id IN (${ph})
+       ORDER BY pa.step, pa.id`).all(...chunk)) {
+      if (!apprByReq.has(a.request_id)) apprByReq.set(a.request_id, []);
+      apprByReq.get(a.request_id).push(a);
+    }
+  }
+
+  const inbox = [];
+  for (const { row, workflow, stepInfo } of mine) {
     // Enrich the same way the list endpoint does so the UI can show
     // "✓ HR Approval by Aanchal · ⏳ Waiting on you" cleanly.
     try {
@@ -643,41 +685,25 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
       row.current_step_name = stepInfo.name;
       row.next_approver_role = stepInfo.approver_role;
       row.next_approver_name = whoFor(row.category, stepInfo);
-      const lastApproval = db.prepare(`
-        SELECT pa.step_name, pa.approved_at, u.name AS approved_by_name
-          FROM payment_approvals pa
-          LEFT JOIN users u ON u.id = pa.approved_by
-         WHERE pa.request_id = ? AND pa.action = 'approved'
-         ORDER BY pa.step DESC, pa.id DESC LIMIT 1
-      `).get(row.id);
-      if (lastApproval) {
-        row.last_approved_step_name = lastApproval.step_name;
-        row.last_approved_by_name   = lastApproval.approved_by_name;
-        row.last_approved_at        = lastApproval.approved_at;
+      const appr = apprByReq.get(row.id) || [];
+      if (appr.length) {
+        const last = appr[appr.length - 1];        // highest step, latest id
+        row.last_approved_step_name = last.step_name;
+        row.last_approved_by_name   = last.by_name;
+        row.last_approved_at        = last.approved_at;
       }
-      const cleared = db.prepare(
-        `SELECT COUNT(DISTINCT step) AS c FROM payment_approvals
-          WHERE request_id = ? AND action = 'approved'`
-      ).get(row.id);
-      row.approvals_count = cleared?.c || 0;
+      row.approvals_count = new Set(appr.map(a => a.step)).size;
       // Per-step approved amount (mam 2026-06-15: per-level Pending/Approved
       // views — "when I select Approved on L1 then show how much amount").
       // step_amounts = { <step>: <amount approved at that step> }.
       row.step_amounts = {};
-      for (const s of db.prepare(
-        `SELECT step, step_amount FROM payment_approvals
-          WHERE request_id = ? AND action = 'approved'`
-      ).all(row.id)) {
-        row.step_amounts[s.step] = (s.step_amount != null ? +s.step_amount : (+row.approved_amount || +row.amount || 0));
-      }
       // Full step pipeline for the rich bulk-approve card (mam 2026-06-25):
       // each workflow step with done / current / pending + who cleared it.
       const apprByStep = {};
-      for (const a of db.prepare(
-        `SELECT pa.step, pa.approved_at, u.name AS by_name
-           FROM payment_approvals pa LEFT JOIN users u ON u.id = pa.approved_by
-          WHERE pa.request_id = ? AND pa.action = 'approved'`
-      ).all(row.id)) { apprByStep[a.step] = a; }
+      for (const a of appr) {
+        row.step_amounts[a.step] = (a.step_amount != null ? +a.step_amount : (+row.approved_amount || +row.amount || 0));
+        apprByStep[a.step] = a;
+      }
       // RACI + timing per step: elapsed = time from the previous step's clear
       // (or the request creation) to this step; for the CURRENT step it's how
       // long it's been waiting NOW. late = elapsed beyond the step's SLA hours.
@@ -721,6 +747,9 @@ router.get('/my-inbox-count', requirePermission('payment_required', 'view'), (re
      WHERE status NOT IN ('final_approved','rejected')
   `).all();
   let count = 0;
+  // Memoized by (category, step) — same cure as /my-inbox above; the answer
+  // is identical for every row sharing the pair (2026-08-20 hang audit).
+  const canMemo = new Map();
   for (const row of rows) {
     const workflow = WORKFLOW[row.category];
     if (!workflow) continue;
@@ -730,7 +759,9 @@ router.get('/my-inbox-count', requirePermission('payment_required', 'view'), (re
     // named approver / COO / role). The old role-only check here showed a 0
     // badge to the named L2/L3/Release approvers — which is why those accounts
     // got handed the admin role, gutting the whole chain (manager 2026-07-30).
-    if (canUserApproveStep(db, uid, row.category, row.current_step)) count++;
+    const k = row.category + '|' + row.current_step;
+    if (!canMemo.has(k)) canMemo.set(k, canUserApproveStep(db, uid, row.category, row.current_step));
+    if (canMemo.get(k)) count++;
   }
   res.json({ count });
 });
