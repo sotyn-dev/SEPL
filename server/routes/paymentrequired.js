@@ -429,6 +429,17 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
       }
       row.step_amounts = {};
       for (const a of appr) row.step_amounts[a.step] = (a.step_amount != null ? +a.step_amount : (+row.approved_amount || +row.amount || 0));
+      // Can THIS user act on THIS row right now? The Review / Bulk Approve
+      // controls were gated purely on the payment_required 'approve' permission,
+      // so someone the server DOES authorise — e.g. a person assigned to a step
+      // in ⚙ Approval Routing whose role lacks that permission tick — saw no
+      // button at all (mam 2026-08-19: "aanchal can't bulk approval"). This is
+      // the exact pair of checks the approve endpoint runs (authorisation AND
+      // separation of duties), so the UI can never offer an action the server
+      // then refuses, and never hides one it would allow.
+      row.can_approve_current = (row.status !== 'final_approved' && row.status !== 'rejected')
+        && canUserApproveStep(db, req.user.id, row.category, row.current_step)
+        && !sodBlockReason(db, row, req.user.id);
     } catch (e) {
       console.warn('[payment-required GET] enrich failed for row', row.id, e.message);
     }

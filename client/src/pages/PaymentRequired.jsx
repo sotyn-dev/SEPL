@@ -62,6 +62,11 @@ const emptyForm = {
 
 export default function PaymentRequired() {
   const { canCreate, canApprove, canDelete, user } = useAuth();
+  // ⚙ Responsible (mam 2026-08-19): the server authorises whoever is named
+  // Responsible for a step, so the buttons must appear for them too — gating
+  // purely on the module 'approve' permission hid the action from the very
+  // person the RACI screen put in charge. Server still re-checks every action.
+  const mayAct = (r) => canApprove('payment_required') || !!(r && r.can_approve_current);
   const [tab, setTab] = useUrlTab('dashboard');
   // Mam (2026-05-30): My Inbox tab removed.  Old bookmarks pointing
   // at ?tab=inbox land back on Dashboard so they don't dead-end.
@@ -70,6 +75,8 @@ export default function PaymentRequired() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
   const [requests, setRequests] = useState([]);
+  // Bulk Approve is worth showing if this user can act on ANY loaded row.
+  const mayActAnywhere = canApprove('payment_required') || requests.some(r => r.can_approve_current);
   // Bulk approve (mam 2026-06-25): pick a person, see all their pending with
   // proof, tick-tick approve — instead of opening each one by one.
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -479,7 +486,7 @@ export default function PaymentRequired() {
               <FiSettings size={16} /> Approval Routing
             </button>
           )}
-          {canApprove('payment_required') && (
+          {mayActAnywhere && (
             <button onClick={openBulk} className="btn btn-secondary flex items-center gap-2"
                     title="Approve many of your pending requests at once — filter by person, see proofs, tick-tick approve">
               <FiCheckCircle size={16} /> Bulk Approve
@@ -759,7 +766,7 @@ export default function PaymentRequired() {
                     <span>{date} · {time}</span>
                     <div className="flex gap-1">
                       <button onClick={() => viewRequest(r.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><FiEye size={14} /></button>
-                      {canApprove('payment_required') && r.status !== 'final_approved' && r.status !== 'rejected' && (
+                      {mayAct(r) && r.status !== 'final_approved' && r.status !== 'rejected' && (
                         <button onClick={() => viewRequest(r.id)} className="btn btn-secondary text-[10px] py-0.5 px-2">Review</button>
                       )}
                       {canDelete('payment_required') && <button onClick={async () => {
@@ -892,7 +899,7 @@ export default function PaymentRequired() {
                   </td>
                   <td><div className="flex gap-1">
                     <button onClick={() => viewRequest(r.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><FiEye size={15} /></button>
-                    {canApprove('payment_required') && r.status !== 'final_approved' && r.status !== 'rejected' && <>
+                    {mayAct(r) && r.status !== 'final_approved' && r.status !== 'rejected' && <>
                       <button onClick={() => viewRequest(r.id)} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded font-bold text-xs" title="Review & Approve/Reject">Review</button>
                     </>}
                     {canDelete('payment_required') && <button onClick={async () => {
