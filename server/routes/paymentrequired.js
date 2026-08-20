@@ -1044,15 +1044,25 @@ function stepRequirementLabel(db, category, stepInfo) {
 
 // Separation of duties (mam 2026-07-08 bug: an admin who FILLED a payable could
 // approve every step himself in seconds → instant "Final Approved / Paid",
-// bypassing L1 Accountant → L2 Nitin → L3 MD → Release Aanchal). Rule, applied to
-// EVERYONE including admin/COO: the person who RAISED the request can't approve
-// it — the whole point of the chain is that someone else signs off. Returns a
+// bypassing L1 Accountant → L2 Nitin → L3 MD → Release Aanchal). Returns a
 // reason string, or null if OK.
+// Mam 2026-08-20 (Prabhdeep, PR-2026-1584): being a step's Responsible approver
+// WINS on intermediate steps — an HR head may approve his own TA/DA at the HR
+// step, because the rest of the chain (L1 → L2 → L3 → Release) still has to be
+// cleared by other people. What the 2026-07-08 rule must prevent is one person
+// completing the chain alone, so the block now applies ONLY to the FINAL step:
+// nobody — including admin/COO — can release the payout on a request they
+// raised themselves. At least one other person always signs before money moves.
 // NOTE: we deliberately do NOT block a user from approving two DIFFERENT steps of
 // the same request — the COO is meant to stand in for both L2 and L3 (see the
 // payment-approval-flow note). Blocking that would break intentional coverage.
 function sodBlockReason(db, request, userId) {
-  if (request.created_by === userId) return 'you raised this request';
+  if (request.created_by !== userId) return null;
+  const flow = WORKFLOW[request.category] || [];
+  const finalStep = flow.length ? flow[flow.length - 1].step : null;
+  if (finalStep != null && request.current_step === finalStep) {
+    return 'you raised this request and this is the final payout step';
+  }
   return null;
 }
 

@@ -1307,12 +1307,13 @@ export default function PaymentRequired() {
 
             {/* Action buttons - role based */}
             {/* Separation of duties — the viewer WOULD be this step's approver
-                but raised the request themselves, so the server will refuse.
-                Explain that instead of offering Approve and then erroring
-                (mam 2026-08-20: HR head reviewing his own TA/DA claim). */}
+                but raised the request themselves AND this is the final payout
+                step (mam 2026-08-20: own-step approval is allowed on
+                intermediate steps; only self-RELEASE is blocked). Explain
+                instead of offering Approve and then erroring. */}
             {viewData.status !== 'final_approved' && viewData.status !== 'rejected' && viewData.sod_block_reason && (
               <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50 text-sm text-amber-800">
-                <b>Someone else must approve this step:</b> {viewData.sod_block_reason}. Separation of duties — the person who raises a request can never approve it, so another authorised approver for this step (e.g. another HR team member or admin) has to clear it.
+                <b>Someone else must complete this step:</b> {viewData.sod_block_reason}. Separation of duties — you cannot release the payment on your own request; a different authorised person (e.g. admin or the release approver) must do the payout.
               </div>
             )}
             {viewData.status !== 'final_approved' && viewData.status !== 'rejected' && viewData.can_approve_current && (() => {
