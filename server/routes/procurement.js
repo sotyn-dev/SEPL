@@ -1307,13 +1307,17 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
   // The admin one-day override keeps working — indents raised under it are
   // auto-flagged emergency too, so the KPI never under-counts.
   const win = indentRaiseWindow(db);
-  const wantsEmergency = req.body.is_emergency === true || req.body.is_emergency === 1 || req.body.is_emergency === '1';
+  // Self-service emergency tick is admin-only (mam 2026-08-20) — a regular
+  // user can no longer flag their own indent as EMERGENCY to bypass the
+  // Wed/Sat gate; only an admin can raise one directly, or open the whole
+  // day for everyone via the emergency-date toggle above.
+  const wantsEmergency = req.user.role === 'admin' && (req.body.is_emergency === true || req.body.is_emergency === 1 || req.body.is_emergency === '1');
   const emergencyReason = String(req.body.emergency_reason || '').trim();
   let isEmergency = 0;
   if (!win.isIndentDay) {
     if (!wantsEmergency && !win.emergencyActive) {
       return res.status(403).json({
-        error: 'Routine indents are raised on Wednesday & Saturday only (SPOS). To raise one today, tick "Emergency indent" and write the reason — it will be flagged for PM approval.',
+        error: 'Indents are raised on Wednesday & Saturday only (SPOS). Ask an admin to open emergency raising for today.',
         code: 'INDENT_DAY_BLOCKED',
       });
     }

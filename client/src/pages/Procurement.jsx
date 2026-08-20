@@ -1038,6 +1038,9 @@ export default function Procurement() {
     // SPOS off-day rule: routine indents Wed + Sat only; any other day
     // needs the Emergency tick + reason (server enforces too).
     const offDay = !!raiseWindow && !raiseWindow.allowed;
+    if (offDay && !editingIndentId && !isAdmin()) {
+      return toast.error('Indents are raised on Wednesday & Saturday only. Ask an admin to open emergency raising for today.');
+    }
     if (offDay && !editingIndentId && !form.is_emergency) {
       return toast.error('Today is not an indent day (Wed/Sat). Tick "Emergency indent" and write the reason to raise it now.');
     }
@@ -5875,25 +5878,34 @@ export default function Procurement() {
           </div>
           {/* SPOS emergency section — shows only when raising OFF-day (not
               Wed/Sat, no admin day-open). Reason is mandatory; the indent is
-              flagged ⚡EMERGENCY for approvers + the <5% KPI. */}
+              flagged ⚡EMERGENCY for approvers + the <5% KPI.
+              Admin-only self-service (mam 2026-08-20): regular users may
+              raise ONLY on Wed/Sat — the whole-day override is admin's
+              call via the banner toggle, not a per-user emergency tick. */}
           {!editingIndentId && raiseWindow && !raiseWindow.allowed && (
-            <div className="border border-red-300 bg-red-50 rounded p-3 space-y-2">
-              <label className="flex items-start gap-2 text-xs cursor-pointer">
-                <input type="checkbox" className="mt-0.5"
-                  checked={!!form.is_emergency}
-                  onChange={e => setForm({ ...form, is_emergency: e.target.checked })} />
-                <span>
-                  <span className="font-semibold text-red-700">⚡ Emergency indent — today is not an indent day (Wed/Sat)</span>
-                  <span className="text-red-600 block mt-0.5">Tick to confirm this cannot wait for the next routine indent day. It will carry an EMERGENCY flag through approval and count toward the emergency-indent KPI (target &lt; 5%).</span>
-                </span>
-              </label>
-              {form.is_emergency && (
-                <textarea className="input" rows="2" required
-                  placeholder="Why can't this wait for Wednesday/Saturday? (mandatory)"
-                  value={form.emergency_reason || ''}
-                  onChange={e => setForm({ ...form, emergency_reason: e.target.value })} />
-              )}
-            </div>
+            isAdmin() ? (
+              <div className="border border-red-300 bg-red-50 rounded p-3 space-y-2">
+                <label className="flex items-start gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" className="mt-0.5"
+                    checked={!!form.is_emergency}
+                    onChange={e => setForm({ ...form, is_emergency: e.target.checked })} />
+                  <span>
+                    <span className="font-semibold text-red-700">⚡ Emergency indent — today is not an indent day (Wed/Sat)</span>
+                    <span className="text-red-600 block mt-0.5">Tick to confirm this cannot wait for the next routine indent day. It will carry an EMERGENCY flag through approval and count toward the emergency-indent KPI (target &lt; 5%).</span>
+                  </span>
+                </label>
+                {form.is_emergency && (
+                  <textarea className="input" rows="2" required
+                    placeholder="Why can't this wait for Wednesday/Saturday? (mandatory)"
+                    value={form.emergency_reason || ''}
+                    onChange={e => setForm({ ...form, emergency_reason: e.target.value })} />
+                )}
+              </div>
+            ) : (
+              <div className="border border-amber-300 bg-amber-50 rounded p-3 text-xs text-amber-800">
+                🔒 Indents are raised on <b>Wednesday &amp; Saturday</b> only. If today's material can't wait, ask an admin to open emergency raising for the day.
+              </div>
+            )
           )}
           {/* Header — Site from Business Book, Raised By from Employees. Stacks on mobile. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
