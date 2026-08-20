@@ -1306,6 +1306,15 @@ export default function PaymentRequired() {
             )}
 
             {/* Action buttons - role based */}
+            {/* Separation of duties — the viewer WOULD be this step's approver
+                but raised the request themselves, so the server will refuse.
+                Explain that instead of offering Approve and then erroring
+                (mam 2026-08-20: HR head reviewing his own TA/DA claim). */}
+            {viewData.status !== 'final_approved' && viewData.status !== 'rejected' && viewData.sod_block_reason && (
+              <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50 text-sm text-amber-800">
+                <b>Someone else must approve this step:</b> {viewData.sod_block_reason}. Separation of duties — the person who raises a request can never approve it, so another authorised approver for this step (e.g. another HR team member or admin) has to clear it.
+              </div>
+            )}
             {viewData.status !== 'final_approved' && viewData.status !== 'rejected' && viewData.can_approve_current && (() => {
               const original = +(viewData.amount || 0);
               const currentApproved = viewData.approved_amount != null ? +viewData.approved_amount : original;

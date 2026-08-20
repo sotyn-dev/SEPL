@@ -786,7 +786,19 @@ router.get('/:id', requirePermission('payment_required', 'view'), (req, res, nex
   if (!request) return res.status(404).json({ error: 'Not found' });
   request.approvals = db.prepare(`SELECT pa.*, u.name as approved_by_name FROM payment_approvals pa LEFT JOIN users u ON pa.approved_by=u.id WHERE pa.request_id=? ORDER BY pa.step`).all(req.params.id);
   request.workflow = WORKFLOW[request.category] || [];
-  request.can_approve_current = canUserApproveStep(db, req.user.id, request.category, request.current_step);
+  // Same THREE checks the list endpoint runs (status, step authorisation,
+  // separation of duties) — this line used to skip the SoD check, so the
+  // Review modal offered Approve to the very person who raised the request
+  // and the server's SoD 403 then read as an error (mam 2026-08-20,
+  // PR-2026-1584: HR head reviewing his own TA/DA claim).
+  const sodReason = sodBlockReason(db, request, req.user.id);
+  const wouldApprove = request.status !== 'final_approved' && request.status !== 'rejected'
+    && canUserApproveStep(db, req.user.id, request.category, request.current_step);
+  request.can_approve_current = wouldApprove && !sodReason;
+  // Set ONLY when SoD is the one thing stopping this viewer, so the modal can
+  // explain "you raised this — someone else must approve" instead of silently
+  // hiding the panel.
+  request.sod_block_reason = (wouldApprove && sodReason) ? sodReason : null;
   // Mam (2026-05-22): same next-approver enrichment as the list
   // endpoint, so the detail modal's workflow strip can show
   // "WAITING ON: <name>" on the current step.
