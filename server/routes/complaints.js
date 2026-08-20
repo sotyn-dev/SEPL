@@ -63,7 +63,7 @@ router.post('/public', (req, res) => {
   const db = getDb();
 
   // Safe migrations (legacy — kept for older deploys)
-  const newCols = ['client_name TEXT','company_name TEXT','mobile_number TEXT','category TEXT','problem_detail TEXT','customer_type TEXT','complaint_type TEXT','emp_name TEXT','step1_planned_date DATE','step1_actual_date DATE','step1_time_delay INTEGER','step1_assigned_to TEXT','step2_planned_date DATE','step2_actual_date DATE','step2_time_delay INTEGER','step2_assigned_to TEXT','service_report TEXT','updated_at DATETIME'];
+  const newCols = ['client_name TEXT','company_name TEXT','mobile_number TEXT','category TEXT','problem_detail TEXT','customer_type TEXT','complaint_type TEXT','emp_name TEXT','step1_planned_date DATE','step1_actual_date DATE','step1_time_delay INTEGER','step1_assigned_to TEXT','step2_planned_date DATE','step2_actual_date DATE','step2_time_delay INTEGER','step2_assigned_to TEXT','service_report TEXT','service_report_url TEXT','updated_at DATETIME'];
   newCols.forEach(col => { try { db.exec(`ALTER TABLE complaints ADD COLUMN ${col}`); } catch(e){} });
 
   const { nextSequence } = require('../db/nextSequence');
@@ -219,6 +219,21 @@ router.post('/', requirePermission('complaints', 'create'), (req, res) => {
 // Update (Step 1 / Step 2 progression)
 router.put('/:id', requirePermission('complaints', 'edit'), (req, res) => {
   { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
+  // Closing a complaint has to say WHAT was done — remarks are mandatory to mark
+  // it resolved/closed, while the service-report proof upload stays optional
+  // (mam 2026-08-20). Checked against what the record will hold AFTER this save,
+  // so remarks entered earlier still count.
+  {
+    const b0 = req.body || {};
+    const nextStatus = b0.status;
+    if (nextStatus === 'resolved' || nextStatus === 'closed') {
+      const existing = getDb().prepare('SELECT resolution_notes FROM complaints WHERE id=?').get(req.params.id) || {};
+      const remarks = b0.resolution_notes !== undefined ? b0.resolution_notes : existing.resolution_notes;
+      if (!String(remarks || '').trim()) {
+        return res.status(400).json({ error: 'Add Remarks describing what was done before marking this complaint resolved. (The service report upload is optional.)' });
+      }
+    }
+  }
   const b = req.body;
   const db = getDb();
 
@@ -238,12 +253,13 @@ router.put('/:id', requirePermission('complaints', 'edit'), (req, res) => {
     complaint_type=COALESCE(?,complaint_type), emp_name=COALESCE(?,emp_name),
     step1_planned_date=COALESCE(?,step1_planned_date), step1_actual_date=COALESCE(?,step1_actual_date), step1_time_delay=?, step1_assigned_to=COALESCE(?,step1_assigned_to),
     step2_planned_date=COALESCE(?,step2_planned_date), step2_actual_date=COALESCE(?,step2_actual_date), step2_time_delay=?, step2_assigned_to=COALESCE(?,step2_assigned_to),
-    service_report=COALESCE(?,service_report), status=COALESCE(?,status), priority=COALESCE(?,priority),
+    service_report=COALESCE(?,service_report), service_report_url=COALESCE(?,service_report_url),
+    resolution_notes=COALESCE(?,resolution_notes), status=COALESCE(?,status), priority=COALESCE(?,priority),
     updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(
     b.client_name, b.company_name, b.mobile_number, b.category, b.problem_detail, b.customer_type, b.complaint_type, b.emp_name,
     b.step1_planned_date, b.step1_actual_date, s1Delay, b.step1_assigned_to,
     b.step2_planned_date, b.step2_actual_date, s2Delay, b.step2_assigned_to,
-    b.service_report, b.status, b.priority, req.params.id
+    b.service_report, b.service_report_url, b.resolution_notes, b.status, b.priority, req.params.id
   );
   res.json({ message: 'Updated' });
 });

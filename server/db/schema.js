@@ -3837,6 +3837,11 @@ function initializeDatabase() {
     // the finalised one, so editing the PO changed nothing on the PDF (mam
     // 2026-08-19). With this timestamp the newer edit wins either way.
     ['vendor_po_items', 'rate_updated_at DATETIME'],
+    // Optional proof file for a complaint's Step 2 service report (mam
+    // 2026-08-20). Added here, at boot, because the complaints route only ran
+    // its own ALTERs inside POST /public — so on any install where no client had
+    // submitted through the public form, the column simply never existed.
+    ['complaints', 'service_report_url TEXT'],
     // CRM funnel ← Extra indent link (mam 2026-06-06): Extra-Schedule /
     // Extra-Non-Schedule indents drop a funnel "requirement" at raise time.
     ['crm_funnel', 'source_indent_id INTEGER'],

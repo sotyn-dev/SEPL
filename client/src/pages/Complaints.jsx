@@ -52,6 +52,7 @@ export default function Complaints() {
   const [engineers, setEngineers] = useState([]);
   const [assignResult, setAssignResult] = useState(null);
   const [otpEntry, setOtpEntry] = useState('');
+  const [srUploading, setSrUploading] = useState(false);   // service-report proof upload
   const [registerAck, setRegisterAck] = useState(null);  // wa link surfaced right after Register
 
   const load = async () => {
@@ -136,9 +137,23 @@ export default function Complaints() {
   };
 
   const save = async () => {
-    await api.put(`/complaints/${viewing.id}`, viewing);
-    setViewing(null);
-    load();
+    // Remarks are required to close a complaint; the service-report upload is
+    // optional (mam 2026-08-20). Checked here so the person is told immediately
+    // instead of the save appearing to do nothing.
+    if ((viewing.status === 'resolved' || viewing.status === 'closed')
+        && !String(viewing.resolution_notes || '').trim()) {
+      toast.error('Fill Remarks — say what was done before marking it Resolved.');
+      return;
+    }
+    try {
+      await api.put(`/complaints/${viewing.id}`, viewing);
+      toast.success('Saved');
+      setViewing(null);
+      load();
+    } catch (err) {
+      // Without this the PUT rejected silently and the modal just sat there.
+      toast.error(err.response?.data?.error || 'Could not save this complaint');
+    }
   };
 
   // Open the view modal in edit mode (same modal — already has all the
@@ -164,13 +179,13 @@ export default function Complaints() {
   // Tab-based filter — subset of the full list for each tab
   const visibleList = (() => {
     if (tab === 'step1') return list.filter(c => c.status === 'open' && !c.step1_assigned_to);
-    if (tab === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to && !c.service_report);
+    if (tab === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to);
     if (tab === 'resolved') return list.filter(c => c.status === 'resolved' || c.status === 'closed');
     return list;
   })();
   const tabCount = (id) => {
     if (id === 'step1') return list.filter(c => c.status === 'open' && !c.step1_assigned_to).length;
-    if (id === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to && !c.service_report).length;
+    if (id === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to).length;
     if (id === 'resolved') return list.filter(c => c.status === 'resolved' || c.status === 'closed').length;
     if (id === 'all') return list.length;
     return null;
@@ -368,7 +383,10 @@ export default function Complaints() {
         // Until then, Step 2 stays locked — you can't resolve a complaint
         // that hasn't even been assigned to a technician yet.
         const step1Done = !!(viewing.step1_assigned_to && viewing.step1_actual_date);
-        const step2Done = !!(viewing.step2_actual_date && viewing.service_report);
+        // Resolved/closed marks Step 2 complete. It used to require the service
+        // report, which is optional now (mam 2026-08-20).
+        const step2Done = viewing.status === 'resolved' || viewing.status === 'closed'
+          || !!(viewing.step2_actual_date && (viewing.resolution_notes || viewing.service_report));
         return (
         <Modal onClose={() => setViewing(null)} title={`Complaint ${viewing.complaint_number}`}>
           <div className="space-y-5">
@@ -462,8 +480,40 @@ export default function Complaints() {
                     </select>
                   </Field>
                   <div className="md:col-span-2">
-                    <Field label="Service Report *">
-                      <textarea rows="3" value={viewing.service_report||''} onChange={e=>setViewing({...viewing, service_report:e.target.value})} className="inp" placeholder="What was done to resolve the complaint" />
+                    {/* mam 2026-08-20: the service report is a PROOF UPLOAD and is
+                        optional; Remarks carry what was done and are required to
+                        mark the complaint resolved. */}
+                    <Field label={`Remarks ${(viewing.status === 'resolved' || viewing.status === 'closed') ? '*' : ''}`}>
+                      <textarea rows="3" value={viewing.resolution_notes||''}
+                        onChange={e=>setViewing({...viewing, resolution_notes:e.target.value})} className="inp"
+                        placeholder="What was done to resolve the complaint (required to mark it Resolved)" />
+                    </Field>
+                  </div>
+                  <div className="md:col-span-2">
+                    <Field label="Service Report (proof upload · optional)">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input type="file" className="inp text-xs" disabled={srUploading}
+                          onChange={async e => {
+                            const f = e.target.files?.[0]; if (!f) return;
+                            setSrUploading(true);
+                            try {
+                              const fd = new FormData(); fd.append('file', f);
+                              const up = await api.post('/upload', fd);
+                              setViewing(v => ({ ...v, service_report_url: up.data.url }));
+                              toast.success('Service report attached');
+                            } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
+                            setSrUploading(false);
+                          }} />
+                        {srUploading && <span className="text-[11px] text-gray-400">Uploading…</span>}
+                        {viewing.service_report_url && (
+                          <>
+                            <a href={viewing.service_report_url} target="_blank" rel="noreferrer"
+                               className="text-[11px] text-blue-700 hover:underline">View attached report</a>
+                            <button type="button" className="text-[11px] text-red-600 hover:underline"
+                              onClick={() => setViewing(v => ({ ...v, service_report_url: '' }))}>remove</button>
+                          </>
+                        )}
+                      </div>
                     </Field>
                   </div>
                 </div>
