@@ -1,1 +1,0 @@
-import{r as a}from"./react-vendor-j6k_rcxr.js";import{a as e,b as o}from"./CartesianChart-BjSc98m0.js";var i=["axis","item"],s=a.forwardRef((r,t)=>a.createElement(e,{chartName:"BarChart",defaultTooltipEventType:"axis",validateTooltipEventTypes:i,tooltipPayloadSearcher:o,categoricalChartProps:r,ref:t}));export{s as B};
