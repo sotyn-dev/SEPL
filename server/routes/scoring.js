@@ -852,13 +852,18 @@ function computeScorecard(db, userId, weekStart) {
       }
 
       // ===== Complaints =====
-      if (source === 'auto:complaints_raised') {
-        const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        return { given: null, done: c };
-      }
-      if (source === 'auto:complaints_resolved') {
-        const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE status='resolved' AND created_at BETWEEN ? AND ?`).get(since, until).c;
-        return { given: null, done: c };
+      // Mam 2026-08-20: Plan is not a hand-typed target — it auto-fills from
+      // the complaints RAISED in the week, and Actual is how many of that same
+      // cohort are resolved ("plan 10 complaint but resolve 9" → 90%). Same
+      // given/done cohort shape as delegations/PMS/snags: current status only,
+      // no resolved-date window — a later resolution still counts toward the
+      // raised week. 'closed' counts as resolved, matching the Complaints
+      // page dashboard tiles. Both sources return the same pair so the KPI
+      // reads Plan=raised / Actual=resolved whichever one a row is bound to.
+      if (source === 'auto:complaints_raised' || source === 'auto:complaints_resolved') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(since, until).c;
+        return { given, done };
       }
 
       // ===== Customers / Vendors =====

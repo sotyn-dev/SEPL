@@ -166,6 +166,12 @@ const SOURCE_INFO = {
   'auto:attendance_late_days':  { plan: 'You set (lower better)',             actual: 'Late days this week' },
   'auto:attendance_absent_days':{ plan: '0 days target',                      actual: 'Absent days this week' },
   'auto:leaves_applied':        { plan: 'You set',                            actual: 'Leave requests filed by user' },
+  // Complaints — Plan auto-fills from the complaints RAISED in the week;
+  // Actual = of that same week's complaints, how many are resolved/closed
+  // (mam 2026-08-20: "plan 10 complaint but resolve 9" → 90%). Both sources
+  // return the same pair server-side, so the hint is the same for both.
+  'auto:complaints_raised':     { plan: 'Complaints raised this week (company-wide)', actual: 'Of those, resolved / closed' },
+  'auto:complaints_resolved':   { plan: 'Complaints raised this week (company-wide)', actual: 'Of those, resolved / closed' },
   // Master Data
   'auto:customers_added':       { plan: 'You set',                            actual: 'Customers added by user' },
   'auto:vendors_added':         { plan: 'You set',                            actual: 'Vendors added by user' },
