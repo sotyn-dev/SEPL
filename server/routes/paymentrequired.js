@@ -180,7 +180,51 @@ try {
   }
 } catch (e) { console.error('[migration] TA/DA HR backfill failed:', e.message); }
 
+// ── Names out of the code, into config (mam 2026-08-19) ─────────────
+// "u dont do hardcode hr approval, prabhdeep will do" — the flow definitions
+// name real people (HR Prabhdeep Singh, L2 Nitin Jain, L3 Ankur Kaplesh,
+// Release Aanchal). Those names are only a FIRST-RUN DEFAULT: on boot each one
+// is copied into payment_approval_overrides, the table ⚙ Approval Routing edits,
+// so every step becomes a row mam can reassign without touching source. Once a
+// row exists it is never re-seeded, so her choices are never overwritten — and a
+// step she clears back to "— Default —" simply stops having a row.
+// Idempotent: only fills a (category, step) that has no row and whose name
+// resolves to an active user.
+// Latches only once EVERY named step has a row. If a name did not resolve (that
+// person is not created yet, or is spelled differently), we retry later instead
+// of latching — otherwise a user added after the first call would never get their
+// config row until the next restart. Throttled so an unresolvable name cannot
+// re-run this on every request.
+let _routingSeedDone = false, _routingSeedAt = 0;
+function seedApprovalRoutingDefaults(db) {
+  if (_routingSeedDone) return;
+  const now = Date.now();
+  if (now - _routingSeedAt < 60000) return;
+  _routingSeedAt = now;
+  let skipped = 0;
+  try {
+    ensureOverrideTable(db);
+    const has = db.prepare('SELECT 1 FROM payment_approval_overrides WHERE category=? AND step=?');
+    const ins = db.prepare(`INSERT INTO payment_approval_overrides (category, step, user_id, updated_at, updated_by)
+                            VALUES (?,?,?,CURRENT_TIMESTAMP,NULL)`);
+    const seeded = [];
+    for (const [category, flow] of Object.entries(WORKFLOW)) {
+      for (const st of flow) {
+        if (!st.approver_name) continue;                 // role-based steps stay role-based
+        if (has.get(category, st.step)) continue;        // never overwrite a real choice
+        const u = resolveUserByName(db, st.approver_name);
+        if (!u) { skipped++; continue; }                  // name not created yet → retry later
+        ins.run(category, st.step, u.id);
+        seeded.push(`${category}/${st.step}=${u.name}`);
+      }
+    }
+    if (seeded.length) console.log(`[payables] approval routing seeded from defaults: ${seeded.join(', ')}`);
+    if (!skipped) _routingSeedDone = true;                // nothing left to fill — stop checking
+  } catch (e) { console.warn('[payables] approval routing seed failed:', e.message); }
+}
+
 function getApprovalRoutingFor(db, category, step) {
+  seedApprovalRoutingDefaults(db);   // first call in this process fills the defaults
   try {
     const row = db.prepare(`SELECT user_id FROM payment_approval_overrides WHERE category=? AND step=?`).get(category, step);
     return row?.user_id || null;
@@ -199,7 +243,17 @@ function canUserApproveStep(db, userId, category, step) {
   // that's the point of the override.
   const overrideUserId = getApprovalRoutingFor(db, category, step);
   if (overrideUserId) {
-    return overrideUserId === userId;
+    if (overrideUserId === userId) return true;
+    // The COO stand-in for L2/L3 used to be reachable only because those steps
+    // had no row. Now that the defaults are seeded as rows, check it here too —
+    // otherwise seeding would silently strip an escalation path that works today
+    // (mam 2026-06-18: "coo@securedengineers unable to approve").
+    if (step === 2 || step === 3) {
+      const me = db.prepare('SELECT email, username FROM users WHERE id=?').get(userId);
+      const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
+      if (isCoo(me?.email) || isCoo(me?.username)) return true;
+    }
+    return false;
   }
   // COO escalation (mam 2026-06-18: "coo@securedengineers unable to approve").
   // The COO may clear the L2 and L3 sign-offs. Matched by EMAIL (the `coo@`
@@ -1215,6 +1269,10 @@ router.get('/approval-routing', (req, res) => {
   try {
     const db = getDb();
     ensureOverrideTable(db);
+    // Fill the defaults before rendering, so opening ⚙ Approval Routing SHOWS who
+    // currently holds each step instead of a blank "— Default —" that hides the
+    // name baked into the code.
+    seedApprovalRoutingDefaults(db);
     let overrides = [];
     try {
       overrides = db.prepare(`
