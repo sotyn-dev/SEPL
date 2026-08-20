@@ -97,30 +97,7 @@ router.post('/public', (req, res) => {
 // All routes below require auth
 router.use(authMiddleware);
 
-// ── Scope: view = MY complaints, See All = everyone's (mam 2026-08-20) ──
-// "if i use in complaints view than user can show which they assign" — a role
-// with plain View (e.g. Jr. Site Eng) was still served EVERY complaint in the
-// company. Now View shows only the ones that are this person's: assigned to them
-// at either step, or raised by them. Ticking "See All" on Complaints in the role
-// matrix restores the full list, exactly like the other modules; admin always
-// sees everything.
-// Step 1/2 assignees are stored as free TEXT names, so those are matched on the
-// user's own name as well as the id columns — otherwise older rows assigned by
-// name would vanish from the assignee's list.
-function complaintScope(req) {
-  try {
-    if (req.user?.role === 'admin') return null;
-    if (getUserPermissions(req.user.id)['complaints']?.can_see_all) return null;
-  } catch (_) { /* fall through to the safe, narrow scope */ }
-  const name = String(req.user?.name || '').trim();
-  return {
-    sql: ` AND (c.assigned_to = ? OR c.assigned_engineer_id = ? OR c.created_by = ?
-                OR (? <> '' AND (LOWER(TRIM(COALESCE(c.step1_assigned_to,''))) = LOWER(?)
-                              OR LOWER(TRIM(COALESCE(c.step2_assigned_to,''))) = LOWER(?)
-                              OR LOWER(TRIM(COALESCE(c.emp_name,''))) = LOWER(?))))`,
-    params: [req.user.id, req.user.id, req.user.id, name, name, name, name],
-  };
-}
+const { complaintScope } = require('../lib/complaintScope');
 
 router.get('/', requirePermission('complaints', 'view'), (req, res) => {
   const { status, search, category } = req.query;
@@ -158,7 +135,27 @@ router.get('/stats', requirePermission('complaints', 'view'), (req, res) => {
   res.json({ total: total.c, open: open.c, inProgress: inProgress.c, resolved: resolved.c, byCategory });
 });
 
+// Same scope as the list, applied to ONE record. Hiding a complaint from the
+// list while still serving it at /complaints/:id would only be cosmetic — the id
+// is sequential, so anyone could walk other people's complaints (and edit them,
+// since the write routes take the same path). Returns an error object when the
+// caller may not touch this record, null when they may.
+function complaintDenied(req, id) {
+  const scope = complaintScope(req);
+  if (!scope) return null;                       // admin or "See All" — everything allowed
+  const row = getDb().prepare(`SELECT c.id FROM complaints c WHERE c.id = ?${scope.sql}`)
+    .get(id, ...scope.params);
+  if (row) return null;
+  // Distinguish "does not exist" from "not yours" so a real 404 still reads as one.
+  const exists = getDb().prepare('SELECT 1 FROM complaints WHERE id=?').get(id);
+  return exists
+    ? { code: 403, error: "This complaint isn't assigned to you. Ask your admin to tick \"See All\" on Complaints if you need to work on everyone's." }
+    : { code: 404, error: 'Not found' };
+}
+
 router.get('/:id', requirePermission('complaints', 'view'), (req, res) => {
+  const denied = complaintDenied(req, req.params.id);
+  if (denied) return res.status(denied.code).json({ error: denied.error });
   const c = getDb().prepare(`
     SELECT c.*, eng.name as assigned_engineer_name, eng.phone as assigned_engineer_phone
     FROM complaints c LEFT JOIN users eng ON c.assigned_engineer_id = eng.id
@@ -221,6 +218,7 @@ router.post('/', requirePermission('complaints', 'create'), (req, res) => {
 
 // Update (Step 1 / Step 2 progression)
 router.put('/:id', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const b = req.body;
   const db = getDb();
 
@@ -251,6 +249,7 @@ router.put('/:id', requirePermission('complaints', 'edit'), (req, res) => {
 });
 
 router.delete('/:id', requirePermission('complaints', 'delete'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   getDb().prepare('DELETE FROM complaints WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -266,6 +265,7 @@ router.delete('/:id', requirePermission('complaints', 'delete'), (req, res) => {
 // one to the client carrying the OTP).  The OTP itself is NEVER sent
 // to the engineer — only to the client.
 router.post('/:id/assign', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const db = getDb();
   const id = +req.params.id;
   const engId = +req.body.engineer_user_id;
@@ -337,6 +337,7 @@ router.post('/:id/assign', requirePermission('complaints', 'edit'), (req, res) =
 // timestamp which messages have been dispatched.  Pure audit-trail.
 // Body: { kind: 'register' | 'engineer_assign' | 'client_assign' }
 router.post('/:id/whatsapp/sent', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const map = {
     register:        'client_register_msg_sent_at',
     engineer_assign: 'engineer_assign_msg_sent_at',
@@ -354,6 +355,7 @@ router.post('/:id/whatsapp/sent', requirePermission('complaints', 'edit'), (req,
 // Mismatch → attempts++ and return remaining attempts so the UI can
 // shame the engineer into asking the client again.
 router.post('/:id/verify-otp', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const db = getDb();
   const id = +req.params.id;
   const given = String(req.body.otp || '').trim();
@@ -400,6 +402,7 @@ router.post('/:id/verify-otp', requirePermission('complaints', 'edit'), (req, re
 // number, generate a fresh OTP and return the new client-side
 // WhatsApp link.  Resets the attempts counter.
 router.post('/:id/resend-otp', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const db = getDb();
   const id = +req.params.id;
   const c = db.prepare(`

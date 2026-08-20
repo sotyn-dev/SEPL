@@ -115,9 +115,18 @@ router.post('/testing', requirePermission('installation', 'create'), (req, res) 
 });
 
 // Complaints
-router.get('/complaints', (req, res) => {
-  res.json(getDb().prepare(`SELECT c.*, u1.name as created_by_name, u2.name as assigned_to_name FROM complaints c
-    LEFT JOIN users u1 ON c.created_by=u1.id LEFT JOIN users u2 ON c.assigned_to=u2.id ORDER BY c.created_at DESC`).all());
+// Served here as well as from /api/complaints, so it MUST honour the same rules:
+// it had no permission check at all and returned every complaint in the company
+// to any signed-in user, which quietly defeated the Complaints view scope
+// (mam 2026-08-20). Now gated by the complaints view permission and filtered by
+// the shared scope — "See All" still returns everything.
+router.get('/complaints', requirePermission('complaints', 'view'), (req, res) => {
+  const { complaintScope } = require('../lib/complaintScope');
+  const scope = complaintScope(req);
+  const sql = `SELECT c.*, u1.name as created_by_name, u2.name as assigned_to_name FROM complaints c
+    LEFT JOIN users u1 ON c.created_by=u1.id LEFT JOIN users u2 ON c.assigned_to=u2.id
+    WHERE 1=1${scope ? scope.sql : ''} ORDER BY c.created_at DESC`;
+  res.json(getDb().prepare(sql).all(...(scope ? scope.params : [])));
 });
 
 router.post('/complaints', requirePermission('complaints', 'create'), (req, res) => {

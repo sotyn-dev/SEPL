@@ -65,10 +65,12 @@ export default function Complaints() {
   };
 
   useEffect(() => { load(); }, [q]);
-  // Best-effort load of the engineer/user list on mount so the "Assigned To"
-  // fields can suggest names (mam 2026-06-15 automation). Admins-only
-  // endpoint — silently empty for others, fields stay free-text.
-  useEffect(() => { api.get('/users').then(({ data }) => setEngineers(Array.isArray(data) ? data : (data?.users || []))).catch(() => {}); }, []);
+  // The user list behind every "Assigned To" picker. It used to call '/users',
+  // which does not exist (/api/users 404s — the real route is /auth/users), and
+  // the failure was swallowed by .catch(). That was invisible while these were
+  // free-text boxes with a suggestion list, but they are dropdowns now, so an
+  // empty list meant nobody could be assigned at all (2026-08-20).
+  useEffect(() => { api.get('/auth/users?active_only=1').then(({ data }) => setEngineers(Array.isArray(data) ? data : (data?.users || []))).catch(() => {}); }, []);
 
   const create = async (e) => {
     e.preventDefault();
@@ -92,7 +94,7 @@ export default function Complaints() {
     // Pull users for the engineer picker (only when no engineer yet)
     if (!c.assigned_engineer_id && engineers.length === 0) {
       try {
-        const { data } = await api.get('/users');
+        const { data } = await api.get('/auth/users?active_only=1');
         setEngineers(Array.isArray(data) ? data : (data?.users || []));
       } catch (_) { /* admins-only endpoint — non-fatal */ }
     }
