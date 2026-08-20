@@ -1,7 +1,7 @@
 const express = require('express');
 const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
 // Email-trigger helpers (recipient resolution). Best-effort.
@@ -97,6 +97,31 @@ router.post('/public', (req, res) => {
 // All routes below require auth
 router.use(authMiddleware);
 
+// ── Scope: view = MY complaints, See All = everyone's (mam 2026-08-20) ──
+// "if i use in complaints view than user can show which they assign" — a role
+// with plain View (e.g. Jr. Site Eng) was still served EVERY complaint in the
+// company. Now View shows only the ones that are this person's: assigned to them
+// at either step, or raised by them. Ticking "See All" on Complaints in the role
+// matrix restores the full list, exactly like the other modules; admin always
+// sees everything.
+// Step 1/2 assignees are stored as free TEXT names, so those are matched on the
+// user's own name as well as the id columns — otherwise older rows assigned by
+// name would vanish from the assignee's list.
+function complaintScope(req) {
+  try {
+    if (req.user?.role === 'admin') return null;
+    if (getUserPermissions(req.user.id)['complaints']?.can_see_all) return null;
+  } catch (_) { /* fall through to the safe, narrow scope */ }
+  const name = String(req.user?.name || '').trim();
+  return {
+    sql: ` AND (c.assigned_to = ? OR c.assigned_engineer_id = ? OR c.created_by = ?
+                OR (? <> '' AND (LOWER(TRIM(COALESCE(c.step1_assigned_to,''))) = LOWER(?)
+                              OR LOWER(TRIM(COALESCE(c.step2_assigned_to,''))) = LOWER(?)
+                              OR LOWER(TRIM(COALESCE(c.emp_name,''))) = LOWER(?))))`,
+    params: [req.user.id, req.user.id, req.user.id, name, name, name, name],
+  };
+}
+
 router.get('/', requirePermission('complaints', 'view'), (req, res) => {
   const { status, search, category } = req.query;
   let sql = `SELECT c.*, u.name as assigned_to_name,
@@ -109,20 +134,27 @@ router.get('/', requirePermission('complaints', 'view'), (req, res) => {
   if (status) { sql += ' AND c.status=?'; params.push(status); }
   if (category) { sql += ' AND c.category=?'; params.push(category); }
   if (search) { sql += ' AND (c.client_name LIKE ? OR c.complaint_number LIKE ? OR c.company_name LIKE ? OR c.mobile_number LIKE ?)'; params.push(`%${search}%`,`%${search}%`,`%${search}%`,`%${search}%`); }
+  const scope = complaintScope(req);
+  if (scope) { sql += scope.sql; params.push(...scope.params); }
   sql += ' ORDER BY c.created_at DESC';
   res.json(getDb().prepare(sql).all(...params));
 });
 
 router.get('/stats', requirePermission('complaints', 'view'), (req, res) => {
   const db = getDb();
-  const total = db.prepare('SELECT COUNT(*) as c FROM complaints').get();
-  const open = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status='open'").get();
-  const inProgress = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status='in_progress'").get();
+  // Same scope as the list — tiles counting complaints the user cannot see
+  // would contradict the rows underneath them.
+  const scope = complaintScope(req);
+  const w = scope ? scope.sql : '';
+  const p = scope ? scope.params : [];
+  const total = db.prepare(`SELECT COUNT(*) as c FROM complaints c WHERE 1=1${w}`).get(...p);
+  const open = db.prepare(`SELECT COUNT(*) as c FROM complaints c WHERE c.status='open'${w}`).get(...p);
+  const inProgress = db.prepare(`SELECT COUNT(*) as c FROM complaints c WHERE c.status='in_progress'${w}`).get(...p);
   // Mam (2026-05-22 audit fix): UI treats both 'resolved' AND legacy
   // 'closed' as done (Complaints.jsx:161 OR check) but stats only
   // counted 'resolved' → tile undershoot.  Match the UI's union.
-  const resolved = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status IN ('resolved','closed')").get();
-  const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM complaints WHERE category IS NOT NULL GROUP BY category").all();
+  const resolved = db.prepare(`SELECT COUNT(*) as c FROM complaints c WHERE c.status IN ('resolved','closed')${w}`).get(...p);
+  const byCategory = db.prepare(`SELECT c.category, COUNT(*) as count FROM complaints c WHERE c.category IS NOT NULL${w} GROUP BY c.category`).all(...p);
   res.json({ total: total.c, open: open.c, inProgress: inProgress.c, resolved: resolved.c, byCategory });
 });
 

@@ -321,7 +321,12 @@ export default function Complaints() {
                 {STATES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </Field>
-            <Field label="EMP Name"><input list="cmpEngDL1" value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp" placeholder="Who received the complaint" /><datalist id="cmpEngDL1">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist></Field>
+            <Field label="EMP Name"><select value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp">
+              <option value="">— select person —</option>
+              {engineers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+              {form.emp_name && !engineers.some(u => u.name === form.emp_name)
+                && <option value={form.emp_name}>{form.emp_name} (existing)</option>}
+            </select></Field>
             <Field label="Complaint Type *">
               <div className="flex gap-2">
                 {COMPLAINT_TYPES.map(t => (
@@ -392,7 +397,14 @@ export default function Complaints() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Field label="Assigned To (name / team) *">
-                  <input list="cmpEngDL2" value={viewing.step1_assigned_to||''} onChange={e=>setViewing({...viewing, step1_assigned_to:e.target.value})} className="inp" placeholder="e.g. LV Team / Himank / Gagan" /><datalist id="cmpEngDL2">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist>
+                  <select value={viewing.step1_assigned_to||''} onChange={e=>setViewing({...viewing, step1_assigned_to:e.target.value})} className="inp">
+                    <option value="">— select person —</option>
+                    {engineers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                    {/* A name typed before this became a dropdown must still show,
+                        or opening an old complaint would silently blank it. */}
+                    {viewing.step1_assigned_to && !engineers.some(u => u.name === viewing.step1_assigned_to)
+                      && <option value={viewing.step1_assigned_to}>{viewing.step1_assigned_to} (existing)</option>}
+                  </select>
                 </Field>
                 <Field label="Planned Date">
                   <input type="date" value={viewing.step1_planned_date||''} onChange={e=>setViewing({...viewing, step1_planned_date:e.target.value})} className="inp" />
@@ -423,7 +435,12 @@ export default function Complaints() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <Field label="Assigned To (resolver)">
-                    <input list="cmpEngDL3" value={viewing.step2_assigned_to||''} onChange={e=>setViewing({...viewing, step2_assigned_to:e.target.value})} className="inp" placeholder="Technician / engineer name" /><datalist id="cmpEngDL3">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist>
+                    <select value={viewing.step2_assigned_to||''} onChange={e=>setViewing({...viewing, step2_assigned_to:e.target.value})} className="inp">
+                      <option value="">— select person —</option>
+                      {engineers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                      {viewing.step2_assigned_to && !engineers.some(u => u.name === viewing.step2_assigned_to)
+                        && <option value={viewing.step2_assigned_to}>{viewing.step2_assigned_to} (existing)</option>}
+                    </select>
                   </Field>
                   <Field label="Planned Date">
                     <input type="date" value={viewing.step2_planned_date||''} onChange={e=>setViewing({...viewing, step2_planned_date:e.target.value})} className="inp" />
