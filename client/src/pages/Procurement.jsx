@@ -2278,17 +2278,11 @@ export default function Procurement() {
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="text-sm font-semibold">Raise Indent</h3>
-            {(() => {
-              const raiseClosed = !!raiseWindow && !raiseWindow.allowed;
-              return (
-                <button
-                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', is_emergency: false, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
-                  title={raiseClosed ? 'Off-day — opens as an EMERGENCY indent (reason required)' : ''}
-                  className={`btn flex items-center gap-2 ${raiseClosed ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
-                  <FiPlus /> {raiseClosed ? 'Raise Emergency Indent' : 'Raise Indent'}
-                </button>
-              );
-            })()}
+            <button
+              onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', is_emergency: false, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
+              className="btn btn-primary flex items-center gap-2">
+              <FiPlus /> Raise Indent
+            </button>
           </div>
 
           {/* Raise window banner (mam 2026-06-16): indents only on Saturday;
