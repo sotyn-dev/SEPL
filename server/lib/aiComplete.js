@@ -17,15 +17,32 @@ const { getDb } = require('../db/schema');
 // available to new users") — Google's own error told us to move to 3.6. Any
 // hardcoded id dies the same way eventually, so the 404 self-heal below ASKS
 // Google what this key can actually use instead of guessing a second time.
-const AI_DEFAULTS = { anthropic: 'claude-opus-4-7', gemini: 'gemini-3.6-flash' };
-const ANTHROPIC_FALLBACK_MODEL = 'claude-opus-5';   // stale-model self-heal (audit 2026-08-18)
-const GEMINI_FALLBACK_MODEL = 'gemini-3.6-flash';
-// Preference order when auto-picking a live Gemini model: cheap+fast first,
-// since every caller here wants a short answer, not deep reasoning.
+// Preference order when auto-picking a live Gemini model. FLASH-LITE FIRST:
+// every caller here wants a short answer (a rate, a head-count, a JSON row),
+// not deep reasoning, and the lite models carry by far the most generous
+// FREE-tier limits. mam 2026-08-21 is on the free tier deliberately ("i want
+// free which will work") and hit a 429 on gemini-3.6-flash, whose free
+// allowance is small — so the cheap, high-quota models are tried first and the
+// flagships are kept as backstops.
 const GEMINI_PREFERRED = [
-  'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite', 'gemini-3.5-flash',
+  'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite',
+  'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.5-flash',
 ];
+// A CAPABILITY-first order for the rare caller that would rather pay quota than
+// lose answer quality (opts.prefer:'capable' — vision/drawing work). Same ids,
+// flagships first. No caller opts in today; the default stays cheap-first.
+const GEMINI_PREFERRED_CAPABLE = [
+  'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash',
+  'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite',
+];
+// The default, the 404 fallback and the preference list must all name the SAME
+// model. Audit 2026-08-21: the list was reordered to flash-lite but these two
+// still said 'gemini-3.6-flash', so a blank/reset/coerced ai_model STARTED on
+// the flagship whose free quota mam had just exhausted, and the 404 toast told
+// her to pick it. Derive them from the list so they can never drift again.
+const AI_DEFAULTS = { anthropic: 'claude-opus-4-7', gemini: GEMINI_PREFERRED[0] };
+const ANTHROPIC_FALLBACK_MODEL = 'claude-opus-5';   // stale-model self-heal (audit 2026-08-18)
+const GEMINI_FALLBACK_MODEL = GEMINI_PREFERRED[0];
 
 function setting(db, key) {
   try { return (db || getDb()).prepare('SELECT value FROM app_settings WHERE key=?').get(key)?.value ?? null; }
@@ -126,7 +143,7 @@ async function runAnthropic(cfg, opts) {
     } else throw err;
   }
   const text = (resp?.content || []).map(c => c.text || '').join(opts.attachments?.length ? '' : ' ').trim();
-  return { text, model, provider: 'anthropic',
+  return { text, model, requestedModel: cfg.model, provider: 'anthropic',
     usage: { input_tokens: resp?.usage?.input_tokens, output_tokens: resp?.usage?.output_tokens } };
 }
 
@@ -153,16 +170,29 @@ async function listGeminiModels(apiKey, timeout = 15000) {
   } catch (_) { return []; }
 }
 
-// Best live model for short answers: first hit in GEMINI_PREFERRED, else any
-// non-preview flash, else the first usable model the key reports.
-function pickGeminiModel(available, exclude) {
+// Best live model for short answers: first hit in the preference list, else any
+// non-preview flash, else the cheapest-looking thing the key reports.
+//
+// The LAST-RESORT rung used to be `available.find(m => !skip.has(m.id))`, which
+// ignored both filters above it and could hand back a *-pro or *-preview id —
+// exactly the models with the SMALLEST free-tier allowance, the opposite of
+// what this list exists to do (audit 2026-08-21). It now degrades in order:
+// preferred → plain flash → any stable non-pro → any stable → anything.
+// @param prefer 'capable' = flagships first (vision/drawing callers); default cheap-first.
+function pickGeminiModel(available, exclude, prefer) {
   const ids = new Set(available.map(m => m.id));
   const skip = new Set(exclude || []);
-  for (const p of GEMINI_PREFERRED) if (ids.has(p) && !skip.has(p)) return p;
-  const flash = available.find(m => /flash/i.test(m.id) && !/preview|exp/i.test(m.id) && !skip.has(m.id));
+  const order = prefer === 'capable' ? GEMINI_PREFERRED_CAPABLE : GEMINI_PREFERRED;
+  for (const p of order) if (ids.has(p) && !skip.has(p)) return p;
+  const usable = available.filter(m => !skip.has(m.id));
+  const stable = (m) => !/preview|exp/i.test(m.id);
+  const flash = usable.find(m => /flash/i.test(m.id) && stable(m));
   if (flash) return flash.id;
-  const any = available.find(m => !skip.has(m.id));
-  return any ? any.id : null;
+  const lean = usable.find(m => stable(m) && !/pro|ultra/i.test(m.id));
+  if (lean) return lean.id;
+  const anyStable = usable.find(stable);
+  if (anyStable) return anyStable.id;
+  return usable.length ? usable[0].id : null;
 }
 
 // Persist a healed model so the NEXT request doesn't repeat the discovery round
@@ -175,6 +205,42 @@ function rememberModel(db, model) {
     else h.prepare("INSERT INTO app_settings (key, value) VALUES ('ai_model', ?)").run(model);
   } catch (_) { /* best-effort — never fail a completion over bookkeeping */ }
 }
+
+// ── Free-tier quota memory — IN PROCESS ONLY, deliberately not persisted ────
+// A 404 is permanent (Google retired the id) so healing onto a new model is
+// written to app_settings. A 429 is NOT: it is a rolling free-tier window that
+// reopens. Persisting a 429 hop turned a temporary condition into a permanent
+// settings change mam never chose — every AI feature (and the separate Ask
+// SOTYN.AI chat, which reads the same app_settings.ai_model) stayed downgraded
+// to the lite tier forever, because nothing ever walks back UP the list
+// (audit 2026-08-21). So a quota hop lives here instead: for the next
+// QUOTA_COOLDOWN_MS this process starts on the model that answered, and after
+// that it goes back to HER model on its own. A pm2 restart also clears it.
+const QUOTA_COOLDOWN_MS = 15 * 60 * 1000;
+// A body at or above this size is treated as "expensive to re-upload" — the
+// 429/404 walk is capped at a single hop for it (25MB of drawings x 4 hops is
+// ~100MB out of a 1GB VPS).
+const BIG_PAYLOAD_BYTES = 256 * 1024;
+// Don't start a hop with less than this much of the caller's budget left.
+const MIN_HOP_MS = 2000;
+const quotaCapped = new Map();   // model id → ms timestamp of the last 429
+let quotaSwitch = null;          // { from, to, at } — last quota hop that WORKED
+
+function markQuotaCapped(model) { quotaCapped.set(model, Date.now()); }
+function isQuotaCapped(model) {
+  const t = quotaCapped.get(model);
+  if (!t) return false;
+  if (Date.now() - t > QUOTA_COOLDOWN_MS) { quotaCapped.delete(model); return false; }
+  return true;
+}
+// Exposed so Admin → AI Settings can one day show "auto-switched from X to Y
+// (quota)" instead of the switch being invisible. Returns null once it expires.
+function getQuotaSwitch() {
+  if (!quotaSwitch) return null;
+  if (Date.now() - quotaSwitch.at > QUOTA_COOLDOWN_MS) { quotaSwitch = null; return null; }
+  return { ...quotaSwitch };
+}
+function _resetQuotaMemory() { quotaCapped.clear(); quotaSwitch = null; }   // tests only
 
 // ── Google Gemini (native REST, global fetch — no new dependency) ──────────
 async function runGemini(cfg, opts) {
@@ -193,12 +259,16 @@ async function runGemini(cfg, opts) {
   const body = { contents: [{ role: 'user', parts }], generationConfig: genCfg };
   if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
 
-  // Serialise ONCE PER MODEL — never inside the retry loop. The model id lives
-  // in the URL, not the body, so every 429 attempt reuses the same string;
-  // procurementSchedule.js can ship ~33MB of base64 drawings here and
-  // re-stringifying that per attempt churned hundreds of MB on the VPS for
-  // nothing (audit 2026-08-21). Only the 404 self-heal rebuilds it, because
-  // thinkingConfig is 2.5-only and 1.5/2.0 reject the unknown field with a 400.
+  // Serialise ONCE PER BODY SHAPE — never inside the retry loop, and never
+  // again per hop. The model id lives in the URL, not the body, so every 429
+  // attempt reuses the same string; procurementSchedule.js can ship ~33MB of
+  // base64 drawings here and re-stringifying that per attempt churned hundreds
+  // of MB on the VPS for nothing (audit 2026-08-21). The 429 walk then
+  // re-stringified the SAME bytes up to 3 more times, because every id in
+  // GEMINI_PREFERRED lands on the same (thinks, 2.5, maxOutputTokens) triple —
+  // so the string is now memoised on exactly that triple and a hop between two
+  // same-shaped models costs zero extra serialisation (audit 2026-08-21).
+  const payloadCache = new Map();
   const payloadFor = (model) => {
     // The token floor is derived from the model that is ACTUALLY being called,
     // never from cfg.model (audit 2026-08-21): the 404 self-heal below can land
@@ -209,49 +279,128 @@ async function runGemini(cfg, opts) {
     // 404, so assume thinking headroom unless the id is a known pre-2.5
     // generation. Unused tokens are not spent, so the headroom is free.
     const thinks = !/gemini-(1\.\d|2\.0)/i.test(model);
-    genCfg.maxOutputTokens = Math.max(opts.maxTokens || 0, thinks ? 1024 : 256);
-    if (/2\.5/.test(model)) genCfg.thinkingConfig = { thinkingBudget: 0 };
+    const is25 = /2\.5/.test(model);
+    const maxOut = Math.max(opts.maxTokens || 0, thinks ? 1024 : 256);
+    const key = `${thinks}|${is25}|${maxOut}`;
+    const hit = payloadCache.get(key);
+    if (hit) return hit;
+    genCfg.maxOutputTokens = maxOut;
+    if (is25) genCfg.thinkingConfig = { thinkingBudget: 0 };
     else delete genCfg.thinkingConfig;
-    return JSON.stringify(body);
+    const s = JSON.stringify(body);
+    payloadCache.set(key, s);
+    return s;
   };
 
-  const call = async (model, payload) => {
+  // Wall-clock spent INSIDE generateContent fetches (the timed 429 back-off
+  // sleeps and the ListModels round trip are excluded — they are not the
+  // caller's per-attempt budget). The hop walk below spends against this so the
+  // whole walk fits inside ONE opts.timeout instead of taking a fresh full
+  // timeout per hop (audit 2026-08-21: 4 x 180s = 12 min on a 180s contract).
+  let netMs = 0;
+  const call = async (model, payload, retriesOverride, timeoutOverride) => {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-    const retries = opts.retries429 == null ? 2 : opts.retries429;
+    const retries = retriesOverride != null ? retriesOverride
+      : (opts.retries429 == null ? 2 : opts.retries429);
+    const perAttempt = timeoutOverride != null ? timeoutOverride : opts.timeout;
     for (let attempt = 0; ; attempt++) {
       let r;
+      const t0 = Date.now();
       try {
         r = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.apiKey },
           body: payload,
-          signal: AbortSignal.timeout(opts.timeout),
+          signal: AbortSignal.timeout(perAttempt),
         });
       } catch (e) {
+        netMs += Date.now() - t0;
         if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw httpErr('Gemini request timed out', 408);
         throw httpErr(e?.message || 'Gemini request failed', 502);
       }
+      netMs += Date.now() - t0;
       if (r.status === 429 && attempt < retries) { await sleep(4000 * (attempt + 1)); continue; }  // 4s, then 8s
       return r;
     }
   };
 
   let model = cfg.model;
+  const tried = [];
+  // A quota hop earlier in this process is remembered IN MEMORY only (see
+  // QUOTA_COOLDOWN_MS above): if her model was 429'd minutes ago, start on the
+  // one that answered instead of paying the failed call + ListModels round trip
+  // on every single request. app_settings still holds HER choice, and once the
+  // cooldown lapses we go straight back to it. A probe (Test connection) is
+  // exempt — it must test exactly the model that was typed.
+  if (!opts.noHeal && isQuotaCapped(model)) {
+    const alt = quotaSwitch && quotaSwitch.to;
+    if (alt && alt !== model && !isQuotaCapped(alt)) {
+      console.warn(`[ai] gemini '${model}' was quota-capped minutes ago — using '${alt}' for this request (in-memory only; Admin → AI Settings still says '${model}')`);
+      tried.push(model);
+      model = alt;
+    }
+  }
+  tried.push(model);
   let r = await call(model, payloadFor(model));
-  // Stale-model self-heal. Don't guess a replacement — Google retired BOTH ids
-  // the old Admin dropdown offered (mam 2026-08-21), so ask the key what it can
-  // actually call, retry on that, and remember it so this costs one round trip
-  // once rather than on every request.
-  if (r.status === 404) {
-    const live = await listGeminiModels(cfg.apiKey);
-    const next = pickGeminiModel(live, [model]);
-    if (next) {
-      console.warn(`[ai] gemini model '${model}' not available — switching to '${next}' (${live.length} models offered by this key)`);
+  if (r.status === 429) markQuotaCapped(model);
+  // Self-heal onto another model the key can actually use. TWO triggers:
+  //   404 — the id is retired. Google killed BOTH ids the old Admin dropdown
+  //         offered (mam 2026-08-21), so never guess a replacement: ask.
+  //   429 — this MODEL's free-tier quota is spent. Quota on Gemini is charged
+  //         PER MODEL, so a sibling (especially a flash-lite, which carries the
+  //         most generous free limits) is usually still open. mam 2026-08-21:
+  //         "i want free which will work" — she is on the free tier by choice,
+  //         so exhausting one model must not take every AI feature down.
+  // call() has already burned its own timed 429 retries before we get here.
+  const healTrigger = r.status;
+  let healed = false;
+  if (!opts.noHeal && (r.status === 404 || r.status === 429)) {
+    // ListModels counts against the same budget as the hops below.
+    const tList = Date.now();
+    const live = await listGeminiModels(cfg.apiKey, Math.max(1000, Math.min(15000, opts.timeout - netMs)));
+    netMs += Date.now() - tList;
+    // HOW MANY HOPS THIS CALLER CAN AFFORD (audit 2026-08-21). The walk re-POSTs
+    // the caller's whole body per hop, so it must respect what the caller is
+    // shipping. procurementSchedule.js sends up to 25MB of drawings with
+    // retries429:0 *precisely* to get one attempt; 4 attempts there is ~100MB
+    // re-uploaded from a 1GB VPS that has been OOM-killed at ~190MB before. So a
+    // body with attachments (or >256KB serialised) gets ONE hop — enough to
+    // escape a capped model, not enough to melt the box — while a 40-token rate
+    // ask keeps the full walk, because several models can be capped at once.
+    //
+    // retries429:0 means "don't SLEEP out a quota window", and it is still
+    // honoured exactly: hops never sleep (retriesOverride 0 below), and the
+    // whole walk now shares ONE opts.timeout of network time instead of each
+    // hop getting a fresh full one (4 x 180s = 12 min against a 180s contract,
+    // long past nginx's 60s and the browser).
+    const bigBody = (opts.attachments || []).length > 0 || payloadFor(model).length > BIG_PAYLOAD_BYTES;
+    const maxHops = bigBody ? 1 : 3;
+    // NOTE the loop re-reads r.status every iteration: a 404 that lands on a capped
+    // model used to stop dead after one hop because `hops` was frozen from the
+    // FIRST status, leaving an open free model one entry further down untried.
+    for (let i = 0; i < maxHops && (r.status === 404 || r.status === 429); i++) {
+      const left = opts.timeout - netMs;
+      if (left < MIN_HOP_MS) {
+        console.warn(`[ai] gemini ${r.status} on '${model}' — no time left in the caller's ${opts.timeout}ms budget to try another model`);
+        break;
+      }
+      const next = pickGeminiModel(live, tried, opts.prefer);
+      if (!next) break;
+      console.warn(`[ai] gemini '${model}' ${r.status === 429 ? 'quota exhausted' : 'not available'} — trying '${next}' (${live.length} models offered by this key)`);
+      tried.push(next);
       model = next;
-      r = await call(model, payloadFor(model));
-      if (r.ok && !opts.noPersistModel) rememberModel(opts.db, model);
-    } else {
-      console.warn(`[ai] gemini model '${model}' not available and ListModels returned nothing usable`);
+      // No timed 429 back-off on a hop: waiting 4s+8s on a model we only
+      // reached BECAUSE another was capped would stall a click for ~40s across
+      // 3 hops. Sitting out a quota window is what the caller's own retry is
+      // for; here we just want the first model that answers immediately.
+      r = await call(model, payloadFor(model), 0, Math.min(opts.timeout, left));
+      if (r.status === 429) markQuotaCapped(model);
+      if (r.ok) { healed = true; break; }
+      // Anything that is neither 404 nor 429 (403, 400, 5xx) is a real error —
+      // the loop condition stops the walk on the next turn.
+    }
+    if (!r.ok && !live.length) {
+      console.warn(`[ai] gemini '${model}' failed ${r.status} and ListModels returned nothing usable`);
     }
   }
   if (!r.ok) {
@@ -281,7 +430,27 @@ async function runGemini(cfg, opts) {
     const fr = cand?.finishReason || data.promptFeedback?.blockReason || 'no content';
     throw httpErr(`Gemini returned no text (${fr})`, 502);
   }
-  return { text, model, provider: 'gemini',
+  // ── Bookkeeping AFTER the reply has proved itself ──────────────────────────
+  // Two rules, both learned the hard way (audit 2026-08-21):
+  //  1. Persist only once we have TEXT. The old code wrote the model on r.ok
+  //     alone, so a hop that answered 200 with no parts (SAFETY / RECITATION /
+  //     MAX_TOKENS) was saved as ai_model and the request still failed 502 —
+  //     the next request then STARTED on the model that produced nothing.
+  //  2. Persist only a 404 heal. A retired id is gone for good, so writing the
+  //     replacement is right. A 429 is a rolling free-tier window: writing it
+  //     would silently and permanently replace mam's own choice (and downgrade
+  //     the separate Ask SOTYN.AI chat, which reads the same key) with nothing
+  //     that ever walks back up. That one lives in memory for QUOTA_COOLDOWN_MS.
+  if (healed) {
+    quotaCapped.delete(model);
+    if (healTrigger === 404) {
+      if (!opts.noPersistModel) rememberModel(opts.db, model);
+    } else {
+      quotaSwitch = { from: cfg.model, to: model, at: Date.now() };
+      console.warn(`[ai] gemini quota switch: '${cfg.model}' → '${model}' for the next ${Math.round(QUOTA_COOLDOWN_MS / 60000)} min (NOT saved — Admin → AI Settings keeps your choice)`);
+    }
+  }
+  return { text, model, requestedModel: cfg.model, provider: 'gemini',
     usage: { input_tokens: data.usageMetadata?.promptTokenCount, output_tokens: data.usageMetadata?.candidatesTokenCount } };
 }
 
@@ -297,10 +466,20 @@ async function runGemini(cfg, opts) {
  *   json        {boolean=} ask for strict JSON (Gemini: responseMimeType application/json).
  *   jsonSchema  {object=} optional Gemini responseSchema (OpenAPI subset, UPPERCASE types).
  *   attachments {Array=}  [{ mime:'image/jpeg'|'application/pdf', data:<base64>, name?:string }]
- *   timeout     {number=} ms, default 60000.
- *   retries429  {number=} Gemini 429 retries, default 2 (4s, 8s). 0 = fail fast.
+ *   timeout     {number=} ms, default 60000. Gemini: this is the budget for the
+ *                        WHOLE call including any 404/429 model hop, not per hop.
+ *   retries429  {number=} Gemini 429 retries, default 2 (4s, 8s). 0 = fail fast
+ *                        (also caps the model-hop walk at a single hop).
+ *   prefer      {'cheap'|'capable'=} Gemini model preference when auto-picking.
+ *                        Default 'cheap' (flash-lite first — biggest free quota).
+ *                        'capable' puts the flagships first, for a caller whose
+ *                        output quality is visible (drawing vision, photo count).
  *   override    {object=} { provider, model, apiKey } — bypass app_settings (Test connection only).
- * @returns {Promise<{ text:string, model:string, provider:'anthropic'|'gemini',
+ *                        Implies noPersistModel AND noHeal: a probe must report
+ *                        exactly what the model being tested did, never a
+ *                        substitute's success under the tested model's name.
+ * @returns {Promise<{ text:string, model:string, requestedModel:string,
+ *                     provider:'anthropic'|'gemini',
  *                     usage:{input_tokens?:number, output_tokens?:number} }>}
  * @throws  Error with .status (401/403/404/408/429/5xx, Gemini normalised) — feed to aiErrorMessage(err, provider).
  */
@@ -312,15 +491,22 @@ async function aiComplete(db, opts = {}) {
     maxTokens: opts.maxTokens || 1024, json: !!opts.json, jsonSchema: opts.jsonSchema || null,
     attachments: Array.isArray(opts.attachments) ? opts.attachments : [],
     timeout: opts.timeout || 60000, retries429: opts.retries429,
+    prefer: opts.prefer === 'capable' ? 'capable' : 'cheap',
     // Carried so the 404 self-heal can persist the model it discovered.
     // Test connection passes noPersistModel so probing never rewrites settings.
     db: db || null, noPersistModel: !!opts.noPersistModel || !!opts.override,
+    // A PROBE tests one model, so it must not silently answer on another:
+    // "gemini-3.6-flash responded — key works" while a lite sibling actually
+    // answered told mam her quota-dead selection was healthy (audit 2026-08-21).
+    // With no heal she gets the real 429 wording, which names the free tier.
+    noHeal: !!opts.noHeal || !!opts.override,
   };
   return cfg.provider === 'gemini' ? runGemini(cfg, o) : runAnthropic(cfg, o);
 }
 
 module.exports = {
   aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJsonArray,
-  listGeminiModels, pickGeminiModel,
-  AI_DEFAULTS, ANTHROPIC_FALLBACK_MODEL, GEMINI_FALLBACK_MODEL, GEMINI_PREFERRED,
+  listGeminiModels, pickGeminiModel, getQuotaSwitch, _resetQuotaMemory,
+  AI_DEFAULTS, ANTHROPIC_FALLBACK_MODEL, GEMINI_FALLBACK_MODEL,
+  GEMINI_PREFERRED, GEMINI_PREFERRED_CAPABLE,
 };
