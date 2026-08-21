@@ -3,11 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage } = require('../lib/aiComplete');
 const router = express.Router();
 
-// Read an app setting (AI provider/key/model live in app_settings, set in
-// Admin → AI Settings). Used by the contractor-attendance photo head-count.
-const getSetting = (k) => getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(k)?.value ?? null;
+// (AI provider/key/model live in app_settings, set in Admin → AI Settings —
+// the contractor-attendance photo head-count reads them through
+// lib/aiComplete.js since 2026-08-21, so no local getter is needed here.)
 router.use(authMiddleware);
 
 // ── Contractor Manpower Attendance — morning punch (mam 2026-06-22) ──────
@@ -89,34 +90,26 @@ router.post('/contractor-attendance/count-photo', requirePermission('dpr', 'crea
   const media_type = mediaMap[ext];
   if (!media_type) return res.status(400).json({ error: 'Unsupported image type — use JPG / PNG / WEBP' });
 
-  const apiKey = getSetting('ai_api_key');
-  if (!apiKey) return res.status(400).json({ error: 'AI key not set — add it in Admin → AI Settings to use photo head-count' });
-  let Anthropic;
-  try { Anthropic = require('@anthropic-ai/sdk'); }
-  catch { return res.status(500).json({ error: '@anthropic-ai/sdk not installed on the server' }); }
+  // Vision through the shared one-shot helper so the head-count follows the
+  // provider picked in Admin → AI Settings — Anthropic OR Gemini (mam
+  // 2026-08-21). media_type above is already the exact mime string both want.
+  const cfg = aiConfig(getDb());
+  if (!cfg.configured) return res.status(400).json({ error: aiNotConfiguredMessage(cfg.provider) });
 
   try {
     const data = fs.readFileSync(filePath).toString('base64');
-    const client = new Anthropic.default({ apiKey, timeout: 60000 });
-    // Vision works across the 4.x family; default to a fast model for counting.
-    const model = getSetting('ai_model') || 'claude-opus-4-7';
-    const msg = await client.messages.create({
-      model, max_tokens: 50,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type, data } },
-          { type: 'text', text: 'This is a site attendance photo of construction/MEPF labourers. Count how many distinct people (workers) are visible. Reply with ONLY a single integer — no words, no punctuation.' },
-        ],
-      }],
+    const out = await aiComplete(getDb(), {
+      prompt: 'This is a site attendance photo of construction/MEPF labourers. Count how many distinct people (workers) are visible. Reply with ONLY a single integer — no words, no punctuation.',
+      maxTokens: 50, timeout: 60000,
+      attachments: [{ mime: media_type, data }],
     });
-    const txt = (msg.content || []).map(b => b.text || '').join(' ');
-    const m = txt.match(/\d+/);
+    const m = out.text.match(/\d+/);
     const count = m ? parseInt(m[0], 10) : null;
     if (count == null) return res.status(422).json({ error: 'Could not read a count from the photo — enter manpower manually' });
     res.json({ count });
   } catch (e) {
-    res.status(500).json({ error: e.message || 'Photo head-count failed' });
+    console.error('[dpr] photo head-count failed:', e.status || '', e.message);
+    res.status(e.status === 429 ? 429 : 500).json({ error: aiErrorMessage(e, cfg.provider) });
   }
 });
 
@@ -792,28 +785,28 @@ try { getDb().exec(`
 // day comes back as `items: [{ id, po_item_id, description, unit,
 // planned_qty, actual_qty }]` so the UI can render the full plan.
 // Mam, 2026-05-16: "in one day multiple boq item have".
-// SPOS daily compliance grid (mam 2026-07-29): per active site — morning
-// punch by 09:00, DPR by 20:00 cutoff, photos, weekly plan approved.
+// SPOS daily compliance grid (mam 2026-07-29): morning punch by 09:00,
+// DPR by 20:00 cutoff, photos, weekly plan approved. Rows are ENGINEER-wise
+// since mam 2026-08-21 ("no need compliance eng wise that ok") — `sites` is
+// still returned for scoping/back-compat, `engineers` is what the grid draws.
 // Same compute as the 18:30 exception-report cron (lib/sposCompliance).
 router.get('/spos-compliance', requirePermission('dpr', 'view'), (req, res) => {
   const date = String(req.query.date || istTodayIso()).slice(0, 10);
   try {
     const db = getDb();
-    const { computeSposCompliance } = require('../lib/sposCompliance');
+    const { computeSposCompliance, rollupByEngineer } = require('../lib/sposCompliance');
     const result = computeSposCompliance(db, date);
     // Scope: a plain engineer sees only their own sites' rows (audit).
+    // Filter the SITES first, then rebuild the engineer rollup from what
+    // survived — an aggregate row can then never carry a site the viewer
+    // is not allowed to see.
     if (!dprCanSeeAll(db, req.user)) {
       const owned = new Set(db.prepare(`SELECT s.id FROM sites s WHERE ${siteScopeSql('s')}`)
         .all(...siteScopeParams(req.user.id)).map(r => r.id));
       result.sites = result.sites.filter(r => (r.site_ids || [r.site_id]).some(id => owned.has(id)));
-      const n = result.sites.length || 1;
-      result.summary = {
-        sites: result.sites.length,
-        punch_pct: Math.round(result.sites.filter(r => r.punch_done).length / n * 100),
-        dpr_pct: Math.round(result.sites.filter(r => r.dpr_done).length / n * 100),
-        photos_pct: Math.round(result.sites.filter(r => r.photos_done).length / n * 100),
-        plan_approved_pct: Math.round(result.sites.filter(r => r.plan_status === 'approved').length / n * 100),
-      };
+      const roll = rollupByEngineer(result.sites);
+      result.engineers = roll.engineers;
+      result.summary = roll.summary;
     }
     res.json(result);
   } catch (e) {

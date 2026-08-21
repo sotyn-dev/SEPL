@@ -126,6 +126,59 @@ router.put('/settings', adminOnly, (req, res) => {
   res.json({ message: 'AI settings saved' });
 });
 
+// POST /api/ai-agent/settings/test — one-click "Test connection" (mam
+// 2026-08-21: she switched to Gemini and had no way to know the key worked
+// until Vendor Rates went red). Tests the values BEING TYPED without saving
+// them; the posted key is never persisted, echoed back, or logged.
+router.post('/settings/test', adminOnly, async (req, res) => {
+  const { aiComplete, aiConfig, aiErrorMessage } = require('../lib/aiComplete');
+  const override = {
+    provider: req.body?.provider,
+    model: req.body?.model,
+    apiKey: (req.body?.api_key || '').trim() || getSetting('ai_api_key'),
+  };
+  const cfg = aiConfig(getDb(), override);
+  if (!cfg.configured) return res.status(400).json({ ok: false, error: 'Paste a key first' });
+  try {
+    const out = await aiComplete(getDb(), {
+      prompt: 'Reply with the single word: OK', maxTokens: 16, timeout: 20000, retries429: 0, override,
+    });
+    res.json({ ok: true, provider: out.provider, model: out.model, reply: out.text.slice(0, 60) });
+  } catch (e) {
+    console.error('[AI Agent /settings/test] failed:', e.status || '', e.message);
+    res.status(400).json({ ok: false, error: aiErrorMessage(e, cfg.provider) });
+  }
+});
+
+// GET /api/ai-agent/settings/models — live model list for the Admin dropdown.
+// mam 2026-08-21: the dropdown was three HARDCODED Gemini ids and Google had
+// retired all of them, so every option 404'd and she had no way to type a
+// working one. Ask her own key what it can call instead of shipping another
+// list that expires. The key stays server-side; only ids/labels go out.
+// Falls back to the static list when the key is unset or Google is unreachable.
+router.get('/settings/models', adminOnly, async (req, res) => {
+  const { listGeminiModels, AI_DEFAULTS, GEMINI_PREFERRED } = require('../lib/aiComplete');
+  const provider = String(req.query.provider || getSetting('ai_provider') || 'anthropic').toLowerCase();
+  if (provider !== 'gemini' && provider !== 'google') {
+    return res.json({ provider: 'anthropic', source: 'static', models: [
+      { id: 'claude-opus-4-7', label: 'Claude Opus 4.7 (most capable)' },
+      { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (faster, cheaper)' },
+      { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (fastest, cheapest)' },
+    ] });
+  }
+  const key = getSetting('ai_api_key');
+  const live = key ? await listGeminiModels(key) : [];
+  if (!live.length) {
+    return res.json({ provider: 'gemini', source: 'static',
+      models: GEMINI_PREFERRED.map(id => ({ id, label: id })) });
+  }
+  // Preferred (cheap, fast, non-preview) first — that's what these one-shot
+  // features want — then everything else this key can reach, A-Z.
+  const rank = (id) => { const i = GEMINI_PREFERRED.indexOf(id); return i === -1 ? 999 : i; };
+  live.sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
+  res.json({ provider: 'gemini', source: 'live', default: AI_DEFAULTS.gemini, models: live });
+});
+
 // Email (SMTP) settings — also lives in app_settings. Admin-only;
 // password is never echoed back. Separate from the AI Agent settings
 // so the UI can show two clear panels even though both go through this
@@ -751,10 +804,25 @@ Guidance:
   const provider = (getSetting('ai_provider') || 'anthropic').toLowerCase();
   if (provider === 'gemini' || provider === 'google') {
     const gStart = Date.now();
+    const { AI_DEFAULTS, listGeminiModels, pickGeminiModel } = require('../lib/aiComplete');
     let gmodel = getSetting('ai_model');
-    if (!gmodel || !/gemini/i.test(gmodel)) gmodel = 'gemini-2.0-flash';
+    if (!gmodel || !/gemini/i.test(gmodel)) gmodel = AI_DEFAULTS.gemini;
     try {
-      const { answer, sqlRuns } = await runGeminiAgent({ apiKey, model: gmodel, systemPrompt, history: priorHistory, question, db });
+      let answer, sqlRuns;
+      try {
+        ({ answer, sqlRuns } = await runGeminiAgent({ apiKey, model: gmodel, systemPrompt, history: priorHistory, question, db }));
+      } catch (e1) {
+        // Retired model → ask the key what it CAN call, switch, remember.
+        // mam 2026-08-21: 2.0-flash was shut down and 2.5-flash closed to new
+        // keys, so the chat 404'd with no way for her to pick a live model.
+        if (e1?.status !== 404) throw e1;
+        const next = pickGeminiModel(await listGeminiModels(apiKey), [gmodel]);
+        if (!next) throw e1;
+        console.warn(`[AI Agent /ask] gemini model '${gmodel}' not available — switching to '${next}'`);
+        ({ answer, sqlRuns } = await runGeminiAgent({ apiKey, model: next, systemPrompt, history: priorHistory, question, db }));
+        gmodel = next;
+        setSetting('ai_model', next);
+      }
       console.log(`[AI Agent /ask] ok ${gmodel} (gemini) elapsed=${Date.now() - gStart}ms sqlRuns=${sqlRuns.length}`);
       return sendJson(200, { answer, sql_runs: sqlRuns, model: gmodel });
     } catch (e) {

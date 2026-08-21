@@ -6,6 +6,7 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { aiComplete, aiConfig, extractJsonArray } = require('../lib/aiComplete');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -39,22 +40,17 @@ function scoreMatch(lineSet, itemTokens) {
   return Math.min(1, score);
 }
 
-// Read an app_settings value (AI key/model live there, set via AI Settings UI).
-function aiSetting(key) {
-  try { const r = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key); return r ? r.value : null; }
-  catch (e) { return null; }
-}
+// (AI provider/key/model live in app_settings, set via the AI Settings UI —
+// both LLM passes below read them through lib/aiComplete.js since 2026-08-21.)
 
 // Claude pass: for each line, pick the best catalog item from its fuzzy
 // shortlist, or null for composite WORK items that have no single catalog
 // match. Returns an array indexed by line, or null if AI isn't configured.
 async function llmRefine(ranked) {
-  const apiKey = aiSetting('ai_api_key');
-  if (!apiKey) return null;
-  let Anthropic;
-  try { Anthropic = require('@anthropic-ai/sdk'); } catch (e) { return null; }
-  const model = aiSetting('ai_model') || 'claude-opus-4-7';
-  const client = new Anthropic.default({ apiKey, timeout: 55000 });
+  // Provider (anthropic / gemini) comes from Admin → AI Settings via the
+  // shared helper (mam 2026-08-21). Contract unchanged: return null on ANY
+  // failure so the caller falls back to fuzzy matching.
+  if (!aiConfig(getDb()).configured) return null;
   const blocks = ranked.map((r, i) => {
     const cands = r.scored.slice(0, 8).map(s =>
       `${s.it.id}=${[s.it.item_name, s.it.specification, s.it.size].filter(Boolean).join(' ')}`).join(' | ');
@@ -66,11 +62,11 @@ CRITICAL: many lines are CONSTRUCTION WORK (e.g. "construct brick masonry manhol
 Return ONLY a JSON array, one object per line: {"line": <index>, "item_id": <id or null>, "confidence": <0-100>}.
 
 ${blocks}`;
-  const resp = await client.messages.create({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
-  const text = (resp.content || []).map(c => c.text || '').join('');
-  const a = text.indexOf('['), b = text.lastIndexOf(']');
-  if (a === -1 || b === -1) return null;
-  const arr = JSON.parse(text.slice(a, b + 1));
+  let out0;
+  try { out0 = await aiComplete(getDb(), { prompt, maxTokens: 4096, timeout: 55000, json: true }); }
+  catch (e) { console.warn('[quotations] AI refine pass failed:', e.status || '', e.message); return null; }
+  const arr = extractJsonArray(out0.text);
+  if (!arr) { console.warn('[quotations] AI refine returned no JSON array'); return null; }
   const out = [];
   for (const o of arr) if (o && typeof o.line === 'number') out[o.line] = { item_id: o.item_id ?? null, confidence: Number(o.confidence) || 0 };
   return out;
@@ -105,11 +101,7 @@ function textToLines(text) {
 // groups multi-line descriptions (name + spec + make) into one item and skips
 // headers/notes/totals. Returns [{description, qty}] or null if AI not set up.
 async function llmExtractItems(text) {
-  const apiKey = aiSetting('ai_api_key');
-  if (!apiKey || !text) return null;
-  let Anthropic; try { Anthropic = require('@anthropic-ai/sdk'); } catch (e) { return null; }
-  const model = aiSetting('ai_model') || 'claude-opus-4-7';
-  const client = new Anthropic.default({ apiKey, timeout: 55000 });
+  if (!text || !aiConfig(getDb()).configured) return null;
   const prompt = `Extract the BOQ / requirement line items from this client document text.
 Each item may span SEVERAL lines (item name, long description, "Make: ...", size) — COMBINE those into ONE item's description.
 Skip headers, column titles, notes, terms, totals, page numbers, addresses.
@@ -117,11 +109,11 @@ Return ONLY a JSON array, one object per item: {"description": "<full combined i
 
 TEXT:
 ${String(text).slice(0, 14000)}`;
-  const resp = await client.messages.create({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
-  const t = (resp.content || []).map(c => c.text || '').join('');
-  const a = t.indexOf('['), b = t.lastIndexOf(']');
-  if (a === -1 || b === -1) return null;
-  const arr = JSON.parse(t.slice(a, b + 1));
+  let res0;
+  try { res0 = await aiComplete(getDb(), { prompt, maxTokens: 4096, timeout: 55000, json: true }); }
+  catch (e) { console.warn('[quotations] AI extract pass failed:', e.status || '', e.message); return null; }
+  const arr = extractJsonArray(res0.text);
+  if (!arr) { console.warn('[quotations] AI extract returned no JSON array'); return null; }
   const out = arr.filter(x => x && x.description && String(x.description).trim().length > 3)
     .map(x => ({ description: String(x.description).replace(/\s+/g, ' ').trim(), qty: Number(x.qty) || 1, unit: '' }));
   return out.length ? out : null;
