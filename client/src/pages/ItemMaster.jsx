@@ -458,6 +458,7 @@ export default function ItemMaster() {
       <div className="card p-0">
         <table className="min-w-full freeze-head">
           <thead><tr className="bg-gray-50">
+            <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Sr No</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Code</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Dept</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Item / Spec / Size</th>
@@ -476,13 +477,14 @@ export default function ItemMaster() {
             <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-gray-100">
-            {items.map(i => {
+            {items.map((i, idx) => {
               const status = i.age_status || (i.current_price > 0 ? 'green' : 'never');
               const rowCls = status === 'red' ? 'bg-red-50/40 hover:bg-red-100/40' : status === 'yellow' ? 'bg-amber-50/40 hover:bg-amber-100/40' : 'hover:bg-red-50/30';
               const missingVendor = !i.vendor_id;
               const missingMake = !i.make || !i.make.trim();
               return (
                 <tr key={i.id} className={rowCls}>
+                  <td className="px-3 py-2 text-gray-500">{page * PAGE_SIZE + idx + 1}</td>
                   <td className="px-3 py-2 font-mono text-xs font-bold text-red-600">{i.item_code}</td>
                   <td className="px-3 py-2"><span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">{i.department}</span></td>
                   <td className="px-3 py-2">
@@ -553,7 +555,7 @@ export default function ItemMaster() {
                 </tr>
               );
             })}
-            {items.length === 0 && <tr><td colSpan="12" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
+            {items.length === 0 && <tr><td colSpan="13" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
           </tbody>
         </table>
         {/* Paginator — keeps the page snappy even on 2,000+ item masters. */}

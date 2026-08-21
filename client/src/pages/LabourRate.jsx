@@ -8,7 +8,6 @@ import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiDownload, FiCopy } from 'react-i
 // rates by UOM and category. Seeded from her uploaded sheet; add/edit here.
 const UOMS = ['Kg', 'PCS', 'Nos', 'Each', 'Per Ltr', 'mtrs', 'RMT', 'RFT', 'R mtr', 'Per Point'];
 const CATEGORIES = ['Low Voltage', 'ELECTRICAL', 'Fire Fighting','Mechanical','HVAC','Plumbing','SOLAR','CIVIL'];
-const RENDER_CAP = 200;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const blank = () => ({ id: null, item_name: '', specification: '', size: '', rate: '', uom: 'PCS', category: 'Low Voltage' });
 
@@ -30,6 +29,8 @@ export default function LabourRate() {
   const [keepSel, setKeepSel] = useState({});
   const autoEditName = useRef((new URLSearchParams(window.location.search)).get('edit'));
   const autoEditDone = useRef(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = useCallback(() => { api.get('/quotations/labour-rates').then(r => setRows(r.data || [])).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
@@ -61,6 +62,24 @@ export default function LabourRate() {
     if (q) { const toks = q.split(/\s+/).filter(Boolean); list = list.filter(r => toks.every(t => (r.item_name || '').toLowerCase().includes(t))); }
     return list;
   }, [rows, catFilter, search]);
+  // Snap back to page 1 whenever search/filters change, so the user doesn't
+  // land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [search, catFilter]);
+
+  // Client-side pagination over the already-filtered `filtered` list.
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = filtered.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
 
   const setF = (patch) => setForm(f => ({ ...f, ...patch }));
   const openAdd = () => { setForm(blank()); setModal(true); };
@@ -169,6 +188,7 @@ export default function LabourRate() {
         <table className="min-w-full text-sm">
           <thead>
             <tr className="bg-gray-50 text-left text-[11px] uppercase text-gray-500">
+              <th className="p-2 w-16">Sr No</th>
               <th className="p-2 w-20">Task ID</th>
               <th className="p-2">Item Name</th>
               <th className="p-2 text-right w-28">Rate ₹</th>
@@ -178,8 +198,9 @@ export default function LabourRate() {
             </tr>
           </thead>
           <tbody>
-            {filtered.slice(0, RENDER_CAP).map(r => (
+            {pagedRows.map((r, i) => (
               <tr key={r.id} className="border-t border-gray-100 hover:bg-gray-50">
+                <td className="p-2 text-gray-400">{from + i + 1}</td>
                 <td className="p-2 text-gray-400 font-mono text-xs">LR-{r.id}</td>
                 <td className="p-2 font-medium text-gray-800">{[r.item_name, r.specification, r.size].filter(Boolean).join(' / ')}</td>
                 <td className="p-2 text-right">{fmt(r.rate)}</td>
@@ -193,12 +214,71 @@ export default function LabourRate() {
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-gray-400 text-sm">No labour rates. Click “Add Labour Item”.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-gray-400 text-sm">No labour rates. Click “Add Labour Item”.</td></tr>}
           </tbody>
         </table>
-        {filtered.length > RENDER_CAP && <div className="p-2 text-center text-xs text-gray-400">Showing {RENDER_CAP} of {filtered.length} — search or filter to narrow.</div>}
       </div>
       <div className="text-xs text-gray-400">{filtered.length} item(s){catFilter ? ` in ${catFilter}` : ''}.</div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Add / Edit modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={form.id ? `Edit Labour Item — LR-${form.id}` : 'Add Labour Item'}>

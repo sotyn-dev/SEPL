@@ -39,6 +39,73 @@ const lastMonday = () => {
   return d.toISOString().slice(0, 10);
 };
 
+// Stateless pagination bar shared by both list tabs — takes the paginate()
+// result plus the page/pageSize setters for whichever tab is rendering it.
+// Kept at module scope (not defined inside Tools()) so it isn't recreated
+// on every render.
+function PgBar({ pg, pageSize, setPage, setPageSize }) {
+  return (
+    <div className="card p-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+          <p className="text-xs text-gray-500">
+            Showing <span className="font-semibold text-gray-700">{pg.total === 0 ? 0 : pg.from + 1}</span>–<span className="font-semibold text-gray-700">{pg.to}</span> of <span className="font-semibold text-gray-700">{pg.total}</span> records
+          </p>
+          <label className="flex items-center gap-1.5 text-xs text-gray-500">
+            Rows per page:
+            <select
+              className="select text-xs py-1 px-2 w-auto"
+              value={pageSize}
+              onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+            >
+              {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+          <button
+            type="button"
+            onClick={() => setPage(pg.curPage - 1)}
+            disabled={pg.curPage <= 1}
+            className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Previous
+          </button>
+          {pg.pageNumbers.map((n, idx) => {
+            const prevN = pg.pageNumbers[idx - 1];
+            const gap = prevN != null && n - prevN > 1;
+            return (
+              <span key={n} className="flex items-center gap-1.5">
+                {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                <button
+                  type="button"
+                  onClick={() => setPage(n)}
+                  className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                    n === pg.curPage
+                      ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                      : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                  }`}
+                >
+                  {n}
+                </button>
+              </span>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setPage(pg.curPage + 1)}
+            disabled={pg.curPage >= pg.totalPages}
+            className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Tools() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [tab, setTab] = useUrlTab('catalog');
@@ -56,6 +123,10 @@ export default function Tools() {
   const [submissions, setSubmissions] = useState([]);
   const [submissionWeek, setSubmissionWeek] = useState(lastMonday());
   const [submitForm, setSubmitForm] = useState({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' });
+  const [catalogPage, setCatalogPage] = useState(1);
+  const [catalogPageSize, setCatalogPageSize] = useState(10);
+  const [submissionsPage, setSubmissionsPage] = useState(1);
+  const [submissionsPageSize, setSubmissionsPageSize] = useState(10);
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -74,6 +145,10 @@ export default function Tools() {
     api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => {});
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
   }, [tab, load, submissionWeek]);
+  // Snap back to page 1 whenever the relevant filters change, so the user
+  // doesn't land on a page number that no longer exists in the new result set.
+  useEffect(() => { setCatalogPage(1); }, [filters]);
+  useEffect(() => { setSubmissionsPage(1); }, [submissionWeek]);
 
   const save = async (e) => {
     e.preventDefault();
@@ -122,6 +197,25 @@ export default function Tools() {
       api.get(`/tools/submissions/list?week_start=${submissionWeek}`).then(r => setSubmissions(r.data));
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
+
+  // Client-side pagination — shared shape for both list tabs (each with its
+  // own page/pageSize state, since they're independent tables).
+  const paginate = (rows, page, pageSize) => {
+    const total = rows.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const curPage = Math.min(page, totalPages);
+    const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+    const to = Math.min(from + pageSize, total);
+    const pagedRows = rows.slice(from, to);
+    const pageNumbers = totalPages <= 7
+      ? Array.from({ length: totalPages }, (_, i) => i + 1)
+      : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+          .filter(n => n >= 1 && n <= totalPages)
+          .sort((a, b) => a - b);
+    return { total, totalPages, curPage, from, to, pagedRows, pageNumbers };
+  };
+  const catalogPg = paginate(tools, catalogPage, catalogPageSize);
+  const submissionsPg = paginate(submissions, submissionsPage, submissionsPageSize);
 
   return (
     <div className="space-y-6">
@@ -219,7 +313,7 @@ export default function Tools() {
               </thead>
               <tbody>
                 {tools.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No tools yet — click "Add Tool" to start the catalog</td></tr>}
-                {tools.map(t => (
+                {catalogPg.pagedRows.map(t => (
                   <tr key={t.id} className="hover:bg-gray-50">
                     <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
                     <td className="font-medium">{t.name}</td>
@@ -260,6 +354,7 @@ export default function Tools() {
               </tbody>
             </table>
           </div>
+          <PgBar pg={catalogPg} pageSize={catalogPageSize} setPage={setCatalogPage} setPageSize={setCatalogPageSize} />
         </>
       )}
 
@@ -278,7 +373,7 @@ export default function Tools() {
               <thead><tr><th>Week</th><th>Site</th><th>Submitted By</th><th className="text-right">Tools Count</th><th>Photo</th><th>Notes</th></tr></thead>
               <tbody>
                 {submissions.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No submissions for this week</td></tr>}
-                {submissions.map(s => (
+                {submissionsPg.pagedRows.map(s => (
                   <tr key={s.id}>
                     <td className="text-xs">{s.week_start}</td>
                     <td className="font-medium">{s.site_name || '—'}</td>
@@ -291,6 +386,7 @@ export default function Tools() {
               </tbody>
             </table>
           </div>
+          <PgBar pg={submissionsPg} pageSize={submissionsPageSize} setPage={setSubmissionsPage} setPageSize={setSubmissionsPageSize} />
         </>
       )}
 

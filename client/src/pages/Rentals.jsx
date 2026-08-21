@@ -49,6 +49,8 @@ export default function Rentals() {
   const [payModal, setPayModal] = useState(null);
   const [payForm, setPayForm] = useState({ paid_via: 'Bank' });
   const [reqFilter, setReqFilter] = useState({ month: '', status: '' });
+  const [reqPage, setReqPage] = useState(1);
+  const [reqPageSize, setReqPageSize] = useState(10);
   const [stats, setStats] = useState(null);
   const [properties, setProperties] = useState([]);
   const [bookings, setBookings] = useState([]);
@@ -99,6 +101,10 @@ export default function Rentals() {
     }
     if (tab === 'requests') loadRequests();
   }, [tab, loadProperties, loadRequests]);
+  // Snap back to page 1 whenever the month/status filter changes, so the
+  // user doesn't land on a page number that no longer exists in the new
+  // result set.
+  useEffect(() => { setReqPage(1); }, [reqFilter]);
 
   const saveProp = async (e) => {
     e.preventDefault();
@@ -165,6 +171,22 @@ export default function Rentals() {
       loadPayments(); reloadDetail();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
+
+  // Client-side pagination over `requests` (already filtered server-side by
+  // month/status inside loadRequests()).
+  const reqTotal = requests.length;
+  const reqTotalPages = Math.max(1, Math.ceil(reqTotal / reqPageSize));
+  const reqCurPage = Math.min(reqPage, reqTotalPages);
+  const reqFrom = reqTotal === 0 ? 0 : (reqCurPage - 1) * reqPageSize;
+  const reqTo = Math.min(reqFrom + reqPageSize, reqTotal);
+  const pagedRequests = requests.slice(reqFrom, reqTo);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const reqPageNumbers = reqTotalPages <= 7
+    ? Array.from({ length: reqTotalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, reqTotalPages - 1, reqTotalPages, reqCurPage - 1, reqCurPage, reqCurPage + 1])]
+        .filter(n => n >= 1 && n <= reqTotalPages)
+        .sort((a, b) => a - b);
 
   return (
     <div className="space-y-6">
@@ -239,7 +261,7 @@ export default function Rentals() {
               </thead>
               <tbody>
                 {requests.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No rent requests yet — click "Raise Rent" to start</td></tr>}
-                {requests.map(r => {
+                {pagedRequests.map(r => {
                   // Compute "due date" and overdue flag
                   const payByDay = r.pay_by_day || 10;
                   let dueDate = null, isOverdue = false;
@@ -370,6 +392,66 @@ export default function Rentals() {
                 );})}
               </tbody>
             </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="card p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                <p className="text-xs text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{reqTotal === 0 ? 0 : reqFrom + 1}</span>–<span className="font-semibold text-gray-700">{reqTo}</span> of <span className="font-semibold text-gray-700">{reqTotal}</span> records
+                </p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                  Rows per page:
+                  <select
+                    className="select text-xs py-1 px-2 w-auto"
+                    value={reqPageSize}
+                    onChange={e => { setReqPageSize(Number(e.target.value)); setReqPage(1); }}
+                  >
+                    {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setReqPage(reqCurPage - 1)}
+                  disabled={reqCurPage <= 1}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                {reqPageNumbers.map((n, idx) => {
+                  const prevN = reqPageNumbers[idx - 1];
+                  const gap = prevN != null && n - prevN > 1;
+                  return (
+                    <span key={n} className="flex items-center gap-1.5">
+                      {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                      <button
+                        type="button"
+                        onClick={() => setReqPage(n)}
+                        className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          n === reqCurPage
+                            ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    </span>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setReqPage(reqCurPage + 1)}
+                  disabled={reqCurPage >= reqTotalPages}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
         </>
       )}

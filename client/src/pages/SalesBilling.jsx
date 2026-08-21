@@ -34,6 +34,17 @@ export default function SalesBilling() {
   const [saving, setSaving] = useState(false);
   const [payModal, setPayModal] = useState(null);
   const [payForm, setPayForm] = useState({ amount: '', payment_date: new Date().toISOString().split('T')[0], payment_mode: 'Bank', transaction_ref: '' });
+  // Pagination — one page/pageSize pair per table (Dashboard's "recent 12"
+  // BillTable stays uncapped/unpaginated on purpose; it's a preview widget,
+  // not the browsable list).
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [ordersPageSize, setOrdersPageSize] = useState(10);
+  const [materialPage, setMaterialPage] = useState(1);
+  const [materialPageSize, setMaterialPageSize] = useState(10);
+  const [dprPage, setDprPage] = useState(1);
+  const [dprPageSize, setDprPageSize] = useState(10);
+  const [dashPage, setDashPage] = useState(1);
+  const [dashPageSize, setDashPageSize] = useState(10);
 
   const load = () => {
     api.get('/sales-billing').then(r => setBills(r.data || [])).catch(() => setBills([])).finally(() => setLoading(false));
@@ -151,7 +162,28 @@ export default function SalesBilling() {
     </button>
   );
 
-  const BillTable = ({ rows, showPayment, sentMode }) => (
+  // Pagination is OPTIONAL and controlled from outside: pass page/pageSize/
+  // onPageChange/onPageSizeChange to paginate `rows`; omit them (as the
+  // Dashboard "recent 12" preview does) to render every row unpaginated,
+  // exactly as before. Kept controlled (no internal useState) because
+  // BillTable is a function defined inside SalesBilling's body — a new
+  // closure every parent render — so internal state would silently reset
+  // on every re-render.
+  const BillTable = ({ rows, showPayment, sentMode, page, pageSize, onPageChange, onPageSizeChange }) => {
+    const paginate = page != null && pageSize != null;
+    const total = rows.length;
+    const totalPages = paginate ? Math.max(1, Math.ceil(total / pageSize)) : 1;
+    const curPage = paginate ? Math.min(page, totalPages) : 1;
+    const from = paginate ? (total === 0 ? 0 : (curPage - 1) * pageSize) : 0;
+    const to = paginate ? Math.min(from + pageSize, total) : total;
+    const pagedRows = paginate ? rows.slice(from, to) : rows;
+    const pageNumbers = totalPages <= 7
+      ? Array.from({ length: totalPages }, (_, i) => i + 1)
+      : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+          .filter(n => n >= 1 && n <= totalPages)
+          .sort((a, b) => a - b);
+    return (
+    <>
     <div className="card p-0 overflow-x-auto">
       <table className="text-sm w-full">
         <thead>
@@ -175,7 +207,7 @@ export default function SalesBilling() {
             <tr><td colSpan={showPayment ? 12 : 11} className="text-center py-8 text-gray-400">Loading…</td></tr>
           ) : rows.length === 0 ? (
             <tr><td colSpan={showPayment ? 12 : 11} className="text-center py-8 text-gray-400">No bills here yet.</td></tr>
-          ) : rows.map(b => (
+          ) : pagedRows.map(b => (
             <tr key={b.id} className="border-t border-gray-100 hover:bg-blue-50/40">
               <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{b.bill_number}</td>
               <td className="px-3 py-2 text-xs whitespace-nowrap">{TYPE_LABEL[b.bill_type] || b.bill_type}</td>
@@ -215,7 +247,95 @@ export default function SalesBilling() {
         </tbody>
       </table>
     </div>
-  );
+    {paginate && (
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { onPageSizeChange(Number(e.target.value)); onPageChange(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => onPageChange(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => onPageChange(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => onPageChange(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
+    );
+  };
+
+  // Client-side pagination — Sales Order Bills tab (`orders`).
+  const ordersTotal = orders.length;
+  const ordersTotalPages = Math.max(1, Math.ceil(ordersTotal / ordersPageSize));
+  const ordersCurPage = Math.min(ordersPage, ordersTotalPages);
+  const ordersFrom = ordersTotal === 0 ? 0 : (ordersCurPage - 1) * ordersPageSize;
+  const ordersTo = Math.min(ordersFrom + ordersPageSize, ordersTotal);
+  const ordersPagedRows = orders.slice(ordersFrom, ordersTo);
+  const ordersPageNumbers = ordersTotalPages <= 7
+    ? Array.from({ length: ordersTotalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, ordersTotalPages - 1, ordersTotalPages, ordersCurPage - 1, ordersCurPage, ordersCurPage + 1])]
+        .filter(n => n >= 1 && n <= ordersTotalPages)
+        .sort((a, b) => a - b);
+
+  // Client-side pagination — Material · PO vs Bill tab (`material`).
+  const materialTotal = material.length;
+  const materialTotalPages = Math.max(1, Math.ceil(materialTotal / materialPageSize));
+  const materialCurPage = Math.min(materialPage, materialTotalPages);
+  const materialFrom = materialTotal === 0 ? 0 : (materialCurPage - 1) * materialPageSize;
+  const materialTo = Math.min(materialFrom + materialPageSize, materialTotal);
+  const materialPagedRows = material.slice(materialFrom, materialTo);
+  const materialPageNumbers = materialTotalPages <= 7
+    ? Array.from({ length: materialTotalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, materialTotalPages - 1, materialTotalPages, materialCurPage - 1, materialCurPage, materialCurPage + 1])]
+        .filter(n => n >= 1 && n <= materialTotalPages)
+        .sort((a, b) => a - b);
 
   return (
     <div className="space-y-4">
@@ -295,7 +415,10 @@ export default function SalesBilling() {
           <div className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg px-4 py-2.5">
             Flow per order: <b>Sales Order (T1)</b> → <b>Material delivery (T2, billed in Dispatch)</b> → <b>Installation (T3, auto from DPRs)</b> → <b>Final (T4)</b>. Payment is taken against the Final bill.
           </div>
-          <BillTable rows={bills.slice(0, 12)} showPayment />
+          <BillTable rows={bills} showPayment
+            page={dashPage} pageSize={dashPageSize}
+            onPageChange={setDashPage}
+            onPageSizeChange={setDashPageSize} />
         </div>
       )}
 
@@ -321,7 +444,7 @@ export default function SalesBilling() {
               <tbody>
                 {orders.length === 0 ? (
                   <tr><td colSpan="6" className="text-center py-8 text-gray-400">No orders found in Business Book.</td></tr>
-                ) : orders.map(o => {
+                ) : ordersPagedRows.map(o => {
                   const so = bills.find(b => b.business_book_id === o.id && b.bill_type === 1);
                   const final = bills.find(b => b.business_book_id === o.id && b.bill_type === 4);
                   const val = +o.po_amount || +o.sale_amount_without_gst || 0;
@@ -357,6 +480,66 @@ export default function SalesBilling() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination */}
+          <div className="card p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                <p className="text-xs text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{ordersTotal === 0 ? 0 : ordersFrom + 1}</span>–<span className="font-semibold text-gray-700">{ordersTo}</span> of <span className="font-semibold text-gray-700">{ordersTotal}</span> records
+                </p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                  Rows per page:
+                  <select
+                    className="select text-xs py-1 px-2 w-auto"
+                    value={ordersPageSize}
+                    onChange={e => { setOrdersPageSize(Number(e.target.value)); setOrdersPage(1); }}
+                  >
+                    {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setOrdersPage(ordersCurPage - 1)}
+                  disabled={ordersCurPage <= 1}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                {ordersPageNumbers.map((n, idx) => {
+                  const prevN = ordersPageNumbers[idx - 1];
+                  const gap = prevN != null && n - prevN > 1;
+                  return (
+                    <span key={n} className="flex items-center gap-1.5">
+                      {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                      <button
+                        type="button"
+                        onClick={() => setOrdersPage(n)}
+                        className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          n === ordersCurPage
+                            ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    </span>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setOrdersPage(ordersCurPage + 1)}
+                  disabled={ordersCurPage >= ordersTotalPages}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -384,7 +567,7 @@ export default function SalesBilling() {
               <tbody>
                 {material.length === 0 ? (
                   <tr><td colSpan="8" className="text-center py-8 text-gray-400">No material dispatches yet. Challans raised in Dispatch will appear here.</td></tr>
-                ) : material.map(m => (
+                ) : materialPagedRows.map(m => (
                   <tr key={m.id} className="border-t border-gray-100 hover:bg-blue-50/40">
                     <td className="px-3 py-2 font-medium whitespace-nowrap">{m.indent_number || '-'}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{m.challan_no || '-'}</td>
@@ -413,6 +596,66 @@ export default function SalesBilling() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination */}
+          <div className="card p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                <p className="text-xs text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{materialTotal === 0 ? 0 : materialFrom + 1}</span>–<span className="font-semibold text-gray-700">{materialTo}</span> of <span className="font-semibold text-gray-700">{materialTotal}</span> records
+                </p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                  Rows per page:
+                  <select
+                    className="select text-xs py-1 px-2 w-auto"
+                    value={materialPageSize}
+                    onChange={e => { setMaterialPageSize(Number(e.target.value)); setMaterialPage(1); }}
+                  >
+                    {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setMaterialPage(materialCurPage - 1)}
+                  disabled={materialCurPage <= 1}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                {materialPageNumbers.map((n, idx) => {
+                  const prevN = materialPageNumbers[idx - 1];
+                  const gap = prevN != null && n - prevN > 1;
+                  return (
+                    <span key={n} className="flex items-center gap-1.5">
+                      {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                      <button
+                        type="button"
+                        onClick={() => setMaterialPage(n)}
+                        className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          n === materialCurPage
+                            ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    </span>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setMaterialPage(materialCurPage + 1)}
+                  disabled={materialCurPage >= materialTotalPages}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -422,7 +665,10 @@ export default function SalesBilling() {
           <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
             Installation bills are generated from <b>submitted, approved DPRs</b> — each DPR is billed once. Click <b>Generate Installation Bills</b> to bill the latest approved DPRs (created as draft for review).
           </div>
-          <BillTable rows={t3} showPayment={false} sentMode />
+          <BillTable rows={t3} showPayment={false} sentMode
+            page={dprPage} pageSize={dprPageSize}
+            onPageChange={setDprPage}
+            onPageSizeChange={setDprPageSize} />
         </div>
       )}
 

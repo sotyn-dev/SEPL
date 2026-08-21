@@ -112,6 +112,8 @@ export default function PaymentRequired() {
   const [approvedLevel, setApprovedLevel] = useState(null);
   const clearedAt = (r, step) => !!(r.step_amounts && r.step_amounts[step] != null);
   const [uploading, setUploading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // The lists that used to be hardcoded module constants, same names, now served
   // from /payment-required/lookups. Empty until the fetch resolves.
@@ -461,6 +463,38 @@ export default function PaymentRequired() {
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
 
+  // The single filtered list both the mobile-card view and the desktop table
+  // render from — extracted once so pagination slices the SAME set both
+  // breakpoints show (this predicate used to be duplicated inline in each).
+  const visibleRequests = (tab === 'inbox' ? myInbox : requests).filter(r => {
+    if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
+    if (tab === 'approved' && r.status !== 'final_approved') return false;
+    if (tab === 'rejected' && r.status !== 'rejected') return false;
+    if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
+    else if (stageFilter && stageOf(r) !== stageFilter) return false;
+    return true;
+  });
+
+  // Snap back to page 1 whenever the tab, search, or any filter changes, so
+  // the user doesn't land on a page number that no longer exists in the new
+  // result set.
+  useEffect(() => { setPage(1); }, [tab, search, filters, stageFilter, approvedLevel]);
+
+  // Client-side pagination over `visibleRequests`.
+  const total = visibleRequests.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRequests = visibleRequests.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -700,14 +734,7 @@ export default function PaymentRequired() {
 
           {/* ─── MOBILE CARDS (mam 2026-06-02) ───────────────────── */}
           <div className="md:hidden space-y-3">
-            {(tab === 'inbox' ? myInbox : requests).filter(r => {
-              if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
-              if (tab === 'approved' && r.status !== 'final_approved') return false;
-              if (tab === 'rejected' && r.status !== 'rejected') return false;
-              if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
-              else if (stageFilter && stageOf(r) !== stageFilter) return false;
-              return true;
-            }).map(r => {
+            {pagedRequests.map(r => {
               const { date, time } = fmtISTPair(r.created_at);
               return (
                 <div key={r.id} className="card p-3 space-y-2">
@@ -779,15 +806,7 @@ export default function PaymentRequired() {
           <div className="hidden md:block card p-0"><table className="freeze-head">
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th title="Amount the approver agreed — may be less than requested">Approval Amt</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
-              {(tab === 'inbox' ? myInbox : requests).filter(r => {
-                if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
-                if (tab === 'approved' && r.status !== 'final_approved') return false;
-                if (tab === 'rejected' && r.status !== 'rejected') return false;
-                // "Approved by Lx" view, else the live-stage chip filter.
-                if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
-                else if (stageFilter && stageOf(r) !== stageFilter) return false;
-                return true;
-              }).map(r => (
+              {pagedRequests.map(r => (
                 <tr key={r.id}>
                   <td className="font-bold text-red-600 cursor-pointer" onClick={() => viewRequest(r.id)}>{r.request_no}</td>
                   <td className="font-medium">{r.employee_name}</td>
@@ -906,6 +925,66 @@ export default function PaymentRequired() {
               {requests.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No requests found</td></tr>}
             </tbody>
           </table></div>
+
+          {/* Pagination */}
+          <div className="card p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                <p className="text-xs text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+                </p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                  Rows per page:
+                  <select
+                    className="select text-xs py-1 px-2 w-auto"
+                    value={pageSize}
+                    onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+                  >
+                    {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setPage(curPage - 1)}
+                  disabled={curPage <= 1}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                {pageNumbers.map((n, idx) => {
+                  const prevN = pageNumbers[idx - 1];
+                  const gap = prevN != null && n - prevN > 1;
+                  return (
+                    <span key={n} className="flex items-center gap-1.5">
+                      {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                      <button
+                        type="button"
+                        onClick={() => setPage(n)}
+                        className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          n === curPage
+                            ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    </span>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setPage(curPage + 1)}
+                  disabled={curPage >= totalPages}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
         </>
       )}
 

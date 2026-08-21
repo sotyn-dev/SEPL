@@ -22,6 +22,8 @@ export default function Employees() {
   const [bulkPreview, setBulkPreview] = useState([]);
   const [rosterAudit, setRosterAudit] = useState({ backlog: [], guests: [] });
   const [view, setView] = useState('directory'); // 'directory' | 'review'
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const fileRef = useRef(null);
 
   const load = () => {
@@ -30,6 +32,9 @@ export default function Employees() {
     api.get('/hr/roster-audit').then(r => setRosterAudit(r.data || { backlog: [], guests: [] })).catch(() => {});
   };
   useEffect(() => { load(); }, []);
+  // Snap back to page 1 whenever search changes, so the user doesn't land on
+  // a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [search]);
 
   // Delete an employee — surfaces WHY it's blocked instead of a bare "Delete
   // failed" (mam 2026-07-06). Payroll history → server 400 tells her to
@@ -224,6 +229,22 @@ export default function Employees() {
     !search || [e.name, e.phone, e.email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase()))
   );
 
+  // Client-side pagination over `filtered` — shared by the desktop table and
+  // the mobile-card view so both breakpoints show the same page.
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = filtered.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -276,7 +297,7 @@ export default function Employees() {
           <th>Status</th><th>Actions</th>
         </tr></thead>
         <tbody>
-          {filtered.map(e => (
+          {pagedRows.map(e => (
             <tr key={e.id}>
               <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email}</td>
               <td>{e.designation}</td><td>{e.department}</td><td>{e.join_date}</td>
@@ -302,7 +323,7 @@ export default function Employees() {
         {filtered.length === 0 && (
           <div className="card p-6 text-center text-gray-400 text-sm">No employees found</div>
         )}
-        {filtered.map(e => (
+        {pagedRows.map(e => (
           <div key={e.id} className="card p-3 space-y-2">
             <div className="flex justify-between items-start gap-2">
               <div className="flex-1 min-w-0">
@@ -357,6 +378,66 @@ export default function Employees() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
       </>
       )}

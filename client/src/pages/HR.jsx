@@ -92,6 +92,8 @@ export default function HR() {
   // (Applied / Screening / Interview / Final Round / Selected /
   // Rejected / On Hold).  Filter value drives the table filter.
   const [stageFilter, setStageFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   // Mam (2026-05-22 ATS Phase 1):
   //   timelineRow → candidate whose activity log is open in a modal
   //   timelineEvents → fetched events for that candidate
@@ -120,6 +122,9 @@ export default function HR() {
     api.get('/hr/employees').then(r => setEmployees(r.data || [])).catch(() => setEmployees([]));
   };
   useEffect(() => { load(); }, []);
+  // Snap back to page 1 whenever the stage filter changes, so the user
+  // doesn't land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [stageFilter]);
 
   // Generic file upload helper — reuses /upload, returns the served URL.
   const uploadFile = async (file) => {
@@ -555,6 +560,18 @@ export default function HR() {
         const visibleCandidates = stageFilter === 'all'
           ? candidates
           : candidates.filter(c => bucketFor(c) === stageFilter);
+        // Client-side pagination over `visibleCandidates`.
+        const total = visibleCandidates.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize));
+        const curPage = Math.min(page, totalPages);
+        const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+        const to = Math.min(from + pageSize, total);
+        const pagedCandidates = visibleCandidates.slice(from, to);
+        const pageNumbers = totalPages <= 7
+          ? Array.from({ length: totalPages }, (_, i) => i + 1)
+          : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+              .filter(n => n >= 1 && n <= totalPages)
+              .sort((a, b) => a - b);
         return (<>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <div>
@@ -614,7 +631,7 @@ export default function HR() {
                 </tr>
               </thead>
               <tbody>
-                {visibleCandidates.map(c => {
+                {pagedCandidates.map(c => {
                   const p = pipelineFor(c);
                   return (
                     <tr key={c.id} className="border-t hover:bg-gray-50/60 align-top">
@@ -748,6 +765,66 @@ export default function HR() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="card p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                <p className="text-xs text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+                </p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                  Rows per page:
+                  <select
+                    className="select text-xs py-1 px-2 w-auto"
+                    value={pageSize}
+                    onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+                  >
+                    {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setPage(curPage - 1)}
+                  disabled={curPage <= 1}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                {pageNumbers.map((n, idx) => {
+                  const prevN = pageNumbers[idx - 1];
+                  const gap = prevN != null && n - prevN > 1;
+                  return (
+                    <span key={n} className="flex items-center gap-1.5">
+                      {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                      <button
+                        type="button"
+                        onClick={() => setPage(n)}
+                        className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          n === curPage
+                            ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    </span>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setPage(curPage + 1)}
+                  disabled={curPage >= totalPages}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
         </>);
       })()}
@@ -1529,6 +1606,8 @@ function ManpowerTab() {
   const [editVal, setEditVal] = useState('');
   const [saving, setSaving] = useState(false);
   const [catFilter, setCatFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const CATEGORIES = ['Live', 'Hold', 'Service Team', 'Handover'];
   const load = () => {
     api.get('/hr/manpower-plan')
@@ -1553,6 +1632,9 @@ function ManpowerTab() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Snap back to page 1 whenever search/filters change, so the user doesn't
+  // land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [search, catFilter]);
   // Each project row has three editable targets — manpower, Site Engineers and
   // Jr. Site Engineers — so the edit key is composite: `${projectKey}|${role}`.
   const ROLES = {
@@ -1661,6 +1743,21 @@ function ManpowerTab() {
     { label: 'Shortfall', value: totalGap > 0 ? `−${totalGap}` : totalGap === 0 ? '0' : `+${-totalGap}`, sub: `${shortCount} project(s) short`, icon: FiAlertTriangle, ring: totalGap > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600', text: totalGap > 0 ? 'text-red-600' : 'text-emerald-600' },
   ];
 
+  // Client-side pagination over `filtered`.
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = filtered.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
+
   return (
     <div className="space-y-4">
       {/* Info banner */}
@@ -1753,7 +1850,7 @@ function ManpowerTab() {
                 <tr><td colSpan="11" className="text-center py-10 text-gray-400">Loading…</td></tr>
               ) : filtered.length === 0 ? (
                 <tr><td colSpan="11" className="text-center py-10 text-gray-400">No projects found</td></tr>
-              ) : filtered.map((r, i) => {
+              ) : pagedRows.map((r, i) => {
                 const pct = coverage(r);
                 const accent = r.gap > 0 ? 'border-l-red-400' : r.gap === 0 ? 'border-l-emerald-400' : 'border-l-blue-400';
                 return (
@@ -1838,6 +1935,66 @@ function ManpowerTab() {
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
     </div>

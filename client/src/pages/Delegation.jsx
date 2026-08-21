@@ -46,6 +46,9 @@ export default function Delegation() {
   // task or task id").  Applied client-side over the already-filtered
   // tasks array so it composes with status / assignee / date filters.
   const [search, setSearch] = useState('');
+  // Pagination — List view table.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [createModal, setCreateModal] = useState(false);
   const [editModal, setEditModal] = useState(null); // task being edited (admin / assigner)
   const [editForm, setEditForm] = useState({});
@@ -64,10 +67,6 @@ export default function Delegation() {
   const [proofPct, setProofPct] = useState(0);
   const [rejectReason, setRejectReason] = useState('');
   const [extendForm, setExtendForm] = useState({ requested_due_date: '', reason: '' });
-  // Proof remarks are clamped to 2 lines to keep rows scannable, which hides
-  // anything longer behind "…" — tap the remark to read all of it (hover
-  // tooltips don't exist on the phones this is mostly used from).
-  const [remarksOpen, setRemarksOpen] = useState({}); // { taskId: true } — full remark shown
   // Voice input
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef(null);
@@ -132,6 +131,11 @@ export default function Delegation() {
     const el = document.getElementById(`deleg-row-${highlightId}`);
     if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [highlightId, tasks]);
+
+  // Reset to page 1 whenever the underlying task list or any filter changes.
+  useEffect(() => {
+    setPage(1);
+  }, [tasks, statusFilter, healthFilter, assigneeFilter, dateFrom, dateTo, search]);
 
   // Voice → description. Appends to existing text so user can combine typing + voice.
   const toggleVoice = () => {
@@ -302,7 +306,7 @@ export default function Delegation() {
           if (ev.total) setProofPct(Math.round((ev.loaded / ev.total) * 100));
         },
       });
-      setSubmitForm(s => ({ ...s, proof_url: res.data.url, uploading: false }));
+      setSubmitForm({ proof_url: res.data.url, uploading: false });
       setProofPct(100);
       toast.success('File uploaded — click Submit');
     } catch {
@@ -409,6 +413,30 @@ export default function Delegation() {
     }[h];
     return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${cfg[0]}`} title={cfg[1]} />;
   };
+
+  // Client-side pagination — List view table. Search + health filter are
+  // applied first (same logic the table body used to run inline), then the
+  // result is sliced into pages.
+  const q = search.trim().toLowerCase();
+  let visibleTasks = q
+    ? tasks.filter(t =>
+        (t.task_id || '').toLowerCase().includes(q) ||
+        (t.description || '').toLowerCase().includes(q))
+    : tasks;
+  if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
+  const total = visibleTasks.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedTasks = visibleTasks.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
 
   return (
     <div className="space-y-4">
@@ -615,23 +643,16 @@ export default function Delegation() {
           </thead>
           <tbody>
             {(() => {
-              const q = search.trim().toLowerCase();
-              let visibleTasks = q
-                ? tasks.filter(t =>
-                    (t.task_id || '').toLowerCase().includes(q) ||
-                    (t.description || '').toLowerCase().includes(q))
-                : tasks;
-              if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
               return (<>
-                {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
-                {visibleTasks.map((t, idx) => {
+                {total === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
+                {pagedTasks.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               const canEditProject = isAdmin() || isAssigner;
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} id={`deleg-row-${t.id}`} className={`align-top ${t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}${String(t.id) === String(highlightId) ? ' ring-2 ring-amber-400 ring-inset' : ''}`}>
-                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
+                  <td className="text-center text-xs text-gray-500 font-medium">{from + idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
                   <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>
                     <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
@@ -679,11 +700,7 @@ export default function Delegation() {
                         <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1 whitespace-nowrap"><FiExternalLink size={11} className="shrink-0" /> View</a>
                       )}
                       {t.proof_remarks && (
-                        <span
-                          onClick={() => setRemarksOpen(p => ({ ...p, [t.id]: !p[t.id] }))}
-                          className={`text-[10px] text-gray-500 italic break-words cursor-pointer ${remarksOpen[t.id] ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}
-                          title={remarksOpen[t.id] ? 'Tap to collapse' : t.proof_remarks}
-                        >{t.proof_remarks}</span>
+                        <span className="text-[10px] text-gray-500 italic line-clamp-2 break-words" title={t.proof_remarks}>{t.proof_remarks}</span>
                       )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
                         <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
@@ -717,7 +734,6 @@ export default function Delegation() {
                   <td className="align-top">
                     {isEA ? (
                       <textarea
-                        key={`${t.id}:${t.followup_remarks || ''}`}
                         defaultValue={t.followup_remarks || ''}
                         placeholder="— add note —"
                         rows={2}
@@ -753,6 +769,66 @@ export default function Delegation() {
             })()}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Mobile-only card layout REMOVED — per mam's request, the desktop

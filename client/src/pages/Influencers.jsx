@@ -67,6 +67,8 @@ export default function Influencers() {
   const [form, setForm] = useState({ ...empty });
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = () => {
     const params = new URLSearchParams();
@@ -76,6 +78,9 @@ export default function Influencers() {
     api.get(`/influencers?${params}`).then(r => setRows(r.data)).catch(() => {});
   };
   useEffect(load, [search, filterCategory, filterStage]);
+  // Snap back to page 1 whenever search/filters change, so the user doesn't
+  // land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [search, filterCategory, filterStage]);
 
   const openAdd = () => {
     setEditing(null);
@@ -184,6 +189,23 @@ export default function Influencers() {
     </div>
   );
 
+  // Client-side pagination over the already-filtered `rows` (search /
+  // category / stage are applied server-side inside load(), so slicing
+  // here composes with all three automatically).
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = rows.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -230,6 +252,7 @@ export default function Influencers() {
         <table className="text-xs w-full">
           <thead className="bg-gray-50">
             <tr>
+              <th className="px-2 py-2 text-left">Sr No</th>
               <th className="px-2 py-2 text-left">Form ID</th>
               <th className="px-2 py-2 text-left">Name</th>
               <th className="px-2 py-2 text-left">Category</th>
@@ -243,10 +266,11 @@ export default function Influencers() {
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan="9" className="text-center text-gray-400 py-8">No influencers yet — click "Add Influencer" or import via Excel.</td></tr>
+              <tr><td colSpan="10" className="text-center text-gray-400 py-8">No influencers yet — click "Add Influencer" or import via Excel.</td></tr>
             )}
-            {rows.map(r => (
+            {pagedRows.map((r, i) => (
               <tr key={r.id} className="border-t hover:bg-blue-50/30">
+                <td className="px-2 py-1.5 text-gray-500">{from + i + 1}</td>
                 <td className="px-2 py-1.5 font-mono text-blue-700 font-semibold">{r.form_id}</td>
                 <td className="px-2 py-1.5">
                   <div className="font-medium">{r.salutation ? `${r.salutation}. ` : ''}{r.full_name}</div>
@@ -276,6 +300,66 @@ export default function Influencers() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Add / Edit modal */}

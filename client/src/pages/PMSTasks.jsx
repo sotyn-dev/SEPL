@@ -50,6 +50,9 @@ export default function PMSTasks() {
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  // Pagination — table below.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [createModal, setCreateModal] = useState(false);
   const [editModal, setEditModal] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -131,6 +134,11 @@ export default function PMSTasks() {
     load();
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
     api.get('/pms-tasks/projects').then(r => setProjects(r.data || [])).catch(() => setProjects([]));
+  }, [scope, statusFilter, crmFilter, assigneeFilter, dateFrom, dateTo]);
+
+  // Reset to page 1 whenever a filter changes.
+  useEffect(() => {
+    setPage(1);
   }, [scope, statusFilter, crmFilter, assigneeFilter, dateFrom, dateTo]);
 
   const openCreate = () => {
@@ -297,6 +305,22 @@ export default function PMSTasks() {
     label: `${p.project_name || '(no project name)'}${p.company_name ? ' · ' + p.company_name : ''}${p.client_name ? ' · ' + p.client_name : ''}${p.crm_name ? '  — CRM: ' + p.crm_name : ''}`,
   }));
 
+  // Client-side pagination — `tasks` is already server-filtered by scope /
+  // status / CRM / assignee / date, so this just slices the current page.
+  const total = tasks.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedTasks = tasks.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -392,8 +416,8 @@ export default function PMSTasks() {
             </tr>
           </thead>
           <tbody>
-            {tasks.length === 0 && <tr><td colSpan="11" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
-            {tasks.map((t, idx) => {
+            {total === 0 && <tr><td colSpan="11" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
+            {pagedTasks.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               // Mam (2026-05-21): "if in pms task site name is sushila
@@ -412,7 +436,7 @@ export default function PMSTasks() {
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
-                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
+                  <td className="text-center text-xs text-gray-500 font-medium">{from + idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">PMS-{String(t.id).padStart(4, '0')}</td>
                   <td className="max-w-[220px]">
                     <div className="font-medium text-gray-800 text-xs">{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</div>
@@ -506,8 +530,8 @@ export default function PMSTasks() {
 
       {/* Mobile cards */}
       <div className="md:hidden space-y-2">
-        {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No PMS tasks</div>}
-        {tasks.map((t, idx) => {
+        {total === 0 && <div className="card text-center text-gray-400 py-8">No PMS tasks</div>}
+        {pagedTasks.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
           // Mirror the desktop table so the phone doesn't lock out approvers
@@ -524,7 +548,7 @@ export default function PMSTasks() {
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
                 <span className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-400 font-semibold">#{idx + 1}</span>
+                  <span className="text-[10px] text-gray-400 font-semibold">#{from + idx + 1}</span>
                   <span className="font-mono text-xs text-red-700">PMS-{String(t.id).padStart(4, '0')}</span>
                 </span>
                 {statusBadge(t.status)}
@@ -579,6 +603,66 @@ export default function PMSTasks() {
             </div>
           );
         })}
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Create Modal */}

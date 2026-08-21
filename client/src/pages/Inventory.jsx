@@ -219,6 +219,8 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   // typeFilter. Lets mam isolate e.g. all "Free to use" spare stock, and with
   // the warehouse picker, see what's free at a given site (mam 2026-07-15).
   const [condFilter, setCondFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   // Ageing date picker. `agingRow` is the stock row whose calendar is open;
   // `agingDraft` holds the picked date UNSAVED until OK is pressed, which is
   // the whole point — Cancel/close must leave the DB untouched.
@@ -367,6 +369,26 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
     return { label: `${sites.size} site${sites.size === 1 ? '' : 's'}`, single: false };
   }, [flatStock, filter.warehouse_id, warehouses]);
 
+  // Snap back to page 1 whenever search/filters change, so the user doesn't
+  // land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [filter.warehouse_id, filter.search, filter.low_only, typeFilter, condFilter]);
+
+  // Client-side pagination over `flatStock` — shared by the desktop table
+  // and the mobile-card view so both breakpoints show the same page.
+  const total = flatStock.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = flatStock.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
+
   return (
     <>
       <div className="card p-4 grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
@@ -446,7 +468,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
           interactions are too cramped on a phone. */}
       {flatStock.length > 0 && (
         <div className="md:hidden space-y-2">
-          {flatStock.map(r => {
+          {pagedRows.map(r => {
             const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
             const cond = r.latest_condition || '';
             const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -593,7 +615,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                 </tr>
               </thead>
               <tbody>
-                {flatStock.map(r => {
+                {pagedRows.map(r => {
                   const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
                   const cond = r.latest_condition || '';
                   const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -788,6 +810,66 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
           </div>
         </div>
       )}
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Edit qty / rate modal — records an ADJUST IN or OUT movement
           for the qty delta so the journal stays consistent. */}
@@ -1914,6 +1996,8 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
 function ReportsTab({ summary, warehouses }) {
   const [lowStock, setLowStock] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [whPage, setWhPage] = useState(1);
+  const [whPageSize, setWhPageSize] = useState(10);
 
   useEffect(() => {
     setLoading(true);
@@ -1925,6 +2009,19 @@ function ReportsTab({ summary, warehouses }) {
 
   const grandTotal = useMemo(() => summary.reduce((s, w) => s + (+w.total_value || 0), 0), [summary]);
   const grandItems = useMemo(() => summary.reduce((s, w) => s + (+w.items_in_stock || 0), 0), [summary]);
+
+  // Client-side pagination — Stock Value by Warehouse table.
+  const whTotal = summary.length;
+  const whTotalPages = Math.max(1, Math.ceil(whTotal / whPageSize));
+  const whCurPage = Math.min(whPage, whTotalPages);
+  const whFrom = whTotal === 0 ? 0 : (whCurPage - 1) * whPageSize;
+  const whTo = Math.min(whFrom + whPageSize, whTotal);
+  const pagedSummary = summary.slice(whFrom, whTo);
+  const whPageNumbers = whTotalPages <= 7
+    ? Array.from({ length: whTotalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, whTotalPages - 1, whTotalPages, whCurPage - 1, whCurPage, whCurPage + 1])]
+        .filter(n => n >= 1 && n <= whTotalPages)
+        .sort((a, b) => a - b);
 
   return (
     <>
@@ -1963,7 +2060,7 @@ function ReportsTab({ summary, warehouses }) {
               {summary.length === 0 && (
                 <tr><td colSpan="6" className="text-center py-8 text-gray-400 text-sm">No warehouses</td></tr>
               )}
-              {summary.map(w => {
+              {pagedSummary.map(w => {
                 const pct = grandTotal > 0 ? ((+w.total_value / grandTotal) * 100) : 0;
                 return (
                   <tr key={w.id} className="border-t hover:bg-gray-50">
@@ -1982,6 +2079,66 @@ function ReportsTab({ summary, warehouses }) {
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Pagination — Stock Value by Warehouse */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{whTotal === 0 ? 0 : whFrom + 1}</span>–<span className="font-semibold text-gray-700">{whTo}</span> of <span className="font-semibold text-gray-700">{whTotal}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={whPageSize}
+                onChange={e => { setWhPageSize(Number(e.target.value)); setWhPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setWhPage(whCurPage - 1)}
+              disabled={whCurPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {whPageNumbers.map((n, idx) => {
+              const prevN = whPageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setWhPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === whCurPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setWhPage(whCurPage + 1)}
+              disabled={whCurPage >= whTotalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2035,6 +2192,8 @@ function ReportsTab({ summary, warehouses }) {
 // ---------- WAREHOUSES TAB ----------
 function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
   const [modal, setModal] = useState(null); // { id?, name, type, site_id, location, in_charge }
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const open = (w) => setModal(w || { name: '', type: 'office', site_id: '', location: '', in_charge: '' });
   const save = async (e) => {
     e.preventDefault();
@@ -2051,6 +2210,21 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
       toast.error(err.response?.data?.error || 'Failed');
     }
   };
+
+  // Client-side pagination over `warehouses`.
+  const total = warehouses.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = warehouses.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
 
   return (
     <>
@@ -2076,7 +2250,7 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
             </tr>
           </thead>
           <tbody>
-            {warehouses.map(w => (
+            {pagedRows.map(w => (
               <tr key={w.id} className="border-t hover:bg-gray-50">
                 <td className="px-3 py-2 font-medium text-gray-800">{w.name}</td>
                 <td className="px-3 py-2"><span className={`px-2 py-0.5 text-[10px] rounded ${w.type === 'office' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>{w.type === 'office' ? 'Office' : 'Site'}</span></td>
@@ -2103,6 +2277,66 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
       <Modal isOpen={!!modal} onClose={() => setModal(null)} title={modal?.id ? 'Edit Warehouse' : 'Add Warehouse'}>

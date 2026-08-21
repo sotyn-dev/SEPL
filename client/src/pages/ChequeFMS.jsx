@@ -57,6 +57,8 @@ export default function ChequeFMS() {
   const [selected, setSelected] = useState(null);
   const [history, setHistory] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = () => {
     const params = new URLSearchParams();
@@ -169,6 +171,28 @@ export default function ChequeFMS() {
       return true;
     });
   }, [cheques, dateFrom, dateTo]);
+
+  // Snap back to page 1 whenever the tab, search, or date-range filter
+  // changes, so the user doesn't land on a page number that no longer
+  // exists in the new result set.
+  useEffect(() => { setPage(1); }, [tab, search, dateFrom, dateTo]);
+
+  // Client-side pagination over `visible` (tab/search already run
+  // server-side inside load(); the date-range filter above is client-side —
+  // slicing here composes with all of them).
+  const total = visible.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = visible.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
 
   const counts = useMemo(() => {
     const m = { pending: 0, clear: 0, hold: 0, bounce: 0, stopped: 0, cancel: 0 };
@@ -300,7 +324,7 @@ export default function ChequeFMS() {
           </thead>
           <tbody>
             {visible.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">{(dateFrom || dateTo) ? 'No cheques in this date range' : 'No cheques in this tab'}</td></tr>}
-            {visible.map(c => {
+            {pagedRows.map(c => {
               const due = c.action_due === 1;
               return (
                 <tr key={c.id} className={`border-b ${due ? 'bg-red-50/40' : ''}`}>
@@ -335,6 +359,68 @@ export default function ChequeFMS() {
             })}
           </tbody>
         </table>
+      </div>
+      )}
+
+      {/* Pagination */}
+      {tab !== 'responsible' && (
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
       )}
 

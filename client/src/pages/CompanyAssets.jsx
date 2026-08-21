@@ -52,6 +52,8 @@ export default function CompanyAssets() {
   const [actionForm, setActionForm] = useState({});
   const [history, setHistory] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -59,6 +61,9 @@ export default function CompanyAssets() {
     api.get(`/company-assets?${params}`).then(r => setAssets(r.data || [])).catch(() => {});
     api.get('/company-assets/stats').then(r => setStats(r.data)).catch(() => {});
   }, [filters]);
+  // Snap back to page 1 whenever search/filters change, so the user doesn't
+  // land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [filters]);
 
   useEffect(() => {
     load();
@@ -140,6 +145,22 @@ export default function CompanyAssets() {
     } catch (err) { toast.error('Failed to load history'); }
   };
 
+  // Client-side pagination over `assets` (already filtered server-side
+  // inside load()).
+  const total = assets.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedAssets = assets.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -204,7 +225,7 @@ export default function CompanyAssets() {
             {assets.length === 0 && (
               <tr><td colSpan="10" className="text-center py-8 text-gray-400">No assets yet — click "Add Asset" to start the register</td></tr>
             )}
-            {assets.map(a => (
+            {pagedAssets.map(a => (
               <tr key={a.id}>
                 <td className="font-bold text-indigo-700 text-xs">{a.asset_no}</td>
                 <td className="text-xs">{a.category || <span className="text-gray-300">—</span>}</td>
@@ -252,6 +273,66 @@ export default function CompanyAssets() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* ADD / EDIT MODAL */}

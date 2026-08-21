@@ -89,6 +89,12 @@ export default function Orders() {
   // visible on-screen (mam can screenshot it) instead of disappearing in a
   // 4-second toast. Cleared whenever the modal opens or save retries.
   const [poError, setPoError] = useState(null);
+  // Pagination — kept separate per tab so switching tabs doesn't carry a
+  // confusing page number over onto unrelated data.
+  const [poPage, setPoPage] = useState(1);
+  const [poPageSize, setPoPageSize] = useState(10);
+  const [planPage, setPlanPage] = useState(1);
+  const [planPageSize, setPlanPageSize] = useState(10);
 
   const load = () => {
     api.get('/orders/po').then(r => setPos(r.data));
@@ -252,10 +258,43 @@ export default function Orders() {
   const togglePoGroup = (key) => setPoExpanded(prev => ({ ...prev, [key]: !prev[key] }));
   const poClientList = (set) => { const a = [...set]; if (!a.length) return '-'; return a.length <= 2 ? a.join(', ') : `${a.slice(0, 2).join(', ')} +${a.length - 2} more`; };
 
+  // Snap back to page 1 whenever the PO filter or grouping mode changes.
+  useEffect(() => { setPoPage(1); }, [poFilter, groupPo]);
+
+  // Client-side pagination — PO tab. When grouped by project, pagination
+  // slices the GROUP rows (each already aggregates its POs) so a project's
+  // POs never split across pages.
+  const poDisplay = groupPo ? poGroups : pos.filter(p => poMatches(p, poFilter));
+  const poTotal = poDisplay.length;
+  const poTotalPages = Math.max(1, Math.ceil(poTotal / poPageSize));
+  const poCurPage = Math.min(poPage, poTotalPages);
+  const poFrom = poTotal === 0 ? 0 : (poCurPage - 1) * poPageSize;
+  const poTo = Math.min(poFrom + poPageSize, poTotal);
+  const poPagedRows = poDisplay.slice(poFrom, poTo);
+  const poPageNumbers = poTotalPages <= 7
+    ? Array.from({ length: poTotalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, poTotalPages - 1, poTotalPages, poCurPage - 1, poCurPage, poCurPage + 1])]
+        .filter(n => n >= 1 && n <= poTotalPages)
+        .sort((a, b) => a - b);
+
+  // Client-side pagination — Order Planning tab.
+  const planTotal = planning.length;
+  const planTotalPages = Math.max(1, Math.ceil(planTotal / planPageSize));
+  const planCurPage = Math.min(planPage, planTotalPages);
+  const planFrom = planTotal === 0 ? 0 : (planCurPage - 1) * planPageSize;
+  const planTo = Math.min(planFrom + planPageSize, planTotal);
+  const planPagedRows = planning.slice(planFrom, planTo);
+  const planPageNumbers = planTotalPages <= 7
+    ? Array.from({ length: planTotalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, planTotalPages - 1, planTotalPages, planCurPage - 1, planCurPage, planCurPage + 1])]
+        .filter(n => n >= 1 && n <= planTotalPages)
+        .sort((a, b) => a - b);
+
   // One PO row — reused by the flat list and the grouped children so the
   // columns never drift between the two modes.
-  const renderPoRow = (p, child = false) => (
+  const renderPoRow = (p, child = false, srNo = null) => (
     <tr key={p.id} className={child ? 'bg-gray-50/60' : ''}>
+      <td className="text-gray-500">{srNo ?? ''}</td>
       <td className={`font-medium ${child ? 'pl-8' : ''}`}>{p.po_number}</td>
       <td className="text-red-600 font-bold">{p.lead_no || '-'}</td>
       <td>{p.bb_client || p.company_name || '-'}</td>
@@ -342,16 +381,19 @@ export default function Orders() {
             </div>
           )}
           <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Sr No</th><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {/* Flat list, or merged-by-project when grouping is on. */}
-              {!groupPo && pos.filter(p => poMatches(p, poFilter)).map(p => renderPoRow(p))}
-              {groupPo && poGroups.map(g => {
+              {/* Flat list, or merged-by-project when grouping is on. Both
+                  branches render the already-paginated `poPagedRows` slice. */}
+              {!groupPo && poPagedRows.map((p, i) => renderPoRow(p, false, poFrom + i + 1))}
+              {groupPo && poPagedRows.map((g, i) => {
                 const open = !!poExpanded[g.key];
+                const srNo = poFrom + i + 1;
                 return (
                   <Fragment key={g.key}>
                     {/* Collapsed project row — project name + PO count + total amount. */}
                     <tr className="bg-blue-50/60 hover:bg-blue-100/60 cursor-pointer border-l-4 border-blue-600" onClick={() => togglePoGroup(g.key)}>
+                      <td className="text-gray-500">{srNo}</td>
                       <td className="font-medium">
                         <div className="flex items-center gap-1.5 text-blue-700">
                           {open ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
@@ -373,9 +415,69 @@ export default function Orders() {
                   </Fragment>
                 );
               })}
-              {pos.length === 0 && <tr><td colSpan="13" className="text-center py-8 text-gray-400">No orders yet</td></tr>}
+              {pos.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No orders yet</td></tr>}
             </tbody>
           </table></div>
+
+          {/* Pagination */}
+          <div className="card p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                <p className="text-xs text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{poTotal === 0 ? 0 : poFrom + 1}</span>–<span className="font-semibold text-gray-700">{poTo}</span> of <span className="font-semibold text-gray-700">{poTotal}</span> records
+                </p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                  Rows per page:
+                  <select
+                    className="select text-xs py-1 px-2 w-auto"
+                    value={poPageSize}
+                    onChange={e => { setPoPageSize(Number(e.target.value)); setPoPage(1); }}
+                  >
+                    {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setPoPage(poCurPage - 1)}
+                  disabled={poCurPage <= 1}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                {poPageNumbers.map((n, idx) => {
+                  const prevN = poPageNumbers[idx - 1];
+                  const gap = prevN != null && n - prevN > 1;
+                  return (
+                    <span key={n} className="flex items-center gap-1.5">
+                      {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                      <button
+                        type="button"
+                        onClick={() => setPoPage(n)}
+                        className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          n === poCurPage
+                            ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    </span>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setPoPage(poCurPage + 1)}
+                  disabled={poCurPage >= poTotalPages}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
         </>
       )}
 
@@ -386,14 +488,74 @@ export default function Orders() {
             <button onClick={() => { setForm({ po_id: '', business_book_id: '', planned_start: '', planned_end: '', notes: '' }); setModal('planning'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Plan</button>
           </div>
           <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th>PO</th><th>Client</th><th>Start</th><th>End</th><th>Status</th></tr></thead>
+            <thead><tr><th>Sr No</th><th>PO</th><th>Client</th><th>Start</th><th>End</th><th>Status</th></tr></thead>
             <tbody>
-              {planning.map(p => (
-                <tr key={p.id}><td>{p.po_number}</td><td>{p.client_name}</td><td>{p.planned_start}</td><td>{p.planned_end}</td><td><StatusBadge status={p.status} /></td></tr>
+              {planPagedRows.map((p, i) => (
+                <tr key={p.id}><td className="text-gray-500">{planFrom + i + 1}</td><td>{p.po_number}</td><td>{p.client_name}</td><td>{p.planned_start}</td><td>{p.planned_end}</td><td><StatusBadge status={p.status} /></td></tr>
               ))}
-              {planning.length === 0 && <tr><td colSpan="5" className="text-center py-8 text-gray-400">No plans yet</td></tr>}
+              {planning.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No plans yet</td></tr>}
             </tbody>
           </table></div>
+
+          {/* Pagination */}
+          <div className="card p-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                <p className="text-xs text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{planTotal === 0 ? 0 : planFrom + 1}</span>–<span className="font-semibold text-gray-700">{planTo}</span> of <span className="font-semibold text-gray-700">{planTotal}</span> records
+                </p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                  Rows per page:
+                  <select
+                    className="select text-xs py-1 px-2 w-auto"
+                    value={planPageSize}
+                    onChange={e => { setPlanPageSize(Number(e.target.value)); setPlanPage(1); }}
+                  >
+                    {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setPlanPage(planCurPage - 1)}
+                  disabled={planCurPage <= 1}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                {planPageNumbers.map((n, idx) => {
+                  const prevN = planPageNumbers[idx - 1];
+                  const gap = prevN != null && n - prevN > 1;
+                  return (
+                    <span key={n} className="flex items-center gap-1.5">
+                      {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                      <button
+                        type="button"
+                        onClick={() => setPlanPage(n)}
+                        className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          n === planCurPage
+                            ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                            : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    </span>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setPlanPage(planCurPage + 1)}
+                  disabled={planCurPage >= planTotalPages}
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
         </>
       )}
 

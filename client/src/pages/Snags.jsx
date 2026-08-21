@@ -12,7 +12,7 @@
 //
 // Permission gates: snags.view / create / edit / approve / delete.
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -20,15 +20,6 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
-
-// How many rows we ADD to the DOM each time the user scrolls near the bottom
-// of the table box. This is render-only chunking, NOT pagination: the whole
-// filtered list stays in memory (and drives the summary cards + export) — we
-// just don't mount 200+ <tr>s, each with two thumbnails, up front.
-const CHUNK = 50;
-// Start mounting the next chunk this far before the last row scrolls into
-// view, so rows are ready by the time the user gets to them.
-const PREFETCH_PX = 400;
 
 const STATUS_PILL = {
   open: 'bg-amber-100 text-amber-700',
@@ -61,11 +52,8 @@ export default function Snags() {
   const [form, setForm] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [uploading, setUploading] = useState(false);
-  // Rows currently mounted. Grows by CHUNK as the user scrolls; reset back to
-  // one chunk whenever the list itself changes (new filter/search result).
-  const [visibleCount, setVisibleCount] = useState(CHUNK);
-  const scrollBoxRef = useRef(null);   // the table's own overflow container
-  const [lastRowEl, setLastRowEl] = useState(null); // last mounted <tr>
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -88,28 +76,26 @@ export default function Snags() {
     return s;
   }, [snags]);
 
-  // ─── Scroll-in rendering ────────────────────────────────────────────
-  // Search / status / priority / site / scope all run SERVER-side (see load
-  // above), so `snags` is always the complete matching set — every filter
-  // still searches the whole list, not just what's on screen. All this does
-  // is meter how much of that set is in the DOM at once.
-  const visibleRows = useMemo(() => snags.slice(0, visibleCount), [snags, visibleCount]);
-  const hasMore = visibleCount < snags.length;
-  // A fresh result set (any filter change) starts from the top again.
-  useEffect(() => { setVisibleCount(CHUNK); scrollBoxRef.current?.scrollTo({ top: 0 }); }, [snags]);
+  // Snap back to page 1 whenever search/filters change, so the user doesn't
+  // land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [filters]);
 
-  // Watch the last mounted row; when it nears the bottom of the scroll box,
-  // mount the next chunk. Runs as an effect (not a ref callback) so
-  // scrollBoxRef is guaranteed to be attached before the observer is built.
-  useEffect(() => {
-    if (!lastRowEl || !hasMore) return;
-    const io = new IntersectionObserver(
-      entries => { if (entries[0].isIntersecting) setVisibleCount(c => Math.min(c + CHUNK, snags.length)); },
-      { root: scrollBoxRef.current, rootMargin: `0px 0px ${PREFETCH_PX}px 0px` },
-    );
-    io.observe(lastRowEl);
-    return () => io.disconnect();
-  }, [lastRowEl, hasMore, snags.length]);
+  // Client-side pagination over `snags` (search / status / priority / site /
+  // scope all run server-side inside load(), so `snags` is already the
+  // complete matching set — slicing here composes with all of them).
+  const total = snags.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = snags.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
 
   // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
   // photos embedded. CSV can't carry images, so this hits the server which
@@ -286,11 +272,10 @@ export default function Snags() {
       {/* Reverted to the original 10-column table per mam
           (2026-05-21: "dont change also snag list old is ok"). */}
       <div className="card p-0">
-        {/* Own bounded scroll box → the sticky `freeze-head` thead pins to
-            THIS container's top (Excel-style frozen header), and `freeze-col`
-            keeps the Snag-No column fixed during horizontal scroll.
-            mam (2026-07-28): "freeze like excel". */}
-        <div ref={scrollBoxRef} className="overflow-auto max-h-[70vh]">
+        {/* `freeze-head` pins the thead (Excel-style frozen header) and
+            `freeze-col` keeps the Snag-No column fixed during horizontal
+            scroll. mam (2026-07-28): "freeze like excel". */}
+        <div className="overflow-x-auto">
         <table className="freeze-head freeze-col w-full">
           <thead>
             <tr>
@@ -303,8 +288,8 @@ export default function Snags() {
             {snags.length === 0 && (
               <tr><td colSpan="10" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
             )}
-            {visibleRows.map((s, i) => (
-              <tr key={s.id} ref={i === visibleRows.length - 1 ? setLastRowEl : undefined}>
+            {pagedRows.map((s) => (
+              <tr key={s.id}>
                 <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
                 <td className="text-xs">
                   <div>{s.raised_at ? fmtDate(s.raised_at) : '—'}</div>
@@ -358,6 +343,66 @@ export default function Snags() {
             ))}
           </tbody>
         </table>
+        </div>
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
 

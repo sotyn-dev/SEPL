@@ -45,7 +45,7 @@ export default function CRMFunnel() {
   const { canCreate, canEdit, canDelete } = useAuth();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState({ q: '', step: 'all', state: '', type: '' });
+  const [filter, setFilter] = useState({ q: '', step: 'all', state: '', type: '', source: '' });
   const [view, setView] = useState('funnel');   // 'funnel' | 'responsible'
   const [modal, setModal] = useState(false);
   // Read-only view modal (mam, 2026-05-16: "action as eye" on the
@@ -118,6 +118,8 @@ export default function CRMFunnel() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(blank());
   const [saving, setSaving] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const load = () => {
     setLoading(true);
@@ -126,11 +128,15 @@ export default function CRMFunnel() {
     if (filter.step !== 'all') params.step = filter.step;
     if (filter.state) params.state = filter.state;
     if (filter.type) params.type = filter.type;
+    if (filter.source) params.source = filter.source;
     api.get('/crm-funnel', { params }).then(r => setRows(r.data))
       .catch(e => toast.error(e.response?.data?.error || 'Load failed'))
       .finally(() => setLoading(false));
   };
-  useEffect(load, [filter.q, filter.step, filter.state, filter.type]);
+  useEffect(load, [filter.q, filter.step, filter.state, filter.type, filter.source]);
+  // Snap back to page 1 whenever search/filters change, so the user doesn't
+  // land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [filter.q, filter.step, filter.state, filter.type, filter.source]);
 
   const openAdd = () => { setEditing(null); setForm(blank()); setModal(true); };
   const openEdit = (row) => {
@@ -203,6 +209,23 @@ export default function CRMFunnel() {
     key === '2' ? rows.filter(r => r.quotation_submitted && !r.final_status).length :
     rows.filter(r => r.final_status === 'win' || r.final_status === 'loss').length;
 
+  // Client-side pagination over the already-filtered `rows` (search / step /
+  // state / type / source are applied server-side inside load(), so slicing
+  // here composes with all of them automatically).
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedRows = rows.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -266,7 +289,7 @@ export default function CRMFunnel() {
         <div className="card p-4 border-l-4 border-amber-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Win Rate</p><p className="text-3xl font-extrabold text-amber-600">{winRate}%</p></div>
       </div>
 
-      <div className="card p-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
+      <div className="card p-3 grid grid-cols-1 sm:grid-cols-5 gap-2">
         <input className="input text-sm" placeholder="Search client / company / mobile / lead#"
           value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value }))} />
         <select className="select text-sm" value={filter.state} onChange={e => setFilter(f => ({ ...f, state: e.target.value }))}>
@@ -276,6 +299,10 @@ export default function CRMFunnel() {
         <select className="select text-sm" value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
           <option value="">All types</option>
           {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select className="select text-sm" value={filter.source} onChange={e => setFilter(f => ({ ...f, source: e.target.value }))}>
+          <option value="">All sources</option>
+          {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
         <select className="select text-sm" value={filter.step} onChange={e => setFilter(f => ({ ...f, step: e.target.value }))}>
           <option value="all">All steps</option>
@@ -289,7 +316,7 @@ export default function CRMFunnel() {
         <table className="freeze-head">
           <thead>
             <tr>
-              <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
+              <th>Sr No</th><th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
               <th>Type</th><th>Category</th><th>State</th>
               <th>BOQ</th><th>Quote</th><th>Qty Amount</th>
               <th>Neg Status</th><th>Neg Amount</th>
@@ -297,14 +324,15 @@ export default function CRMFunnel() {
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan="16" className="text-center py-8 text-gray-400">Loading…</td></tr>}
+            {loading && <tr><td colSpan="17" className="text-center py-8 text-gray-400">Loading…</td></tr>}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan="16" className="text-center py-8 text-gray-400">
+              <tr><td colSpan="17" className="text-center py-8 text-gray-400">
                 No leads yet. Click <b>+ Add Lead</b>.
               </td></tr>
             )}
-            {rows.map(r => (
+            {pagedRows.map((r, i) => (
               <tr key={r.id}>
+                <td className="text-gray-500">{from + i + 1}</td>
                 <td className="font-mono text-xs">{r.lead_no}</td>
                 <td className="font-medium">
                   {r.client_name}
@@ -353,6 +381,66 @@ export default function CRMFunnel() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
       </>)}
 
@@ -539,11 +627,17 @@ export default function CRMFunnel() {
       {viewRow && (
         <Modal isOpen={true} onClose={() => setViewRow(null)} title={`Lead · ${viewRow.lead_no || viewRow.client_name || '—'}`} wide>
           <div className="space-y-3 text-sm">
+            {viewRow.source === 'Website' && (
+              <div className="px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold inline-flex items-center gap-1.5">
+                🌐 Submitted via Sotyn AI website — Free Consultation form
+              </div>
+            )}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <Field label="Lead #">{viewRow.lead_no || '—'}</Field>
               <Field label="Client">{viewRow.client_name || '—'}</Field>
               <Field label="Company">{viewRow.company_name || '—'}</Field>
               <Field label="Mobile">{viewRow.mobile || '—'}</Field>
+              <Field label="Email">{viewRow.email || '—'}</Field>
               <Field label="Source">{viewRow.source || '—'}</Field>
               <Field label="Type">{viewRow.type || '—'}</Field>
               <Field label="Category">{viewRow.category || '—'}</Field>
@@ -556,10 +650,19 @@ export default function CRMFunnel() {
               <Field label="Neg Status">{NEG_STATUSES.find(s => s.v === viewRow.negotiation_status)?.l || '—'}</Field>
               <Field label="Neg Amount">{viewRow.negotiation_amount ? `Rs ${(+viewRow.negotiation_amount).toLocaleString('en-IN')}` : '—'}</Field>
               <Field label="Final Status">{viewRow.final_status || '—'}</Field>
+              {/* Website lead qualification fields (from the Sotyn AI Free
+                  Consultation form) — only populated for source='Website'. */}
+              {viewRow.industry && <Field label="Industry">{viewRow.industry}</Field>}
+              {viewRow.company_size && <Field label="Company Size">{viewRow.company_size}</Field>}
+              {viewRow.service_interest && <Field label="Looking For">{viewRow.service_interest}</Field>}
+              {viewRow.budget_range && <Field label="Budget Range">{viewRow.budget_range}</Field>}
+              {viewRow.timeline && <Field label="Timeline">{viewRow.timeline}</Field>}
+              {viewRow.preferred_contact && <Field label="Preferred Contact">{viewRow.preferred_contact}</Field>}
             </div>
             {viewRow.loss_reason && (
               <Field label="Loss Reason"><span className="text-red-700">{viewRow.loss_reason}</span></Field>
             )}
+            {viewRow.remarks && <Field label="Remarks">{viewRow.remarks}</Field>}
             {viewRow.notes && <Field label="Notes">{viewRow.notes}</Field>}
 
             {/* ─── Stage-aware quick-update card ────────────────────

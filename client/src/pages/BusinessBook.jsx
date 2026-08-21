@@ -72,6 +72,8 @@ export default function BusinessBook() {
   const [expanded, setExpanded] = useState({});      // dashboard: which client+site groups are open
   const [groupList, setGroupList] = useState(true);  // List view: merge leads by project name
   const [listExpanded, setListExpanded] = useState({}); // List view: which project groups are open
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const loadEntries = useCallback(() => {
     const params = new URLSearchParams();
@@ -85,6 +87,9 @@ export default function BusinessBook() {
   };
 
   useEffect(() => { loadEntries(); loadStats(); }, [loadEntries]);
+  // Snap back to page 1 whenever search/filters/grouping change, so the user
+  // doesn't land on a page number that no longer exists in the new result set.
+  useEffect(() => { setPage(1); }, [search, filters, groupList]);
 
   // Load active employees once for the "Employee Name" picker.
   useEffect(() => {
@@ -374,8 +379,10 @@ export default function BusinessBook() {
   const CAT_PILL = ['bg-blue-50 text-blue-700', 'bg-emerald-50 text-emerald-700', 'bg-purple-50 text-purple-700', 'bg-orange-50 text-orange-700', 'bg-pink-50 text-pink-700', 'bg-cyan-50 text-cyan-700', 'bg-rose-50 text-rose-700', 'bg-teal-50 text-teal-700'];
   const catColor = (c) => { let h = 0; const s = String(c || ''); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return CAT_PILL[h % CAT_PILL.length]; };
 
-  const renderLeadRow = (b, child = false) => (
+  const renderLeadRow = (b, child = false, srNo = null) => (
     <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-blue-50/40'}`}>
+      {/* Sr No — blank for nested lead rows under an expanded project group */}
+      <td className="px-3 py-1.5 align-top text-gray-500">{srNo ?? ''}</td>
       {/* Lead No + Type */}
       <td className={`px-3 py-1.5 align-top ${child ? 'pl-8' : ''}`}>
         <span className="font-bold text-blue-700 text-[13px] cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span>
@@ -455,6 +462,24 @@ export default function BusinessBook() {
       byCategory, byOrderType, byStatus, topClients,
     };
   }, [entries, groups]);
+
+  // Client-side pagination for the List view's table. When leads are grouped
+  // by project (groupList), pagination slices the GROUP rows (each already
+  // aggregates its leads) so one project's leads never split across pages.
+  const listDisplay = groupList ? listGroups : entries;
+  const total = listDisplay.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, totalPages);
+  const from = total === 0 ? 0 : (curPage - 1) * pageSize;
+  const to = Math.min(from + pageSize, total);
+  const pagedList = listDisplay.slice(from, to);
+  // Compact page-number list — show every page up to 7, else collapse the
+  // middle with an ellipsis around the current page.
+  const pageNumbers = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, i) => i + 1)
+    : [...new Set([1, 2, totalPages - 1, totalPages, curPage - 1, curPage, curPage + 1])]
+        .filter(n => n >= 1 && n <= totalPages)
+        .sort((a, b) => a - b);
 
   return (
     <div className="space-y-6">
@@ -559,10 +584,12 @@ export default function BusinessBook() {
 
       {/* Table (List view) */}
       {viewMode === 'list' && (
+      <>
       <div className="card p-0">
         <div className="overflow-x-auto">
           <table className="min-w-full freeze-head">
             <thead><tr className="bg-gray-50/80 border-b border-gray-200">
+              <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Sr No</th>
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Lead No</th>
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Client</th>
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Project / Location</th>
@@ -573,19 +600,22 @@ export default function BusinessBook() {
               <th className="px-3 py-3 text-center text-[11px] font-semibold uppercase tracking-wider text-gray-500">Actions</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {/* Flat list, or merged-by-project when grouping is on. */}
-              {!groupList && entries.map(b => renderLeadRow(b))}
-              {groupList && listGroups.map(g => {
+              {/* Flat list, or merged-by-project when grouping is on. Both
+                  branches render the already-paginated `pagedList` slice. */}
+              {!groupList && pagedList.map((b, i) => renderLeadRow(b, false, from + i + 1))}
+              {groupList && pagedList.map((g, i) => {
                 // Every project — even a single-lead one — renders as the SAME
                 // collapsible group row (mam 2026-06-24: "view is same of all").
                 // The lead(s) appear on expand.
                 const open = !!listExpanded[g.key];
+                const srNo = from + i + 1;
                 return (
                   <Fragment key={g.key}>
                     {/* Collapsed merged row — project name + project-wise totals
                         (Sales, GST sales, Mgmt discount). Client/Category/Actions
                         stay blank; the per-lead detail appears on expand. */}
                     <tr className="bg-blue-50/60 hover:bg-blue-100/60 cursor-pointer transition-colors border-l-4 border-blue-600" onClick={() => toggleListGroup(g.key)}>
+                      <td className="px-3 py-1.5 align-top text-gray-500">{srNo}</td>
                       <td className="px-3 py-1.5 align-top">
                         <div className="flex items-center gap-1.5 text-blue-700">
                           {open ? <FiChevronDown size={15} /> : <FiChevronRight size={15} />}
@@ -611,6 +641,7 @@ export default function BusinessBook() {
                     {/* Sub-header for the expanded per-lead rows */}
                     {open && (
                       <tr className="bg-gray-100/80 text-[10px] uppercase tracking-wide text-gray-500">
+                        <td className="px-3 py-1"></td>
                         <td className="px-3 py-1 pl-8">Lead No</td>
                         <td className="px-3 py-1">Client</td>
                         <td className="px-3 py-1">Project / Location</td>
@@ -625,11 +656,72 @@ export default function BusinessBook() {
                   </Fragment>
                 );
               })}
-              {entries.length === 0 && <tr><td colSpan="8" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
+              {entries.length === 0 && <tr><td colSpan="9" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Pagination */}
+      <div className="card p-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+            <p className="text-xs text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{total === 0 ? 0 : from + 1}</span>–<span className="font-semibold text-gray-700">{to}</span> of <span className="font-semibold text-gray-700">{total}</span> records
+            </p>
+            <label className="flex items-center gap-1.5 text-xs text-gray-500">
+              Rows per page:
+              <select
+                className="select text-xs py-1 px-2 w-auto"
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+              >
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap justify-center sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setPage(curPage - 1)}
+              disabled={curPage <= 1}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prevN = pageNumbers[idx - 1];
+              const gap = prevN != null && n - prevN > 1;
+              return (
+                <span key={n} className="flex items-center gap-1.5">
+                  {gap && <span className="text-gray-300 text-xs px-0.5">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[30px] px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      n === curPage
+                        ? 'bg-gradient-to-r from-blue-800 to-blue-900 text-white shadow-sm shadow-blue-300'
+                        : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(curPage + 1)}
+              disabled={curPage >= totalPages}
+              className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+      </>
       )}
 
       {/* Dashboard view — entries merged by client name + site name */}
