@@ -195,6 +195,19 @@ function pickGeminiModel(available, exclude, prefer) {
   return usable.length ? usable[0].id : null;
 }
 
+// Same pick, but SKIPPING models this process saw 429 in the last cooldown.
+// pickGeminiModel() itself is quota-blind — it walks GEMINI_PREFERRED from the
+// top — so a walk that used it kept selecting models it had already recorded as
+// spent, burning a whole agentic turn each time (audit 2026-08-21). If every
+// candidate is capped we fall back to the quota-blind pick: a stale cap is a
+// guess, and trying something beats returning nothing.
+// NOTE: declared BELOW isQuotaCapped in module scope; both are function
+// declarations, so the hoisting is safe.
+function pickFreshGeminiModel(available, exclude, prefer) {
+  const fresh = (available || []).filter(m => !isQuotaCapped(m.id));
+  return pickGeminiModel(fresh, exclude, prefer) || pickGeminiModel(available, exclude, prefer);
+}
+
 // Persist a healed model so the NEXT request doesn't repeat the discovery round
 // trip (and so Admin → AI Settings shows what is actually in use).
 function rememberModel(db, model) {
@@ -223,15 +236,70 @@ const QUOTA_COOLDOWN_MS = 15 * 60 * 1000;
 const BIG_PAYLOAD_BYTES = 256 * 1024;
 // Don't start a hop with less than this much of the caller's budget left.
 const MIN_HOP_MS = 2000;
-const quotaCapped = new Map();   // model id → ms timestamp of the last 429
+// The SHORT end of the scale: a per-MINUTE 429 reopens in about a minute, so
+// parking every consumer off mam's chosen model for the full 15 minutes because
+// a bulk Vendor-Rates sweep tripped RPM is wrong (audit 2026-08-21). Google's
+// 429 body carries both the quota id (…PerMinute vs …PerDay) and a RetryInfo
+// retryDelay — parseRetryDelayMs() below reads them so the cooldown matches the
+// window that was actually hit.
+const QUOTA_MIN_COOLDOWN_MS = 45 * 1000;
+const quotaCapped = new Map();   // model id → { at, ttl } of the last 429
 let quotaSwitch = null;          // { from, to, at } — last quota hop that WORKED
 
-function markQuotaCapped(model) { quotaCapped.set(model, Date.now()); }
+/**
+ * How long a model should be treated as quota-capped, read from Google's own
+ * 429 body. Returns null when the body says nothing useful (caller then uses
+ * the conservative QUOTA_COOLDOWN_MS default).
+ *   - "quotaId": "GenerateRequestsPerMinutePerProjectPerModel" → short window
+ *   - RetryInfo { "retryDelay": "27s" }                        → use that delay
+ *   - anything naming PerDay                                   → full cooldown
+ * @param {string|object} body raw 429 response text (or parsed object).
+ */
+function parseRetryDelayMs(body) {
+  if (!body) return null;
+  let txt = typeof body === 'string' ? body : '';
+  if (!txt) { try { txt = JSON.stringify(body); } catch (_) { return null; } }
+  if (/per\s*-?\s*day|PerDay/i.test(txt)) return QUOTA_COOLDOWN_MS;
+  const m = txt.match(/"?retryDelay"?\s*[:=]\s*"?(\d+(?:\.\d+)?)s"?/i);
+  if (m) {
+    const ms = Math.round(parseFloat(m[1]) * 1000);
+    // +50% margin so we don't come back a beat early, clamped both ways.
+    return Math.max(QUOTA_MIN_COOLDOWN_MS, Math.min(QUOTA_COOLDOWN_MS, Math.round(ms * 1.5)));
+  }
+  if (/per\s*-?\s*minute|PerMinute/i.test(txt)) return QUOTA_MIN_COOLDOWN_MS;
+  return null;
+}
+
+/**
+ * Record that a model is out of free quota.
+ * @param {string} model
+ * @param {number|string|object=} ttlOrBody  ms to hold the cap for, OR the raw
+ *   429 body to derive it from. Omitted → the conservative 15-min default.
+ */
+function markQuotaCapped(model, ttlOrBody) {
+  let ttl = null;
+  if (typeof ttlOrBody === 'number' && ttlOrBody > 0) ttl = ttlOrBody;
+  else if (ttlOrBody != null) ttl = parseRetryDelayMs(ttlOrBody);
+  quotaCapped.set(model, { at: Date.now(), ttl: ttl || QUOTA_COOLDOWN_MS });
+}
 function isQuotaCapped(model) {
-  const t = quotaCapped.get(model);
-  if (!t) return false;
-  if (Date.now() - t > QUOTA_COOLDOWN_MS) { quotaCapped.delete(model); return false; }
+  const e = quotaCapped.get(model);
+  if (!e) return false;
+  // Tolerate the old bare-timestamp shape in case anything still writes it.
+  const at = typeof e === 'number' ? e : e.at;
+  const ttl = (typeof e === 'number' ? QUOTA_COOLDOWN_MS : e.ttl) || QUOTA_COOLDOWN_MS;
+  if (Date.now() - at > ttl) { quotaCapped.delete(model); return false; }
   return true;
+}
+// A model that just ANSWERED is demonstrably not capped. Called by both this
+// module's heal and routes/aiAgent.js's chat walk, so the memory is genuinely
+// shared in BOTH directions: without this the chat's successful hop was
+// invisible here and every one-shot caller re-burned a full failed request on
+// the capped model (audit 2026-08-21).
+function noteQuotaSwitch(from, to) {
+  if (!to) return;
+  quotaCapped.delete(to);
+  if (from && from !== to) quotaSwitch = { from, to, at: Date.now() };
 }
 // Exposed so Admin → AI Settings can one day show "auto-switched from X to Y
 // (quota)" instead of the switch being invisible. Returns null once it expires.
@@ -324,6 +392,14 @@ async function runGemini(cfg, opts) {
     }
   };
 
+  // Record a 429 with the cooldown Google's own body implies (per-minute vs
+  // per-day). r.clone() so the final error path can still read the body.
+  const capFrom = async (r, m) => {
+    let body = '';
+    try { body = await r.clone().text(); } catch (_) {}
+    markQuotaCapped(m, body || undefined);
+  };
+
   let model = cfg.model;
   const tried = [];
   // A quota hop earlier in this process is remembered IN MEMORY only (see
@@ -332,17 +408,36 @@ async function runGemini(cfg, opts) {
   // on every single request. app_settings still holds HER choice, and once the
   // cooldown lapses we go straight back to it. A probe (Test connection) is
   // exempt — it must test exactly the model that was typed.
+  // preflightSwitched: we LEFT her model because of a 429, not because it is
+  // retired — so a 404 further down the walk must never be persisted over her
+  // choice (audit 2026-08-21).
+  let preflightSwitched = false;
+  let liveModels = null;          // ListModels answer, fetched at most once per call
   if (!opts.noHeal && isQuotaCapped(model)) {
-    const alt = quotaSwitch && quotaSwitch.to;
-    if (alt && alt !== model && !isQuotaCapped(alt)) {
+    // 1) A model that ANSWERED after a quota hop (this module's or the chat's,
+    //    via noteQuotaSwitch) — zero network, the good case.
+    let alt = quotaSwitch && quotaSwitch.to;
+    if (alt && (alt === model || isQuotaCapped(alt))) alt = null;
+    // 2) Nothing remembered: ask the key what it can call and pick a model this
+    //    process has NOT seen 429 — still cheaper than spending a whole request
+    //    (plus its 4s+8s back-off) rediscovering a cap we already recorded.
+    if (!alt) {
+      const tPre = Date.now();
+      liveModels = await listGeminiModels(cfg.apiKey, Math.max(1000, Math.min(15000, opts.timeout)));
+      netMs += Date.now() - tPre;
+      alt = pickFreshGeminiModel(liveModels, [model], opts.prefer);
+      if (alt && isQuotaCapped(alt)) alt = null;   // everything capped → just use hers
+    }
+    if (alt && alt !== model) {
       console.warn(`[ai] gemini '${model}' was quota-capped minutes ago — using '${alt}' for this request (in-memory only; Admin → AI Settings still says '${model}')`);
-      tried.push(model);
+      tried.push(model);            // never re-select the model we just skipped
       model = alt;
+      preflightSwitched = true;
     }
   }
   tried.push(model);
   let r = await call(model, payloadFor(model));
-  if (r.status === 429) markQuotaCapped(model);
+  if (r.status === 429) await capFrom(r, model);
   // Self-heal onto another model the key can actually use. TWO triggers:
   //   404 — the id is retired. Google killed BOTH ids the old Admin dropdown
   //         offered (mam 2026-08-21), so never guess a replacement: ask.
@@ -356,9 +451,12 @@ async function runGemini(cfg, opts) {
   let healed = false;
   if (!opts.noHeal && (r.status === 404 || r.status === 429)) {
     // ListModels counts against the same budget as the hops below.
-    const tList = Date.now();
-    const live = await listGeminiModels(cfg.apiKey, Math.max(1000, Math.min(15000, opts.timeout - netMs)));
-    netMs += Date.now() - tList;
+    let live = liveModels;
+    if (!live) {
+      const tList = Date.now();
+      live = liveModels = await listGeminiModels(cfg.apiKey, Math.max(1000, Math.min(15000, opts.timeout - netMs)));
+      netMs += Date.now() - tList;
+    }
     // HOW MANY HOPS THIS CALLER CAN AFFORD (audit 2026-08-21). The walk re-POSTs
     // the caller's whole body per hop, so it must respect what the caller is
     // shipping. procurementSchedule.js sends up to 25MB of drawings with
@@ -384,7 +482,7 @@ async function runGemini(cfg, opts) {
         console.warn(`[ai] gemini ${r.status} on '${model}' — no time left in the caller's ${opts.timeout}ms budget to try another model`);
         break;
       }
-      const next = pickGeminiModel(live, tried, opts.prefer);
+      const next = pickFreshGeminiModel(live, tried, opts.prefer);
       if (!next) break;
       console.warn(`[ai] gemini '${model}' ${r.status === 429 ? 'quota exhausted' : 'not available'} — trying '${next}' (${live.length} models offered by this key)`);
       tried.push(next);
@@ -394,7 +492,7 @@ async function runGemini(cfg, opts) {
       // 3 hops. Sitting out a quota window is what the caller's own retry is
       // for; here we just want the first model that answers immediately.
       r = await call(model, payloadFor(model), 0, Math.min(opts.timeout, left));
-      if (r.status === 429) markQuotaCapped(model);
+      if (r.status === 429) await capFrom(r, model);
       if (r.ok) { healed = true; break; }
       // Anything that is neither 404 nor 429 (403, 400, 5xx) is a real error —
       // the loop condition stops the walk on the next turn.
@@ -441,12 +539,17 @@ async function runGemini(cfg, opts) {
   //     would silently and permanently replace mam's own choice (and downgrade
   //     the separate Ask SOTYN.AI chat, which reads the same key) with nothing
   //     that ever walks back up. That one lives in memory for QUOTA_COOLDOWN_MS.
-  if (healed) {
-    quotaCapped.delete(model);
-    if (healTrigger === 404) {
+  //     preflightSwitched counts as a 429 trigger for the same reason: we left
+  //     her model over quota, so a 404 on the SUBSTITUTE must not be written
+  //     over her choice either.
+  if (healed || preflightSwitched) {
+    if (healed && healTrigger === 404 && !preflightSwitched) {
+      quotaCapped.delete(model);
       if (!opts.noPersistModel) rememberModel(opts.db, model);
     } else {
-      quotaSwitch = { from: cfg.model, to: model, at: Date.now() };
+      // Remember the model that ANSWERED so the next request skips the capped
+      // one with zero network (and so the chat's walk can reuse it too).
+      noteQuotaSwitch(cfg.model, model);
       console.warn(`[ai] gemini quota switch: '${cfg.model}' → '${model}' for the next ${Math.round(QUOTA_COOLDOWN_MS / 60000)} min (NOT saved — Admin → AI Settings keeps your choice)`);
     }
   }
@@ -506,7 +609,11 @@ async function aiComplete(db, opts = {}) {
 
 module.exports = {
   aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJsonArray,
-  listGeminiModels, pickGeminiModel, getQuotaSwitch, _resetQuotaMemory,
+  listGeminiModels, pickGeminiModel, pickFreshGeminiModel, getQuotaSwitch, _resetQuotaMemory,
+  // Shared with routes/aiAgent.js: the chat keeps its OWN agentic Gemini loop
+  // but must not re-learn which model is quota-capped (mam 2026-08-21: market
+  // rates recovered while the chat still 429'd, because only this module knew).
+  markQuotaCapped, isQuotaCapped, noteQuotaSwitch, parseRetryDelayMs, QUOTA_COOLDOWN_MS,
   AI_DEFAULTS, ANTHROPIC_FALLBACK_MODEL, GEMINI_FALLBACK_MODEL,
   GEMINI_PREFERRED, GEMINI_PREFERRED_CAPABLE,
 };
