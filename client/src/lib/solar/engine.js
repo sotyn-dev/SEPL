@@ -12,8 +12,15 @@ export const DEFAULTS = {
   dg: true, rms: true, clean: true, net: true,
   margin: 22, floor: 15, gst: 13.8, netchg: 500000, cont: 1.5, tariff: 8, valid: 10, amcfree: 10, amcfee: 200000,
   transport: true, escal: true, subsidy: false, scope: true,
+  // Who the customer is — drives subsidy eligibility (PM Surya Ghar is
+  // residential-only). Mirrors qualification.js's property_type options.
+  property_type: 'Commercial',
   // Off-grid / hybrid battery sizing
   backupkw: 25, backuphrs: 4, dod: 80, autonomy: 1, batterytype: 'Li-ion LFP',
+  // Finance — pure calculator inputs, not tied to any real lender. The
+  // salesperson sets rate/tenure from whatever quote the customer's bank
+  // actually gave them.
+  loanPct: 100, loanRate: 10.5, loanTenure: 5,
 };
 
 const FALLBACK_INV_SIZES = [300, 125, 110, 100, 75, 50, 40, 30, 25, 20, 15, 10, 5];
@@ -186,15 +193,67 @@ export function summarize(lines, c) {
   return { totPP, totTPA, totSP, marginPct, wpRate, kwRate: wpRate * 1000 };
 }
 
+// PM Surya Ghar Muft Bijli Yojana — central financial assistance (CFA) for
+// residential rooftop solar (MNRE scheme, launched Feb-2024): ₹30,000/kW up
+// to 2 kW, ₹18,000/kW for the 2–3 kW slab, flat ₹78,000 above 3 kW. CFA
+// eligibility itself caps at 10 kWp. Residential + on-grid + rooftop only —
+// commercial/industrial, ground-mount and off-grid systems don't qualify.
+// State top-up subsidies vary too much (and change too often) to hard-code
+// safely — solar_factors carries a per-state top-up that defaults to ₹0
+// until Solar Settings has a confirmed figure for that state.
+export function computeSubsidy(c, inp, rb) {
+  const wants = inp.subsidy === true || inp.subsidy === 'true';
+  const isResidential = inp.property_type === 'Residential';
+  const isRooftop = inp.mount === 'rcc' || inp.mount === 'tin';
+  const eligible = wants && isResidential && inp.conn === 'ongrid' && isRooftop;
+  if (!eligible) {
+    let reason = null;
+    if (wants && !isResidential) reason = `PM Surya Ghar is residential-only — this quote is marked ${inp.property_type || 'non-residential'}.`;
+    else if (wants && inp.conn !== 'ongrid') reason = 'Subsidy needs an on-grid (net-metering) connection.';
+    else if (wants && !isRooftop) reason = 'Subsidy applies to rooftop (RCC / tin-shed) mounting only.';
+    return { eligible: false, reason, centralSubsidy: 0, stateSubsidy: 0, totalSubsidy: 0 };
+  }
+  const kwp = Math.min(c.realKWp, 10); // CFA eligibility ceiling
+  const central = kwp <= 2 ? kwp * 30000 : kwp <= 3 ? 2 * 30000 + (kwp - 2) * 18000 : 78000;
+  const stateSubsidy = (rb.factors?.state?.[inp.state] || {}).subsidy_topup || 0;
+  return {
+    eligible: true, reason: null,
+    centralSubsidy: Math.round(central), stateSubsidy: Math.round(stateSubsidy),
+    totalSubsidy: Math.round(central + stateSubsidy),
+  };
+}
+
 export function computeROI(c, grand, inp, rb) {
   const tariff = parseFloat(inp.tariff) || 0;
   const annualKWh = c.annual * 1000;
   const annualSav = annualKWh * tariff;
-  const payback = annualSav > 0 ? grand / annualSav : 0;
+  const subsidy = computeSubsidy(c, inp, rb);
+  const netCost = Math.max(0, grand - subsidy.totalSubsidy);
+  const payback = annualSav > 0 ? netCost / annualSav : 0;
   const f25 = 22.67; // Σ degradation factor over 25 yrs @ ~0.8%/yr
   const sav25 = annualKWh * f25 * tariff;
   const co2 = annualKWh * (rb.settings?.['co2_factor_kg/kWh'] ?? 0.82) / 1000; // t/yr
-  return { annualKWh, annualSav, payback, sav25, co2 };
+  return { annualKWh, annualSav, payback, sav25, co2, subsidy, netCost };
+}
+
+// Standard reducing-balance EMI. A pure calculator — rate/tenure are
+// whatever the salesperson enters from the customer's actual bank quote,
+// not pulled from any live lender integration.
+export function computeEMI(principal, annualRatePct, tenureYears) {
+  const P = Math.max(0, principal || 0);
+  const n = Math.round((tenureYears || 0) * 12);
+  const r = (annualRatePct || 0) / 100 / 12;
+  if (n <= 0 || P <= 0) return { emi: 0, totalPayment: 0, totalInterest: 0, months: 0 };
+  if (r <= 0) { const emi = P / n; return { emi, totalPayment: emi * n, totalInterest: 0, months: n }; }
+  const factor = Math.pow(1 + r, n);
+  const emi = (P * r * factor) / (factor - 1);
+  return { emi, totalPayment: emi * n, totalInterest: emi * n - P, months: n };
+}
+
+/** EMI on the financed share of the grand total, per the quote's loan inputs. */
+export function computeFinance(grand, inp) {
+  const principal = (grand || 0) * ((parseFloat(inp.loanPct) || 0) / 100);
+  return { principal, ...computeEMI(principal, parseFloat(inp.loanRate) || 0, parseFloat(inp.loanTenure) || 0) };
 }
 
 export const PROJECT_TYPES = [
@@ -210,6 +269,10 @@ export const MOUNTS = [
   { v: 'ground', label: 'Ground-mount' }, { v: 'rcc', label: 'Rooftop RCC' }, { v: 'tin', label: 'Rooftop tin-shed' },
   { v: 'carport', label: 'Carport / shed' }, { v: 'floating', label: 'Floating' },
 ];
+// Mirrors qualification.js's property_type options — same vocabulary the
+// qualification call already uses, so a value picked there means the same
+// thing here.
+export const PROPERTY_TYPES = ['Residential', 'Commercial', 'Industrial', 'Institutional', 'Agricultural'];
 export const ARRAY_TYPES = [
   { v: 'fixed', label: 'Fixed tilt' }, { v: 'seasonal', label: 'Seasonal tilt' }, { v: 'tracker', label: 'Single-axis tracker' },
 ];

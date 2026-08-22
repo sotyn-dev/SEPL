@@ -226,12 +226,17 @@ function getUserPermissions(userId) {
     const modules = [
       'dashboard','leads','quotations','solar_quotation','orders','business_book','item_master','vendors','customers','procurement',
       'cashflow','collections','payment_required','attendance','indent_fms','dpr',
-      'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','gamification','tools','rentals',
+      'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','gamification','tools','rentals','client_snag',
       // employee_salary: gates visibility of the salary field on GET /hr/employees.
       // hr_team: HR-team membership — gates hiring-request actions and the HR-alert
       // recipient group (cron). Both replace the fuzzy department/role "is HR" checks.
       // attendance_grid: gates viewing the Attendance Monthly Grid tab (marking needs attendance.can_approve).
-      'employee_salary','hr_team','attendance_grid'
+      'employee_salary','hr_team','attendance_grid',
+      // Drawing Tracker (2026-08). NOTE: this list is a separate hardcoded copy
+      // from schema.js's ALL_MODULES and has drifted out of sync over time — a
+      // new module must be added to BOTH or admin's frontend permission map
+      // silently omits it (routes still work; the sidebar entry disappears).
+      'drawing_tracker'
     ];
     const perms = {};
     for (const m of modules) {

@@ -27,6 +27,7 @@ const ALL_MODULES = [
   { key: 'sotyn_flow', label: "SOTYN Flow — Create = create & own boards. See All = view & contribute (cards, comments) on every board, not just your own. Board settings, members & lists stay board-admin only." },
   { key: 'dpr', label: 'DPR' },
   { key: 'indent_labour_payment', label: 'Indent Labour Payment' },
+  { key: 'drawing_tracker', label: 'Drawing Tracker — drawings + revision history (delete = cancel a revision)' },
   { key: 'labour_payment', label: 'Labour Payment Indents' },
   { key: 'delegations', label: 'Delegations' },
   { key: 'pms_tasks', label: 'PMS Tasks' },
@@ -42,6 +43,15 @@ const ALL_MODULES = [
   { key: 'quotations', label: 'BOQ & Quotations' },
   { key: 'ai_quotation', label: 'AI Auto-Quotation' },
   { key: 'labour_rates', label: 'Labour Rate Sheet' },
+
+  // — Labour Management System (2026-08).
+  // 'indent_labour_payment' above already gates Projects & Work Orders and is
+  // deliberately left alone: roles already carry grants against that key, and
+  // renaming it would silently revoke access for everyone who has it.
+  { key: 'labour_quotation', label: 'Labour Quotations — can_approve generates the Work Order' },
+  { key: 'labour_rate_master', label: 'Labour Rate Master — HR maintains; others read-only' },
+  { key: 'labour_master', label: 'Labour Master — roster, attendance, transfers, wage register' },
+  { key: 'bill_verification', label: 'Bill Verification — 6-stage chain, Bills & Finance, Payments' },
   { key: 'business_book', label: 'Business Book' },
 
   // — Solar Division (PR #2: Funnel / Quotation / Projects / Masters)
@@ -61,6 +71,7 @@ const ALL_MODULES = [
   // — Execution / Site
   { key: 'installation', label: 'Installation' },
   { key: 'billing', label: 'Billing' },
+  { key: 'client_snag', label: 'Client Snag — bill missing client signature (upload = Ajmer only, approve/reject = Lovely Sharma only, see the Reassign panel on the page)' },
   { key: 'complaints', label: 'Complaints' },
   { key: 'snags', label: 'Snag List' },
   { key: 'company_assets', label: 'Company Assets' },

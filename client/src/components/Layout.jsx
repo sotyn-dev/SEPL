@@ -47,8 +47,17 @@ import {
   FiGitMerge,
   // Procurement · backward-pass Gantt (mam 2026-05-28)
   FiGitBranch,
+  // Drawing Tracker (2026-08) — verified unused elsewhere in this file, so the
+  // no-duplicate-icons rule above still holds.
+  FiPenTool, FiLayout,
+  // Labour Management System group + its children (mam 2026-08).
+  // All three verified unused elsewhere in this file — the
+  // no-duplicate-icons rule above still holds.
+  FiHardDrive, FiPercent, FiUmbrella,
   // SOTYN Flow · task boards pinned link (mam 2026-07)
   FiTrello,
+  // Client Snag · bill missing client signature (2026-08-11)
+  FiCamera,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -88,8 +97,20 @@ const SIDEBAR_GROUPS = [
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
     { path: '/crm-kitting',   label: 'Full Kitting',      icon: FiArchive,    module: 'crm_kitting' },
   ]},
+  // Labour Management System (mam 2026-08) — sits between CRM and Solar
+  // Division per spec. Quotation → approval → Work Order → labour cost.
+  // "Projects & Work Orders" is the existing Indent Labour Payment page,
+  // MOVED here rather than duplicated: same route, same permission key
+  // (indent_labour_payment), so every existing grant and bookmark still works.
+  { id: 'labour_mgmt', label: 'Labour Management System', icon: FiHardDrive, items: [
+    { path: '/labour-management',     label: 'Quotations & Rates',     icon: FiPercent,   module: 'labour_quotation' },
+    { path: '/indent-labour-payment', label: 'Projects & Work Orders', icon: FiClipboard, module: 'indent_labour_payment' },
+    { path: '/labour-master',         label: 'Labour Master',          icon: FiUmbrella,  module: 'labour_master' },
+    { path: '/bill-verification',     label: 'Bill Verification',      icon: FiCheckSquare, module: 'bill_verification' },
+  ]},
   { id: 'solar_sales', label: 'Solar Division', icon: FiSun, items: [
     { path: '/solar-funnel',          label: 'Solar Sales Funnel',   icon: FiTrendingUp, module: 'solar_quotation' },
+    { path: '/solar-site-design',     label: '3D Shadow Analysis',   icon: FiLayers,     module: 'solar_quotation' },
     { path: '/solar-quotation',       label: 'Solar Quotation',      icon: FiClipboard,  module: 'solar_quotation' },
     { path: '/solar-projects',        label: 'Solar Projects',       icon: FiActivity,   module: 'solar_quotation' },
     { path: '/solar-material-master', label: 'Solar Material Master', icon: FiPackage,   module: 'solar_quotation' },
@@ -117,10 +138,10 @@ const SIDEBAR_GROUPS = [
     { path: '/procurement-schedule', label: 'Schedule (Gantt)',   icon: FiGitBranch,    module: 'procurement_schedule' },
   ]},
   { id: 'projects', label: 'Projects', icon: FiBriefcase, items: [
-    // Mam (2026-06-01): top of Projects group — full execution +
-    // billing pipeline (Phase 1 lights up Project list only;
-    // Phases 2-6 visible as planned tabs).
-    { path: '/indent-labour-payment', label: 'Indent Labour Payment', icon: FiClipboard, module: 'indent_labour_payment' },
+    // Mam (2026-06-01): the execution + billing pipeline used to sit here.
+    // Mam (2026-08): MOVED into the Labour Management System group as
+    // "Projects & Work Orders" — same route and permission key, listed once so
+    // there is only one place in the sidebar that owns Work Orders.
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
     // WhatsApp moved OUT of this group → pinned at the bottom of the sidebar,
@@ -131,11 +152,19 @@ const SIDEBAR_GROUPS = [
     { path: '/tally-bills',  label: 'Tally Bills',      icon: FiFileText,    module: 'tally_bills' },
     { path: '/installation', label: 'Sales Billing',     icon: FiTool,        module: 'installation' },
   ]},
+  // Drawing Tracker (2026-08) — sits between Projects and Finance per spec.
+  // Project drawings + a permanent revision history; a revision is never
+  // overwritten, so Rev 0 stays readable after Rev 11 exists.
+  { id: 'drawing_tracker', label: 'Drawing Tracker', icon: FiPenTool, items: [
+    { path: '/drawing-tracker',              label: 'Drawings', icon: FiLayout,   module: 'drawing_tracker' },
+    { path: '/drawing-tracker?tab=reports',  label: 'Reports',  icon: FiFileText, module: 'drawing_tracker' },
+  ]},
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
     { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
+    { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag' },
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
     { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
     // Expenses module removed from the menu (mam 2026-07-03). Route + page kept

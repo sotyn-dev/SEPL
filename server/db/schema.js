@@ -2939,6 +2939,32 @@ function initializeDatabase() {
     console.warn('[tally-bills] indexes not created (non-fatal):', e.message);
   }
 
+  // Feature schemas extracted into their own files for readability. Invoked
+  // HERE rather than at the tail of initializeDatabase() (where fireNoc and
+  // the other module schemas are called) because the ALTER TABLE column
+  // additions and sqlite_master table rebuilds for these tables are still
+  // inline below, and they need the tables to exist by the time they run.
+  try {
+    const { runClientSnagMigrations } = require('./clientSnagSchema');
+    runClientSnagMigrations(db);
+  } catch (e) {
+    console.warn('[client_snag] migrations skipped (non-fatal):', e.message);
+  }
+
+  try {
+    const { runDrawingTrackerMigrations } = require('./drawingTrackerSchema');
+    runDrawingTrackerMigrations(db);
+  } catch (e) {
+    console.warn('[drawing_tracker] migrations skipped (non-fatal):', e.message);
+  }
+
+  try {
+    const { runLabourManagementMigrations } = require('./labourManagementSchema');
+    runLabourManagementMigrations(db);
+  } catch (e) {
+    console.warn('[labour_management] migrations skipped (non-fatal):', e.message);
+  }
+
   // Safe schema migrations for columns added after initial release
   const migrations = [
     // Tally Bill workflow: a PMS task raised from a bill carries the link back,
@@ -3488,6 +3514,10 @@ function initializeDatabase() {
     //   extra_non_schedule — No BOQ link, picked free from Item Master
     //   rental             — Rented tools, validated against buy-outright cost
     ['indents', "indent_category TEXT DEFAULT 'material'"],
+    // Department the indent is raised for (FF / LV / ELE / CCTV / AC / NET /
+    // SOL / PLB / UT / OTHER — same codes as item_master.department). Free
+    // text, optional — filters/reporting can group indents by department.
+    ['indents', 'department TEXT'],
     // Per-line flags so listing + downstream reports can tell extra rows
     // apart from regular ones without re-deriving from indents.indent_category.
     ['indent_items', 'is_extra_schedule INTEGER DEFAULT 0'],
@@ -3938,6 +3968,48 @@ function initializeDatabase() {
     ['rent_requests', 'pincode TEXT'],
     ['rent_requests', 'pincode_city TEXT'],
     ['rent_requests', 'metro_type TEXT'],
+    // Client Snag — Before Photo: documents the problem (e.g. the
+    // unsigned bill) at raise time, captured by whoever raises the snag
+    // (not identity-gated). The existing photo_url column becomes the
+    // "After Photo" — the resolution photo, still Ajmer-only via
+    // POST /:id/document.
+    ['client_snags', 'before_photo_url TEXT'],
+    // Labour Management System (2026-08). Links a Work Order back to the
+    // quotation it was generated from. Additive and nullable — every existing
+    // WO keeps working with this unset. No REFERENCES clause on purpose: the
+    // priced_by/approved_by migration used one, some SQLite builds reject that
+    // inside ALTER ... ADD COLUMN, this loop's silent try/catch swallowed the
+    // error, and the whole Item Master list 500'd (see itemmaster.js:45-62).
+    ['proj_work_orders', 'quotation_id INTEGER'],
+    // Modules 4-6 (2026-08): the 6-stage bill verification chain rides on
+    // the existing proj_contractor_ra_bills row rather than a new bill
+    // table. current_stage tracks the chain; invoice/gst/tax/previous-
+    // payment flags are Module 5's "Bills & Finance" checks, captured on
+    // the same row since they're properties of ONE bill, not a child entity.
+    ['proj_contractor_ra_bills', "current_stage TEXT DEFAULT 'contractor_uploaded'"],
+    ['proj_contractor_ra_bills', 'invoice_number TEXT'],
+    ['proj_contractor_ra_bills', 'gst_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'tax_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'previous_payment_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'payment_mode TEXT'],
+    ['proj_contractor_ra_bills', 'transaction_id TEXT'],
+    ['proj_contractor_ra_bills', 'contractor_id INTEGER'],
+    // Module 5 (2026-08): Hold — pause a bill in place, resumable.
+    ['proj_contractor_ra_bills', 'hold_reason TEXT'],
+    ['proj_contractor_ra_bills', 'held_by INTEGER'],
+    ['proj_contractor_ra_bills', 'held_by_name TEXT'],
+    ['proj_contractor_ra_bills', 'held_at DATETIME'],
+    ['proj_contractor_ra_bills', 'resumed_by INTEGER'],
+    ['proj_contractor_ra_bills', 'resumed_by_name TEXT'],
+    ['proj_contractor_ra_bills', 'resumed_at DATETIME'],
+    // Work Order routing (2026-08): "send to Site Engineer -> send to
+    // Contractor" after save. One WO can be routed more than once as it
+    // moves along, so this holds only the MOST RECENT hop — full history
+    // lives in audit_log via logAuditEvent.
+    ['proj_work_orders', 'routed_to TEXT'],
+    ['proj_work_orders', 'routed_by INTEGER'],
+    ['proj_work_orders', 'routed_by_name TEXT'],
+    ['proj_work_orders', 'routed_at DATETIME'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index
@@ -4623,6 +4695,168 @@ function initializeDatabase() {
     console.error('[migration] indents CHECK relax failed:', e.message);
   }
 
+  // Module 5 (2026-08): "Hold" pauses a contractor bill at whatever stage
+  // it's currently at, without rejecting it or sending it back to the
+  // contractor. Needs a new status value + two new stage_log actions.
+  // Same rebuild pattern as indents/leave_requests above.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_contractor_ra_bills'").get();
+    if (row && /CHECK\s*\(\s*status\s+IN/i.test(row.sql) && !/on_hold/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_contractor_ra_bills/i, 'CREATE TABLE proj_contractor_ra_bills_new')
+        .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(status IN ('raised','payment','paid','cancelled','on_hold'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_contractor_ra_bills_new (${shared}) SELECT ${shared} FROM proj_contractor_ra_bills`);
+      db.exec('DROP TABLE proj_contractor_ra_bills');
+      db.exec('ALTER TABLE proj_contractor_ra_bills_new RENAME TO proj_contractor_ra_bills');
+      db.exec('COMMIT');
+      console.log('[migration] proj_contractor_ra_bills.status CHECK relaxed to allow on_hold');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_contractor_ra_bills CHECK relax failed:', e.message);
+  }
+
+  // Bug fix (2026-08): proj_contractor_ra_bills.project_id was declared
+  // REFERENCES business_book(id) — a pre-existing convention shared with
+  // proj_mb_sheets/proj_client_ra_bills. But server/routes/billVerification.js
+  // (this session's Bill Verification chain) creates bills from a Work
+  // Order, and stamps project_id with wo.project_id — a proj_projects(id),
+  // NOT a business_book(id). With foreign_keys=ON (schema.js:31) this FK
+  // silently rejects bill creation for any real project whose id doesn't
+  // coincidentally also exist in business_book — it only appeared to work
+  // in early testing because both tables had small overlapping ids in an
+  // empty dev DB. Fix: drop the FK on this column; the trustworthy link for
+  // this chain is bill.work_order_id -> proj_work_orders.project_id, which
+  // every query in billVerification.js already joins through.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_contractor_ra_bills'").get();
+    if (row && /project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book/i.test(row.sql)) {
+      // FKs OFF for the rebuild — real bill rows already have children in
+      // vendor_ledger / proj_bill_stage_log / proj_contractor_ra_deductions
+      // (all REFERENCES proj_contractor_ra_bills(id)), and the DROP TABLE
+      // step below fails under foreign_keys=ON with rows like that present.
+      // Matches the support_tickets/payment_requests rebuilds elsewhere.
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS proj_contractor_ra_bills_new'); } catch (_) {}
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+"?proj_contractor_ra_bills"?/i, 'CREATE TABLE proj_contractor_ra_bills_new')
+        .replace(/project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book\(id\)/i, 'project_id INTEGER');
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_contractor_ra_bills_new (${shared}) SELECT ${shared} FROM proj_contractor_ra_bills`);
+      db.exec('DROP TABLE proj_contractor_ra_bills');
+      db.exec('ALTER TABLE proj_contractor_ra_bills_new RENAME TO proj_contractor_ra_bills');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pcra_project ON proj_contractor_ra_bills(project_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pcra_wo      ON proj_contractor_ra_bills(work_order_id)');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+      console.log('[migration] proj_contractor_ra_bills.project_id FK to business_book removed (mismatched with Bill Verification chain usage)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] proj_contractor_ra_bills project_id FK fix failed:', e.message);
+  }
+
+  // Same bug, same fix, for proj_mb_sheets (2026-08): the Phase 5 MB/CDPR
+  // endpoints in indentLabourPayment.js stamp project_id with a proj_projects
+  // id (the route is /projects/:pid/mb), but the column was declared
+  // REFERENCES business_book(id) — the same pre-existing convention that
+  // broke proj_contractor_ra_bills above. Trustworthy link stays
+  // proj_mb_lines.work_order_id -> proj_work_orders.project_id.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_mb_sheets'").get();
+    if (row && /project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book/i.test(row.sql)) {
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS proj_mb_sheets_new'); } catch (_) {}
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+"?proj_mb_sheets"?/i, 'CREATE TABLE proj_mb_sheets_new')
+        .replace(/project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book\(id\)/i, 'project_id INTEGER');
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_mb_sheets)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_mb_sheets_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_mb_sheets_new (${shared}) SELECT ${shared} FROM proj_mb_sheets`);
+      db.exec('DROP TABLE proj_mb_sheets');
+      db.exec('ALTER TABLE proj_mb_sheets_new RENAME TO proj_mb_sheets');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pmb_project ON proj_mb_sheets(project_id)');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+      console.log('[migration] proj_mb_sheets.project_id FK to business_book removed (mismatched with MB/CDPR usage)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] proj_mb_sheets project_id FK fix failed:', e.message);
+  }
+
+  // Work Order status expansion (2026-08): spec wants
+  // Draft -> Submitted -> Approved -> Work Started -> In Progress -> Completed.
+  // Legacy 'active'/'closed' kept (never remove a value old rows may still
+  // hold) — 'active' becomes a synonym existing WOs already use, 'closed'
+  // stays as an alternate terminal state alongside the new 'completed'.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_work_orders'").get();
+    if (row && /CHECK\s*\(\s*status\s+IN/i.test(row.sql) && !/work_started/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_work_orders/i, 'CREATE TABLE proj_work_orders_new')
+        .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(status IN ('draft','submitted','approved','work_started','in_progress','completed','active','closed','cancelled'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_work_orders)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_work_orders_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_work_orders_new (${shared}) SELECT ${shared} FROM proj_work_orders`);
+      db.exec('DROP TABLE proj_work_orders');
+      db.exec('ALTER TABLE proj_work_orders_new RENAME TO proj_work_orders');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pwo_project ON proj_work_orders(project_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pwo_subcon  ON proj_work_orders(sub_contractor_id)');
+      db.exec('COMMIT');
+      console.log('[migration] proj_work_orders.status CHECK expanded to the full lifecycle');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_work_orders CHECK expand failed:', e.message);
+  }
+
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_bill_stage_log'").get();
+    if (row && /CHECK\s*\(\s*action\s+IN/i.test(row.sql) && !/held/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_bill_stage_log/i, 'CREATE TABLE proj_bill_stage_log_new')
+        .replace(/CHECK\s*\(\s*action\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(action IN ('verified','rejected','sent_back','held','resumed'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_bill_stage_log)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_bill_stage_log_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_bill_stage_log_new (${shared}) SELECT ${shared} FROM proj_bill_stage_log`);
+      db.exec('DROP TABLE proj_bill_stage_log');
+      db.exec('ALTER TABLE proj_bill_stage_log_new RENAME TO proj_bill_stage_log');
+      // DROP TABLE took the indexes with it — recreate them, same as the
+      // ra_bills / mb_sheets / work_orders rebuilds above.
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pbsl_bill  ON proj_bill_stage_log(ra_bill_id, acted_at DESC)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pbsl_stage ON proj_bill_stage_log(stage)');
+      db.exec('COMMIT');
+      console.log('[migration] proj_bill_stage_log.action CHECK relaxed to allow held/resumed');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_bill_stage_log CHECK relax failed:', e.message);
+  }
+
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
@@ -4676,6 +4910,28 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE employees ADD COLUMN bank_account_no TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE employees ADD COLUMN bank_ifsc TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) {}
+    // Labour quotation supporting document (2026-08): the raiser can attach a
+    // PDF/photo of the client's BOQ, contractor's rate card, or site photo —
+    // same upload endpoint AnnouncementBell already uses, just a new column.
+    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN attachment_url TEXT`); } catch (_) {}
+    // Work Order — contractor contact, site location, and who approved it
+    // (2026-08). approved_by is a fixed name picklist, not a users(id) FK —
+    // the approvers here are managers who may not all hold ERP logins.
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contact_number TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN location TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN approved_by TEXT`); } catch (_) {}
+    // Contractor's own document (ID proof / registration / agreement) —
+    // separate from work_order_file_url, which is the WO document itself.
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contractor_document_url TEXT`); } catch (_) {}
+    // Labour Master — type of manpower (2026-08): distinguishes contractor
+    // manpower from SEPL's own team and daily-wage hires, since wage
+    // register and cost rollups treat each differently.
+    try { db.exec(`ALTER TABLE labour_master ADD COLUMN manpower_type TEXT`); } catch (_) {}
+    // Worker's own document (ID proof / Aadhaar card / photo) — 2026-08.
+    try { db.exec(`ALTER TABLE labour_master ADD COLUMN document_url TEXT`); } catch (_) {}
+    // Labour quotation — contractor is now free text (2026-08), no longer
+    // forced through the Sub-Contractors master, plus their Aadhaar.
+    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN contractor_aadhaar TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) {}
@@ -5977,6 +6233,8 @@ in your first week. If a process feels broken, raise a Help Ticket
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
     'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets',
     'sub_contractors','ai_agent','crm_funnel','cheques','fire_noc','rental_tools','influencers','crm_kitting',
+    // Drawing Tracker (2026-08) — project drawings + permanent revision history.
+    'drawing_tracker',
     // Mam (2026-05-21): "add all module in roles& permission" — the
     // four modules below existed in the sidebar / routes / permission
     // checks but were missing from the server's seed list, so newly
@@ -6047,6 +6305,21 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Stage 3 needs no permission — it belongs to whoever the PMS task is
     // assigned to, enforced by the pms_tasks module itself.
     'tally_bills',
+    // Client Snag — bills missing a client signature. Ordinary view/create/
+    // edit/delete are role-gated here as normal; the upload (Ajmer-only)
+    // and approve/reject (Lovely Sharma-only) actions are a SEPARATE
+    // identity gate (client_snag_gate_users, see server/db/schema.js's
+    // client_snag tables) and intentionally don't run through can_approve.
+    'client_snag',
+    // Labour Management System (2026-08).
+    //   labour_quotation    — raise / approve labour quotations
+    //   labour_rate_master  — HR-only write; everyone else reads the rates
+    //                         through the Labour Rate Window
+    // The existing 'indent_labour_payment' key is deliberately NOT renamed:
+    // roles already carry grants against it, and changing the key would
+    // silently revoke access for every user who has it. The module is renamed
+    // in the UI only.
+    'labour_quotation', 'labour_rate_master', 'labour_master', 'bill_verification',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

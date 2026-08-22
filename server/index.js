@@ -470,6 +470,7 @@ app.use('/api/leads', require('./routes/leads'));
 app.use('/api/sales-funnel', require('./routes/salesfunnel'));
 app.use('/api/quotations', require('./routes/quotations'));
 app.use('/api/solar', require('./routes/solar'));
+app.use('/api/solar-site', require('./routes/solarSite'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/business-book', require('./routes/businessbook'));
 app.use('/api/payment-required', require('./routes/paymentrequired'));
@@ -477,6 +478,7 @@ app.use('/api/raci', require('./routes/raci').router);
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/item-master', require('./routes/itemmaster'));
+app.use('/api/drawing-tracker', require('./routes/drawingTracker'));
 app.use('/api/pipe-weights', require('./routes/pipeweights'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/customers', require('./routes/customers'));
@@ -495,11 +497,19 @@ app.use('/api/gamification', require('./routes/champions'));
 app.use('/api/tools', require('./routes/tools'));
 app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/snags', require('./routes/snags'));
+app.use('/api/client-snag', require('./routes/clientSnag'));
 // Mam (2026-05-30): labour payment indents — sits in the Projects
 // sidebar group, raised against a site + sub-contractor.
 app.use('/api/labour-payment', require('./routes/labourPayment'));
 // Indent Labour Payment — Phase 1 (mam 2026-06-01).
 app.use('/api/indent-labour-payment', require('./routes/indentLabourPayment'));
+// Labour Management System (2026-08) — the Indent Labour Payment pipeline
+// extended with quotations and HR-owned crew rates. Mounted alongside it, not
+// replacing it: the existing routes and permission key are untouched.
+app.use('/api/labour-quotations', require('./routes/labourQuotations'));
+app.use('/api/labour-rate-master', require('./routes/labourRateMaster'));
+app.use('/api/labour-master', require('./routes/labourMaster'));
+app.use('/api/bill-verification', require('./routes/billVerification'));
 app.use('/api/company-assets', require('./routes/companyAssets'));
 app.use('/api/push', require('./routes/push'));
 

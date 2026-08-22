@@ -13,11 +13,14 @@ const Leads = lazy(() => import('./pages/Leads'));
 const Quotations = lazy(() => import('./pages/Quotations'));
 const Estimator = lazy(() => import('./pages/Estimator'));
 const SolarQuotation = lazy(() => import('./pages/SolarQuotation'));
+const SolarDesignReport = lazy(() => import('./pages/SolarDesignReport'));
+const SolarNetMeteringPrint = lazy(() => import('./pages/SolarNetMeteringPrint'));
 const SolarRateMaster = lazy(() => import('./pages/SolarRateMaster'));
 const SolarFunnel = lazy(() => import('./pages/SolarFunnel'));
 const SolarMaterialMaster = lazy(() => import('./pages/SolarMaterialMaster'));
 const SolarLabourMaster = lazy(() => import('./pages/SolarLabourMaster'));
 const SolarProjects = lazy(() => import('./pages/SolarProjects'));
+const SolarSiteDesign = lazy(() => import('./pages/SolarSiteDesign'));
 const PoFocStripped = lazy(() => import('./pages/PoFocStripped'));
 const PoFocPrint = lazy(() => import('./pages/PoFocPrint'));
 const LabourRate = lazy(() => import('./pages/LabourRate'));
@@ -44,6 +47,7 @@ const Tools = lazy(() => import('./pages/Tools'));
 const Rentals = lazy(() => import('./pages/Rentals'));
 const Snags = lazy(() => import('./pages/Snags'));
 const TallyBills = lazy(() => import('./pages/TallyBills'));
+const ClientSnag = lazy(() => import('./pages/ClientSnag'));
 const CompanyAssets = lazy(() => import('./pages/CompanyAssets'));
 const Employees = lazy(() => import('./pages/Employees'));
 const Expenses = lazy(() => import('./pages/Expenses'));
@@ -56,6 +60,9 @@ const SotynFlow = lazy(() => import('./pages/SotynFlow'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
 const IndentLabourPayment = lazy(() => import('./pages/IndentLabourPayment'));
+const LabourManagementSystem = lazy(() => import('./pages/LabourManagementSystem'));
+const LabourMaster = lazy(() => import('./pages/LabourMaster'));
+const BillVerification = lazy(() => import('./pages/BillVerification'));
 const Delegation = lazy(() => import('./pages/Delegation'));
 const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
@@ -68,6 +75,14 @@ const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
 const DeliveryNotePrint = lazy(() => import('./pages/DeliveryNotePrint'));
 const RentalPOPrint = lazy(() => import('./pages/RentalPOPrint'));
 const IndentPrint = lazy(() => import('./pages/IndentPrint'));
+const DrawingTracker = lazy(() => import('./pages/DrawingTracker'));
+const DrawingDetail = lazy(() => import('./pages/DrawingDetail'));
+const DrawingRegisterPrint = lazy(() => import('./pages/DrawingRegisterPrint'));
+const DrawingRevisionView = lazy(() => import('./pages/DrawingRevisionView'));
+const WorkOrderPrint = lazy(() => import('./pages/WorkOrderPrint'));
+const LabourRateMasterPrint = lazy(() => import('./pages/LabourRateMasterPrint'));
+const WageRegisterPrint = lazy(() => import('./pages/WageRegisterPrint'));
+const BillPrint = lazy(() => import('./pages/BillPrint'));
 const SiteSlipPrint = lazy(() => import('./pages/SiteSlipPrint'));
 const QuotationPrint = lazy(() => import('./pages/QuotationPrint'));
 const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
@@ -147,6 +162,14 @@ export default function App() {
       <Route path="/vendor-po/:id/delivery-note" element={<ProtectedRoute><DeliveryNotePrint /></ProtectedRoute>} />
       <Route path="/rental-po/:id/print" element={<ProtectedRoute><RentalPOPrint /></ProtectedRoute>} />
       <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
+      <Route path="/drawing-register-print" element={<ProtectedRoute><DrawingRegisterPrint /></ProtectedRoute>} />
+      {/* Full-page revision viewer — outside the Layout shell so the drawing
+          gets the whole window when opened in its own tab. */}
+      <Route path="/drawing-view/:id" element={<ProtectedRoute><DrawingRevisionView /></ProtectedRoute>} />
+      <Route path="/work-order-print/:id" element={<ProtectedRoute><WorkOrderPrint /></ProtectedRoute>} />
+      <Route path="/labour-rate-master-print" element={<ProtectedRoute><LabourRateMasterPrint /></ProtectedRoute>} />
+      <Route path="/wage-register-print" element={<ProtectedRoute><WageRegisterPrint /></ProtectedRoute>} />
+      <Route path="/bill-print/:id" element={<ProtectedRoute><BillPrint /></ProtectedRoute>} />
       {/* SPOS site-store GRN slips (mam 2026-07-31): printable Issue/Return slip */}
       <Route path="/site-slip/:id/print" element={<ProtectedRoute><SiteSlipPrint /></ProtectedRoute>} />
       <Route path="/quotation/:indentId/print" element={<ProtectedRoute><QuotationPrint /></ProtectedRoute>} />
@@ -171,6 +194,8 @@ export default function App() {
         <Route path="dashboard/cmd-toc" element={<AdminRoute><DashboardCMDToc /></AdminRoute>} />
         <Route path="dashboard/war-room" element={<AdminRoute><DashboardWarRoom /></AdminRoute>} />
         <Route path="fire-noc" element={<ModuleRoute module="fire_noc"><FireNoc /></ModuleRoute>} />
+        <Route path="drawing-tracker" element={<ModuleRoute module="drawing_tracker"><DrawingTracker /></ModuleRoute>} />
+        <Route path="drawing-tracker/:id" element={<ModuleRoute module="drawing_tracker"><DrawingDetail /></ModuleRoute>} />
         <Route path="rental-tools" element={<ModuleRoute module="rental_tools"><RentalTools /></ModuleRoute>} />
         <Route path="influencers" element={<ModuleRoute module="influencers"><Influencers /></ModuleRoute>} />
         <Route path="crm-kitting" element={<ModuleRoute module="crm_kitting"><CRMKitting /></ModuleRoute>} />
@@ -201,6 +226,9 @@ export default function App() {
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
         <Route path="indent-labour-payment" element={<ModuleRoute module="indent_labour_payment"><IndentLabourPayment /></ModuleRoute>} />
+        <Route path="labour-management" element={<ModuleRoute module="labour_quotation"><LabourManagementSystem /></ModuleRoute>} />
+        <Route path="labour-master" element={<ModuleRoute module="labour_master"><LabourMaster /></ModuleRoute>} />
+        <Route path="bill-verification" element={<ModuleRoute module="bill_verification"><BillVerification /></ModuleRoute>} />
         <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />
         <Route path="pms-tasks" element={<ModuleRoute module="pms_tasks"><PMSTasks /></ModuleRoute>} />
         {/* Other Modules */}
@@ -209,7 +237,10 @@ export default function App() {
         <Route path="estimator" element={<ModuleRoute module="ai_quotation"><Estimator /></ModuleRoute>} />
         <Route path="solar-funnel" element={<ModuleRoute module="solar_quotation"><SolarFunnel /></ModuleRoute>} />
         <Route path="solar-quotation" element={<ModuleRoute module="solar_quotation"><SolarQuotation /></ModuleRoute>} />
+        <Route path="solar-quotations/:id/design-report" element={<ModuleRoute module="solar_quotation"><SolarDesignReport /></ModuleRoute>} />
         <Route path="solar-projects" element={<ModuleRoute module="solar_quotation"><SolarProjects /></ModuleRoute>} />
+        <Route path="solar-projects/:id/net-metering-print" element={<ModuleRoute module="solar_quotation"><SolarNetMeteringPrint /></ModuleRoute>} />
+        <Route path="solar-site-design" element={<ModuleRoute module="solar_quotation"><SolarSiteDesign /></ModuleRoute>} />
         <Route path="solar-material-master" element={<ModuleRoute module="solar_quotation"><SolarMaterialMaster /></ModuleRoute>} />
         <Route path="solar-labour-master" element={<ModuleRoute module="solar_quotation"><SolarLabourMaster /></ModuleRoute>} />
         <Route path="solar-rate-master" element={<ModuleRoute module="solar_quotation"><SolarRateMaster /></ModuleRoute>} />
@@ -231,6 +262,7 @@ export default function App() {
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
         <Route path="snags" element={<ModuleRoute module="snags"><Snags /></ModuleRoute>} />
         <Route path="tally-bills" element={<ModuleRoute module="tally_bills"><TallyBills /></ModuleRoute>} />
+        <Route path="client-snag" element={<ModuleRoute module="client_snag"><ClientSnag /></ModuleRoute>} />
         <Route path="company-assets" element={<ModuleRoute module="company_assets"><CompanyAssets /></ModuleRoute>} />
         <Route path="hr" element={<ModuleRoute module="hr"><HR /></ModuleRoute>} />
         <Route path="payroll" element={<ModuleRoute module="payroll"><Payroll /></ModuleRoute>} />
