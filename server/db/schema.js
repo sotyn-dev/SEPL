@@ -6616,6 +6616,27 @@ in your first week. If a process feels broken, raise a Help Ticket
     'CREATE INDEX IF NOT EXISTS idx_indentitems_poi  ON indent_items(po_item_id)',
     'CREATE INDEX IF NOT EXISTS idx_payments_ref     ON payments(reference_type, reference_id)',
     'CREATE INDEX IF NOT EXISTS idx_pofoc_poi        ON po_foc_entries(po_item_id)',
+    // ── Hang audit 2026-08-21 ────────────────────────────────────────
+    // Every one of these covers a column that a correlated subquery
+    // filters on ONCE PER ROW of a list that is loaded on page mount.
+    // Without the index SQLite re-scans the whole child table per row,
+    // so cost is quadratic and — because better-sqlite3 is synchronous —
+    // the freeze is the WHOLE server, not just the one page. Measured on
+    // a production-scale copy of the DB:
+    //   /procurement/po-pipeline  151,785 ms -> 746 ms  (the 4 vendor_po_id ones)
+    //   /procurement/indents      104,310 ms -> 241 ms  (vendor_po_items.indent_item_id)
+    //   /indent-fms/tracker        19,389 ms -> 392 ms  (indent_tracker.indent_id)
+    'CREATE INDEX IF NOT EXISTS idx_vpitems_indentitem ON vendor_po_items(indent_item_id)',
+    'CREATE INDEX IF NOT EXISTS idx_indent_tracker_ind ON indent_tracker(indent_id, stage_date)',
+    'CREATE INDEX IF NOT EXISTS idx_dnotes_vpo       ON delivery_notes(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pbills_vpo       ON purchase_bills(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_grn_vpo          ON grn(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_dnotes_debit_vpo ON debit_notes(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pms_assignee     ON pms_tasks(assigned_to, status)',
+    'CREATE INDEX IF NOT EXISTS idx_dprmat_dpr       ON dpr_material(dpr_id)',
+    'CREATE INDEX IF NOT EXISTS idx_expenses_created ON expenses(created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_notif_user       ON notifications(user_id, id DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_scoreentries_uw  ON score_entries(user_id, week_start)',
   ];
   for (const sql of hotPathIndexes) {
     try {

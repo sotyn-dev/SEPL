@@ -853,9 +853,17 @@ function RaciBreakdown({ data }) {
   const pct = (done, planned) => { if (!planned) return 0; const p = Math.round(((done - planned) / planned) * 100); return p < -100 ? -100 : p; };
   const pctClr = (p) => p >= 0 ? 'text-emerald-700' : p >= -50 ? 'text-amber-700' : 'text-red-700';
   const overall = pct(data.totals.actual, data.totals.planned);
-  // Weighted overall % when any step carries a weight: Σ(weight × stepPct)/Σ(weight).
+  // Overall %. Weighting is only applied when EVERY step carries a weight.
+  //
+  // It used to be Σ(weight × stepPct)/Σ(weight) over just the weighted rows,
+  // which silently dropped every step that had no weight set — so a step with
+  // 97 pending at −100% vanished from the headline and the person read −50%
+  // instead of −99% (mam 2026-08-22). A step must never be able to hide from
+  // the score just because nobody typed a weight on it, so when any step is
+  // unweighted we fall back to the plain all-step figure, which is exactly the
+  // planned/done totals shown next to it.
   const wRows = rows.filter(r => +r.weight > 0);
-  const hasW = wRows.length > 0;
+  const hasW = wRows.length > 0 && wRows.length === rows.length;
   const weightedOverall = hasW
     ? Math.round(wRows.reduce((s, r) => s + (+r.weight) * pct(r.actual, r.planned), 0) / wRows.reduce((s, r) => s + (+r.weight), 0))
     : overall;

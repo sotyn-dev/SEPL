@@ -687,6 +687,10 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
       // so no step is in-flight → nothing pending on anyone for it.
       const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
+      // Raw date the CURRENT step landed on its owner = the previous step's own
+      // stamp, or the record's creation date for the very first step. Kept as the
+      // raw string so it is compared exactly the way a closure date is below.
+      let prevRaw = rec.created_at;
       for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
@@ -699,12 +703,25 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
           // flow already passed (a later stamp exists) is history, not
           // workload (audit 2026-08-17: legacy approved indents sat "pending
           // at L1" forever and inflated Planned).
-          if (!recClosed && s.key === rec.current_key && responsibleId === userId) openOnUser += 1;
+          //
+          // AND only when the step LANDED on this person inside the week
+          // (mam 2026-08-22: "raci with also calculate week date planning
+          // according"). Before this, Planned mixed a week-scoped Actual with
+          // an all-time open backlog, so one person showed 97 planned / 0 done
+          // = −100% purely from leads that had been sitting open for months.
+          // "Landed" = when the previous step finished (prevRaw), i.e. the
+          // moment this step became theirs — for a first step that is the
+          // record's creation date.
+          if (!recClosed && s.key === rec.current_key && responsibleId === userId) {
+            const landedStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
+            if (landedStr && landedStr >= sinceDate && landedStr <= untilDate) openOnUser += 1;
+          }
           continue;                                    // open → don't advance prev / don't close
         }
         const atMs = tsMs(stampRaw);
         let elapsed = null;
         if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
+        prevRaw = stampRaw;
         if (responsibleId !== userId) continue;        // not this person's step
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue; // closed outside the week
@@ -768,25 +785,32 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
       const recRaci = raciByRec[rec.id] || {};
       const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
+      let prevRaw = rec.created_at;               // when the current step landed — see raciUserWeek
       for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
         const responsibleId = responsibleOf(s, cfg, m, rec);
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
         if (!stampRaw) {
-          // Same rule as raciUserWeek: pending only at the record's actual
-          // in-flight step (audit 2026-08-17 — no phantom "pending at L1"
-          // for records the flow already moved past).
+          // Same two rules as raciUserWeek: pending only at the record's actual
+          // in-flight step (audit 2026-08-17 — no phantom "pending at L1" for
+          // records the flow already moved past), AND only when the step landed
+          // on this person inside the week (mam 2026-08-22). These two functions
+          // must stay in lockstep or the drill-down disagrees with the KPI row.
           if (!recClosed && s.key === rec.current_key && responsibleId === userId) {
-            const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
-            t.planned += 1; t.pending += 1;
-            if (t.pending_records.length < 8) t.pending_records.push(rec.title);
+            const landedStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
+            if (landedStr && landedStr >= sinceDate && landedStr <= untilDate) {
+              const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
+              t.planned += 1; t.pending += 1;
+              if (t.pending_records.length < 8) t.pending_records.push(rec.title);
+            }
           }
           continue;
         }
         const atMs = tsMs(stampRaw);
         let elapsed = null;
         if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
+        prevRaw = stampRaw;
         if (responsibleId !== userId) continue;
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue;
