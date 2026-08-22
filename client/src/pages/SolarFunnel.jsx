@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown, FiSearch } from 'react-icons/fi';
+import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown, FiSearch, FiLayers } from 'react-icons/fi';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -508,7 +508,18 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
                         <label key={f.k} className="block"><span className="label">{f.label}</span>
                           <input className="input-compact w-full" type={f.type || 'text'} value={aForm[f.k] ?? ''} onChange={(e) => setAForm((p) => ({ ...p, [f.k]: e.target.value }))} /></label>))}
                     </div>
-                    <button onClick={saveStageAction} className="btn btn-secondary text-sm">{action.doneFlag ? 'Mark step complete' : 'Save'}</button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button onClick={saveStageAction} className="btn btn-secondary text-sm">{action.doneFlag ? 'Mark step complete' : 'Save'}</button>
+                      {/* The survey's shadow-free area is the one number the whole
+                          design hangs off. Measure it in 3D instead of eyeballing it. */}
+                      {action.group === 'survey' && (
+                        <button onClick={() => nav(`/solar-site-design?deal=${d.id}`)}
+                          className="btn btn-primary text-sm flex items-center gap-1">
+                          <FiLayers size={14} /> 3D shadow study
+                        </button>)}
+                      {action.group === 'survey' && sd.survey?.site_study_id && (
+                        <span className="text-[11px] text-emerald-700">✓ from 3D study #{sd.survey.site_study_id}</span>)}
+                    </div>
                   </div>)}
 
                 {action.kind === 'quote' && (
