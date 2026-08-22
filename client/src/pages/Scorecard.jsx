@@ -179,7 +179,14 @@ const SOURCE_INFO = {
 const sourceInfoFor = (src) => {
   // Per-step RACI sources are dynamic (auto:raci_step:<module>:<step>) — one hint covers them all.
   if (src && src.startsWith('auto:raci_step:')) {
-    return { plan: 'This step on the user this week (closed + still open)', actual: 'This step the user closed this week' };
+    // Kept in step with raciUserWeek(): Planned is now week-scoped on BOTH
+    // sides. It used to read "closed + still open", which was true but
+    // misleading — "still open" meant every open record ever, so a step could
+    // show 97 planned from leads sitting since March (mam 2026-08-22).
+    return {
+      plan: 'Closed this week + still open from work that reached the user this week',
+      actual: 'This step the user closed this week',
+    };
   }
   return SOURCE_INFO[src] || { plan: '—', actual: '—' };
 };
@@ -192,8 +199,31 @@ export default function Scorecard() {
   const [scorecard, setScorecard] = useState(null);
   const [savingKpi, setSavingKpi] = useState(null);
   const [templates, setTemplates] = useState([]);
+  // Inline rename of the open template's heading (mam 2026-08-22 "rename title").
+  const [renamingTpl, setRenamingTpl] = useState(false);
+  const [renameVal, setRenameVal] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
   const [assignments, setAssignments] = useState([]);
   const [tplDetail, setTplDetail] = useState(null);
+  // Save the inline template rename. Patches the open modal AND re-pulls the
+  // list so the Templates tab and the Assign dropdowns don't keep showing the
+  // old name until a reload.
+  const saveTplName = async () => {
+    const name = renameVal.trim();
+    if (!name || !tplDetail || name === tplDetail.name) { setRenamingTpl(false); return; }
+    setRenameSaving(true);
+    try {
+      await api.put(`/scoring/templates/${tplDetail.id}`, { name });
+      setTplDetail(d => (d ? { ...d, name } : d));
+      api.get('/scoring/templates').then(r => setTemplates(r.data)).catch(() => {});
+      setRenamingTpl(false);
+      toast.success('Template renamed');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not rename the template');
+    } finally {
+      setRenameSaving(false);
+    }
+  };
   const [overview, setOverview] = useState(null);
   // "RACI Steps" row → step-wise breakdown shown INLINE, expanded under the row
   // on the page (mam 2026-06-27: show it here, like an expand — not in a popup).
@@ -640,8 +670,50 @@ export default function Scorecard() {
         <AssignTemplates assignments={assignments} templates={templates} reload={() => api.get('/scoring/assignments').then(r => setAssignments(r.data))} />
       )}
 
-      {/* Template detail modal */}
-      <Modal isOpen={!!tplDetail} onClose={() => setTplDetail(null)} title={tplDetail?.name || 'Template'} wide>
+      {/* Template detail modal. The heading doubles as an inline rename (mam
+          2026-08-22 "rename title") — the template name was read-only here, so
+          a role that got renamed (or typo'd on creation) could only be fixed by
+          deleting the template and rebuilding every KPI on it. Admin-only,
+          matching PUT /scoring/templates/:id which is adminOnly server-side. */}
+      <Modal
+        isOpen={!!tplDetail}
+        onClose={() => { setTplDetail(null); setRenamingTpl(false); }}
+        wide
+        title={
+          !tplDetail ? 'Template' : renamingTpl ? (
+            <span className="flex items-center gap-2">
+              <input
+                autoFocus
+                value={renameVal}
+                onChange={e => setRenameVal(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') saveTplName();
+                  if (e.key === 'Escape') setRenamingTpl(false);
+                }}
+                placeholder="Template name"
+                className="input text-base font-semibold py-1"
+              />
+              <button onClick={saveTplName} disabled={renameSaving || !renameVal.trim()} className="btn btn-primary text-xs py-1 whitespace-nowrap">
+                {renameSaving ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => setRenamingTpl(false)} className="btn btn-secondary text-xs py-1">Cancel</button>
+            </span>
+          ) : (
+            <span className="flex items-center gap-2">
+              {tplDetail.name}
+              {isAdmin() && (
+                <button
+                  onClick={() => { setRenameVal(tplDetail.name || ''); setRenamingTpl(true); }}
+                  title="Rename this template"
+                  className="p-1 text-gray-400 hover:text-blue-700 hover:bg-gray-100 rounded flex-shrink-0"
+                >
+                  <FiEdit2 size={14} />
+                </button>
+              )}
+            </span>
+          )
+        }
+      >
         {tplDetail && <TemplateKpiEditor templateId={tplDetail.id} onChange={() => api.get(`/scoring/templates/${tplDetail.id}`).then(r => setTplDetail(r.data))} />}
       </Modal>
     </div>
