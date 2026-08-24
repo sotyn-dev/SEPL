@@ -512,7 +512,8 @@ router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
        priced_at, priced_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  let added = 0;
+  const { nextSequence } = require('../db/nextSequence');
+  let added = 0, skipped = 0;
   const errors = [];
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
@@ -523,18 +524,30 @@ router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
         : (it.vendor_name ? vendorByName.get(String(it.vendor_name).trim().toLowerCase()) || null : null);
       const source = ALLOWED_SOURCES.includes(it.source_type) ? it.source_type : (it.source_type ? null : 'Manual');
       const price = +it.current_price || 0;
-      insert.run(
-        it.item_code || '', it.department || '', String(it.item_name).trim(),
+      // item_code is UNIQUE. A row with no code used to insert as '' — fine
+      // for the FIRST such row, but item_code TEXT UNIQUE treats a repeated
+      // '' as a duplicate, so INSERT OR IGNORE silently dropped every row
+      // after the first one with a blank code, while `added` still counted
+      // it. Generate a real code the same way the single-item add route
+      // does, so every row actually lands.
+      let code = it.item_code && String(it.item_code).trim();
+      if (!code) {
+        const dept = (it.department || 'GEN').toUpperCase().substring(0, 3);
+        code = nextSequence(db, 'item_master', 'item_code', dept, { startFrom: 0, pad: 4 });
+      }
+      const r = insert.run(
+        code, it.department || '', String(it.item_name).trim(),
         it.specification || '', it.size || '', it.uom || 'PCS',
         it.gst || '18%', it.type || 'PO', it.make || '',
         price, vendorId, source, it.bill_po_number || null, it.bill_po_date || null,
         price > 0 ? new Date().toISOString() : null,
         price > 0 ? req.user.id : null,
       );
-      added++;
+      if (r.changes > 0) added++;
+      else { skipped++; errors.push(`Row ${i + 1}: "${it.item_name}" — code "${code}" already exists, skipped`); }
     } catch (err) { errors.push(`Row ${i + 1}: ${err.message}`); }
   }
-  res.json({ added, errors, total: items.length });
+  res.json({ added, skipped, errors, total: items.length });
 });
 
 module.exports = router;
