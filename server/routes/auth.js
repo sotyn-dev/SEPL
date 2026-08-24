@@ -2,11 +2,38 @@ const express = require('express');
 const { istToday } = require('../lib/istDate');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../db/schema');
-const { generateToken, authMiddleware, adminOnly, getUserPermissions,
+const jwt = require('jsonwebtoken');
+const { generateToken, generatePendingToken, getSecret, authMiddleware, adminOnly, getUserPermissions,
         revokeUserSessions, clearSessionCache } = require('../middleware/auth');
+const totp = require('../db/userTotp');
 const router = express.Router();
 
-router.post('/login', (req, res) => {
+function finishLogin(res, user, db, ip, ua) {
+  const { logAuditEvent } = require('../middleware/audit');
+  const token = generateToken(user);
+  const permissions = getUserPermissions(user.id);
+  const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(user.id);
+  logAuditEvent({
+    user: { id: user.id, name: user.name, role: user.role },
+    action: 'LOGIN', entity_type: 'auth', entity_id: user.id, entity_label: user.name,
+    method: 'POST', path: '/api/auth/login', status_code: 200, ip, user_agent: ua,
+  });
+  res.json({
+    token,
+    user: {
+      id: user.id, name: user.name, email: user.email, username: user.username,
+      role: user.role, department: user.department, phone: user.phone,
+      approval_role: user.approval_role || null,
+      avatar_url: user.avatar_url || null,
+      has_recovery_code: !!user.recovery_code_hash,
+      totp_enabled: !!(totp.get(db, user.id) || {}).enabled,
+    },
+    permissions,
+    userRoles: userRoles.map(r => r.name)
+  });
+}
+
+router.post('/login', async (req, res) => {
   // Accept either `username` or `email` as the identifier. Historical clients
   // send `email`; the new login UI sends `username` which may actually be a
   // username OR an email — we match against both columns.
@@ -49,32 +76,46 @@ router.post('/login', (req, res) => {
     });
     return res.status(401).json({ error: 'Invalid credentials' });
   }
-  const token = generateToken(user);
-  const permissions = getUserPermissions(user.id);
-  const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(user.id);
-  // Successful login — record user + ip + UA for session tracking.
-  logAuditEvent({
-    user: { id: user.id, name: user.name, role: user.role },
-    action: 'LOGIN', entity_type: 'auth', entity_id: user.id, entity_label: user.name,
-    method: 'POST', path: '/api/auth/login', status_code: 200, ip, user_agent: ua,
-  });
-  res.json({
-    token,
-    user: {
-      id: user.id, name: user.name, email: user.email, username: user.username,
-      role: user.role, department: user.department, phone: user.phone,
-      // L1/L2 indent approval role (mam's 2026-05-26 spec). 'l1' = Nitin
-      // Jain ji, 'l2' = Nitin Sir, NULL = ordinary user. Procurement UI
-      // uses this to decide whether to show Approve L1 / L2 buttons.
-      approval_role: user.approval_role || null,
-      avatar_url: user.avatar_url || null,
-      // Frontend uses this to force a "set recovery code" modal on first
-      // login, guaranteeing every user can self-recover later.
-      has_recovery_code: !!user.recovery_code_hash,
-    },
-    permissions,
-    userRoles: userRoles.map(r => r.name)
-  });
+  const totpRow = totp.get(db, user.id);
+  if (totp.needsTotp(totpRow)) {
+    const temp_token = generatePendingToken(user);
+    if (totpRow.enabled && totpRow.secret) {
+      return res.json({ totp_required: true, temp_token });
+    }
+    const setup = await totp.beginSetup(db, user);
+    return res.json({ totp_setup_required: true, temp_token, qr: setup.qr, secret: setup.secret });
+  }
+
+  finishLogin(res, user, db, ip, ua);
+});
+
+router.post('/login/totp', (req, res) => {
+  const { token: tempToken, code } = req.body || {};
+  const { logAuditEvent } = require('../middleware/audit');
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null;
+  const ua = req.headers['user-agent'] || null;
+  if (!tempToken || !code) return res.status(400).json({ error: 'Authenticator code required' });
+  let pending;
+  try {
+    pending = jwt.verify(tempToken, getSecret());
+  } catch {
+    return res.status(401).json({ error: 'This sign-in expired. Enter your password again.' });
+  }
+  if (!pending.totp_pending || !pending.id) return res.status(401).json({ error: 'Authenticator code required' });
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(pending.id);
+  if (!user || user.active === 0) return res.status(403).json({ error: 'Your account is disabled. Please contact admin.' });
+  const row = totp.get(db, user.id);
+  if (!row || !row.secret) return res.status(400).json({ error: 'Set up authenticator first' });
+  if (!totp.verifyCode(user, row.secret, code)) {
+    logAuditEvent({
+      action: 'LOGIN_FAIL', entity_type: 'auth', entity_label: user.username || user.email,
+      method: 'POST', path: '/api/auth/login/totp', status_code: 401, ip, user_agent: ua,
+    });
+    return res.status(401).json({ error: 'Invalid authenticator code' });
+  }
+  if (!row.enabled) totp.confirm(db, user.id);
+  finishLogin(res, user, db, ip, ua);
 });
 
 router.post('/register', authMiddleware, adminOnly, (req, res) => {
@@ -122,7 +163,39 @@ router.get('/me', authMiddleware, (req, res) => {
   delete user.recovery_code_hash;
   const permissions = getUserPermissions(req.user.id);
   const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(req.user.id);
-  res.json({ ...user, has_recovery_code, permissions, userRoles: userRoles.map(r => r.name) });
+  const totpRow = totp.get(db, user.id);
+  res.json({
+    ...user, has_recovery_code, permissions, userRoles: userRoles.map(r => r.name),
+    totp_enabled: !!(totpRow && totpRow.enabled),
+    totp_required: !!(totpRow && totpRow.required),
+  });
+});
+
+router.post('/totp/setup', authMiddleware, async (req, res) => {
+  const password = req.body?.current_password;
+  if (!password) return res.status(400).json({ error: 'Current password required' });
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  if (!user || !user.password || !bcrypt.compareSync(password, user.password)) {
+    return res.status(401).json({ error: 'Current password is wrong' });
+  }
+  const row = totp.get(db, user.id);
+  if (row && row.enabled) return res.status(400).json({ error: '2FA is already on' });
+  totp.optIn(db, user.id);
+  const setup = await totp.beginSetup(db, user);
+  res.json({ qr: setup.qr, secret: setup.secret });
+});
+
+router.post('/totp/confirm', authMiddleware, (req, res) => {
+  const code = req.body?.code;
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const row = totp.get(db, user.id);
+  if (!row || !row.secret) return res.status(400).json({ error: 'Start 2FA setup first' });
+  if (!totp.verifyCode(user, row.secret, code)) return res.status(401).json({ error: 'Invalid authenticator code' });
+  totp.confirm(db, user.id);
+  res.json({ message: '2FA is on. Next login will ask for a code.' });
 });
 
 // Set / clear the signed-in user's profile photo (WhatsApp-style avatar).
@@ -236,6 +309,8 @@ router.get('/users', authMiddleware, (req, res) => {
   const users = db.prepare(`
     SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active, u.avatar_url,
            COALESCE(u.track_location, 1) as track_location, COALESCE(u.archived, 0) as archived, u.created_at, u.approval_role,
+           COALESCE((SELECT enabled FROM user_totp WHERE user_id = u.id), 0) as totp_enabled,
+           COALESCE((SELECT required FROM user_totp WHERE user_id = u.id), 0) as totp_required,
     GROUP_CONCAT(r.name) as role_names,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = u.id) AS hr_department,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
@@ -378,6 +453,41 @@ router.post('/users/:id/force-logout', authMiddleware, adminOnly, (req, res) => 
     after: { token_revoked_at: at },
   });
   res.json({ message: `All sessions for "${target.name}" have been signed out.`, token_revoked_at: at });
+});
+
+router.post('/users/:id/totp/opt-in', authMiddleware, adminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  const db = getDb();
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  totp.optIn(db, id);
+  res.json({ message: `2FA on for "${target.name}". Next login they scan a QR (or enter a code if already set up).` });
+});
+
+router.post('/users/:id/totp/opt-out', authMiddleware, adminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  const db = getDb();
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  totp.optOut(db, id);
+  res.json({ message: `2FA off for "${target.name}". Password-only login again.` });
+});
+
+router.post('/users/:id/totp/reset', authMiddleware, adminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  if (id === req.user.id) return res.status(400).json({ error: 'Ask another admin to reset your authenticator.' });
+  const db = getDb();
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  totp.reset(db, id);
+  revokeUserSessions(id, db);
+  const { logAuditEvent } = require('../middleware/audit');
+  logAuditEvent({
+    user: req.user, action: 'TOTP_RESET', entity_type: 'auth',
+    entity_id: target.id, entity_label: target.name,
+    method: 'POST', path: `/api/auth/users/${id}/totp/reset`, status_code: 200,
+  });
+  res.json({ message: `Authenticator reset for "${target.name}". They stay on 2FA and scan a new QR next login.` });
 });
 
 // Self-service: change own password (any logged-in user)

@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
 import api from '../../api';
+import { useAuth } from '../../context/AuthContext';
 import Modal from '../../components/Modal';
 import StatusBadge from '../../components/StatusBadge';
 import Pagination, { usePagination } from '../../components/Pagination';
 import HrIdentity from '../../components/HrIdentity';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut, FiSmartphone } from 'react-icons/fi';
 
 export default function UserManagement() {
+  const { user: me, markTotpEnabled } = useAuth();
   const [users, setUsers] = useState([]);
   const [filter, setFilter] = useState('all');   // all | active | inactive | admin — status filter tabs
   const [search, setSearch]   = useState('');    // search by username or email
@@ -27,7 +29,10 @@ export default function UserManagement() {
   const [revealedPassword, setRevealedPassword] = useState(null); // { user, password } shown once after reset
 
   const load = () => {
-    api.get('/auth/users').then(r => setUsers(r.data));
+    api.get('/auth/users').then(r => {
+      setUsers(r.data);
+      setEditing(prev => (prev ? r.data.find(u => u.id === prev.id) || prev : prev));
+    });
     api.get('/auth/roles').then(r => setRoles(r.data));
   };
   useEffect(() => { load(); }, []);
@@ -102,6 +107,34 @@ export default function UserManagement() {
       toast.success(r.data?.message || 'Signed out everywhere');
     } catch (e) {
       toast.error(e.response?.data?.error || 'Could not sign the user out');
+    }
+  };
+
+  const resetTotp = async (user) => {
+    if (!confirm(`Reset authenticator for "${user.name}"?\n\nThey stay on 2FA and scan a new QR next login. Their current sessions will also end.`)) return;
+    try {
+      const r = await api.post(`/auth/users/${user.id}/totp/reset`);
+      toast.success(r.data?.message || 'Authenticator reset');
+      if (me?.id === user.id) markTotpEnabled(false);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not reset authenticator');
+    }
+  };
+
+  const toggleTotp = async (user) => {
+    const on = !user.totp_required;
+    if (!confirm(on
+      ? `Turn 2FA on for "${user.name}"?\n\nAny role. Next login they scan a QR, then enter a code every time.`
+      : `Turn 2FA off for "${user.name}"?\n\nThey go back to password-only login.`
+    )) return;
+    try {
+      const r = await api.post(`/auth/users/${user.id}/totp/${on ? 'opt-in' : 'opt-out'}`);
+      toast.success(r.data?.message || (on ? '2FA on' : '2FA off'));
+      if (me?.id === user.id) markTotpEnabled(on ? !!user.totp_enabled : false);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not update 2FA');
     }
   };
 
@@ -345,10 +378,6 @@ export default function UserManagement() {
                       {u.track_location ? <FiMapPin size={15} /> : <FiEyeOff size={15} />}
                     </button>
                     </>)}
-                    {/* Force logout — kill every live session for this user now. */}
-                    <button onClick={() => forceLogout(u)} className="p-1.5 hover:bg-orange-50 rounded text-orange-600" title="Force logout — sign this user out on every device immediately (password unchanged)">
-                      <FiLogOut size={15} />
-                    </button>
                     {/* Archive (hide from all lists, keep every record) / Restore —
                         mam 2026-07-02: the safe way to "remove" a user with salary data. */}
                     <button onClick={() => archiveUser(u, !u.archived)}
@@ -446,10 +475,41 @@ export default function UserManagement() {
           </div>
 
           {editing && (
+            <>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.active} onChange={e => setForm({...form, active: e.target.checked})} className="w-4 h-4" />
               <span>User is Active</span>
             </label>
+
+            <div className="rounded-lg border border-gray-200 bg-gray-50/70 p-4 space-y-3">
+              <div>
+                <div className="text-sm font-semibold text-gray-800">Session &amp; 2FA</div>
+                <p className="text-xs text-gray-500 mt-0.5">These apply immediately — they are not saved with Update User.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => forceLogout(editing)}
+                  className="px-3 py-1.5 rounded text-xs font-semibold border border-orange-200 text-orange-700 bg-white hover:bg-orange-50 flex items-center gap-1.5"
+                  title="Sign this user out on every device immediately (password unchanged)">
+                  <FiLogOut size={14} /> Sign out everywhere
+                </button>
+                <button type="button" onClick={() => toggleTotp(editing)}
+                  className={`px-3 py-1.5 rounded text-xs font-semibold border flex items-center gap-1.5 ${editing.totp_required ? 'text-violet-700 border-violet-300 bg-violet-50 hover:bg-violet-100' : 'text-gray-600 border-gray-300 bg-white hover:bg-gray-50'}`}>
+                  <FiSmartphone size={14} />
+                  {editing.totp_required ? 'Turn 2FA off' : 'Turn 2FA on'}
+                </button>
+                {!!editing.totp_enabled && (
+                  <button type="button" onClick={() => resetTotp(editing)}
+                    className="px-3 py-1.5 rounded text-xs font-semibold border border-violet-200 text-violet-700 bg-white hover:bg-violet-50 flex items-center gap-1.5"
+                    title="They stay on 2FA and scan a new QR next login">
+                    Reset authenticator
+                  </button>
+                )}
+                <span className={`text-xs font-medium ${editing.totp_required ? 'text-violet-700' : 'text-gray-500'}`}>
+                  {editing.totp_required ? (editing.totp_enabled ? '2FA is on' : '2FA setup pending') : '2FA is off'}
+                </span>
+              </div>
+            </div>
+            </>
           )}
 
           <div className="flex justify-end gap-3">
