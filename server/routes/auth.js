@@ -499,6 +499,22 @@ router.post('/users/:id/reset-password', authMiddleware, adminOnly, (req, res) =
 // users(id).  Used by the force-delete path so we don't have to keep
 // a hard-coded list of tables in sync with the schema — SQLite tells
 // us dynamically.  Returns [{ table, column }].
+// `INTEGER PRIMARY KEY` on a single column makes SQLite treat that column as
+// the table's rowid alias. It reads as nullable in PRAGMA table_info (notnull
+// stays 0), but a rowid can never actually be NULL — `UPDATE ... SET col =
+// NULL` on such a column always fails, silently, since findUserFkReferences'
+// caller wraps the clear in try/catch. That's exactly what happened with
+// announcement_reads.user_id and score_user_template.user_id (both declared
+// `user_id INTEGER PRIMARY KEY REFERENCES users(id)`): force-delete tried to
+// null them, silently failed both passes, and reported them as un-clearable
+// blockers. Treat this shape like a NOT NULL column so the row gets DELETEd
+// instead — safe here since both tables hold nothing but a per-user pointer
+// that's meaningless once the user is gone (a "last seen" marker and a
+// template assignment), not audit data worth preserving.
+function isRowidAliasColumn(col, cols) {
+  return !!(col && col.pk === 1 && /INT/i.test(col.type || '') && cols.filter(c => c.pk > 0).length === 1);
+}
+
 function findUserFkReferences(db) {
   const refs = [];
   // Pull every user table (not views, not sqlite_master itself).
@@ -518,7 +534,8 @@ function findUserFkReferences(db) {
       const cols = db.prepare(`PRAGMA table_info("${name}")`).all();
       for (const fk of userFks) {
         const col = cols.find(c => c.name === fk.from);
-        refs.push({ table: name, column: fk.from, on_delete: fk.on_delete, notnull: !!(col && col.notnull) });
+        const notnull = !!(col && col.notnull) || isRowidAliasColumn(col, cols);
+        refs.push({ table: name, column: fk.from, on_delete: fk.on_delete, notnull });
       }
     } catch (_) { /* skip tables that can't be inspected */ }
   }
@@ -546,7 +563,8 @@ function usersStillReferencedBy(db, id) {
         const c = db.prepare(`SELECT COUNT(*) c FROM "${name}" WHERE "${fk.from}" = ?`).get(id).c;
         if (c > 0) {
           const col = cols.find(cc => cc.name === fk.from);
-          hits.push({ table: name, column: fk.from, notnull: !!(col && col.notnull), count: c });
+          const notnull = !!(col && col.notnull) || isRowidAliasColumn(col, cols);
+          hits.push({ table: name, column: fk.from, notnull, count: c });
         }
       } catch (_) { /* skip */ }
     }
