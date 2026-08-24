@@ -5,7 +5,7 @@ import StatusBadge from '../../components/StatusBadge';
 import Pagination, { usePagination } from '../../components/Pagination';
 import HrIdentity from '../../components/HrIdentity';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut } from 'react-icons/fi';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
@@ -83,6 +83,28 @@ export default function UserManagement() {
   };
 
   // Archive (hide from all lists, keep every record) or restore (mam 2026-07-02).
+  // Force logout — ends every live session this person has, immediately, without
+  // changing their password or disabling the account. Needed because a signed-in
+  // session used to survive deactivation, demotion and password resets alike.
+  const forceLogout = async (user) => {
+    if (!confirm(
+      `Sign "${user.name}" out of the ERP everywhere, right now?
+
+` +
+      `Every device and browser they are currently signed in on stops working immediately. ` +
+      `Their password and account are NOT changed — they can sign back in normally.
+
+` +
+      `Use this if you think somebody else has access to their account.`
+    )) return;
+    try {
+      const r = await api.post(`/auth/users/${user.id}/force-logout`);
+      toast.success(r.data?.message || 'Signed out everywhere');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not sign the user out');
+    }
+  };
+
   const archiveUser = async (user, archived) => {
     try {
       const r = await api.patch(`/auth/users/${user.id}/archive`, { archived: archived ? 1 : 0 });
@@ -323,6 +345,10 @@ export default function UserManagement() {
                       {u.track_location ? <FiMapPin size={15} /> : <FiEyeOff size={15} />}
                     </button>
                     </>)}
+                    {/* Force logout — kill every live session for this user now. */}
+                    <button onClick={() => forceLogout(u)} className="p-1.5 hover:bg-orange-50 rounded text-orange-600" title="Force logout — sign this user out on every device immediately (password unchanged)">
+                      <FiLogOut size={15} />
+                    </button>
                     {/* Archive (hide from all lists, keep every record) / Restore —
                         mam 2026-07-02: the safe way to "remove" a user with salary data. */}
                     <button onClick={() => archiveUser(u, !u.archived)}

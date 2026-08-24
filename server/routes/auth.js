@@ -2,7 +2,8 @@ const express = require('express');
 const { istToday } = require('../lib/istDate');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../db/schema');
-const { generateToken, authMiddleware, adminOnly, getUserPermissions } = require('../middleware/auth');
+const { generateToken, authMiddleware, adminOnly, getUserPermissions,
+        revokeUserSessions, clearSessionCache } = require('../middleware/auth');
 const router = express.Router();
 
 router.post('/login', (req, res) => {
@@ -271,6 +272,10 @@ router.patch('/users/:id/archive', authMiddleware, adminOnly, (req, res) => {
   const arch = req.body?.archived ? 1 : 0;
   if (arch) db.prepare('UPDATE users SET archived=1, active=0 WHERE id=?').run(id);
   else db.prepare('UPDATE users SET archived=0 WHERE id=?').run(id);
+  // Archiving is meant to BLOCK login. Before session revocation existed it
+  // only blocked NEW logins — an already-open session sailed on. End it.
+  if (arch) revokeUserSessions(id, db);
+  clearSessionCache(id);
   res.json({ message: arch ? `"${target.name}" archived — hidden from lists, all data kept` : `"${target.name}" restored to the Inactive list`, archived: arch });
 });
 
@@ -278,6 +283,9 @@ router.patch('/users/:id/archive', authMiddleware, adminOnly, (req, res) => {
 router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
   const { name, email, username, department, phone, role, active, role_ids, password, approval_role, avatar_url } = req.body;
   const db = getDb();
+  // Pre-image, so we can tell a lockout / demotion apart from a phone-number
+  // edit and only end sessions when the edit actually removes access.
+  const prev = db.prepare('SELECT role, COALESCE(active,1) AS active FROM users WHERE id=?').get(req.params.id) || {};
 
   try {
     const uname = username !== undefined ? (username ? String(username).trim() : null) : undefined;
@@ -334,7 +342,42 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
     for (const rid of role_ids) insertUserRole.run(req.params.id, rid);
   }
 
+  // Did this edit take access AWAY? Deactivating, changing the password, or
+  // demoting out of admin all have to end the live session — otherwise the
+  // change is only cosmetic and the open tab keeps its old powers (that was
+  // the whole gap behind the 2026-08-24 incident). A harmless edit (phone,
+  // department, avatar, a PROMOTION) must not sign anyone out, so we only
+  // drop the cache in that case and the new role lands on the next request.
+  const nowActive = active ? 1 : 0;
+  const lockedOut = prev.active === 1 && nowActive === 0;
+  const demoted = prev.role === 'admin' && role && role !== 'admin';
+  if (lockedOut || demoted || password) revokeUserSessions(req.params.id, db);
+  else clearSessionCache(req.params.id);
+
   res.json({ message: 'User updated' });
+});
+
+// Force-logout: end every live session for one user, right now, without
+// touching their password or their account state (2026-08-24 incident — there
+// was no way to do this at all, so a suspected-compromised account could not
+// be cut off except by guessing that a password reset might help, which it
+// didn't either). Use when a token may be in the wrong hands.
+router.post('/users/:id/force-logout', authMiddleware, adminOnly, (req, res) => {
+  const db = getDb();
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const at = revokeUserSessions(target.id, db);
+  if (!at) return res.status(500).json({ error: 'Could not revoke sessions' });
+  const { logAuditEvent } = require('../middleware/audit');
+  logAuditEvent({
+    user: req.user, action: 'FORCE_LOGOUT', entity_type: 'auth',
+    entity_id: target.id, entity_label: target.name,
+    method: 'POST', path: `/api/auth/users/${target.id}/force-logout`, status_code: 200,
+    ip: (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null,
+    user_agent: req.headers['user-agent'] || null,
+    after: { token_revoked_at: at },
+  });
+  res.json({ message: `All sessions for "${target.name}" have been signed out.`, token_revoked_at: at });
 });
 
 // Self-service: change own password (any logged-in user)
@@ -348,6 +391,17 @@ router.post('/change-password', authMiddleware, (req, res) => {
     return res.status(401).json({ error: 'Current password is incorrect' });
   }
   db.prepare('UPDATE users SET password=? WHERE id=?').run(bcrypt.hashSync(new_password, 10), req.user.id);
+  // Changing your password signs out everywhere ELSE (the usual reason someone
+  // changes it is that they think somebody has their old one). The tab doing
+  // the change is kept alive by handing back a token minted AFTER the
+  // revocation stamp — the client already swaps X-Refresh-Token in, so the
+  // user is not bounced to the login screen for their own action.
+  revokeUserSessions(req.user.id, db);
+  try {
+    const fresh = generateToken({ id: req.user.id, email: req.user.email, role: req.user.role, name: req.user.name });
+    res.setHeader('X-Refresh-Token', fresh);
+    res.setHeader('Access-Control-Expose-Headers', 'X-Refresh-Token');
+  } catch (_) { /* best-effort; worst case this tab re-logs in once */ }
   res.json({ message: 'Password changed successfully' });
 });
 
@@ -402,6 +456,9 @@ router.post('/forgot-password', (req, res) => {
   // valid recovery code should also un-disable an accidentally deactivated
   // account, otherwise the user would still be locked out after the reset.
   db.prepare('UPDATE users SET password=?, active=1 WHERE id=?').run(bcrypt.hashSync(newPwd, 10), user.id);
+  // A recovery-code reset is the account-takeover recovery path: whoever else
+  // holds a live token for this account must be cut off.
+  revokeUserSessions(user.id, db);
   logAuditEvent({
     user: { id: user.id, name: user.name, role: emergencyOk ? 'emergency' : 'self' },
     action: emergencyOk ? 'FORGOT_PASSWORD_OK_EMERGENCY' : 'FORGOT_PASSWORD_OK',
@@ -432,6 +489,9 @@ router.post('/users/:id/reset-password', authMiddleware, adminOnly, (req, res) =
   }
 
   db.prepare('UPDATE users SET password=? WHERE id=?').run(bcrypt.hashSync(newPassword, 10), req.params.id);
+  // The point of an admin reset is usually to lock someone OUT. Kill the
+  // sessions too, or the old token keeps working with the old password.
+  revokeUserSessions(req.params.id, db);
   res.json({ message: 'Password reset', user: { id: user.id, name: user.name, username: user.username, email: user.email }, new_password: newPassword });
 });
 

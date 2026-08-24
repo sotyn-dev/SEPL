@@ -4901,6 +4901,15 @@ function initializeDatabase() {
     // will fill data"): multi_use=1 links are shared ONCE with all new joiners
     // and never consumed by a submission. Guarded for DBs created before this.
     try { db.exec(`ALTER TABLE employee_fill_links ADD COLUMN multi_use INTEGER DEFAULT 0`); } catch (_) {}
+    // ── Session revocation (2026-08-24 security incident) ────────────────────
+    // Epoch SECONDS. Any JWT whose `iat` is older than this value is refused by
+    // authMiddleware, so a session can actually be ENDED. Until this existed the
+    // only check on a request was the JWT signature: deactivating, archiving,
+    // demoting, password-resetting or even DELETING a user left their live
+    // session fully working (with whatever role was baked into the token) until
+    // it expired — and the sliding refresh meant it never expired. NULL = never
+    // revoked, which is every existing row, so adding this logs nobody out.
+    try { db.exec(`ALTER TABLE users ADD COLUMN token_revoked_at INTEGER`); } catch (_) {}
     // Candidate detail fields (mam 2026-08-17 "yes" to DOB/address/emergency/
     // bank): filled by the joiner on the public form, editable by HR after.
     try { db.exec(`ALTER TABLE employees ADD COLUMN date_of_birth TEXT`); } catch (_) {}

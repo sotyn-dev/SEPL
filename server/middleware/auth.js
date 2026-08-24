@@ -70,7 +70,15 @@ const PUBLIC_LEGACY_SECRETS = [
   'erp-secret-key-change-in-production',   // getSecret() hard-coded seed / local-dev value (len 35)
   'sepl-erp-secret-key-2026',              // deploy-vps.sh .env — prod's pre-rotation secret (len 24)
 ];
-const PUBLIC_DEFAULT_UNTIL = '2026-08-24';   // IST, inclusive — unchanged from the original bridge
+// 2026-08-24 — CLOSED EARLY (security incident). Both secrets in
+// PUBLIC_LEGACY_SECRETS are committed in this repo, so anyone who can read the
+// source can MINT a valid admin token for the live ERP for as long as they are
+// accepted. That is a forged-token path into production, and it was still open
+// today. Set to a past date = these signatures are dead now. Only the recovered
+// RANDOM secrets (not public, therefore not forgeable) keep their window.
+// Cost: a session last used before the 2026-08-17 rotation needs one re-login.
+// Anyone who has opened the ERP since then was silently re-signed already.
+const PUBLIC_DEFAULT_UNTIL = '2026-08-23';   // IST, inclusive — expired on purpose
 const RECOVERED_UNTIL = '2026-08-31';        // IST, inclusive — non-public old secrets
 
 function istDateStr() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); }
@@ -114,12 +122,108 @@ function verifyToken(token) {
   }
 }
 
+// ── Live session enforcement (2026-08-24 security incident) ────────────────
+// Until today the ONLY thing a request was checked against was the JWT
+// SIGNATURE. Everything else — id, name, and critically `role` — was read
+// straight out of the token and trusted. That meant a session could not be
+// ended by anything the product offers:
+//   • deactivate the account (active=0) → token keeps working
+//   • archive the account               → token keeps working
+//   • demote admin → user               → token still says "admin"
+//   • reset / change the password       → token keeps working
+//   • DELETE the user row               → token keeps working (nothing looked
+//                                         the user up at all)
+// and because the sliding refresh below re-issues the token on every request,
+// an attacker who was logged in once stayed logged in indefinitely. "Disable
+// the user" was cosmetic.
+//
+// So: re-check the account on every request. To keep this off the hot path it
+// is cached per user for 30s — one small indexed read per user per 30s, not
+// one per request (this DB is synchronous better-sqlite3; a per-request read
+// on every endpoint is exactly the kind of thing that turns into a hang).
+//
+// FAIL-OPEN by design. If the lookup throws for any reason (DB busy, column
+// missing on an un-migrated copy) we keep the token's own claims and let the
+// request through. A logout storm caused by a database hiccup would be worse
+// than the thing we are defending against, and mam's standing rule is that an
+// unexplained auto-logout is never acceptable.
+const SESSION_CACHE_MS = 30 * 1000;
+const _sessionCache = new Map();
+
+function sessionState(userId) {
+  const now = Date.now();
+  const hit = _sessionCache.get(userId);
+  if (hit && (now - hit.at) < SESSION_CACHE_MS) return hit.state;
+  let state;
+  try {
+    const row = getDb().prepare(
+      `SELECT id, role, COALESCE(active, 1) AS active, COALESCE(archived, 0) AS archived,
+              token_revoked_at
+         FROM users WHERE id = ?`
+    ).get(userId);
+    state = row
+      ? { ok: true, role: row.role, active: row.active, archived: row.archived, revokedAt: row.token_revoked_at || 0 }
+      : { ok: true, missing: true };
+  } catch (_) {
+    state = null;   // unknown → fail open (see note above); don't cache a failure
+    _sessionCache.delete(userId);
+    return state;
+  }
+  _sessionCache.set(userId, { at: now, state });
+  return state;
+}
+
+// Ends every live session for one user, immediately (within the 30s cache
+// window, and instantly on this process since we drop the cache entry).
+// Called whenever an account is disabled, archived, demoted, deleted, or has
+// its password changed — and directly by the admin "Force logout" button.
+function revokeUserSessions(userId, db) {
+  const at = Math.floor(Date.now() / 1000);
+  try {
+    (db || getDb()).prepare('UPDATE users SET token_revoked_at = ? WHERE id = ?').run(at, userId);
+  } catch (e) {
+    console.error('[auth] revokeUserSessions failed:', e.message);
+    return null;
+  }
+  _sessionCache.delete(Number(userId));
+  return at;
+}
+
+// Drop a cached account snapshot so the next request re-reads it (used after
+// any admin edit to a user, so a role change lands immediately rather than
+// up to 30s later).
+function clearSessionCache(userId) {
+  if (userId == null) _sessionCache.clear();
+  else _sessionCache.delete(Number(userId));
+}
+
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
     const { decoded, legacy } = verifyToken(token);
     req.user = decoded;
+
+    // Signature is good — but is this session still ALLOWED? (see the note on
+    // sessionState above). Runs before any refresh below, so a revoked token
+    // can never be rolled forward into a fresh one.
+    const st = sessionState(decoded.id);
+    if (st && st.ok) {
+      if (st.missing) {
+        return res.status(401).json({ error: 'Session ended', reason: 'account_removed' });
+      }
+      if (st.active === 0 || st.archived === 1) {
+        return res.status(401).json({ error: 'Session ended', reason: 'account_disabled' });
+      }
+      if (st.revokedAt && (!decoded.iat || decoded.iat < st.revokedAt)) {
+        return res.status(401).json({ error: 'Session ended', reason: 'session_revoked' });
+      }
+      // Authority comes from the DATABASE, never from the token. A demotion
+      // from admin now takes effect on the next request instead of surviving
+      // for the 90-day life of an already-issued token.
+      req.user.role = st.role;
+    }
+
     if (legacy) {
       // Migrate on the spot: hand back a token signed with the NEW secret.
       // The client's response interceptor swaps it in automatically — the
@@ -280,5 +384,6 @@ function generateToken(user) {
 // one persisted secret.
 module.exports = {
   authMiddleware, adminOnly, requirePermission, getUserPermissions, generateToken, getSecret,
+  revokeUserSessions, clearSessionCache,
   get SECRET() { return getSecret(); },
 };
