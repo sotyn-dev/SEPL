@@ -450,9 +450,9 @@ for (const t of listTables(bk)) {
   // instead of one per row, which matters on tables with tens of thousands.
   const liveKeys = new Set(
     live.prepare(`SELECT ${pk.map(c => `"${c}"`).join(',')} FROM "${t}"`).all()
-        .map(r => pk.map(c => String(r[c])).join(' '))
+        .map(r => pk.map(c => String(r[c])).join(' '))
   );
-  const missing = bkRows.filter(r => !liveKeys.has(pk.map(c => String(r[c])).join(' ')));
+  const missing = bkRows.filter(r => !liveKeys.has(pk.map(c => String(r[c])).join(' ')));
   if (missing.length >= MIN) findings.push({ table: t, pk, shared, missing });
 }
 
