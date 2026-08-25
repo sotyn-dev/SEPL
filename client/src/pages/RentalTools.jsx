@@ -75,6 +75,17 @@ export default function RentalTools() {
     days_required: 1, site_engineer_id: '', site_engineer_name: '',
   });
   const [drawerEnq, setDrawerEnq] = useState(null);
+  // Which enquiry's drawer is actually open right now — checked before a
+  // fetch inside openDrawer() is allowed to write drawerEnq/rateForm (mam
+  // 2026-08-24: "sometimes wrong upload"). Real risk here: onPhotoPicked
+  // waits on a geolocation permission prompt before uploading — if the user
+  // closes this drawer and opens a DIFFERENT enquiry while that prompt is
+  // still pending, the eventual `openDrawer(drawerEnq.id)` refresh used to
+  // silently overwrite the vendor/rate fields the user is now looking at
+  // (or actively editing) with the OLD enquiry's data — and a subsequent
+  // Finalise Rate click would then post those stale numbers against
+  // whichever enquiry id ended up in drawerEnq.
+  const drawerIdRef = useRef(null);
   const [rateForm, setRateForm] = useState({
     vendor_id: '', vendor_name: '', vendor_rate: '', vendor_rate_unit: 'per_day',
     po_number: '', po_date: new Date().toISOString().slice(0, 10),
@@ -154,8 +165,13 @@ export default function RentalTools() {
 
   // === Drawer ===
   const openDrawer = async (id) => {
+    drawerIdRef.current = id;
     try {
       const r = await api.get(`/rental-tools/enquiries/${id}`);
+      // The user may have opened a DIFFERENT enquiry (or closed the drawer)
+      // while this was in flight — a stale response must not overwrite
+      // what's currently on screen.
+      if (drawerIdRef.current !== id) return;
       setDrawerEnq(r.data);
       // Pre-fill rate form with sensible defaults
       setRateForm({
@@ -169,9 +185,9 @@ export default function RentalTools() {
         advance_amount: '',
         crm_name: r.data.created_by_name || '',
       });
-    } catch { toast.error('Could not load enquiry'); }
+    } catch { if (drawerIdRef.current === id) toast.error('Could not load enquiry'); }
   };
-  const closeDrawer = () => { setDrawerEnq(null); setReturnNotes(''); };
+  const closeDrawer = () => { setDrawerEnq(null); setReturnNotes(''); drawerIdRef.current = null; };
 
   const finaliseRate = async () => {
     try {

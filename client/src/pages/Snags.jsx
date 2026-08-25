@@ -57,6 +57,11 @@ export default function Snags() {
   const [filters, setFilters] = useState({ status: '', priority: '', search: '', scope: '', site_id: '' });
   const [modal, setModal] = useState(false);          // raise/edit
   const [proofModal, setProofModal] = useState(null); // snag obj being submitted
+  // Which snag's proof modal is actually open right now — checked before an
+  // in-flight upload is allowed to write into proofForm (mam 2026-08-24:
+  // "sometimes wrong upload" — switching snags mid-upload used to let a
+  // stale file land on whatever snag is open when the upload finishes).
+  const proofModalIdRef = useRef(null);
   const [proofForm, setProofForm] = useState({});
   const [form, setForm] = useState({});
   const [editingId, setEditingId] = useState(null);
@@ -190,7 +195,7 @@ export default function Snags() {
     try {
       await api.post(`/snags/${proofModal.id}/submit`, proofForm);
       toast.success('Proof submitted — awaiting approval');
-      setProofModal(null); setProofForm({}); load();
+      setProofModal(null); proofModalIdRef.current = null; setProofForm({}); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -339,7 +344,7 @@ export default function Snags() {
                 </td>
                 <td className="whitespace-nowrap">
                   {(isAssignee(s) || canApprove('snags') || isAdmin()) && (s.status === 'open' || s.status === 'rejected') && (
-                    <button onClick={() => { setProofModal(s); setProofForm({}); }} className="btn btn-primary text-[10px] px-2 py-1 mr-1" title="Upload proof"><FiUploadCloud size={11} className="inline" /> {s.status === 'rejected' ? 'Resubmit' : 'Submit Proof'}</button>
+                    <button onClick={() => { setProofModal(s); proofModalIdRef.current = s.id; setProofForm({}); }} className="btn btn-primary text-[10px] px-2 py-1 mr-1" title="Upload proof"><FiUploadCloud size={11} className="inline" /> {s.status === 'rejected' ? 'Resubmit' : 'Submit Proof'}</button>
                   )}
                   {s.status === 'submitted' && canActAsApprover(s) && (
                     <>
@@ -443,7 +448,7 @@ export default function Snags() {
       </Modal>
 
       {/* SUBMIT PROOF MODAL */}
-      <Modal isOpen={!!proofModal} onClose={() => { setProofModal(null); setProofForm({}); }} title={proofModal ? `Submit Proof — ${proofModal.snag_no}` : ''}>
+      <Modal isOpen={!!proofModal} onClose={() => { setProofModal(null); proofModalIdRef.current = null; setProofForm({}); }} title={proofModal ? `Submit Proof — ${proofModal.snag_no}` : ''}>
         {proofModal && (
           <form onSubmit={submitProof} className="space-y-3">
             <div className="bg-gray-50 p-3 rounded text-sm">
@@ -463,14 +468,20 @@ export default function Snags() {
                   <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
                     <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
                     <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => {
-                      const url = await upload(e.target.files?.[0]); if (url) setProofForm(f => ({ ...f, proof_url: url }));
+                      const forId = proofModalIdRef.current;
+                      const url = await upload(e.target.files?.[0]);
+                      if (url && proofModalIdRef.current === forId) setProofForm(f => ({ ...f, proof_url: url }));
+                      else if (url) toast('That upload finished after you switched snags — please upload again here.', { icon: '⚠️' });
                       e.target.value = '';
                     }} />
                   </label>
                   <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
                     <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
                     <input type="file" accept="image/*,.pdf" className="hidden" onChange={async e => {
-                      const url = await upload(e.target.files?.[0]); if (url) setProofForm(f => ({ ...f, proof_url: url }));
+                      const forId = proofModalIdRef.current;
+                      const url = await upload(e.target.files?.[0]);
+                      if (url && proofModalIdRef.current === forId) setProofForm(f => ({ ...f, proof_url: url }));
+                      else if (url) toast('That upload finished after you switched snags — please upload again here.', { icon: '⚠️' });
                       e.target.value = '';
                     }} />
                   </label>
@@ -482,7 +493,7 @@ export default function Snags() {
               <textarea className="input" rows="2" value={proofForm.proof_notes || ''} onChange={e => setProofForm(f => ({ ...f, proof_notes: e.target.value }))} placeholder="What was done?" />
             </div>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => { setProofModal(null); setProofForm({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={() => { setProofModal(null); proofModalIdRef.current = null; setProofForm({}); }} className="btn btn-secondary">Cancel</button>
               <button type="submit" disabled={uploading || !proofForm.proof_url} className="btn btn-primary">{uploading ? 'Uploading…' : 'Submit Proof'}</button>
             </div>
           </form>

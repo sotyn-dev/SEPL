@@ -953,6 +953,67 @@ function computeScorecard(db, userId, weekStart) {
       return { given: null, done: null };
     };
 
+    // ── Cross-week carryover (mam 2026-08-25: "also add previous pendancy").
+    // For the task-cohort sources, the week's Planned = this week's cohort +
+    // the still-open BACKLOG from ALL previous weeks (not just last week),
+    // and Actual = cohort done + backlog items closed DURING this week. The
+    // backlog is reconstructed as-of the week start from each table's done
+    // timestamp (reviewed_at / resolved_at / approved_at) so a past week
+    // reads the way it actually stood, not the way things stand today. A
+    // done row with a NULL done-timestamp can't be placed in time, so it is
+    // treated as done before the week — excluded from BOTH sides, which
+    // keeps the mam-2026-06-29 invariant intact: Actual can never exceed
+    // Planned (every prev-done item is inside prevPending by construction).
+    // RACI sources are deliberately NOT here — mam rejected months-old open
+    // records inflating Planned there (2026-08-22, the 97-leads case).
+    const CARRY_CFG = {
+      'auto:delegations':     { table: 'delegations',     who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at' },
+      'auto:pms':             { table: 'pms_tasks',       who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at' },
+      'auto:tickets':         { table: 'support_tickets', who: 'assigned_to=?', doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at' },
+      'auto:delegations_all': { table: 'delegations',     who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at' },
+      'auto:pms_all':         { table: 'pms_tasks',       who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at' },
+      'auto:tickets_all':     { table: 'support_tickets', who: null,            doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at' },
+    };
+    const computeCarry = (source, since, until) => {
+      // Snags keep their special shapes: IST week bucketing on raised_at and
+      // the tolerant assignee match (same rules as computeAutoCount above).
+      if (source === 'auto:snags' || source === 'auto:snags_all') {
+        const sinceDate = since.slice(0, 10), untilDate = until.slice(0, 10);
+        const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
+        const who = source === 'auto:snags'
+          ? `(assigned_to=? OR (assigned_to IS NULL AND assigned_to_name=?) OR CAST(assigned_to AS TEXT)=?) AND `
+          : '';
+        const whoArgs = source === 'auto:snags' ? [userId, uname, uname] : [];
+        const prevPending = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
+             AND (status != 'approved' OR (approved_at IS NOT NULL AND date(approved_at, '+330 minutes') >= ?))`
+        ).get(...whoArgs, sinceDate, sinceDate).c;
+        const prevDone = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
+             AND status = 'approved' AND date(approved_at, '+330 minutes') BETWEEN ? AND ?`
+        ).get(...whoArgs, sinceDate, sinceDate, untilDate).c;
+        return { prevPending, prevDone };
+      }
+      const cfg = CARRY_CFG[source];
+      if (!cfg) return null;
+      const who = cfg.who ? `${cfg.who} AND ` : '';
+      const whoArgs = cfg.who ? [userId] : [];
+      const prevPending = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
+           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${cfg.doneAt} >= ?))`
+      ).get(...whoArgs, since, since).c;
+      const prevDone = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
+           AND (${cfg.doneCond}) AND ${cfg.doneAt} BETWEEN ? AND ?`
+      ).get(...whoArgs, since, since, until).c;
+      return { prevPending, prevDone };
+    };
+    // Sources with no cross-week backlog concept but where the Pending column
+    // should still auto-fill with the week's own leftover (planned − actual):
+    // checklists are day-scoped and RACI planned is week-scoped by decision.
+    const pendingWeekOnly = (source) =>
+      source === 'auto:checklists' || source === 'auto:raci_steps_done' || source.startsWith('auto:raci_step:');
+
     // Load every per-user override row for this user in ONE query so the
     // per-KPI loop below doesn't fan out to 20 small SELECTs.  Indexed by
     // kpi_id for O(1) lookup.
@@ -995,6 +1056,14 @@ function computeScorecard(db, userId, weekStart) {
       // - If `given` is non-null, override Planned (e.g. 6 days for DPR count)
       // - If `given` is null, keep template default_planned and only set Actual
       //   (e.g. DPR profit Actual = sum from DPR rows, target stays as 30000)
+      // Auto Pending (mam 2026-08-25 "use this column to pending"):
+      //   wk = this week's own leftover (cohort given − cohort done)
+      //   up = total still-open as of the week end (backlog + this week)
+      let pendingUp = null, pendingWk = null, pendingAuto = false;
+      let carryPrevPending = 0, carryPrevDone = 0;
+      // Pre-carry cohort values — the From→To period endpoint sums THESE, so
+      // a task pending across N weeks isn't counted N times in a period.
+      let plannedCohort = null, actualCohort = null;
       if (k.data_source && k.data_source.startsWith('auto:')) {
         try {
           const { given, done } = computeAutoCount(k.data_source, startTs, endTs);
@@ -1003,6 +1072,23 @@ function computeScorecard(db, userId, weekStart) {
           }
           if (done !== null && done !== undefined) {
             actual = done;
+          }
+          // Carry the previous pendency into the week (see computeCarry note).
+          const carry = computeCarry(k.data_source, startTs, endTs);
+          if (carry) {
+            carryPrevPending = carry.prevPending;
+            carryPrevDone = carry.prevDone;
+            plannedCohort = given || 0;
+            actualCohort = done || 0;
+            planned = (given || 0) + carry.prevPending;
+            actual = (done || 0) + carry.prevDone;
+            pendingWk = Math.max(0, (given || 0) - (done || 0));
+            pendingUp = Math.max(0, planned - actual);
+            pendingAuto = true;
+          } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
+            pendingWk = Math.max(0, given - done);
+            pendingUp = pendingWk;
+            pendingAuto = true;
           }
         } catch (e) {
           console.warn(`auto-fetch failed for ${k.data_source}:`, e.message);
@@ -1062,8 +1148,15 @@ function computeScorecard(db, userId, weekStart) {
         actual_pct: actualPct,
         last_week_pct: lastEntry?.actual_pct ?? null,
         total_uptodate: entry?.total_uptodate ?? null,
-        pending_uptodate: entry?.pending_uptodate ?? null,
-        pending_work: entry?.pending_work ?? null,
+        // Auto rows compute Pending live (backlog-aware); manual rows keep
+        // whatever was typed into the up/wk boxes.
+        pending_uptodate: pendingAuto ? pendingUp : (entry?.pending_uptodate ?? null),
+        pending_work: pendingAuto ? pendingWk : (entry?.pending_work ?? null),
+        pending_auto: pendingAuto,
+        carry_prev_pending: carryPrevPending,
+        carry_prev_done: carryPrevDone,
+        planned_cohort: plannedCohort ?? planned,
+        actual_cohort: actualCohort ?? actual,
         pending_pct: entry?.pending_pct ?? null,
         commitment: entry?.commitment ?? null,
         notes: entry?.notes ?? null,
@@ -1146,12 +1239,19 @@ router.get('/scorecard-range', (req, res) => {
       for (const k of sc.kpis) {
         const agg = byKpi.get(k.kpi_id);
         if (!agg) {
-          byKpi.set(k.kpi_id, { ...k, planned: +k.planned || 0, actual: +k.actual || 0,
+          // Sum the pre-carry COHORT values: with the 2026-08-25 backlog
+          // carryover, weekly planned/actual re-count the same open task
+          // every week it stays pending — summing those across a period
+          // would inflate the totals. The cohort pair counts each task once.
+          byKpi.set(k.kpi_id, { ...k,
+            planned: +(k.planned_cohort ?? k.planned) || 0,
+            actual: +(k.actual_cohort ?? k.actual) || 0,
             last_week_pct: null, total_uptodate: null, pending_uptodate: null,
-            pending_work: null, pending_pct: null, commitment: null, notes: null });
+            pending_work: null, pending_pct: null, commitment: null, notes: null,
+            pending_auto: false, carry_prev_pending: 0, carry_prev_done: 0 });
         } else {
-          agg.planned += +k.planned || 0;
-          agg.actual += +k.actual || 0;
+          agg.planned += +(k.planned_cohort ?? k.planned) || 0;
+          agg.actual += +(k.actual_cohort ?? k.actual) || 0;
           // keep the latest week's definition (name/weight/direction may evolve)
           agg.group_name = k.group_name; agg.metric_name = k.metric_name;
           agg.weightage = k.weightage; agg.direction = k.direction;

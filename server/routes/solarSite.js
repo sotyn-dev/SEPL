@@ -134,6 +134,40 @@ async function geocodeGoogle(q) {
   }));
 }
 
+// Business names ("Secured Engineers Pvt Ltd") are a different problem from
+// addresses: the Geocoding API and both free tiers index PLACES, not
+// businesses, so a company name draws a blank everywhere (confirmed live —
+// the user typed exactly that and got "No match"). Places Text Search is the
+// Google API built for name lookups, and it runs off the same key. It sits
+// after the Geocoding tier so it only spends a (pricier) Places call when the
+// query isn't a resolvable address.
+async function geocodeGooglePlaces(q) {
+  const key = process.env.GOOGLE_SOLAR_API_KEY;
+  if (!key) return null;
+  const r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    signal: AbortSignal.timeout(7000),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': 'places.location,places.formattedAddress,places.displayName',
+    },
+    body: JSON.stringify({ textQuery: q, regionCode: 'IN', pageSize: 5 }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    // Key not enabled for Places API — a configuration gap, not "no results";
+    // fall through to the free tiers like the Geocoding tier does.
+    console.warn('[solar-site] Google Places search:', r.status, j.error?.message || '');
+    return null;
+  }
+  return (j.places || []).map((p) => ({
+    lat: p.location.latitude, lng: p.location.longitude, altitude: 0,
+    name: [p.displayName?.text, p.formattedAddress].filter(Boolean).join(', '),
+    country: 'IN', source: 'google-places',
+  }));
+}
+
 async function geocodeNominatim(q) {
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=in&format=jsonv2&addressdetails=1&limit=6`;
   // Nominatim's usage policy requires an identifying User-Agent — a generic
@@ -176,12 +210,21 @@ async function geocodeOpenMeteo(q) {
 // Run every tier against one query string; returns [] if none find anything,
 // throws only if EVERY tier hard-errored (vs. genuinely found nothing).
 async function geocodeAllTiers(q) {
-  const tiers = [geocodeGoogle, geocodeNominatim, geocodeOpenMeteo];
+  const tiers = [geocodeGoogle, geocodeGooglePlaces, geocodeNominatim, geocodeOpenMeteo];
   const errors = [];
+  // Count tiers that actually ANSWERED (returned a real, possibly-empty
+  // result set). A keyless/misconfigured Google tier returns null — it never
+  // ran, so it must not dilute the all-failed check: with the old
+  // errors===tiers test, "no key + both free tiers down" read as a calm
+  // "No match" instead of the 502 that tells someone to check the server's
+  // internet access (reproduced locally under a blocked-network sandbox).
+  let answered = 0;
   for (const tier of tiers) {
     try {
       const results = await tier(q);
-      if (results && results.length) return results;
+      if (results === null) continue;
+      answered++;
+      if (results.length) return results;
     } catch (e) {
       // A tier failing here used to be completely invisible — the caller only
       // ever sees "No match", identical to a genuine not-found, whether one
@@ -194,12 +237,17 @@ async function geocodeAllTiers(q) {
       errors.push(`${tier.name}: ${e.message}`);
     }
   }
-  if (errors.length === tiers.length) { const err = new Error(errors.join('; ')); err.allFailed = true; throw err; }
+  if (errors.length && !answered) { const err = new Error(errors.join('; ')); err.allFailed = true; throw err; }
   return [];
 }
 
 router.get('/geocode', view, async (req, res) => {
   let q = String(req.query.q || '').trim();
+  // The state dropdown next to the Find button. It used to drive ONLY the
+  // specific-yield calibration, which reads as broken to anyone who selects
+  // "Punjab" and then watches the search ignore it — so it now also scopes
+  // the lookup when the typed query finds nothing on its own.
+  const state = String(req.query.state || '').trim();
   if (!q) return res.status(400).json({ error: 'Nothing to look up' });
 
   // A short share link (maps.app.goo.gl/…) carries nothing usable until
@@ -228,11 +276,24 @@ router.get('/geocode', view, async (req, res) => {
   // Cache the full payload (results + any broadenedFrom/note), not just the
   // bare array — a repeat of the same broadened query must still explain
   // itself on a cache hit, not silently drop the "this is approximate" note.
-  if (GEO_CACHE.has(q)) return res.json({ ...GEO_CACHE.get(q), cached: true });
+  // Keyed on state too: the same words can resolve differently once the
+  // state-scoped retry below participates.
+  const cacheKey = state ? `${q} @@ ${state}` : q;
+  if (GEO_CACHE.has(cacheKey)) return res.json({ ...GEO_CACHE.get(cacheKey), cached: true });
 
   try {
     let results = await geocodeAllTiers(q);
     let broadenedFrom = null;
+
+    // Nothing as typed — retry with the selected state appended ("Secured
+    // Engineers Pvt Ltd" → "Secured Engineers Pvt Ltd, Punjab"). Geocoders do
+    // materially better with a region anchor, and it costs nothing when the
+    // user already typed one (skipped if the state is in the query).
+    let searched = q;
+    if (!results.length && state && !q.toLowerCase().includes(state.toLowerCase())) {
+      searched = `${q}, ${state}`;
+      results = await geocodeAllTiers(searched).catch(() => []);
+    }
 
     // Nothing found for the query as typed — no geocoder, free or paid, has
     // every small commercial building by name (confirmed against this exact
@@ -248,8 +309,12 @@ router.get('/geocode', view, async (req, res) => {
     // Nominatim's matching completely even when X alone resolves fine
     // (confirmed: "near Grewal Hospital, Ludhiana" → nothing, but "Grewal
     // Hospital, Ludhiana" → resolves immediately).
+    // Broadening runs over the state-carrying variant so a bare single-segment
+    // business name (no commas as typed) still has somewhere to fall: "Secured
+    // Engineers Pvt Ltd, Punjab" → "Punjab" lands an area pin with the honest
+    // approximate-note instead of a dead "No match".
     const stripLandmarkPrefix = (s) => s.replace(/^(near|opp\.?|opposite|behind|beside|next to|backside of|adjacent to)\s+/i, '').trim();
-    const segments = q.split(',').map((s) => s.trim()).filter(Boolean);
+    const segments = searched.split(',').map((s) => s.trim()).filter(Boolean);
     if (!results.length && segments.length > 1) {
       // Capped so a long address can't chain into an unbounded run of
       // sequential network round-trips — each failed attempt still costs a
@@ -257,7 +322,7 @@ router.get('/geocode', view, async (req, res) => {
       const maxDrops = Math.min(segments.length - 1, 4);
       for (let drop = 0; drop < maxDrops && !results.length; drop++) {
         const broader = segments.slice(drop).map(stripLandmarkPrefix).filter(Boolean).join(', ');
-        if (!broader || broader === q) continue;
+        if (!broader || broader === q || broader === searched) continue;
         const retry = await geocodeAllTiers(broader).catch(() => []);
         if (retry.length) { results = retry; broadenedFrom = q; }
       }
@@ -265,7 +330,7 @@ router.get('/geocode', view, async (req, res) => {
 
     if (results.length) {
       const payload = { results, ...(broadenedFrom ? { broadenedFrom, note: `No exact match for "${broadenedFrom}" — showing results for the area instead. Zoom in and click the map to pin the precise spot.` } : {}) };
-      GEO_CACHE.set(q, payload);
+      GEO_CACHE.set(cacheKey, payload);
       return res.json(payload);
     }
   } catch (e) {

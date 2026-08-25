@@ -498,7 +498,9 @@ export default function Scorecard() {
                       k.actual ?? 0,
                       vsPlan(k.actual_pct) ?? '',
                       k.total_uptodate ?? '',
-                      k.pending_uptodate ?? k.pending_work ?? '',
+                      (k.pending_uptodate != null || k.pending_work != null)
+                        ? `${k.pending_uptodate ?? ''}${k.pending_work != null ? ` / ${k.pending_work} wk` : ''}`
+                        : '',
                       k.commitment || '',
                     ])
                   )}
@@ -1058,11 +1060,32 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         {kpi.last_week_pct != null ? <span className={vsClr(kpi.last_week_pct)}>{fmtVs(kpi.last_week_pct)}</span> : <span className="text-gray-300">—</span>}
       </td>
       <td className="text-center p-2">
-        {isAuto ? <span className="text-gray-700">{planned}</span> :
+        {isAuto ? (
+          <>
+            <span className="text-gray-700">{planned}</span>
+            {/* Backlog carryover (mam 2026-08-25): Planned = this week's tasks
+                + still-pending from ALL previous weeks — the tiny line shows
+                how much of the number is carried backlog. */}
+            {kpi.carry_prev_pending > 0 && (
+              <div className="text-[9px] text-amber-600" title="Pending carried over from previous weeks, included in Planned">
+                incl {kpi.carry_prev_pending} prev
+              </div>
+            )}
+          </>
+        ) :
           <input type="number" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={flush} disabled={readOnly} />}
       </td>
       <td className="text-center p-2">
-        {isAuto ? <span className="text-gray-700">{actual}</span> :
+        {isAuto ? (
+          <>
+            <span className="text-gray-700">{actual}</span>
+            {kpi.carry_prev_done > 0 && (
+              <div className="text-[9px] text-emerald-600" title="Previous weeks' tasks completed during this week, included in Actual">
+                incl {kpi.carry_prev_done} prev
+              </div>
+            )}
+          </>
+        ) :
           <input type="number" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={flush} disabled={readOnly} />}
       </td>
       <td className={`text-center p-2 font-bold ${pctClr}`}>{fmtVs(kpi.actual_pct)}</td>
@@ -1070,11 +1093,23 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         <input type="number" className="input text-center text-xs w-20 mx-auto" value={totalUp} onChange={e => setTotalUp(e.target.value)} onBlur={flush} disabled={readOnly} />
       </td>
       <td className="text-center p-2">
-        <div className="flex items-center justify-center gap-1">
-          <input type="number" className="input text-center text-xs w-16" placeholder="up" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
-          <span className="text-gray-300">/</span>
-          <input type="number" className="input text-center text-xs w-16" placeholder="wk" value={pendingWork} onChange={e => setPendingWork(e.target.value)} onBlur={flush} disabled={readOnly} />
-        </div>
+        {kpi.pending_auto ? (
+          // Auto-computed pending (mam 2026-08-25 "use this column to pending"):
+          // up = total still-open as of the week end (incl. backlog),
+          // wk = this week's own leftover (this week's tasks − done of those).
+          <div className="flex items-center justify-center gap-1 font-semibold"
+            title={`${kpi.pending_uptodate} pending up-to-date / ${kpi.pending_work} pending from this week's tasks`}>
+            <span className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate}</span>
+            <span className="text-gray-300">/</span>
+            <span className={kpi.pending_work > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_work}</span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-1">
+            <input type="number" className="input text-center text-xs w-16" placeholder="up" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-gray-300">/</span>
+            <input type="number" className="input text-center text-xs w-16" placeholder="wk" value={pendingWork} onChange={e => setPendingWork(e.target.value)} onBlur={flush} disabled={readOnly} />
+          </div>
+        )}
       </td>
       <td className="p-2">
         <input type="text" className="input text-xs w-full" placeholder="…" value={commitment} onChange={e => setCommitment(e.target.value)} onBlur={flush} disabled={readOnly} />

@@ -208,11 +208,13 @@ export default function SolarSiteDesign() {
     setSearching(true);
     setSearchStatus(null);
     try {
-      const { data } = await api.get('/solar-site/geocode', { params: { q } });
+      // The state dropdown scopes the lookup too (server appends it when the
+      // query alone finds nothing), not just the yield calibration.
+      const { data } = await api.get('/solar-site/geocode', { params: { q, state } });
       const hits = data.results || [];
       setResults(hits);
       if (!hits.length) {
-        const msg = `No match for "${q}" — try a nearby town, an area/landmark name, a pasted Google Maps link, or "lat, lng".`;
+        const msg = `No match for "${q}" — add the city after a business name (e.g. "${q}, Ludhiana"), or try an area/landmark name, a pasted Google Maps link, or "lat, lng".`;
         setSearchStatus({ type: 'empty', message: msg });
         toast.error('No location match — see the note below the search box');
       } else if (data.broadenedFrom) {

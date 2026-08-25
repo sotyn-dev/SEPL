@@ -51,6 +51,12 @@ export default function Delegation() {
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [submitModal, setSubmitModal] = useState(null); // task being submitted
+  // Which task's proof modal is actually open right now, checked before an
+  // in-flight upload is allowed to write into submitForm. Without this: open
+  // task A's modal, start uploading, cancel and open task B's modal before
+  // A's upload finishes — A's photo silently lands as B's "ready to submit"
+  // proof (mam 2026-08-24, reported as "sometimes wrong upload").
+  const submitModalIdRef = useRef(null);
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
@@ -288,6 +294,12 @@ export default function Delegation() {
 
   // Upload proof file then submit
   const uploadProof = async (file) => {
+    // The task this upload was started for. Uploads take a few seconds
+    // (compress + send) — if the user closes this modal or opens a
+    // DIFFERENT task's proof modal before it finishes, submitModalIdRef
+    // will have moved on by the time we get here, and we must NOT let this
+    // stale result land in whatever's open now.
+    const forId = submitModalIdRef.current;
     setSubmitForm(s => ({ ...s, uploading: true }));
     setProofPct(0);
     try {
@@ -302,10 +314,15 @@ export default function Delegation() {
           if (ev.total) setProofPct(Math.round((ev.loaded / ev.total) * 100));
         },
       });
+      if (submitModalIdRef.current !== forId) {
+        toast('That upload finished after you switched tasks — please upload again here.', { icon: '⚠️' });
+        return;
+      }
       setSubmitForm(s => ({ ...s, proof_url: res.data.url, uploading: false }));
       setProofPct(100);
       toast.success('File uploaded — click Submit');
     } catch {
+      if (submitModalIdRef.current !== forId) return;
       toast.error('Upload failed');
       setSubmitForm(s => ({ ...s, uploading: false }));
     } finally {
@@ -323,7 +340,7 @@ export default function Delegation() {
         proof_remarks: submitForm.proof_remarks,
       });
       toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
+      setSubmitModal(null); submitModalIdRef.current = null; setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -686,7 +703,7 @@ export default function Delegation() {
                         >{t.proof_remarks}</span>
                       )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
+                        <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
                           <FiUpload size={11} className="shrink-0" /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
@@ -822,7 +839,7 @@ export default function Delegation() {
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -1035,7 +1052,7 @@ export default function Delegation() {
       </Modal>
 
       {/* Submit Proof Modal */}
-      <Modal isOpen={!!submitModal} onClose={() => setSubmitModal(null)} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
+      <Modal isOpen={!!submitModal} onClose={() => { setSubmitModal(null); submitModalIdRef.current = null; }} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
         <form onSubmit={submitProof} className="space-y-3">
           {submitModal?.status === 'rejected' && submitModal.reject_reason && (
             <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-700">
@@ -1095,7 +1112,7 @@ export default function Delegation() {
             </p>
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setSubmitModal(null)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => { setSubmitModal(null); submitModalIdRef.current = null; }} className="btn btn-secondary">Cancel</button>
             <button type="submit" disabled={!submitForm.proof_url || submitForm.uploading} className="btn btn-primary disabled:opacity-50">Submit for Approval</button>
           </div>
         </form>
