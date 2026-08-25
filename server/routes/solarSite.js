@@ -65,13 +65,37 @@ async function resolveShortLink(s) {
   return r.url || null;
 }
 
+// A /maps/dir/ (Directions) link's @lat,lng segment is the map's last pan/
+// zoom VIEWPORT at the moment the link was generated — NOT the destination's
+// real coordinates. Trusting it (as a plain @lat,lng regex match would)
+// silently pins the wrong spot: confirmed against a real business address,
+// where it landed off the actual building. A /maps/place/ link doesn't have
+// this problem — Google always centers that page exactly on the place — so
+// only /dir/ needs its destination re-geocoded from text instead.
+function isDirectionsLink(s) {
+  try { return new URL(s).pathname.includes('/dir/'); } catch { return false; }
+}
+
 function extractPlaceFromMapsUrl(s) {
   let u;
   try { u = new URL(s); } catch { return null; }
   const host = u.hostname.toLowerCase();
   if (!host.includes('google.') && host !== 'maps.app.goo.gl') return null;
-  const placeMatch = u.pathname.match(/\/maps\/place\/([^/]+)/);
-  if (placeMatch) return decodeURIComponent(placeMatch[1].replace(/\+/g, ' '));
+
+  const parts = u.pathname.split('/').filter(Boolean);
+  const placeIdx = parts.indexOf('place');
+  if (placeIdx !== -1 && parts[placeIdx + 1]) return decodeURIComponent(parts[placeIdx + 1].replace(/\+/g, ' '));
+
+  // /maps/dir/<origin>/<destination>/@viewport,z/data=... — origin is often
+  // empty (a bare "directions to X" link). Take the last segment that isn't
+  // the viewport or the data blob; that's the destination as typed/resolved.
+  const dirIdx = parts.indexOf('dir');
+  if (dirIdx !== -1) {
+    const rest = parts.slice(dirIdx + 1).filter((p) => p && !p.startsWith('@') && !p.startsWith('data='));
+    const dest = rest[rest.length - 1];
+    if (dest && !/^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$/.test(dest)) return decodeURIComponent(dest.replace(/\+/g, ' '));
+  }
+
   const qParam = u.searchParams.get('q');
   if (qParam && !/^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(qParam.trim())) return qParam;
   return null;
@@ -178,23 +202,28 @@ router.get('/geocode', view, async (req, res) => {
   let q = String(req.query.q || '').trim();
   if (!q) return res.status(400).json({ error: 'Nothing to look up' });
 
-  let direct = parseCoords(q);
-
-  // See the comment above extractPlaceFromMapsUrl — resolve a short share
-  // link to its real URL, then in both cases fall back to the place name the
-  // link carries when there's still no raw @lat,lng to parse.
-  if (!direct && isShortMapsLink(q)) {
+  // A short share link (maps.app.goo.gl/…) carries nothing usable until
+  // resolved to its real URL — do that first so everything below sees it.
+  if (isShortMapsLink(q)) {
     const resolved = await resolveShortLink(q).catch(() => null);
-    if (resolved) {
-      direct = parseCoords(resolved);
-      if (!direct) { const place = extractPlaceFromMapsUrl(resolved); if (place) q = place; }
-    }
-  } else if (!direct && /^https?:\/\//i.test(q)) {
-    const place = extractPlaceFromMapsUrl(q);
-    if (place) q = place;
+    if (resolved) q = resolved;
   }
 
-  if (direct) return res.json({ results: [{ ...direct, name: `${direct.lat.toFixed(6)}, ${direct.lng.toFixed(6)}`, source: 'coordinates' }] });
+  const isUrl = /^https?:\/\//i.test(q);
+  // See isDirectionsLink's comment — a /dir/ link's @lat,lng is a viewport,
+  // not the destination, so it's never trustworthy as a direct coordinate.
+  let direct = isUrl && isDirectionsLink(q) ? null : parseCoords(q);
+
+  // Pull a human-readable place/address out of the URL either way: it's the
+  // ONLY way to find the real spot on a /dir/ link, and even when the raw
+  // coordinate IS trustworthy (a /place/ link, a bare pin drop) it replaces
+  // "just show the numbers" with the actual address as the name.
+  const extractedName = isUrl ? extractPlaceFromMapsUrl(q) : null;
+  if (!direct && extractedName) q = extractedName;
+
+  if (direct) {
+    return res.json({ results: [{ ...direct, name: extractedName || `${direct.lat.toFixed(6)}, ${direct.lng.toFixed(6)}`, source: 'coordinates' }] });
+  }
 
   // Cache the full payload (results + any broadenedFrom/note), not just the
   // bare array — a repeat of the same broadened query must still explain
