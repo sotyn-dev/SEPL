@@ -380,6 +380,13 @@ router.delete('/:id', requirePermission('business_book', 'delete'), (req, res) =
     // DPRs).  Deleting a Business Book order ALSO erases its sites' DPRs +
     // attendance.  Refuse if any DPRs/attendance exist unless ?force=1, so an
     // accidental click can't destroy filled DPRs.
+    // force=1 skips the child-row refusal below and cascade-wipes the
+    // order's DPRs + attendance in ONE request — the single most damaging
+    // call in the 22–24 incident class. Admin-only (2026-08-25 hardening):
+    // a non-admin with business_book.delete keeps the protective 409.
+    if (req.query.force === '1' && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Force-delete (erasing DPRs + attendance under this order) is admin-only. Ask an admin, or delete after the DPRs are handled.' });
+    }
     if (req.query.force !== '1') {
       const sub = '(SELECT id FROM sites WHERE business_book_id=?)';
       const dprCount = db.prepare(`SELECT COUNT(*) c FROM dpr WHERE site_id IN ${sub}`).get(id).c;
@@ -412,6 +419,16 @@ router.delete('/:id', requirePermission('business_book', 'delete'), (req, res) =
     db.prepare('DELETE FROM receivables WHERE po_id IN (SELECT id FROM purchase_orders WHERE business_book_id=?)').run(id);
     db.prepare('DELETE FROM business_book WHERE id=?').run(id);
     db.pragma('foreign_keys = ON');
+    // A force-delete just cascade-wiped DPRs + attendance under this order —
+    // the audit log records it as ONE delete, so give the breaker the real
+    // blast radius (admin-only path, but stolen-admin is exactly the breaker's
+    // remaining scope). Weight capped so one giant legitimate cleanup locks
+    // (intended) without flooding the score table.
+    if (req.query.force === '1') {
+      try {
+        require('../lib/destructiveBreaker').addScore(req.user.id, 10, 'bb_force_delete_cascade');
+      } catch (_) { /* never block the response */ }
+    }
     res.json({ message: 'Deleted' });
   } catch (err) {
     try { getDb().pragma('foreign_keys = ON'); } catch(e) {}

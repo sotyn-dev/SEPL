@@ -531,6 +531,9 @@ router.post('/po-foc/:id/approve', requirePermission('quotations', 'approve'), (
   if (!cur) return res.status(404).json({ error: 'Not found' });
   db.prepare(`UPDATE po_foc_entries SET status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
     .run(req.user.id, req.params.id);
+  // 106 of these went through in ~2 minutes on 2026-08-23 — same
+  // fastest-finger pattern as the deletes, so it feeds the same breaker.
+  require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'po_foc_approve');
   res.json({ message: 'Approved' });
 });
 

@@ -172,9 +172,12 @@ export default function PoFocStripped() {
       setEntries(es => es.map(e => e.id === id ? { ...e, status: 'approved' } : e));
       const from = cur?.status;
       if (from && from !== 'approved') setCounts(c => ({ ...c, [from]: Math.max(0, (c[from] || 0) - 1), approved: (c.approved || 0) + 1 }));
-    } catch (e) { toast.error('Failed'); }
+    // Surface the server's own message — a bare 'Failed' hid the
+    // destructive-action breaker's 429 explanation entirely, so a locked
+    // approver had no idea WHY approvals suddenly stopped working.
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
-  const del = async (id) => { if (!confirm('Delete this PO/FOC item?')) return; try { await api.delete(`/quotations/po-foc/${id}`); load(); } catch (e) { toast.error('Failed'); } };
+  const del = async (id) => { if (!confirm('Delete this PO/FOC item?')) return; try { await api.delete(`/quotations/po-foc/${id}`); load(); } catch (e) { toast.error(e.response?.data?.error || 'Failed'); } };
 
   // "Auto-list PO items needing FOC" (mam 2026-06-10): Non-Approved lists PO
   // items that have no approved FOC kit yet — you open each and define it.

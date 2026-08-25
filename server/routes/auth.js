@@ -714,6 +714,32 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
   }
 });
 
+// ===== DESTRUCTIVE-ACTION LOCKS (Admin Only) =====
+// The circuit breaker (lib/destructiveBreaker.js) refuses a user's
+// destructive calls after a rapid spray. These endpoints let an admin see
+// who is locked and clear a lock early — e.g. a genuine HR batch that
+// tripped it. Unlock emails the director (a stolen-admin unlocking itself
+// still leaves a trace mam sees).
+router.get('/breaker/locks', authMiddleware, adminOnly, (req, res) => {
+  try { res.json(require('../lib/destructiveBreaker').listLocks()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/breaker/unlock/:userId', authMiddleware, adminOnly, (req, res) => {
+  try {
+    const userId = +req.params.userId;
+    const cleared = require('../lib/destructiveBreaker').unlock(userId, req.user);
+    const { logAuditEvent } = require('../middleware/audit');
+    logAuditEvent({
+      user: req.user, action: 'BREAKER_UNLOCK', entity_type: 'users', entity_id: userId,
+      method: 'POST', path: `/api/auth/breaker/unlock/${userId}`,
+    });
+    res.json(cleared > 0
+      ? { message: 'Destructive actions unlocked' }
+      : { message: 'No active lock for that user' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== ROLES & PERMISSIONS (Admin Only) =====
 
 router.get('/roles', authMiddleware, (req, res) => {

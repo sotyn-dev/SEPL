@@ -6928,6 +6928,45 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   }
 
+  // ── Security hardening (2026-08-25): strip destructive grants ──────────
+  // Layer 1 of the 22–24 incident response ("take the gun away"): the mass
+  // wipe worked because ORDINARY roles held can_delete across ~20 modules
+  // and can_approve on quotations (the 106 PO/FOC approve spray). Run-once:
+  //   1. Snapshot the full grant table to role_permissions_snapshot_20260825
+  //      — restoring any single grant is one UPDATE, and the whole table can
+  //      be reinstated from it if this ever proves too tight.
+  //   2. Zero can_delete on the incident (band A/B) modules for every role
+  //      EXCEPT the one literally named 'Admin' (admin-equivalent by intent;
+  //      users.role='admin' bypasses role_permissions anyway).
+  //   3. Zero can_approve on quotations, same scope.
+  // A team that legitimately deletes gets the grant back per-role in
+  // Roles & Permissions — deliberate, visible re-grants, not a broad default.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='security_destructive_strip_v1'").get();
+    if (!done) {
+      const STRIP_DELETE_MODULES = [
+        'business_book', 'customers', 'crm_funnel', 'leads', 'influencers',
+        'quotations', 'solar_quotation', 'procurement', 'orders',
+        'procurement_schedule', 'snags', 'installation', 'cheques',
+        'payment_required', 'collections', 'ar_ap_tracker', 'hr', 'employees',
+        'hr_system', 'checklists', 'company_assets', 'rentals',
+        'subcon_hiring', 'sub_contractors', 'attendance',
+      ];
+      db.exec('CREATE TABLE IF NOT EXISTS role_permissions_snapshot_20260825 AS SELECT * FROM role_permissions');
+      const adminRoleId = db.prepare("SELECT id FROM roles WHERE name='Admin'").get()?.id ?? -1;
+      const ph = STRIP_DELETE_MODULES.map(() => '?').join(',');
+      const rDel = db.prepare(
+        `UPDATE role_permissions SET can_delete=0 WHERE can_delete=1 AND role_id != ? AND module IN (${ph})`
+      ).run(adminRoleId, ...STRIP_DELETE_MODULES);
+      const rApp = db.prepare(
+        "UPDATE role_permissions SET can_approve=0 WHERE can_approve=1 AND role_id != ? AND module='quotations'"
+      ).run(adminRoleId);
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('security_destructive_strip_v1', ?)")
+        .run(`deletes_stripped=${rDel.changes};approves_stripped=${rApp.changes}`);
+      console.log(`[schema] security_destructive_strip_v1: ${rDel.changes} delete grant(s) + ${rApp.changes} quotation-approve grant(s) stripped from non-Admin roles (snapshot kept)`);
+    }
+  } catch (e) { console.error('[schema] security_destructive_strip_v1 failed:', e.message); }
+
   console.log('Database initialized successfully');
   return db;
 }

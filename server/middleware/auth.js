@@ -224,6 +224,15 @@ function authMiddleware(req, res, next) {
       req.user.role = st.role;
     }
 
+    // Destructive-action circuit breaker (2026-08-22/24 mass-delete incident).
+    // Single wiring point: every guarded router runs through here, so the
+    // spray defence can't be forgotten on a new route file. Returns 429 and
+    // KEEPS the session — never a logout. See lib/destructiveBreaker.js.
+    try {
+      const blocked = require('../lib/destructiveBreaker').guardCheck(req, res);
+      if (blocked) return res.status(blocked.status).json(blocked.body);
+    } catch (e) { console.error('[auth] breaker check failed (failing open):', e.message); }
+
     if (legacy) {
       // Migrate on the spot: hand back a token signed with the NEW secret.
       // The client's response interceptor swaps it in automatically — the

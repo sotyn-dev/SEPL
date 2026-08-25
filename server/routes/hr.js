@@ -844,10 +844,41 @@ router.post('/employees/fill-link', (req, res) => {
   res.json({ token, path: `/employee-fill/${token}`, expires_in_days: 30, multi_use: true });
 });
 
+// Can this user off-board staff? Terminating/deactivating is an APPROVE-class
+// authority, not an edit: on 2026-08-23 an account with plain employees.edit
+// set 16 staff to `terminated` in two sittings, invisible to every
+// delete-focused defence. Admin, or a role holding employees.can_approve.
+function canOffboard(db, req) {
+  if (req.user.role === 'admin') return true;
+  const ok = db.prepare(`
+    SELECT MAX(CASE WHEN rp.can_approve = 1 THEN 1 ELSE 0 END) AS ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+     WHERE ur.user_id = ? AND rp.module = 'employees'
+  `).get(req.user.id);
+  return !!ok?.ok;
+}
+
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
           aadhar_file, pan_file, qualification_file, roster } = req.body;
   const db = getDb();
+
+  // Status transition INTO terminated/inactive is gated separately from the
+  // ordinary edit (see canOffboard above) and scored on the breaker. A save
+  // that keeps the status unchanged — or moves it back to active/training —
+  // stays a plain edit: HR fixing a phone number must never hit this.
+  const newStatus = String(status || '').toLowerCase();
+  if (['terminated', 'inactive'].includes(newStatus)) {
+    const cur = db.prepare('SELECT status FROM employees WHERE id=?').get(req.params.id);
+    if (cur && String(cur.status || '').toLowerCase() !== newStatus) {
+      if (!canOffboard(db, req)) {
+        return res.status(403).json({
+          error: 'Setting an employee to terminated/inactive needs off-boarding authority (employees approve permission or admin). Other edits are unaffected.',
+        });
+      }
+      require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'hr_status_offboard');
+    }
+  }
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
   // upload — frontend can edit other fields without re-uploading docs.
   db.prepare(`
@@ -893,6 +924,62 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   }
 
   res.json({ message: 'Updated' });
+});
+
+// The ONE legitimate mass-offboarding path (e.g. a site demobilises and 20
+// contract staff leave the same day). Design per the 2026-08-24 post-mortem:
+// a real HR batch is ONE call — ids + shared reason, capped — and after it
+// succeeds the destructive-action lock starts DELIBERATELY and the director
+// is emailed. Real HR: one batch, done, unlock/wait. An attacker: one batch,
+// then locked out — not all morning, and never silently.
+router.post('/employees/bulk-status', requirePermission('employees', 'edit'), (req, res) => {
+  const db = getDb();
+  if (!canOffboard(db, req)) {
+    return res.status(403).json({ error: 'Bulk status change needs off-boarding authority (employees approve permission or admin).' });
+  }
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Boolean))] : [];
+  const status = String(req.body.status || '').toLowerCase();
+  const reason = String(req.body.reason || '').trim();
+  if (!ids.length) return res.status(400).json({ error: 'No employees selected' });
+  if (ids.length > 30) return res.status(400).json({ error: 'Max 30 employees per batch — split larger off-boardings' });
+  if (!['terminated', 'inactive'].includes(status)) return res.status(400).json({ error: "status must be 'terminated' or 'inactive'" });
+  if (reason.length < 5) return res.status(400).json({ error: 'A reason (min 5 characters) is required for a bulk status change' });
+
+  const changed = [], skipped = [];
+  const upd = db.prepare('UPDATE employees SET status=? WHERE id=?');
+  const tx = db.transaction(() => {
+    for (const id of ids) {
+      const emp = db.prepare('SELECT id, name, status, user_id FROM employees WHERE id=?').get(id);
+      if (!emp) { skipped.push({ id, reason: 'not found' }); continue; }
+      if (String(emp.status || '').toLowerCase() === status) { skipped.push({ id, reason: 'already ' + status }); continue; }
+      upd.run(status, id);
+      // Same login active-sync as the single PUT — a terminated employee's
+      // login goes inactive so they stop inflating attendance strength.
+      if (emp.user_id) {
+        try { db.prepare('UPDATE users SET active=0 WHERE id=? AND active=1').run(emp.user_id); } catch (_) {}
+      }
+      changed.push({ id, name: emp.name, from: emp.status });
+    }
+  });
+  tx();
+
+  if (changed.length) {
+    logAuditEvent({
+      user: req.user, action: 'BULK_STATUS', entity_type: 'employees',
+      method: 'POST', path: '/api/hr/employees/bulk-status',
+      body: { status, reason, count: changed.length, names: changed.map(c => c.name).slice(0, 30) },
+    });
+    const breaker = require('../lib/destructiveBreaker');
+    breaker.addScore(req.user.id, changed.length, 'hr_bulk_status');
+    // Deliberate lock: the batch was the legitimate action; anything MORE
+    // destructive in the next 30 min from this account is suspect.
+    breaker.tripNow(db, req.user.id, req.user.name, changed.length,
+      `bulk-status: ${changed.length} employee(s) → ${status} (${reason.slice(0, 80)})`);
+  }
+  res.json({
+    message: `${changed.length} employee(s) → ${status}${skipped.length ? `, ${skipped.length} skipped` : ''}. Destructive actions are now locked for 30 minutes (admins notified) — this is expected after a bulk off-boarding.`,
+    changed, skipped,
+  });
 });
 
 // Delete an employee. Robust like the user delete (auth.js): a bare

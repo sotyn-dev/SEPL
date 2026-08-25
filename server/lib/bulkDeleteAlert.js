@@ -26,6 +26,14 @@ const { getDb } = require('../db/schema');
 
 const WINDOW_MINUTES = 10;
 const THRESHOLDS = [10, 50, 100, 250, 500, 1000];
+// The 22–24 spray ran 23:42–00:47 and pre-dawn. Office staff deleting
+// ANYTHING in bulk at that hour is abnormal, so at night the first alert
+// fires at 3 instead of 10 (the escalation tiers above stay the same).
+const NIGHT_FIRST_TIER = 3;
+function isNightIST() {
+  const h = new Date(Date.now() + 5.5 * 3600 * 1000).getUTCHours();
+  return h >= 22 || h < 6;
+}
 
 function checkBulkDelete(userId, userName) {
   if (!userId) return;
@@ -39,7 +47,8 @@ function checkBulkDelete(userId, userName) {
     ).get(userId, since);
 
     // Highest threshold this count has just reached or passed.
-    const tier = [...THRESHOLDS].reverse().find(t => count >= t);
+    const tiers = isNightIST() ? [NIGHT_FIRST_TIER, ...THRESHOLDS] : THRESHOLDS;
+    const tier = [...tiers].reverse().find(t => count >= t);
     if (!tier) return;
 
     // One alert per (user, day, severity tier) — re-fires as it escalates,

@@ -1180,6 +1180,12 @@ router.post('/bulk-approve', (req, res) => {
     }
   });
   run();
+  // Breaker weight = +1 per CALL, not per id: a legit approver clearing a
+  // morning batch of 25 must not lock themselves out of everything else
+  // (adversarial-review find). The per-step + SoD gates above already
+  // constrain WHO can approve; a stolen approver's damage lands in call #1
+  // regardless of weighting, and ten bulk calls in ten minutes still trips.
+  if (approved.length) require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'payment_bulk_approve');
   res.json({ message: `Approved ${approved.length}${skipped.length ? `, skipped ${skipped.length}` : ''}`, approved, skipped });
 });
 
@@ -1208,6 +1214,8 @@ router.post('/bulk-reject', (req, res) => {
     }
   });
   run();
+  // +1 per call, same rationale as bulk-approve above.
+  if (rejected.length) require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'payment_bulk_reject');
   res.json({ message: `Rejected ${rejected.length}${skipped.length ? `, skipped ${skipped.length}` : ''}`, rejected, skipped });
 });
 

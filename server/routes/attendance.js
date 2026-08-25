@@ -395,7 +395,13 @@ router.post('/admin-mark', (req, res) => {
   // absent / whatever the punch was).  Never touches a real punch row.
   if (status === 'clear') {
     const ex = db.prepare('SELECT id, admin_marked FROM attendance WHERE user_id=? AND date=?').get(user_id, date);
-    if (ex && ex.admin_marked) db.prepare('DELETE FROM attendance WHERE id=?').run(ex.id);
+    if (ex && ex.admin_marked) {
+      db.prepare('DELETE FROM attendance WHERE id=?').run(ex.id);
+      // A clear IS a delete, hidden inside a POST — the 22–24 incident used
+      // exactly this. Score it like DELETE /attendance/:id (which the audit
+      // log counts automatically; this path it can't see).
+      require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'admin_mark_clear');
+    }
     return res.json({ message: 'Cleared' });
   }
   const finalStatus = ['present','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
@@ -427,6 +433,13 @@ router.post('/admin-mark', (req, res) => {
     `INSERT INTO attendance (user_id, date, status, remarks, admin_marked, marked_by, marked_at, proof_url, total_hours)
      VALUES (?,?,?,?,1,?,CURRENT_TIMESTAMP,?, ?)`
   ).run(user_id, date, finalStatus, remarks || null, req.user.id, proof_url || null, finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
+  // Deliberately NOT scored on the breaker: the Monthly Grid marks payroll
+  // corrections cell-by-cell through this endpoint (mam's core workflow —
+  // 15+ clicks in a sitting is NORMAL), and marking is already gated by
+  // attendance.approve, visible (admin_marked=1 + audit log), and
+  // reversible. Only the DESTRUCTIVE paths score: status=clear above (+1,
+  // it deletes a row) and DELETE /attendance/:id (counted via audit_log).
+  // A locked user still can't reach this endpoint at all (GUARDED_WRITES).
   res.status(201).json({ id: r.lastInsertRowid, message: 'Marked' });
 });
 
@@ -712,6 +725,10 @@ router.post('/admin-mark-bulk', (req, res) => {
     }
   });
   tx();
+  // Scored +1 per CALL, not per day marked: one legitimate month-mark (proof
+  // document required, attendance.approve gated) must not insta-lock HR at
+  // month-end — but ten of these inside ten minutes is a spray, and trips.
+  if (marked > 0) require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'admin_mark_bulk');
   res.json({ message: `Marked ${marked} day(s)`, marked });
 });
 
