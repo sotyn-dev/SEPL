@@ -115,6 +115,12 @@ async function geocodeNominatim(q) {
   // Nominatim's usage policy requires an identifying User-Agent — a generic
   // browser UA gets silently rate-limited/blocked.
   const r = await fetch(url, { signal: AbortSignal.timeout(7000), headers: { 'User-Agent': 'SEPL-SOTYN-Solar/1.0 (internal solar design tool)' } });
+  // A rate-limit/block (e.g. 429/403 during a burst) still resolves fetch()
+  // normally — without this check it fails downstream as an opaque "j.map is
+  // not a function" (the error body is an object, not the expected array),
+  // which reads no differently from "found nothing" once geocodeAllTiers'
+  // try/catch swallows it. Surface it explicitly instead.
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const j = await r.json();
   return (j || []).map((x) => ({
     lat: +x.lat, lng: +x.lon, altitude: 0,
@@ -129,6 +135,7 @@ async function geocodeOpenMeteo(q) {
   const place = q.split(',')[0].trim();
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=8&language=en&format=json`;
   const r = await fetch(url, { signal: AbortSignal.timeout(7000) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const j = await r.json();
   const rest = q.slice(place.length).toLowerCase();
   return (j?.results || [])
@@ -152,6 +159,14 @@ async function geocodeAllTiers(q) {
       const results = await tier(q);
       if (results && results.length) return results;
     } catch (e) {
+      // A tier failing here used to be completely invisible — the caller only
+      // ever sees "No match", identical to a genuine not-found, whether one
+      // tier silently errored (a rate-limit, a timeout) or the place really
+      // doesn't exist. Log it so a real degradation shows up in `pm2 logs`
+      // instead of reading as a geocoder gap (confirmed cause of a live
+      // "Ludhiana gives no match" report that was actually a transient tier
+      // failure — direct curl calls right after found it instantly).
+      console.warn(`[solar-site] geocode tier ${tier.name} failed for "${q}":`, e.message);
       errors.push(`${tier.name}: ${e.message}`);
     }
   }
