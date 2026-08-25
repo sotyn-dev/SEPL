@@ -15,7 +15,7 @@ import { useAppSocket } from '../context/SocketProvider';
 import { useModuleFlags } from '../context/ModuleFlagsContext';
 import {
   // Navigation + UI controls (kept as-is)
-  FiHome, FiMenu, FiX, FiLogOut, FiChevronRight, FiChevronDown, FiKey,
+  FiHome, FiMenu, FiX, FiLogOut, FiChevronRight, FiChevronDown, FiKey, FiSmartphone,
   // ─── No-duplicate icon set (mam 2026-05-27: "icon dont have duplicates") ───
   // 64 distinct icons for 64 sidebar entries. Every one used exactly once.
   // Group headers + standalone Dashboard + Settings group
@@ -242,13 +242,20 @@ export default function Layout() {
   const [pwdModal, setPwdModal] = useState(false);
   const [pwdForm, setPwdForm] = useState({ current_password: '', new_password: '', confirm: '' });
   const [pwdSaving, setPwdSaving] = useState(false);
+  const [totpModal, setTotpModal] = useState(false);
+  const [totpStep, setTotpStep] = useState('password'); // password | qr
+  const [totpPwd, setTotpPwd] = useState('');
+  const [totpCode, setTotpCode] = useState('');
+  const [totpQr, setTotpQr] = useState(null);
+  const [totpSecret, setTotpSecret] = useState('');
+  const [totpSaving, setTotpSaving] = useState(false);
   // Header user-avatar menu (mam 2026-06-17 header freeze): identity +
   // Change Password + Logout reachable from the top bar even when the
   // sidebar is collapsed — the footer copy stays as-is for the open state.
   const [userMenu, setUserMenu] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, logout, canView, isAdmin, userRoles } = useAuth();
+  const { user, logout, canView, isAdmin, userRoles, markTotpEnabled } = useAuth();
   const { subscribe } = useAppSocket();
 
   // Admin bypasses mandatory fields everywhere (mam 2026-06-19: "admin can
@@ -364,6 +371,45 @@ export default function Layout() {
       toast.error(err.response?.data?.error || 'Failed to change password');
     }
     setPwdSaving(false);
+  };
+
+  const openTotp = () => {
+    setUserMenu(false);
+    setTotpStep('password');
+    setTotpPwd('');
+    setTotpCode('');
+    setTotpQr(null);
+    setTotpSecret('');
+    setTotpModal(true);
+  };
+
+  const startTotpSetup = async (e) => {
+    e.preventDefault();
+    setTotpSaving(true);
+    try {
+      const r = await api.post('/auth/totp/setup', { current_password: totpPwd });
+      setTotpQr(r.data.qr);
+      setTotpSecret(r.data.secret || '');
+      setTotpStep('qr');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not start 2FA');
+    }
+    setTotpSaving(false);
+  };
+
+  const confirmTotp = async (e) => {
+    e.preventDefault();
+    if (totpCode.length !== 6) return;
+    setTotpSaving(true);
+    try {
+      await api.post('/auth/totp/confirm', { code: totpCode });
+      markTotpEnabled();
+      toast.success('2FA is on. Next login will ask for a code.');
+      setTotpModal(false);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Invalid authenticator code');
+    }
+    setTotpSaving(false);
   };
 
   useEffect(() => {
@@ -803,6 +849,42 @@ export default function Layout() {
         </form>
       </Modal>
 
+      <Modal isOpen={totpModal} onClose={() => setTotpModal(false)} title={totpStep === 'qr' ? 'Scan authenticator QR' : 'Set up 2FA'}>
+        {totpStep === 'password' ? (
+          <form onSubmit={startTotpSetup} className="space-y-4">
+            <p className="text-sm text-gray-600">Confirm your current password, then scan a QR with Google or Microsoft Authenticator.</p>
+            <div>
+              <label className="label">Current Password</label>
+              <input className="input" type="password" autoComplete="current-password" value={totpPwd} onChange={e => setTotpPwd(e.target.value)} required autoFocus />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setTotpModal(false)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={totpSaving} className="btn btn-primary">{totpSaving ? 'Checking…' : 'Continue'}</button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={confirmTotp} className="space-y-4">
+            <p className="text-sm text-gray-600 text-center">Scan this QR once, then enter the 6-digit code.</p>
+            {totpQr && <img src={totpQr} alt="Authenticator QR" className="mx-auto w-[220px] h-[220px] rounded-lg border border-gray-200 bg-white" />}
+            {totpSecret && <p className="text-[11px] text-gray-500 break-all font-mono text-center">Key: {totpSecret}</p>}
+            <input
+              autoFocus
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              value={totpCode}
+              onChange={e => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              className="input text-center text-2xl tracking-[0.4em] font-mono"
+              placeholder="000000"
+            />
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setTotpModal(false)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={totpSaving || totpCode.length !== 6} className="btn btn-primary">{totpSaving ? 'Verifying…' : 'Turn on 2FA'}</button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
       {/* Floating "expand sidebar" tab — only when sidebar is collapsed
           on desktop. Mam: 'if I hide sidebar then show expand'. Sticky
           to the left edge so it's impossible to miss. */}
@@ -932,6 +1014,18 @@ export default function Layout() {
                   >
                     <FiKey size={15} /> Change Password
                   </button>
+                  {user?.totp_enabled ? (
+                    <div className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-emerald-700">
+                      <FiSmartphone size={15} /> 2FA is on
+                    </div>
+                  ) : (
+                    <button
+                      onClick={openTotp}
+                      className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <FiSmartphone size={15} /> Set up 2FA
+                    </button>
+                  )}
                   <button
                     onClick={logout}
                     className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 border-t border-gray-100"

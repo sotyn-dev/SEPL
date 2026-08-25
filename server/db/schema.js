@@ -6967,6 +6967,8 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   } catch (e) { console.error('[schema] security_destructive_strip_v1 failed:', e.message); }
 
+  require('./userTotp').initialize(db);
+
   console.log('Database initialized successfully');
   return db;
 }

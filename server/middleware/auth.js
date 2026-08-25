@@ -202,6 +202,11 @@ function authMiddleware(req, res, next) {
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
     const { decoded, legacy } = verifyToken(token);
+    // Pending TOTP tokens are only for POST /auth/login/totp (verified there).
+    // Never treat them as a session, and never slide them into a 90-day JWT.
+    if (decoded.totp_pending) {
+      return res.status(401).json({ error: 'Authenticator code required' });
+    }
     req.user = decoded;
 
     // Signature is good — but is this session still ALLOWED? (see the note on
@@ -389,10 +394,18 @@ function generateToken(user) {
   );
 }
 
+function generatePendingToken(user) {
+  return jwt.sign(
+    { id: user.id, totp_pending: true },
+    getSecret(),
+    { expiresIn: '5m' }
+  );
+}
+
 // `SECRET` getter kept for back-compat (e.g. chatSocket) — always returns the
 // one persisted secret.
 module.exports = {
-  authMiddleware, adminOnly, requirePermission, getUserPermissions, generateToken, getSecret,
+  authMiddleware, adminOnly, requirePermission, getUserPermissions, generateToken, generatePendingToken, getSecret,
   revokeUserSessions, clearSessionCache,
   get SECRET() { return getSecret(); },
 };
