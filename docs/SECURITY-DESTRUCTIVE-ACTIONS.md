@@ -40,7 +40,7 @@ New file: `server/lib/destructiveBreaker.js`, hooked at a single point inside `a
 - HR status change to terminated/inactive — +1 (transition-aware: re-saving an already-terminated employee doesn't count and isn't blocked)
 - HR bulk-status — trips the lock **deliberately** (see Layer 3)
 - Attendance bulk month-mark — +1 per call
-- Business-book force-delete — +10 (one call cascade-wipes DPRs + attendance; the audit log sees it as one delete, so it carries its real blast radius)
+- Business-book force-delete — carries its **real blast radius** (the number of DPRs + attendance rows it erased), and when it actually erased history it **locks immediately** and emails the director — same "one deliberate act, then the gun goes cold" design as HR bulk-status. A stolen admin gets one damaging force-delete, not ten.
 
 **Burst-proof:** requests **in flight** count too. A script firing 30 parallel DELETEs at once — which would outrun any counter based only on completed requests — gets exactly the threshold through and the rest refused (verified live: 10 succeeded, 20 got 429). Path matching is normalised against Express's routing quirks (case-insensitive, doubled slashes, percent-encoding), so `/API//Customers/5` can't slip past the guard.
 
@@ -104,6 +104,7 @@ An independent **multi-agent adversarial review** (26 agents: bypass hunting, co
 ## Known limits & follow-ups (honest list)
 
 - A **patient** attacker doing 9 deletes per 10 minutes stays under the breaker — Layer 1 (no grants) and Layer 4 (alerts) are the answer there; the strategic fix is the planned **recycle-bin soft-delete** (turns any successful wipe into a 10-minute restore).
+- The Layer-1 **permission strip stays scoped to the modules the incident actually hit** (the reviewed list mam endorsed). The breaker additionally guards DPR, item master, tally bills, tools, inventory, complaints and their siblings — but ordinary roles may still hold `can_delete` there. Widening the strip to those modules is a one-line v2 migration once management confirms no team deletes there day-to-day.
 - Mass **fake-present marking** via the grid is deliberately unscored (legit workflow); it remains gated by `attendance.approve`, audit-logged, and blocked while locked.
 - Bulk **imports** (row caps) and **exports** (rate limits) are Phase 4 — not yet done.
 - Client UI for the unlock button — next client build.

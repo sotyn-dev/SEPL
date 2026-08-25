@@ -387,10 +387,12 @@ router.delete('/:id', requirePermission('business_book', 'delete'), (req, res) =
     if (req.query.force === '1' && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Force-delete (erasing DPRs + attendance under this order) is admin-only. Ask an admin, or delete after the DPRs are handled.' });
     }
+    // Counted on BOTH branches: the refusal below needs them, and the force
+    // path reports them to the breaker as its real blast radius.
+    const sub = '(SELECT id FROM sites WHERE business_book_id=?)';
+    const dprCount = db.prepare(`SELECT COUNT(*) c FROM dpr WHERE site_id IN ${sub}`).get(id).c;
+    const attCount = db.prepare(`SELECT COUNT(*) c FROM attendance WHERE site_id IN ${sub}`).get(id).c;
     if (req.query.force !== '1') {
-      const sub = '(SELECT id FROM sites WHERE business_book_id=?)';
-      const dprCount = db.prepare(`SELECT COUNT(*) c FROM dpr WHERE site_id IN ${sub}`).get(id).c;
-      const attCount = db.prepare(`SELECT COUNT(*) c FROM attendance WHERE site_id IN ${sub}`).get(id).c;
       if (dprCount > 0 || attCount > 0) {
         return res.status(409).json({
           error: `This order has ${dprCount} DPR(s) and ${attCount} attendance record(s) under its site(s). Deleting will permanently erase them.`,
@@ -420,13 +422,20 @@ router.delete('/:id', requirePermission('business_book', 'delete'), (req, res) =
     db.prepare('DELETE FROM business_book WHERE id=?').run(id);
     db.pragma('foreign_keys = ON');
     // A force-delete just cascade-wiped DPRs + attendance under this order —
-    // the audit log records it as ONE delete, so give the breaker the real
-    // blast radius (admin-only path, but stolen-admin is exactly the breaker's
-    // remaining scope). Weight capped so one giant legitimate cleanup locks
-    // (intended) without flooding the score table.
+    // the audit log records it as ONE delete, so give the breaker the REAL
+    // blast radius, and when it actually erased history, lock immediately
+    // (same "one deliberate act, then the gun goes cold" design as HR
+    // bulk-status) — a stolen admin gets ONE damaging force-delete, not
+    // ten, and the director is emailed on the spot. A genuine admin doing
+    // cleanup waits out the 30 minutes or has another admin unlock.
     if (req.query.force === '1') {
       try {
-        require('../lib/destructiveBreaker').addScore(req.user.id, 10, 'bb_force_delete_cascade');
+        const breaker = require('../lib/destructiveBreaker');
+        breaker.addScore(req.user.id, Math.max(1, dprCount + attCount), 'bb_force_delete_cascade');
+        if (dprCount + attCount > 0) {
+          breaker.tripNow(db, req.user.id, req.user.name, dprCount + attCount,
+            `force-delete of order ${id}: erased ${dprCount} DPR(s) + ${attCount} attendance row(s)`);
+        }
       } catch (_) { /* never block the response */ }
     }
     res.json({ message: 'Deleted' });
