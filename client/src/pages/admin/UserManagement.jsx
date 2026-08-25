@@ -18,6 +18,7 @@ export default function UserManagement() {
   const [roles, setRoles] = useState([]);
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [securityUser, setSecurityUser] = useState(null); // Login security modal — not the Edit User form
   const [form, setForm] = useState({});
   const [selectedRoles, setSelectedRoles] = useState([]);
   const [bulkModal, setBulkModal] = useState(false);
@@ -32,6 +33,7 @@ export default function UserManagement() {
     api.get('/auth/users').then(r => {
       setUsers(r.data);
       setEditing(prev => (prev ? r.data.find(u => u.id === prev.id) || prev : prev));
+      setSecurityUser(prev => (prev ? r.data.find(u => u.id === prev.id) || prev : prev));
     });
     api.get('/auth/roles').then(r => setRoles(r.data));
   };
@@ -363,6 +365,11 @@ export default function UserManagement() {
                     <button onClick={() => { setResetUser(u); setResetInput('123'); }} className="p-1.5 hover:bg-amber-50 rounded text-amber-600" title="Reset password">
                       <FiKey size={15} />
                     </button>
+                    <button onClick={() => setSecurityUser(u)}
+                      className={`p-1.5 rounded ${u.totp_required ? 'hover:bg-violet-50 text-violet-600' : 'hover:bg-gray-50 text-gray-500'}`}
+                      title="Login security — 2FA and sign out everywhere">
+                      <FiSmartphone size={15} />
+                    </button>
                     {/* Activate/Deactivate + Track — only for non-archived users
                         (mam 2026-07-02: the labelled toggle replaced an icon-only one). */}
                     {!u.archived && (<>
@@ -475,41 +482,10 @@ export default function UserManagement() {
           </div>
 
           {editing && (
-            <>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.active} onChange={e => setForm({...form, active: e.target.checked})} className="w-4 h-4" />
               <span>User is Active</span>
             </label>
-
-            <div className="rounded-lg border border-gray-200 bg-gray-50/70 p-4 space-y-3">
-              <div>
-                <div className="text-sm font-semibold text-gray-800">Session &amp; 2FA</div>
-                <p className="text-xs text-gray-500 mt-0.5">These apply immediately — they are not saved with Update User.</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" onClick={() => forceLogout(editing)}
-                  className="px-3 py-1.5 rounded text-xs font-semibold border border-orange-200 text-orange-700 bg-white hover:bg-orange-50 flex items-center gap-1.5"
-                  title="Sign this user out on every device immediately (password unchanged)">
-                  <FiLogOut size={14} /> Sign out everywhere
-                </button>
-                <button type="button" onClick={() => toggleTotp(editing)}
-                  className={`px-3 py-1.5 rounded text-xs font-semibold border flex items-center gap-1.5 ${editing.totp_required ? 'text-violet-700 border-violet-300 bg-violet-50 hover:bg-violet-100' : 'text-gray-600 border-gray-300 bg-white hover:bg-gray-50'}`}>
-                  <FiSmartphone size={14} />
-                  {editing.totp_required ? 'Turn 2FA off' : 'Turn 2FA on'}
-                </button>
-                {!!editing.totp_enabled && (
-                  <button type="button" onClick={() => resetTotp(editing)}
-                    className="px-3 py-1.5 rounded text-xs font-semibold border border-violet-200 text-violet-700 bg-white hover:bg-violet-50 flex items-center gap-1.5"
-                    title="They stay on 2FA and scan a new QR next login">
-                    Reset authenticator
-                  </button>
-                )}
-                <span className={`text-xs font-medium ${editing.totp_required ? 'text-violet-700' : 'text-gray-500'}`}>
-                  {editing.totp_required ? (editing.totp_enabled ? '2FA is on' : '2FA setup pending') : '2FA is off'}
-                </span>
-              </div>
-            </div>
-            </>
           )}
 
           <div className="flex justify-end gap-3">
@@ -517,6 +493,63 @@ export default function UserManagement() {
             <button type="submit" className="btn btn-primary">{editing ? 'Update User' : 'Create User'}</button>
           </div>
         </form>
+      </Modal>
+
+      <Modal isOpen={!!securityUser} onClose={() => setSecurityUser(null)} title={securityUser ? `Login security — ${securityUser.name}` : 'Login security'}>
+        {securityUser && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500">These take effect immediately.</p>
+
+            <div className="rounded-lg border border-gray-200 p-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                  <FiSmartphone size={15} /> Authenticator (2FA)
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  {securityUser.totp_required
+                    ? (securityUser.totp_enabled
+                      ? 'On. Next login asks for a 6-digit code.'
+                      : 'On, but not set up yet. Next login they scan a QR, then enter a code.')
+                    : 'Off. Password-only login.'}
+                </p>
+              </div>
+              <button type="button" onClick={() => toggleTotp(securityUser)}
+                className={`shrink-0 px-3 py-1.5 rounded text-xs font-semibold border ${securityUser.totp_required ? 'text-gray-700 border-gray-300 bg-white hover:bg-gray-50' : 'text-violet-700 border-violet-300 bg-violet-50 hover:bg-violet-100'}`}>
+                {securityUser.totp_required ? 'Turn off' : 'Turn on'}
+              </button>
+            </div>
+
+            {!!securityUser.totp_enabled && (
+              <div className="rounded-lg border border-gray-200 p-4 flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-gray-800">Reset authenticator</div>
+                  <p className="text-xs text-gray-500 mt-1">Lost phone. They stay on 2FA and scan a new QR next login. Live sessions end.</p>
+                </div>
+                <button type="button" onClick={() => resetTotp(securityUser)}
+                  className="shrink-0 px-3 py-1.5 rounded text-xs font-semibold border border-violet-200 text-violet-700 bg-white hover:bg-violet-50">
+                  Reset
+                </button>
+              </div>
+            )}
+
+            <div className="rounded-lg border border-gray-200 p-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                  <FiLogOut size={15} /> Sign out everywhere
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Ends every live session now. Password and 2FA are not changed.</p>
+              </div>
+              <button type="button" onClick={() => forceLogout(securityUser)}
+                className="shrink-0 px-3 py-1.5 rounded text-xs font-semibold border border-orange-200 text-orange-700 bg-white hover:bg-orange-50">
+                Sign out
+              </button>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button type="button" onClick={() => setSecurityUser(null)} className="btn btn-secondary">Done</button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Bulk Import Modal */}

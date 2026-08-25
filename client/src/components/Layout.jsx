@@ -821,15 +821,6 @@ export default function Layout() {
           <button onClick={() => setPwdModal(true)} className="flex items-center gap-2 px-3 py-1.5 text-sm text-red-100 hover:text-white hover:bg-white/10 rounded w-full mb-1">
             <FiKey size={14} /> <span>Change Password</span>
           </button>
-          {user?.totp_enabled ? (
-            <div className="flex items-center gap-2 px-3 py-1.5 text-sm text-emerald-200 w-full mb-1">
-              <FiSmartphone size={14} /> <span>2FA is on</span>
-            </div>
-          ) : (
-            <button onClick={openTotp} className="flex items-center gap-2 px-3 py-1.5 text-sm text-red-100 hover:text-white hover:bg-white/10 rounded w-full mb-1">
-              <FiSmartphone size={14} /> <span>Set up 2FA</span>
-            </button>
-          )}
           <button onClick={logout} className="flex items-center gap-2 px-3 py-1.5 text-sm text-yellow-200 hover:text-white hover:bg-white/10 rounded w-full">
             <FiLogOut size={15} /> <span>Logout</span>
           </button>
