@@ -221,7 +221,7 @@ export default function SolarSiteDesign() {
         // always surface the results list here, even if there's only one,
         // rather than silently auto-pinning something the user didn't
         // actually type and may not realise is approximate.
-        setSearchStatus({ type: 'broadened', message: data.note || `Showing the area for "${data.broadenedFrom}" — zoom in and right-click the map to pin the exact spot.` });
+        setSearchStatus({ type: 'broadened', message: data.note || `Showing the area for "${data.broadenedFrom}" — zoom in and click the map to pin the exact spot.` });
       } else if (hits.length === 1) {
         pick(hits[0]);
       } else {

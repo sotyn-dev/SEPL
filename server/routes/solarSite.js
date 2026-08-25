@@ -42,6 +42,41 @@ function parseCoords(q) {
   return { lat, lng };
 }
 
+// A pasted Google Maps link doesn't always carry raw @lat,lng — two shapes
+// that don't:
+//   1. A phone "Share → Copy link" link, e.g. https://maps.app.goo.gl/AbC123 —
+//      that's a redirector with no coordinates in the URL at all; the real
+//      link only exists after following the 302.
+//   2. A desktop /maps/place/<Name>/ link with no zoom segment yet, or an
+//      old-style search link like /maps?q=<Name> — these carry the PLACE the
+//      user meant, as text, not coordinates.
+// Previously neither case was handled: parseCoords found nothing, and the
+// *entire raw URL string* got sent to the geocoders as the search query —
+// which never finds anything, since none of them can geocode a URL. Resolve
+// case 1 server-side (the browser can't — it's cross-origin) and pull the
+// place text out for case 2, so the search actually runs on something a
+// geocoder can use.
+function isShortMapsLink(s) {
+  try { return new URL(s).hostname.toLowerCase() === 'maps.app.goo.gl'; } catch { return false; }
+}
+
+async function resolveShortLink(s) {
+  const r = await fetch(s, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(7000) });
+  return r.url || null;
+}
+
+function extractPlaceFromMapsUrl(s) {
+  let u;
+  try { u = new URL(s); } catch { return null; }
+  const host = u.hostname.toLowerCase();
+  if (!host.includes('google.') && host !== 'maps.app.goo.gl') return null;
+  const placeMatch = u.pathname.match(/\/maps\/place\/([^/]+)/);
+  if (placeMatch) return decodeURIComponent(placeMatch[1].replace(/\+/g, ' '));
+  const qParam = u.searchParams.get('q');
+  if (qParam && !/^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(qParam.trim())) return qParam;
+  return null;
+}
+
 // Three geocoders, tried in order, cheapest-configured first:
 //   1. Google Geocoding API — real street/building-level accuracy for India,
 //      IF a Maps Platform key is set (same GOOGLE_SOLAR_API_KEY as the LiDAR
@@ -125,10 +160,25 @@ async function geocodeAllTiers(q) {
 }
 
 router.get('/geocode', view, async (req, res) => {
-  const q = String(req.query.q || '').trim();
+  let q = String(req.query.q || '').trim();
   if (!q) return res.status(400).json({ error: 'Nothing to look up' });
 
-  const direct = parseCoords(q);
+  let direct = parseCoords(q);
+
+  // See the comment above extractPlaceFromMapsUrl — resolve a short share
+  // link to its real URL, then in both cases fall back to the place name the
+  // link carries when there's still no raw @lat,lng to parse.
+  if (!direct && isShortMapsLink(q)) {
+    const resolved = await resolveShortLink(q).catch(() => null);
+    if (resolved) {
+      direct = parseCoords(resolved);
+      if (!direct) { const place = extractPlaceFromMapsUrl(resolved); if (place) q = place; }
+    }
+  } else if (!direct && /^https?:\/\//i.test(q)) {
+    const place = extractPlaceFromMapsUrl(q);
+    if (place) q = place;
+  }
+
   if (direct) return res.json({ results: [{ ...direct, name: `${direct.lat.toFixed(6)}, ${direct.lng.toFixed(6)}`, source: 'coordinates' }] });
 
   // Cache the full payload (results + any broadenedFrom/note), not just the
@@ -154,7 +204,7 @@ router.get('/geocode', view, async (req, res) => {
     }
 
     if (results.length) {
-      const payload = { results, ...(broadenedFrom ? { broadenedFrom, note: `No exact match for "${broadenedFrom}" — showing results for the area instead. Zoom in and right-click the map to pin the precise spot.` } : {}) };
+      const payload = { results, ...(broadenedFrom ? { broadenedFrom, note: `No exact match for "${broadenedFrom}" — showing results for the area instead. Zoom in and click the map to pin the precise spot.` } : {}) };
       GEO_CACHE.set(q, payload);
       return res.json(payload);
     }
