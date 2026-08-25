@@ -237,14 +237,30 @@ router.get('/geocode', view, async (req, res) => {
     // Nothing found for the query as typed — no geocoder, free or paid, has
     // every small commercial building by name (confirmed against this exact
     // case: "B.K. Towers" genuinely isn't in OpenStreetMap's India dataset).
-    // Retry with the first comma-segment dropped — "B.K. Towers, Gill Road,
-    // Janta Nagar" → "Gill Road, Janta Nagar" — the same recovery a person
-    // would do by hand, so the salesperson doesn't have to realise it themselves.
+    // Retry with progressively more of the leading segments dropped —
+    // "B.K. Towers, Gill Road, Janta Nagar" → "Gill Road, Janta Nagar" → "Janta
+    // Nagar" — stopping at the first one that finds anything, the same
+    // recovery a person would do by hand. A single drop wasn't always enough
+    // (confirmed: a real "<Business>, <house>, <road>, near <Landmark>, <city>,
+    // <state>" address needed THREE segments gone before it matched). Also
+    // strip a leading landmark-reference word from every segment — "near X" /
+    // "opp X" phrasing, extremely common in Indian addresses, defeats
+    // Nominatim's matching completely even when X alone resolves fine
+    // (confirmed: "near Grewal Hospital, Ludhiana" → nothing, but "Grewal
+    // Hospital, Ludhiana" → resolves immediately).
+    const stripLandmarkPrefix = (s) => s.replace(/^(near|opp\.?|opposite|behind|beside|next to|backside of|adjacent to)\s+/i, '').trim();
     const segments = q.split(',').map((s) => s.trim()).filter(Boolean);
     if (!results.length && segments.length > 1) {
-      const broader = segments.slice(1).join(', ');
-      const retry = await geocodeAllTiers(broader).catch(() => []);
-      if (retry.length) { results = retry; broadenedFrom = q; }
+      // Capped so a long address can't chain into an unbounded run of
+      // sequential network round-trips — each failed attempt still costs a
+      // real request per tier.
+      const maxDrops = Math.min(segments.length - 1, 4);
+      for (let drop = 0; drop < maxDrops && !results.length; drop++) {
+        const broader = segments.slice(drop).map(stripLandmarkPrefix).filter(Boolean).join(', ');
+        if (!broader || broader === q) continue;
+        const retry = await geocodeAllTiers(broader).catch(() => []);
+        if (retry.length) { results = retry; broadenedFrom = q; }
+      }
     }
 
     if (results.length) {
