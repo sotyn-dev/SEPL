@@ -6928,6 +6928,8 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   }
 
+  require('./userTotp').initialize(db);
+
   console.log('Database initialized successfully');
   return db;
 }
