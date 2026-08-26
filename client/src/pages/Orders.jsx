@@ -654,6 +654,11 @@ export default function Orders() {
                             items[i].amount = (items[i].quantity || 0) * (items[i].rate || 0);
                           }
                           setPoItems(items);
+                          // Mapping IS an item edit — without this flag, a save
+                          // where the mapping was the ONLY change skipped the
+                          // line-items write and the mapping vanished on reopen
+                          // (mam 2026-08-26: "map item… save… reopen not display").
+                          setPoItemsDirty(true);
                         }}
                       />
                     </div>
