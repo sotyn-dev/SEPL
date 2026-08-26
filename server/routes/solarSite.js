@@ -320,7 +320,12 @@ router.get('/geocode', view, async (req, res) => {
       // sequential network round-trips — each failed attempt still costs a
       // real request per tier.
       const maxDrops = Math.min(segments.length - 1, 4);
-      for (let drop = 0; drop < maxDrops && !results.length; drop++) {
+      // Inclusive bound: the LAST segment alone must be tried too — with the
+      // exclusive `<`, a two-segment query ("<Business>, Punjab") only ever
+      // attempted drop=0 (the full string, skipped as already-searched) and
+      // never fell back to "Punjab" (confirmed against the live "Secured
+      // engineer Pvt Ltd" report).
+      for (let drop = 0; drop <= maxDrops && !results.length; drop++) {
         const broader = segments.slice(drop).map(stripLandmarkPrefix).filter(Boolean).join(', ');
         if (!broader || broader === q || broader === searched) continue;
         const retry = await geocodeAllTiers(broader).catch(() => []);
