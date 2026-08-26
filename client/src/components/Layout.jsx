@@ -5,6 +5,7 @@ import AnnouncementBell from './AnnouncementBell';
 // functionality is now merged into AnnouncementBell as a second tab,
 // so there's a single bell icon in the header (was confusing with 3).
 import EnablePushButton from './EnablePushButton';
+import TrainingVideoButton from './TrainingVideoButton';
 import AIAgentChat from './AIAgentChat';
 import { CallProvider } from '../context/CallContext';
 import Modal from './Modal';
@@ -597,15 +598,25 @@ export default function Layout() {
   // "Finance › Cash Flow" instead of a context-free "Cash Flow".
   // Dashboard is standalone (no group); unknown routes fall back to the
   // app name with no crumb.
+  // Also resolves the page's `module` key — it scopes the header's per-page
+  // training-video button (mam 2026-08-26: "add video of youtube link button
+  // every where"), so one button in the shared header covers every page
+  // instead of hand-placing it in 80 toolbars.
   const crumb = (() => {
-    if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label };
+    if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label, module: SIDEBAR_DASHBOARD.module };
     for (const g of SIDEBAR_GROUPS) {
       const it = g.items.find(m => m.path === location.pathname);
-      if (it) return { group: g.label, label: it.label };
+      if (it) return { group: g.label, label: it.label, module: it.module };
     }
     const s = SIDEBAR_SETTINGS.items.find(m => m.path === location.pathname);
-    if (s) return { group: SIDEBAR_SETTINGS.label, label: s.label };
-    return { group: null, label: 'SOTYN.AI' };
+    if (s) return { group: SIDEBAR_SETTINGS.label, label: s.label, module: s.module };
+    // Detail routes (/some-page/123): reuse the parent page's module so its
+    // training videos follow onto the detail view.
+    for (const g of SIDEBAR_GROUPS) {
+      const it = g.items.find(m => m.path !== '/' && location.pathname.startsWith(m.path + '/'));
+      if (it) return { group: g.label, label: it.label, module: it.module };
+    }
+    return { group: null, label: 'SOTYN.AI', module: location.pathname.split('/')[1] || 'dashboard' };
   })();
 
   // Avatar initials from the user's name (fallback to username), max 2 chars.
@@ -969,6 +980,12 @@ export default function Layout() {
               {crumb.label}
             </h2>
           </div>
+          {/* Per-page training video (mam 2026-08-26: "every where") —
+              keyed by the page's module, remounted on route change so the
+              video list always belongs to the page being viewed. Admin
+              sees it on every page to add links; users only when a video
+              exists (the component returns null otherwise). */}
+          <TrainingVideoButton key={crumb.module} module={crumb.module} />
           {/* Push notification toggle — phone / laptop / desktop each
               need to be enabled separately. Mam's MD requirement. */}
           <EnablePushButton />

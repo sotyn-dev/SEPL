@@ -14,7 +14,6 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
-import TrainingVideoButton from '../components/TrainingVideoButton';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
@@ -2296,10 +2295,9 @@ export default function Procurement() {
             if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
             if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
           }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
-          {/* Training video for this module (mam 2026-08-19) — admin adds a
-              YouTube link, everyone can watch. Reusable: drop the same
-              component on any page with its own module key. */}
-          <TrainingVideoButton module="procurement" />
+          {/* Training video button moved to the shared Layout header
+              (mam 2026-08-26: "every where") — same "procurement" module
+              key, so previously added videos still show. */}
           {/* Approval flow control — who may act at each gate (L1 / L2 / CRM /
               PO L1 / PO L2 / Revoke) and which optional gates are on. Separate
               from ⚙ Responsible: that tab is per-record RACI reporting, this is

@@ -6,7 +6,6 @@ import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload } from 'react-icons/fi';
-import TrainingVideoButton from '../components/TrainingVideoButton';
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
 import HrIdentity, { hrDeptText } from '../components/HrIdentity';
@@ -570,10 +569,9 @@ export default function Attendance() {
         </>}
         {canGrid && <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>}
         {isAdmin() && <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>}
-        {/* Training video for this module (mam 2026-08-20) — admin pastes the
-            YouTube link (the attendance training video), everyone watches
-            inline. Same reusable component as Procurement. */}
-        <TrainingVideoButton module="attendance" />
+        {/* Training video button moved to the shared Layout header
+            (mam 2026-08-26: "every where") — same "attendance" module key,
+            so previously added videos still show. */}
       </div>
 
       {/* MONTHLY ATTENDANCE GRID TAB */}
