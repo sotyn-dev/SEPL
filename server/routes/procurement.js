@@ -1295,25 +1295,26 @@ router.put('/indent-raise-window', (req, res) => {
   res.json(indentRaiseWindow(db));
 });
 
-// Site + Department existence check — drives the category lock on the
-// Raise Purchase Indent screen. Rule (not derivable from PPE Kit presence,
-// only from whether ANY indent has ever been raised for this exact
-// site+department pair):
-//   exists=true  → this site+department already has indent history →
-//                  PPE Kit locked, all other categories unlocked.
-//   exists=false → brand-new site+department pair → PPE Kit is the ONLY
-//                  category unlocked (mam's "raise PPE Kit first" rule).
+// Site existence check — drives the category lock on the Raise Purchase
+// Indent screen. Keyed on the SITE alone (mam 2026-08-26: the original
+// per-site+department version blocked everyone from filling indents —
+// Department had to be picked before any category would unlock, and every
+// existing site+new department combination demanded a fresh PPE Kit):
+//   exists=true  → this site already has indent history → every category
+//                  unlocked.
+//   exists=false → brand-new site → PPE Kit is the ONLY category unlocked
+//                  (mam's "raise PPE Kit first" rule — now once per site).
+// departmentId is still accepted from older clients but no longer gates.
 router.get('/site-department-status', (req, res) => {
   const siteId = String(req.query.siteId || req.query.site_name || '').trim();
-  const departmentId = String(req.query.departmentId || req.query.department || '').trim();
-  if (!siteId || !departmentId) {
-    return res.status(400).json({ error: 'siteId and departmentId are both required' });
+  if (!siteId) {
+    return res.status(400).json({ error: 'siteId is required' });
   }
   const db = getDb();
   const row = db.prepare(
-    `SELECT 1 FROM indents WHERE site_name = ? AND department = ? LIMIT 1`
-  ).get(siteId, departmentId);
-  res.json({ exists: !!row, siteId, departmentId });
+    `SELECT 1 FROM indents WHERE site_name = ? LIMIT 1`
+  ).get(siteId);
+  res.json({ exists: !!row, siteId });
 });
 
 router.post('/indents', requirePermission('procurement', 'create'), (req, res) => {
@@ -1367,21 +1368,19 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
   // Item Master shape (same as RGP/Rental), mirrored end-to-end below.
   const isPpeKit            = category === 'ppe_kit';
 
-  // ─── Site + Department category lock (backend enforcement) ────────────
+  // ─── Site category lock (backend enforcement) ─────────────────────────
   // Mirrors the frontend lock so a direct API call can't bypass it. PPE Kit
   // is ALWAYS allowed. The other 5 categories need ANY indent to already
-  // exist for this exact site_name + department pair:
-  //   pair already has indent history → every category open
-  //   pair has never been indented    → only PPE Kit is open
-  const deptForLock = String(department || '').trim();
-  if (!deptForLock) {
-    return res.status(400).json({ error: 'Department is required — it determines whether the non-PPE-Kit categories are available for this Site.' });
-  }
-  const siteDeptExists = !!db.prepare(
-    'SELECT 1 FROM indents WHERE site_name = ? AND department = ? LIMIT 1'
-  ).get(site_name, deptForLock);
-  if (!siteDeptExists && !isPpeKit) {
-    return res.status(400).json({ error: 'This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.' });
+  // exist for this site (mam 2026-08-26: site-only — the site+department
+  // pair version blocked everyone from filling indents; Department is
+  // optional metadata again, not part of the gate):
+  //   site already has indent history → every category open
+  //   site has never been indented    → only PPE Kit is open
+  const siteHasIndents = !!db.prepare(
+    'SELECT 1 FROM indents WHERE site_name = ? LIMIT 1'
+  ).get(site_name);
+  if (!siteHasIndents && !isPpeKit) {
+    return res.status(400).json({ error: 'This Site has no indents yet. Raise its PPE Kit indent first to unlock this category.' });
   }
   // Master-price lookup reused by the rental block check. Returns
   // 0 if no rate has ever been recorded, which triggers a clear error
@@ -2777,22 +2776,18 @@ router.put('/indents/:id', (req, res) => {
       return res.status(400).json({ error: `Cannot edit — ${vpoCount} active Vendor PO(s) reference this indent` });
     }
 
-    // ─── Site + Department category lock (backend enforcement, edit path) ──
-    // Same rule as create: PPE Kit is ALWAYS allowed. The other 5 need ANY
-    // OTHER indent to already exist for this site_name + department pair.
-    // Excludes this indent's own row so re-saving the very first indent
-    // raised for a pair doesn't see itself as "already exists".
+    // ─── Site category lock (backend enforcement, edit path) ──────────────
+    // Same rule as create (site-only, mam 2026-08-26): PPE Kit is ALWAYS
+    // allowed. The other 5 need ANY OTHER indent to already exist for this
+    // site. Excludes this indent's own row so re-saving the very first
+    // indent raised for a site doesn't see itself as "already exists".
     const editSiteName = String(site_name || cur.site_name || '').trim();
-    const editDept = String(department || cur.department || '').trim();
-    if (!editDept) {
-      return res.status(400).json({ error: 'Department is required — it determines whether the non-PPE-Kit categories are available for this Site.' });
-    }
-    const editSiteDeptExists = !!db.prepare(
-      'SELECT 1 FROM indents WHERE site_name = ? AND department = ? AND id <> ? LIMIT 1'
-    ).get(editSiteName, editDept, id);
+    const editSiteHasIndents = !!db.prepare(
+      'SELECT 1 FROM indents WHERE site_name = ? AND id <> ? LIMIT 1'
+    ).get(editSiteName, id);
     const editIsPpeKit = String(cur.indent_category || 'material').toLowerCase() === 'ppe_kit';
-    if (!editSiteDeptExists && !editIsPpeKit) {
-      return res.status(400).json({ error: 'This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.' });
+    if (!editSiteHasIndents && !editIsPpeKit) {
+      return res.status(400).json({ error: 'This Site has no indents yet. Raise its PPE Kit indent first to unlock this category.' });
     }
 
     // Same per-row validation as POST — including PO qty cap (mam 2026-05-25).
