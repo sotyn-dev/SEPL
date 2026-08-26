@@ -14,6 +14,26 @@ const atDirector = () => { try { return getEmailConfig().director; } catch { ret
 const router = express.Router();
 router.use(authMiddleware);
 
+// One-time self-heal for epoch-poisoned hour totals (mam 2026-08-26: "wrong
+// hours calculate" — dashboard showed 496,650 Total Hrs). Cause: punching out
+// on a row that had NO punch_in_time (admin/allow-list mark) computed the
+// duration from new Date(null) = 1970. The punch-out route now guards this;
+// this repairs rows already stored. Idempotent — recompute where both punch
+// times are valid, otherwise fall back to 0; runs in ms on every boot.
+try {
+  const db = getDb();
+  const fixed = db.prepare(`
+    UPDATE attendance SET total_hours = CASE
+      WHEN punch_in_time IS NOT NULL AND punch_out_time IS NOT NULL
+       AND (julianday(punch_out_time) - julianday(punch_in_time)) * 24 BETWEEN 0 AND 24
+      THEN ROUND((julianday(punch_out_time) - julianday(punch_in_time)) * 24, 2)
+      WHEN COALESCE(admin_marked, 0) = 1 THEN 8
+      ELSE 0 END
+    WHERE total_hours > 24 OR total_hours < 0
+  `).run();
+  if (fixed.changes) console.log(`[attendance] repaired ${fixed.changes} row(s) with impossible total_hours`);
+} catch (e) { console.warn('[attendance] total_hours self-heal skipped:', e.message); }
+
 // "Today" as an IST (UTC+5:30) YYYY-MM-DD. The VPS runs UTC, so a bare
 // toISOString().split('T')[0] rolls the date over at 05:30 IST — punches and
 // admin-marks in that pre-dawn window landed on the WRONG calendar day (L4).
@@ -835,10 +855,23 @@ router.post('/punch-out', (req, res) => {
     }
   }
 
-  // Calculate total hours
+  // Calculate total hours. A row can exist WITHOUT punch_in_time (admin
+  // manual mark, allow-list auto-mark) — new Date(null) is the 1970 epoch,
+  // and punching out on such a row stored ~496,650 hours (mam 2026-08-26:
+  // "wrong hours calculate" — Admin's own dashboard tile). No punch-in →
+  // no duration to compute; keep the marked hours and just record the out.
   const punchIn = new Date(record.punch_in_time);
+  if (!record.punch_in_time || Number.isNaN(punchIn.getTime())) {
+    db.prepare('UPDATE attendance SET punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, punch_out_accuracy=? WHERE id=?')
+      .run(now, latitude, longitude, address, photo, accuracy || null, record.id);
+    return res.json({ message: 'Punched Out. (No punch-in time on today\'s record — hours kept as marked.)', totalHours: record.total_hours || 0 });
+  }
   const punchOut = new Date(now);
-  const totalHours = Math.round((punchOut - punchIn) / (1000 * 60 * 60) * 100) / 100;
+  let totalHours = Math.round((punchOut - punchIn) / (1000 * 60 * 60) * 100) / 100;
+  // A day is at most 24h — anything outside means corrupt timestamps, never
+  // a real shift. Clamp so one bad row can't poison monthly/weekly sums.
+  if (!Number.isFinite(totalHours) || totalHours < 0) totalHours = 0;
+  if (totalHours > 24) totalHours = 24;
   const status = totalHours < 4 ? 'half_day' : record.status;
 
   db.prepare(`UPDATE attendance SET punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, total_hours=?, status=?, punch_out_accuracy=? WHERE id=?`)
@@ -1241,7 +1274,11 @@ function runAutoPunchCheck() {
       } catch (e) { console.error('[auto-punch] IN failed:', e.message); }
     } else if (attendance && attendance.punch_in_time && !attendance.punch_out_time && allOutside) {
       const punchIn = new Date(attendance.punch_in_time);
-      const totalHours = Math.round((new Date(now) - punchIn) / (1000 * 60 * 60) * 100) / 100;
+      // Same 0–24h clamp as manual punch-out — corrupt timestamps must never
+      // store epoch-sized hour totals.
+      let totalHours = Math.round((new Date(now) - punchIn) / (1000 * 60 * 60) * 100) / 100;
+      if (!Number.isFinite(totalHours) || totalHours < 0) totalHours = 0;
+      if (totalHours > 24) totalHours = 24;
       const status = totalHours < 4 ? 'half_day' : (totalHours < 8 ? 'short_day' : attendance.status);
       try {
         db.prepare(`UPDATE attendance
