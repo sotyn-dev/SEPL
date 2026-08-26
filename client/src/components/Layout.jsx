@@ -413,11 +413,19 @@ export default function Layout() {
   };
 
   useEffect(() => {
+    // Only touch sidebarOpen when the mobile/desktop BREAKPOINT actually
+    // changes — not on every resize. On phones the on-screen keyboard fires
+    // a window resize, and the old unconditional `setSidebarOpen(false)`
+    // slammed the sidebar shut the moment you tapped the menu-search box
+    // (mam 2026-08-26: "unable to type, side bar hide").
+    let prevMobile = null;
     const check = () => {
       const mobile = window.innerWidth < 768;
       setIsMobile(mobile);
-      if (!mobile) setSidebarOpen(true);
-      else setSidebarOpen(false);
+      if (prevMobile !== mobile) {
+        setSidebarOpen(!mobile);
+        prevMobile = mobile;
+      }
     };
     check();
     window.addEventListener('resize', check);
