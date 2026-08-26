@@ -431,16 +431,9 @@ export default function Procurement() {
   // into the indent, so raising an indent never blocks on someone else
   // populating the catalogue first.
   const [ppeQuickAdd, setPpeQuickAdd] = useState({ open: false, name: '', qty: 1, saving: false });
-  // Site category lock. Keyed on whether ANY indent has ever been raised
-  // for this SITE (mam 2026-08-26: site-only — the site+department pair
-  // version locked everyone out; Department is optional metadata again):
-  //   exists === true  → site already has indent history → every category
-  //                       unlocked.
-  //   exists === false → brand-new site → PPE Kit is the ONLY unlocked
-  //                       category (raise the PPE Kit indent first).
-  //   exists === null  → not checked yet (no site picked, or the check is
-  //                       in flight) → everything but PPE Kit locked.
-  const [siteDeptStatus, setSiteDeptStatus] = useState({ checking: false, exists: null, error: null });
+  // Category lock REMOVED (mam 2026-08-26, 3rd revision: "all category is
+  // accessible" for everyone) — the 13-Aug PPE-first gate is gone; only the
+  // Wed/Sat indent-day rule still gates raising.
   // Editable per-line items for the Sales Bill / Delivery Note modal.
   // Pre-filled from Client PO (po_items) so the rate column shows the
   // SELLING price (what we invoice the client), not vendor cost. Mam can
@@ -827,41 +820,6 @@ export default function Procurement() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Site category lock — recheck every time the site changes while the
-  // Raise Indent modal is open. Never reuse a stale result: a different
-  // site is a different indent history.
-  useEffect(() => {
-    if (modal !== 'indent') return;
-    const site = (form.site_name || '').trim();
-    if (!site) {
-      setSiteDeptStatus({ checking: false, exists: null, error: null });
-      return;
-    }
-    let cancelled = false;
-    setSiteDeptStatus({ checking: true, exists: null, error: null });
-    api.get('/procurement/site-department-status', { params: { siteId: site } })
-      .then(r => { if (!cancelled) setSiteDeptStatus({ checking: false, exists: !!r.data.exists, error: null }); })
-      .catch(err => { if (!cancelled) setSiteDeptStatus({ checking: false, exists: null, error: err.response?.data?.error || 'Could not check this Site' }); });
-    return () => { cancelled = true; };
-  }, [modal, form.site_name]);
-
-  // Whenever the lock result changes, if the currently-picked category is
-  // no longer allowed, snap to an allowed one and clear the item rows
-  // (their shape differs between PPE Kit and the BOQ-based categories).
-  // PPE Kit is never forced away from — it's always allowed.
-  useEffect(() => {
-    // Skip while editing an existing indent — its category was already
-    // valid when raised (server excludes the indent's own row from the
-    // exists-check), so don't yank the category out from under an edit.
-    if (modal !== 'indent' || editingIndentId || siteDeptStatus.checking || siteDeptStatus.exists === null) return;
-    const cur = form.indent_category || 'material';
-    if (cur === 'ppe_kit' || siteDeptStatus.exists) return;
-    setForm(f => ({ ...f, indent_category: 'ppe_kit' }));
-    setIndentItems([{ ...EMPTY_ITEM }]);
-    setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [siteDeptStatus.checking, siteDeptStatus.exists, modal]);
-
   // Tab switch → lazy fetch the new tab's data (cached if already loaded).
   // Raise-Indent is a live dashboard — its UNIT / RATE / LINE BUDGET pull
   // the CURRENT Item Master UOM + price — so always refetch it fresh
@@ -1066,21 +1024,6 @@ export default function Procurement() {
     // Server enforces the same rules, but failing fast in the UI gives
     // a better error UX (row number + specific cause).
     const cat = form.indent_category || 'material';
-    // Site category lock — fail fast client-side too (server re-checks
-    // with the authoritative same-instant query in case this went stale,
-    // e.g. someone else raised the site's first indent between the last
-    // check and Submit). Skipped while editing: this
-    // indent's own row makes the frontend's un-excluded check unreliable
-    // (the server's exists-check excludes the row being edited, this one
-    // can't without a second round-trip) — the backend is authoritative there.
-    if (!editingIndentId) {
-      if (siteDeptStatus.checking || siteDeptStatus.exists === null) {
-        return toast.error('Still checking this Site — wait a moment and try again.');
-      }
-      if (!siteDeptStatus.exists && cat !== 'ppe_kit') {
-        return toast.error('This Site has no indents yet. Raise its PPE Kit indent first to unlock this category.');
-      }
-    }
     // RGP no longer requires BOQ (mam 2026-05-27): returnable material is
     // picked directly from Item Master, not tied to the Client PO BOQ.
     const needsBoq = (cat === 'material' || cat === 'extra_schedule');
@@ -6066,35 +6009,9 @@ export default function Procurement() {
               capture (days × rate/day with the rent-vs-buy block). */}
           <div>
             <label className="label">Category *</label>
-            {/* ─── Site category lock (site-only, mam 2026-08-26) ───────
-                PPE Kit is ALWAYS selectable. The other 5 categories need
-                the SITE to already have indent history — Department is no
-                longer part of the gate:
-                  site has indents → Material / RGP / Extra / Rental open
-                  site is new      → Material / RGP / Extra / Rental locked,
-                                      raise the PPE Kit indent first
-                  not checked yet  → same 5 locked (pick a site first) */}
-            {!form.site_name ? (
-              <div className="text-[11px] rounded-lg border border-gray-200 bg-gray-50 text-gray-500 px-2.5 py-1.5 mb-1.5">
-                Pick a Site above to unlock Material / RGP / Extra / Rental. PPE Kit is always available.
-              </div>
-            ) : siteDeptStatus.checking ? (
-              <div className="text-[11px] rounded-lg border border-blue-200 bg-blue-50 text-blue-700 px-2.5 py-1.5 mb-1.5 flex items-center gap-1.5">
-                <FiRefreshCw size={12} className="animate-spin" /> Checking this Site…
-              </div>
-            ) : siteDeptStatus.error ? (
-              <div className="text-[11px] rounded-lg border border-red-200 bg-red-50 text-red-700 px-2.5 py-1.5 mb-1.5">
-                Could not check this Site: {siteDeptStatus.error}
-              </div>
-            ) : siteDeptStatus.exists ? (
-              <div className="text-[11px] rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 px-2.5 py-1.5 mb-1.5">
-                This Site already has indent history — every category is available.
-              </div>
-            ) : (
-              <div className="text-[11px] rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-800 px-2.5 py-1.5 mb-1.5">
-                This Site has no indents yet. Raise its PPE Kit indent first to unlock the rest.
-              </div>
-            )}
+            {/* Category lock removed (mam 2026-08-26, 3rd revision) —
+                every category is open to everyone; only the Wed/Sat
+                indent-day rule still gates raising. */}
             <div className="flex gap-1 flex-wrap">
               {[
                 { id: 'material',           label: 'Material',         hint: 'BOQ items (PO + FOC). RGP hidden.' },
@@ -6105,21 +6022,11 @@ export default function Procurement() {
                 { id: 'ppe_kit',            label: 'PPE Kit',          hint: 'PPE Kit items — no BOQ. Item name + Quantity. Always available.' },
               ].map(c => {
                 const active = (form.indent_category || 'material') === c.id;
-                // PPE Kit is never gated. The other 5 need the site to
-                // already have indent history.
-                const notCheckedYet = !form.site_name || siteDeptStatus.checking || siteDeptStatus.exists === null;
-                const locked = c.id !== 'ppe_kit' && (notCheckedYet || !siteDeptStatus.exists);
-                const lockReason = notCheckedYet
-                  ? 'Pick a Site first.'
-                  : 'This Site has no indents yet. Raise its PPE Kit indent first to unlock this category.';
                 return (
                   <button
                     key={c.id}
                     type="button"
-                    disabled={locked}
-                    aria-disabled={locked}
                     onClick={() => {
-                      if (locked) return;
                       // Reset items when category changes — different categories
                       // have incompatible row shapes (BOQ vs flat Item Master).
                       setForm(f => ({ ...f, indent_category: c.id }));
@@ -6127,13 +6034,11 @@ export default function Procurement() {
                       setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
                     }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
-                      locked
-                        ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
-                        : active
-                          ? 'bg-blue-700 text-white border-blue-700 shadow-sm'
-                          : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:text-blue-700'
+                      active
+                        ? 'bg-blue-700 text-white border-blue-700 shadow-sm'
+                        : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:text-blue-700'
                     }`}
-                    title={locked ? lockReason : c.hint}
+                    title={c.hint}
                   >
                     {c.label}
                   </button>

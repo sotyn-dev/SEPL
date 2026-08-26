@@ -1295,26 +1295,14 @@ router.put('/indent-raise-window', (req, res) => {
   res.json(indentRaiseWindow(db));
 });
 
-// Site existence check — drives the category lock on the Raise Purchase
-// Indent screen. Keyed on the SITE alone (mam 2026-08-26: the original
-// per-site+department version blocked everyone from filling indents —
-// Department had to be picked before any category would unlock, and every
-// existing site+new department combination demanded a fresh PPE Kit):
-//   exists=true  → this site already has indent history → every category
-//                  unlocked.
-//   exists=false → brand-new site → PPE Kit is the ONLY category unlocked
-//                  (mam's "raise PPE Kit first" rule — now once per site).
-// departmentId is still accepted from older clients but no longer gates.
+// Category lock endpoint — the lock itself is REMOVED (mam 2026-08-26, 3rd
+// revision: every category open to everyone; only the Wed/Sat day gate
+// remains). Kept only so browsers running a stale cached frontend don't
+// error AND don't lock: always answer exists=true so any old client's
+// category chips stay unlocked.
 router.get('/site-department-status', (req, res) => {
   const siteId = String(req.query.siteId || req.query.site_name || '').trim();
-  if (!siteId) {
-    return res.status(400).json({ error: 'siteId is required' });
-  }
-  const db = getDb();
-  const row = db.prepare(
-    `SELECT 1 FROM indents WHERE site_name = ? LIMIT 1`
-  ).get(siteId);
-  res.json({ exists: !!row, siteId });
+  res.json({ exists: true, siteId });
 });
 
 router.post('/indents', requirePermission('procurement', 'create'), (req, res) => {
@@ -1368,20 +1356,11 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
   // Item Master shape (same as RGP/Rental), mirrored end-to-end below.
   const isPpeKit            = category === 'ppe_kit';
 
-  // ─── Site category lock (backend enforcement) ─────────────────────────
-  // Mirrors the frontend lock so a direct API call can't bypass it. PPE Kit
-  // is ALWAYS allowed. The other 5 categories need ANY indent to already
-  // exist for this site (mam 2026-08-26: site-only — the site+department
-  // pair version blocked everyone from filling indents; Department is
-  // optional metadata again, not part of the gate):
-  //   site already has indent history → every category open
-  //   site has never been indented    → only PPE Kit is open
-  const siteHasIndents = !!db.prepare(
-    'SELECT 1 FROM indents WHERE site_name = ? LIMIT 1'
-  ).get(site_name);
-  if (!siteHasIndents && !isPpeKit) {
-    return res.status(400).json({ error: 'This Site has no indents yet. Raise its PPE Kit indent first to unlock this category.' });
-  }
+  // Category lock REMOVED (mam 2026-08-26, 3rd revision: "no need … every
+  // one indent on wednesday and saturday material rgp all category is
+  // accessible"). History: 13-Aug PPE-first gate keyed on site+department
+  // → site-only earlier today → gone entirely. Every category is open to
+  // everyone; only the Wed/Sat day gate above still applies.
   // Master-price lookup reused by the rental block check. Returns
   // 0 if no rate has ever been recorded, which triggers a clear error
   // instead of silently letting the indent through.
@@ -2776,19 +2755,8 @@ router.put('/indents/:id', (req, res) => {
       return res.status(400).json({ error: `Cannot edit — ${vpoCount} active Vendor PO(s) reference this indent` });
     }
 
-    // ─── Site category lock (backend enforcement, edit path) ──────────────
-    // Same rule as create (site-only, mam 2026-08-26): PPE Kit is ALWAYS
-    // allowed. The other 5 need ANY OTHER indent to already exist for this
-    // site. Excludes this indent's own row so re-saving the very first
-    // indent raised for a site doesn't see itself as "already exists".
-    const editSiteName = String(site_name || cur.site_name || '').trim();
-    const editSiteHasIndents = !!db.prepare(
-      'SELECT 1 FROM indents WHERE site_name = ? AND id <> ? LIMIT 1'
-    ).get(editSiteName, id);
-    const editIsPpeKit = String(cur.indent_category || 'material').toLowerCase() === 'ppe_kit';
-    if (!editSiteHasIndents && !editIsPpeKit) {
-      return res.status(400).json({ error: 'This Site has no indents yet. Raise its PPE Kit indent first to unlock this category.' });
-    }
+    // Category lock removed on the edit path too (mam 2026-08-26, 3rd
+    // revision) — see the create-path comment above.
 
     // Same per-row validation as POST — including PO qty cap (mam 2026-05-25).
     // On edit, exclude the CURRENT indent's own rows from the already-indented
