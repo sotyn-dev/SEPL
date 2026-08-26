@@ -793,10 +793,16 @@ try {
   console.log('[flow] Socket.IO ready');
 }
 catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
-httpServer.listen(serverPort, '0.0.0.0', () => {
+// Bind loopback-only by default (2026-08-26): on the VPS, nginx is the sole
+// public front door (HTTPS, server_tokens off) — with 0.0.0.0 anyone could
+// hit http://<vps-ip>:5000 directly, skipping nginx and sending logins over
+// plain HTTP. Set HOST=0.0.0.0 explicitly (env) only when LAN access to the
+// bare API is genuinely needed (e.g. phone testing against a dev machine).
+const bindHost = process.env.HOST || '127.0.0.1';
+httpServer.listen(serverPort, bindHost, () => {
   console.log(`\n======================================`);
   console.log(`  Business ERP Server`);
-  console.log(`  Running on port ${serverPort}`);
+  console.log(`  Running on ${bindHost}:${serverPort}`);
   console.log(`  Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`======================================\n`);
 });
