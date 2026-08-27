@@ -104,10 +104,18 @@ export default function VendorPOPrint() {
   // indent_item_rates.final_rate when present (mam, 2026-05-21:
   // "update here if i update rate in 3 vendor"), falling back to the
   // PO-frozen rate, then to the stored amount.
-  const subtotal = items.reduce((s, it) => {
+  let subtotal = items.reduce((s, it) => {
     const r = (it.latest_rate != null && +it.latest_rate > 0) ? +it.latest_rate : +it.rate;
     return s + (+r * +it.quantity || +it.amount || 0);
   }, 0);
+  // No linked lines (uploaded ready-made PO) — fall back to the total the
+  // buyer TYPED on Create Vendor PO (vendor_pos.total_amount = typed base +
+  // freight, pre-GST), so the print matches the amount the list shows
+  // instead of reading Rs 0 (mam 2026-08-27 "from where u pick amount?").
+  // Freight is subtracted here because the taxable line below adds it back.
+  if (items.length === 0 && +po.total_amount > 0) {
+    subtotal = Math.max(0, +po.total_amount - (+po.freight_amount || 0));
+  }
 
   // Freight (mam 2026-06-12). Added to the taxable value so GST is charged
   // on (goods + freight), matching how vendors bill freight. freight_terms

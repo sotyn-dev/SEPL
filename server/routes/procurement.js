@@ -3905,6 +3905,20 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   }
   const lines = Array.isArray(items) ? items.filter(i => i.indent_item_id && +i.quantity > 0 && +i.rate > 0) : [];
 
+  // ── At least ONE linked line is MANDATORY (mam 2026-08-27: "at least one
+  // item need to link for create — as civic sense"). Zero-item POs print an
+  // empty table with an unverifiable total (the VPO/0211 batch), and lines
+  // used to be dropped SILENTLY when the rate was 0 or the indent link was
+  // missing — now creation refuses and says exactly why.
+  if (lines.length === 0) {
+    const sent = Array.isArray(items) ? items.length : 0;
+    return res.status(400).json({
+      error: sent > 0
+        ? `${sent} item(s) were sent but none are valid — every line needs an indent link, quantity > 0 AND rate > 0. Fill the missing rates and try again.`
+        : 'Link at least one indent item (tick the line, enter quantity and rate) — a Vendor PO cannot be created without items.',
+    });
+  }
+
   // PO number is always auto-generated with a year-stamped pattern
   // VPO/YYYY/#### (e.g. VPO/2026/0001) — mam's "professional behaviour"
   // requirement. Any po_number sent by the client is ignored so we have
@@ -7259,6 +7273,235 @@ router.post('/upload-boq-for-site', requirePermission('procurement', 'create'), 
   }
 
   res.json({ message: 'BOQ saved', file_url: fileUrl, items_saved: savedCount, parsed_items_count: parsedItems.length, business_book_id: bbId, po_id: po.id });
+});
+
+// ═══ SOP-07 FLOW BOARD (mam 2026-08-28: "same ditto design, our workflow") ═══
+// One aggregate for the Procurement pipeline dashboard — KPI tiles, the
+// stage pipeline (indent → PO approval → with vendor → arriving → received →
+// billed/debit), SLA alerts, today's tasks, distributions and the activity
+// feed. Everything read-only, computed live from the same tables the tabs use.
+router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const now = Date.now();
+    const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+    const today = iso(now), wkAgo = iso(now - 7 * 864e5), wk2Ago = iso(now - 14 * 864e5), tomorrow = iso(now + 864e5);
+    const cnt = (sql, ...p) => { try { return db.prepare(sql).get(...p)?.c || 0; } catch { return 0; } };
+    const all = (sql, ...p) => { try { return db.prepare(sql).all(...p); } catch { return []; } };
+
+    // ── KPI tiles (this week vs last week) ──────────────────────────────
+    const kpi = (curSql, prevSql, ...base) => {
+      const cur = cnt(curSql, ...base, wkAgo);
+      const prev = cnt(prevSql, ...base, wk2Ago, wkAgo);
+      return { value: cur, prev };
+    };
+    const kpis = {
+      indents: kpi('SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ?',
+                   'SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ? AND date(created_at) < ?'),
+      pos: kpi("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND date(created_at) >= ?",
+               "SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND date(created_at) >= ? AND date(created_at) < ?"),
+      received: kpi('SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ?',
+                    'SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ? AND date(created_at) < ?'),
+      bills: kpi('SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ?',
+                 'SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ? AND date(created_at) < ?'),
+      debit_open: { value: cnt("SELECT COUNT(*) c FROM debit_notes WHERE COALESCE(status,'open') NOT IN ('settled','closed','cancelled')"), prev: null },
+      awaiting_dispatch: { value: cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                                        AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)`), prev: null },
+    };
+
+    // ── Overdue processes, measured in HOURS (mam 2026-08-28) ───────────
+    // Anything sitting past its SOP clock: indents waiting approval > 24h,
+    // POs waiting L1/L2 > 24h, and approved POs past their delivery date
+    // with no GRN. value = how many; oldest_hrs = the worst one's age.
+    {
+      const overdueIndents = all(`SELECT created_at FROM indents WHERE status='submitted' AND created_at <= datetime('now','-1 day')`);
+      const overduePos = all(`SELECT created_at FROM vendor_pos WHERE COALESCE(cancelled,0)=0
+                               AND po_approval IN ('pending_l1','pending_l2') AND created_at <= datetime('now','-1 day')`);
+      const overdueDeliveries = all(`SELECT expected_receipt_date AS created_at FROM vendor_pos vp
+                                      WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                                        AND vp.expected_receipt_date < ? AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)`, today);
+      const ages = [...overdueIndents, ...overduePos, ...overdueDeliveries]
+        .map(r => (now - new Date(String(r.created_at).replace(' ', 'T') + (String(r.created_at).length <= 10 ? 'T00:00:00Z' : 'Z')).getTime()) / 3600000)
+        .filter(h => Number.isFinite(h) && h > 0);
+      kpis.overdue = {
+        value: ages.length,
+        oldest_hrs: ages.length ? Math.round(Math.max(...ages)) : 0,
+        prev: null,
+      };
+    }
+
+    // ── Pipeline columns (mam 2026-08-28 revision): Indent Raised/Approval →
+    // Finalised Rate → PO Create → PO Approval → Purchase Bill → Sales Bill →
+    // Received (GRN) → Billed/Debit. 3 cards + count each.
+    const col = (key, label, sop, rows, total) => ({ key, label, sop, total, cards: rows });
+    // An indent item has a FINALISED rate when its latest rate row carries
+    // final_rate > 0; "on a PO" when a vendor_po_items row points at it.
+    const notOnPo = `NOT EXISTS (SELECT 1 FROM vendor_po_items vpi JOIN vendor_pos vpp ON vpp.id=vpi.vendor_po_id
+                                  WHERE vpi.indent_item_id=ii.id AND COALESCE(vpp.cancelled,0)=0)`;
+    const hasFinalRate = `EXISTS (SELECT 1 FROM indent_item_rates ir WHERE ir.indent_item_id=ii.id AND COALESCE(ir.final_rate,0) > 0)`;
+    const pipeline = [
+      col('indent', 'Indent Raised / Approval', 'S1', all(`
+        SELECT i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
+               COALESCE(i.raised_by_name,'') AS owner, i.created_at
+          FROM indents i WHERE i.status='submitted' ORDER BY i.created_at DESC LIMIT 3`),
+        cnt("SELECT COUNT(*) c FROM indents WHERE status='submitted'")),
+      col('rates', 'Finalised Rate', 'RATE', all(`
+        SELECT i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
+               COUNT(ii.id) || ' item(s) rate pending' AS owner, MAX(i.created_at) AS created_at
+          FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+         WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND NOT ${hasFinalRate}
+         GROUP BY i.id ORDER BY MAX(i.created_at) DESC LIMIT 3`),
+        cnt(`SELECT COUNT(DISTINCT i.id) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+              WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND NOT ${hasFinalRate}`)),
+      col('po_create', 'PO Create', 'PO', all(`
+        SELECT i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
+               COUNT(ii.id) || ' item(s) ready for PO' AS owner, MAX(i.created_at) AS created_at
+          FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+         WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND ${hasFinalRate}
+         GROUP BY i.id ORDER BY MAX(i.created_at) DESC LIMIT 3`),
+        cnt(`SELECT COUNT(DISTINCT i.id) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+              WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND ${hasFinalRate}`)),
+      col('po_approval', 'PO Approval', 'APPROVE', all(`
+        SELECT vp.po_number AS ref, COALESCE(v.name,'—') AS title,
+               CASE vp.po_approval WHEN 'pending_l1' THEN 'L1 pending' ELSE 'L2 pending' END AS owner, vp.created_at
+          FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
+         WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval IN ('pending_l1','pending_l2')
+         ORDER BY vp.created_at DESC LIMIT 3`),
+        cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval IN ('pending_l1','pending_l2')")),
+      col('purchase_bill', 'Purchase Bill', 'P.BILL', all(`
+        SELECT vp.po_number AS ref, COALESCE(v.name,'—') AS title,
+               COALESCE('due ' || vp.expected_receipt_date, 'bill awaited') AS owner, vp.created_at
+          FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
+         WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+           AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)
+         ORDER BY vp.created_at DESC LIMIT 3`),
+        cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+              AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)`)),
+      col('sales_bill', 'Sales Bill', 'DISPATCH', all(`
+        SELECT COALESCE(dn.document_number, 'DN-' || dn.id) AS ref,
+               COALESCE(vp.po_number, CASE WHEN dn.vendor_po_id IS NULL THEN 'From Store' ELSE '—' END) AS title,
+               COALESCE(dn.document_type,'') || CASE WHEN dn.received_at IS NULL THEN ' · in transit' ELSE ' · received' END AS owner,
+               dn.created_at
+          FROM delivery_notes dn LEFT JOIN vendor_pos vp ON vp.id=dn.vendor_po_id
+         ORDER BY dn.created_at DESC LIMIT 3`),
+        cnt('SELECT COUNT(*) c FROM delivery_notes WHERE date(created_at) >= ?', wkAgo)),
+      col('received', 'Received (GRN)', 'S8', all(`
+        SELECT g.grn_number AS ref, COALESCE(vp.po_number,'—') AS title,
+               COALESCE(g.received_by,'') AS owner, g.created_at
+          FROM grn g LEFT JOIN vendor_pos vp ON vp.id=g.vendor_po_id
+         ORDER BY g.created_at DESC LIMIT 3`),
+        cnt('SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ?', wkAgo)),
+      col('billed', 'Billed / Debit', 'S9-S10', all(`
+        SELECT pb.bill_number AS ref, COALESCE(v.name,'—') AS title,
+               'Rs ' || CAST(COALESCE(pb.total_amount, pb.amount, 0) AS INTEGER) AS owner, pb.created_at
+          FROM purchase_bills pb LEFT JOIN vendors v ON v.id=pb.vendor_id
+         ORDER BY pb.created_at DESC LIMIT 3`),
+        cnt('SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ?', wkAgo)),
+    ];
+
+    // ── Stage completion % (mam 2026-08-28): done/all × 100 − 100 — the
+    // scorecard variance convention. 0% = everything through the stage,
+    // −100% = nothing done. null (no work reached the stage) → "clear".
+    {
+      const onPo = `EXISTS (SELECT 1 FROM vendor_po_items vpi JOIN vendor_pos vpp ON vpp.id=vpi.vendor_po_id
+                             WHERE vpi.indent_item_id=ii.id AND COALESCE(vpp.cancelled,0)=0)`;
+      const apprItems = `FROM indent_items ii JOIN indents i ON i.id=ii.indent_id WHERE i.status IN ('approved','crm_approved')`;
+      const pctOf = (done, allc) => (allc > 0 ? Math.round((done / allc) * 100) - 100 : null);
+      const indAll = cnt('SELECT COUNT(*) c FROM indents');
+      const ratesDone = cnt(`SELECT COUNT(*) c ${apprItems} AND (${hasFinalRate} OR ${onPo})`);
+      const ratesPend = cnt(`SELECT COUNT(*) c ${apprItems} AND ${notOnPo} AND NOT ${hasFinalRate}`);
+      const poDone = cnt(`SELECT COUNT(*) c ${apprItems} AND ${onPo}`);
+      const poPend = cnt(`SELECT COUNT(*) c ${apprItems} AND ${notOnPo} AND ${hasFinalRate}`);
+      const apprPend = cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval IN ('pending_l1','pending_l2')");
+      const apprDone = cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval IN ('approved','rejected')");
+      const poApproved = cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval='approved'");
+      const poBilled = cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                             AND EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)`);
+      const dnAll = cnt('SELECT COUNT(*) c FROM delivery_notes');
+      const dnRecv = cnt('SELECT COUNT(*) c FROM delivery_notes WHERE received_at IS NOT NULL');
+      const poRecv = cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                           AND EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)`);
+      const recvBilled = cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0
+                               AND EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)
+                               AND EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)`);
+      const stagePct = {
+        indent: pctOf(indAll - pipeline[0].total, indAll),
+        rates: pctOf(ratesDone, ratesDone + ratesPend),
+        po_create: pctOf(poDone, poDone + poPend),
+        po_approval: pctOf(apprDone, apprDone + apprPend),
+        purchase_bill: pctOf(poBilled, poApproved),
+        sales_bill: pctOf(dnRecv, dnAll),
+        received: pctOf(poRecv, poApproved),
+        billed: pctOf(recvBilled, poRecv),
+      };
+      for (const c of pipeline) c.pct = stagePct[c.key] ?? null;
+    }
+
+    // ── SLA alerts (SOP-07 rule breaks, oldest/most severe first) ───────
+    const alerts = [];
+    for (const r of all(`SELECT indent_number, site_name, raised_by_name, created_at FROM indents
+                          WHERE status='submitted' AND created_at <= datetime('now','-1 day') ORDER BY created_at LIMIT 3`)) {
+      alerts.push({ level: 'red', ref: r.indent_number, text: 'Indent approval pending over 24 hrs', owner: r.raised_by_name || r.site_name, at: r.created_at });
+    }
+    for (const r of all(`SELECT vp.po_number, vp.po_approval, vp.created_at, v.name vname FROM vendor_pos vp
+                          LEFT JOIN vendors v ON v.id=vp.vendor_id
+                          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval IN ('pending_l1','pending_l2')
+                            AND vp.created_at <= datetime('now','-1 day') ORDER BY vp.created_at LIMIT 3`)) {
+      alerts.push({ level: 'red', ref: r.po_number, text: `PO ${r.po_approval === 'pending_l1' ? 'L1' : 'L2'} approval pending over 24 hrs`, owner: r.vname, at: r.created_at });
+    }
+    for (const r of all(`SELECT vp.po_number, v.name vname, vp.created_at FROM vendor_pos vp
+                          LEFT JOIN vendors v ON v.id=vp.vendor_id
+                          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved' AND vp.expected_receipt_date IS NULL
+                            AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)
+                          ORDER BY vp.created_at DESC LIMIT 3`)) {
+      alerts.push({ level: 'amber', ref: r.po_number, text: 'No delivery date on PO — SOP-07.5 "no date, no PO"', owner: r.vname, at: r.created_at });
+    }
+    for (const r of all(`SELECT vp.po_number, v.name vname, vp.expected_receipt_date, vp.created_at FROM vendor_pos vp
+                          LEFT JOIN vendors v ON v.id=vp.vendor_id
+                          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                            AND vp.expected_receipt_date < ? AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)
+                          ORDER BY vp.expected_receipt_date LIMIT 3`, today)) {
+      alerts.push({ level: 'amber', ref: r.po_number, text: `Delivery overdue — was due ${r.expected_receipt_date}`, owner: r.vname, at: r.created_at });
+    }
+
+    // ── Tasks due today ─────────────────────────────────────────────────
+    const tasks = [];
+    for (const r of all(`SELECT vp.po_number, v.name vname FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
+                          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved' AND vp.expected_receipt_date = ?
+                            AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id) LIMIT 4`, today)) {
+      tasks.push({ text: `Receive material — ${r.po_number} (${r.vname || 'vendor'})`, tag: 'GRN today' });
+    }
+    for (const r of all(`SELECT po_number FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval='pending_l1' ORDER BY created_at LIMIT 3`)) {
+      tasks.push({ text: `Approve PO ${r.po_number} (L1)`, tag: 'approval' });
+    }
+    for (const r of all(`SELECT indent_number FROM indents WHERE status='submitted' ORDER BY created_at LIMIT 3`)) {
+      tasks.push({ text: `Approve indent ${r.indent_number}`, tag: 'approval' });
+    }
+
+    // ── Distributions (donuts) ──────────────────────────────────────────
+    const indentDist = all(`SELECT status AS label, COUNT(*) c FROM indents GROUP BY status ORDER BY c DESC`);
+    const poDist = [
+      { label: 'Pending L1', c: cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval='pending_l1'") },
+      { label: 'Pending L2', c: cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval='pending_l2'") },
+      { label: 'With vendor', c: kpis.awaiting_dispatch.value },
+      { label: 'Received', c: cnt('SELECT COUNT(*) c FROM vendor_pos vp WHERE EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)') },
+      { label: 'Rejected', c: cnt("SELECT COUNT(*) c FROM vendor_pos WHERE po_approval='rejected'") },
+    ].filter(d => d.c > 0);
+
+    // ── Activity feed (latest 8 across the chain) ───────────────────────
+    const activity = [
+      ...all(`SELECT 'indent' k, indent_number ref, COALESCE(raised_by_name,'Site') who, 'raised indent' verb, created_at FROM indents ORDER BY created_at DESC LIMIT 4`),
+      ...all(`SELECT 'po' k, po_number ref, '' who, 'Vendor PO created' verb, created_at FROM vendor_pos WHERE COALESCE(cancelled,0)=0 ORDER BY created_at DESC LIMIT 4`),
+      ...all(`SELECT 'grn' k, grn_number ref, COALESCE(received_by,'Store') who, 'received material' verb, created_at FROM grn ORDER BY created_at DESC LIMIT 4`),
+      ...all(`SELECT 'bill' k, bill_number ref, '' who, 'purchase bill booked' verb, created_at FROM purchase_bills ORDER BY created_at DESC LIMIT 3`),
+      ...all(`SELECT 'debit' k, dn_number ref, '' who, 'debit note raised' verb, created_at FROM debit_notes ORDER BY created_at DESC LIMIT 2`),
+    ].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 8);
+
+    res.json({ week: { from: wkAgo, to: today }, kpis, pipeline, alerts: alerts.slice(0, 6), tasks: tasks.slice(0, 6), indentDist, poDist, activity });
+  } catch (err) {
+    console.error('flow-board error', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

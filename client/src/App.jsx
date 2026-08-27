@@ -71,6 +71,7 @@ const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
 const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
 const FileViewer = lazy(() => import('./pages/FileViewer'));
+const ProcurementBoard = lazy(() => import('./pages/ProcurementBoard'));
 const DebitNotePrint = lazy(() => import('./pages/DebitNotePrint'));
 const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
 const DeliveryNotePrint = lazy(() => import('./pages/DeliveryNotePrint'));
@@ -256,6 +257,9 @@ export default function App() {
         <Route path="vendors" element={<ModuleRoute module="vendors"><Vendors /></ModuleRoute>} />
         <Route path="customers" element={<ModuleRoute module="customers"><Customers /></ModuleRoute>} />
         <Route path="procurement" element={<ModuleRoute module="procurement"><Procurement /></ModuleRoute>} />
+        {/* SOP-07 flow board (mam 2026-08-28) — pipeline dashboard for
+            Indent-to-Material, in mam's reference design. */}
+        <Route path="procurement-board" element={<ModuleRoute module="procurement"><ProcurementBoard /></ModuleRoute>} />
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />

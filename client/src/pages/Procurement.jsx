@@ -1628,6 +1628,16 @@ export default function Procurement() {
         return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate };
       });
 
+    // Mandatory items (mam 2026-08-27 "civic sense"): a PO must carry at
+    // least one linked line. Say WHY when ticked lines got filtered out
+    // (missing rate/qty) instead of silently creating an empty PO.
+    if (items.length === 0) {
+      const checkedCount = Object.values(poItemSelection).filter(v => v && v.checked).length;
+      return toast.error(checkedCount > 0
+        ? `${checkedCount} line(s) are ticked but missing quantity or rate — every line needs both before the PO can be created`
+        : 'Tick at least one indent item — a Vendor PO cannot be created without items');
+    }
+
     const fd = new FormData();
     if (form.po_date) fd.append('po_date', form.po_date);
     if (form.expected_receipt_date) fd.append('expected_receipt_date', form.expected_receipt_date);
@@ -2238,6 +2248,11 @@ export default function Procurement() {
             if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
             if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
           }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
+          {/* SOP-07 flow board (mam 2026-08-28) — the pipeline dashboard */}
+          <a href="/procurement-board" className="btn btn-secondary flex items-center gap-2 text-sm"
+             title="Live SOP-07 pipeline: indent → PO → dispatch → GRN → bill">
+            📊 Flow Board
+          </a>
           {/* Training video button moved to the shared Layout header
               (mam 2026-08-26: "every where") — same "procurement" module
               key, so previously added videos still show. */}
