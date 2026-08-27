@@ -970,7 +970,15 @@ function RaciBreakdown({ data }) {
             <tbody>
               {list.map(r => (
                 <tr key={r.step_key} className="border-t">
-                  <td className="p-2 font-medium">{r.step_label}</td>
+                  <td className="p-2 font-medium">
+                    {r.step_label}
+                    {/* R = Responsible, A = Accountable (mam 2026-08-28:
+                        accountable steps show on the card too) */}
+                    {r.role && r.role !== 'R' && (
+                      <span className="ml-1.5 px-1 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px] font-bold align-middle"
+                        title={r.role.includes('A') ? 'On this step this person is ACCOUNTABLE (RACI)' : ''}>{r.role}</span>
+                    )}
+                  </td>
                   <td className="text-center p-2 text-indigo-700">{r.weight != null ? `${r.weight}%` : <span className="text-gray-300">—</span>}</td>
                   <td className="text-center p-2 font-semibold">{r.planned}</td>
                   <td className="text-center p-2 text-emerald-700">{r.actual}</td>

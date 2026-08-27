@@ -679,12 +679,18 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
     const md = {};
     for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id=0`, key)) md[r.step_key] = r;
     // Scorecard attribution: a step counts for a person ONLY where mam explicitly
-    // named them in RACI — the per-record Responsible, else the whole-module
-    // default (record_id 0). Deliberately NO fallback to the record's owner/
-    // creator or the step's native doer (the board keeps those defaults; the
-    // scorecard must not), so opening any person's card shows only the steps
-    // assigned to their name (mam 2026-06-27: "show only where her name … from raci").
-    const responsibleOf = (s, cfg, m, rec) => (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
+    // named them in RACI — per-record, else the whole-module default (record_id
+    // 0). Deliberately NO fallback to the record's owner/creator or the step's
+    // native doer (mam 2026-06-27: "show only where her name … from raci").
+    // Both RESPONSIBLE and ACCOUNTABLE count (mam 2026-08-28: "if i used
+    // accountable then show here") — roleOf returns 'R' / 'A' / null.
+    const roleOf = (cfg, m, userId) => {
+      const rId = (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
+      if (rId === userId) return 'R';
+      const aId = (cfg && cfg.accountable_id) || (m && m.accountable_id) || null;
+      if (aId === userId) return 'A';
+      return null;
+    };
     const defSteps = activeSteps(db, key);  // honour L2 switch + per-step ON/OFF (mam 2026-07-21)
     for (const rec of recs) {
       const recRaci = raciByRec[rec.id] || {};
@@ -699,7 +705,7 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
       for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
-        const responsibleId = responsibleOf(s, cfg, m, rec);
+        const userRole = roleOf(cfg, m, userId);
         // Completion = manual "mark done" stamp, else the module's native date.
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
         if (!stampRaw) {
@@ -717,7 +723,7 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
           // "Landed" = when the previous step finished (prevRaw), i.e. the
           // moment this step became theirs — for a first step that is the
           // record's creation date.
-          if (!recClosed && s.key === rec.current_key && responsibleId === userId) {
+          if (!recClosed && s.key === rec.current_key && userRole) {
             const landedStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
             if (landedStr && landedStr >= sinceDate && landedStr <= untilDate) openOnUser += 1;
             // Landed before the week (or undatable) and still open → backlog.
@@ -732,7 +738,7 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
         // advanced to this step's own closure stamp.
         const landedBeforeStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
         prevRaw = stampRaw;
-        if (responsibleId !== userId) continue;        // not this person's step
+        if (!userRole) continue;                       // not this person's step (R or A)
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue; // closed outside the week
         stepsClosed += 1;
@@ -759,7 +765,7 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     let t = acc.get(k);
     if (!t) {
       t = { module: mod, module_label: modLabel, step_key: stepKey, step_label: stepLabel,
-            planned: 0, actual: 0, pending: 0, pending_before: 0, closed_before: 0, sla_judged: 0, on_time: 0, pending_records: [],
+            planned: 0, actual: 0, pending: 0, pending_before: 0, closed_before: 0, sla_judged: 0, on_time: 0, pending_records: [], role: null,
             // Per-step weightage % + "for next week" commitment, set at the module-default
             // level (record_id 0) in the ⚙ Responsible editor (mam 2026-06-29).
             weight: (weight != null && weight !== '') ? +weight : null,
@@ -790,7 +796,14 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     // creator or the step's native doer (the board keeps those defaults; the
     // scorecard must not), so opening any person's card shows only the steps
     // assigned to their name (mam 2026-06-27: "show only where her name … from raci").
-    const responsibleOf = (s, cfg, m, rec) => (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
+    // R and A both count (mam 2026-08-28) — kept in LOCKSTEP with raciUserWeek.
+    const roleOf = (cfg, m) => {
+      const rId = (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
+      if (rId === userId) return 'R';
+      const aId = (cfg && cfg.accountable_id) || (m && m.accountable_id) || null;
+      if (aId === userId) return 'A';
+      return null;
+    };
     const defSteps = activeSteps(db, key);  // honour L2 switch + per-step ON/OFF (mam 2026-07-21)
     for (const rec of recs) {
       const recRaci = raciByRec[rec.id] || {};
@@ -800,7 +813,8 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
       for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
-        const responsibleId = responsibleOf(s, cfg, m, rec);
+        const userRole = roleOf(cfg, m);
+        const markRole = (t) => { if (userRole && !(t.role || '').includes(userRole)) t.role = t.role ? `${t.role}+${userRole}` : userRole; };
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
         if (!stampRaw) {
           // Same two rules as raciUserWeek: pending only at the record's actual
@@ -808,17 +822,17 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
           // records the flow already moved past), AND only when the step landed
           // on this person inside the week (mam 2026-08-22). These two functions
           // must stay in lockstep or the drill-down disagrees with the KPI row.
-          if (!recClosed && s.key === rec.current_key && responsibleId === userId) {
+          if (!recClosed && s.key === rec.current_key && userRole) {
             const landedStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
             if (landedStr && landedStr >= sinceDate && landedStr <= untilDate) {
               const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
-              t.planned += 1; t.pending += 1;
+              t.planned += 1; t.pending += 1; markRole(t);
               if (t.pending_records.length < 8) t.pending_records.push(rec.title);
             } else if (!landedStr || landedStr < sinceDate) {
               // Backlog from earlier weeks — NOT in planned (2026-08-22 rule),
               // tracked separately for the Pending "up" figure (mam 2026-08-26).
               const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
-              t.pending_before += 1;
+              t.pending_before += 1; markRole(t);
             }
           }
           continue;
@@ -829,11 +843,11 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
         // Landing date BEFORE prevRaw advances — same rule as raciUserWeek.
         const landedBeforeStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
         prevRaw = stampRaw;
-        if (responsibleId !== userId) continue;
+        if (!userRole) continue;                       // not this person's step (R or A)
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue;
         const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
-        t.planned += 1; t.actual += 1;
+        t.planned += 1; t.actual += 1; markRole(t);
         if (landedBeforeStr && landedBeforeStr < sinceDate) t.closed_before += 1;
         const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
         if (sla != null && elapsed != null) { t.sla_judged += 1; if (elapsed <= sla) t.on_time += 1; }
