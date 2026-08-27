@@ -696,6 +696,16 @@ export default function Procurement() {
   const [dispReadySearch, setDispReadySearch]   = useState('');
   const [dispReadyPage, setDispReadyPage]       = useState(1);
   const [dispListSearch, setDispListSearch]     = useState('');
+  // Deep link from the flow boards (mam 2026-08-28: "click → open only that
+  // thing"): ?q=<record no> pre-fills every tab's search box so the opened
+  // tab shows JUST the clicked record, with its action in front.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('q');
+    if (!q) return;
+    setIndSearch(q); setRatesSearch(q); setVpoListSearch(q); setVpoPendingSearch(q);
+    setBillsListSearch(q); setBillsFuSearch(q); setDispReadySearch(q); setDispListSearch(q);
+    setPaymentSearch(q);
+  }, []);
   const [dispListStatus, setDispListStatus]     = useState('all');
   const [dispListFrom, setDispListFrom]         = useState('');
   const [dispListTo, setDispListTo]             = useState('');

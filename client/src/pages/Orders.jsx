@@ -383,7 +383,14 @@ export default function Orders() {
         <>
           <div className="flex justify-between items-center">
             <h3 className="font-semibold">Order Planning</h3>
-            <button onClick={() => { setForm({ po_id: '', business_book_id: '', planned_start: '', planned_end: '', notes: '' }); setModal('planning'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Plan</button>
+            <div className="flex gap-2">
+              {/* SOP-05 rates board (mam 2026-08-28) — vendor & rates BEFORE indent */}
+              <a href="/rates-board" className="btn btn-secondary flex items-center gap-2"
+                 title="SOP-05 live board: packages → rate enquiry → comparison → finalise → MD lock → rate contract">
+                📊 Rates Board
+              </a>
+              <button onClick={() => { setForm({ po_id: '', business_book_id: '', planned_start: '', planned_end: '', notes: '' }); setModal('planning'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Plan</button>
+            </div>
           </div>
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>PO</th><th>Client</th><th>Start</th><th>End</th><th>Status</th></tr></thead>
