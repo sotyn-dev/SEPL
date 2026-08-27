@@ -657,7 +657,9 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
   // openBefore (mam 2026-08-26): still-open steps that landed on the user
   // BEFORE this week — kept OUT of Planned (the 2026-08-22 97-leads rule)
   // but surfaced in the scorecard's Pending "up" so backlog stays visible.
-  let stepsClosed = 0, slaJudged = 0, onTime = 0, openOnUser = 0, openBefore = 0;
+  // closedBefore (mam 2026-08-26 "19/4"): of the steps closed THIS week, how
+  // many had landed on the user BEFORE the week — backlog actually cleared.
+  let stepsClosed = 0, slaJudged = 0, onTime = 0, openOnUser = 0, openBefore = 0, closedBefore = 0;
   for (const key of Object.keys(MODULE_DEFS)) {
     const def = MODULE_DEFS[key];
     let recs;
@@ -726,17 +728,21 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
         const atMs = tsMs(stampRaw);
         let elapsed = null;
         if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
+        // When this step LANDED on its owner — must be read BEFORE prevRaw is
+        // advanced to this step's own closure stamp.
+        const landedBeforeStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
         prevRaw = stampRaw;
         if (responsibleId !== userId) continue;        // not this person's step
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue; // closed outside the week
         stepsClosed += 1;
+        if (landedBeforeStr && landedBeforeStr < sinceDate) closedBefore += 1;
         const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
         if (sla != null && elapsed != null) { slaJudged += 1; if (elapsed <= sla) onTime += 1; }
       }
     }
   }
-  return { stepsClosed, slaJudged, onTime, openOnUser, openBefore, stepsPlanned: stepsClosed + openOnUser };
+  return { stepsClosed, slaJudged, onTime, openOnUser, openBefore, closedBefore, stepsPlanned: stepsClosed + openOnUser };
 }
 
 // Same per-person weekly aggregate as raciUserWeek, but BROKEN DOWN per
@@ -753,7 +759,7 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     let t = acc.get(k);
     if (!t) {
       t = { module: mod, module_label: modLabel, step_key: stepKey, step_label: stepLabel,
-            planned: 0, actual: 0, pending: 0, pending_before: 0, sla_judged: 0, on_time: 0, pending_records: [],
+            planned: 0, actual: 0, pending: 0, pending_before: 0, closed_before: 0, sla_judged: 0, on_time: 0, pending_records: [],
             // Per-step weightage % + "for next week" commitment, set at the module-default
             // level (record_id 0) in the ⚙ Responsible editor (mam 2026-06-29).
             weight: (weight != null && weight !== '') ? +weight : null,
@@ -820,12 +826,15 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
         const atMs = tsMs(stampRaw);
         let elapsed = null;
         if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
+        // Landing date BEFORE prevRaw advances — same rule as raciUserWeek.
+        const landedBeforeStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
         prevRaw = stampRaw;
         if (responsibleId !== userId) continue;
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue;
         const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
         t.planned += 1; t.actual += 1;
+        if (landedBeforeStr && landedBeforeStr < sinceDate) t.closed_before += 1;
         const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
         if (sla != null && elapsed != null) { t.sla_judged += 1; if (elapsed <= sla) t.on_time += 1; }
       }

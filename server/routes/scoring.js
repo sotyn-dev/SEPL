@@ -482,12 +482,12 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:raci_steps_done' || source === 'auto:raci_ontime_pct') {
         if (_raciAgg === undefined) {
           try { _raciAgg = require('../utils/raciModules').raciUserWeek(db, userId, sinceDate, untilDate); }
-          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, openBefore: 0, stepsPlanned: 0 }; }
+          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, openBefore: 0, closedBefore: 0, stepsPlanned: 0 }; }
         }
         // Planned = steps on their plate this week (closed this week + still open
         // on them); Actual = steps they closed this week. So % = how much of the
         // RACI work assigned to this person they have finished (mam 2026-06-27).
-        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed, openBefore: _raciAgg.openBefore || 0 };
+        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed, openBefore: _raciAgg.openBefore || 0, closedBefore: _raciAgg.closedBefore || 0 };
         // On-time %: only meaningful when the user closed SLA-bearing steps this
         // week. Otherwise stay neutral (planned 0 → 0%) so an idle week neither
         // tanks the score nor falsely qualifies for the activity gate.
@@ -511,7 +511,9 @@ function computeScorecard(db, userId, weekStart) {
         const mod = ci >= 0 ? rest.slice(0, ci) : rest;
         const stepKey = ci >= 0 ? rest.slice(ci + 1) : '';
         const row = _raciBreakdown.find(r => r.module === mod && r.step_key === stepKey);
-        return row ? { given: row.planned, done: row.actual, openBefore: row.pending_before || 0 } : { given: 0, done: 0, openBefore: 0 };
+        return row
+          ? { given: row.planned, done: row.actual, openBefore: row.pending_before || 0, closedBefore: row.closed_before || 0 }
+          : { given: 0, done: 0, openBefore: 0, closedBefore: 0 };
       }
 
       // Site-scoped KPIs (Site Engineer / Supervisor templates) — need
@@ -1079,19 +1081,23 @@ function computeScorecard(db, userId, weekStart) {
           if (carry) {
             carryPrevPending = carry.prevPending;
             carryPrevDone = carry.prevDone;
-            pendingWk = Math.max(0, (given || 0) - (done || 0));
-            // up = still open as of the week end: backlog not yet cleared
-            // (prevPending − prevDone) + this week's own leftover.
-            pendingUp = Math.max(0, carry.prevPending - carry.prevDone) + pendingWk;
+            // Pending pair (mam 2026-08-26, "19/4" question): first = ALL still
+            // open as of the week end (uncleared backlog + this week's
+            // leftover); second = of the PREVIOUS tasks, how many were
+            // completed during this week. This week's own leftover is already
+            // visible as Planned − Actual.
+            pendingUp = Math.max(0, carry.prevPending - carry.prevDone)
+                      + Math.max(0, (given || 0) - (done || 0));
+            pendingWk = carry.prevDone;
             pendingAuto = true;
           } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
-            pendingWk = Math.max(0, given - done);
-            // RACI sources also report still-open backlog from earlier weeks
-            // (openBefore) — it joins "up" only, never Planned (mam 2026-08-26,
-            // keeping the 2026-08-22 week-scoped-Planned rule). Checklists
-            // have no backlog concept → openBefore is simply absent (0).
-            pendingUp = pendingWk + (autoRes.openBefore || 0);
+            // RACI: same pair — openBefore joins the outstanding total (never
+            // Planned, 2026-08-22 rule) and closedBefore = backlog steps the
+            // user closed this week. Checklists have neither → 0s.
+            pendingUp = Math.max(0, given - done) + (autoRes.openBefore || 0);
+            pendingWk = autoRes.closedBefore || 0;
             carryPrevPending = autoRes.openBefore || 0;
+            carryPrevDone = autoRes.closedBefore || 0;
             pendingAuto = true;
           }
         } catch (e) {

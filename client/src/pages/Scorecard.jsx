@@ -1075,14 +1075,15 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       </td>
       <td className="text-center p-2">
         {kpi.pending_auto ? (
-          // Auto-computed pending (mam 2026-08-25 "use this column to pending"):
-          // up = total still-open as of the week end (incl. backlog),
-          // wk = this week's own leftover (this week's tasks − done of those).
+          // Auto-computed pending pair (mam 2026-08-26 "19/4"):
+          // first = ALL tasks still pending as of the week end (backlog +
+          // this week's leftover); second = of the PREVIOUS tasks, how many
+          // were completed during this week (green — backlog being cleared).
           <div className="flex items-center justify-center gap-1 font-semibold"
-            title={`${kpi.pending_uptodate} pending up-to-date / ${kpi.pending_work} pending from this week's tasks`}>
+            title={`${kpi.pending_uptodate} pending in total / ${kpi.pending_work} previous task(s) completed this week`}>
             <span className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate}</span>
             <span className="text-gray-300">/</span>
-            <span className={kpi.pending_work > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_work}</span>
+            <span className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work}</span>
           </div>
         ) : (
           <div className="flex items-center justify-center gap-1">
