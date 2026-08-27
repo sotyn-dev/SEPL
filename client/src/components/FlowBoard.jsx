@@ -33,7 +33,10 @@ const StagePct = ({ pct }) => (
   </span>
 );
 
-export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, stageIcons = {}, distsOf, extraTiles, activityBadge, openTo }) {
+// cardExtra(stageKey, card, reload) — optional render prop: an ACTION row
+// inside a record card (e.g. ⚡ Make Plan / 📄 Enquiry Sheet) so the step
+// can be completed right on the board (mam 2026-08-28 "make it here system").
+export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, stageIcons = {}, distsOf, extraTiles, activityBadge, openTo, cardExtra }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   // "+N more" expands the column INLINE (mam 2026-08-28: "show all data
@@ -135,6 +138,7 @@ export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, 
                             <span className="truncate">{card.owner}</span>
                             <span className="whitespace-nowrap">{timeAgo(card.created_at)}</span>
                           </div>
+                          {cardExtra && cardExtra(c.key, card, load)}
                         </Link>
                       ))}
                       {/* "+N more" expands INLINE below — no page jump. */}

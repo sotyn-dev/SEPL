@@ -7542,13 +7542,14 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
     const pkgDone = cnt(`SELECT COUNT(*) c FROM purchase_orders po WHERE EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)`);
 
     const byIndent = (cond, ownerText, limit = 50) => all(`
-      SELECT i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
+      SELECT i.id AS rid, i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
              COUNT(ii.id) || ' ${ownerText}' AS owner, MAX(COALESCE(ir.updated_at, ii.id)) AS created_at
         ${BASE} AND ${cond} GROUP BY i.id ORDER BY MAX(i.created_at) DESC LIMIT ${limit}`);
 
     const pipeline = [
       { key: 'packages', label: 'Package List', sop: 'S1', total: pkgPend, pct: pctOf(pkgDone, pkgDone + pkgPend),
-        cards: all(`SELECT COALESCE(po.po_number, 'PO #' || po.id) AS ref, COALESCE(bb.company_name, bb.client_name, '—') AS title,
+        cards: all(`SELECT po.id AS rid, po.business_book_id AS bb,
+                           COALESCE(po.po_number, 'PO #' || po.id) AS ref, COALESCE(bb.company_name, bb.client_name, '—') AS title,
                            'planning pending' AS owner, po.created_at
                       FROM purchase_orders po LEFT JOIN business_book bb ON bb.id = po.business_book_id
                      WHERE NOT EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)
@@ -7637,6 +7638,46 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
     res.json({ week: { from: wkAgo, to: today }, kpis, pipeline, alerts: alerts.slice(0, 6), tasks: tasks.slice(0, 6), dists, activity });
   } catch (err) {
     console.error('rates-board error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SOP-05.2 Rate Enquiry sheet (mam 2026-08-28 "make it here system"): the
+// ready-made enquiry format for ONE indent's unrated items, quoting the
+// FULL PROJECT QUANTITY (BOQ qty when the item is linked, else the indent
+// qty — "big quantity = better rate"). The /rate-enquiry/:id/print page
+// renders it for print / WhatsApp to vendors.
+router.get('/rate-enquiry/:indentId', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const ind = db.prepare(`SELECT i.*, u.name AS raised_by FROM indents i LEFT JOIN users u ON u.id=i.created_by WHERE i.id=?`).get(req.params.indentId);
+    if (!ind) return res.status(404).json({ error: 'Indent not found' });
+    const items = db.prepare(`
+      SELECT ii.id, COALESCE(im.item_name, ii.description, 'Item') AS name,
+             COALESCE(im.specification,'') AS specification, COALESCE(im.size,'') AS size,
+             COALESCE(im.make, ii.make, '') AS make,
+             COALESCE(im.uom, ii.unit, '') AS uom,
+             ii.quantity AS indent_qty,
+             poi.quantity AS boq_qty,
+             COALESCE(poi.quantity, ii.quantity) AS full_qty,
+             CASE WHEN poi.quantity IS NOT NULL THEN 'BOQ (full project)' ELSE 'indent' END AS qty_source
+        FROM indent_items ii
+        LEFT JOIN item_master im ON im.id = ii.item_master_id
+        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+       WHERE ii.indent_id = ?
+         AND NOT EXISTS (SELECT 1 FROM indent_item_rates ir
+                          WHERE ir.indent_item_id = ii.id
+                            AND (COALESCE(ir.vendor1_rate,0) > 0 OR COALESCE(ir.vendor2_rate,0) > 0
+                                 OR COALESCE(ir.vendor3_rate,0) > 0 OR COALESCE(ir.final_rate,0) > 0))
+       ORDER BY ii.id`).all(req.params.indentId);
+    res.json({
+      indent: { id: ind.id, indent_number: ind.indent_number, site_name: ind.site_name,
+                client_name: ind.client_name, lead_no: ind.lead_no, indent_date: ind.indent_date,
+                raised_by: ind.raised_by_name || ind.raised_by },
+      items,
+    });
+  } catch (err) {
+    console.error('rate-enquiry error', err);
     res.status(500).json({ error: err.message });
   }
 });

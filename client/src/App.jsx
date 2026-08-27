@@ -73,6 +73,7 @@ const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
 const FileViewer = lazy(() => import('./pages/FileViewer'));
 const ProcurementBoard = lazy(() => import('./pages/ProcurementBoard'));
 const RatesBoard = lazy(() => import('./pages/RatesBoard'));
+const RateEnquiryPrint = lazy(() => import('./pages/RateEnquiryPrint'));
 const DebitNotePrint = lazy(() => import('./pages/DebitNotePrint'));
 const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
 const DeliveryNotePrint = lazy(() => import('./pages/DeliveryNotePrint'));
@@ -158,6 +159,8 @@ export default function App() {
       {/* Online file viewer (mam 2026-08-27) — Excel/Word/CSV open in a tab
           instead of downloading; Layout's link interceptor routes here. */}
       <Route path="/file-view" element={<ProtectedRoute><FileViewer /></ProtectedRoute>} />
+      {/* SOP-05.2 rate-enquiry sheet — print page, no app chrome. */}
+      <Route path="/rate-enquiry/:id/print" element={<ProtectedRoute><RateEnquiryPrint /></ProtectedRoute>} />
       <Route path="/vendor-po/:id/print" element={<ProtectedRoute><VendorPOPrint /></ProtectedRoute>} />
       <Route path="/debit-note/:id/print" element={<ProtectedRoute><DebitNotePrint /></ProtectedRoute>} />
       <Route path="/payment-advice/print" element={<ProtectedRoute><PaymentAdvicePrint /></ProtectedRoute>} />
