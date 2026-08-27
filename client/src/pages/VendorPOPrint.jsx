@@ -345,6 +345,22 @@ export default function VendorPOPrint() {
             </tr>
           </thead>
           <tbody>
+            {/* No linked line items (mam 2026-08-27 "why data is not
+                showing"): this PO was saved without linking indent lines —
+                usually an uploaded ready-made (Tally) PO where the items
+                live inside the attached file. Say so instead of printing a
+                silent empty table with Rs 0. */}
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-4 py-6 text-center text-[12px] text-amber-800 bg-amber-50 print:bg-white">
+                  <b>No line items are linked to this PO.</b><br />
+                  {po.file_path
+                    ? <>The items are inside the uploaded PO file — <a className="text-blue-700 underline" href={`/file-view?src=${encodeURIComponent(po.file_path)}`} target="_blank" rel="noreferrer">open the uploaded PO</a>.<br /></>
+                    : null}
+                  To print the items here, open this PO in <b>Edit PO</b> (Procurement → Vendor POs), link the indent lines, and save.
+                </td>
+              </tr>
+            )}
             {items.map((it, idx) => {
               const desc = it.master_name || it.description || '—';
               const detail = [it.size, it.specification].filter(Boolean).join(' · ');
