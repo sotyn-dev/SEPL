@@ -5,7 +5,7 @@ const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { aiComplete, aiConfig, extractJsonArray } = require('../lib/aiComplete');
 const router = express.Router();
 router.use(authMiddleware);
@@ -358,24 +358,44 @@ router.get('/boq', (req, res) => {
         created_by_name: r.created_by_name || null,
         funnel_id: r.funnel_id,
       }));
-    // Legacy leads whose BOQ predates the history table — the latest columns
-    // hold the only copy, so surface those too (no duplicate when history exists).
-    const legacy = db.prepare(`
+    // The lead's own latest columns can hold files the history table never
+    // saw — the ORIGINAL and the REVISED BOQ (mam 2026-08-27 "previous also
+    // add"). Emit each file that isn't already covered by a history row.
+    const historyLinks = new Set(funnel.map(r => `${r.funnel_id}|${r.boq_file_link || ''}`));
+    const latest = db.prepare(`
       SELECT sf.id AS funnel_id,
              COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name,
-             COALESCE(NULLIF(sf.revised_boq_file_link,''), NULLIF(sf.boq_file_link,'')) AS boq_file_link,
+             NULLIF(sf.boq_file_link,'') AS boq_file_link,
+             NULLIF(sf.revised_boq_file_link,'') AS revised_boq_file_link,
              COALESCE(sf.boq_amount, 0) AS total_amount,
-             COALESCE(sf.boq_date, sf.updated_at, sf.created_at) AS created_at
+             COALESCE(sf.boq_date, sf.updated_at, sf.created_at) AS created_at,
+             EXISTS (SELECT 1 FROM sales_funnel_boqs x WHERE x.funnel_id = sf.id) AS has_history
         FROM sales_funnel sf
-       WHERE (COALESCE(sf.boq_file_link,'') <> '' OR COALESCE(sf.boq_amount, 0) > 0)
-         AND NOT EXISTS (SELECT 1 FROM sales_funnel_boqs x WHERE x.funnel_id = sf.id)`).all()
-      .map(r => ({
-        id: `sfl-${r.funnel_id}`, source: 'funnel', title: 'Funnel BOQ',
+       WHERE COALESCE(sf.boq_file_link,'') <> '' OR COALESCE(sf.revised_boq_file_link,'') <> ''
+          OR COALESCE(sf.boq_amount, 0) > 0`).all();
+    for (const r of latest) {
+      const emitted = [];
+      if (r.boq_file_link && !historyLinks.has(`${r.funnel_id}|${r.boq_file_link}`)) {
+        emitted.push({ link: r.boq_file_link, title: 'Funnel BOQ', status: 'funnel', source: 'funnel' });
+      }
+      if (r.revised_boq_file_link && r.revised_boq_file_link !== r.boq_file_link
+          && !historyLinks.has(`${r.funnel_id}|${r.revised_boq_file_link}`)) {
+        emitted.push({ link: r.revised_boq_file_link, title: 'Revised BOQ', status: 'extra', source: 'funnel_extra' });
+      }
+      // A lead with only an amount (no files) and no history still gets one row.
+      if (!emitted.length && !r.has_history && r.total_amount > 0) {
+        emitted.push({ link: null, title: 'Funnel BOQ', status: 'funnel', source: 'funnel' });
+      }
+      emitted.forEach((e, i) => funnel.push({
+        id: `sfl-${r.funnel_id}-${i}`, source: e.source, title: e.title,
         company_name: r.company_name, drawing_required: 0,
-        total_amount: r.total_amount, status: 'funnel', created_at: r.created_at,
-        boq_file_link: r.boq_file_link || null, funnel_id: r.funnel_id,
+        // amount belongs to the LATEST file — earlier files show 0 rather
+        // than repeating a total they may not represent.
+        total_amount: (i === emitted.length - 1) ? r.total_amount : 0,
+        status: e.status, created_at: r.created_at,
+        boq_file_link: e.link, funnel_id: r.funnel_id,
       }));
-    funnel = funnel.concat(legacy);
+    }
   } catch (e) { /* funnel tables missing on a stale DB — native list still serves */ }
   res.json([...native, ...funnel].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
 });
@@ -417,10 +437,166 @@ router.get('/boq/:id', (req, res) => {
   res.json(boq);
 });
 
-// Quotations
+// Quotations — ERP rows PLUS quotations recorded on Sales Funnel leads
+// (mam 2026-08-27: "upload quotations show here"). A funnel lead whose
+// quotation was uploaded in the funnel (quotation_number/file/amount on
+// sales_funnel) shows as a read-only FUNNEL row — unless a real quotations
+// row already points at that lead (funnel_id), which supersedes it.
 router.get('/', (req, res) => {
-  res.json(getDb().prepare(`SELECT q.*, l.company_name, u.name as created_by_name FROM quotations q
-    LEFT JOIN leads l ON q.lead_id=l.id LEFT JOIN users u ON q.created_by=u.id ORDER BY q.created_at DESC`).all());
+  const db = getDb();
+  const native = db.prepare(`SELECT q.*, COALESCE(l.company_name, sf.company_name, sf.client_name) AS company_name, u.name as created_by_name, 'quotation' AS source
+    FROM quotations q
+    LEFT JOIN leads l ON q.lead_id=l.id
+    LEFT JOIN sales_funnel sf ON sf.id=q.funnel_id
+    LEFT JOIN users u ON q.created_by=u.id ORDER BY q.created_at DESC`).all();
+  let funnel = [];
+  try {
+    funnel = db.prepare(`
+      SELECT sf.id AS funnel_id, sf.quotation_number, sf.quotation_file_link,
+             COALESCE(sf.quotation_amount, 0) AS quotation_amount,
+             sf.quotation_sent_by, COALESCE(sf.quotation_sent_date, sf.updated_at, sf.created_at) AS created_at,
+             COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name
+        FROM sales_funnel sf
+       WHERE (COALESCE(sf.quotation_number,'') <> '' OR COALESCE(sf.quotation_file_link,'') <> '' OR COALESCE(sf.quotation_amount,0) > 0)
+         AND NOT EXISTS (SELECT 1 FROM quotations q WHERE q.funnel_id = sf.id)`).all()
+      .map(r => ({
+        id: `sfq-${r.funnel_id}`, source: 'funnel', funnel_id: r.funnel_id,
+        quotation_number: r.quotation_number || `SF-${r.funnel_id}`,
+        company_name: r.company_name,
+        total_amount: r.quotation_amount, discount: 0, final_amount: r.quotation_amount,
+        status: 'sent', created_at: r.created_at,
+        quotation_file_link: r.quotation_file_link || null,
+        created_by_name: r.quotation_sent_by || null,
+      }));
+  } catch (e) { /* stale DB without funnel columns — native list still serves */ }
+  res.json([...native, ...funnel].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+});
+
+// ── SOP-02 S5/S6: Margin Chart + floor rule (mam 2026-08-27) ──────────────
+// GET the fixed margin chart + the floor — feeds the Quote modal's category
+// dropdown and the "below floor goes to Sales Head" hint.
+router.get('/margin-chart', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM quotation_margin_chart ORDER BY category').all();
+  const floor = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_margin_floor_pct'").get()?.value || 10);
+  res.json({ rows, floor });
+});
+
+// Upsert one chart row / set the floor — admin keeps the chart honest.
+router.post('/margin-chart', adminOnly, (req, res) => {
+  const db = getDb();
+  const { category, margin_pct, floor } = req.body || {};
+  if (floor != null) {
+    db.prepare(`INSERT INTO app_settings (key, value) VALUES ('quotation_margin_floor_pct', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(String(+floor || 0));
+  }
+  if (category && String(category).trim()) {
+    db.prepare(`INSERT INTO quotation_margin_chart (category, margin_pct, updated_by, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(category) DO UPDATE SET margin_pct=excluded.margin_pct,
+                  updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`)
+      .run(String(category).trim(), +margin_pct || 0, req.user.id);
+  }
+  res.json({ ok: true });
+});
+
+router.delete('/margin-chart/:id', adminOnly, (req, res) => {
+  getDb().prepare('DELETE FROM quotation_margin_chart WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Who may decide a below-floor margin: admin, anyone holding can_approve on
+// quotations, or the Sales Head by name (SOP-02 S6 names Rajat Sharma —
+// same by-name pattern as the vendor-PO approvers).
+const canDecideMargin = (db, user) => {
+  if (user.role === 'admin') return true;
+  const n = (user.name || '').toLowerCase();
+  if (n.includes('rajat') && n.includes('sharma')) return true;
+  try {
+    return !!db.prepare(`SELECT 1 FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id
+      WHERE ur.user_id=? AND rp.module='quotations' AND rp.can_approve=1`).get(user.id);
+  } catch { return false; }
+};
+
+// Sales Head decision on a below-floor quotation (SOP-02 S6).
+router.post('/:id/margin-decision', (req, res) => {
+  try {
+    const db = getDb();
+    if (!canDecideMargin(db, req.user)) {
+      return res.status(403).json({ error: 'Only the Sales Head (or admin / quotations-approve) can decide a below-floor margin' });
+    }
+    const q = db.prepare('SELECT * FROM quotations WHERE id=?').get(req.params.id);
+    if (!q) return res.status(404).json({ error: 'Quotation not found' });
+    if (q.margin_approval !== 'pending') return res.status(409).json({ error: 'This quotation is not waiting for a margin decision' });
+    const approve = req.body?.action === 'approve';
+    db.prepare('UPDATE quotations SET margin_approval=?, status=?, notes=COALESCE(notes,\'\') || ? WHERE id=?')
+      .run(approve ? 'approved' : 'rejected',
+           approve ? 'draft' : 'rejected',
+           ` | Margin ${approve ? 'APPROVED' : 'REJECTED'} by ${req.user.name}${req.body?.reason ? `: ${req.body.reason}` : ''}`,
+           q.id);
+    // The funnel stage is stamped only once the quote may go out (S7).
+    if (approve && q.funnel_id) {
+      db.prepare(`UPDATE sales_funnel SET quotation_number=?, quotation_amount=?,
+                    quotation_file_link=COALESCE(?, quotation_file_link),
+                    quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(q.quotation_number, q.final_amount, q.quotation_file_link || null, req.user.name || null, q.funnel_id);
+    }
+    res.json({ ok: true, status: approve ? 'draft' : 'rejected' });
+  } catch (err) {
+    console.error('margin-decision error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Quote a Sales Funnel BOQ with margin (mam 2026-08-27, SOP-02 F5-F7):
+// base = the BOQ cost, final = base × (1 + margin%). Creates a real
+// quotation row AND stamps the funnel lead's quotation_* columns so the
+// funnel board and this page stay in sync.
+router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, res) => {
+  try {
+    const { funnel_id, base_amount, margin_pct, category, quotation_file_link, valid_until, notes } = req.body || {};
+    const db = getDb();
+    const sf = db.prepare('SELECT id, company_name, client_name FROM sales_funnel WHERE id=?').get(+funnel_id);
+    if (!sf) return res.status(404).json({ error: 'Funnel lead not found' });
+    const base = +base_amount || 0;
+    if (base <= 0) return res.status(400).json({ error: 'Enter the BOQ base amount' });
+    // Margin resolution (SOP-02 S5 "margin chart, not guesswork"):
+    // explicit % from the form → else the chart's % for the picked category.
+    let margin = margin_pct != null && margin_pct !== '' ? +margin_pct : null;
+    if (margin == null && category) {
+      margin = db.prepare('SELECT margin_pct FROM quotation_margin_chart WHERE category=?').get(category)?.margin_pct ?? null;
+    }
+    margin = +margin || 0;
+    // Floor rule (S6): at/above the floor the quote approves on its own;
+    // below it, it parks as pending_approval for the Sales Head and the
+    // funnel is NOT stamped until the decision.
+    const floor = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_margin_floor_pct'").get()?.value || 10);
+    const belowFloor = margin < floor;
+    const finalAmt = Math.round(base * (1 + margin / 100) * 100) / 100;
+    const { nextSequence } = require('../db/nextSequence');
+    const qNum = nextSequence(db, 'quotations', 'quotation_number', 'QTN-', { startFrom: 0, pad: 4 });
+    const clientName = sf.company_name || sf.client_name || '';
+    const r = db.prepare(`INSERT INTO quotations
+        (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, status, margin_approval, created_by, funnel_id, margin_pct, quotation_file_link)
+        VALUES (NULL, NULL, ?, ?, 0, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`)
+      .run(qNum, base, finalAmt, valid_until || null,
+           notes || `Margin ${margin}%${category ? ` (${category})` : ''} on funnel BOQ — ${clientName}`,
+           belowFloor ? 'pending' : null,
+           req.user.id, sf.id, margin, quotation_file_link || null);
+    if (!belowFloor) {
+      db.prepare(`UPDATE sales_funnel SET quotation_number=?, quotation_amount=?, quotation_file_link=COALESCE(?, quotation_file_link),
+                    quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(qNum, finalAmt, quotation_file_link || null, req.user.name || null, sf.id);
+    }
+    res.status(201).json({
+      id: r.lastInsertRowid, quotation_number: qNum, final_amount: finalAmt,
+      status: 'draft', margin_approval: belowFloor ? 'pending' : null, floor, margin,
+      message: belowFloor ? `Margin ${margin}% is below the ${floor}% floor — sent to the Sales Head for a decision` : undefined,
+    });
+  } catch (err) {
+    console.error('funnel-quote error', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.post('/', requirePermission('quotations', 'create'), (req, res) => {

@@ -2971,6 +2971,18 @@ function initializeDatabase() {
     // previous pending task and current commitment". commitment_prev = the
     // promise on clearing the backlog; commitment stays the current-week one.
     ['score_entries', 'commitment_prev TEXT'],
+    // Quote-with-margin from a funnel BOQ (mam 2026-08-27, SOP-02 F5-F7):
+    // the quotation remembers which funnel lead it came from, the margin %
+    // applied on the BOQ base, and the uploaded quotation file.
+    ['quotations', 'funnel_id INTEGER'],
+    ['quotations', 'margin_pct REAL'],
+    ['quotations', 'quotation_file_link TEXT'],
+    // S6 floor gate lives in its OWN column — the quotations.status CHECK
+    // only allows draft/sent/negotiation/accepted/rejected, and rebuilding
+    // the table on prod to relax it isn't worth the risk. null = not
+    // applicable, 'pending' = below-floor awaiting the Sales Head,
+    // 'approved'/'rejected' = decided.
+    ['quotations', 'margin_approval TEXT'],
     // Tally Bill workflow: a PMS task raised from a bill carries the link back,
     // so Stage 3 can tell when the LAST linked task closes (spec §4 Stage 3).
     ['pms_tasks', 'tally_bill_id INTEGER'],
@@ -5404,6 +5416,23 @@ function initializeDatabase() {
       created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
   } catch (e) { console.error('[schema] sales_funnel_boqs create failed:', e.message); }
+
+  // ─── SOP-02 S5/S6: fixed Margin Chart + margin floor (mam 2026-08-27) ───
+  // "Margin chart, not guesswork": standard margin % per category feeds the
+  // Quote-with-margin action. Floor rule: a quote at/above the floor is
+  // approved on its own; below it goes to the Sales Head for a decision.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS quotation_margin_chart (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL UNIQUE,
+      margin_pct REAL NOT NULL DEFAULT 10,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.prepare(`INSERT INTO app_settings (key, value)
+                SELECT 'quotation_margin_floor_pct', '10'
+                WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key='quotation_margin_floor_pct')`).run();
+  } catch (e) { console.error('[schema] quotation_margin_chart create failed:', e.message); }
 
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,
