@@ -2983,6 +2983,12 @@ function initializeDatabase() {
     // applicable, 'pending' = below-floor awaiting the Sales Head,
     // 'approved'/'rejected' = decided.
     ['quotations', 'margin_approval TEXT'],
+    // SOP-03 (mam 2026-08-27, Negotiation & order booking):
+    // S3 discount gate — null=within chart, 'pending_sh' Sales Head,
+    // 'pending_md' MD sir, then 'approved'/'rejected'.
+    // S4 — the ONE project record created when the order lands.
+    ['quotations', 'discount_approval TEXT'],
+    ['quotations', 'business_book_id INTEGER'],
     // Tally Bill workflow: a PMS task raised from a bill carries the link back,
     // so Stage 3 can tell when the LAST linked task closes (spec §4 Stage 3).
     ['pms_tasks', 'tally_bill_id INTEGER'],
@@ -5433,6 +5439,27 @@ function initializeDatabase() {
                 SELECT 'quotation_margin_floor_pct', '10'
                 WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key='quotation_margin_floor_pct')`).run();
   } catch (e) { console.error('[schema] quotation_margin_chart create failed:', e.message); }
+
+  // ─── SOP-03 S1/S3 (mam 2026-08-27): two-clock negotiation + discount chart ─
+  // Two clocks: every negotiation event flips whose court the ball is in —
+  // 'client' = the client replied (ball comes to us), 'us' = we replied /
+  // re-quoted (ball goes to the client). Days on each side computed live.
+  // Discount chart: within quotation_discount_auto_pct → done on its own;
+  // above it → Sales Head; above quotation_discount_md_pct → MD sir.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS quotation_negotiation_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      quotation_id INTEGER REFERENCES quotations(id) ON DELETE CASCADE,
+      side TEXT NOT NULL CHECK(side IN ('us','client')),
+      note TEXT,
+      at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_by INTEGER REFERENCES users(id)
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_qnl_quote ON quotation_negotiation_log(quotation_id, at)');
+    for (const [k, v] of [['quotation_discount_auto_pct', '5'], ['quotation_discount_md_pct', '10']]) {
+      db.prepare(`INSERT INTO app_settings (key, value) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key=?)`).run(k, v, k);
+    }
+  } catch (e) { console.error('[schema] quotation_negotiation_log create failed:', e.message); }
 
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,

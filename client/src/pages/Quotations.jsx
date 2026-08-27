@@ -18,11 +18,17 @@ const blankRow = () => ({ description: '', quantity: 1, unit: 'nos', rate: 0, it
 // server-side; the Quote modal's category dropdown reads from here.
 function MarginChartEditor({ chart, reload }) {
   const [floor, setFloor] = useState(chart.floor);
+  // SOP-03 S3 discount chart: within auto → done; above → Sales Head; above md → MD sir.
+  const [discAuto, setDiscAuto] = useState(chart.discount_auto);
+  const [discMd, setDiscMd] = useState(chart.discount_md);
   const [cat, setCat] = useState('');
   const [pct, setPct] = useState('');
-  useEffect(() => { setFloor(chart.floor); }, [chart.floor]);
+  useEffect(() => { setFloor(chart.floor); setDiscAuto(chart.discount_auto); setDiscMd(chart.discount_md); }, [chart.floor, chart.discount_auto, chart.discount_md]);
   const saveFloor = async () => {
-    try { await api.post('/quotations/margin-chart', { floor: +floor || 0 }); toast.success('Floor saved'); reload(); }
+    try {
+      await api.post('/quotations/margin-chart', { floor: +floor || 0, discount_auto: +discAuto || 0, discount_md: +discMd || 0 });
+      toast.success('Rules saved'); reload();
+    }
     catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
   };
   const addRow = async (e) => {
@@ -44,13 +50,26 @@ function MarginChartEditor({ chart, reload }) {
   };
   return (
     <div className="space-y-4">
-      <div className="flex items-end gap-2 p-3 bg-amber-50 border border-amber-200 rounded">
-        <div>
-          <label className="label">Margin Floor %</label>
-          <input type="number" className="input w-28" step="0.5" value={floor} onChange={e => setFloor(e.target.value)} />
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded space-y-2">
+        <div className="flex items-end gap-3 flex-wrap">
+          <div>
+            <label className="label">Margin Floor %</label>
+            <input type="number" className="input w-24" step="0.5" value={floor} onChange={e => setFloor(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Discount OK up to %</label>
+            <input type="number" className="input w-24" step="0.5" value={discAuto} onChange={e => setDiscAuto(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">MD sir above %</label>
+            <input type="number" className="input w-24" step="0.5" value={discMd} onChange={e => setDiscMd(e.target.value)} />
+          </div>
+          <button onClick={saveFloor} className="btn btn-primary text-sm">Save Rules</button>
         </div>
-        <button onClick={saveFloor} className="btn btn-primary text-sm">Save Floor</button>
-        <p className="text-[11px] text-amber-800 flex-1">At/above the floor a quote approves on its own. Below it, the Sales Head decides (SOP-02.6).</p>
+        <p className="text-[11px] text-amber-800">
+          Margin: at/above the floor a quote approves on its own; below it the Sales Head decides (SOP-02.6).
+          Discount: within "OK up to" — done; above it — Sales Head; above the MD line — MD sir (SOP-03.3).
+        </p>
       </div>
       <table className="w-full text-sm">
         <thead className="text-[10px] text-gray-500 uppercase bg-gray-50">
@@ -162,9 +181,31 @@ export default function Quotations() {
 
   const updateQuotation = async (id, status) => {
     const q = quotations.find(x => x.id === id);
-    await api.put(`/quotations/${id}`, { ...q, status });
-    toast.success('Status updated');
-    reload();
+    try {
+      const r = await api.put(`/quotations/${id}`, { ...q, status });
+      // SOP-03 S4/S5: booking the order creates the ONE project record and
+      // informs PM / Purchase / Accounts together.
+      if (r.data.project) toast.success(`Order booked! Project record ${r.data.project.lead_no} created in Business Book — PM, Purchase & Accounts informed`, { duration: 7000 });
+      else toast.success('Status updated');
+      reload();
+    } catch (err) { toast.error(err.response?.data?.error || 'Update failed'); }
+  };
+
+  // SOP-03 S1: one tap per negotiation event — flips whose court the ball is in.
+  const logNegotiation = async (id, side) => {
+    try {
+      await api.post(`/quotations/${id}/negotiation-log`, { side });
+      toast.success(side === 'client' ? 'Client reply logged — ball is with US now' : 'Our reply logged — ball is with the CLIENT now');
+      reload();
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not log'); }
+  };
+  const decideDiscount = async (id, action) => {
+    const reason = action === 'reject' ? (prompt('Reject reason (optional):') || '') : '';
+    try {
+      await api.post(`/quotations/${id}/discount-decision`, { action, reason });
+      toast.success(action === 'approve' ? 'Discount approved' : 'Discount rejected');
+      reload();
+    } catch (err) { toast.error(err.response?.data?.error || 'Decision failed'); }
   };
 
   // Quote-with-margin on a funnel BOQ row (mam 2026-08-27, SOP-02 F5-F7):
@@ -317,12 +358,35 @@ export default function Quotations() {
                         <a href={q.quotation_file_link} target="_blank" rel="noreferrer"
                            className="ml-2 text-blue-600 hover:underline text-[11px]">view file</a>
                       )}
+                      {/* SOP-03 S1 two clocks: days waited on each side, and
+                          one-tap logging of who just replied. */}
+                      {q.source !== 'funnel' && q.clock_client_days != null && (
+                        <div className="flex items-center gap-1 mt-1 text-[10px]">
+                          <span className={`px-1.5 py-0.5 rounded font-semibold ${q.clock_ball === 'client' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}
+                            title="Days the ball has been in the CLIENT's court">client {q.clock_client_days}d</span>
+                          <span className={`px-1.5 py-0.5 rounded font-semibold ${q.clock_ball === 'us' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'}`}
+                            title="Days the ball has been in OUR court">us {q.clock_us_days}d</span>
+                          {!['accepted', 'rejected'].includes(q.status) && (
+                            <>
+                              <button onClick={() => logNegotiation(q.id, 'client')} className="text-blue-600 hover:underline" title="Log: the client just replied — ball comes to us">client replied</button>
+                              <span className="text-gray-300">·</span>
+                              <button onClick={() => logNegotiation(q.id, 'us')} className="text-blue-600 hover:underline" title="Log: we just replied / re-quoted — ball goes to the client">we replied</button>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td>{q.company_name}</td>
                     <td>Rs {q.total_amount?.toLocaleString()}</td>
                     <td>Rs {q.discount?.toLocaleString()}</td>
                     <td className="font-semibold">Rs {q.final_amount?.toLocaleString()}</td>
-                    <td><StatusBadge status={q.margin_approval === 'pending' ? 'pending_approval' : q.status} /></td>
+                    <td>
+                      <StatusBadge status={q.margin_approval === 'pending' ? 'pending_approval' : q.status} />
+                      {/* SOP-03 S3 discount gate chip */}
+                      {q.discount_approval === 'pending_sh' && <div className="text-[9px] font-bold text-amber-700 mt-0.5">DISC → SALES HEAD</div>}
+                      {q.discount_approval === 'pending_md' && <div className="text-[9px] font-bold text-red-700 mt-0.5">DISC → MD SIR</div>}
+                      {q.discount_approval === 'rejected' && <div className="text-[9px] font-bold text-red-700 mt-0.5">DISC REJECTED</div>}
+                    </td>
                     <td>
                       {q.source === 'funnel' ? (
                         <span className="text-[11px] text-gray-400">from Sales Funnel</span>
@@ -338,6 +402,13 @@ export default function Quotations() {
                             try { await api.post(`/quotations/${q.id}/margin-decision`, { action: 'reject', reason }); toast.success('Rejected'); reload(); }
                             catch (err) { toast.error(err.response?.data?.error || 'Reject failed'); }
                           }} className="text-[11px] px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-semibold">✕ Reject</button>
+                        </div>
+                      ) : (q.discount_approval === 'pending_sh' || q.discount_approval === 'pending_md') ? (
+                        // SOP-03 S3: above-chart discount — Sales Head / MD decides.
+                        <div className="flex gap-1 items-center">
+                          <span className="text-[10px] text-gray-500 mr-1">{q.discount_approval === 'pending_md' ? 'MD sir:' : 'Sales Head:'}</span>
+                          <button onClick={() => decideDiscount(q.id, 'approve')} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 font-semibold">✓ Approve</button>
+                          <button onClick={() => decideDiscount(q.id, 'reject')} className="text-[11px] px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-semibold">✕ Reject</button>
                         </div>
                       ) : (
                         <div className="flex gap-2 items-center">

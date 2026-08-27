@@ -449,6 +449,35 @@ router.get('/', (req, res) => {
     LEFT JOIN leads l ON q.lead_id=l.id
     LEFT JOIN sales_funnel sf ON sf.id=q.funnel_id
     LEFT JOIN users u ON q.created_by=u.id ORDER BY q.created_at DESC`).all();
+  // SOP-03 S1 two clocks: starting when the quote went out (created_at) the
+  // ball is with the CLIENT; each log entry flips it ('client' replied → ball
+  // to us, 'us' replied → ball to client). Days accumulate on whoever holds it.
+  try {
+    const logs = db.prepare('SELECT quotation_id, side, at FROM quotation_negotiation_log ORDER BY quotation_id, at, id').all();
+    const byQ = {};
+    for (const l of logs) (byQ[l.quotation_id] = byQ[l.quotation_id] || []).push(l);
+    const DAY = 86400000, now = Date.now();
+    for (const q of native) {
+      let ball = 'client', from = new Date(String(q.created_at).replace(' ', 'T') + 'Z').getTime();
+      let cDays = 0, usDays = 0;
+      if (!Number.isFinite(from)) from = now;
+      for (const ev of (byQ[q.id] || [])) {
+        const at = new Date(String(ev.at).replace(' ', 'T') + 'Z').getTime();
+        if (Number.isFinite(at) && at > from) {
+          if (ball === 'client') cDays += (at - from) / DAY; else usDays += (at - from) / DAY;
+          from = at;
+        }
+        ball = ev.side === 'client' ? 'us' : 'client';
+      }
+      // Clocks stop once the negotiation is over.
+      if (!['accepted', 'rejected'].includes(q.status) && now > from) {
+        if (ball === 'client') cDays += (now - from) / DAY; else usDays += (now - from) / DAY;
+      }
+      q.clock_client_days = Math.round(cDays * 10) / 10;
+      q.clock_us_days = Math.round(usDays * 10) / 10;
+      q.clock_ball = ball;
+    }
+  } catch (e) { /* log table missing on a stale DB — list still serves */ }
   let funnel = [];
   try {
     funnel = db.prepare(`
@@ -478,18 +507,26 @@ router.get('/', (req, res) => {
 router.get('/margin-chart', (req, res) => {
   const db = getDb();
   const rows = db.prepare('SELECT * FROM quotation_margin_chart ORDER BY category').all();
-  const floor = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_margin_floor_pct'").get()?.value || 10);
-  res.json({ rows, floor });
+  const setting = (k, d) => +(db.prepare('SELECT value FROM app_settings WHERE key=?').get(k)?.value || d);
+  res.json({
+    rows,
+    floor: setting('quotation_margin_floor_pct', 10),
+    // SOP-03 S3 discount chart: within auto → done; above → Sales Head;
+    // above md → MD sir.
+    discount_auto: setting('quotation_discount_auto_pct', 5),
+    discount_md: setting('quotation_discount_md_pct', 10),
+  });
 });
 
 // Upsert one chart row / set the floor — admin keeps the chart honest.
 router.post('/margin-chart', adminOnly, (req, res) => {
   const db = getDb();
-  const { category, margin_pct, floor } = req.body || {};
-  if (floor != null) {
-    db.prepare(`INSERT INTO app_settings (key, value) VALUES ('quotation_margin_floor_pct', ?)
-                ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(String(+floor || 0));
-  }
+  const { category, margin_pct, floor, discount_auto, discount_md } = req.body || {};
+  const setSetting = (k, v) => db.prepare(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(k, String(+v || 0));
+  if (floor != null) setSetting('quotation_margin_floor_pct', floor);
+  if (discount_auto != null) setSetting('quotation_discount_auto_pct', discount_auto);
+  if (discount_md != null) setSetting('quotation_discount_md_pct', discount_md);
   if (category && String(category).trim()) {
     db.prepare(`INSERT INTO quotation_margin_chart (category, margin_pct, updated_by, updated_at)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
@@ -599,22 +636,132 @@ router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, re
   }
 });
 
+// ── SOP-03 S3: discount chart gate (mam 2026-08-27) ───────────────────────
+// Discount within quotation_discount_auto_pct → done on its own. Above it →
+// Sales Head. Above quotation_discount_md_pct → MD sir.
+const discountGate = (db, total, discount) => {
+  const pct = +total > 0 ? Math.round(((+discount || 0) / +total) * 10000) / 100 : 0;
+  const auto = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_discount_auto_pct'").get()?.value || 5);
+  const mdAt = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_discount_md_pct'").get()?.value || 10);
+  return { pct, auto, mdAt, level: pct > mdAt ? 'pending_md' : (pct > auto ? 'pending_sh' : null) };
+};
+
 router.post('/', requirePermission('quotations', 'create'), (req, res) => {
   const { lead_id, boq_id, total_amount, discount, final_amount, valid_until, notes } = req.body;
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
   const qNum = nextSequence(db, 'quotations', 'quotation_number', 'QTN-', { startFrom: 0, pad: 4 });
+  const gate = discountGate(db, total_amount, discount);
   const r = db.prepare(
-    'INSERT INTO quotations (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)'
-  ).run(lead_id, boq_id, qNum, total_amount, discount || 0, final_amount, valid_until, notes, req.user.id);
-  res.status(201).json({ id: r.lastInsertRowid, quotation_number: qNum });
+    'INSERT INTO quotations (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, discount_approval, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)'
+  ).run(lead_id, boq_id, qNum, total_amount, discount || 0, final_amount, valid_until, notes, gate.level, req.user.id);
+  res.status(201).json({
+    id: r.lastInsertRowid, quotation_number: qNum, discount_approval: gate.level,
+    message: gate.level === 'pending_md' ? `Discount ${gate.pct}% is above ${gate.mdAt}% — needs MD sir's approval`
+           : gate.level === 'pending_sh' ? `Discount ${gate.pct}% is above the ${gate.auto}% chart — needs the Sales Head's approval`
+           : undefined,
+  });
 });
 
 router.put('/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const { total_amount, discount, final_amount, status, valid_until, notes } = req.body;
-  getDb().prepare('UPDATE quotations SET total_amount=?, discount=?, final_amount=?, status=?, valid_until=?, notes=? WHERE id=?')
-    .run(total_amount, discount, final_amount, status, valid_until, notes, req.params.id);
-  res.json({ message: 'Updated' });
+  const db = getDb();
+  const prev = db.prepare('SELECT * FROM quotations WHERE id=?').get(req.params.id);
+  if (!prev) return res.status(404).json({ error: 'Quotation not found' });
+  // Re-run the discount gate ONLY when the discount actually changed —
+  // an already-approved discount must not re-park on a plain status change.
+  let discountApproval = prev.discount_approval;
+  if (+discount !== +prev.discount || +total_amount !== +prev.total_amount) {
+    discountApproval = discountGate(db, total_amount, discount).level;
+  }
+  // Gates on booking the order: margin (SOP-02 S6) and discount (SOP-03 S3)
+  // must both be settled before 'accepted'.
+  if (status === 'accepted') {
+    if (prev.margin_approval === 'pending') return res.status(409).json({ error: 'Margin is below the floor and still waiting for the Sales Head — cannot book the order yet' });
+    if (discountApproval === 'pending_sh') return res.status(409).json({ error: 'Discount is above the chart and waiting for the Sales Head — cannot book the order yet' });
+    if (discountApproval === 'pending_md') return res.status(409).json({ error: "Discount needs MD sir's approval — cannot book the order yet" });
+  }
+  db.prepare('UPDATE quotations SET total_amount=?, discount=?, final_amount=?, status=?, valid_until=?, notes=?, discount_approval=? WHERE id=?')
+    .run(total_amount, discount, final_amount, status, valid_until, notes, discountApproval, req.params.id);
+
+  // ── SOP-03 S4/S5: "Order mila!" — ONE project record + handover ─────────
+  // First transition into 'accepted' creates the Business Book record the
+  // whole company uses, and informs PM / Purchase / Accounts together.
+  let project = null;
+  if (status === 'accepted' && prev.status !== 'accepted' && !prev.business_book_id) {
+    try {
+      const { nextSequence } = require('../db/nextSequence');
+      const lead = prev.lead_id ? db.prepare('SELECT company_name, contact_person, email FROM leads WHERE id=?').get(prev.lead_id) : null;
+      const sf = prev.funnel_id ? db.prepare('SELECT company_name, client_name FROM sales_funnel WHERE id=?').get(prev.funnel_id) : null;
+      const clientName = lead?.company_name || sf?.company_name || sf?.client_name || 'Client';
+      const leadNo = nextSequence(db, 'business_book', 'lead_no', 'SEPL', { startFrom: 20000, pad: 5 });
+      const bb = db.prepare(`INSERT INTO business_book
+          (lead_no, client_name, company_name, project_name, sale_amount_without_gst, po_amount)
+          VALUES (?,?,?,?,?,?)`)
+        .run(leadNo, clientName, clientName, `${clientName} — ${prev.quotation_number}`,
+             +final_amount || +prev.final_amount || 0, +final_amount || +prev.final_amount || 0);
+      db.prepare('UPDATE quotations SET business_book_id=? WHERE id=?').run(bb.lastInsertRowid, prev.id);
+      project = { business_book_id: bb.lastInsertRowid, lead_no: leadNo };
+      // S5 handover — PM, Purchase and Accounts informed together: the
+      // module owners of DPR / Procurement / Payments (where set) + admins.
+      try {
+        const owners = db.prepare(`SELECT DISTINCT owner_user_id AS id FROM module_owners
+            WHERE module_key IN ('dpr','procurement','payment_required') AND owner_user_id IS NOT NULL`).all();
+        const admins = db.prepare("SELECT id FROM users WHERE role='admin' AND COALESCE(active,1)=1").all();
+        const ids = [...new Set([...owners, ...admins].map(u => u.id))];
+        const title = `Order booked — ${clientName}`;
+        const body = `${prev.quotation_number} accepted · Rs ${(+final_amount || 0).toLocaleString('en-IN')} · project record ${leadNo} created. Handover pack: BOQ & files on the Quotations page / Sales Funnel.`;
+        const ins = db.prepare(`INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+                                VALUES (?,?,?,?,?,?,?)`);
+        for (const uid of ids) ins.run(uid, 'order_booked', title, body, '/business-book', 'in_app', `order-booked-q${prev.id}-${uid}`);
+        try { require('../lib/push').notifyMany(ids, { title, body, url: '/business-book' }); } catch (_) {}
+      } catch (e) { console.warn('[order-booked] notify failed:', e.message); }
+    } catch (e) { console.error('[order-booked] project record failed:', e.message); }
+  }
+  res.json({ message: 'Updated', discount_approval: discountApproval, project });
+});
+
+// S3 decision: pending_sh → Sales Head (Rajat Sharma / quotations-approve /
+// admin); pending_md → MD sir (Ankur Kaplesh / admin).
+router.post('/:id/discount-decision', (req, res) => {
+  try {
+    const db = getDb();
+    const q = db.prepare('SELECT * FROM quotations WHERE id=?').get(req.params.id);
+    if (!q) return res.status(404).json({ error: 'Quotation not found' });
+    if (q.discount_approval !== 'pending_sh' && q.discount_approval !== 'pending_md') {
+      return res.status(409).json({ error: 'This quotation is not waiting for a discount decision' });
+    }
+    const n = (req.user.name || '').toLowerCase();
+    const isMd = n.includes('ankur') || req.user.role === 'admin';
+    if (q.discount_approval === 'pending_md' && !isMd) {
+      return res.status(403).json({ error: "This discount level needs MD sir (Ankur Kaplesh) or admin" });
+    }
+    if (q.discount_approval === 'pending_sh' && !canDecideMargin(db, req.user) && !isMd) {
+      return res.status(403).json({ error: 'Only the Sales Head (Rajat Sharma), quotations-approve holders, MD or admin can decide this discount' });
+    }
+    const approve = req.body?.action === 'approve';
+    db.prepare("UPDATE quotations SET discount_approval=?, notes=COALESCE(notes,'') || ? WHERE id=?")
+      .run(approve ? 'approved' : 'rejected',
+           ` | Discount ${approve ? 'APPROVED' : 'REJECTED'} by ${req.user.name}${req.body?.reason ? `: ${req.body.reason}` : ''}`,
+           q.id);
+    res.json({ ok: true, discount_approval: approve ? 'approved' : 'rejected' });
+  } catch (err) {
+    console.error('discount-decision error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SOP-03 S1: two-clock negotiation log ──────────────────────────────────
+// One tap per event: 'client' = client replied (ball comes to US),
+// 'us' = we replied / re-quoted (ball goes to the CLIENT).
+router.post('/:id/negotiation-log', requirePermission('quotations', 'edit'), (req, res) => {
+  const db = getDb();
+  const side = req.body?.side === 'client' ? 'client' : 'us';
+  const q = db.prepare('SELECT id FROM quotations WHERE id=?').get(req.params.id);
+  if (!q) return res.status(404).json({ error: 'Quotation not found' });
+  db.prepare('INSERT INTO quotation_negotiation_log (quotation_id, side, note, created_by) VALUES (?,?,?,?)')
+    .run(q.id, side, (req.body?.note || '').slice(0, 300) || null, req.user.id);
+  res.json({ ok: true });
 });
 
 router.delete('/:id', requirePermission('quotations', 'delete'), (req, res) => {
