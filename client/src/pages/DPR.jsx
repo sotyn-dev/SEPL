@@ -1030,8 +1030,10 @@ export default function DPR() {
             </div>
           )}
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <input type="date" className="input w-48" value={filterDate} onChange={e => { setFilterDate(e.target.value); setDateTouched(true); }} />
-            <div className="flex gap-2">
+            <input type="date" className="input w-full sm:w-48" value={filterDate} onChange={e => { setFilterDate(e.target.value); setDateTouched(true); }} />
+            {/* flex-wrap: mobile par 6 buttons ek line mein screen se bahar
+                chale jate the (741px) — ab wrap hote hain (mam 2026-08-03) */}
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
               <button onClick={() => exportCsv('dpr-reports',
                 ['Site','Date','By','Status','Plan Cost (B-plan)','Actual Cost (B-actual)','Actual Total (A)','Variance (B-act − B-plan)','Approval'],
                 dprs.map(d => {
@@ -1708,11 +1710,11 @@ export default function DPR() {
                   <tbody>
                     {dprMaterials.map((m, i) => (
                       <tr key={m.item_master_id} className="border-b border-indigo-100">
-                        <td className="py-1 pr-2">{m.material_name} <span className="text-gray-400">({m.unit})</span></td>
-                        <td className="py-1 px-2 text-right tabular-nums">{m.stock_qty}</td>
-                        <td className="py-1 px-2 text-right tabular-nums">{m.issued_today > 0 ? m.issued_today : <span className="text-gray-300">—</span>}</td>
-                        <td className="py-1 px-2 text-right tabular-nums">{m.returned_today > 0 ? m.returned_today : <span className="text-gray-300">—</span>}</td>
-                        <td className="py-1 pl-2 text-right">
+                        <td className="py-1 pr-2 min-w-[150px] break-words">{m.material_name} <span className="text-gray-400 whitespace-nowrap">({m.unit})</span></td>
+                        <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{m.stock_qty}</td>
+                        <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{m.issued_today > 0 ? m.issued_today : <span className="text-gray-300">—</span>}</td>
+                        <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{m.returned_today > 0 ? m.returned_today : <span className="text-gray-300">—</span>}</td>
+                        <td className="py-1 pl-2 text-right min-w-[100px]">
                           {m.from_slips ? (
                             <span className="font-semibold text-indigo-800 tabular-nums" title="Auto from issue/return slips — the jr. engineer's GRN slips are the source of truth">
                               {m.consumed_today} <span className="text-[9px] font-normal text-indigo-500">auto·slips</span>
@@ -1971,7 +1973,7 @@ export default function DPR() {
       <Modal isOpen={mmModal} onClose={() => setMmModal(false)} title="Morning Manpower — Contractor Attendance">
         <div className="space-y-3">
           <p className="text-xs text-gray-500">Record which contractors are on site this morning and how many manpower each brought. This pre-fills the DPR’s “Contractors on Site” when you submit it.</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Site *</label>
               <select className="select" value={mmSite}
@@ -2113,7 +2115,7 @@ export default function DPR() {
 
       <Modal isOpen={planModal} onClose={() => setPlanModal(false)} title="Plan This Week — 7-Day DPR Plan" wide>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Site *</label>
               <select className="select" value={planSiteId}
@@ -2358,9 +2360,9 @@ export default function DPR() {
             const totalPl = totalA - totalB;
             return (
               <div className="bg-gray-50 border rounded px-3 py-2 text-xs space-y-1">
-                <div className="flex justify-between font-semibold">
+                <div className="flex flex-wrap justify-between gap-x-2 gap-y-0.5 font-semibold">
                   <span>Week Totals</span>
-                  <span>{planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days · Labour Value (A) ₹{Math.round(totalA).toLocaleString('en-IN')} · Cost (B) ₹{Math.round(totalB).toLocaleString('en-IN')}</span>
+                  <span className="text-right">{planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days · Labour (A) ₹{Math.round(totalA).toLocaleString('en-IN')} · Cost (B) ₹{Math.round(totalB).toLocaleString('en-IN')}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-gray-500">Plan P/L (labour rates se — BOQ rate nahi)</span>
@@ -2474,14 +2476,14 @@ export default function DPR() {
                 <tbody>
                   {slipRows.map((r, i) => (
                     <tr key={r.item_master_id} className="border-b">
-                      <td className="py-1 pr-2">
-                        {r.name} <span className="text-gray-400">({r.unit})</span>
+                      <td className="py-1 pr-2 min-w-[150px] break-words">
+                        {r.name} <span className="text-gray-400 whitespace-nowrap">({r.unit})</span>
                         {r.age_status === 'orange' && <span title={`${r.age_days} din se store mein pada hai (15 allowed)`} className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300">🟠 {r.age_days}d</span>}
                         {r.age_status === 'red' && <span title={`${r.age_days} din se store mein pada hai (max 30!)`} className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-red-50 text-red-700 border-red-300">🔴 {r.age_days}d</span>}
                       </td>
-                      <td className="py-1 px-2 text-right tabular-nums">{r.cap}</td>
-                      {slipType === 'issue' && <td className="py-1 px-2 text-right tabular-nums text-blue-700">{r.planned_today > 0 ? r.planned_today : <span className="text-gray-300">—</span>}</td>}
-                      <td className="py-1 pl-2 text-right">
+                      <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{r.cap}</td>
+                      {slipType === 'issue' && <td className="py-1 px-2 text-right tabular-nums text-blue-700 whitespace-nowrap">{r.planned_today > 0 ? r.planned_today : <span className="text-gray-300">—</span>}</td>}
+                      <td className="py-1 pl-2 text-right min-w-[100px]">
                         <input type="number" min="0" max={r.cap} step="0.01"
                                disabled={slipType === 'issue' && r.cap <= 0}
                                title={slipType === 'issue' && r.cap <= 0 ? 'Store mein 0 hai — pehle stock lao (Opening Stock / transfer / PO receive)' : ''}
@@ -2601,11 +2603,11 @@ function AgeingWidget() {
             <tbody>
               {flagged.slice(0, 15).map((r, i) => (
                 <tr key={i} className="border-b">
-                  <td className="py-1 pr-2">{r.site_name}</td>
-                  <td className="py-1 px-2">{r.engineer_name || <span className="text-red-500 font-semibold">koi assign nahi!</span>}</td>
-                  <td className="py-1 px-2">{r.material_name} <span className="text-gray-400">({r.uom || 'nos'})</span></td>
-                  <td className="py-1 px-2 text-right tabular-nums">{r.quantity}</td>
-                  <td className="py-1 pl-2 text-right">
+                  <td className="py-1 pr-2 min-w-[120px] break-words">{r.site_name}</td>
+                  <td className="py-1 px-2 min-w-[110px]">{r.engineer_name || <span className="text-red-500 font-semibold whitespace-nowrap">koi assign nahi!</span>}</td>
+                  <td className="py-1 px-2 min-w-[140px] break-words">{r.material_name} <span className="text-gray-400 whitespace-nowrap">({r.uom || 'nos'})</span></td>
+                  <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{r.quantity}</td>
+                  <td className="py-1 pl-2 text-right whitespace-nowrap">
                     <span className={`font-bold px-1.5 py-0.5 rounded border text-[10px] ${r.status === 'red' ? 'bg-red-50 text-red-700 border-red-300' : 'bg-amber-50 text-amber-700 border-amber-300'}`}>
                       {r.age_days} din {r.status === 'red' ? '🔴' : '🟠'}
                     </span>
@@ -2810,19 +2812,21 @@ function AajKaUpdate() {
                   <tbody>
                     {rows.map((r, i) => (
                       <tr key={i} className="border-b">
-                        <td className="py-2 pr-2">{r.description} <span className="text-gray-400 text-xs">({r.unit})</span></td>
-                        <td className="py-2 px-2 text-right tabular-nums text-gray-600">{r.planned_qty}</td>
-                        <td className="py-2 pl-2">
+                        {/* min-widths: crush hone ki jagah table scroll kare —
+                            mobile par words kabhi na kate (mam 2026-08-03) */}
+                        <td className="py-2 pr-2 min-w-[150px] break-words">{r.description} <span className="text-gray-400 text-xs whitespace-nowrap">({r.unit})</span></td>
+                        <td className="py-2 px-2 text-right tabular-nums text-gray-600 whitespace-nowrap">{r.planned_qty}</td>
+                        <td className="py-2 pl-2 min-w-[150px]">
                           <div className="flex items-center gap-1">
                             <input type="number" min="0" step="0.01" placeholder="0"
-                              className="input text-right text-base font-semibold w-full"
+                              className="input text-right text-base font-semibold w-full min-w-[70px]"
                               value={r.done}
                               onChange={e => setRows(prev => prev.map((x, j) => j === i ? { ...x, done: e.target.value } : x))} />
                             {/* One-tap confirm: "target jitna hua" — deliberate
                                 tap, not auto-fill, so 100% days stay honest */}
                             <button type="button" title="Target jitna hua — ek tap"
                               onClick={() => setRows(prev => prev.map((x, j) => j === i ? { ...x, done: String(x.planned_qty) } : x))}
-                              className={`text-[10px] font-semibold border rounded px-1.5 py-1 whitespace-nowrap ${+r.done === +r.planned_qty && +r.done > 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'text-emerald-700 border-emerald-300 hover:bg-emerald-50'}`}>
+                              className={`text-[10px] font-semibold border rounded px-1.5 py-1 whitespace-nowrap flex-shrink-0 ${+r.done === +r.planned_qty && +r.done > 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'text-emerald-700 border-emerald-300 hover:bg-emerald-50'}`}>
                               ✓ full
                             </button>
                           </div>
@@ -2907,7 +2911,7 @@ function AajKaUpdate() {
               {plChip('Is mahine', pl?.monthly)}
             </div>
             <button onClick={submit} disabled={busy || uploading}
-              className="btn btn-primary text-base font-bold px-6 py-3">
+              className="btn btn-primary text-base font-bold px-6 py-3 w-full sm:w-auto">
               {busy ? 'Ban raha hai…' : '✅ DPR SUBMIT KARO'}
             </button>
           </div>
@@ -2918,7 +2922,9 @@ function AajKaUpdate() {
 }
 
 // SposComplianceGrid — SPOS Daily Compliance (mam 2026-07-29, SPOS PDF).
-// One row per active site, four checks from the SPOS HR checklist:
+// One row per SITE ENGINEER (mam 2026-08-21: "no need compliance eng wise
+// that ok") — sites with no engineer no longer get a row; the four checks
+// are rolled up across all of that engineer's active sites:
 // morning punch by 09:00 · DPR by evening cutoff · site photos · weekly
 // plan approved. Renders above the Engineer Compliance analytics; the
 // same data feeds the 18:30 Exception Report email to management.
@@ -2940,29 +2946,111 @@ function SposComplianceGrid() {
         .toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
     } catch { return ''; }
   };
-  const Chip = ({ tone, children }) => {
+  const Chip = ({ tone, title, children }) => {
     const cls = tone === 'ok' ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
       : tone === 'warn' ? 'bg-amber-50 text-amber-700 border-amber-300'
       : tone === 'bad' ? 'bg-red-50 text-red-700 border-red-300'
       : 'bg-gray-50 text-gray-400 border-gray-200';
-    return <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap ${cls}`}>{children}</span>;
+    return <span title={title} className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap ${cls}`}>{children}</span>;
   };
+  // v === null means 0/0 — no engineer-owned site, so there is no denominator.
+  // The tiles are hidden in that state, but never let a missing number render
+  // as a red "0%" / "%" if that guard ever drifts (audit 2026-08-21).
   const Pct = ({ v, label }) => (
     <div className="text-center px-3">
-      <div className={`text-xl font-bold ${v >= 90 ? 'text-emerald-600' : v >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{v}%</div>
+      {v == null
+        ? <div className="text-xl font-bold text-gray-400" title="No engineer-owned site — nothing to measure">—</div>
+        : <div className={`text-xl font-bold ${v >= 90 ? 'text-emerald-600' : v >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{v}%</div>}
       <div className="text-[10px] text-gray-500 uppercase">{label}</div>
     </div>
   );
+
+  // Engineer-wise chips (mam 2026-08-21): a fraction across all that
+  // engineer's sites, never a boolean that hides a gap — ✓ only when every
+  // site passed. A single-site engineer keeps the old wording. Shared by the
+  // desktop table and the mobile cards so the two can't drift.
+  const tip = (...parts) => parts.filter(Boolean).join(' · ') || undefined;
+  const punchChip = (c) => {
+    const title = tip(c.missing_sites.length && `missing: ${c.missing_sites.join(', ')}`,
+      c.late_sites.length && `after 9 AM: ${c.late_sites.join(', ')}`);
+    if (c.total === 1) {
+      return !c.done ? { tone: 'bad', text: '✗ missing', title }
+        : c.on_time ? { tone: 'ok', text: `✓ ${fmtT(c.at)}`, title }
+        : { tone: 'warn', text: `⚠ after 9 · ${fmtT(c.at)}`, title };
+    }
+    const tone = c.done === 0 ? 'bad' : (c.done === c.total && c.late === 0) ? 'ok' : 'warn';
+    const mark = c.done === 0 ? '✗' : c.done === c.total ? '✓' : '⚠';
+    return { tone, text: `${mark} ${c.done}/${c.total}${c.late ? ` · ${c.late} late` : ''}`, title };
+  };
+  const dprChip = (c) => {
+    const title = tip(c.missing_sites.length && `missing: ${c.missing_sites.join(', ')}`,
+      c.late_sites.length && `after cutoff: ${c.late_sites.join(', ')}`);
+    if (c.total === 1) {
+      return !c.done ? { tone: 'bad', text: '✗ missing', title }
+        : c.on_time ? { tone: 'ok', text: `✓ ${fmtT(c.at)}`, title }
+        : { tone: 'warn', text: `⚠ late · ${fmtT(c.at)}`, title };
+    }
+    const tone = c.done === 0 ? 'bad' : (c.done === c.total && c.late === 0) ? 'ok' : 'warn';
+    const mark = c.done === 0 ? '✗' : c.done === c.total ? '✓' : '⚠';
+    return { tone, text: `${mark} ${c.done}/${c.total}${c.late ? ` · ${c.late} late` : ''}`, title };
+  };
+  const photosChip = (c) => {
+    const title = c.missing_sites.length ? `no photos: ${c.missing_sites.join(', ')}` : undefined;
+    if (c.total === 1) {
+      return c.done ? { tone: 'ok', text: '✓', title }
+        : c.missing ? { tone: 'bad', text: '✗ none', title }
+        : { tone: 'none', text: '—', title };
+    }
+    if (c.done === c.total) return { tone: 'ok', text: `✓ ${c.done}/${c.total}`, title };
+    if (c.done === 0 && c.missing === 0) return { tone: 'none', text: '—', title };
+    if (c.done === 0) return { tone: 'bad', text: `✗ 0/${c.total}`, title };
+    return { tone: 'warn', text: `⚠ ${c.done}/${c.total}`, title };
+  };
+  const planChip = (c) => {
+    const title = tip(c.missing_sites.length && `no plan: ${c.missing_sites.join(', ')}`,
+      c.pending_sites.length && `pending PM: ${c.pending_sites.join(', ')}`,
+      c.rejected_sites.length && `rejected: ${c.rejected_sites.join(', ')}`);
+    if (c.total === 1) {
+      return c.approved ? { tone: 'ok', text: `✓ approved${c.late ? ' (late)' : ''}`, title }
+        : c.submitted ? { tone: 'warn', text: '⏳ pending PM', title }
+        : c.rejected ? { tone: 'bad', text: '✗ rejected', title }
+        : { tone: 'bad', text: '✗ no plan', title };
+    }
+    if (c.approved === c.total) return { tone: 'ok', text: `✓ ${c.total}/${c.total} approved${c.late ? ` · ${c.late} late` : ''}`, title };
+    if (c.approved === 0) return { tone: 'bad', text: `✗ 0/${c.total} approved`, title };
+    return { tone: 'warn', text: `⚠ ${c.approved}/${c.total} approved`, title };
+  };
+  const Cell = ({ c }) => <Chip tone={c.tone} title={c.title}>{c.text}</Chip>;
+  // Site subtitle — capped at 3 names like the 18:30 report, so an engineer
+  // with a dozen sites can't push the status chips off a phone screen; the
+  // full list stays available as the tooltip.
+  const SiteList = ({ r, className }) => {
+    const shown = r.site_names.length <= 3
+      ? r.site_names.join(', ')
+      : `${r.site_names.slice(0, 3).join(', ')} +${r.site_names.length - 3} more`;
+    return (
+      <div className={className} title={r.site_names.join(', ')}>
+        {r.sites_count} site{r.sites_count === 1 ? '' : 's'} · {shown}
+      </div>
+    );
+  };
+  const unassigned = data && data.summary.sites_unassigned > 0 ? (
+    <div className="text-[11px] text-gray-400">
+      {data.summary.sites_unassigned} active site(s) have no engineer assigned — not counted above.
+    </div>
+  ) : null;
 
   return (
     <div className="card p-4 mb-4 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="font-semibold text-gray-800">SPOS Daily Compliance</h3>
-          <p className="text-xs text-gray-500">Per site: morning punch by 9 AM · DPR by evening cutoff · photos · weekly plan approved. Gaps go to management in the 6:30 PM Exception Report.</p>
+          <p className="text-xs text-gray-500">Per engineer (all their sites): morning punch by 9 AM · DPR by evening cutoff · photos · weekly plan approved. A ✓ means every one of that engineer's sites did it. Gaps go to management in the 6:30 PM Exception Report.</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {data && <>
+          {/* No engineer rows = no denominator: the tiles would read a flat
+              0% and brand a compliant site non-compliant. Hide them instead. */}
+          {data && data.engineers.length > 0 && <>
             <Pct v={data.summary.punch_pct} label="Punch" />
             <Pct v={data.summary.dpr_pct} label="DPR" />
             <Pct v={data.summary.photos_pct} label="Photos" />
@@ -2973,14 +3061,33 @@ function SposComplianceGrid() {
       </div>
       {loading ? <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>
         : !data ? <div className="text-sm text-red-500 py-4 text-center">Could not load compliance data.</div>
-        : data.sites.length === 0 ? <div className="text-sm text-gray-400 py-4 text-center">No active sites.</div>
+        : data.engineers.length === 0 ? <div className="text-sm text-gray-400 py-4 text-center">No engineer is assigned to any active site.</div>
         : (
-        <div className="overflow-x-auto">
+        <>
+        {/* ─── MOBILE CARDS ─── mobile↔desktop parity rule. */}
+        <div className="md:hidden space-y-3">
+          {data.engineers.map(r => (
+            <div key={r.engineer_id} className="card p-3 space-y-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Engineer</div>
+                <div className="text-base font-bold text-gray-900 truncate">{r.engineer}</div>
+                <SiteList r={r} className="text-[11px] text-gray-500" />
+              </div>
+              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100">
+                <div><div className="text-[9px] uppercase text-gray-400">Morning Punch</div><Cell c={punchChip(r.punch)} /></div>
+                <div><div className="text-[9px] uppercase text-gray-400">DPR</div><Cell c={dprChip(r.dpr)} /></div>
+                <div><div className="text-[9px] uppercase text-gray-400">Photos</div><Cell c={photosChip(r.photos)} /></div>
+                <div><div className="text-[9px] uppercase text-gray-400">Week Plan</div><Cell c={planChip(r.plan)} /></div>
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* ─── DESKTOP TABLE (md+) ─── */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="text-gray-500 border-b text-left">
-                <th className="py-1.5 pr-2">Site</th>
-                <th className="py-1.5 px-2">Engineer</th>
+                <th className="py-1.5 pr-2">Engineer</th>
                 <th className="py-1.5 px-2">Morning Punch</th>
                 <th className="py-1.5 px-2">DPR</th>
                 <th className="py-1.5 px-2">Photos</th>
@@ -2988,37 +3095,24 @@ function SposComplianceGrid() {
               </tr>
             </thead>
             <tbody>
-              {data.sites.map(r => (
-                <tr key={r.site_id} className="border-b hover:bg-gray-50">
-                  <td className="py-1.5 pr-2 font-medium">{r.site}</td>
-                  <td className="py-1.5 px-2 text-gray-600">{r.engineer || <span className="text-gray-300">—</span>}</td>
-                  <td className="py-1.5 px-2">
-                    {!r.punch_done ? <Chip tone="bad">✗ missing</Chip>
-                      : r.punch_by_9 ? <Chip tone="ok">✓ {fmtT(r.punch_at)}</Chip>
-                      : <Chip tone="warn">⚠ after 9 · {fmtT(r.punch_at)}</Chip>}
+              {data.engineers.map(r => (
+                <tr key={r.engineer_id} className="border-b hover:bg-gray-50">
+                  <td className="py-1.5 pr-2">
+                    <div className="font-medium">{r.engineer}</div>
+                    <SiteList r={r} className="text-[10px] text-gray-400" />
                   </td>
-                  <td className="py-1.5 px-2">
-                    {!r.dpr_done ? <Chip tone="bad">✗ missing</Chip>
-                      : r.dpr_by_cutoff ? <Chip tone="ok">✓ {fmtT(r.dpr_at)}</Chip>
-                      : <Chip tone="warn">⚠ late · {fmtT(r.dpr_at)}</Chip>}
-                  </td>
-                  <td className="py-1.5 px-2">
-                    {r.photos_done ? <Chip tone="ok">✓</Chip>
-                      : r.dpr_done ? <Chip tone="bad">✗ none</Chip>
-                      : <Chip tone="none">—</Chip>}
-                  </td>
-                  <td className="py-1.5 pl-2">
-                    {r.plan_status === 'approved' ? <Chip tone="ok">✓ approved{r.plan_late ? ' (late)' : ''}</Chip>
-                      : r.plan_status === 'submitted' ? <Chip tone="warn">⏳ pending PM</Chip>
-                      : r.plan_status === 'rejected' ? <Chip tone="bad">✗ rejected</Chip>
-                      : <Chip tone="bad">✗ no plan</Chip>}
-                  </td>
+                  <td className="py-1.5 px-2"><Cell c={punchChip(r.punch)} /></td>
+                  <td className="py-1.5 px-2"><Cell c={dprChip(r.dpr)} /></td>
+                  <td className="py-1.5 px-2"><Cell c={photosChip(r.photos)} /></td>
+                  <td className="py-1.5 pl-2"><Cell c={planChip(r.plan)} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        </>
       )}
+      {unassigned}
     </div>
   );
 }

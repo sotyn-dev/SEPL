@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
@@ -105,7 +106,7 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
   const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM sales_funnel WHERE category IS NOT NULL AND category != '' GROUP BY category").all();
   const bySC = db.prepare("SELECT assigned_sc, COUNT(*) as count FROM sales_funnel WHERE assigned_sc IS NOT NULL AND assigned_sc != '' GROUP BY assigned_sc").all();
   const recent = db.prepare('SELECT * FROM sales_funnel ORDER BY updated_at DESC LIMIT 10').all();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   let todayFollowups = 0, overdueFollowups = 0;
   try {
     todayFollowups = db.prepare("SELECT COUNT(*) as c FROM lead_followups WHERE done=0 AND followup_date=?").get(today)?.c || 0;
@@ -279,12 +280,26 @@ router.get('/:id/audit', requirePermission('leads', 'view'), (req, res) => {
 // PUT update — Stage 1 fields editable until lead leaves Stage 1.
 // Audit row written for any field change.
 router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
-  const b = req.body;
+  const raw = req.body || {};
+  const db = getDb();
+  const cur = db.prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Lead not found' });
+
+  // Lost-update guard (audit 2026-08-17, same pattern as Business Book):
+  // stale form → 409; unsent fields keep their stored values instead of
+  // being blanked to null. Validation runs on the MERGED row so a partial
+  // payload can't dodge Stage-1 requirements either.
+  if (raw.updated_at && cur.updated_at && String(raw.updated_at) !== String(cur.updated_at)) {
+    return res.status(409).json({
+      error: 'This lead was edited by someone else while you had it open. Please reload and re-apply your change.',
+      stale: true,
+    });
+  }
+  const b = { ...cur };
+  for (const k of Object.keys(raw)) { if (raw[k] !== undefined) b[k] = raw[k]; }
+
   const errors = validateStage1(b, false);
   if (errors.length) return res.status(400).json({ error: errors.join(' · ') });
-  const db = getDb();
-  const cur = db.prepare('SELECT current_stage FROM sales_funnel WHERE id=?').get(req.params.id);
-  if (!cur) return res.status(404).json({ error: 'Lead not found' });
 
   const subTrades = Array.isArray(b.sub_trades_scope) ? b.sub_trades_scope.join(',') : (b.sub_trades_scope || null);
   const leadKind = b.lead_kind === 'government' ? 'government' : (b.lead_kind === 'private' ? 'private' : null);
@@ -613,7 +628,7 @@ router.put('/followup/:fid', requirePermission('leads', 'edit'), (req, res) => {
 
 // GET today's pending follow-ups (for dashboard)
 router.get('/followups/today', requirePermission('leads', 'view'), (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   const pending = getDb().prepare(`SELECT f.*, sf.lead_no, sf.client_name, sf.company_name, sf.phone, sf.current_stage
     FROM lead_followups f JOIN sales_funnel sf ON f.lead_id=sf.id
     WHERE f.done=0 AND f.followup_date <= ? ORDER BY f.followup_date`).all(today);
@@ -622,7 +637,7 @@ router.get('/followups/today', requirePermission('leads', 'view'), (req, res) =>
 
 // GET overdue follow-ups
 router.get('/followups/overdue', requirePermission('leads', 'view'), (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   const overdue = getDb().prepare(`SELECT f.*, sf.lead_no, sf.client_name, sf.company_name, sf.phone
     FROM lead_followups f JOIN sales_funnel sf ON f.lead_id=sf.id
     WHERE f.done=0 AND f.followup_date < ? ORDER BY f.followup_date`).all(today);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown } from 'react-icons/fi';
+import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown, FiSearch, FiLayers } from 'react-icons/fi';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -46,9 +46,23 @@ export default function SolarFunnel() {
   const [leads, setLeads] = useState([]);
   const [tab, setTab] = useState('pipeline');
   const [modal, setModal] = useState(null); // null | {} (new) | deal (edit)
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Lost deals are fetched separately (the /deals endpoint hides them unless
+  // include_lost is set) and are deliberately NOT merged into `deals`, so the
+  // pipeline board, stage counts and analytics stay exactly as they were.
+  // They exist only so that SEARCH can find them: previously, searching a
+  // client whose deals had all been marked Lost returned "No solar deals
+  // match", which reads as "we never dealt with them" when the truth is
+  // "we dealt with them and lost it" — a materially different answer for
+  // anyone picking the phone up to that client.
+  const [lostDeals, setLostDeals] = useState([]);
 
   const load = () => {
     api.get('/solar/deals').then((r) => setDeals(r.data || [])).catch(() => toast.error('Could not load deals'));
+    api.get('/solar/deals', { params: { include_lost: 1 } })
+      .then((r) => setLostDeals((r.data || []).filter((d) => d.status === 'lost')))
+      .catch(() => {});
     api.get('/solar/funnel/analytics').then((r) => setAnalytics(r.data)).catch(() => {});
   };
   useEffect(() => {
@@ -57,11 +71,35 @@ export default function SolarFunnel() {
     load();
   }, []); // eslint-disable-line
 
+  const matchesQuery = (d, q) => (
+    (d.client_name && d.client_name.toLowerCase().includes(q))
+    || (d.company && d.company.toLowerCase().includes(q))
+    || (d.deal_no && d.deal_no.toLowerCase().includes(q))
+    || (d.phone && d.phone.includes(q))
+  );
+
+  const filteredDeals = useMemo(() => {
+    if (!searchQuery.trim()) return deals;
+    const q = searchQuery.toLowerCase().trim();
+    return deals.filter((d) => matchesQuery(d, q));
+  }, [deals, searchQuery]);
+
+  // Lost matches surface only while searching — never on the default board.
+  const filteredLost = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase().trim();
+    return lostDeals.filter((d) => matchesQuery(d, q));
+  }, [lostDeals, searchQuery]);
+
+  // The case worth calling out explicitly: every match for this search is a
+  // deal we already lost.
+  const onlyLostMatches = searchQuery.trim() && filteredDeals.length === 0 && filteredLost.length > 0;
+
   const byStage = useMemo(() => {
     const m = {}; stages.forEach((s) => (m[s.key] = []));
-    deals.forEach((d) => { (m[d.stage] = m[d.stage] || []).push(d); });
+    filteredDeals.forEach((d) => { (m[d.stage] = m[d.stage] || []).push(d); });
     return m;
-  }, [deals, stages]);
+  }, [filteredDeals, stages]);
   const conv = useMemo(() => {
     const m = {}; (analytics?.byStage || []).forEach((s) => (m[s.key] = s)); return m;
   }, [analytics]);
@@ -80,13 +118,149 @@ export default function SolarFunnel() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><FiSun className="text-amber-500" /> Solar Sales Funnel</h1>
           <p className="text-xs text-gray-500">Every solar opportunity, stage by stage — with conversion, next actions and stuck-deal alerts driving each step.</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
+          {/* Top Search Bar */}
+          <div className="relative w-64 sm:w-72">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search company or client name..."
+              className="w-full pl-8 pr-7 py-1.5 text-xs border border-gray-300 rounded-full bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                title="Clear search"
+              >
+                <FiX size={12} />
+              </button>
+            )}
+          </div>
           <button onClick={() => setTab('pipeline')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'pipeline' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}>Pipeline</button>
           <button onClick={() => setTab('analytics')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'analytics' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}><FiTrendingUp className="inline mr-1" />Conversion</button>
           <button onClick={() => setTab('responsible')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'responsible' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}>⚙ Responsible</button>
           <button onClick={() => setModal({ owner_name: user?.name || '', stage: 'inquiry', project_type: 'ongrid' })} className="btn btn-primary text-sm flex items-center gap-1"><FiPlus size={14} /> New Deal</button>
         </div>
       </div>
+
+      {/* Search result indicator banner & Top Matching Results */}
+      {searchQuery && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-xs text-blue-900 bg-blue-50 border border-blue-200 rounded-lg px-3.5 py-2">
+            <div className="flex items-center gap-2">
+              <FiSearch size={14} className="text-blue-600" />
+              <span>
+                Showing <b>{filteredDeals.length}</b> of <b>{deals.length}</b> deals matching "<b>{searchQuery}</b>"
+                {filteredLost.length > 0 && <> · <b className="text-rose-700">{filteredLost.length} lost</b></>}
+              </span>
+            </div>
+            <button onClick={() => setSearchQuery('')} className="text-xs text-blue-700 hover:underline font-semibold">Clear filter</button>
+          </div>
+
+          {/* Top Matching Deals Card View */}
+          {filteredDeals.length > 0 ? (
+            <div className="bg-gradient-to-r from-blue-50/80 via-indigo-50/50 to-blue-50/80 border border-blue-200 rounded-xl p-3.5 shadow-sm">
+              <p className="text-xs font-bold text-blue-900 mb-2.5 flex items-center gap-1.5 uppercase tracking-wide">
+                <FiSun className="text-amber-500" size={14} /> Top Matching Deals ({filteredDeals.length})
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {filteredDeals.map((d) => {
+                  const stageObj = stages.find((s) => s.key === d.stage);
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => api.get(`/solar/deals/${d.id}`).then((r) => setModal(r.data))}
+                      className="bg-white rounded-xl border border-blue-200 p-3 shadow-sm hover:shadow-md hover:border-blue-400 transition-all cursor-pointer flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1.5">
+                          <span className="text-[11px] font-bold text-blue-900 bg-blue-100/80 px-2 py-0.5 rounded-md">{d.deal_no}</span>
+                          <span className="text-[10px] bg-slate-100 text-slate-700 font-semibold px-2 py-0.5 rounded-full border border-slate-200">
+                            {stageObj?.label || d.stage}
+                          </span>
+                        </div>
+                        <p className="text-xs font-bold text-gray-900 truncate">{d.client_name || '—'}</p>
+                        {d.company && d.company !== d.client_name && (
+                          <p className="text-[11px] text-gray-600 truncate">{d.company}</p>
+                        )}
+                        <p className="text-[10px] text-gray-500 mt-1">
+                          {fmt(d.capacity_kw)} kW · {inr(d.value)}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-gray-100 text-[10px]">
+                        <span className="text-gray-400">{d.owner_name || ''}</span>
+                        <span className="text-blue-600 font-bold hover:underline">Open deal details ›</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : !onlyLostMatches && (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-center text-xs text-gray-500">
+              No solar deals match "<b>{searchQuery}</b>". Try searching by company name, client name, or deal number.
+            </div>
+          )}
+
+          {/* Lost matches. Shown as their own section so a closed-lost deal can
+              never be mistaken for live pipeline, with the reason surfaced —
+              that is the thing a rep actually needs before calling back. */}
+          {filteredLost.length > 0 && (
+            <div className="bg-rose-50/60 border border-rose-200 rounded-xl p-3.5">
+              {onlyLostMatches && (
+                <div className="flex items-start gap-2 mb-3 text-xs text-rose-900 bg-rose-100/70 border border-rose-200 rounded-lg px-3 py-2">
+                  <FiAlertTriangle size={14} className="text-rose-600 mt-0.5 shrink-0" />
+                  <span>
+                    <b>No active deals for "{searchQuery}".</b> The {filteredLost.length === 1 ? 'only match is a deal that was' : `${filteredLost.length} matches are all deals that were`} marked <b>Lost</b>.
+                    They are not in the pipeline and are not counted in the funnel figures.
+                  </span>
+                </div>
+              )}
+              <p className="text-xs font-bold text-rose-900 mb-2.5 flex items-center gap-1.5 uppercase tracking-wide">
+                <FiX className="text-rose-500" size={14} /> Lost deals ({filteredLost.length})
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {filteredLost.map((d) => {
+                  const stageObj = stages.find((s) => s.key === d.stage);
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => api.get(`/solar/deals/${d.id}`).then((r) => setModal(r.data))}
+                      className="bg-white/80 rounded-xl border border-rose-200 p-3 shadow-sm hover:shadow-md hover:border-rose-400 transition-all cursor-pointer flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1.5">
+                          <span className="text-[11px] font-bold text-rose-900 bg-rose-100 px-2 py-0.5 rounded-md">{d.deal_no}</span>
+                          <span className="text-[10px] bg-rose-500 text-white font-bold px-2 py-0.5 rounded-full">LOST</span>
+                        </div>
+                        <p className="text-xs font-bold text-gray-700 truncate">{d.client_name || '—'}</p>
+                        {d.company && d.company !== d.client_name && (
+                          <p className="text-[11px] text-gray-500 truncate">{d.company}</p>
+                        )}
+                        <p className="text-[10px] text-gray-500 mt-1">
+                          {fmt(d.capacity_kw)} kW · {inr(d.value)} · lost at {stageObj?.label || d.stage}
+                        </p>
+                        {d.lost_reason && (
+                          <p className="text-[10px] text-rose-700 mt-1.5 line-clamp-2" title={d.lost_reason}>
+                            Reason: {d.lost_reason}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-rose-100 text-[10px]">
+                        <span className="text-gray-400">{d.owner_name || ''}</span>
+                        <span className="text-rose-600 font-bold hover:underline">Open deal details ›</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* KPI strip */}
       {T && (
@@ -135,6 +309,9 @@ export default function SolarFunnel() {
                           {d.stuck && <FiAlertTriangle className="text-rose-500" size={12} />}
                         </div>
                         <p className="text-xs font-medium truncate">{d.client_name || '—'}</p>
+                        {d.company && d.company !== d.client_name && (
+                          <p className="text-[10px] text-gray-500 font-normal truncate">{d.company}</p>
+                        )}
                         <p className="text-[10px] text-gray-500">{fmt(d.capacity_kw)} kW · {inr(d.value)}</p>
                         {d.next_action && <p className="text-[10px] text-gray-600 mt-1 truncate">→ {d.next_action}</p>}
                         <div className="flex items-center justify-between mt-1">
@@ -257,7 +434,7 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
 
   return (
     <>
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center overflow-y-auto p-4">
+    <div className="!m-0 fixed inset-0 bg-black/40 z-50 flex items-start justify-center overflow-y-auto p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl my-8">
         <div className="px-5 py-3 border-b flex items-center justify-between">
           <h3 className="font-bold">{isNew ? 'New Solar Lead' : `${deal.deal_no} · ${deal.client_name}`}</h3>
@@ -331,7 +508,18 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
                         <label key={f.k} className="block"><span className="label">{f.label}</span>
                           <input className="input-compact w-full" type={f.type || 'text'} value={aForm[f.k] ?? ''} onChange={(e) => setAForm((p) => ({ ...p, [f.k]: e.target.value }))} /></label>))}
                     </div>
-                    <button onClick={saveStageAction} className="btn btn-secondary text-sm">{action.doneFlag ? 'Mark step complete' : 'Save'}</button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button onClick={saveStageAction} className="btn btn-secondary text-sm">{action.doneFlag ? 'Mark step complete' : 'Save'}</button>
+                      {/* The survey's shadow-free area is the one number the whole
+                          design hangs off. Measure it in 3D instead of eyeballing it. */}
+                      {action.group === 'survey' && (
+                        <button onClick={() => nav(`/solar-site-design?deal=${d.id}`)}
+                          className="btn btn-primary text-sm flex items-center gap-1">
+                          <FiLayers size={14} /> 3D shadow study
+                        </button>)}
+                      {action.group === 'survey' && sd.survey?.site_study_id && (
+                        <span className="text-[11px] text-emerald-700">✓ from 3D study #{sd.survey.site_study_id}</span>)}
+                    </div>
                   </div>)}
 
                 {action.kind === 'quote' && (

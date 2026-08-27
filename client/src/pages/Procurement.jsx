@@ -18,6 +18,11 @@ import { fmtDateTime as fmtIST } from '../utils/datetime';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
+// Department picker for Raise Indent — same codes/labels as Item Master's
+// department field so indents and the catalogue stay on one vocabulary.
+const DEPARTMENTS = ['FF', 'LV', 'ELE', 'CCTV', 'AC', 'NET', 'SOL', 'PLB', 'UT', 'OTHER'];
+const DEPT_LABELS = { FF: 'Fire Fighting', LV: 'Low Voltage', ELE: 'Electrical', CCTV: 'CCTV', AC: 'Access Control', NET: 'Networking', SOL: 'Solar', PLB: 'Plumbing', UT: 'Utensils', OTHER: 'Other' };
+
 // Canonical division for a category / department string. Normalises the messy
 // real-world codes (SOLAR vs SOL, PLU vs PLUMB, CIVIL vs CIV, …) into ONE key so
 // the Sub-Item picker can scope Item Master to the project's / BOQ's division.
@@ -421,6 +426,14 @@ export default function Procurement() {
   // master_name, make}.
   const [receiveItems, setReceiveItems] = useState([]);
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
+  // PPE Kit category — inline "item not in the list" quick-add. Creates the
+  // item in Item Master (type=PPE_KIT) on the spot and drops it straight
+  // into the indent, so raising an indent never blocks on someone else
+  // populating the catalogue first.
+  const [ppeQuickAdd, setPpeQuickAdd] = useState({ open: false, name: '', qty: 1, saving: false });
+  // Category lock REMOVED (mam 2026-08-26, 3rd revision: "all category is
+  // accessible" for everyone) — the 13-Aug PPE-first gate is gone; only the
+  // Wed/Sat indent-day rule still gates raising.
   // Editable per-line items for the Sales Bill / Delivery Note modal.
   // Pre-filled from Client PO (po_items) so the rate column shows the
   // SELLING price (what we invoice the client), not vendor cost. Mam can
@@ -470,6 +483,8 @@ export default function Procurement() {
       // Freight terms + charge (mam 2026-06-12).
       freight_terms: v.freight_terms || '',
       freight_amount: v.freight_amount || '',
+      // GST % (mam 2026-08-12) — default 18, editable per PO.
+      gst_pct: v.gst_pct ?? 18,
     });
     setEditPoItems([]);
     setEditPoLocked(false);
@@ -953,6 +968,31 @@ export default function Procurement() {
     }
   };
 
+  // PPE Kit quick-add — creates the item in Item Master (type=PPE_KIT) and
+  // drops it straight into the current indent as a new row, so an item that
+  // isn't catalogued yet doesn't block raising the indent.
+  const submitPpeQuickAdd = async () => {
+    const name = ppeQuickAdd.name.trim();
+    if (!name) return toast.error('Item name is required');
+    const qty = +ppeQuickAdd.qty || 0;
+    if (!(qty > 0)) return toast.error('Quantity must be greater than 0');
+    setPpeQuickAdd(s => ({ ...s, saving: true }));
+    try {
+      const r = await api.post('/item-master', { item_name: name, uom: 'nos', type: 'PPE_KIT', department: 'PPE' });
+      const newMaster = { id: r.data.id, item_code: r.data.item_code, item_name: name, display_name: name, type: 'PPE_KIT', uom: 'nos', current_price: 0 };
+      setMasterItems(prev => [...prev, newMaster]);
+      setIndentItems(prev => {
+        const withoutBlankRow = prev.filter(it => it.item_master_id);
+        return [...withoutBlankRow, { ...EMPTY_ITEM, item_master_id: newMaster.id, item_type: 'PPE_KIT', unit: 'nos', quantity: qty }];
+      });
+      toast.success(`"${name}" added to Item Master and this indent`);
+      setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to add item');
+      setPpeQuickAdd(s => ({ ...s, saving: false }));
+    }
+  };
+
   // Picking a BOQ item for this row — fills description / unit / type / make
   // and copies BOQ qty + remaining so the UI can show "BOQ 100 · Rem 60"
   // like DPR does. FOC items have remaining = null (hidden in UI).
@@ -978,6 +1018,7 @@ export default function Procurement() {
   const saveIndent = async (e) => {
     e.preventDefault();
     if (!form.site_name) return toast.error('Site Name is required');
+    if (!form.department) return toast.error('Department is required');
     if (!form.raised_by_name) return toast.error('Raised By is required');
     // ─── Per-category client-side validation (mam's spec 2026-05-26) ───
     // Server enforces the same rules, but failing fast in the UI gives
@@ -1035,6 +1076,9 @@ export default function Procurement() {
     // SPOS off-day rule: routine indents Wed + Sat only; any other day
     // needs the Emergency tick + reason (server enforces too).
     const offDay = !!raiseWindow && !raiseWindow.allowed;
+    if (offDay && !editingIndentId && !isAdmin()) {
+      return toast.error('Indents are raised on Wednesday & Saturday only. Ask an admin to open emergency raising for today.');
+    }
     if (offDay && !editingIndentId && !form.is_emergency) {
       return toast.error('Today is not an indent day (Wed/Sat). Tick "Emergency indent" and write the reason to raise it now.');
     }
@@ -1046,6 +1090,7 @@ export default function Procurement() {
       raised_by_name: form.raised_by_name,
       notes: form.notes || '',
       indent_category: cat,
+      department: form.department || '',
       is_emergency: form.is_emergency ? 1 : 0,
       emergency_reason: (form.emergency_reason || '').trim(),
       items: indentItems.map(it => ({
@@ -1099,6 +1144,7 @@ export default function Procurement() {
           : (user?.name || ''),
         notes: data.notes || '',
         indent_category: data.indent_category || 'material',
+        department: data.department || '',
       });
       // Fetch BOQ items inline so we have the list synchronously available
       // for the back-fill below.  reloadBoq() sets state but doesn't return
@@ -1482,6 +1528,7 @@ export default function Procurement() {
       total_amount: '',
       remarks: '',
       po_file: null,
+      gst_pct: 18,
     });
     setIndentItemsForPo([]);
     setPoItemSelection({});
@@ -1547,6 +1594,8 @@ export default function Procurement() {
     if (!s.checked) return sum;
     return sum + poLineQtyForAmount(it, s) * (+s.rate || 0);
   }, 0);
+  // Effective GST % for the Create-PO preview — blank/invalid falls back to 18.
+  const poGstPct = (form.gst_pct !== '' && form.gst_pct != null && +form.gst_pct >= 0) ? +form.gst_pct : 18;
 
   // Upload a Tally Vendor PO. The backend endpoint is multipart/form-data —
   // metadata fields + an optional file + a JSON-encoded items array for the
@@ -1589,6 +1638,9 @@ export default function Procurement() {
     // Freight terms + charge (mam 2026-06-12) — printed on the PDF PO.
     if (form.freight_terms) fd.append('freight_terms', form.freight_terms);
     if (+form.freight_amount > 0) fd.append('freight_amount', form.freight_amount);
+    // GST % (mam 2026-08-12) — default 18, editable (e.g. 5). Server
+    // falls back to 18 on blank/invalid.
+    if (form.gst_pct !== undefined && form.gst_pct !== '') fd.append('gst_pct', form.gst_pct);
     if (items.length) fd.append('items', JSON.stringify(items));
     if (form.po_file) fd.append('file', form.po_file);
     // Internal payment-block fields (mam 2026-05-27). Never printed on PO.
@@ -2181,11 +2233,14 @@ export default function Procurement() {
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
             if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
-            if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
+            if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, (+v.display_total || +v.total_amount || 0), v.status]));
             if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
             if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
             if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
           }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
+          {/* Training video button moved to the shared Layout header
+              (mam 2026-08-26: "every where") — same "procurement" module
+              key, so previously added videos still show. */}
           {/* Approval flow control — who may act at each gate (L1 / L2 / CRM /
               PO L1 / PO L2 / Revoke) and which optional gates are on. Separate
               from ⚙ Responsible: that tab is per-record RACI reporting, this is
@@ -2266,13 +2321,20 @@ export default function Procurement() {
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="text-sm font-semibold">Raise Indent</h3>
             {(() => {
-              const raiseClosed = !!raiseWindow && !raiseWindow.allowed;
+              // mam 2026-08-20: raising is strictly Wed/Sat — the button is
+              // OFF on any other day. The only way back in on an off-day is
+              // the admin's "Open the whole day" toggle in the banner below
+              // (raiseWindow.allowed flips true), at which point indents
+              // raised are auto-flagged EMERGENCY server-side.
+              const closed = !!raiseWindow && !raiseWindow.allowed;
+              const adminEmergencyOpen = !!raiseWindow && raiseWindow.allowed && !raiseWindow.isIndentDay;
               return (
                 <button
-                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', is_emergency: false, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
-                  title={raiseClosed ? 'Off-day — opens as an EMERGENCY indent (reason required)' : ''}
-                  className={`btn flex items-center gap-2 ${raiseClosed ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
-                  <FiPlus /> {raiseClosed ? 'Raise Emergency Indent' : 'Raise Indent'}
+                  disabled={closed}
+                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', department: '', is_emergency: adminEmergencyOpen, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
+                  title={closed ? 'Indents are raised on Wednesday & Saturday only' : adminEmergencyOpen ? 'Admin opened today — indents raised now are flagged EMERGENCY' : ''}
+                  className={`btn flex items-center gap-2 ${closed ? 'btn-secondary opacity-50 cursor-not-allowed' : adminEmergencyOpen ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
+                  <FiPlus /> {adminEmergencyOpen ? 'Raise Emergency Indent' : 'Raise Indent'}
                 </button>
               );
             })()}
@@ -2429,6 +2491,7 @@ export default function Procurement() {
                 <option value="extra_schedule">Extra · Schedule</option>
                 <option value="extra_non_schedule">Extra · Non-Schedule</option>
                 <option value="rental">Rental</option>
+                <option value="ppe_kit">PPE Kit</option>
               </select>
             </div>
             <div>
@@ -2645,6 +2708,7 @@ export default function Procurement() {
                           extra_schedule:     { label: 'Extra · Sched', color: 'bg-amber-50 text-amber-700 border-amber-200' },
                           extra_non_schedule: { label: 'Extra · Non',   color: 'bg-orange-50 text-orange-700 border-orange-200' },
                           rental:             { label: 'Rental',       color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+                          ppe_kit:            { label: 'PPE Kit',      color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
                         }[c] || { label: c, color: 'bg-gray-50 text-gray-700 border-gray-200' };
                         return <span className={`inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${cfg.color}`}>{cfg.label}</span>;
                       })()}
@@ -2829,6 +2893,7 @@ export default function Procurement() {
                         extra_schedule:     { label: 'Extra · Sched', color: 'bg-amber-50 text-amber-700 border-amber-200' },
                         extra_non_schedule: { label: 'Extra · Non',   color: 'bg-orange-50 text-orange-700 border-orange-200' },
                         rental:             { label: 'Rental',       color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+                        ppe_kit:            { label: 'PPE Kit',      color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
                       }[c] || { label: c, color: 'bg-gray-50 text-gray-700 border-gray-200' };
                       return <span className={`inline-block text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${cfg.color}`}>{cfg.label}</span>;
                     })()}
@@ -3954,7 +4019,7 @@ export default function Procurement() {
                   </td>
                   <td>{v.po_date || <span className="text-gray-300">—</span>}</td>
                   <td>{v.vendor_name}</td>
-                  <td>Rs {v.total_amount?.toLocaleString()}</td>
+                  <td>Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</td>
                   <td>
                     <div className="flex flex-col gap-1">
                       <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-xs flex items-center gap-1">
@@ -4092,7 +4157,7 @@ export default function Procurement() {
                   </div>
                   <div className="text-right">
                     <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                    <div className="font-semibold text-emerald-700">Rs {(+v.total_amount || 0).toLocaleString('en-IN')}</div>
+                    <div className="font-semibold text-emerald-700">Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</div>
                   </div>
                 </div>
                 {/* Links row */}
@@ -4634,7 +4699,7 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center">{chip}</td>
-                          {/* Show the LIVE computed total (items × 1.18 GST)
+                          {/* Show the LIVE computed total (items + the PO's GST %)
                               from display_total — matches what the PO print
                               shows.  Mam, 2026-05-16: header total drifted from
                               the line items.  Drift chip warns when the stored
@@ -4642,7 +4707,7 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
                             Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
                             {+po.total_amount_drift > 1 && (
-                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + 18% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
                                 ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
                               </div>
                             )}
@@ -5300,7 +5365,7 @@ export default function Procurement() {
                         <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
                           Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
                           {+po.total_amount_drift > 1 && (
-                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + 18% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
                               ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
                             </div>
                           )}
@@ -5859,25 +5924,34 @@ export default function Procurement() {
           </div>
           {/* SPOS emergency section — shows only when raising OFF-day (not
               Wed/Sat, no admin day-open). Reason is mandatory; the indent is
-              flagged ⚡EMERGENCY for approvers + the <5% KPI. */}
+              flagged ⚡EMERGENCY for approvers + the <5% KPI.
+              Admin-only self-service (mam 2026-08-20): regular users may
+              raise ONLY on Wed/Sat — the whole-day override is admin's
+              call via the banner toggle, not a per-user emergency tick. */}
           {!editingIndentId && raiseWindow && !raiseWindow.allowed && (
-            <div className="border border-red-300 bg-red-50 rounded p-3 space-y-2">
-              <label className="flex items-start gap-2 text-xs cursor-pointer">
-                <input type="checkbox" className="mt-0.5"
-                  checked={!!form.is_emergency}
-                  onChange={e => setForm({ ...form, is_emergency: e.target.checked })} />
-                <span>
-                  <span className="font-semibold text-red-700">⚡ Emergency indent — today is not an indent day (Wed/Sat)</span>
-                  <span className="text-red-600 block mt-0.5">Tick to confirm this cannot wait for the next routine indent day. It will carry an EMERGENCY flag through approval and count toward the emergency-indent KPI (target &lt; 5%).</span>
-                </span>
-              </label>
-              {form.is_emergency && (
-                <textarea className="input" rows="2" required
-                  placeholder="Why can't this wait for Wednesday/Saturday? (mandatory)"
-                  value={form.emergency_reason || ''}
-                  onChange={e => setForm({ ...form, emergency_reason: e.target.value })} />
-              )}
-            </div>
+            isAdmin() ? (
+              <div className="border border-red-300 bg-red-50 rounded p-3 space-y-2">
+                <label className="flex items-start gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" className="mt-0.5"
+                    checked={!!form.is_emergency}
+                    onChange={e => setForm({ ...form, is_emergency: e.target.checked })} />
+                  <span>
+                    <span className="font-semibold text-red-700">⚡ Emergency indent — today is not an indent day (Wed/Sat)</span>
+                    <span className="text-red-600 block mt-0.5">Tick to confirm this cannot wait for the next routine indent day. It will carry an EMERGENCY flag through approval and count toward the emergency-indent KPI (target &lt; 5%).</span>
+                  </span>
+                </label>
+                {form.is_emergency && (
+                  <textarea className="input" rows="2" required
+                    placeholder="Why can't this wait for Wednesday/Saturday? (mandatory)"
+                    value={form.emergency_reason || ''}
+                    onChange={e => setForm({ ...form, emergency_reason: e.target.value })} />
+                )}
+              </div>
+            ) : (
+              <div className="border border-amber-300 bg-amber-50 rounded p-3 text-xs text-amber-800">
+                🔒 Indents are raised on <b>Wednesday &amp; Saturday</b> only. If today's material can't wait, ask an admin to open emergency raising for the day.
+              </div>
+            )
           )}
           {/* Header — Site from Business Book, Raised By from Employees. Stacks on mobile. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -5905,6 +5979,13 @@ export default function Procurement() {
                   ? (boqLoading ? 'Loading BOQ…' : `${boqItems.length} BOQ item${boqItems.length === 1 ? '' : 's'} available for this site`)
                   : 'Pick a site first — its BOQ items will load below.'}
               </p>
+              <div className="mt-3">
+                <label className="label">Department</label>
+                <select className="select" value={form.department || ''} onChange={e => setForm({ ...form, department: e.target.value })}>
+                  <option value="">All Departments</option>
+                  {DEPARTMENTS.map(d => <option key={d} value={d}>{d} — {DEPT_LABELS[d] || d}</option>)}
+                </select>
+              </div>
             </div>
             <div>
               <label className="label">Raised By *</label>
@@ -5928,6 +6009,9 @@ export default function Procurement() {
               capture (days × rate/day with the rent-vs-buy block). */}
           <div>
             <label className="label">Category *</label>
+            {/* Category lock removed (mam 2026-08-26, 3rd revision) —
+                every category is open to everyone; only the Wed/Sat
+                indent-day rule still gates raising. */}
             <div className="flex gap-1 flex-wrap">
               {[
                 { id: 'material',           label: 'Material',         hint: 'BOQ items (PO + FOC). RGP hidden.' },
@@ -5935,6 +6019,7 @@ export default function Procurement() {
                 { id: 'extra_schedule',     label: 'Extra · Schedule', hint: 'BOQ item exists, qty cap removed (over-BOQ).' },
                 { id: 'extra_non_schedule', label: 'Extra · Non-Schedule', hint: 'Item outside BOQ — pick free from Item Master (PO + FOC).' },
                 { id: 'rental',             label: 'Rental',           hint: 'Rented tool — Days × Rate/Day. Blocks if rental ≥ buying outright.' },
+                { id: 'ppe_kit',            label: 'PPE Kit',          hint: 'PPE Kit items — no BOQ. Item name + Quantity. Always available.' },
               ].map(c => {
                 const active = (form.indent_category || 'material') === c.id;
                 return (
@@ -5946,6 +6031,7 @@ export default function Procurement() {
                       // have incompatible row shapes (BOQ vs flat Item Master).
                       setForm(f => ({ ...f, indent_category: c.id }));
                       setIndentItems([{ ...EMPTY_ITEM }]);
+                      setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
                     }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
                       active
@@ -5967,6 +6053,7 @@ export default function Procurement() {
                 if (c === 'extra_schedule')     return 'BOQ item exists but the site needs MORE qty than BOQ allows. Qty cap is removed — L1+L2 will see the over-commit.';
                 if (c === 'extra_non_schedule') return 'Item is completely outside the BOQ. Pick directly from Item Master (PO + FOC types).';
                 if (c === 'rental')             return 'Rented tool. Per row: Days × Rate/Day. Server BLOCKS the indent if rental cost ≥ buying outright cost.';
+                if (c === 'ppe_kit')            return 'PPE Kit items — no BOQ. Pick the item (type = PPE_KIT) and set Quantity. Not in the list? Use "+ Add new item" to create it.';
                 return '';
               })()}
             </p>
@@ -5979,6 +6066,7 @@ export default function Procurement() {
                 const c = form.indent_category || 'material';
                 if (c === 'extra_non_schedule') return '(direct pick from Item Master — no BOQ)';
                 if (c === 'rental')             return '(Item Master + Days × Rate/Day)';
+                if (c === 'ppe_kit')            return '(Item name + Quantity — no BOQ)';
                 return '(BOQ item from Client PO → then sub-item from Item Master)';
               })()}
             </span>
@@ -6154,6 +6242,79 @@ export default function Procurement() {
                     <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM, rental_days: 0, rental_rate_per_day: 0 }])} className="btn btn-secondary text-xs">
                       + Add another {isRental ? 'rental' : isRgp ? 'RGP item' : 'item'}
                     </button>
+                  </div>
+                );
+              })()}
+
+              {/* ─── PPE Kit layout — 2 columns: Item name, Quantity ───────
+                  No BOQ, no rate/make/date clutter. Item is picked straight
+                  from Item Master (type='PPE_KIT'). If the item isn't
+                  catalogued yet, "+ Add new item" creates it on the spot
+                  (POST /item-master) and drops it into the indent. */}
+              {form.indent_category === 'ppe_kit' && (() => {
+                const ppeMasterItems = masterItems.filter(m => String(m.type || '').toUpperCase() === 'PPE_KIT');
+                return (
+                  <div className="space-y-2">
+                    <div className="hidden md:grid grid-cols-[1fr_140px_28px] gap-2 px-1">
+                      <div className="text-[10px] font-bold text-gray-500 uppercase">Item Name</div>
+                      <div className="text-[10px] font-bold text-gray-500 uppercase">Quantity</div>
+                      <div />
+                    </div>
+                    {indentItems.map((item, i) => (
+                      <div key={i} className="border rounded-lg p-3 bg-white grid grid-cols-1 md:grid-cols-[1fr_140px_28px] gap-2 md:items-center">
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5 md:hidden">
+                            Item Name <span className="text-red-500">*</span>
+                          </label>
+                          <SearchableSelect
+                            options={ppeMasterItems.map(x => ({ id: x.id, label: x.display_name || x.item_name, ...x }))}
+                            value={item.item_master_id || null} valueKey="id" displayKey="label"
+                            placeholder="Search PPE item…"
+                            onChange={(picked) => pickMasterItem(i, picked)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5 md:hidden">Quantity *</label>
+                          <NumInput className="input text-base font-bold text-right" min="0" value={item.quantity} emitZeroOnEmpty onChange={v => { const n = [...indentItems]; n[i].quantity = v; setIndentItems(n); }} />
+                        </div>
+                        <div className="flex justify-end md:justify-center">
+                          {indentItems.length > 1 && (
+                            <button type="button" onClick={() => setIndentItems(indentItems.filter((_, x) => x !== i))} className="p-1 text-gray-400 hover:text-red-600" title="Remove row">
+                              <FiTrash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM }])} className="btn btn-secondary text-xs">
+                        + Add another item
+                      </button>
+                      <button type="button" onClick={() => setPpeQuickAdd({ open: true, name: '', qty: 1, saving: false })} className="btn btn-secondary text-xs">
+                        + Add new item (not in list)
+                      </button>
+                    </div>
+                    {ppeQuickAdd.open && (
+                      <div className="border-2 border-dashed border-blue-300 rounded-lg p-3 bg-blue-50 space-y-2">
+                        <div className="text-xs font-bold text-blue-800">New PPE item — saved to Item Master and added to this indent</div>
+                        <div className="grid grid-cols-1 md:grid-cols-[1fr_140px] gap-2">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Item Name *</label>
+                            <input autoFocus className="input text-sm" placeholder="e.g. Safety Harness" value={ppeQuickAdd.name} onChange={e => setPpeQuickAdd(s => ({ ...s, name: e.target.value }))} />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Quantity *</label>
+                            <NumInput className="input text-base font-bold text-right" min="0" value={ppeQuickAdd.qty} emitZeroOnEmpty onChange={v => setPpeQuickAdd(s => ({ ...s, qty: v }))} />
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button type="button" disabled={ppeQuickAdd.saving} onClick={submitPpeQuickAdd} className="btn btn-primary text-xs">
+                            {ppeQuickAdd.saving ? 'Adding…' : 'Add Item'}
+                          </button>
+                          <button type="button" onClick={() => setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false })} className="btn btn-secondary text-xs">Cancel</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -6640,6 +6801,13 @@ export default function Procurement() {
               <input className="input text-right" type="number" step="0.01" min="0" placeholder="0" value={form.freight_amount || ''} onChange={e => setForm({...form, freight_amount: e.target.value})} />
               <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
             </div>
+            {/* GST % (mam 2026-08-12: "gst 18% but some time 5%") — default 18,
+                editable per PO. Drives the print page GST split + list total. */}
+            <div>
+              <label className="label">GST % <span className="text-gray-400 font-normal">(default 18)</span></label>
+              <input className="input text-right" type="number" step="0.01" min="0" max="100" placeholder="18" value={form.gst_pct ?? 18} onChange={e => setForm({...form, gst_pct: e.target.value})} />
+              <p className="text-[10px] text-gray-400 mt-0.5">Change when the material attracts a different slab (e.g. 5%). Used on the PO print &amp; totals.</p>
+            </div>
           </div>
 
           {/* Optional item linking — when an indent is picked, the uploader
@@ -6715,8 +6883,12 @@ export default function Procurement() {
                         <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
                             <td className="px-2 py-1 text-right text-gray-700">Rs {(+form.freight_amount).toLocaleString()}</td></tr>
                       )}
-                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total:</td>
+                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total (taxable):</td>
                           <td className="px-2 py-2 text-right font-bold text-red-700">Rs {(poTotal + (+form.freight_amount || 0)).toLocaleString()}</td></tr>
+                      <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">GST @ {poGstPct}%:</td>
+                          <td className="px-2 py-1 text-right text-gray-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (poGstPct / 100)).toLocaleString()}</td></tr>
+                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
+                          <td className="px-2 py-2 text-right font-bold text-red-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (1 + poGstPct / 100)).toLocaleString()}</td></tr>
                     </tfoot>
                   </table>
                 </div>
@@ -7867,6 +8039,13 @@ export default function Procurement() {
                        onChange={e => setEditPoForm({ ...editPoForm, freight_amount: e.target.value })} />
                 <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
               </div>
+              <div>
+                <label className="label">GST %</label>
+                <input className="input text-right" type="number" step="0.01" min="0" max="100" placeholder="18"
+                       value={editPoForm.gst_pct ?? 18}
+                       onChange={e => setEditPoForm({ ...editPoForm, gst_pct: e.target.value })} />
+                <p className="text-[10px] text-gray-400 mt-0.5">Default 18 — change when the material attracts a different slab (e.g. 5%). Used on the PO print &amp; totals.</p>
+              </div>
             </div>
 
             {/* Payment-before-material (INTERNAL — mam 2026-05-27).
@@ -8002,9 +8181,9 @@ export default function Procurement() {
                         </td>
                       </tr>
                       <tr className="bg-blue-50 font-semibold text-blue-800">
-                        <td colSpan="6" className="px-2 py-2 text-right">+ 18% GST · Grand Total</td>
+                        <td colSpan="6" className="px-2 py-2 text-right">+ {(editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18}% GST · Grand Total</td>
                         <td className="px-2 py-2 text-right">
-                          ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * 1.18).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * (1 + ((editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18) / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     </tfoot>
@@ -8012,7 +8191,7 @@ export default function Procurement() {
                 </div>
                 {!editPoLocked && (
                   <p className="text-[10px] text-gray-500 mt-1">
-                    Saving will auto-recompute the PO's Total Amount from these line items (× 1.18 GST).
+                    Saving will auto-recompute the PO's Total Amount from these line items (+ the GST % above).
                   </p>
                 )}
               </div>

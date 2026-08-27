@@ -3,6 +3,7 @@
 // engineering factors + settings, and saved solar quotations. Gated by the
 // `solar_quotation` module permission. Tables created/seeded by db/seedSolar.js.
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -56,10 +57,16 @@ router.get('/rate-book', requirePermission('solar_quotation', 'view'), (req, res
   for (const f of db.prepare('SELECT * FROM solar_factors').all()) {
     if (f.kind === 'mount') mount[f.name] = { struct_mult: f.val1, area_per_kwp: f.val2 };
     if (f.kind === 'array') array[f.name] = { struct_mult: f.val1, yield_mult: f.val2 };
-    if (f.kind === 'state') state[f.name] = { specific_yield: f.val1, t_min: f.val2, t_max: f.val3 };
+    if (f.kind === 'state') state[f.name] = { specific_yield: f.val1, t_min: f.val2, t_max: f.val3, tariff: f.val4 || 0, subsidy_topup: f.val5 || 0 };
   }
   const settingsObj = {};
-  for (const s of db.prepare('SELECT key, value FROM solar_settings').all()) settingsObj[s.key] = isNaN(+s.value) ? s.value : +s.value;
+  // `+'' === 0` and `isNaN(0) === false`, so a blank string setting (e.g. an
+  // unset logo_url/company_tagline) would silently coerce to the NUMBER 0
+  // without the blank-string guard below.
+  for (const s of db.prepare('SELECT key, value FROM solar_settings').all()) {
+    const v = s.value ?? '';
+    settingsObj[s.key] = v.trim() === '' || isNaN(+v) ? v : +v;
+  }
   const inverterSizes = [...invSizes].sort((a, b) => b - a);
 
   res.json({ ui, factors: { mount, array, state }, settings: settingsObj, inverterSizes, bos, labour, counts });
@@ -71,16 +78,19 @@ router.get('/factors', requirePermission('solar_quotation', 'view'), (req, res) 
 });
 router.put('/factors/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
   const b = req.body || {};
-  getDb().prepare('UPDATE solar_factors SET val1=?, val2=?, val3=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
-    .run(n(b.val1), n(b.val2), n(b.val3), req.params.id);
+  getDb().prepare('UPDATE solar_factors SET val1=?, val2=?, val3=?, val4=?, val5=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(n(b.val1), n(b.val2), n(b.val3), n(b.val4), n(b.val5), req.params.id);
   res.json({ message: 'Updated' });
 });
 router.get('/settings', requirePermission('solar_quotation', 'view'), (req, res) => {
   res.json(getDb().prepare('SELECT * FROM solar_settings ORDER BY key').all());
 });
 router.put('/settings/:key', requirePermission('solar_quotation', 'edit'), (req, res) => {
-  getDb().prepare('UPDATE solar_settings SET value=?, updated_at=CURRENT_TIMESTAMP WHERE key=?')
-    .run(String(req.body?.value ?? ''), req.params.key);
+  // Upsert — branding keys (company_name/logo_url/…) aren't in the bulk seed,
+  // so a plain UPDATE would silently no-op the first time one's set.
+  getDb().prepare(`INSERT INTO solar_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`)
+    .run(req.params.key, String(req.body?.value ?? ''));
   res.json({ message: 'Updated' });
 });
 
@@ -179,7 +189,7 @@ router.post('/quotations/export', requirePermission('solar_quotation', 'view'), 
     q.push(['Secured Engineers India']);
     q.push([`QUOTATION FOR ${sysTitle}`]);
     q.push([]);
-    q.push(['NAME', b.client_name || '', '', 'Date', new Date().toISOString().slice(0, 10)]);
+    q.push(['NAME', b.client_name || '', '', 'Date', istToday()]);
     q.push(['ADDRESS', b.address || '', '', 'Quotation No', b.quote_no || '']);
     q.push([]);
     q.push(['S No.', 'Description', 'Amount (In Rupees)']);
@@ -506,7 +516,8 @@ router.post('/projects/from-deal/:dealId', requirePermission('solar_quotation', 
 
 router.put('/projects/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
   const b = req.body || {};
-  const cols = ['client_name', 'company', 'location', 'state', 'capacity_kw', 'project_type', 'value', 'owner_id', 'owner_name', 'next_action', 'next_action_due', 'target_handover', 'handover_date', 'amc_annual_fee', 'amc_free_until', 'amc_next_due', 'amc_status', 'status'];
+  const cols = ['client_name', 'company', 'location', 'state', 'capacity_kw', 'project_type', 'value', 'owner_id', 'owner_name', 'next_action', 'next_action_due', 'target_handover', 'handover_date', 'amc_annual_fee', 'amc_free_until', 'amc_next_due', 'amc_status', 'status',
+    'discom_status', 'discom_consumer_no', 'discom_application_date', 'discom_application_ref', 'discom_inspection_date', 'discom_approval_date', 'net_meter_installed_date', 'discom_notes'];
   const set = cols.filter((c) => c in b);
   if ('milestones' in b) { set.push('milestones_json'); b.milestones_json = JSON.stringify(b.milestones); }
   if ('checklist' in b) { set.push('checklist_json'); b.checklist_json = JSON.stringify(b.checklist); }
@@ -534,8 +545,122 @@ router.post('/projects/:id/move', requirePermission('solar_quotation', 'edit'), 
 
 router.delete('/projects/:id', requirePermission('solar_quotation', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM solar_project_events WHERE project_id=?').run(req.params.id);
+  getDb().prepare('DELETE FROM solar_project_components WHERE project_id=?').run(req.params.id);
+  getDb().prepare('DELETE FROM solar_amc_visits WHERE project_id=?').run(req.params.id);
   getDb().prepare('DELETE FROM solar_projects WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
+});
+
+// ── Installed components (serial + warranty, for future claims) ──────────
+const COMPONENT_CATEGORIES = ['panel', 'inverter', 'battery', 'structure', 'monitoring', 'other'];
+// install_date + warranty_years (may be fractional, e.g. 1.5) → an ISO date.
+function addWarrantyYears(installDateStr, years) {
+  const d = new Date(installDateStr);
+  if (isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + Math.round(years * 365.25));
+  return d.toISOString().slice(0, 10);
+}
+router.get('/projects/:id/components', requirePermission('solar_quotation', 'view'), (req, res) => {
+  res.json(getDb().prepare('SELECT * FROM solar_project_components WHERE project_id=? ORDER BY created_at').all(req.params.id));
+});
+router.post('/projects/:id/components', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const b = req.body || {};
+  const category = COMPONENT_CATEGORIES.includes(b.category) ? b.category : 'other';
+  const years = parseFloat(b.warranty_years) || 0;
+  // warranty_till defaults off install_date + years unless the salesperson
+  // overrides it directly (some OEM warranties don't cleanly add in months).
+  const till = b.warranty_till || (b.install_date && years > 0 ? addWarrantyYears(b.install_date, years) : null);
+  const r = getDb().prepare(`INSERT INTO solar_project_components
+    (project_id,category,make,model,rating,serial_no,qty,install_date,warranty_years,warranty_till,notes,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    req.params.id, category, n(b.make), n(b.model), n(b.rating), n(b.serial_no), Number(b.qty) || 1,
+    n(b.install_date), years, till, n(b.notes), req.user.id);
+  res.json({ id: r.lastInsertRowid });
+});
+router.put('/components/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const b = req.body || {};
+  const cols = ['category', 'make', 'model', 'rating', 'serial_no', 'qty', 'install_date', 'warranty_years', 'warranty_till', 'notes'];
+  const set = cols.filter((c) => c in b);
+  if (!set.length) return res.json({ message: 'No change' });
+  getDb().prepare(`UPDATE solar_project_components SET ${set.map((c) => `${c}=?`).join(',')} WHERE id=?`)
+    .run(...set.map((c) => n(b[c])), req.params.id);
+  res.json({ message: 'Updated' });
+});
+router.delete('/components/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  getDb().prepare('DELETE FROM solar_project_components WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
+// ── AMC visit schedule ─────────────────────────────────────────────────
+const AMC_FREQ_MONTHS = { quarterly: 3, 'half-yearly': 6, annual: 12 };
+function defaultAmcChecklist() {
+  return ['Module cleaning', 'Visual inspection — cracks, hotspots, connector wear', 'String/inverter output check vs expected yield',
+    'DC/AC cable & connector tightness', 'Earthing continuity check', 'Structure/fastener corrosion check', 'RMS/monitoring data review']
+    .map((item) => ({ item, done: false }));
+}
+router.get('/projects/:id/amc-visits', requirePermission('solar_quotation', 'view'), (req, res) => {
+  const rows = getDb().prepare('SELECT * FROM solar_amc_visits WHERE project_id=? ORDER BY scheduled_date').all(req.params.id);
+  res.json(rows.map((r) => ({ ...r, checklist: JSON.parse(r.checklist_json || '[]') })));
+});
+// Lays out N visits at the chosen cadence — the actual recurring calendar
+// that amc_next_due alone never was. Idempotent-ish: only generates into the
+// future from the given start date, doesn't touch existing visits.
+router.post('/projects/:id/amc-visits/generate', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const b = req.body || {};
+  const months = AMC_FREQ_MONTHS[b.frequency] || 12;
+  const years = Math.max(1, Math.min(25, parseInt(b.years) || 1));
+  const start = b.start_date ? new Date(b.start_date) : new Date();
+  if (isNaN(start.getTime())) return res.status(400).json({ error: 'Bad start_date' });
+  const count = Math.round((years * 12) / months);
+  const ins = getDb().prepare(`INSERT INTO solar_amc_visits (project_id,scheduled_date,visit_type,checklist_json) VALUES (?,?,?,?)`);
+  const rows = [];
+  getDb().transaction(() => {
+    for (let i = 0; i < count; i++) {
+      const d = new Date(start); d.setMonth(d.getMonth() + i * months);
+      const iso = d.toISOString().slice(0, 10);
+      const r = ins.run(req.params.id, iso, b.frequency || 'annual', JSON.stringify(defaultAmcChecklist()));
+      rows.push(r.lastInsertRowid);
+    }
+  })();
+  res.json({ created: rows.length });
+});
+router.post('/projects/:id/amc-visits', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const b = req.body || {};
+  const r = getDb().prepare(`INSERT INTO solar_amc_visits (project_id,scheduled_date,visit_type,checklist_json,notes) VALUES (?,?,?,?,?)`)
+    .run(req.params.id, n(b.scheduled_date), b.visit_type || 'routine', JSON.stringify(b.checklist || defaultAmcChecklist()), n(b.notes));
+  res.json({ id: r.lastInsertRowid });
+});
+router.put('/amc-visits/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const b = req.body || {};
+  const cols = ['scheduled_date', 'visit_type', 'status', 'completed_date', 'technician_name', 'notes'];
+  const set = cols.filter((c) => c in b);
+  if ('checklist' in b) { set.push('checklist_json'); b.checklist_json = JSON.stringify(b.checklist); }
+  if (!set.length) return res.json({ message: 'No change' });
+  getDb().prepare(`UPDATE solar_amc_visits SET ${set.map((c) => `${c}=?`).join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(...set.map((c) => n(b[c])), req.params.id);
+  res.json({ message: 'Updated' });
+});
+router.delete('/amc-visits/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  getDb().prepare('DELETE FROM solar_amc_visits WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
+// ── Net-metering application summary (print) ──────────────────────────
+// Not a live DISCOM submission (no Indian DISCOM exposes a public one) — a
+// clean summary of the technical details every DISCOM application asks for,
+// so it's transcribed once here instead of hunted across four screens.
+router.get('/projects/:id/net-metering-print', requirePermission('solar_quotation', 'view'), (req, res) => {
+  const db = getDb();
+  const p = db.prepare('SELECT * FROM solar_projects WHERE id=?').get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  const q = p.quotation_id ? db.prepare('SELECT * FROM solar_quotations WHERE id=?').get(p.quotation_id) : null;
+  const components = db.prepare('SELECT * FROM solar_project_components WHERE project_id=? ORDER BY category').all(p.id);
+  res.json({
+    project: p,
+    engineering: q ? JSON.parse(q.engineering_json || '{}') : {},
+    inputs: q ? JSON.parse(q.inputs_json || '{}') : {},
+    components,
+  });
 });
 
 router.get('/projects/stats/analytics', requirePermission('solar_quotation', 'view'), (req, res) => {

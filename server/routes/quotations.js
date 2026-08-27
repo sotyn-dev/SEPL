@@ -1,10 +1,12 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
+const { aiComplete, aiConfig, extractJsonArray } = require('../lib/aiComplete');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -38,22 +40,17 @@ function scoreMatch(lineSet, itemTokens) {
   return Math.min(1, score);
 }
 
-// Read an app_settings value (AI key/model live there, set via AI Settings UI).
-function aiSetting(key) {
-  try { const r = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key); return r ? r.value : null; }
-  catch (e) { return null; }
-}
+// (AI provider/key/model live in app_settings, set via the AI Settings UI —
+// both LLM passes below read them through lib/aiComplete.js since 2026-08-21.)
 
 // Claude pass: for each line, pick the best catalog item from its fuzzy
 // shortlist, or null for composite WORK items that have no single catalog
 // match. Returns an array indexed by line, or null if AI isn't configured.
 async function llmRefine(ranked) {
-  const apiKey = aiSetting('ai_api_key');
-  if (!apiKey) return null;
-  let Anthropic;
-  try { Anthropic = require('@anthropic-ai/sdk'); } catch (e) { return null; }
-  const model = aiSetting('ai_model') || 'claude-opus-4-7';
-  const client = new Anthropic.default({ apiKey, timeout: 55000 });
+  // Provider (anthropic / gemini) comes from Admin → AI Settings via the
+  // shared helper (mam 2026-08-21). Contract unchanged: return null on ANY
+  // failure so the caller falls back to fuzzy matching.
+  if (!aiConfig(getDb()).configured) return null;
   const blocks = ranked.map((r, i) => {
     const cands = r.scored.slice(0, 8).map(s =>
       `${s.it.id}=${[s.it.item_name, s.it.specification, s.it.size].filter(Boolean).join(' ')}`).join(' | ');
@@ -65,11 +62,11 @@ CRITICAL: many lines are CONSTRUCTION WORK (e.g. "construct brick masonry manhol
 Return ONLY a JSON array, one object per line: {"line": <index>, "item_id": <id or null>, "confidence": <0-100>}.
 
 ${blocks}`;
-  const resp = await client.messages.create({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
-  const text = (resp.content || []).map(c => c.text || '').join('');
-  const a = text.indexOf('['), b = text.lastIndexOf(']');
-  if (a === -1 || b === -1) return null;
-  const arr = JSON.parse(text.slice(a, b + 1));
+  let out0;
+  try { out0 = await aiComplete(getDb(), { prompt, maxTokens: 4096, timeout: 55000, json: true }); }
+  catch (e) { console.warn('[quotations] AI refine pass failed:', e.status || '', e.message); return null; }
+  const arr = extractJsonArray(out0.text);
+  if (!arr) { console.warn('[quotations] AI refine returned no JSON array'); return null; }
   const out = [];
   for (const o of arr) if (o && typeof o.line === 'number') out[o.line] = { item_id: o.item_id ?? null, confidence: Number(o.confidence) || 0 };
   return out;
@@ -104,11 +101,7 @@ function textToLines(text) {
 // groups multi-line descriptions (name + spec + make) into one item and skips
 // headers/notes/totals. Returns [{description, qty}] or null if AI not set up.
 async function llmExtractItems(text) {
-  const apiKey = aiSetting('ai_api_key');
-  if (!apiKey || !text) return null;
-  let Anthropic; try { Anthropic = require('@anthropic-ai/sdk'); } catch (e) { return null; }
-  const model = aiSetting('ai_model') || 'claude-opus-4-7';
-  const client = new Anthropic.default({ apiKey, timeout: 55000 });
+  if (!text || !aiConfig(getDb()).configured) return null;
   const prompt = `Extract the BOQ / requirement line items from this client document text.
 Each item may span SEVERAL lines (item name, long description, "Make: ...", size) — COMBINE those into ONE item's description.
 Skip headers, column titles, notes, terms, totals, page numbers, addresses.
@@ -116,11 +109,11 @@ Return ONLY a JSON array, one object per item: {"description": "<full combined i
 
 TEXT:
 ${String(text).slice(0, 14000)}`;
-  const resp = await client.messages.create({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
-  const t = (resp.content || []).map(c => c.text || '').join('');
-  const a = t.indexOf('['), b = t.lastIndexOf(']');
-  if (a === -1 || b === -1) return null;
-  const arr = JSON.parse(t.slice(a, b + 1));
+  let res0;
+  try { res0 = await aiComplete(getDb(), { prompt, maxTokens: 4096, timeout: 55000, json: true }); }
+  catch (e) { console.warn('[quotations] AI extract pass failed:', e.status || '', e.message); return null; }
+  const arr = extractJsonArray(res0.text);
+  if (!arr) { console.warn('[quotations] AI extract returned no JSON array'); return null; }
   const out = arr.filter(x => x && x.description && String(x.description).trim().length > 3)
     .map(x => ({ description: String(x.description).replace(/\s+/g, ' ').trim(), qty: Number(x.qty) || 1, unit: '' }));
   return out.length ? out : null;
@@ -260,7 +253,7 @@ async function matchBoqFile(filePath, originalName) {
 }
 
 // Upload a BOQ file → match (the original route).
-router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
+router.post('/auto-match-boq', requirePermission('quotations', 'view'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     res.json(await matchBoqFile(req.file.path, req.file.originalname));
@@ -330,13 +323,84 @@ router.get('/client-boq', async (req, res) => {
   }
 });
 
-// BOQ
+// BOQ — the manually created rows PLUS every BOQ recorded on a Sales Funnel
+// lead (mam 2026-08-27: "here need come data from sales funnel boq, if add and
+// extra sales funnel boq"). Funnel rows are read-only references: the first
+// BOQ on a lead shows as FUNNEL, later ones (the "additional BOQ" path) as
+// EXTRA. Ids are prefixed (sf-/sfl-) so they can never collide with native
+// boq ids or be deleted/quoted by mistake.
 router.get('/boq', (req, res) => {
-  res.json(getDb().prepare(`SELECT b.*, l.company_name, u.name as created_by_name FROM boq b
-    LEFT JOIN leads l ON b.lead_id=l.id LEFT JOIN users u ON b.created_by=u.id ORDER BY b.created_at DESC`).all());
+  const db = getDb();
+  const native = db.prepare(`SELECT b.*, l.company_name, u.name as created_by_name, 'boq' AS source FROM boq b
+    LEFT JOIN leads l ON b.lead_id=l.id LEFT JOIN users u ON b.created_by=u.id ORDER BY b.created_at DESC`).all();
+  let funnel = [];
+  try {
+    funnel = db.prepare(`
+      SELECT fb.id, fb.funnel_id, fb.boq_file_link, fb.boq_amount AS total_amount,
+             fb.notes, fb.created_by AS created_by_name, fb.created_at,
+             COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name,
+             (SELECT COUNT(*) FROM sales_funnel_boqs x
+               WHERE x.funnel_id = fb.funnel_id
+                 AND (x.created_at < fb.created_at OR (x.created_at = fb.created_at AND x.id < fb.id))) AS prior_count
+        FROM sales_funnel_boqs fb
+        JOIN sales_funnel sf ON sf.id = fb.funnel_id
+       ORDER BY fb.created_at DESC, fb.id DESC`).all()
+      .map(r => ({
+        id: `sf-${r.id}`,
+        source: r.prior_count > 0 ? 'funnel_extra' : 'funnel',
+        title: `${r.prior_count > 0 ? 'Extra BOQ' : 'Funnel BOQ'}${r.notes ? ` — ${r.notes}` : ''}`,
+        company_name: r.company_name,
+        drawing_required: 0,
+        total_amount: r.total_amount || 0,
+        status: r.prior_count > 0 ? 'extra' : 'funnel',
+        created_at: r.created_at,
+        boq_file_link: r.boq_file_link || null,
+        created_by_name: r.created_by_name || null,
+        funnel_id: r.funnel_id,
+      }));
+    // The lead's own latest columns can hold files the history table never
+    // saw — the ORIGINAL and the REVISED BOQ (mam 2026-08-27 "previous also
+    // add"). Emit each file that isn't already covered by a history row.
+    const historyLinks = new Set(funnel.map(r => `${r.funnel_id}|${r.boq_file_link || ''}`));
+    const latest = db.prepare(`
+      SELECT sf.id AS funnel_id,
+             COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name,
+             NULLIF(sf.boq_file_link,'') AS boq_file_link,
+             NULLIF(sf.revised_boq_file_link,'') AS revised_boq_file_link,
+             COALESCE(sf.boq_amount, 0) AS total_amount,
+             COALESCE(sf.boq_date, sf.updated_at, sf.created_at) AS created_at,
+             EXISTS (SELECT 1 FROM sales_funnel_boqs x WHERE x.funnel_id = sf.id) AS has_history
+        FROM sales_funnel sf
+       WHERE COALESCE(sf.boq_file_link,'') <> '' OR COALESCE(sf.revised_boq_file_link,'') <> ''
+          OR COALESCE(sf.boq_amount, 0) > 0`).all();
+    for (const r of latest) {
+      const emitted = [];
+      if (r.boq_file_link && !historyLinks.has(`${r.funnel_id}|${r.boq_file_link}`)) {
+        emitted.push({ link: r.boq_file_link, title: 'Funnel BOQ', status: 'funnel', source: 'funnel' });
+      }
+      if (r.revised_boq_file_link && r.revised_boq_file_link !== r.boq_file_link
+          && !historyLinks.has(`${r.funnel_id}|${r.revised_boq_file_link}`)) {
+        emitted.push({ link: r.revised_boq_file_link, title: 'Revised BOQ', status: 'extra', source: 'funnel_extra' });
+      }
+      // A lead with only an amount (no files) and no history still gets one row.
+      if (!emitted.length && !r.has_history && r.total_amount > 0) {
+        emitted.push({ link: null, title: 'Funnel BOQ', status: 'funnel', source: 'funnel' });
+      }
+      emitted.forEach((e, i) => funnel.push({
+        id: `sfl-${r.funnel_id}-${i}`, source: e.source, title: e.title,
+        company_name: r.company_name, drawing_required: 0,
+        // amount belongs to the LATEST file — earlier files show 0 rather
+        // than repeating a total they may not represent.
+        total_amount: (i === emitted.length - 1) ? r.total_amount : 0,
+        status: e.status, created_at: r.created_at,
+        boq_file_link: e.link, funnel_id: r.funnel_id,
+      }));
+    }
+  } catch (e) { /* funnel tables missing on a stale DB — native list still serves */ }
+  res.json([...native, ...funnel].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
 });
 
-router.post('/boq', (req, res) => {
+router.post('/boq', requirePermission('quotations', 'create'), (req, res) => {
   const { lead_id, title, drawing_required, items } = req.body;
   const db = getDb();
   const total = (items || []).reduce((s, i) => s + (i.quantity * i.rate), 0);
@@ -373,31 +437,334 @@ router.get('/boq/:id', (req, res) => {
   res.json(boq);
 });
 
-// Quotations
+// Quotations — ERP rows PLUS quotations recorded on Sales Funnel leads
+// (mam 2026-08-27: "upload quotations show here"). A funnel lead whose
+// quotation was uploaded in the funnel (quotation_number/file/amount on
+// sales_funnel) shows as a read-only FUNNEL row — unless a real quotations
+// row already points at that lead (funnel_id), which supersedes it.
 router.get('/', (req, res) => {
-  res.json(getDb().prepare(`SELECT q.*, l.company_name, u.name as created_by_name FROM quotations q
-    LEFT JOIN leads l ON q.lead_id=l.id LEFT JOIN users u ON q.created_by=u.id ORDER BY q.created_at DESC`).all());
+  const db = getDb();
+  const native = db.prepare(`SELECT q.*, COALESCE(l.company_name, sf.company_name, sf.client_name) AS company_name, u.name as created_by_name, 'quotation' AS source
+    FROM quotations q
+    LEFT JOIN leads l ON q.lead_id=l.id
+    LEFT JOIN sales_funnel sf ON sf.id=q.funnel_id
+    LEFT JOIN users u ON q.created_by=u.id ORDER BY q.created_at DESC`).all();
+  // SOP-03 S1 two clocks: starting when the quote went out (created_at) the
+  // ball is with the CLIENT; each log entry flips it ('client' replied → ball
+  // to us, 'us' replied → ball to client). Days accumulate on whoever holds it.
+  try {
+    const logs = db.prepare('SELECT quotation_id, side, at FROM quotation_negotiation_log ORDER BY quotation_id, at, id').all();
+    const byQ = {};
+    for (const l of logs) (byQ[l.quotation_id] = byQ[l.quotation_id] || []).push(l);
+    const DAY = 86400000, now = Date.now();
+    for (const q of native) {
+      let ball = 'client', from = new Date(String(q.created_at).replace(' ', 'T') + 'Z').getTime();
+      let cDays = 0, usDays = 0;
+      if (!Number.isFinite(from)) from = now;
+      for (const ev of (byQ[q.id] || [])) {
+        const at = new Date(String(ev.at).replace(' ', 'T') + 'Z').getTime();
+        if (Number.isFinite(at) && at > from) {
+          if (ball === 'client') cDays += (at - from) / DAY; else usDays += (at - from) / DAY;
+          from = at;
+        }
+        ball = ev.side === 'client' ? 'us' : 'client';
+      }
+      // Clocks stop once the negotiation is over.
+      if (!['accepted', 'rejected'].includes(q.status) && now > from) {
+        if (ball === 'client') cDays += (now - from) / DAY; else usDays += (now - from) / DAY;
+      }
+      q.clock_client_days = Math.round(cDays * 10) / 10;
+      q.clock_us_days = Math.round(usDays * 10) / 10;
+      q.clock_ball = ball;
+    }
+  } catch (e) { /* log table missing on a stale DB — list still serves */ }
+  let funnel = [];
+  try {
+    funnel = db.prepare(`
+      SELECT sf.id AS funnel_id, sf.quotation_number, sf.quotation_file_link,
+             COALESCE(sf.quotation_amount, 0) AS quotation_amount,
+             sf.quotation_sent_by, COALESCE(sf.quotation_sent_date, sf.updated_at, sf.created_at) AS created_at,
+             COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name
+        FROM sales_funnel sf
+       WHERE (COALESCE(sf.quotation_number,'') <> '' OR COALESCE(sf.quotation_file_link,'') <> '' OR COALESCE(sf.quotation_amount,0) > 0)
+         AND NOT EXISTS (SELECT 1 FROM quotations q WHERE q.funnel_id = sf.id)`).all()
+      .map(r => ({
+        id: `sfq-${r.funnel_id}`, source: 'funnel', funnel_id: r.funnel_id,
+        quotation_number: r.quotation_number || `SF-${r.funnel_id}`,
+        company_name: r.company_name,
+        total_amount: r.quotation_amount, discount: 0, final_amount: r.quotation_amount,
+        status: 'sent', created_at: r.created_at,
+        quotation_file_link: r.quotation_file_link || null,
+        created_by_name: r.quotation_sent_by || null,
+      }));
+  } catch (e) { /* stale DB without funnel columns — native list still serves */ }
+  res.json([...native, ...funnel].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
 });
 
-router.post('/', (req, res) => {
+// ── SOP-02 S5/S6: Margin Chart + floor rule (mam 2026-08-27) ──────────────
+// GET the fixed margin chart + the floor — feeds the Quote modal's category
+// dropdown and the "below floor goes to Sales Head" hint.
+router.get('/margin-chart', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM quotation_margin_chart ORDER BY category').all();
+  const setting = (k, d) => +(db.prepare('SELECT value FROM app_settings WHERE key=?').get(k)?.value || d);
+  res.json({
+    rows,
+    floor: setting('quotation_margin_floor_pct', 10),
+    // SOP-03 S3 discount chart: within auto → done; above → Sales Head;
+    // above md → MD sir.
+    discount_auto: setting('quotation_discount_auto_pct', 5),
+    discount_md: setting('quotation_discount_md_pct', 10),
+  });
+});
+
+// Upsert one chart row / set the floor — admin keeps the chart honest.
+router.post('/margin-chart', adminOnly, (req, res) => {
+  const db = getDb();
+  const { category, margin_pct, floor, discount_auto, discount_md } = req.body || {};
+  const setSetting = (k, v) => db.prepare(`INSERT INTO app_settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(k, String(+v || 0));
+  if (floor != null) setSetting('quotation_margin_floor_pct', floor);
+  if (discount_auto != null) setSetting('quotation_discount_auto_pct', discount_auto);
+  if (discount_md != null) setSetting('quotation_discount_md_pct', discount_md);
+  if (category && String(category).trim()) {
+    db.prepare(`INSERT INTO quotation_margin_chart (category, margin_pct, updated_by, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(category) DO UPDATE SET margin_pct=excluded.margin_pct,
+                  updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`)
+      .run(String(category).trim(), +margin_pct || 0, req.user.id);
+  }
+  res.json({ ok: true });
+});
+
+router.delete('/margin-chart/:id', adminOnly, (req, res) => {
+  getDb().prepare('DELETE FROM quotation_margin_chart WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Who may decide a below-floor margin: admin, anyone holding can_approve on
+// quotations, or the Sales Head by name (SOP-02 S6 names Rajat Sharma —
+// same by-name pattern as the vendor-PO approvers).
+const canDecideMargin = (db, user) => {
+  if (user.role === 'admin') return true;
+  const n = (user.name || '').toLowerCase();
+  if (n.includes('rajat') && n.includes('sharma')) return true;
+  try {
+    return !!db.prepare(`SELECT 1 FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id
+      WHERE ur.user_id=? AND rp.module='quotations' AND rp.can_approve=1`).get(user.id);
+  } catch { return false; }
+};
+
+// Sales Head decision on a below-floor quotation (SOP-02 S6).
+router.post('/:id/margin-decision', (req, res) => {
+  try {
+    const db = getDb();
+    if (!canDecideMargin(db, req.user)) {
+      return res.status(403).json({ error: 'Only the Sales Head (or admin / quotations-approve) can decide a below-floor margin' });
+    }
+    const q = db.prepare('SELECT * FROM quotations WHERE id=?').get(req.params.id);
+    if (!q) return res.status(404).json({ error: 'Quotation not found' });
+    if (q.margin_approval !== 'pending') return res.status(409).json({ error: 'This quotation is not waiting for a margin decision' });
+    const approve = req.body?.action === 'approve';
+    db.prepare('UPDATE quotations SET margin_approval=?, status=?, notes=COALESCE(notes,\'\') || ? WHERE id=?')
+      .run(approve ? 'approved' : 'rejected',
+           approve ? 'draft' : 'rejected',
+           ` | Margin ${approve ? 'APPROVED' : 'REJECTED'} by ${req.user.name}${req.body?.reason ? `: ${req.body.reason}` : ''}`,
+           q.id);
+    // The funnel stage is stamped only once the quote may go out (S7).
+    if (approve && q.funnel_id) {
+      db.prepare(`UPDATE sales_funnel SET quotation_number=?, quotation_amount=?,
+                    quotation_file_link=COALESCE(?, quotation_file_link),
+                    quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(q.quotation_number, q.final_amount, q.quotation_file_link || null, req.user.name || null, q.funnel_id);
+    }
+    res.json({ ok: true, status: approve ? 'draft' : 'rejected' });
+  } catch (err) {
+    console.error('margin-decision error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Quote a Sales Funnel BOQ with margin (mam 2026-08-27, SOP-02 F5-F7):
+// base = the BOQ cost, final = base × (1 + margin%). Creates a real
+// quotation row AND stamps the funnel lead's quotation_* columns so the
+// funnel board and this page stay in sync.
+router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, res) => {
+  try {
+    const { funnel_id, base_amount, margin_pct, category, quotation_file_link, valid_until, notes } = req.body || {};
+    const db = getDb();
+    const sf = db.prepare('SELECT id, company_name, client_name FROM sales_funnel WHERE id=?').get(+funnel_id);
+    if (!sf) return res.status(404).json({ error: 'Funnel lead not found' });
+    const base = +base_amount || 0;
+    if (base <= 0) return res.status(400).json({ error: 'Enter the BOQ base amount' });
+    // Margin resolution (SOP-02 S5 "margin chart, not guesswork"):
+    // explicit % from the form → else the chart's % for the picked category.
+    let margin = margin_pct != null && margin_pct !== '' ? +margin_pct : null;
+    if (margin == null && category) {
+      margin = db.prepare('SELECT margin_pct FROM quotation_margin_chart WHERE category=?').get(category)?.margin_pct ?? null;
+    }
+    margin = +margin || 0;
+    // Floor rule (S6): at/above the floor the quote approves on its own;
+    // below it, it parks as pending_approval for the Sales Head and the
+    // funnel is NOT stamped until the decision.
+    const floor = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_margin_floor_pct'").get()?.value || 10);
+    const belowFloor = margin < floor;
+    const finalAmt = Math.round(base * (1 + margin / 100) * 100) / 100;
+    const { nextSequence } = require('../db/nextSequence');
+    const qNum = nextSequence(db, 'quotations', 'quotation_number', 'QTN-', { startFrom: 0, pad: 4 });
+    const clientName = sf.company_name || sf.client_name || '';
+    const r = db.prepare(`INSERT INTO quotations
+        (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, status, margin_approval, created_by, funnel_id, margin_pct, quotation_file_link)
+        VALUES (NULL, NULL, ?, ?, 0, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`)
+      .run(qNum, base, finalAmt, valid_until || null,
+           notes || `Margin ${margin}%${category ? ` (${category})` : ''} on funnel BOQ — ${clientName}`,
+           belowFloor ? 'pending' : null,
+           req.user.id, sf.id, margin, quotation_file_link || null);
+    if (!belowFloor) {
+      db.prepare(`UPDATE sales_funnel SET quotation_number=?, quotation_amount=?, quotation_file_link=COALESCE(?, quotation_file_link),
+                    quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(qNum, finalAmt, quotation_file_link || null, req.user.name || null, sf.id);
+    }
+    res.status(201).json({
+      id: r.lastInsertRowid, quotation_number: qNum, final_amount: finalAmt,
+      status: 'draft', margin_approval: belowFloor ? 'pending' : null, floor, margin,
+      message: belowFloor ? `Margin ${margin}% is below the ${floor}% floor — sent to the Sales Head for a decision` : undefined,
+    });
+  } catch (err) {
+    console.error('funnel-quote error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SOP-03 S3: discount chart gate (mam 2026-08-27) ───────────────────────
+// Discount within quotation_discount_auto_pct → done on its own. Above it →
+// Sales Head. Above quotation_discount_md_pct → MD sir.
+const discountGate = (db, total, discount) => {
+  const pct = +total > 0 ? Math.round(((+discount || 0) / +total) * 10000) / 100 : 0;
+  const auto = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_discount_auto_pct'").get()?.value || 5);
+  const mdAt = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_discount_md_pct'").get()?.value || 10);
+  return { pct, auto, mdAt, level: pct > mdAt ? 'pending_md' : (pct > auto ? 'pending_sh' : null) };
+};
+
+router.post('/', requirePermission('quotations', 'create'), (req, res) => {
   const { lead_id, boq_id, total_amount, discount, final_amount, valid_until, notes } = req.body;
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
   const qNum = nextSequence(db, 'quotations', 'quotation_number', 'QTN-', { startFrom: 0, pad: 4 });
+  const gate = discountGate(db, total_amount, discount);
   const r = db.prepare(
-    'INSERT INTO quotations (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)'
-  ).run(lead_id, boq_id, qNum, total_amount, discount || 0, final_amount, valid_until, notes, req.user.id);
-  res.status(201).json({ id: r.lastInsertRowid, quotation_number: qNum });
+    'INSERT INTO quotations (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, discount_approval, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)'
+  ).run(lead_id, boq_id, qNum, total_amount, discount || 0, final_amount, valid_until, notes, gate.level, req.user.id);
+  res.status(201).json({
+    id: r.lastInsertRowid, quotation_number: qNum, discount_approval: gate.level,
+    message: gate.level === 'pending_md' ? `Discount ${gate.pct}% is above ${gate.mdAt}% — needs MD sir's approval`
+           : gate.level === 'pending_sh' ? `Discount ${gate.pct}% is above the ${gate.auto}% chart — needs the Sales Head's approval`
+           : undefined,
+  });
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const { total_amount, discount, final_amount, status, valid_until, notes } = req.body;
-  getDb().prepare('UPDATE quotations SET total_amount=?, discount=?, final_amount=?, status=?, valid_until=?, notes=? WHERE id=?')
-    .run(total_amount, discount, final_amount, status, valid_until, notes, req.params.id);
-  res.json({ message: 'Updated' });
+  const db = getDb();
+  const prev = db.prepare('SELECT * FROM quotations WHERE id=?').get(req.params.id);
+  if (!prev) return res.status(404).json({ error: 'Quotation not found' });
+  // Re-run the discount gate ONLY when the discount actually changed —
+  // an already-approved discount must not re-park on a plain status change.
+  let discountApproval = prev.discount_approval;
+  if (+discount !== +prev.discount || +total_amount !== +prev.total_amount) {
+    discountApproval = discountGate(db, total_amount, discount).level;
+  }
+  // Gates on booking the order: margin (SOP-02 S6) and discount (SOP-03 S3)
+  // must both be settled before 'accepted'.
+  if (status === 'accepted') {
+    if (prev.margin_approval === 'pending') return res.status(409).json({ error: 'Margin is below the floor and still waiting for the Sales Head — cannot book the order yet' });
+    if (discountApproval === 'pending_sh') return res.status(409).json({ error: 'Discount is above the chart and waiting for the Sales Head — cannot book the order yet' });
+    if (discountApproval === 'pending_md') return res.status(409).json({ error: "Discount needs MD sir's approval — cannot book the order yet" });
+  }
+  db.prepare('UPDATE quotations SET total_amount=?, discount=?, final_amount=?, status=?, valid_until=?, notes=?, discount_approval=? WHERE id=?')
+    .run(total_amount, discount, final_amount, status, valid_until, notes, discountApproval, req.params.id);
+
+  // ── SOP-03 S4/S5: "Order mila!" — ONE project record + handover ─────────
+  // First transition into 'accepted' creates the Business Book record the
+  // whole company uses, and informs PM / Purchase / Accounts together.
+  let project = null;
+  if (status === 'accepted' && prev.status !== 'accepted' && !prev.business_book_id) {
+    try {
+      const { nextSequence } = require('../db/nextSequence');
+      const lead = prev.lead_id ? db.prepare('SELECT company_name, contact_person, email FROM leads WHERE id=?').get(prev.lead_id) : null;
+      const sf = prev.funnel_id ? db.prepare('SELECT company_name, client_name FROM sales_funnel WHERE id=?').get(prev.funnel_id) : null;
+      const clientName = lead?.company_name || sf?.company_name || sf?.client_name || 'Client';
+      const leadNo = nextSequence(db, 'business_book', 'lead_no', 'SEPL', { startFrom: 20000, pad: 5 });
+      const bb = db.prepare(`INSERT INTO business_book
+          (lead_no, client_name, company_name, project_name, sale_amount_without_gst, po_amount)
+          VALUES (?,?,?,?,?,?)`)
+        .run(leadNo, clientName, clientName, `${clientName} — ${prev.quotation_number}`,
+             +final_amount || +prev.final_amount || 0, +final_amount || +prev.final_amount || 0);
+      db.prepare('UPDATE quotations SET business_book_id=? WHERE id=?').run(bb.lastInsertRowid, prev.id);
+      project = { business_book_id: bb.lastInsertRowid, lead_no: leadNo };
+      // S5 handover — PM, Purchase and Accounts informed together: the
+      // module owners of DPR / Procurement / Payments (where set) + admins.
+      try {
+        const owners = db.prepare(`SELECT DISTINCT owner_user_id AS id FROM module_owners
+            WHERE module_key IN ('dpr','procurement','payment_required') AND owner_user_id IS NOT NULL`).all();
+        const admins = db.prepare("SELECT id FROM users WHERE role='admin' AND COALESCE(active,1)=1").all();
+        const ids = [...new Set([...owners, ...admins].map(u => u.id))];
+        const title = `Order booked — ${clientName}`;
+        const body = `${prev.quotation_number} accepted · Rs ${(+final_amount || 0).toLocaleString('en-IN')} · project record ${leadNo} created. Handover pack: BOQ & files on the Quotations page / Sales Funnel.`;
+        const ins = db.prepare(`INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+                                VALUES (?,?,?,?,?,?,?)`);
+        for (const uid of ids) ins.run(uid, 'order_booked', title, body, '/business-book', 'in_app', `order-booked-q${prev.id}-${uid}`);
+        try { require('../lib/push').notifyMany(ids, { title, body, url: '/business-book' }); } catch (_) {}
+      } catch (e) { console.warn('[order-booked] notify failed:', e.message); }
+    } catch (e) { console.error('[order-booked] project record failed:', e.message); }
+  }
+  res.json({ message: 'Updated', discount_approval: discountApproval, project });
 });
 
-router.delete('/:id', (req, res) => {
+// S3 decision: pending_sh → Sales Head (Rajat Sharma / quotations-approve /
+// admin); pending_md → MD sir (Ankur Kaplesh / admin).
+router.post('/:id/discount-decision', (req, res) => {
+  try {
+    const db = getDb();
+    const q = db.prepare('SELECT * FROM quotations WHERE id=?').get(req.params.id);
+    if (!q) return res.status(404).json({ error: 'Quotation not found' });
+    if (q.discount_approval !== 'pending_sh' && q.discount_approval !== 'pending_md') {
+      return res.status(409).json({ error: 'This quotation is not waiting for a discount decision' });
+    }
+    const n = (req.user.name || '').toLowerCase();
+    const isMd = n.includes('ankur') || req.user.role === 'admin';
+    if (q.discount_approval === 'pending_md' && !isMd) {
+      return res.status(403).json({ error: "This discount level needs MD sir (Ankur Kaplesh) or admin" });
+    }
+    if (q.discount_approval === 'pending_sh' && !canDecideMargin(db, req.user) && !isMd) {
+      return res.status(403).json({ error: 'Only the Sales Head (Rajat Sharma), quotations-approve holders, MD or admin can decide this discount' });
+    }
+    const approve = req.body?.action === 'approve';
+    db.prepare("UPDATE quotations SET discount_approval=?, notes=COALESCE(notes,'') || ? WHERE id=?")
+      .run(approve ? 'approved' : 'rejected',
+           ` | Discount ${approve ? 'APPROVED' : 'REJECTED'} by ${req.user.name}${req.body?.reason ? `: ${req.body.reason}` : ''}`,
+           q.id);
+    res.json({ ok: true, discount_approval: approve ? 'approved' : 'rejected' });
+  } catch (err) {
+    console.error('discount-decision error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── SOP-03 S1: two-clock negotiation log ──────────────────────────────────
+// One tap per event: 'client' = client replied (ball comes to US),
+// 'us' = we replied / re-quoted (ball goes to the CLIENT).
+router.post('/:id/negotiation-log', requirePermission('quotations', 'edit'), (req, res) => {
+  const db = getDb();
+  const side = req.body?.side === 'client' ? 'client' : 'us';
+  const q = db.prepare('SELECT id FROM quotations WHERE id=?').get(req.params.id);
+  if (!q) return res.status(404).json({ error: 'Quotation not found' });
+  db.prepare('INSERT INTO quotation_negotiation_log (quotation_id, side, note, created_by) VALUES (?,?,?,?)')
+    .run(q.id, side, (req.body?.note || '').slice(0, 300) || null, req.user.id);
+  res.json({ ok: true });
+});
+
+router.delete('/:id', requirePermission('quotations', 'delete'), (req, res) => {
   const db = getDb();
   const poCount = db.prepare('SELECT COUNT(*) as c FROM purchase_orders WHERE quotation_id=?').get(req.params.id).c;
   if (poCount > 0) return res.status(409).json({ error: 'Cannot delete: Purchase Orders reference this quotation' });
@@ -405,7 +772,7 @@ router.delete('/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-router.delete('/boq/:id', (req, res) => {
+router.delete('/boq/:id', requirePermission('quotations', 'delete'), (req, res) => {
   const db = getDb();
   const qCount = db.prepare('SELECT COUNT(*) as c FROM quotations WHERE boq_id=?').get(req.params.id).c;
   if (qCount > 0) return res.status(409).json({ error: 'Cannot delete: Quotations reference this BOQ' });
@@ -505,7 +872,7 @@ router.get('/po-foc/:id', (req, res) => {
   res.json(liveResolvePoFoc(r, buildLiveMaps(db)));
 });
 
-router.post('/po-foc', (req, res) => {
+router.post('/po-foc', requirePermission('quotations', 'create'), (req, res) => {
   const c = computePoFoc(req.body);
   const r = getDb().prepare(
     `INSERT INTO po_foc_entries (po_item_id, po_name, po_rate, qty, labour, labour_item_id, labour_name, labour_margin, margin, focs_json, cost, tpa, status, created_by)
@@ -516,7 +883,7 @@ router.post('/po-foc', (req, res) => {
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
 
-router.put('/po-foc/:id', (req, res) => {
+router.put('/po-foc/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const db = getDb();
   const cur = db.prepare('SELECT status FROM po_foc_entries WHERE id=?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
@@ -532,16 +899,19 @@ router.put('/po-foc/:id', (req, res) => {
   res.json({ message: 'Updated', status: newStatus });
 });
 
-router.post('/po-foc/:id/approve', (req, res) => {
+router.post('/po-foc/:id/approve', requirePermission('quotations', 'approve'), (req, res) => {
   const db = getDb();
   const cur = db.prepare('SELECT id FROM po_foc_entries WHERE id=?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
   db.prepare(`UPDATE po_foc_entries SET status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
     .run(req.user.id, req.params.id);
+  // 106 of these went through in ~2 minutes on 2026-08-23 — same
+  // fastest-finger pattern as the deletes, so it feeds the same breaker.
+  require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'po_foc_approve');
   res.json({ message: 'Approved' });
 });
 
-router.delete('/po-foc/:id', (req, res) => {
+router.delete('/po-foc/:id', requirePermission('quotations', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM po_foc_entries WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -557,7 +927,7 @@ router.get('/labour-rates', (req, res) => {
   res.json(db.prepare(`SELECT * FROM labour_rates ${where} ORDER BY category, item_name`).all(...args));
 });
 
-router.post('/labour-rates', (req, res) => {
+router.post('/labour-rates', requirePermission('quotations', 'create'), (req, res) => {
   const { item_name, specification, size, rate, uom, category } = req.body;
   if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'Item name is required' });
   const r = getDb().prepare('INSERT INTO labour_rates (item_name, specification, size, rate, uom, category, created_by) VALUES (?,?,?,?,?,?,?)')
@@ -565,7 +935,7 @@ router.post('/labour-rates', (req, res) => {
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
 
-router.put('/labour-rates/:id', (req, res) => {
+router.put('/labour-rates/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const { item_name, specification, size, rate, uom, category } = req.body;
   if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'Item name is required' });
   getDb().prepare('UPDATE labour_rates SET item_name=?, specification=?, size=?, rate=?, uom=?, category=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
@@ -573,7 +943,7 @@ router.put('/labour-rates/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/labour-rates/:id', (req, res) => {
+router.delete('/labour-rates/:id', requirePermission('quotations', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM labour_rates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -628,7 +998,7 @@ router.get('/labour-rates/duplicates', (req, res) => {
 
 // Merge duplicate labour rows: repoint every PO/FOC kit from the removed rows
 // onto the kept row, then delete the removed rows (one transaction).
-router.post('/labour-rates/merge', (req, res) => {
+router.post('/labour-rates/merge', requirePermission('quotations', 'edit'), (req, res) => {
   const keepId = Number(req.body.keep_id);
   const removeIds = (Array.isArray(req.body.remove_ids) ? req.body.remove_ids : []).map(Number).filter(id => id && id !== keepId);
   if (!keepId || !removeIds.length) return res.status(400).json({ error: 'keep_id and at least one remove_id required' });
@@ -645,7 +1015,7 @@ router.post('/labour-rates/merge', (req, res) => {
 
 // Bulk import from an uploaded .xlsx / .xls / .csv. First row = headers;
 // columns matched case-insensitively. Item Name required; others optional.
-router.post('/labour-rates/import', upload.single('file'), (req, res) => {
+router.post('/labour-rates/import', requirePermission('quotations', 'create'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const db = getDb();
   let rows;
@@ -687,7 +1057,7 @@ router.get('/estimates/:id', (req, res) => {
   if (!r) return res.status(404).json({ error: 'Not found' });
   res.json({ ...r, margins: JSON.parse(r.margins_json || '{}'), rows: JSON.parse(r.rows_json || '[]'), manpower: JSON.parse(r.manpower_json || '[]'), payment_terms: JSON.parse(r.payment_terms_json || '{}') });
 });
-router.post('/estimates', (req, res) => {
+router.post('/estimates', requirePermission('quotations', 'create'), (req, res) => {
   const b = req.body || {};
   const r = getDb().prepare(`INSERT INTO estimate_quotations (title, lead_id, client_name, acc_pct, margins_json, rows_json, manpower_json, payment_terms_json, cost, sp, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(b.title || '', b.lead_id || null, b.client_name || '', Number(b.acc_pct) || 0,
@@ -695,7 +1065,7 @@ router.post('/estimates', (req, res) => {
     Number(b.cost) || 0, Number(b.sp) || 0, req.user.id);
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
-router.put('/estimates/:id', (req, res) => {
+router.put('/estimates/:id', requirePermission('quotations', 'edit'), (req, res) => {
   const b = req.body || {};
   const ex = getDb().prepare('SELECT id FROM estimate_quotations WHERE id=?').get(req.params.id);
   if (!ex) return res.status(404).json({ error: 'Not found' });
@@ -705,7 +1075,7 @@ router.put('/estimates/:id', (req, res) => {
       Number(b.cost) || 0, Number(b.sp) || 0, req.params.id);
   res.json({ message: 'Updated' });
 });
-router.delete('/estimates/:id', (req, res) => {
+router.delete('/estimates/:id', requirePermission('quotations', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM estimate_quotations WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -742,7 +1112,7 @@ async function buildStyledQuotation(ExcelJS, d) {
     ['B4', 'Website: www.securedengineers.com', { size: 9, color: { argb: 'FF555555' } }]];
   co.forEach(([a, v, f], i) => { sum.mergeCells(`${a}:E${i + 1}`); sum.getCell(a).value = v; sum.getCell(a).font = f; });
   sum.mergeCells('A6:E6'); const tb = sum.getCell('A6'); tb.value = `QUOTATION FOR ${d.title || 'WORK'}`; tb.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }; tb.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } }; tb.alignment = { horizontal: 'center', vertical: 'middle' }; sum.getRow(6).height = 24;
-  const info = [['NAME', d.client_name, 'Date', new Date().toISOString().slice(0, 10)], ['ADDRESS', d.client_address, 'Quotation No', d.quotation_no], ['PREP BY', d.prep_by, 'Revision No', 'R0']];
+  const info = [['NAME', d.client_name, 'Date', istToday()], ['ADDRESS', d.client_address, 'Quotation No', d.quotation_no], ['PREP BY', d.prep_by, 'Revision No', 'R0']];
   let rr = 8;
   info.forEach(([k, v, k2, v2]) => { sum.getCell(`A${rr}`).value = k; sum.getCell(`A${rr}`).font = { bold: true }; sum.getCell(`B${rr}`).value = v; sum.getCell(`B${rr}`).alignment = { wrapText: true }; sum.getCell(`D${rr}`).value = k2; sum.getCell(`D${rr}`).font = { bold: true }; sum.getCell(`E${rr}`).value = v2; rr++; });
   rr++;
@@ -783,7 +1153,7 @@ async function buildStyledQuotation(ExcelJS, d) {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-router.post('/estimate-export', async (req, res) => {
+router.post('/estimate-export', requirePermission('quotations', 'view'), async (req, res) => {
   const { title = '', client_name = '', client_address = '', quotation_no = '', prep_by = '',
     rows = [], manpower = [] } = req.body || {};
   const sendBuf = (buf) => {
@@ -831,7 +1201,7 @@ router.post('/estimate-export', async (req, res) => {
     sum.push(['C.O : 58/A/1, First Floor, Kalu Sarai, New Delhi - 110016']);
     sum.push(['Website : www.securedengineers.com']);
     sum.push([`QUOTATION FOR ${title || 'WORK'}`]);
-    sum.push(['NAME', client_name, '', 'Date-:', new Date().toISOString().slice(0, 10)]);
+    sum.push(['NAME', client_name, '', 'Date-:', istToday()]);
     sum.push(['ADDRESS', client_address, '', 'Quotation No', quotation_no]);
     sum.push(['PREP BY', prep_by, '', 'Revision No', 'R0']);
     sum.push([]);

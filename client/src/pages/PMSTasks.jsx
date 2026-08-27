@@ -55,6 +55,10 @@ export default function PMSTasks() {
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [submitModal, setSubmitModal] = useState(null);
+  // Which task's proof modal is actually open right now — checked before an
+  // in-flight upload is allowed to write into submitForm (same shape as the
+  // Delegations fix, mam 2026-08-24: "sometimes wrong upload").
+  const submitModalIdRef = useRef(null);
   const [rejectModal, setRejectModal] = useState(null);
   const [extendModal, setExtendModal] = useState(null);
   const [form, setForm] = useState({});
@@ -202,13 +206,24 @@ export default function PMSTasks() {
 
   // Lifecycle handlers (same shape as Delegations)
   const uploadProof = async (file) => {
+    // See submitModalIdRef above — discard the result if the user has
+    // switched to a different task's modal (or closed it) before this
+    // resolves, instead of letting a stale file silently attach here.
+    const forId = submitModalIdRef.current;
     const fd = new FormData(); fd.append('file', file);
     setSubmitForm(s => ({ ...s, uploading: true }));
     try {
       const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (submitModalIdRef.current !== forId) {
+        toast('That upload finished after you switched tasks — please upload again here.', { icon: '⚠️' });
+        return;
+      }
       setSubmitForm({ proof_url: res.data.url, uploading: false });
       toast.success('File uploaded — click Submit');
-    } catch { toast.error('Upload failed'); setSubmitForm(s => ({ ...s, uploading: false })); }
+    } catch {
+      if (submitModalIdRef.current !== forId) return;
+      toast.error('Upload failed'); setSubmitForm(s => ({ ...s, uploading: false }));
+    }
   };
   const submitProof = async (e) => {
     e.preventDefault();
@@ -216,7 +231,7 @@ export default function PMSTasks() {
     try {
       await api.post(`/pms-tasks/${submitModal.id}/submit`, { proof_url: submitForm.proof_url });
       toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); setSubmitForm({ proof_url: '', uploading: false }); load();
+      setSubmitModal(null); submitModalIdRef.current = null; setSubmitForm({ proof_url: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
   const approve = async (task) => {
@@ -457,7 +472,7 @@ export default function PMSTasks() {
                         <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
                       )}
                       {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
+                        <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
                           <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
@@ -547,7 +562,7 @@ export default function PMSTasks() {
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -733,7 +748,7 @@ export default function PMSTasks() {
       </Modal>
 
       {/* Submit Proof Modal */}
-      <Modal isOpen={!!submitModal} onClose={() => setSubmitModal(null)} title={submitModal ? `Submit proof — PMS-${String(submitModal.id).padStart(4,'0')}` : 'Submit proof'}>
+      <Modal isOpen={!!submitModal} onClose={() => { setSubmitModal(null); submitModalIdRef.current = null; }} title={submitModal ? `Submit proof — PMS-${String(submitModal.id).padStart(4,'0')}` : 'Submit proof'}>
         <form onSubmit={submitProof} className="space-y-3">
           {submitModal?.status === 'rejected' && submitModal.reject_reason && (
             <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-700">
@@ -764,7 +779,7 @@ export default function PMSTasks() {
             {submitForm.proof_url && <p className="text-xs text-emerald-600 mt-1">✓ Ready to submit</p>}
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setSubmitModal(null)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => { setSubmitModal(null); submitModalIdRef.current = null; }} className="btn btn-secondary">Cancel</button>
             <button type="submit" disabled={!submitForm.proof_url || submitForm.uploading} className="btn btn-primary disabled:opacity-50">Submit for Approval</button>
           </div>
         </form>

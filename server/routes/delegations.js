@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
@@ -6,6 +7,7 @@ const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
+const { aiComplete, aiConfig } = require('../lib/aiComplete');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -54,11 +56,6 @@ function resolveWhisperModel() {
   return path.join(WHISPER_MODELS_DIR, 'ggml-base.bin');
 }
 
-function getSetting(key) {
-  try { const row = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key); return row?.value ?? null; }
-  catch (_) { return null; }
-}
-
 // Staff type tasks in Roman letters, so convert Whisper's accurate Hindi
 // (Devanagari) into casual Hinglish using the Claude key the ERP already has.
 // Best-effort: no key, or any failure, just returns the original text so
@@ -100,21 +97,24 @@ async function romanizeToHinglish(text) {
   if (!text) return text;
   if (process.env.WHISPER_ROMANIZE === '0') return text;
   if (!/[ऀ-ॿ]/.test(text)) return text;   // no Hindi script → nothing to do
-  // Prefer Claude (natural Hinglish) IF a key is set — use the SAME model the
-  // ERP's AI agent already uses, so we never fail on an unsupported model id.
-  const apiKey = getSetting('ai_api_key');
-  if (apiKey) {
+  // Prefer the AI (natural Hinglish) IF a key is set — use the SAME provider +
+  // model the ERP's AI agent already uses, so we never fail on an unsupported
+  // model id. Whichever provider Admin → AI Settings selects (anthropic OR gemini) —
+  // shared one-shot helper, mam 2026-08-21. retries429:0 on purpose: a voice
+  // note must NEVER stall 12s waiting out a rate limit when the free local
+  // transliterator below is one line away.
+  if (aiConfig(getDb()).configured) {
     try {
-      const Anthropic = require('@anthropic-ai/sdk');
-      const client = new Anthropic.default({ apiKey, timeout: 30000 });
-      const model = process.env.ROMANIZE_MODEL || getSetting('ai_model') || 'claude-opus-4-7';
-      const r = await client.messages.create({
-        model, max_tokens: 1200,
+      const out = await aiComplete(getDb(), {
+        prompt: text,
         system: 'You transliterate Hindi (Devanagari) into casual Romanized Hinglish exactly how an Indian office worker types in English letters (e.g. "मटेरियल भेजो" -> "material bhejo"). Keep English / brand / product words in English. Do NOT translate the meaning, and do NOT add, remove, or explain anything. Output ONLY the transliterated text.',
-        messages: [{ role: 'user', content: text }],
+        maxTokens: 1200, timeout: 30000, retries429: 0,
+        // ROMANIZE_MODEL goes through override so aiConfig still coerces it
+        // per provider — a leftover Claude id would otherwise kill Hinglish
+        // on a Gemini install.
+        override: process.env.ROMANIZE_MODEL ? { model: process.env.ROMANIZE_MODEL } : undefined,
       });
-      const out = (r.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-      if (out && !/[ऀ-ॿ]/.test(out)) return out;        // good Roman result from Claude
+      if (out.text && !/[ऀ-ॿ]/.test(out.text)) return out.text;   // good Roman result from the AI
     } catch (_) { /* fall through to the free local transliterator */ }
   }
   return devanagariToRoman(text);                         // guaranteed Roman, no key needed
@@ -231,22 +231,38 @@ router.get('/', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
+// Last N company working days (Mon–Sat; Sunday off), ending on/before `todayYmd` (YYYY-MM-DD, UTC).
+function lastWorkingDays(todayYmd, n = 6) {
+  const days = [];
+  const d = new Date(todayYmd + 'T00:00:00Z');
+  while (days.length < n) {
+    // 0 = Sunday — skip; Mon–Sat count
+    if (d.getUTCDay() !== 0) days.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+  return days;
+}
+
 // Per-person workload dashboard. mam's spec — one row per assignee with:
-//   Total Tasks · Active · Completed · Delayed · Avg Delay (days) · WIP Limit · Status
+//   Total Tasks · Active · Avg/Day · Completed · Delayed · Avg Delay (days) · WIP Limit · Status
 // Status:
-//   Overloaded — active_tasks > wip_limit
+//   Overloaded — avg_per_day > wip_limit (assignments over last 6 working days Mon–Sat)
 //   Constraint — >= 25% of tasks delayed OR avg_delay > 5 days
 //   OK         — neither
-// WIP limit is 5 by default for everyone; can be made per-user later.
+// WIP limit is 3 per day (avg) by default for everyone; can be made per-user later.
 router.get('/dashboard', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
-  const WIP_LIMIT_DEFAULT = 5;
+  const today = istToday();
+  const WIP_LIMIT_DEFAULT = 3;
+  const WIP_WINDOW_DAYS = 6;
+  const windowDays = lastWorkingDays(today, WIP_WINDOW_DAYS);
+  const windowPlaceholders = windowDays.map(() => '?').join(',');
 
   const rows = db.prepare(`
     SELECT u.id, u.name as person, u.role, u.department,
            COUNT(d.id) as total_tasks,
            SUM(CASE WHEN d.status IN ('pending','submitted','rejected') THEN 1 ELSE 0 END) as active_tasks,
+           SUM(CASE WHEN date(d.created_at) IN (${windowPlaceholders}) THEN 1 ELSE 0 END) as tasks_window,
            SUM(CASE WHEN d.status = 'approved' THEN 1 ELSE 0 END) as completed,
            SUM(CASE WHEN d.status IN ('pending','submitted')
                      AND d.due_date IS NOT NULL AND d.due_date < ? THEN 1 ELSE 0 END) as delayed_tasks,
@@ -259,13 +275,15 @@ router.get('/dashboard', (req, res) => {
      GROUP BY u.id
     HAVING total_tasks > 0
      ORDER BY active_tasks DESC, delayed_tasks DESC, person
-  `).all(today, today, today);
+  `).all(...windowDays, today, today, today);
 
   const out = rows.map(r => {
     const wip = WIP_LIMIT_DEFAULT;
+    const tasksWindow = r.tasks_window || 0;
+    const avgPerDay = Math.round((tasksWindow / WIP_WINDOW_DAYS) * 10) / 10;
     const delayedRatio = r.total_tasks > 0 ? r.delayed_tasks / r.total_tasks : 0;
     let status = 'OK';
-    if (r.active_tasks > wip) status = 'Overloaded';
+    if (avgPerDay > wip) status = 'Overloaded';
     else if (delayedRatio >= 0.25 || (r.avg_delay || 0) > 5) status = 'Constraint';
     return {
       id: r.id,
@@ -274,6 +292,8 @@ router.get('/dashboard', (req, res) => {
       department: r.department,
       total_tasks: r.total_tasks || 0,
       active_tasks: r.active_tasks || 0,
+      tasks_window: tasksWindow,
+      avg_per_day: avgPerDay,
       completed: r.completed || 0,
       delayed_tasks: r.delayed_tasks || 0,
       avg_delay: r.avg_delay || 0,

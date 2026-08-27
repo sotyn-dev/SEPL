@@ -129,6 +129,14 @@ function auditMiddleware(req, res, next) {
           (req.headers?.['user-agent'] || '').toString().slice(0, 200) || null,
         );
         dbg('insert OK rowid=', result.lastInsertRowid, req.method, pathOnly, 'user=', user.id);
+
+        // Real-time bulk-delete guard (2026-08-24 incident). Checked only on
+        // a successful DELETE — cheap on the hot path since almost every
+        // request here isn't one, and the count query itself is index-backed.
+        if ((req.method === 'DELETE') && res.statusCode >= 200 && res.statusCode < 300 && user.id) {
+          try { require('../lib/bulkDeleteAlert').checkBulkDelete(user.id, user.name); }
+          catch (e) { console.error('[audit] bulk-delete-alert check failed:', e.message); }
+        }
       } catch (e) {
         // Never let audit failures affect the real request flow
         console.error('[audit] insert failed:', e.message, 'path=', pathOnly);

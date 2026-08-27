@@ -1,6 +1,7 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -28,7 +29,7 @@ router.get('/tracker', (req, res) => {
 });
 
 // Track stage update
-router.post('/tracker/:indent_id/stage', (req, res) => {
+router.post('/tracker/:indent_id/stage', requirePermission('indent_fms', 'edit'), (req, res) => {
   const { stage, notes } = req.body;
   const db = getDb();
 
@@ -54,7 +55,7 @@ router.post('/tracker/:indent_id/stage', (req, res) => {
   if (stage === 'payment_done') {
     const indent = db.prepare('SELECT * FROM indents WHERE id=?').get(req.params.indent_id);
     const items = db.prepare('SELECT COALESCE(SUM(amount),0) as total FROM indent_items WHERE indent_id=?').get(req.params.indent_id);
-    const today = new Date().toISOString().split('T')[0];
+    const today = istToday();
 
     let daily = db.prepare('SELECT id FROM cash_flow_daily WHERE date=?').get(today);
     if (!daily) {
@@ -84,7 +85,7 @@ router.post('/tracker/:indent_id/stage', (req, res) => {
 // the same GRN won't double-add stock because a fresh grn_id means a
 // fresh reference_id; but if the request itself has duplicate items they
 // each create one movement row (correct behaviour).
-router.post('/grn', (req, res) => {
+router.post('/grn', requirePermission('indent_fms', 'create'), (req, res) => {
   const db = getDb();
   const { vendor_po_id, indent_id, grn_date, items, notes, warehouse_id } = req.body;
   const { nextSequence } = require('../db/nextSequence');
@@ -192,7 +193,7 @@ router.get('/grn/:id', (req, res) => {
   res.json(grn);
 });
 
-router.delete('/grn/:id', (req, res) => {
+router.delete('/grn/:id', requirePermission('indent_fms', 'delete'), (req, res) => {
   const db = getDb();
   db.prepare('DELETE FROM grn_items WHERE grn_id=?').run(req.params.id);
   db.prepare('DELETE FROM grn WHERE id=?').run(req.params.id);

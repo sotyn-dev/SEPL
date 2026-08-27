@@ -29,8 +29,18 @@ function tsMs(s) {
 
 // First step (in declared order) whose stamp is still null = the one in flight.
 // Returns null when every step is done (record fully closed).
+//
+// Calculation audit (mam 2026-08-17 "95 planned vs 11 actual indents — but
+// calculation check"): a step with no stamp of its own but with a LATER step
+// already stamped is NOT in flight — the flow demonstrably passed it (legacy
+// rows from before the stamp columns existed, alternate approval paths that
+// skip a stamp). Counting those made e.g. fully-approved old indents sit
+// "pending at L1 Approval" forever and inflated Planned on the scorecard.
+// The in-flight step is the first unstamped one AFTER the furthest stamp.
 function firstOpen(steps, stamps) {
-  for (const s of steps) if (!stamps[s.key]) return s.key;
+  let last = -1;
+  for (let i = 0; i < steps.length; i++) if (stamps[steps[i].key]) last = i;
+  for (let i = last + 1; i < steps.length; i++) if (!stamps[steps[i].key]) return steps[i].key;
   return null;
 }
 
@@ -290,7 +300,7 @@ const MODULE_DEFS = {
       const steps = stepsFor(db, 'indent_to_dispatch');
       return safeAll(db, `
         SELECT i.id, i.indent_number, i.site_name, i.created_at, i.created_by,
-               i.l1_at, i.l2_at, i.crm_at, i.approved_at, i.status,
+               i.l1_at, i.l2_at, i.crm_at, i.approved_at, i.status, i.l1_status,
                (SELECT MIN(vp.po_l1_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l1_at,
                (SELECT MIN(vp.po_l2_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l2_at,
                (SELECT MIN(dn.created_at) FROM delivery_notes dn
@@ -306,9 +316,15 @@ const MODULE_DEFS = {
           po_l1: r.po_l1_at || null, po_l2: r.po_l2_at || null, dispatch: r.dispatch_at || null,
           purchase_bill: r.bill_at || null,
         };
+        // A rejected/cancelled indent is TERMINAL — nothing is waiting on
+        // anyone (audit 2026-08-17: rejected indents sat "pending" at their
+        // next step forever, inflating RACI Planned; tally_bills already
+        // handled this, the indent module didn't).
+        const dead = r.status === 'rejected' || r.status === 'cancelled' || r.l1_status === 'rejected';
         return {
           id: r.id, title: r.indent_number || ('IND #' + r.id), subtitle: r.site_name || '—',
-          created_at: r.created_at, owner_id: r.created_by || null, stamps, current_key: firstOpen(steps, stamps),
+          created_at: r.created_at, owner_id: r.created_by || null, stamps,
+          current_key: dead ? null : firstOpen(steps, stamps),
         };
       });
     },
@@ -550,6 +566,76 @@ const MODULE_DEFS = {
       });
     },
   },
+
+  // ── Tally Bills (Upload → Tasks Created → Tasks Done → Approved → Paid) ──
+  // Director CR 2026-08-13. The module owns a real SLA engine of its own
+  // (lib/tallySla.js), so this def exists purely so the bill lifecycle shows on
+  // the shared Responsible board and feeds the scorecard the same way every
+  // other module does. Step owners come off the actual actor columns, so the
+  // board fills without anyone hand-assigning names.
+  tally_bills: {
+    label: 'Tally Bills',
+    steps: [
+      { key: 'upload', label: 'Bill Uploaded' },
+      { key: 'tasks_created', label: 'Tasks Created' },
+      { key: 'tasks_done', label: 'Tasks Completed' },
+      { key: 'approved', label: 'Approved' },
+      { key: 'paid', label: 'Payment Received' },
+    ],
+    rows(db) {
+      const steps = this.steps;
+      const bills = safeAll(db, `
+        SELECT id, register_no, bill_number, vendor_name, project_name, category,
+               created_by, approved_by, created_at,
+               t0_uploaded_at, t1_tasks_created_at, t2_tasks_completed_at,
+               t3_approved_at, t4_closed_at, status
+          FROM tally_bills ORDER BY created_at DESC LIMIT 500`);
+      if (!bills.length) return [];
+
+      // Who actually closed the task stage = the reviewer of the last linked
+      // PMS task to be approved.
+      const ids = bills.map(b => b.id);
+      const doneBy = {};
+      for (let i = 0; i < ids.length; i += 400) {
+        const chunk = ids.slice(i, i + 400);
+        const ph = chunk.map(() => '?').join(',');
+        for (const t of safeAll(db, `
+          SELECT tally_bill_id, reviewer_id, reviewed_at FROM pms_tasks
+           WHERE tally_bill_id IN (${ph}) AND status='approved'
+           ORDER BY reviewed_at ASC`, ...chunk)) {
+          doneBy[t.tally_bill_id] = t.reviewer_id;   // ASC scan → last write wins
+        }
+      }
+
+      return bills.map(b => {
+        const stamps = {
+          upload: b.t0_uploaded_at || b.created_at || null,
+          tasks_created: b.t1_tasks_created_at || null,
+          tasks_done: b.t2_tasks_completed_at || null,
+          approved: b.t3_approved_at || null,
+          paid: b.t4_closed_at || null,
+        };
+        // Rejected bills are terminal — nothing is still "waiting" on anyone.
+        const dead = b.status === 'rejected';
+        return {
+          id: b.id,
+          title: b.register_no || b.bill_number || ('Bill #' + b.id),
+          subtitle: [b.vendor_name, b.project_name].filter(Boolean).join(' · ') || '—',
+          created_at: b.t0_uploaded_at || b.created_at,
+          owner_id: b.created_by || null,
+          step_owners: {
+            upload: b.created_by || null,
+            tasks_created: b.created_by || null,
+            tasks_done: doneBy[b.id] || null,
+            approved: b.approved_by || null,
+            paid: b.created_by || null,
+          },
+          stamps,
+          current_key: dead ? null : firstOpen(steps, stamps),
+        };
+      });
+    },
+  },
 };
 
 // RACI → scoring. Per-person weekly accountability across EVERY module, using
@@ -568,7 +654,12 @@ const MODULE_DEFS = {
 //   onTime      — of slaJudged, how many finished within SLA (the "Time" KPI).
 function raciUserWeek(db, userId, sinceDate, untilDate) {
   const HOUR = 3600000;
-  let stepsClosed = 0, slaJudged = 0, onTime = 0, openOnUser = 0;
+  // openBefore (mam 2026-08-26): still-open steps that landed on the user
+  // BEFORE this week — kept OUT of Planned (the 2026-08-22 97-leads rule)
+  // but surfaced in the scorecard's Pending "up" so backlog stays visible.
+  // closedBefore (mam 2026-08-26 "19/4"): of the steps closed THIS week, how
+  // many had landed on the user BEFORE the week — backlog actually cleared.
+  let stepsClosed = 0, slaJudged = 0, onTime = 0, openOnUser = 0, openBefore = 0, closedBefore = 0;
   for (const key of Object.keys(MODULE_DEFS)) {
     const def = MODULE_DEFS[key];
     let recs;
@@ -601,7 +692,10 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
       // so no step is in-flight → nothing pending on anyone for it.
       const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
-      let sawOpen = false;                             // only the FIRST open step is in-flight
+      // Raw date the CURRENT step landed on its owner = the previous step's own
+      // stamp, or the record's creation date for the very first step. Kept as the
+      // raw string so it is compared exactly the way a closure date is below.
+      let prevRaw = rec.created_at;
       for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
@@ -609,27 +703,46 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
         // Completion = manual "mark done" stamp, else the module's native date.
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
         if (!stampRaw) {
-          // First unstamped step = the one in flight now. If it is on this user
-          // and the record is still active, it is pending work on them (Planned).
-          if (!sawOpen) {
-            sawOpen = true;
-            if (!recClosed && responsibleId === userId) openOnUser += 1;
+          // Pending counts ONLY at the record's actual in-flight step
+          // (current_key — same one the board shows). An unstamped step the
+          // flow already passed (a later stamp exists) is history, not
+          // workload (audit 2026-08-17: legacy approved indents sat "pending
+          // at L1" forever and inflated Planned).
+          //
+          // AND only when the step LANDED on this person inside the week
+          // (mam 2026-08-22: "raci with also calculate week date planning
+          // according"). Before this, Planned mixed a week-scoped Actual with
+          // an all-time open backlog, so one person showed 97 planned / 0 done
+          // = −100% purely from leads that had been sitting open for months.
+          // "Landed" = when the previous step finished (prevRaw), i.e. the
+          // moment this step became theirs — for a first step that is the
+          // record's creation date.
+          if (!recClosed && s.key === rec.current_key && responsibleId === userId) {
+            const landedStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
+            if (landedStr && landedStr >= sinceDate && landedStr <= untilDate) openOnUser += 1;
+            // Landed before the week (or undatable) and still open → backlog.
+            else if (!landedStr || landedStr < sinceDate) openBefore += 1;
           }
           continue;                                    // open → don't advance prev / don't close
         }
         const atMs = tsMs(stampRaw);
         let elapsed = null;
         if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
+        // When this step LANDED on its owner — must be read BEFORE prevRaw is
+        // advanced to this step's own closure stamp.
+        const landedBeforeStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
+        prevRaw = stampRaw;
         if (responsibleId !== userId) continue;        // not this person's step
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue; // closed outside the week
         stepsClosed += 1;
+        if (landedBeforeStr && landedBeforeStr < sinceDate) closedBefore += 1;
         const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
         if (sla != null && elapsed != null) { slaJudged += 1; if (elapsed <= sla) onTime += 1; }
       }
     }
   }
-  return { stepsClosed, slaJudged, onTime, openOnUser, stepsPlanned: stepsClosed + openOnUser };
+  return { stepsClosed, slaJudged, onTime, openOnUser, openBefore, closedBefore, stepsPlanned: stepsClosed + openOnUser };
 }
 
 // Same per-person weekly aggregate as raciUserWeek, but BROKEN DOWN per
@@ -646,7 +759,7 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     let t = acc.get(k);
     if (!t) {
       t = { module: mod, module_label: modLabel, step_key: stepKey, step_label: stepLabel,
-            planned: 0, actual: 0, pending: 0, sla_judged: 0, on_time: 0, pending_records: [],
+            planned: 0, actual: 0, pending: 0, pending_before: 0, closed_before: 0, sla_judged: 0, on_time: 0, pending_records: [],
             // Per-step weightage % + "for next week" commitment, set at the module-default
             // level (record_id 0) in the ⚙ Responsible editor (mam 2026-06-29).
             weight: (weight != null && weight !== '') ? +weight : null,
@@ -683,19 +796,29 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
       const recRaci = raciByRec[rec.id] || {};
       const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
-      let sawOpen = false;
+      let prevRaw = rec.created_at;               // when the current step landed — see raciUserWeek
       for (const s of defSteps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
         const responsibleId = responsibleOf(s, cfg, m, rec);
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
         if (!stampRaw) {
-          if (!sawOpen) {
-            sawOpen = true;
-            if (!recClosed && responsibleId === userId) {
+          // Same two rules as raciUserWeek: pending only at the record's actual
+          // in-flight step (audit 2026-08-17 — no phantom "pending at L1" for
+          // records the flow already moved past), AND only when the step landed
+          // on this person inside the week (mam 2026-08-22). These two functions
+          // must stay in lockstep or the drill-down disagrees with the KPI row.
+          if (!recClosed && s.key === rec.current_key && responsibleId === userId) {
+            const landedStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
+            if (landedStr && landedStr >= sinceDate && landedStr <= untilDate) {
               const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
               t.planned += 1; t.pending += 1;
               if (t.pending_records.length < 8) t.pending_records.push(rec.title);
+            } else if (!landedStr || landedStr < sinceDate) {
+              // Backlog from earlier weeks — NOT in planned (2026-08-22 rule),
+              // tracked separately for the Pending "up" figure (mam 2026-08-26).
+              const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
+              t.pending_before += 1;
             }
           }
           continue;
@@ -703,11 +826,15 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
         const atMs = tsMs(stampRaw);
         let elapsed = null;
         if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
+        // Landing date BEFORE prevRaw advances — same rule as raciUserWeek.
+        const landedBeforeStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
+        prevRaw = stampRaw;
         if (responsibleId !== userId) continue;
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue;
         const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
         t.planned += 1; t.actual += 1;
+        if (landedBeforeStr && landedBeforeStr < sinceDate) t.closed_before += 1;
         const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
         if (sla != null && elapsed != null) { t.sla_judged += 1; if (elapsed <= sla) t.on_time += 1; }
       }

@@ -51,6 +51,12 @@ export default function Delegation() {
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [submitModal, setSubmitModal] = useState(null); // task being submitted
+  // Which task's proof modal is actually open right now, checked before an
+  // in-flight upload is allowed to write into submitForm. Without this: open
+  // task A's modal, start uploading, cancel and open task B's modal before
+  // A's upload finishes — A's photo silently lands as B's "ready to submit"
+  // proof (mam 2026-08-24, reported as "sometimes wrong upload").
+  const submitModalIdRef = useRef(null);
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
@@ -64,6 +70,10 @@ export default function Delegation() {
   const [proofPct, setProofPct] = useState(0);
   const [rejectReason, setRejectReason] = useState('');
   const [extendForm, setExtendForm] = useState({ requested_due_date: '', reason: '' });
+  // Proof remarks are clamped to 2 lines to keep rows scannable, which hides
+  // anything longer behind "…" — tap the remark to read all of it (hover
+  // tooltips don't exist on the phones this is mostly used from).
+  const [remarksOpen, setRemarksOpen] = useState({}); // { taskId: true } — full remark shown
   // Voice input
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef(null);
@@ -284,6 +294,12 @@ export default function Delegation() {
 
   // Upload proof file then submit
   const uploadProof = async (file) => {
+    // The task this upload was started for. Uploads take a few seconds
+    // (compress + send) — if the user closes this modal or opens a
+    // DIFFERENT task's proof modal before it finishes, submitModalIdRef
+    // will have moved on by the time we get here, and we must NOT let this
+    // stale result land in whatever's open now.
+    const forId = submitModalIdRef.current;
     setSubmitForm(s => ({ ...s, uploading: true }));
     setProofPct(0);
     try {
@@ -298,10 +314,15 @@ export default function Delegation() {
           if (ev.total) setProofPct(Math.round((ev.loaded / ev.total) * 100));
         },
       });
-      setSubmitForm({ proof_url: res.data.url, uploading: false });
+      if (submitModalIdRef.current !== forId) {
+        toast('That upload finished after you switched tasks — please upload again here.', { icon: '⚠️' });
+        return;
+      }
+      setSubmitForm(s => ({ ...s, proof_url: res.data.url, uploading: false }));
       setProofPct(100);
       toast.success('File uploaded — click Submit');
     } catch {
+      if (submitModalIdRef.current !== forId) return;
       toast.error('Upload failed');
       setSubmitForm(s => ({ ...s, uploading: false }));
     } finally {
@@ -319,7 +340,7 @@ export default function Delegation() {
         proof_remarks: submitForm.proof_remarks,
       });
       toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
+      setSubmitModal(null); submitModalIdRef.current = null; setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -444,13 +465,13 @@ export default function Delegation() {
       </div>
 
       {/* DASHBOARD — per-person workload table. mam's spec:
-          Person · Total · Active · Completed · Delayed · Avg Delay · WIP Limit · Status
-          Status: 🔴 Overloaded (active > WIP) · 🔴 Constraint (>=25% delayed
-          or avg_delay > 5d) · 🟢 OK */}
+          Person · Total · Active · Completed · Delayed · Avg Delay · WIP Limit / Day · Status
+          Status: 🔴 Overloaded (avg_per_day > WIP over last 6 working days Mon–Sat)
+          · 🔴 Constraint (>=25% delayed or avg_delay > 5d) · 🟢 OK */}
       {view === 'dashboard' && (
         <>
           <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-500 text-xs text-gray-700">
-            <b>Workload Dashboard</b> — one row per person with active tasks. WIP limit is 5 by default. <span className="text-red-600 font-semibold">Overloaded</span> = too many active tasks. <span className="text-amber-700 font-semibold">Constraint</span> = ≥25% delayed or avg delay &gt; 5 days.
+            <b>Workload Dashboard</b> — one row per person with active tasks. WIP limit is <b>3 tasks/day</b>. <span className="text-red-600 font-semibold">Overloaded</span> = exceeding that limit. <span className="text-amber-700 font-semibold">Constraint</span> = ≥25% delayed or avg delay &gt; 5 days.
           </div>
           <div className="card p-0 overflow-x-auto">
             <table className="text-sm w-full">
@@ -462,7 +483,7 @@ export default function Delegation() {
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Completed</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Delayed</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Avg Delay (Days)</th>
-                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">WIP Limit</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">WIP Limit / Day</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Status</th>
                 </tr>
               </thead>
@@ -471,7 +492,11 @@ export default function Delegation() {
                   const dotClass = r.status === 'Overloaded' ? 'bg-red-500'
                     : r.status === 'Constraint' ? 'bg-red-400'
                     : 'bg-emerald-500';
-                  const overActive = r.active_tasks > r.wip_limit;
+                  const statusTitle = r.status === 'Overloaded'
+                    ? `Exceeding ${r.wip_limit} tasks/day limit`
+                    : r.status === 'Constraint'
+                      ? `≥25% delayed or avg delay > 5 days (delayed ${r.delayed_tasks}, avg delay ${r.avg_delay || 0})`
+                      : undefined;
                   return (
                     <tr key={r.id} className="border-t hover:bg-gray-50/60">
                       <td className="px-3 py-2">
@@ -479,13 +504,13 @@ export default function Delegation() {
                         <div className="text-[10px] text-gray-400">{r.role}{r.department ? ' · ' + r.department : ''}</div>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.total_tasks}</td>
-                      <td className={`px-3 py-2 text-right tabular-nums font-bold ${overActive ? 'text-red-600' : 'text-gray-800'}`}>{r.active_tasks}</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-bold text-gray-800">{r.active_tasks}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-emerald-700">{r.completed}</td>
                       <td className={`px-3 py-2 text-right tabular-nums ${r.delayed_tasks > 0 ? 'text-red-600 font-bold' : 'text-gray-400'}`}>{r.delayed_tasks}</td>
                       <td className={`px-3 py-2 text-right tabular-nums ${(r.avg_delay || 0) > 5 ? 'text-red-600 font-bold' : 'text-gray-700'}`}>{r.avg_delay || 0}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-gray-500">{r.wip_limit}</td>
                       <td className="px-3 py-2">
-                        <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase`}>
+                        <span title={statusTitle} className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase cursor-help">
                           <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
                           {r.status}
                         </span>
@@ -671,10 +696,14 @@ export default function Delegation() {
                         <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1 whitespace-nowrap"><FiExternalLink size={11} className="shrink-0" /> View</a>
                       )}
                       {t.proof_remarks && (
-                        <span className="text-[10px] text-gray-500 italic line-clamp-2 break-words" title={t.proof_remarks}>{t.proof_remarks}</span>
+                        <span
+                          onClick={() => setRemarksOpen(p => ({ ...p, [t.id]: !p[t.id] }))}
+                          className={`text-[10px] text-gray-500 italic break-words cursor-pointer ${remarksOpen[t.id] ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}
+                          title={remarksOpen[t.id] ? 'Tap to collapse' : t.proof_remarks}
+                        >{t.proof_remarks}</span>
                       )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
+                        <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
                           <FiUpload size={11} className="shrink-0" /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
@@ -705,6 +734,7 @@ export default function Delegation() {
                   <td className="align-top">
                     {isEA ? (
                       <textarea
+                        key={`${t.id}:${t.followup_remarks || ''}`}
                         defaultValue={t.followup_remarks || ''}
                         placeholder="— add note —"
                         rows={2}
@@ -809,7 +839,7 @@ export default function Delegation() {
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -1022,7 +1052,7 @@ export default function Delegation() {
       </Modal>
 
       {/* Submit Proof Modal */}
-      <Modal isOpen={!!submitModal} onClose={() => setSubmitModal(null)} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
+      <Modal isOpen={!!submitModal} onClose={() => { setSubmitModal(null); submitModalIdRef.current = null; }} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
         <form onSubmit={submitProof} className="space-y-3">
           {submitModal?.status === 'rejected' && submitModal.reject_reason && (
             <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-700">
@@ -1082,7 +1112,7 @@ export default function Delegation() {
             </p>
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setSubmitModal(null)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => { setSubmitModal(null); submitModalIdRef.current = null; }} className="btn btn-secondary">Cancel</button>
             <button type="submit" disabled={!submitForm.proof_url || submitForm.uploading} className="btn btn-primary disabled:opacity-50">Submit for Approval</button>
           </div>
         </form>

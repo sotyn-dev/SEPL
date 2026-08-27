@@ -86,6 +86,46 @@ function ensureSolarSchema(db) {
       project_id INTEGER, type TEXT, from_stage TEXT, to_stage TEXT, note TEXT,
       by_user INTEGER, by_name TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    -- 3D site study: the traced/LiDAR roof model + the shadow analysis run on it.
+    -- site_json   = { surfaces:[…], obstructions:[…] } in local ENU metres
+    -- result_json = per-panel placement, efficiency % and the summary roll-up
+    CREATE TABLE IF NOT EXISTS solar_site_studies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deal_id INTEGER, name TEXT, address TEXT,
+      lat REAL, lng REAL, altitude REAL DEFAULT 0,
+      site_json TEXT, result_json TEXT,
+      panel_count INTEGER DEFAULT 0, capacity_kwp REAL DEFAULT 0, annual_kwh REAL DEFAULT 0,
+      mean_perf_pct REAL DEFAULT 0, shade_loss_pct REAL DEFAULT 0,
+      lidar_source TEXT DEFAULT 'manual', created_by INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_solar_site_studies_deal ON solar_site_studies(deal_id);
+    -- Installed-component registry (director ask, 2026-08-08): panels/inverters/
+    -- batteries actually installed at a customer site, for future warranty
+    -- claims. Same serial+warranty idea as company_assets/tools, but those track
+    -- internal assets reissued between employees — this tracks equipment
+    -- permanently installed at a WON project. qty>1 + a blank serial covers bulk
+    -- items (e.g. 900 panels installed as one lot); serial-tracked rows are for
+    -- the handful of high-value units (inverters, batteries) worth it for.
+    CREATE TABLE IF NOT EXISTS solar_project_components (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER REFERENCES solar_projects(id) ON DELETE CASCADE,
+      category TEXT, make TEXT, model TEXT, rating TEXT, serial_no TEXT, qty INTEGER DEFAULT 1,
+      install_date DATE, warranty_years REAL DEFAULT 0, warranty_till DATE, notes TEXT,
+      created_by INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_solar_components_project ON solar_project_components(project_id);
+    -- AMC visit schedule — replaces the single amc_next_due date with an actual
+    -- recurring calendar: /amc-visits/generate lays out N visits at the chosen
+    -- frequency, each with its own checklist and completion record.
+    CREATE TABLE IF NOT EXISTS solar_amc_visits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER REFERENCES solar_projects(id) ON DELETE CASCADE,
+      scheduled_date DATE, visit_type TEXT DEFAULT 'routine', status TEXT DEFAULT 'scheduled',
+      completed_date DATE, technician_name TEXT, checklist_json TEXT, notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_solar_amc_visits_project ON solar_amc_visits(project_id);
   `);
   addCol(`ALTER TABLE solar_deals ADD COLUMN qualification_json TEXT`);
   addCol(`ALTER TABLE solar_deals ADD COLUMN stage_data_json TEXT`);
@@ -95,6 +135,33 @@ function ensureSolarSchema(db) {
   addCol(`ALTER TABLE solar_deals ADD COLUMN lng REAL`);
   addCol(`ALTER TABLE solar_quotations ADD COLUMN deal_id INTEGER`);
   addCol(`ALTER TABLE solar_quotations ADD COLUMN variant_label TEXT`);
+  // State-wise finance defaults (director ask, 2026-08-07: quotes were using
+  // one flat ₹8/unit tariff for every state in India). val4 = typical tariff
+  // ₹/unit, val5 = state subsidy top-up ₹ (on top of the central PM Surya
+  // Ghar CFA). Both start NULL/0 on existing rows — deliberately NOT
+  // backfilled with guessed figures; Solar Settings is where the director
+  // enters confirmed numbers per state, and they stay editable per quote.
+  addCol(`ALTER TABLE solar_factors ADD COLUMN val4 REAL`);
+  addCol(`ALTER TABLE solar_factors ADD COLUMN val5 REAL`);
+  // DISCOM approval tracking — structured, dated fields living directly on
+  // solar_projects, the same way amc_* already does. No live DISCOM API exists
+  // publicly, so this is status tracking + a generated application summary
+  // (net-metering-print), not automated submission.
+  addCol(`ALTER TABLE solar_projects ADD COLUMN discom_status TEXT DEFAULT 'not_started'`);
+  addCol(`ALTER TABLE solar_projects ADD COLUMN discom_consumer_no TEXT`);
+  addCol(`ALTER TABLE solar_projects ADD COLUMN discom_application_date DATE`);
+  addCol(`ALTER TABLE solar_projects ADD COLUMN discom_application_ref TEXT`);
+  addCol(`ALTER TABLE solar_projects ADD COLUMN discom_inspection_date DATE`);
+  addCol(`ALTER TABLE solar_projects ADD COLUMN discom_approval_date DATE`);
+  addCol(`ALTER TABLE solar_projects ADD COLUMN net_meter_installed_date DATE`);
+  addCol(`ALTER TABLE solar_projects ADD COLUMN discom_notes TEXT`);
+  // Proposal branding — configurable instead of the hardcoded "Secured
+  // Engineers India" text that used to be baked into every print page.
+  // INSERT OR IGNORE so re-running never clobbers a value already set.
+  const seedSetting = db.prepare(`INSERT OR IGNORE INTO solar_settings (key, value, note) VALUES (?,?,?)`);
+  seedSetting.run('company_name', 'Secured Engineers India', 'Shown on quotations, design reports & DISCOM summaries');
+  seedSetting.run('company_tagline', '', 'Optional line under the company name on printed documents');
+  seedSetting.run('logo_url', '', 'Uploaded via Solar Settings → Branding; /uploads/… path');
 }
 
 function seedSolarRates(db) {

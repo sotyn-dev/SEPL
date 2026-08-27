@@ -60,8 +60,9 @@ export default defineConfig({
       // ::1 first, but the API server binds IPv4 only -> "connect ECONNREFUSED
       // ::1:5000", which vite surfaces as a 500 on every proxied login in dev.
       '/api': 'http://127.0.0.1:5000',
-      // Serve uploaded files (proof/attachments) from the API server in dev so
-      // "View"/download links resolve — in production the same origin serves them.
+      // Uploaded files (proof/attachments + chat/board images) are served by
+      // Express at /uploads; proxy them so "View"/download links and
+      // <img src="/uploads/…"> resolve in the dev preview (same origin in prod).
       '/uploads': 'http://127.0.0.1:5000',
       '/socket.io': { target: 'http://127.0.0.1:5000', ws: true }
     }

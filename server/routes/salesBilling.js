@@ -3,6 +3,7 @@
 // Built on existing Business Book orders; amounts typed manually; one GST %
 // per bill; numbering SEPL/SB/<FY>/NNN; Admin + Accounts (installation perm).
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
@@ -441,7 +442,7 @@ router.post('/', requirePermission('installation', 'create'), (req, res) => {
     if (!Number.isFinite(gst_rate) || gst_rate < 0 || gst_rate > 100) return res.status(400).json({ error: 'GST % must be 0-100' });
     const gst_amount = round2(amount * gst_rate / 100);
     const total_amount = round2(amount + gst_amount);
-    const bill_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.bill_date) ? req.body.bill_date : new Date().toISOString().split('T')[0];
+    const bill_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.bill_date) ? req.body.bill_date : istToday();
     const customer_name = (bb.client_name || bb.company_name || '').trim();
     const items = Array.isArray(req.body.items) ? req.body.items : [];
 
@@ -528,7 +529,7 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
     if (bill.approval_status !== 'approved') return res.status(400).json({ error: 'Approve the Final bill before recording payment' });
     const amount = round2(req.body.amount);
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be a positive number' });
-    const payment_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.payment_date) ? req.body.payment_date : new Date().toISOString().split('T')[0];
+    const payment_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.payment_date) ? req.body.payment_date : istToday();
     const payment_mode = ['Cash', 'Bank', 'UPI', 'Cheque', 'NEFT/RTGS'].includes(req.body.payment_mode) ? req.body.payment_mode : 'Bank';
 
     const out = db.transaction(() => {
@@ -599,7 +600,7 @@ function generateInstallationBills(db, userId, { draft = true } = {}) {
     if (r.report_date > g.maxDate) g.maxDate = r.report_date;
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   const out = [];
   const tx = db.transaction(() => {
     for (const [bbId, g] of groups) {

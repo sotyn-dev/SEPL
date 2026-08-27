@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
 import api from '../../api';
+import { useAuth } from '../../context/AuthContext';
 import Modal from '../../components/Modal';
+import ConfirmDialog from '../../components/ConfirmDialog2';
 import StatusBadge from '../../components/StatusBadge';
 import Pagination, { usePagination } from '../../components/Pagination';
 import HrIdentity from '../../components/HrIdentity';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut, FiSmartphone } from 'react-icons/fi';
 
 export default function UserManagement() {
+  const { user: me, markTotpEnabled } = useAuth();
   const [users, setUsers] = useState([]);
   const [filter, setFilter] = useState('all');   // all | active | inactive | admin — status filter tabs
   const [search, setSearch]   = useState('');    // search by username or email
@@ -16,6 +19,9 @@ export default function UserManagement() {
   const [roles, setRoles] = useState([]);
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [securityUser, setSecurityUser] = useState(null); // Login security modal — not the Edit User form
+  const [secAsk, setSecAsk] = useState(null);             // ConfirmDialog2: { kind, user }
+  const [secBusy, setSecBusy] = useState(false);
   const [form, setForm] = useState({});
   const [selectedRoles, setSelectedRoles] = useState([]);
   const [bulkModal, setBulkModal] = useState(false);
@@ -27,7 +33,11 @@ export default function UserManagement() {
   const [revealedPassword, setRevealedPassword] = useState(null); // { user, password } shown once after reset
 
   const load = () => {
-    api.get('/auth/users').then(r => setUsers(r.data));
+    api.get('/auth/users').then(r => {
+      setUsers(r.data);
+      setEditing(prev => (prev ? r.data.find(u => u.id === prev.id) || prev : prev));
+      setSecurityUser(prev => (prev ? r.data.find(u => u.id === prev.id) || prev : prev));
+    });
     api.get('/auth/roles').then(r => setRoles(r.data));
   };
   useEffect(() => { load(); }, []);
@@ -83,6 +93,52 @@ export default function UserManagement() {
   };
 
   // Archive (hide from all lists, keep every record) or restore (mam 2026-07-02).
+  // Force logout — ends every live session this person has, immediately, without
+  // changing their password or disabling the account. Needed because a signed-in
+  // session used to survive deactivation, demotion and password resets alike.
+  const forceLogout = async (user) => {
+    try {
+      const r = await api.post(`/auth/users/${user.id}/force-logout`);
+      toast.success(r.data?.message || 'Signed out everywhere');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not sign the user out');
+    }
+  };
+
+  const resetTotp = async (user) => {
+    try {
+      const r = await api.post(`/auth/users/${user.id}/totp/reset`);
+      toast.success(r.data?.message || 'Authenticator reset');
+      if (me?.id === user.id) markTotpEnabled(false);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not reset authenticator');
+    }
+  };
+
+  const toggleTotp = async (user, on) => {
+    try {
+      const r = await api.post(`/auth/users/${user.id}/totp/${on ? 'opt-in' : 'opt-out'}`);
+      toast.success(r.data?.message || (on ? '2FA on' : '2FA off'));
+      if (me?.id === user.id) markTotpEnabled(on ? !!user.totp_enabled : false);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not update 2FA');
+    }
+  };
+
+  const runSecAsk = async () => {
+    if (!secAsk) return;
+    const { kind, user } = secAsk;
+    setSecBusy(true);
+    if (kind === 'totp-on') await toggleTotp(user, true);
+    else if (kind === 'totp-off') await toggleTotp(user, false);
+    else if (kind === 'reset') await resetTotp(user);
+    else if (kind === 'logout') await forceLogout(user);
+    setSecBusy(false);
+    setSecAsk(null);
+  };
+
   const archiveUser = async (user, archived) => {
     try {
       const r = await api.patch(`/auth/users/${user.id}/archive`, { archived: archived ? 1 : 0 });
@@ -308,6 +364,11 @@ export default function UserManagement() {
                     <button onClick={() => { setResetUser(u); setResetInput('123'); }} className="p-1.5 hover:bg-amber-50 rounded text-amber-600" title="Reset password">
                       <FiKey size={15} />
                     </button>
+                    <button onClick={() => setSecurityUser(u)}
+                      className={`p-1.5 rounded ${u.totp_required ? 'hover:bg-violet-50 text-violet-600' : 'hover:bg-gray-50 text-gray-500'}`}
+                      title="Login security — 2FA and sign out everywhere">
+                      <FiSmartphone size={15} />
+                    </button>
                     {/* Activate/Deactivate + Track — only for non-archived users
                         (mam 2026-07-02: the labelled toggle replaced an icon-only one). */}
                     {!u.archived && (<>
@@ -438,6 +499,94 @@ export default function UserManagement() {
           </div>
         </form>
       </Modal>
+
+      <Modal isOpen={!!securityUser} onClose={() => setSecurityUser(null)} title={securityUser ? `Login security — ${securityUser.name}` : 'Login security'}>
+        {securityUser && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500">These take effect immediately.</p>
+
+            <div className="rounded-lg border border-gray-200 p-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                  <FiSmartphone size={15} /> Authenticator (2FA)
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  {securityUser.totp_required
+                    ? (securityUser.totp_enabled
+                      ? 'On. Next login asks for a 6-digit code.'
+                      : 'On, but not set up yet. Next login they scan a QR, then enter a code.')
+                    : 'Off. Password-only login.'}
+                </p>
+              </div>
+              <button type="button" onClick={() => setSecAsk({ kind: securityUser.totp_required ? 'totp-off' : 'totp-on', user: securityUser })}
+                className={`shrink-0 px-3 py-1.5 rounded text-xs font-semibold border ${securityUser.totp_required ? 'text-gray-700 border-gray-300 bg-white hover:bg-gray-50' : 'text-violet-700 border-violet-300 bg-violet-50 hover:bg-violet-100'}`}>
+                {securityUser.totp_required ? 'Turn off' : 'Turn on'}
+              </button>
+            </div>
+
+            {!!securityUser.totp_enabled && (
+              <div className="rounded-lg border border-gray-200 p-4 flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-gray-800">Reset authenticator</div>
+                  <p className="text-xs text-gray-500 mt-1">Lost phone. They stay on 2FA and scan a new QR next login. Live sessions end.</p>
+                </div>
+                <button type="button" onClick={() => setSecAsk({ kind: 'reset', user: securityUser })}
+                  className="shrink-0 px-3 py-1.5 rounded text-xs font-semibold border border-violet-200 text-violet-700 bg-white hover:bg-violet-50">
+                  Reset
+                </button>
+              </div>
+            )}
+
+            <div className="rounded-lg border border-gray-200 p-4 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                  <FiLogOut size={15} /> Sign out everywhere
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Ends every live session now. Password and 2FA are not changed.</p>
+              </div>
+              <button type="button" onClick={() => setSecAsk({ kind: 'logout', user: securityUser })}
+                className="shrink-0 px-3 py-1.5 rounded text-xs font-semibold border border-orange-200 text-orange-700 bg-white hover:bg-orange-50">
+                Sign out
+              </button>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button type="button" onClick={() => setSecurityUser(null)} className="btn btn-secondary">Done</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        open={!!secAsk}
+        busy={secBusy}
+        tone={secAsk?.kind === 'totp-on' ? 'warning' : 'danger'}
+        title={
+          secAsk?.kind === 'totp-on' ? `Turn on 2FA for ${secAsk.user.name}?`
+          : secAsk?.kind === 'totp-off' ? `Turn off 2FA for ${secAsk.user.name}?`
+          : secAsk?.kind === 'reset' ? `Reset authenticator for ${secAsk.user.name}?`
+          : secAsk ? `Sign ${secAsk.user.name} out everywhere?` : ''
+        }
+        message={
+          secAsk?.kind === 'totp-on' ? 'Next login they scan a QR, then enter a code every time.'
+          : secAsk?.kind === 'totp-off' ? 'They go back to password-only login.'
+          : secAsk?.kind === 'reset' ? 'They stay on 2FA and scan a new QR next login.'
+          : 'Every device they are signed in on stops immediately.'
+        }
+        note={
+          secAsk?.kind === 'reset' ? 'Live sessions will also end.'
+          : secAsk?.kind === 'logout' ? 'Password and 2FA are not changed.'
+          : undefined
+        }
+        confirmLabel={
+          secAsk?.kind === 'totp-on' ? 'Turn on'
+          : secAsk?.kind === 'totp-off' ? 'Turn off'
+          : secAsk?.kind === 'reset' ? 'Reset'
+          : 'Sign out'
+        }
+        onCancel={() => { if (!secBusy) setSecAsk(null); }}
+        onConfirm={runSecAsk}
+      />
 
       {/* Bulk Import Modal */}
       <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Import Users" wide>

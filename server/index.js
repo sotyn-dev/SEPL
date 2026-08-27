@@ -56,31 +56,57 @@ app.set('trust proxy', 1);
 
 // File uploads
 const multer = require('multer');
+const { UPLOADS_ROOT, SWEEP_FOLDERS, uploadsSub, ensureDir } = require('./lib/paths');
+const quarantine = require('./lib/quarantine');
+const storage = require('./lib/storage');
 const fs = require('fs');
-const uploadsDir = path.join(__dirname, '..', 'data', 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-// Mandatory Field Spec (Photo #49 + KYC docs) — dedicated flat subfolder for
-// Employee Workspace uploads, kept alongside (not replacing) the generic
-// flat root every other module's /api/upload call still uses. Only requests
-// that tag themselves with employee_id are routed here; everyone else's
-// destination/filename shape below is completely unchanged.
-const employeesUploadsDir = path.join(uploadsDir, 'employees');
-if (!fs.existsSync(employeesUploadsDir)) fs.mkdirSync(employeesUploadsDir, { recursive: true });
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, req.body.employee_id ? employeesUploadsDir : uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const empId = req.body.employee_id;
-    if (empId && /^\d+$/.test(String(empId))) {
-      const ext = path.extname(file.originalname || '') || '';
-      const docType = (req.body.doc_type || 'file').replace(/[^a-zA-Z0-9_-]/g, '');
-      return cb(null, `${Date.now()}-${empId}-${docType}${ext}`);
-    }
-    cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`);
-  }
+const uploadsDir = ensureDir(UPLOADS_ROOT);
+// Ensure Employee Workspace upload folder exists at boot (Mandatory Field Spec photo/KYC).
+ensureDir(uploadsSub('employees'));
+// Uploads for these modules go into their own subfolder (whitelisted, so no path
+// traversal) so the orphan sweep can target only them; everything else stays flat.
+const UPLOAD_FOLDER_WHITELIST = new Set(SWEEP_FOLDERS);
+const uploadFolder = (req) => {
+  // Workspace photo/KYC: body.employee_id routes into data/uploads/employees/
+  if (req.body && req.body.employee_id && /^\d+$/.test(String(req.body.employee_id))) return 'employees';
+  const f = String((req.query && req.query.folder) || '');
+  return UPLOAD_FOLDER_WHITELIST.has(f) ? f : '';
+};
+// diskStorage, NOT memoryStorage. This is the busiest upload path in the app (site-chat,
+// help-tickets, sotyn-flow, avatars, Business Book, Checklists, DPR), and memoryStorage
+// buffers the whole file in RAM before it is written anywhere — 20 MB x concurrent
+// uploads on a 1-2 GB VPS. diskStorage streams the request straight to disk, so memory
+// stays flat no matter how many people upload at once.
+//
+// Reaching S3 is then storage.adoptLocalFile()'s job (see the handler): it streams the
+// file up and unlinks it. Inline S3 without ever holding a file in memory.
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const f = uploadFolder(req);
+      cb(null, f ? ensureDir(uploadsSub(f)) : uploadsDir);
+    },
+    // <epoch>-<rand>-<sanitised name>. The random block matters: with only a timestamp,
+    // two people uploading "photo.jpg" in the SAME millisecond produced the same name and
+    // the second silently overwrote the first — on disk before, and in the bucket now.
+    // Employee Workspace: prefer empId-docType shape when employee_id is present.
+    filename: (req, file, cb) => {
+      const empId = req.body && req.body.employee_id;
+      if (empId && /^\d+$/.test(String(empId))) {
+        const ext = path.extname(file.originalname || '') || '';
+        const docType = String(req.body.doc_type || 'file').replace(/[^a-zA-Z0-9_-]/g, '');
+        return cb(null, `${Date.now()}-${empId}-${docType}${ext}`);
+      }
+      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`);
+    },
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+// multer has already chosen the filename; the seam key is just <folder>/<that name>.
+const uploadKey = (req, file) => {
+  const f = uploadFolder(req);
+  return f ? `${f}/${file.filename}` : file.filename;
+};
 
 // Initialize DB
 initializeDatabase();
@@ -157,6 +183,61 @@ if (!process.env.ERP_DISABLE_BACKUP_SCHEDULER) {
   } catch (e) {
     console.warn('[backup] Scheduler not started:', e.message);
   }
+}
+
+// Nightly DB compaction — checkpoints the WAL into each DB and VACUUMs when
+// there's meaningful free space, so erp.db/chat.db actually shrink after
+// deletes instead of only ever growing.
+//
+// DEFAULT-OFF (opt-in, not opt-out): VACUUM's temp rewrite may route through
+// RAM (temp_store=MEMORY is set on erp.db) and this hasn't been measured
+// against prod's real DB size on the VPS's 1-2 GB RAM. better-sqlite3 is also
+// synchronous, so VACUUM blocks the whole Node event loop for its duration —
+// unmeasured how long that is at scale. Until a VACUUM has been run against a
+// copy of prod erp.db with RSS watched, leave this off and run
+// `node server/scripts/db-maintenance.js` by hand when reclaiming is actually
+// wanted. Set ERP_ENABLE_DB_MAINTENANCE=1 to arm the nightly scheduler.
+if (process.env.ERP_ENABLE_DB_MAINTENANCE) {
+  try {
+    const { scheduleNightlyMaintenance } = require('./scripts/db-maintenance');
+    scheduleNightlyMaintenance();
+  } catch (e) {
+    console.warn('[db-maint] Scheduler not started:', e.message);
+  }
+} else {
+  console.log('[db-maint] Scheduler not started: set ERP_ENABLE_DB_MAINTENANCE=1 to enable.');
+}
+
+// Nightly uploads → S3 migration at 02:30. Ordering is deliberate: 02:00 backup
+// captures the DB rows that reference these files, 02:15 compaction settles the DBs,
+// and only THEN are files moved off local disk — so a restore point always exists
+// before anything leaves. Never move this earlier.
+//
+// It self-disables (no timer at all) unless STORAGE_DRIVER=s3, so on the local driver
+// this is inert. It exists to cover the feature routes that still write to local disk —
+// they need no code change — plus any file whose inline push failed while the bucket was
+// unreachable. Skip in dev via ERP_DISABLE_UPLOADS_BACKFILL=1.
+if (!process.env.ERP_DISABLE_UPLOADS_BACKFILL) {
+  try {
+    const { scheduleNightlyBackfill } = require('./scripts/backfill-uploads-s3');
+    scheduleNightlyBackfill();
+  } catch (e) {
+    console.warn('[backfill] Scheduler not started:', e.message);
+  }
+}
+
+// 02:20 orphan sweep — slots between 02:15 compaction and the 02:30 S3 backfill, so
+// orphans are quarantined BEFORE we pay to upload them, and after the 02:00 backup has
+// captured the rows that reference them.
+//
+// Opt-in twice over: no timer at all unless ERP_ENABLE_SWEEP_CRON=1, and dry-run even
+// then unless ERP_SWEEP_CRON_DRYRUN=0. Without this the QUARANTINE_TTL never fired
+// outside a manual admin run, so quarantined files accumulated forever.
+try {
+  const { scheduleNightlySweep } = require('./scripts/sweep-uploads');
+  scheduleNightlySweep();
+} catch (e) {
+  console.warn('[sweep] Scheduler not started:', e.message);
 }
 
 // Daily 07:30 AM audit JSON snapshot — TOC v3 P0 #5.  Writes the same
@@ -312,6 +393,18 @@ try {
   console.warn('[procsch-reminder] Scheduler not started:', e.message);
 }
 
+// Tally Bill SLA escalation cron — Director CR (2026-08-13 §6):
+// reminder at 80% of a stage SLA, reporting manager at 100%, Director at
+// 150%.  Every 15 min (the Stage-4 approval SLA is only 4 business hours, so
+// an hourly tick would deliver the 80% reminder after the fact).  Dedup table
+// makes re-runs safe.  Skip via ERP_DISABLE_TALLY_SLA_CRON=1.
+try {
+  const { scheduleTallySlaCron } = require('./scripts/tallySlaCron');
+  scheduleTallySlaCron();
+} catch (e) {
+  console.warn('[tally-sla] Scheduler not started:', e.message);
+}
+
 // Daily 09:00 CMD audit email — audit item B20 + TOC v3 P0 #5.
 // Reads the 07:30 snapshot JSON (falls back to live /audit/kpi if
 // the snapshot folder is missing) and emails the director address
@@ -376,14 +469,21 @@ app.post('/api/admin/cmd-email/send-now', _authMw, (req, res) => {
 const { auditMiddleware } = require('./middleware/audit');
 app.use(auditMiddleware);
 
+// Module availability — the global on/off switch for whole features, one layer above
+// role permissions (see lib/features.js). Mounted before the feature routes it gates.
+const { requireModuleEnabled } = require('./lib/features');
+
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/module-flags', require('./routes/moduleFlags'));
 app.use('/api/admin/audit', require('./routes/audit'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/sales-funnel', require('./routes/salesfunnel'));
 app.use('/api/quotations', require('./routes/quotations'));
+app.use('/api/files', require('./routes/filePreview'));
 app.use('/api/solar', require('./routes/solar'));
+app.use('/api/solar-site', require('./routes/solarSite'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/business-book', require('./routes/businessbook'));
 app.use('/api/payment-required', require('./routes/paymentrequired'));
@@ -391,6 +491,7 @@ app.use('/api/raci', require('./routes/raci').router);
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/item-master', require('./routes/itemmaster'));
+app.use('/api/drawing-tracker', require('./routes/drawingTracker'));
 app.use('/api/pipe-weights', require('./routes/pipeweights'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/customers', require('./routes/customers'));
@@ -409,11 +510,19 @@ app.use('/api/gamification', require('./routes/champions'));
 app.use('/api/tools', require('./routes/tools'));
 app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/snags', require('./routes/snags'));
+app.use('/api/client-snag', require('./routes/clientSnag'));
 // Mam (2026-05-30): labour payment indents — sits in the Projects
 // sidebar group, raised against a site + sub-contractor.
 app.use('/api/labour-payment', require('./routes/labourPayment'));
 // Indent Labour Payment — Phase 1 (mam 2026-06-01).
 app.use('/api/indent-labour-payment', require('./routes/indentLabourPayment'));
+// Labour Management System (2026-08) — the Indent Labour Payment pipeline
+// extended with quotations and HR-owned crew rates. Mounted alongside it, not
+// replacing it: the existing routes and permission key are untouched.
+app.use('/api/labour-quotations', require('./routes/labourQuotations'));
+app.use('/api/labour-rate-master', require('./routes/labourRateMaster'));
+app.use('/api/labour-master', require('./routes/labourMaster'));
+app.use('/api/bill-verification', require('./routes/billVerification'));
 app.use('/api/company-assets', require('./routes/companyAssets'));
 app.use('/api/push', require('./routes/push'));
 
@@ -428,7 +537,10 @@ app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
+app.use('/api/tally-bills', require('./routes/tallyBills'));
+app.use('/api/module-videos', require('./routes/moduleVideos'));
 app.use('/api/admin/backups', require('./routes/backups'));
+app.use('/api/admin/uploads', require('./routes/uploadsSweep'));
 app.use('/api/admin/word-count', require('./routes/wordcount'));
 app.use('/api/admin/changelog', require('./routes/changelog'));
 app.use('/api/admin/locations', require('./routes/locations'));
@@ -453,7 +565,16 @@ app.use('/api/collections', require('./routes/collections'));
 // AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
-app.use('/api/site-chat', require('./routes/siteChat'));
+// Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
+// requireModuleEnabled: admin can switch the whole module off (see lib/features.js);
+// when off every endpoint 404s, so a pasted URL has nothing to load. NOTE this gates
+// the chat FEATURE only — initChatSocket() below must still start, because SOTYN Flow
+// and WebRTC call signalling both ride that same io.
+app.use('/api/site-chat', requireModuleEnabled('site_chat'), require('./routes/siteChat'));
+// SOTYN Flow — task boards (own DB sotynflow.db + shared socket)
+app.use('/api/sotyn-flow', requireModuleEnabled('sotyn_flow'), require('./routes/sotynFlow'));
+// System Requirements — product evolution tracker (upload-heavy; swept/quarantined)
+app.use('/api/system-requirements', requireModuleEnabled('system_requirements'), require('./routes/systemRequirements'));
 // Org Structure (Phase B) — department tree + designation catalog + openings.
 // Un-parked (dme 2026-08-03, Mandatory Field Spec HR pack): org_departments/
 // org_designations are the spec's dept master (HR-3) and Role Master (HR-2),
@@ -474,7 +595,7 @@ app.use('/audit', require('./routes/auditReport'));
 
 // File upload endpoint
 const { authMiddleware } = require('./middleware/auth');
-app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
+app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   // Mandatory Field Spec #49 (Photo, passport size, max 2MB) — scoped to
   // purpose=photo only (set by the Employee Workspace's Photo field);
@@ -483,11 +604,91 @@ app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
     fs.unlink(req.file.path, () => {});
     return res.status(400).json({ error: 'Photo must be 2MB or smaller' });
   }
-  const relPath = path.relative(uploadsDir, req.file.path).split(path.sep).join('/');
-  res.json({ url: `/uploads/${relPath}`, filename: req.file.originalname, size: req.file.size });
+  const key = uploadKey(req, req.file);
+  // On local this is a no-op (multer already wrote the file where it belongs). On s3 it
+  // streams the file into the bucket and removes the local copy — so uploads land in
+  // object storage inline, at request time.
+  //
+  // It never throws for a storage failure: if the bucket is unreachable the file stays on
+  // disk, the /uploads resolver serves it via dual-read, and the migration job moves it
+  // later. The user's upload succeeds either way.
+  const url = await storage.adoptLocalFile(req.file.path, key, req.file.mimetype);
+  // Always "/uploads/<key>" under BOTH drivers, so the value stored in the DB is
+  // identical to what this endpoint has always returned.
+  res.json({ url, filename: req.file.originalname, size: req.file.size });
 });
 
+// Public, token-scoped upload for the employee self-fill form (2026-08-17).
+// No login — the fill token IS the authorization: it must exist, be unused
+// and unexpired, and only document-ish types are accepted. The token check
+// runs BEFORE multer so invalid callers can't even write a temp file.
+const FILL_UPLOAD_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+app.post('/api/public/employee-upload/:token',
+  (req, res, next) => {
+    try {
+      const { getDb } = require('./db/schema');
+      const link = getDb().prepare(
+        `SELECT id FROM employee_fill_links
+          WHERE token=? AND used_at IS NULL
+            AND (expires_at IS NULL OR expires_at >= datetime('now'))`
+      ).get(String(req.params.token || ''));
+      if (!link) return res.status(403).json({ error: 'This link is not valid any more' });
+      next();
+    } catch (e) { res.status(500).json({ error: 'Upload unavailable' }); }
+  },
+  upload.single('file'),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!FILL_UPLOAD_TYPES.has(req.file.mimetype)) {
+      try { require('fs').unlinkSync(req.file.path); } catch (_) {}
+      return res.status(400).json({ error: 'Only JPG / PNG / WEBP images or PDF files are allowed' });
+    }
+    const key = uploadKey(req, req.file);
+    const url = await storage.adoptLocalFile(req.file.path, key, req.file.mimetype);
+    res.json({ url, filename: req.file.originalname, size: req.file.size });
+  });
+
 // Serve uploaded files
+// Lazy restore: if a requested upload is missing from disk but sitting in
+// quarantine (e.g. a chat/ticket was deleted, then a DB revert re-referenced its
+// file), pull it back out of quarantine and serve it — automatic recovery, no
+// manual sweep needed. Runs before express.static so the restored file is served.
+app.use('/uploads', async (req, res, next) => {
+  let key = null;
+  try {
+    key = quarantine.normalizeKey(decodeURIComponent(req.path.replace(/^\/+/, '')));
+  } catch (e) { return next(); }          // undecodable path — let static 404 it
+  if (!key) return next();
+
+  try {
+    // Lazy restore, driver-agnostic: absent from live storage but sitting in
+    // quarantine → pull it back before serving.
+    if (!(await storage.exists(key)) && await quarantine.isQuarantined(key)) {
+      await quarantine.restoreKey(key);
+    }
+  } catch (e) { /* ignore — fall through */ }
+
+  // Local driver: nothing more to do, express.static below serves the file exactly as
+  // it always has. This keeps the live path byte-for-byte the pre-seam behaviour.
+  if (!storage.isRemote) return next();
+
+  try {
+    // A public bucket/CDN can serve the bytes directly — cheaper than proxying.
+    if (process.env.S3_PUBLIC_BASE_URL) {
+      return res.redirect(302, `${process.env.S3_PUBLIC_BASE_URL.replace(/\/+$/, '')}/${key}`);
+    }
+    const buf = await storage.getObject(key);
+    if (buf) {
+      res.type(path.extname(key) || 'application/octet-stream');
+      return res.send(buf);
+    }
+  } catch (e) { /* fall through to the local fallback */ }
+
+  // DUAL-READ: the object isn't in the bucket (or the bucket errored), so fall through
+  // to express.static and serve the local copy. This is what makes the cutover
+  // zero-downtime — files not yet migrated keep serving while the backfill runs.
+  return next();
+});
 app.use('/uploads', express.static(uploadsDir));
 
 // Health check for deployment platforms
@@ -505,6 +706,36 @@ app.get('/api/health', (req, res) => {
 //   - Hashed asset files (under /assets/*) → cache forever (immutable)
 //   - index.html + other root files → no-cache so a refresh ALWAYS
 //     fetches the current bundle name.
+// /join — the PERMANENT new-joiner URL (mam 2026-08-17 "only make link"):
+// short enough to print in the joining kit / pin in WhatsApp. Redirects to
+// the currently ACTIVE standing self-fill link, so rotating the token from
+// the Employees page never changes the URL people share. No active link →
+// the invalid-link card explains to contact HR.
+app.get('/join', (req, res) => {
+  try {
+    const { getDb } = require('./db/schema');
+    const db = getDb();
+    let link = db.prepare(
+      `SELECT token FROM employee_fill_links
+        WHERE employee_id IS NULL AND COALESCE(multi_use,0)=1 AND used_at IS NULL
+          AND (expires_at IS NULL OR expires_at >= datetime('now'))
+        ORDER BY id DESC LIMIT 1`
+    ).get();
+    if (!link) {
+      // Self-healing: /join must always work — provision a fresh standing
+      // link when none is active (expired / first boot). HR can still rotate
+      // it any time from the Employees page (new token, same /join URL).
+      const token = require('crypto').randomBytes(24).toString('base64url');
+      db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at, multi_use)
+                  VALUES (?,NULL,NULL, datetime('now','+30 days'), 1)`).run(token);
+      link = { token };
+    }
+    res.redirect(302, `/employee-fill/${link.token}`);
+  } catch (e) {
+    res.redirect(302, '/employee-fill/none-active');
+  }
+});
+
 const clientBuild = path.join(__dirname, '..', 'client', 'dist');
 const fs2 = require('fs');
 if (fs2.existsSync(clientBuild)) {
@@ -578,12 +809,28 @@ const serverPort = process.env.PORT || 5000;
 // it — the chat uses its own DB + this socket, separate from the rest (mam
 // 2026-06-18). Falls back gracefully if the socket layer fails to start.
 const httpServer = require('http').createServer(app);
-try { require('./lib/chatSocket').initChatSocket(httpServer); console.log('[chat] Socket.IO ready'); }
+try {
+  const io = require('./lib/chatSocket').initChatSocket(httpServer);
+  console.log('[chat] Socket.IO ready');
+  // SOTYN Flow reuses the SAME io (board rooms f:<id> + flow:* events) — chat is
+  // untouched. seeAll lets a non-admin super-viewer (can_see_all on sotyn_flow)
+  // join any board room; resolved from erp.db here so the socket file stays clean.
+  const { getDb } = require('./db/schema');
+  const flowSeeAll = (uid) => { try { return !!getDb().prepare("SELECT MAX(rp.can_see_all) a FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE ur.user_id=? AND rp.module='sotyn_flow'").get(uid)?.a; } catch { return false; } };
+  require('./lib/sotynFlowSocket').registerBoardSocket(io, flowSeeAll);
+  console.log('[flow] Socket.IO ready');
+}
 catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
-httpServer.listen(serverPort, '0.0.0.0', () => {
+// Bind loopback-only by default (2026-08-26): on the VPS, nginx is the sole
+// public front door (HTTPS, server_tokens off) — with 0.0.0.0 anyone could
+// hit http://<vps-ip>:5000 directly, skipping nginx and sending logins over
+// plain HTTP. Set HOST=0.0.0.0 explicitly (env) only when LAN access to the
+// bare API is genuinely needed (e.g. phone testing against a dev machine).
+const bindHost = process.env.HOST || '127.0.0.1';
+httpServer.listen(serverPort, bindHost, () => {
   console.log(`\n======================================`);
   console.log(`  Business ERP Server`);
-  console.log(`  Running on port ${serverPort}`);
+  console.log(`  Running on ${bindHost}:${serverPort}`);
   console.log(`  Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`======================================\n`);
 });

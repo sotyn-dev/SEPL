@@ -17,6 +17,7 @@
 //   delete   — delete a snag (audit-friendly, admins typically only)
 
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db/schema');
@@ -34,9 +35,50 @@ function isApprover(db, user) {
   return !!r?.ok;
 }
 
+// Site scope for non-privileged users (mam 2026-08-13: "user can show their
+// snag according to their site" — a Site Engineer was seeing all 484 company
+// snags). Admin + snag-approvers (management raisers) keep the full company
+// view; everyone else sees only: snags of THEIR sites (same user→site mapping
+// the Scorecard engine uses — sites.site_engineer_id / supervisor_id, legacy
+// supervisor name, PO site-engineer links) + anything they raised + anything
+// assigned to them (by id OR name — imported rows link assignees by name).
+// Returns null for full-view users, else { where, params } with `s.` aliases.
+function siteScopeWhere(db, user) {
+  if (isApprover(db, user)) return null;
+  const uname = db.prepare('SELECT name FROM users WHERE id=?').get(user.id)?.name || '';
+  // The user's sites as id + NAME pairs.  Imported / WhatsApp-raised snags
+  // often carry ONLY site_name text (site_id NULL — e.g. "CONSERN PHARMA"),
+  // so matching by id alone showed an engineer an empty list (mam
+  // 2026-08-13: "consern side site eng i select but not showing him snag").
+  // Junior engineers on the PO (jr_site_engineer_ids CSV) count too.
+  const rows = db.prepare(`
+    SELECT id, name FROM sites WHERE site_engineer_id = ? OR supervisor_id = ?
+    UNION
+    SELECT id, name FROM sites WHERE LOWER(TRIM(COALESCE(supervisor,''))) = LOWER(TRIM(?))
+    UNION
+    SELECT s.id, s.name FROM sites s
+    JOIN purchase_orders po ON po.id = s.po_id
+    WHERE po.site_engineer_id = ?
+       OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ?
+       OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+  `).all(user.id, user.id, uname, user.id, `%,${user.id},%`, `%,${user.id},%`);
+  const ids = rows.map(r => r.id).filter(Boolean);
+  const names = [...new Set(rows.map(r => String(r.name || '').trim().toLowerCase()).filter(Boolean))];
+  const parts = [];
+  const params = [];
+  if (ids.length) parts.push(`s.site_id IN (${ids.join(',')})`);
+  if (names.length) {
+    parts.push(`LOWER(TRIM(COALESCE(s.site_name,''))) IN (${names.map(() => '?').join(',')})`);
+    params.push(...names);
+  }
+  parts.push('s.raised_by = ?', 's.assigned_to = ?', '(s.assigned_to IS NULL AND s.assigned_to_name = ?)', 'CAST(s.assigned_to AS TEXT) = ?');
+  params.push(user.id, user.id, uname, uname);
+  return { where: `(${parts.join(' OR ')})`, params };
+}
+
 // Shared filtered-list query — used by the JSON list AND the .xlsx export so
 // a downloaded sheet always matches what's on screen.
-function buildSnagQuery(req) {
+function buildSnagQuery(db, req) {
   const { status, priority, site_id, assigned_to, scope, search } = req.query;
   let sql = `
     SELECT s.*,
@@ -54,6 +96,11 @@ function buildSnagQuery(req) {
     WHERE 1=1
   `;
   const params = [];
+  // Mandatory per-site visibility for non-privileged users — applies on top
+  // of every optional filter below, so search/site/status can never widen
+  // the window back to company-wide.
+  const scopeW = siteScopeWhere(db, req.user);
+  if (scopeW) { sql += ` AND ${scopeW.where}`; params.push(...scopeW.params); }
   if (status) { sql += ' AND s.status = ?'; params.push(status); }
   if (priority) { sql += ' AND s.priority = ?'; params.push(priority); }
   if (site_id) { sql += ' AND s.site_id = ?'; params.push(site_id); }
@@ -79,7 +126,7 @@ function buildSnagQuery(req) {
 router.get('/', requirePermission('snags', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const { sql, params } = buildSnagQuery(req);
+    const { sql, params } = buildSnagQuery(db, req);
     res.json(db.prepare(sql).all(...params));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -87,12 +134,17 @@ router.get('/', requirePermission('snags', 'view'), (req, res) => {
 router.get('/stats', requirePermission('snags', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const total = db.prepare('SELECT COUNT(*) as c FROM snags').get().c;
-    const open = db.prepare("SELECT COUNT(*) as c FROM snags WHERE status='open'").get().c;
-    const submitted = db.prepare("SELECT COUNT(*) as c FROM snags WHERE status='submitted'").get().c;
-    const approved = db.prepare("SELECT COUNT(*) as c FROM snags WHERE status='approved'").get().c;
-    const rejected = db.prepare("SELECT COUNT(*) as c FROM snags WHERE status='rejected'").get().c;
-    const critical = db.prepare("SELECT COUNT(*) as c FROM snags WHERE priority='critical' AND status NOT IN ('approved')").get().c;
+    // Same per-site window as the list, so the tiles always match the rows.
+    const scopeW = siteScopeWhere(db, req.user);
+    const base = `FROM snags s WHERE ${scopeW ? scopeW.where : '1=1'}`;
+    const P = scopeW ? scopeW.params : [];
+    const cnt = (extra) => db.prepare(`SELECT COUNT(*) as c ${base}${extra}`).get(...P).c;
+    const total = cnt('');
+    const open = cnt(" AND s.status='open'");
+    const submitted = cnt(" AND s.status='submitted'");
+    const approved = cnt(" AND s.status='approved'");
+    const rejected = cnt(" AND s.status='rejected'");
+    const critical = cnt(" AND s.priority='critical' AND s.status NOT IN ('approved')");
     res.json({ total, open, submitted, approved, rejected, critical });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -104,7 +156,7 @@ router.get('/stats', requirePermission('snags', 'view'), (req, res) => {
 router.get('/export.xlsx', requirePermission('snags', 'view'), async (req, res) => {
   try {
     const db = getDb();
-    const { sql, params } = buildSnagQuery(req);
+    const { sql, params } = buildSnagQuery(db, req);
     const rows = db.prepare(sql).all(...params);
 
     const ExcelJS = require('exceljs');
@@ -181,7 +233,7 @@ router.get('/export.xlsx', requirePermission('snags', 'view'), async (req, res) 
 
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="snags-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="snags-${istToday()}.xlsx"`);
     res.send(buf);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

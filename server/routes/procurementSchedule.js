@@ -29,14 +29,18 @@ const fs = require('fs');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const storage = require('../lib/storage');
+const { uploadsSub, ensureDir } = require('../lib/paths');
+const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJsonArray } = require('../lib/aiComplete');
 
 const router = express.Router();
 router.use(authMiddleware);
 
 // Drawing uploads — Bundle A (mam 2026-05-28). Stored only for now;
 // vision-API reading is Bundle B if mam wants to pay the token cost.
-const drawingDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'procurement-schedule');
-if (!fs.existsSync(drawingDir)) fs.mkdirSync(drawingDir, { recursive: true });
+// uploadsSub() honours DATA_ROOT (lib/paths) instead of hardcoding data/uploads.
+const DRAWING_FOLDER = 'procurement-schedule';
+const drawingDir = ensureDir(uploadsSub(DRAWING_FOLDER));
 const drawingUpload = multer({
   storage: multer.diskStorage({
     destination: drawingDir,
@@ -211,11 +215,8 @@ try {
 // landed before ai_reasoning was added.
 try { getDb().exec(`ALTER TABLE procurement_schedule ADD COLUMN ai_reasoning TEXT`); } catch (_) {}
 
-// Helper used by the AI endpoint — match aiAgent.js's pattern of
-// stashing the API key in app_settings so admin can paste it via UI.
-function getAiSetting(key) {
-  try { return getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(key)?.value; } catch (_) { return null; }
-}
+// (The old local getAiSetting() is gone — the AI endpoint reads provider/key/
+// model through server/lib/aiComplete.js since 2026-08-21.)
 
 // ── Business-day arithmetic ───────────────────────────────────────
 // JS Date math, ISO-string in, ISO-string out. Sundays + holiday set are
@@ -414,16 +415,45 @@ router.post('/:project_id/drawings', requirePermission('procurement_schedule', '
 
 // GET /procurement-schedule/drawing/:fileId — stream the file (admin-readable
 // only, since drawings can be commercially sensitive).
-router.get('/drawing/:fileId', requirePermission('procurement_schedule', 'view'), (req, res) => {
+router.get('/drawing/:fileId', requirePermission('procurement_schedule', 'view'), async (req, res) => {
   const db = getDb();
   const f = db.prepare('SELECT filename, storage_path, file_type FROM procurement_schedule_drawings WHERE id = ?')
     .get(+req.params.fileId);
   if (!f) return res.status(404).json({ error: 'File not found' });
-  const fullPath = path.join(drawingDir, f.storage_path);
-  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File missing on disk' });
+
   res.setHeader('Content-Type', f.file_type || 'application/octet-stream');
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.filename)}"`);
-  res.sendFile(fullPath);
+
+  // LOCAL driver: keep res.sendFile. Files never leave local disk on this driver, and
+  // sendFile gives Accept-Ranges, ETag, Last-Modified and 304s for free. Without them a
+  // 30 MB drawing is re-downloaded in full on every view and the browser cannot
+  // range-stream it — a real regression on the biggest files the app serves.
+  if (!storage.isRemote) {
+    const fullPath = path.join(drawingDir, f.storage_path);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File missing on disk' });
+    return res.sendFile(fullPath);
+  }
+
+  // REMOTE driver: the local copy may be gone, so stream from the bucket (openStream
+  // falls back to local for anything not yet migrated).
+  //
+  // Deliberately NOT a redirect to /uploads/<key>: that mount has no auth middleware, and
+  // these drawings are permission-gated and commercially sensitive. The bytes must keep
+  // flowing through this handler, behind requirePermission.
+  //
+  // Streamed, not buffered — drawings run to 30 MB and any number of people may open one
+  // at once, so a Buffer per request would be real heap pressure.
+  let obj = null;
+  try {
+    obj = await storage.openStream(`${DRAWING_FOLDER}/${f.storage_path}`);
+  } catch (e) {
+    return res.status(502).json({ error: `Storage unavailable: ${e.message}` });
+  }
+  if (!obj) return res.status(404).json({ error: 'File missing on disk' });
+
+  if (obj.size != null) res.setHeader('Content-Length', obj.size);
+  obj.stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
+  obj.stream.pipe(res);
 });
 
 // DELETE /procurement-schedule/drawing/:fileId
@@ -478,15 +508,11 @@ router.get('/:project_id', requirePermission('procurement_schedule', 'view'), (r
 // BOQ item. Returns the suggestions WITHOUT writing to procurement_schedule
 // so the user can review/edit before approving.
 router.post('/:project_id/ai-suggest', requirePermission('procurement_schedule', 'edit'), async (req, res) => {
-  const apiKey = getAiSetting('ai_api_key');
-  if (!apiKey) {
-    return res.status(503).json({
-      error: 'AI not configured. Admin → Settings → AI must paste an Anthropic API key first.',
-    });
-  }
-  let Anthropic;
-  try { Anthropic = require('@anthropic-ai/sdk'); }
-  catch (e) { return res.status(500).json({ error: '@anthropic-ai/sdk not installed — run npm install on the server' }); }
+  // Provider comes from Admin → AI Settings (anthropic OR gemini) via the
+  // shared one-shot helper — the old copy hardcoded "Anthropic" here, which
+  // was simply wrong once mam switched to Gemini (2026-08-21).
+  const cfg = aiConfig(getDb());
+  if (!cfg.configured) return res.status(503).json({ error: aiNotConfiguredMessage(cfg.provider) });
 
   const db = getDb();
   const pid = +req.params.project_id;
@@ -519,8 +545,12 @@ router.post('/:project_id/ai-suggest', requirePermission('procurement_schedule',
     'SELECT id, filename, storage_path, file_type, file_size FROM procurement_schedule_drawings WHERE project_id = ? ORDER BY uploaded_at'
   ).all(pid);
   // Bundle B (mam 2026-05-28): vision API reads the drawings unless the
-  // client opted out for cost control. Anthropic accepts PDFs as base64
-  // 'document' blocks and images as 'image' blocks; size-cap below.
+  // client opted out for cost control. Attachments are provider-NEUTRAL
+  // ({ mime, data, name }) since 2026-08-21 — lib/aiComplete.js reshapes them
+  // into Anthropic document/image blocks or Gemini inlineData parts.
+  // CAVEAT: Gemini accepts inline PDFs, but a 25MB multi-drawing payload will
+  // often 429 / exceed request limits on the free tier — that is a data-volume
+  // reality of Gemini, not a regression; the error mapper now says so plainly.
   const useVision = req.body?.skip_drawings ? false : true;
   const VISION_CAP_BYTES = 25 * 1024 * 1024;   // 25MB total per request
   const visionBlocks = [];
@@ -537,19 +567,10 @@ router.post('/:project_id/ai-suggest', requirePermission('procurement_schedule',
         if (!fs.existsSync(full)) { visionSkipped.push({ filename: d.filename, reason: 'missing on disk' }); continue; }
         const buf = fs.readFileSync(full);
         const mime = d.file_type || (d.filename.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png');
-        if (mime === 'application/pdf') {
-          visionBlocks.push({
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
-            // Per-block title helps Claude reference which drawing it's reading.
-            title: d.filename,
-            citations: { enabled: false },
-          });
-        } else if (mime.startsWith('image/')) {
-          visionBlocks.push({
-            type: 'image',
-            source: { type: 'base64', media_type: mime, data: buf.toString('base64') },
-          });
+        if (mime === 'application/pdf' || mime.startsWith('image/')) {
+          // name → Anthropic's per-block title (helps Claude say which drawing
+          // it is reading); Gemini has no equivalent field and drops it.
+          visionBlocks.push({ mime, data: buf.toString('base64'), name: d.filename });
         } else {
           visionSkipped.push({ filename: d.filename, reason: `unsupported type ${mime}` });
           continue;
@@ -590,7 +611,11 @@ ${startDate && endDate ? `Total duration: ${Math.max(1, Math.round((new Date(end
   }
   if (drawings.length > 0) {
     const visionList = drawings.map((d, i) => {
-      const sent = visionBlocks.find(b => (b.title || '') === d.filename || b.type === 'image');
+      // Match on `name` — the provider-neutral attachment shape is
+      // { mime, data, name } (audit 2026-08-21: this still probed the old
+      // Anthropic block's b.title / b.type, so every attached drawing was
+      // announced to the model as "filename only").
+      const sent = visionBlocks.find(b => b.name === d.filename);
       const status = useVision && sent ? 'attached as image/PDF below'
                    : visionSkipped.find(s => s.filename === d.filename) ? `skipped (${visionSkipped.find(s=>s.filename===d.filename).reason})`
                    : 'filename only';
@@ -623,24 +648,19 @@ Reply with ONLY a JSON array, no preamble, no markdown fences:
 [{"item_id": <number>, "trade": "<string>", "dispatch_days": <number>, "reasoning": "<string>"}, ...]`;
 
   try {
-    const client = new Anthropic.default({ apiKey, timeout: 180000 });   // longer timeout — PDFs take longer
-    const model = getAiSetting('ai_model') || 'claude-opus-4-7';
-    // Multimodal user message: drawings first (so model has them in
-    // context when reading the BOQ), then the text prompt last.
-    const userContent = visionBlocks.length > 0
-      ? [...visionBlocks, { type: 'text', text: prompt }]
-      : prompt;
-    const resp = await client.messages.create({
-      model,
-      max_tokens: 8192,
-      messages: [{ role: 'user', content: userContent }],
+    // Multimodal user message: drawings first (so the model has them in
+    // context when reading the BOQ), then the text prompt last — the helper
+    // appends the text part after the attachments, same order as before.
+    const out = await aiComplete(getDb(), {
+      prompt, maxTokens: 8192, timeout: 180000, json: true, attachments: visionBlocks,   // long timeout — PDFs take longer
+      // retries429: 0 — one attempt here is already up to 180s with drawings
+      // attached; the default 4s+8s back-off would hold the request ~9 min,
+      // long past nginx/the browser. Fail fast and let mam re-run (2026-08-21).
+      retries429: 0,
     });
-    const text = resp.content.map(c => c.text || '').join('').trim();
-    // Defensive: strip ```json fences if the model added them anyway
-    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-    const match = cleaned.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error('AI returned no JSON array');
-    const suggestions = JSON.parse(match[0]);
+    const model = out.model;
+    const suggestions = extractJsonArray(out.text);
+    if (!suggestions) throw new Error('AI returned no JSON array');
 
     // Attach the original item context so the UI can render rich rows
     const byId = new Map(items.map(it => [it.id, it]));
@@ -668,12 +688,13 @@ Reply with ONLY a JSON array, no preamble, no markdown fences:
         cap_bytes: VISION_CAP_BYTES,
         used: useVision && visionBlocks.length > 0,
       },
-      input_tokens: resp.usage?.input_tokens,
-      output_tokens: resp.usage?.output_tokens,
+      input_tokens: out.usage?.input_tokens,
+      output_tokens: out.usage?.output_tokens,
     });
   } catch (e) {
-    console.error('[procurement-schedule] ai-suggest error:', e.message);
-    res.status(502).json({ error: 'AI call failed: ' + (e.message || 'unknown') });
+    console.error('[procurement-schedule] ai-suggest error:', e.status || '', e.message);
+    // Actionable, provider-correct wording instead of the raw SDK/Google body.
+    res.status(e.status === 429 ? 429 : 502).json({ error: aiErrorMessage(e, cfg.provider) });
   }
 });
 

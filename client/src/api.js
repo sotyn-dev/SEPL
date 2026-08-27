@@ -81,11 +81,16 @@ api.interceptors.response.use(
         // NEVER end the session — it can be a stale in-flight request, a flaky
         // call, or an endpoint wrongly 401'ing. We do NOT force an immediate
         // /auth/me logout here (that change, 5d5a6c8, kicked active users out
-        // on the first failing request and was reverted 2026-06-26). The
-        // deliberate session check — AuthContext's /auth/me on mount, on tab
-        // focus, and every 2 min — still catches a genuinely dead token and
-        // logs out cleanly. We only strip the raw "Invalid token" text so the
-        // page shows its own friendly fallback instead of the internal string.
+        // on the first failing request and was reverted 2026-06-26; the
+        // 2026-08-18 "instant probe" was a softer take on the same idea but it
+        // amplified a post-rotation signature storm into a login→5s→logout LOOP
+        // for everyone — reverted 2026-08-19, the real cure is server-side: the
+        // multi-legacy-secret bridge silently migrates the stuck tokens so there
+        // is nothing to log out from). The deliberate session check —
+        // AuthContext's /auth/me on mount, on tab focus, and every 2 min — still
+        // catches a genuinely dead token and logs out cleanly. We only strip the
+        // raw "Invalid token" text so the page shows its own friendly fallback
+        // instead of the internal string.
         if (err.response.data && /token/i.test(err.response.data.error || '')) {
           err.response.data = { ...err.response.data, error: null };
         }

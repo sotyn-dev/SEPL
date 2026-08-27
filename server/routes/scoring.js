@@ -342,6 +342,37 @@ function computeScorecard(db, userId, weekStart) {
         const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
+      // Snag List — SAME shape and SAME position as delegations (mam
+      // 2026-08-12: "u do snaglist same as delegation").  MUST stay above the
+      // site-scope gate further down: snags are per-assignee like delegations,
+      // not site-scoped, and when this block sat below the gate every user
+      // with no site mapping silently read 0/0.
+      // Mam's verbatim formula: Plan = raise date BETWEEN week start/end AND
+      // assigned = user; Actual = same + status='approved' (current status
+      // only, NO approved_at window — a later approval still counts toward
+      // the raised week).
+      // Two hard-won correctness rules (mam 2026-08-13 "ur calculation is
+      // wrong" — Vivek's snags landed one week off / counted as nobody's):
+      // 1) IST week bucketing: raised_at is stored UTC, so date() alone puts
+      //    a Monday-morning IST snag on Sunday = last week.  '+330 minutes'
+      //    shifts UTC → IST before taking the calendar date, matching the
+      //    dates the Snags page displays.  (Date-only imports are unaffected:
+      //    00:00 + 5h30 stays the same date.)
+      // 2) Tolerant assignee match: app-created rows link assigned_to =
+      //    users.id, but imported/WhatsApp rows carry only the NAME (either
+      //    in assigned_to_name with a NULL id, or the name string sitting in
+      //    the id column itself) — match all three shapes.
+      if (source === 'auto:snags') {
+        const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
+        const who = `(assigned_to=? OR (assigned_to IS NULL AND assigned_to_name=?) OR CAST(assigned_to AS TEXT)=?)`;
+        const given = db.prepare(
+          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND date(raised_at, '+330 minutes') BETWEEN ? AND ?`
+        ).get(userId, uname, uname, sinceDate, untilDate).c;
+        const done = db.prepare(
+          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND date(raised_at, '+330 minutes') BETWEEN ? AND ? AND status='approved'`
+        ).get(userId, uname, uname, sinceDate, untilDate).c;
+        return { given, done };
+      }
 
       // ── Owner / company-wide variants — for a PROCESS OWNER scored on the
       // WHOLE process, not just their own records (mam 2026-06-29: Sushila owns
@@ -359,6 +390,15 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:tickets_all') {
         const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
         const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(since, until).c;
+        return { given, done };
+      }
+      if (source === 'auto:snags_all') {
+        // Company-wide twin of auto:snags — same formula, no assignee filter.
+        // Kept beside the other *_all owner sources, above the site gate.
+        // Same IST shift as auto:snags so both views bucket a snag into the
+        // same week the Snags page displays.
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at, '+330 minutes') BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at, '+330 minutes') BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       // ERP module coverage — how many of the tracked modules had ANY activity
@@ -442,12 +482,12 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:raci_steps_done' || source === 'auto:raci_ontime_pct') {
         if (_raciAgg === undefined) {
           try { _raciAgg = require('../utils/raciModules').raciUserWeek(db, userId, sinceDate, untilDate); }
-          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, stepsPlanned: 0 }; }
+          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, openBefore: 0, closedBefore: 0, stepsPlanned: 0 }; }
         }
         // Planned = steps on their plate this week (closed this week + still open
         // on them); Actual = steps they closed this week. So % = how much of the
         // RACI work assigned to this person they have finished (mam 2026-06-27).
-        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed };
+        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed, openBefore: _raciAgg.openBefore || 0, closedBefore: _raciAgg.closedBefore || 0 };
         // On-time %: only meaningful when the user closed SLA-bearing steps this
         // week. Otherwise stay neutral (planned 0 → 0%) so an idle week neither
         // tanks the score nor falsely qualifies for the activity gate.
@@ -471,7 +511,9 @@ function computeScorecard(db, userId, weekStart) {
         const mod = ci >= 0 ? rest.slice(0, ci) : rest;
         const stepKey = ci >= 0 ? rest.slice(ci + 1) : '';
         const row = _raciBreakdown.find(r => r.module === mod && r.step_key === stepKey);
-        return row ? { given: row.planned, done: row.actual } : { given: 0, done: 0 };
+        return row
+          ? { given: row.planned, done: row.actual, openBefore: row.pending_before || 0, closedBefore: row.closed_before || 0 }
+          : { given: 0, done: 0, openBefore: 0, closedBefore: 0 };
       }
 
       // Site-scoped KPIs (Site Engineer / Supervisor templates) — need
@@ -484,12 +526,13 @@ function computeScorecard(db, userId, weekStart) {
       const inSites = `(${siteIds.join(',')})`;
 
       if (source === 'auto:dpr_profit') {
-        // Sum of profit_loss across DPRs in the week. Planned = sum of
-        // grand_total_b (planned cost), Actual = sum of grand_total_a
-        // (actual revenue). Score = (a - b) / b × 100 → matches "DPR
-        // Profit" KPI on the Site Eng template.
+        // Planned = sum of grand_total_b (planned cost) × 1.5, Actual = sum
+        // of grand_total_a (actual revenue).  Mam 2026-08-13: "weekly dpr
+        // cost 1 plann cost (DPR table) if 1 than here calculate 1.5" — the
+        // revenue TARGET is 1.5× the planned cost, so a site is on plan only
+        // when it bills one-and-a-half times what it planned to spend.
         const r = db.prepare(`SELECT COALESCE(SUM(grand_total_b),0) as planned, COALESCE(SUM(grand_total_a),0) as actual FROM dpr WHERE site_id IN ${inSites} AND report_date BETWEEN ? AND ?`).get(sinceDate, untilDate);
-        return { given: r.planned, done: r.actual };
+        return { given: Math.round(r.planned * 1.5 * 100) / 100, done: r.actual };
       }
       if (source === 'auto:dpr_count') {
         // DPRs submitted this week (planned = 6 days, actual = count)
@@ -811,13 +854,18 @@ function computeScorecard(db, userId, weekStart) {
       }
 
       // ===== Complaints =====
-      if (source === 'auto:complaints_raised') {
-        const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        return { given: null, done: c };
-      }
-      if (source === 'auto:complaints_resolved') {
-        const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE status='resolved' AND created_at BETWEEN ? AND ?`).get(since, until).c;
-        return { given: null, done: c };
+      // Mam 2026-08-20: Plan is not a hand-typed target — it auto-fills from
+      // the complaints RAISED in the week, and Actual is how many of that same
+      // cohort are resolved ("plan 10 complaint but resolve 9" → 90%). Same
+      // given/done cohort shape as delegations/PMS/snags: current status only,
+      // no resolved-date window — a later resolution still counts toward the
+      // raised week. 'closed' counts as resolved, matching the Complaints
+      // page dashboard tiles. Both sources return the same pair so the KPI
+      // reads Plan=raised / Actual=resolved whichever one a row is bound to.
+      if (source === 'auto:complaints_raised' || source === 'auto:complaints_resolved') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(since, until).c;
+        return { given, done };
       }
 
       // ===== Customers / Vendors =====
@@ -907,6 +955,67 @@ function computeScorecard(db, userId, weekStart) {
       return { given: null, done: null };
     };
 
+    // ── Cross-week carryover (mam 2026-08-25: "also add previous pendancy").
+    // For the task-cohort sources, the week's Planned = this week's cohort +
+    // the still-open BACKLOG from ALL previous weeks (not just last week),
+    // and Actual = cohort done + backlog items closed DURING this week. The
+    // backlog is reconstructed as-of the week start from each table's done
+    // timestamp (reviewed_at / resolved_at / approved_at) so a past week
+    // reads the way it actually stood, not the way things stand today. A
+    // done row with a NULL done-timestamp can't be placed in time, so it is
+    // treated as done before the week — excluded from BOTH sides, which
+    // keeps the mam-2026-06-29 invariant intact: Actual can never exceed
+    // Planned (every prev-done item is inside prevPending by construction).
+    // RACI sources are deliberately NOT here — mam rejected months-old open
+    // records inflating Planned there (2026-08-22, the 97-leads case).
+    const CARRY_CFG = {
+      'auto:delegations':     { table: 'delegations',     who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at' },
+      'auto:pms':             { table: 'pms_tasks',       who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at' },
+      'auto:tickets':         { table: 'support_tickets', who: 'assigned_to=?', doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at' },
+      'auto:delegations_all': { table: 'delegations',     who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at' },
+      'auto:pms_all':         { table: 'pms_tasks',       who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at' },
+      'auto:tickets_all':     { table: 'support_tickets', who: null,            doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at' },
+    };
+    const computeCarry = (source, since, until) => {
+      // Snags keep their special shapes: IST week bucketing on raised_at and
+      // the tolerant assignee match (same rules as computeAutoCount above).
+      if (source === 'auto:snags' || source === 'auto:snags_all') {
+        const sinceDate = since.slice(0, 10), untilDate = until.slice(0, 10);
+        const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
+        const who = source === 'auto:snags'
+          ? `(assigned_to=? OR (assigned_to IS NULL AND assigned_to_name=?) OR CAST(assigned_to AS TEXT)=?) AND `
+          : '';
+        const whoArgs = source === 'auto:snags' ? [userId, uname, uname] : [];
+        const prevPending = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
+             AND (status != 'approved' OR (approved_at IS NOT NULL AND date(approved_at, '+330 minutes') >= ?))`
+        ).get(...whoArgs, sinceDate, sinceDate).c;
+        const prevDone = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
+             AND status = 'approved' AND date(approved_at, '+330 minutes') BETWEEN ? AND ?`
+        ).get(...whoArgs, sinceDate, sinceDate, untilDate).c;
+        return { prevPending, prevDone };
+      }
+      const cfg = CARRY_CFG[source];
+      if (!cfg) return null;
+      const who = cfg.who ? `${cfg.who} AND ` : '';
+      const whoArgs = cfg.who ? [userId] : [];
+      const prevPending = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
+           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${cfg.doneAt} >= ?))`
+      ).get(...whoArgs, since, since).c;
+      const prevDone = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
+           AND (${cfg.doneCond}) AND ${cfg.doneAt} BETWEEN ? AND ?`
+      ).get(...whoArgs, since, since, until).c;
+      return { prevPending, prevDone };
+    };
+    // Sources with no cross-week backlog concept but where the Pending column
+    // should still auto-fill with the week's own leftover (planned − actual):
+    // checklists are day-scoped and RACI planned is week-scoped by decision.
+    const pendingWeekOnly = (source) =>
+      source === 'auto:checklists' || source === 'auto:raci_steps_done' || source.startsWith('auto:raci_step:');
+
     // Load every per-user override row for this user in ONE query so the
     // per-KPI loop below doesn't fan out to 20 small SELECTs.  Indexed by
     // kpi_id for O(1) lookup.
@@ -949,14 +1058,47 @@ function computeScorecard(db, userId, weekStart) {
       // - If `given` is non-null, override Planned (e.g. 6 days for DPR count)
       // - If `given` is null, keep template default_planned and only set Actual
       //   (e.g. DPR profit Actual = sum from DPR rows, target stays as 30000)
+      // Auto Pending (mam 2026-08-25 "use this column to pending"):
+      //   wk = this week's own leftover (cohort given − cohort done)
+      //   up = total still-open as of the week end (backlog + this week)
+      let pendingUp = null, pendingWk = null, pendingAuto = false;
+      let carryPrevPending = 0, carryPrevDone = 0;
       if (k.data_source && k.data_source.startsWith('auto:')) {
         try {
-          const { given, done } = computeAutoCount(k.data_source, startTs, endTs);
+          const autoRes = computeAutoCount(k.data_source, startTs, endTs);
+          const { given, done } = autoRes;
           if (given !== null) {
             planned = given;
           }
           if (done !== null && done !== undefined) {
             actual = done;
+          }
+          // Previous pendency shows in the PENDING column ONLY — mam saw the
+          // first cut live (2026-08-26) and said the "incl N prev" additions
+          // in Planned/Actual should go: Planned/Actual stay this week's
+          // cohort; the backlog lives in Pending "up".
+          const carry = computeCarry(k.data_source, startTs, endTs);
+          if (carry) {
+            carryPrevPending = carry.prevPending;
+            carryPrevDone = carry.prevDone;
+            // Pending pair (mam 2026-08-26, "19/4" question): first = ALL still
+            // open as of the week end (uncleared backlog + this week's
+            // leftover); second = of the PREVIOUS tasks, how many were
+            // completed during this week. This week's own leftover is already
+            // visible as Planned − Actual.
+            pendingUp = Math.max(0, carry.prevPending - carry.prevDone)
+                      + Math.max(0, (given || 0) - (done || 0));
+            pendingWk = carry.prevDone;
+            pendingAuto = true;
+          } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
+            // RACI: same pair — openBefore joins the outstanding total (never
+            // Planned, 2026-08-22 rule) and closedBefore = backlog steps the
+            // user closed this week. Checklists have neither → 0s.
+            pendingUp = Math.max(0, given - done) + (autoRes.openBefore || 0);
+            pendingWk = autoRes.closedBefore || 0;
+            carryPrevPending = autoRes.openBefore || 0;
+            carryPrevDone = autoRes.closedBefore || 0;
+            pendingAuto = true;
           }
         } catch (e) {
           console.warn(`auto-fetch failed for ${k.data_source}:`, e.message);
@@ -972,7 +1114,15 @@ function computeScorecard(db, userId, weekStart) {
       //                  you overshoot (planned/actual×100).
       // Always floored at 0 — a scorecard % must never read negative.
       let actualPct = 0;
-      if (planned > 0) {
+      // Mam 2026-08-13: "if plan 0 actual 0 then actual % will be 0" — an
+      // empty cohort (nothing planned, nothing done) is ON PLAN, not a
+      // failure.  Engine achievement = 100 so the page's variance display
+      // (which subtracts 100) reads 0%.  Before this, 0/0 rows read as 0
+      // achievement → a wall of −100% red and weighted scores tanked for
+      // people who simply had nothing assigned that week.
+      if (+planned === 0 && +actual === 0) {
+        actualPct = 100;
+      } else if (planned > 0) {
         if (k.direction === 'lower_better') {
           actualPct = actual <= planned ? 100 : Math.round((planned / actual) * 100);
         } else {
@@ -1008,15 +1158,27 @@ function computeScorecard(db, userId, weekStart) {
         actual_pct: actualPct,
         last_week_pct: lastEntry?.actual_pct ?? null,
         total_uptodate: entry?.total_uptodate ?? null,
-        pending_uptodate: entry?.pending_uptodate ?? null,
-        pending_work: entry?.pending_work ?? null,
+        // Auto rows compute Pending live (backlog-aware); manual rows keep
+        // whatever was typed into the up/wk boxes.
+        pending_uptodate: pendingAuto ? pendingUp : (entry?.pending_uptodate ?? null),
+        pending_work: pendingAuto ? pendingWk : (entry?.pending_work ?? null),
+        pending_auto: pendingAuto,
+        carry_prev_pending: carryPrevPending,
+        carry_prev_done: carryPrevDone,
         pending_pct: entry?.pending_pct ?? null,
         commitment: entry?.commitment ?? null,
+        commitment_prev: entry?.commitment_prev ?? null,
         notes: entry?.notes ?? null,
       };
     });
 
-    const score = totalWeight > 0 ? Math.round((totalScore / totalWeight) * 100) / 100 : 0;
+    // Zero-weight template (audit 2026-08-17: prod's 'Everyone' template has
+    // 0% weight on every KPI): score = plain unweighted average of the KPI
+    // achievement %s, instead of a constant 0 (which displayed as an eternal
+    // -100% and made Champions treat the whole template as unscoreable).
+    const score = totalWeight > 0
+      ? Math.round((totalScore / totalWeight) * 100) / 100
+      : (result.length ? Math.round((result.reduce((s, r) => s + (r.actual_pct || 0), 0) / result.length) * 100) / 100 : 0);
 
     // Total auto work units this week — the Champions League min-activity gate
     // uses this to decide whether a week counts toward a player's score (so a
@@ -1050,6 +1212,88 @@ router.get('/scorecard', (req, res) => {
   }
 });
 
+// GET the WHOLE scorecard aggregated over a From→To period (mam 2026-08-17:
+// "if i apply this value not changed" — Apply must recalculate the table, not
+// just the banner tile). Runs the normal weekly compute for every week in the
+// range — every hard-won weekly rule (IST bucketing, cohorts, 0/0=on-plan,
+// per-user overrides) applies unchanged — then sums Planned/Actual per KPI
+// and recomputes % and the weighted score from the summed values.
+router.get('/scorecard-range', (req, res) => {
+  try {
+    const userId = parseInt(req.query.user_id, 10) || req.user.id;
+    const ok = (s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+    if (!ok(req.query.from) || !ok(req.query.to)) {
+      return res.status(400).json({ error: 'from and to (yyyy-mm-dd) required' });
+    }
+    // Snap both ends to their week's Monday (scoring weeks are Mon-Sat).
+    const monday = (s) => {
+      const d = new Date(`${s}T00:00:00Z`);
+      const dow = d.getUTCDay();
+      d.setUTCDate(d.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
+      return d.toISOString().slice(0, 10);
+    };
+    let from = monday(req.query.from), to = monday(req.query.to);
+    if (from > to) [from, to] = [to, from];
+    const nWeeks = Math.min(53, Math.round((new Date(to) - new Date(from)) / (7 * 864e5)) + 1);
+
+    const db = getDb();
+    const byKpi = new Map();   // kpi_id → aggregated row
+    let template = null, weeksCounted = 0;
+    for (let i = 0; i < nWeeks; i++) {
+      const w = shiftWeek(from, 7 * i);
+      const sc = computeScorecard(db, userId, w);
+      if (!sc || !sc.template) continue;
+      template = sc.template;
+      weeksCounted++;
+      for (const k of sc.kpis) {
+        const agg = byKpi.get(k.kpi_id);
+        if (!agg) {
+          byKpi.set(k.kpi_id, { ...k, planned: +k.planned || 0, actual: +k.actual || 0,
+            last_week_pct: null, total_uptodate: null, pending_uptodate: null,
+            pending_work: null, pending_pct: null, commitment: null, commitment_prev: null, notes: null,
+            pending_auto: false, carry_prev_pending: 0, carry_prev_done: 0 });
+        } else {
+          agg.planned += +k.planned || 0;
+          agg.actual += +k.actual || 0;
+          // keep the latest week's definition (name/weight/direction may evolve)
+          agg.group_name = k.group_name; agg.metric_name = k.metric_name;
+          agg.weightage = k.weightage; agg.direction = k.direction;
+        }
+      }
+    }
+
+    // Same % + weighted-score math as the weekly compute, on the summed values.
+    let totalScore = 0, totalWeight = 0;
+    const kpis = [...byKpi.values()].map(k => {
+      let pct = 0;
+      if (+k.planned === 0 && +k.actual === 0) pct = 100;
+      else if (k.planned > 0) {
+        pct = k.direction === 'lower_better'
+          ? (k.actual <= k.planned ? 100 : Math.round((k.planned / k.actual) * 100))
+          : Math.round((k.actual / k.planned) * 100);
+        if (pct < 0) pct = 0;
+      }
+      k.actual_pct = pct;
+      totalWeight += k.weightage || 0;
+      totalScore += (k.weightage || 0) * pct;
+      return k;
+    });
+    // Same zero-weight-template rule as the weekly compute above.
+    const score = totalWeight > 0
+      ? Math.round((totalScore / totalWeight) * 100) / 100
+      : (kpis.length ? Math.round((kpis.reduce((s, r) => s + (r.actual_pct || 0), 0) / kpis.length) * 100) / 100 : 0);
+
+    res.json({
+      user_id: userId, period: true, from, to,
+      week_end: shiftWeek(to, 5), weeks_counted: weeksCounted,
+      template, kpis, score, total_weight: totalWeight,
+    });
+  } catch (err) {
+    console.error('scorecard-range get error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET step-wise breakdown of the "RACI Steps (All Modules)" row for one
 // user × week — powers the scorecard drill-down (mam 2026-06-27: "show step
 // wise"). Splits the single Planned/Actual total into one line per (module,
@@ -1064,9 +1308,15 @@ router.get('/raci-breakdown', (req, res) => {
     const sinceDate = weekStart;
     const untilDate = shiftWeek(weekStart, 5);
     const rows = require('../utils/raciModules').raciUserWeekBreakdown(getDb(), userId, sinceDate, untilDate);
+    // totals.pending mirrors the scorecard row's Pending pair (mam 2026-08-27
+    // audit): total outstanding includes the pre-week backlog (pending_before),
+    // and prev_done = backlog steps closed this week — else the drill-down
+    // would contradict the row it expands (502 vs 297).
     const totals = rows.reduce(
-      (t, r) => ({ planned: t.planned + r.planned, actual: t.actual + r.actual, pending: t.pending + r.pending }),
-      { planned: 0, actual: 0, pending: 0 }
+      (t, r) => ({ planned: t.planned + r.planned, actual: t.actual + r.actual,
+                   pending: t.pending + r.pending + (r.pending_before || 0),
+                   prev_done: t.prev_done + (r.closed_before || 0) }),
+      { planned: 0, actual: 0, pending: 0, prev_done: 0 }
     );
     res.json({ user_id: userId, week_start: weekStart, week_end: untilDate, rows, totals });
   } catch (err) {
@@ -1078,7 +1328,7 @@ router.get('/raci-breakdown', (req, res) => {
 // PUT save a single KPI entry (planned / actual / pending counts / notes)
 router.put('/scorecard/entry', (req, res) => {
   try {
-    const { user_id, kpi_id, week_start, planned, actual, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes } = req.body;
+    const { user_id, kpi_id, week_start, planned, actual, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes } = req.body;
     if (!kpi_id || !week_start) return res.status(400).json({ error: 'kpi_id and week_start required' });
     const targetUser = parseInt(user_id, 10) || req.user.id;
     // Only admin or the target user themselves can edit
@@ -1098,8 +1348,8 @@ router.put('/scorecard/entry', (req, res) => {
       if (actualPct < 0) actualPct = 0;
     }
     db.prepare(`
-      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes, updated_by, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes, updated_by, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
       ON CONFLICT(user_id, kpi_id, week_start) DO UPDATE SET
         planned=excluded.planned,
         actual=excluded.actual,
@@ -1109,10 +1359,11 @@ router.put('/scorecard/entry', (req, res) => {
         pending_work=excluded.pending_work,
         pending_pct=excluded.pending_pct,
         commitment=excluded.commitment,
+        commitment_prev=excluded.commitment_prev,
         notes=excluded.notes,
         updated_by=excluded.updated_by,
         updated_at=CURRENT_TIMESTAMP
-    `).run(targetUser, kpi_id, week_start, planned || 0, actual || 0, actualPct, total_uptodate || null, pending_uptodate || null, pending_work || null, pending_pct || null, commitment || null, notes || null, req.user.id);
+    `).run(targetUser, kpi_id, week_start, planned || 0, actual || 0, actualPct, total_uptodate || null, pending_uptodate || null, pending_work || null, pending_pct || null, commitment || null, commitment_prev || null, notes || null, req.user.id);
     res.json({ message: 'Saved', actual_pct: actualPct });
   } catch (err) {
     console.error('scorecard save error', err);
@@ -1146,7 +1397,9 @@ router.get('/commitments', (req, res) => {
       ? req.query.week_start
       : defaultWeekStart();
     let weeks = parseInt(req.query.weeks, 10) || 8;
-    weeks = Math.max(4, Math.min(16, weeks));
+    // Cap 53 = one full year: covers the "Last 6 Months" graph range AND the
+    // manual From→To period score (both mam 2026-08-17).
+    weeks = Math.max(1, Math.min(53, weeks));
     const db = getDb();
 
     // Oldest → newest; newest = the viewed week (so the graph reads left→right).

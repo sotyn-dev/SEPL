@@ -2,16 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "backend",
+      "name": "erp-api",
       "runtimeExecutable": "node",
       "runtimeArgs": ["server/index.js"],
       "port": 5000
     },
     {
-      "name": "frontend",
+      "name": "erp-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "client", "run", "dev", "--", "--port", "5173"],
-      "port": 5173
+      "runtimeArgs": ["run", "client"],
+      "port": 3000
     }
   ]
 }

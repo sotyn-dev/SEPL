@@ -569,6 +569,9 @@ export default function Attendance() {
         </>}
         {canGrid && <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>}
         {isAdmin() && <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>}
+        {/* Training video button moved to the shared Layout header
+            (mam 2026-08-26: "every where") — same "attendance" module key,
+            so previously added videos still show. */}
       </div>
 
       {/* MONTHLY ATTENDANCE GRID TAB */}

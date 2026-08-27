@@ -64,6 +64,28 @@ function FileLink({ url, label, className, iconSize = 13 }) {
   );
 }
 
+// Local calendar day as YYYY-MM-DD — NOT toISOString(), which is UTC and in
+// IST (+5:30) would call a deadline "overdue" from 18:30 the day before.
+const todayStr = (d = new Date()) => {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+// Deadline traffic-light. Returns null when the ticket has no deadline (all
+// legacy tickets), so the cell falls back to "Not Assigned".
+// A finished ticket is never flagged overdue — closing it is the point.
+const deadlineState = (t) => {
+  const due = (t.deadline_date || '').slice(0, 10);
+  if (!due) return null;
+  const done = t.status === 'resolved' || t.status === 'closed';
+  if (done) return { cls: 'text-gray-500', title: `Due ${due} · ticket already ${t.status}` };
+  const today = todayStr();
+  // Plain string compare is safe and timezone-free for YYYY-MM-DD.
+  if (due < today) return { cls: 'bg-red-100 text-red-700 font-semibold', suffix: '· Overdue', title: `Was due ${due}` };
+  if (due === today) return { cls: 'bg-amber-100 text-amber-700 font-semibold', suffix: '· Today', title: `Due today (${due})` };
+  return { cls: 'text-gray-600', title: `Due ${due}` };
+};
+
 const CATEGORIES = ['bug', 'feature_request', 'how_to', 'access_issue', 'data_issue', 'manpower', 'material', 'payment', 'other'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 
@@ -76,13 +98,15 @@ export default function HelpTickets() {
   const [scope, setScope] = useState('mine');     // mine | given | all
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [nameFilter, setNameFilter] = useState('');   // raiser / assignee name
   const [tickets, setTickets] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [createModal, setCreateModal] = useState(false);
   const [viewModal, setViewModal] = useState(null);
-  const [form, setForm] = useState({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '' });
+  const [form, setForm] = useState({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', deadline_date: '' });
   const [response, setResponse] = useState('');
   const [reassign, setReassign] = useState('');
+  const [deadlineEdit, setDeadlineEdit] = useState('');   // deadline draft in the view modal
   // Delegation-style proof upload state for the currently-open ticket.
   const [proof, setProof] = useState({ url: '', notes: '', uploading: false, pct: 0 });
   // Inline reject-reason capture (replaces the native prompt()).
@@ -93,14 +117,27 @@ export default function HelpTickets() {
     // Start the "Add / Update Response" box EMPTY — the saved response is shown
     // read-only in "Latest Response", so pre-filling it just duplicated the text.
     setViewModal(t); setResponse(''); setReassign(t.assigned_to || '');
+    setDeadlineEdit((t.deadline_date || '').slice(0, 10));
     setProof({ url: '', notes: '', uploading: false, pct: 0 });
     setRejecting(false); setRejectReason('');
+  };
+
+  // Summary cards. Counts come from the server (one GROUP BY over the whole
+  // table) rather than from `tickets`, which is only the current scope/filter
+  // slice — otherwise the cards would change every time a tab or status filter
+  // was clicked.
+  const [stats, setStats] = useState(null);
+  const loadStats = () => {
+    api.get('/support/stats').then(r => setStats(r.data)).catch(() => setStats(null));
   };
 
   const load = () => {
     const params = new URLSearchParams({ scope });
     if (statusFilter) params.set('status', statusFilter);
     api.get('/support?' + params.toString()).then(r => setTickets(r.data || [])).catch(() => setTickets([]));
+    // Every create / status change / delete already calls load(), so hanging
+    // the stats refresh here keeps the cards in step with no extra wiring.
+    loadStats();
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [scope, statusFilter]);
   useEffect(() => {
@@ -127,7 +164,8 @@ export default function HelpTickets() {
       try {
         const fd = new FormData();
         fd.append('file', form._file);
-        const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        // ?folder=help-tickets → own uploads subfolder so the orphan sweep can target it.
+        const up = await api.post('/upload?folder=help-tickets', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
         payload.attachment_link = up.data?.url || null;
       } catch (err) {
         toast.error(`Attachment upload failed: ${err.response?.data?.error || err.message} — submitting without file`, { duration: 5000 });
@@ -137,7 +175,7 @@ export default function HelpTickets() {
       const r = await api.post('/support', payload);
       toast.success(`Ticket ${r.data.ticket_no} created`);
       setCreateModal(false);
-      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', _file: null });
+      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', deadline_date: '', _file: null });
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -167,7 +205,7 @@ export default function HelpTickets() {
       const toSend = file.type?.startsWith('image/') ? await compressImage(file) : file;
       const fd = new FormData();
       fd.append('file', toSend);
-      const res = await api.post('/upload', fd, {
+      const res = await api.post('/upload?folder=help-tickets', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (ev) => { if (ev.total) setProof(p => ({ ...p, pct: Math.round((ev.loaded / ev.total) * 100) })); },
       });
@@ -202,7 +240,17 @@ export default function HelpTickets() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-  const filtered = !search ? tickets : tickets.filter(t => {
+  // Filters compose: name AND free-text, both on top of the scope tab +
+  // status dropdown already applied server-side. Partial, case-insensitive
+  // match on either side of the ticket ("dur" matches "Durgesh").
+  const filtered = tickets.filter(t => {
+    if (nameFilter) {
+      const n = nameFilter.toLowerCase();
+      const matchesName = (t.user_name || '').toLowerCase().includes(n)
+        || (t.assigned_to_name || '').toLowerCase().includes(n);
+      if (!matchesName) return false;
+    }
+    if (!search) return true;
     const q = search.toLowerCase();
     return (t.ticket_no || '').toLowerCase().includes(q)
       || (t.subject || '').toLowerCase().includes(q)
@@ -220,12 +268,31 @@ export default function HelpTickets() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => exportCsv('help-tickets',
-            ['Ticket #','Subject','Raised By','Assigned To','Priority','Status','When'],
-            tickets.map(t => [t.ticket_no, t.subject, t.raised_by_name, t.assigned_to_name, t.priority, t.status, t.created_at]))}
+            ['Ticket #','Subject','Raised By','Assigned To','Priority','Status','Deadline','When'],
+            filtered.map(t => [t.ticket_no, t.subject, t.user_name, t.assigned_to_name, t.priority, t.status, t.deadline_date || '', t.created_at]))}
             className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={14} /> Export Excel</button>
           <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Raise New Ticket</button>
         </div>
       </div>
+
+      {/* Summary cards — same `card p-3 border-l-4` treatment the Snags and
+          Inventory pages use, so the three modules read alike. Counts are
+          whole-table totals, independent of the tab / status filter below. */}
+      {stats && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {[
+            { key: 'open', label: 'Open Tickets', sub: 'Total Open Tickets', value: stats.open, bar: 'border-emerald-500', text: 'text-emerald-600' },
+            { key: 'processing', label: 'In Processing', sub: 'Being worked on / awaiting approval', value: stats.processing, bar: 'border-amber-500', text: 'text-amber-600' },
+            { key: 'closed', label: 'Closed Tickets', sub: 'Resolved & closed', value: stats.closed, bar: 'border-gray-400', text: 'text-gray-600' },
+          ].map(c => (
+            <div key={c.key} className={`card p-3 border-l-4 ${c.bar}`}>
+              <p className="text-xs text-gray-500">{c.label}</p>
+              <p className={`text-2xl font-bold ${c.text}`}>{c.value}</p>
+              <p className="text-[10px] text-gray-400">{c.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-2">
@@ -248,6 +315,15 @@ export default function HelpTickets() {
           <option value="rejected">Rejected</option>
           <option value="closed">Closed</option>
         </select>
+        {/* Dedicated NAME filter — narrows by the raiser's or assignee's name
+            only, so you can isolate one person's tickets without the free-text
+            box also matching a subject or description. Composes with the scope
+            tabs, status dropdown and search; filtering is instant, matching the
+            existing search behaviour. */}
+        <div className="relative min-w-[180px]">
+          <FiUser className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+          <input className="input pl-9" placeholder="Filter by name…" value={nameFilter} onChange={e => setNameFilter(e.target.value)} />
+        </div>
         <div className="relative flex-1 min-w-[200px]">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
           <input className="input pl-9" placeholder="Search ticket no / subject / person…" value={search} onChange={e => setSearch(e.target.value)} />
@@ -266,12 +342,13 @@ export default function HelpTickets() {
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Priority</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Status</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500 min-w-24">Proof</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Deadline</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400 text-sm">No tickets {scope === 'mine' ? 'assigned to you' : scope === 'given' ? 'raised by you' : ''} yet.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400 text-sm">No tickets {scope === 'mine' ? 'assigned to you' : scope === 'given' ? 'raised by you' : ''} yet.</td></tr>}
             {filtered.map(t => {
               const isRaiser = t.user_id === user?.id;
               const isAssignee = t.assigned_to === user?.id;
@@ -299,6 +376,20 @@ export default function HelpTickets() {
                         <span className="text-gray-300 text-xs">—</span>
                       )}
                     </div>
+                  </td>
+                  {/* Deadline + due state. Same fmtDate() the When column uses,
+                      so the two read alike. */}
+                  <td className="px-3 py-2 text-[11px] whitespace-nowrap">
+                    {(() => {
+                      const due = deadlineState(t);
+                      if (!due) return <span className="text-gray-400">Not Assigned</span>;
+                      return (
+                        <span className={`px-1.5 py-0.5 rounded ${due.cls}`} title={due.title}>
+                          {fmtDate(t.deadline_date, { day: '2-digit', month: 'short' })}
+                          {due.suffix && <span className="ml-1 font-bold">{due.suffix}</span>}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-[11px] text-gray-500 whitespace-nowrap">{fmtDate(t.created_at, { day: '2-digit', month: 'short' })}</td>
                   <td className="px-3 py-2 text-right" onClick={e => e.stopPropagation()}>
@@ -340,6 +431,11 @@ export default function HelpTickets() {
               <select className="select" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
                 {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
+            </div>
+            <div className="col-span-2">
+              <label className="label">Deadline <span className="text-gray-400 font-normal text-[10px]">(optional · target date)</span></label>
+              <input type="date" className="input" value={form.deadline_date}
+                onChange={e => setForm({ ...form, deadline_date: e.target.value })} />
             </div>
             <div className="col-span-2">
               <label className="label">Module (optional)</label>
@@ -486,6 +582,23 @@ export default function HelpTickets() {
                     </div>
                     <button onClick={() => update(viewModal.id, { assigned_to: reassign || null })} disabled={String(reassign || '') === String(viewModal.assigned_to || '')} className="btn btn-secondary text-xs whitespace-nowrap disabled:opacity-50">Save Assignee</button>
                   </div>
+                </div>
+              )}
+              {/* Deadline editor — same "field + Save" shape as Reassign above.
+                  Open to the raiser, assignee and follow-up roles; the server
+                  applies the same permission rules as any other PUT field. */}
+              {(canFollowAll || isAssignee || viewModal.user_id === user?.id) && (
+                <div>
+                  <label className="label">Deadline</label>
+                  <div className="flex gap-2 items-start">
+                    <input type="date" className="input flex-1" value={deadlineEdit}
+                      onChange={e => setDeadlineEdit(e.target.value)} />
+                    <button
+                      onClick={() => update(viewModal.id, { deadline_date: deadlineEdit || null })}
+                      disabled={(deadlineEdit || '') === (viewModal.deadline_date || '').slice(0, 10)}
+                      className="btn btn-secondary text-xs whitespace-nowrap disabled:opacity-50">Save Deadline</button>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Clear the field and save to remove the deadline.</p>
                 </div>
               )}
               {/* Inline reject reason — replaces the native prompt() so the

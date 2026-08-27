@@ -1075,6 +1075,21 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Employee self-fill links (2026-08-17): HR shares a tokenized public URL,
+    -- the employee fills their own details (no login) and the data lands in
+    -- the Employees directory. employee_id NULL = new-joiner link (creates a
+    -- row on submit); set = tied link (prefills + updates that employee).
+    CREATE TABLE IF NOT EXISTS employee_fill_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token TEXT UNIQUE NOT NULL,
+      employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME,
+      used_at DATETIME,
+      submitted_name TEXT
+    );
+
     -- Sub-Contractors
     CREATE TABLE IF NOT EXISTS sub_contractors (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1572,7 +1587,10 @@ function initializeDatabase() {
     -- cutoff, leave allowances, working days, OT rate, etc.
     CREATE TABLE IF NOT EXISTS payroll_settings (
       id INTEGER PRIMARY KEY CHECK(id = 1),
-      late_after_time TEXT DEFAULT '09:46',           -- start of late zone (after this = late mark)
+      late_after_time TEXT DEFAULT '09:46',           -- FIRST LATE MINUTE ("Late Zone Start"): a punch AT or after
+                                                     -- this is a late mark. SEPL rule (mam): on time up to 09:45,
+                                                     -- so 09:46 is 1 minute late. Penalty minutes are counted from
+                                                     -- the last on-time minute (this value - 1).
       half_day_after_time TEXT DEFAULT '10:00',       -- after this time = half day deduction
       min_hours_full_day REAL DEFAULT 8,              -- below this hours = half day
       min_hours_half_day REAL DEFAULT 4,              -- below this hours = absent
@@ -2206,6 +2224,23 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Per-PAGE training videos (mam 2026-08-19): admin pastes a YouTube link,
+    -- everyone gets a "Training" button on that module's page. Links only —
+    -- nothing is uploaded, so this costs no disk and no streaming load on the
+    -- VPS. The module column matches the permission module keys
+    -- ('procurement', 'payroll', ...) so one button component works anywhere.
+    -- NOTE the name: training_videos is already taken by the HR Training
+    -- module (a different thing — mandatory courses per department/role).
+    CREATE TABLE IF NOT EXISTS module_help_videos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      module TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      sort_order INTEGER DEFAULT 0,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- ============================================
     -- INVENTORY MANAGEMENT
     -- ============================================
@@ -2727,10 +2762,236 @@ function initializeDatabase() {
       submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(checklist_id, user_id, completion_date)
     );
+
+    -- ============================================
+    -- TALLY BILL → PMS TASK → APPROVAL → PAYMENT
+    -- ============================================
+    -- Director change request 2026-08-13.  One SLA-driven lifecycle from
+    -- Tally bill upload to payment realisation, target 11.5 working days
+    -- (2 + 2 + 0.5 + 7).  Clock/holiday math lives in lib/tallySla.js.
+    --
+    -- ONE shared record set across the Material / T&C / Handover tabs
+    -- (spec §3) — the tab is a filter on the category column, never a separate table.
+    CREATE TABLE IF NOT EXISTS tally_bills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      register_no TEXT UNIQUE,                    -- internal TB-YYYY-#### handle
+      project_id INTEGER REFERENCES business_book(id),
+      project_name TEXT,                          -- snapshot at upload
+      site_id INTEGER REFERENCES sites(id),
+      site_name TEXT,
+      category TEXT NOT NULL CHECK(category IN ('material','testing','handover')),
+      vendor_id INTEGER REFERENCES vendors(id),
+      vendor_name TEXT NOT NULL,                  -- snapshot; duplicate key with bill_number
+      bill_number TEXT NOT NULL,
+      bill_date DATE NOT NULL,
+      bill_amount REAL NOT NULL DEFAULT 0,
+      remarks TEXT,
+      status TEXT NOT NULL DEFAULT 'pending_task_creation'
+        CHECK(status IN ('pending_task_creation','tasks_in_progress','pending_approval',
+                         'payment_pending','partially_paid','closed','on_hold','rejected')),
+      status_before_hold TEXT,                    -- restored when the hold is released
+
+      -- Stage timestamps T0..T4 (spec §4).  Never backdated — always CURRENT_TIMESTAMP.
+      t0_uploaded_at DATETIME,
+      t1_tasks_created_at DATETIME,
+      t2_tasks_completed_at DATETIME,
+      t3_approved_at DATETIME,
+      t4_closed_at DATETIME,
+      -- Due times, frozen at the moment each stage starts so history can't drift
+      -- when an admin later edits an SLA setting.
+      t1_due_at DATETIME,
+      t2_due_at DATETIME,
+      t3_due_at DATETIME,
+      t4_due_at DATETIME,
+
+      -- Stage 4: approval + payment release
+      approved_amount REAL,
+      approval_remark TEXT,                       -- mandatory when amount is edited
+      variance_amount REAL,                       -- bill_amount - approved_amount
+      variance_pct REAL,
+      approved_by INTEGER REFERENCES users(id),
+      second_approval_required INTEGER DEFAULT 0, -- approved_amount over threshold → Director
+      second_approved_by INTEGER REFERENCES users(id),
+      second_approved_at DATETIME,
+      second_approval_remark TEXT,
+
+      -- Hold / reject
+      hold_reason TEXT,
+      held_at DATETIME,
+      held_by INTEGER REFERENCES users(id),
+      reject_reason TEXT,
+      rejected_by INTEGER REFERENCES users(id),
+      rejected_at DATETIME,
+
+      -- Stage 5: payment realisation (rolled up from tally_bill_payments)
+      amount_received REAL DEFAULT 0,
+      payment_expected_date DATE,
+
+      -- Post-approval lock (§9): amount + attachments frozen unless a Director
+      -- override with reason unlocks them.
+      locked INTEGER DEFAULT 0,
+      unlock_reason TEXT,
+      unlocked_by INTEGER REFERENCES users(id),
+      unlocked_at DATETIME,
+
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Partial payments (§4 Stage 5).  Balance = approved_amount - SUM(amount);
+    -- the bill only turns 'closed' when that balance reaches zero.
+    -- Declared BEFORE tally_bill_files because that table's payment_id FK
+    -- points here and foreign_keys is ON.
+    CREATE TABLE IF NOT EXISTS tally_bill_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      received_date DATE NOT NULL,
+      amount REAL NOT NULL,
+      utr_ref TEXT,
+      proof_url TEXT,
+      remarks TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Multi-file attachments: the Tally bill itself and per-payment proofs.
+    CREATE TABLE IF NOT EXISTS tally_bill_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      payment_id INTEGER REFERENCES tally_bill_payments(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'bill' CHECK(kind IN ('bill','payment_proof')),
+      file_url TEXT NOT NULL,
+      file_name TEXT,
+      file_size INTEGER,
+      uploaded_by INTEGER REFERENCES users(id),
+      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Hold windows.  The SLA clock pauses for the duration of each row and the
+    -- stage due-time is pushed out by exactly as much (§6).
+    CREATE TABLE IF NOT EXISTS tally_bill_holds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      stage_key TEXT,
+      reason TEXT,
+      from_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      to_at DATETIME,                             -- NULL while still on hold
+      held_by INTEGER REFERENCES users(id),
+      released_by INTEGER REFERENCES users(id),
+      release_remark TEXT
+    );
+
+    -- Immutable field-level audit (§9).  The global audit_log middleware records
+    -- the REQUEST; this records the FIELD — old value, new value, who, when —
+    -- which is what the spec's acceptance criterion 8 actually asks for.
+    -- Append-only: nothing in the app issues UPDATE or DELETE against it.
+    CREATE TABLE IF NOT EXISTS tally_bill_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,                       -- 'create' | 'update' | 'stage' | 'payment' | 'hold' | ...
+      field TEXT,
+      old_value TEXT,
+      new_value TEXT,
+      note TEXT,
+      user_id INTEGER REFERENCES users(id),
+      user_name TEXT,
+      at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Escalation ledger + dedupe.  One row per (bill, stage, level) so the cron
+    -- can run every 15 min without re-sending the 80% reminder each tick.
+    CREATE TABLE IF NOT EXISTS tally_bill_escalations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bill_id INTEGER NOT NULL REFERENCES tally_bills(id) ON DELETE CASCADE,
+      stage_key TEXT NOT NULL,
+      level INTEGER NOT NULL,                     -- 80 | 100 | 150
+      notified_user_id INTEGER REFERENCES users(id),
+      channel TEXT,
+      sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(bill_id, stage_key, level)
+    );
   `);
+
+  // Duplicate guard (§4 Stage 1 rule / acceptance criterion 4): the SAME bill
+  // number may legitimately exist for two different vendors, so uniqueness is on
+  // the PAIR. Case- and whitespace-insensitive, because "INV-001" typed with a
+  // trailing space is the same bill to a human.
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tally_bills_vendor_billno
+             ON tally_bills (LOWER(TRIM(vendor_name)), LOWER(TRIM(bill_number)))`);
+  } catch (e) {
+    console.warn('[tally-bills] duplicate index not created (non-fatal):', e.message);
+  }
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tally_bills_status   ON tally_bills (status);
+      CREATE INDEX IF NOT EXISTS idx_tally_bills_category ON tally_bills (category);
+      CREATE INDEX IF NOT EXISTS idx_tally_bills_project  ON tally_bills (project_id);
+      CREATE INDEX IF NOT EXISTS idx_tally_files_bill     ON tally_bill_files (bill_id);
+      CREATE INDEX IF NOT EXISTS idx_tally_pay_bill       ON tally_bill_payments (bill_id);
+      CREATE INDEX IF NOT EXISTS idx_tally_holds_bill     ON tally_bill_holds (bill_id);
+      CREATE INDEX IF NOT EXISTS idx_tally_audit_bill     ON tally_bill_audit (bill_id, at);
+    `);
+    // pms_tasks.tally_bill_id is added by the migrations array below, so its
+    // index lives in safeIndexes (post-migration) like audit_log's do.
+  } catch (e) {
+    console.warn('[tally-bills] indexes not created (non-fatal):', e.message);
+  }
+
+  // Feature schemas extracted into their own files for readability. Invoked
+  // HERE rather than at the tail of initializeDatabase() (where fireNoc and
+  // the other module schemas are called) because the ALTER TABLE column
+  // additions and sqlite_master table rebuilds for these tables are still
+  // inline below, and they need the tables to exist by the time they run.
+  try {
+    const { runClientSnagMigrations } = require('./clientSnagSchema');
+    runClientSnagMigrations(db);
+  } catch (e) {
+    console.warn('[client_snag] migrations skipped (non-fatal):', e.message);
+  }
+
+  try {
+    const { runDrawingTrackerMigrations } = require('./drawingTrackerSchema');
+    runDrawingTrackerMigrations(db);
+  } catch (e) {
+    console.warn('[drawing_tracker] migrations skipped (non-fatal):', e.message);
+  }
+
+  try {
+    const { runLabourManagementMigrations } = require('./labourManagementSchema');
+    runLabourManagementMigrations(db);
+  } catch (e) {
+    console.warn('[labour_management] migrations skipped (non-fatal):', e.message);
+  }
 
   // Safe schema migrations for columns added after initial release
   const migrations = [
+    // Scorecard commitment split (mam 2026-08-27): "commitment has two type —
+    // previous pending task and current commitment". commitment_prev = the
+    // promise on clearing the backlog; commitment stays the current-week one.
+    ['score_entries', 'commitment_prev TEXT'],
+    // Quote-with-margin from a funnel BOQ (mam 2026-08-27, SOP-02 F5-F7):
+    // the quotation remembers which funnel lead it came from, the margin %
+    // applied on the BOQ base, and the uploaded quotation file.
+    ['quotations', 'funnel_id INTEGER'],
+    ['quotations', 'margin_pct REAL'],
+    ['quotations', 'quotation_file_link TEXT'],
+    // S6 floor gate lives in its OWN column — the quotations.status CHECK
+    // only allows draft/sent/negotiation/accepted/rejected, and rebuilding
+    // the table on prod to relax it isn't worth the risk. null = not
+    // applicable, 'pending' = below-floor awaiting the Sales Head,
+    // 'approved'/'rejected' = decided.
+    ['quotations', 'margin_approval TEXT'],
+    // SOP-03 (mam 2026-08-27, Negotiation & order booking):
+    // S3 discount gate — null=within chart, 'pending_sh' Sales Head,
+    // 'pending_md' MD sir, then 'approved'/'rejected'.
+    // S4 — the ONE project record created when the order lands.
+    ['quotations', 'discount_approval TEXT'],
+    ['quotations', 'business_book_id INTEGER'],
+    // Tally Bill workflow: a PMS task raised from a bill carries the link back,
+    // so Stage 3 can tell when the LAST linked task closes (spec §4 Stage 3).
+    ['pms_tasks', 'tally_bill_id INTEGER'],
     // Labour Rate sheet: specification + size, alongside item_name/uom
     // (mam 2026-06-11: "add specs, size also" to the labour item form).
     ['labour_rates', 'specification TEXT'],
@@ -3279,6 +3540,10 @@ function initializeDatabase() {
     //   extra_non_schedule — No BOQ link, picked free from Item Master
     //   rental             — Rented tools, validated against buy-outright cost
     ['indents', "indent_category TEXT DEFAULT 'material'"],
+    // Department the indent is raised for (FF / LV / ELE / CCTV / AC / NET /
+    // SOL / PLB / UT / OTHER — same codes as item_master.department). Free
+    // text, optional — filters/reporting can group indents by department.
+    ['indents', 'department TEXT'],
     // Per-line flags so listing + downstream reports can tell extra rows
     // apart from regular ones without re-deriving from indents.indent_category.
     ['indent_items', 'is_extra_schedule INTEGER DEFAULT 0'],
@@ -3343,6 +3608,11 @@ function initializeDatabase() {
     // applies on it, matching how vendors bill freight.
     ['vendor_pos', 'freight_terms TEXT'],                 // 'Ex-Works' | 'FOR' | NULL
     ['vendor_pos', 'freight_amount REAL DEFAULT 0'],      // ₹ freight added to the PO total
+    // GST % on the PO (mam 2026-08-12: "gst 18% but some time 5%") —
+    // default 18, editable per PO on the Create/Edit modals; drives the
+    // print page split (CGST/SGST = half each, or IGST = full) and the
+    // live display_total on the list.
+    ['vendor_pos', 'gst_pct REAL DEFAULT 18'],
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
     // Material acceptance at bill entry (mam 2026-06-04): 'approved' (default)
@@ -3443,6 +3713,9 @@ function initializeDatabase() {
     // the approver maintains on the list — this one travels with the
     // submission so the reviewer reads it while checking the proof.
     ['delegations', 'proof_remarks TEXT'],
+    // Help ticket target date. Nullable so every existing ticket stays valid
+    // and simply renders "Not Assigned" until someone sets one.
+    ['support_tickets', 'deadline_date DATE'],
     // Inventory ageing — the date the material started sitting in this
     // warehouse. Only the DATE is stored; the day count is derived on every
     // read so it advances on its own without anyone editing the row.
@@ -3614,6 +3887,17 @@ function initializeDatabase() {
     // "no such column" → 500 → the Edit modal showed zero line items.
     ['vendor_po_items', 'description TEXT'],
     ['vendor_po_items', 'hsn_code TEXT'],
+    // Stamped when a PO line's RATE is edited via Edit PO. The print page has
+    // to choose between two rate sources — this line and the finalised
+    // 3-vendor rate (indent_item_rates.final_rate) — and used to always prefer
+    // the finalised one, so editing the PO changed nothing on the PDF (mam
+    // 2026-08-19). With this timestamp the newer edit wins either way.
+    ['vendor_po_items', 'rate_updated_at DATETIME'],
+    // Optional proof file for a complaint's Step 2 service report (mam
+    // 2026-08-20). Added here, at boot, because the complaints route only ran
+    // its own ALTERs inside POST /public — so on any install where no client had
+    // submitted through the public form, the column simply never existed.
+    ['complaints', 'service_report_url TEXT'],
     // CRM funnel ← Extra indent link (mam 2026-06-06): Extra-Schedule /
     // Extra-Non-Schedule indents drop a funnel "requirement" at raise time.
     ['crm_funnel', 'source_indent_id INTEGER'],
@@ -3710,6 +3994,48 @@ function initializeDatabase() {
     ['rent_requests', 'pincode TEXT'],
     ['rent_requests', 'pincode_city TEXT'],
     ['rent_requests', 'metro_type TEXT'],
+    // Client Snag — Before Photo: documents the problem (e.g. the
+    // unsigned bill) at raise time, captured by whoever raises the snag
+    // (not identity-gated). The existing photo_url column becomes the
+    // "After Photo" — the resolution photo, still Ajmer-only via
+    // POST /:id/document.
+    ['client_snags', 'before_photo_url TEXT'],
+    // Labour Management System (2026-08). Links a Work Order back to the
+    // quotation it was generated from. Additive and nullable — every existing
+    // WO keeps working with this unset. No REFERENCES clause on purpose: the
+    // priced_by/approved_by migration used one, some SQLite builds reject that
+    // inside ALTER ... ADD COLUMN, this loop's silent try/catch swallowed the
+    // error, and the whole Item Master list 500'd (see itemmaster.js:45-62).
+    ['proj_work_orders', 'quotation_id INTEGER'],
+    // Modules 4-6 (2026-08): the 6-stage bill verification chain rides on
+    // the existing proj_contractor_ra_bills row rather than a new bill
+    // table. current_stage tracks the chain; invoice/gst/tax/previous-
+    // payment flags are Module 5's "Bills & Finance" checks, captured on
+    // the same row since they're properties of ONE bill, not a child entity.
+    ['proj_contractor_ra_bills', "current_stage TEXT DEFAULT 'contractor_uploaded'"],
+    ['proj_contractor_ra_bills', 'invoice_number TEXT'],
+    ['proj_contractor_ra_bills', 'gst_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'tax_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'previous_payment_verified INTEGER DEFAULT 0'],
+    ['proj_contractor_ra_bills', 'payment_mode TEXT'],
+    ['proj_contractor_ra_bills', 'transaction_id TEXT'],
+    ['proj_contractor_ra_bills', 'contractor_id INTEGER'],
+    // Module 5 (2026-08): Hold — pause a bill in place, resumable.
+    ['proj_contractor_ra_bills', 'hold_reason TEXT'],
+    ['proj_contractor_ra_bills', 'held_by INTEGER'],
+    ['proj_contractor_ra_bills', 'held_by_name TEXT'],
+    ['proj_contractor_ra_bills', 'held_at DATETIME'],
+    ['proj_contractor_ra_bills', 'resumed_by INTEGER'],
+    ['proj_contractor_ra_bills', 'resumed_by_name TEXT'],
+    ['proj_contractor_ra_bills', 'resumed_at DATETIME'],
+    // Work Order routing (2026-08): "send to Site Engineer -> send to
+    // Contractor" after save. One WO can be routed more than once as it
+    // moves along, so this holds only the MOST RECENT hop — full history
+    // lives in audit_log via logAuditEvent.
+    ['proj_work_orders', 'routed_to TEXT'],
+    ['proj_work_orders', 'routed_by INTEGER'],
+    ['proj_work_orders', 'routed_by_name TEXT'],
+    ['proj_work_orders', 'routed_at DATETIME'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index
@@ -4395,6 +4721,168 @@ function initializeDatabase() {
     console.error('[migration] indents CHECK relax failed:', e.message);
   }
 
+  // Module 5 (2026-08): "Hold" pauses a contractor bill at whatever stage
+  // it's currently at, without rejecting it or sending it back to the
+  // contractor. Needs a new status value + two new stage_log actions.
+  // Same rebuild pattern as indents/leave_requests above.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_contractor_ra_bills'").get();
+    if (row && /CHECK\s*\(\s*status\s+IN/i.test(row.sql) && !/on_hold/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_contractor_ra_bills/i, 'CREATE TABLE proj_contractor_ra_bills_new')
+        .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(status IN ('raised','payment','paid','cancelled','on_hold'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_contractor_ra_bills_new (${shared}) SELECT ${shared} FROM proj_contractor_ra_bills`);
+      db.exec('DROP TABLE proj_contractor_ra_bills');
+      db.exec('ALTER TABLE proj_contractor_ra_bills_new RENAME TO proj_contractor_ra_bills');
+      db.exec('COMMIT');
+      console.log('[migration] proj_contractor_ra_bills.status CHECK relaxed to allow on_hold');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_contractor_ra_bills CHECK relax failed:', e.message);
+  }
+
+  // Bug fix (2026-08): proj_contractor_ra_bills.project_id was declared
+  // REFERENCES business_book(id) — a pre-existing convention shared with
+  // proj_mb_sheets/proj_client_ra_bills. But server/routes/billVerification.js
+  // (this session's Bill Verification chain) creates bills from a Work
+  // Order, and stamps project_id with wo.project_id — a proj_projects(id),
+  // NOT a business_book(id). With foreign_keys=ON (schema.js:31) this FK
+  // silently rejects bill creation for any real project whose id doesn't
+  // coincidentally also exist in business_book — it only appeared to work
+  // in early testing because both tables had small overlapping ids in an
+  // empty dev DB. Fix: drop the FK on this column; the trustworthy link for
+  // this chain is bill.work_order_id -> proj_work_orders.project_id, which
+  // every query in billVerification.js already joins through.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_contractor_ra_bills'").get();
+    if (row && /project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book/i.test(row.sql)) {
+      // FKs OFF for the rebuild — real bill rows already have children in
+      // vendor_ledger / proj_bill_stage_log / proj_contractor_ra_deductions
+      // (all REFERENCES proj_contractor_ra_bills(id)), and the DROP TABLE
+      // step below fails under foreign_keys=ON with rows like that present.
+      // Matches the support_tickets/payment_requests rebuilds elsewhere.
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS proj_contractor_ra_bills_new'); } catch (_) {}
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+"?proj_contractor_ra_bills"?/i, 'CREATE TABLE proj_contractor_ra_bills_new')
+        .replace(/project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book\(id\)/i, 'project_id INTEGER');
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_contractor_ra_bills_new (${shared}) SELECT ${shared} FROM proj_contractor_ra_bills`);
+      db.exec('DROP TABLE proj_contractor_ra_bills');
+      db.exec('ALTER TABLE proj_contractor_ra_bills_new RENAME TO proj_contractor_ra_bills');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pcra_project ON proj_contractor_ra_bills(project_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pcra_wo      ON proj_contractor_ra_bills(work_order_id)');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+      console.log('[migration] proj_contractor_ra_bills.project_id FK to business_book removed (mismatched with Bill Verification chain usage)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] proj_contractor_ra_bills project_id FK fix failed:', e.message);
+  }
+
+  // Same bug, same fix, for proj_mb_sheets (2026-08): the Phase 5 MB/CDPR
+  // endpoints in indentLabourPayment.js stamp project_id with a proj_projects
+  // id (the route is /projects/:pid/mb), but the column was declared
+  // REFERENCES business_book(id) — the same pre-existing convention that
+  // broke proj_contractor_ra_bills above. Trustworthy link stays
+  // proj_mb_lines.work_order_id -> proj_work_orders.project_id.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_mb_sheets'").get();
+    if (row && /project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book/i.test(row.sql)) {
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS proj_mb_sheets_new'); } catch (_) {}
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+"?proj_mb_sheets"?/i, 'CREATE TABLE proj_mb_sheets_new')
+        .replace(/project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book\(id\)/i, 'project_id INTEGER');
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_mb_sheets)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_mb_sheets_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_mb_sheets_new (${shared}) SELECT ${shared} FROM proj_mb_sheets`);
+      db.exec('DROP TABLE proj_mb_sheets');
+      db.exec('ALTER TABLE proj_mb_sheets_new RENAME TO proj_mb_sheets');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pmb_project ON proj_mb_sheets(project_id)');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+      console.log('[migration] proj_mb_sheets.project_id FK to business_book removed (mismatched with MB/CDPR usage)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] proj_mb_sheets project_id FK fix failed:', e.message);
+  }
+
+  // Work Order status expansion (2026-08): spec wants
+  // Draft -> Submitted -> Approved -> Work Started -> In Progress -> Completed.
+  // Legacy 'active'/'closed' kept (never remove a value old rows may still
+  // hold) — 'active' becomes a synonym existing WOs already use, 'closed'
+  // stays as an alternate terminal state alongside the new 'completed'.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_work_orders'").get();
+    if (row && /CHECK\s*\(\s*status\s+IN/i.test(row.sql) && !/work_started/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_work_orders/i, 'CREATE TABLE proj_work_orders_new')
+        .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(status IN ('draft','submitted','approved','work_started','in_progress','completed','active','closed','cancelled'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_work_orders)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_work_orders_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_work_orders_new (${shared}) SELECT ${shared} FROM proj_work_orders`);
+      db.exec('DROP TABLE proj_work_orders');
+      db.exec('ALTER TABLE proj_work_orders_new RENAME TO proj_work_orders');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pwo_project ON proj_work_orders(project_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pwo_subcon  ON proj_work_orders(sub_contractor_id)');
+      db.exec('COMMIT');
+      console.log('[migration] proj_work_orders.status CHECK expanded to the full lifecycle');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_work_orders CHECK expand failed:', e.message);
+  }
+
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_bill_stage_log'").get();
+    if (row && /CHECK\s*\(\s*action\s+IN/i.test(row.sql) && !/held/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+proj_bill_stage_log/i, 'CREATE TABLE proj_bill_stage_log_new')
+        .replace(/CHECK\s*\(\s*action\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(action IN ('verified','rejected','sent_back','held','resumed'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(proj_bill_stage_log)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(proj_bill_stage_log_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO proj_bill_stage_log_new (${shared}) SELECT ${shared} FROM proj_bill_stage_log`);
+      db.exec('DROP TABLE proj_bill_stage_log');
+      db.exec('ALTER TABLE proj_bill_stage_log_new RENAME TO proj_bill_stage_log');
+      // DROP TABLE took the indexes with it — recreate them, same as the
+      // ra_bills / mb_sheets / work_orders rebuilds above.
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pbsl_bill  ON proj_bill_stage_log(ra_bill_id, acted_at DESC)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pbsl_stage ON proj_bill_stage_log(stage)');
+      db.exec('COMMIT');
+      console.log('[migration] proj_bill_stage_log.action CHECK relaxed to allow held/resumed');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] proj_bill_stage_log CHECK relax failed:', e.message);
+  }
+
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
@@ -4451,7 +4939,50 @@ function initializeDatabase() {
     // Contractor attendance photo (mam 2026-06-22): per-contractor site photo,
     // people auto-counted by AI to fill the manpower count. Guarded for DBs
     // whose contractor_attendance table was created before this column existed.
+    // Employee self-fill standing link (mam 2026-08-17 "if new person join he
+    // will fill data"): multi_use=1 links are shared ONCE with all new joiners
+    // and never consumed by a submission. Guarded for DBs created before this.
+    try { db.exec(`ALTER TABLE employee_fill_links ADD COLUMN multi_use INTEGER DEFAULT 0`); } catch (_) {}
+    // ── Session revocation (2026-08-24 security incident) ────────────────────
+    // Epoch SECONDS. Any JWT whose `iat` is older than this value is refused by
+    // authMiddleware, so a session can actually be ENDED. Until this existed the
+    // only check on a request was the JWT signature: deactivating, archiving,
+    // demoting, password-resetting or even DELETING a user left their live
+    // session fully working (with whatever role was baked into the token) until
+    // it expired — and the sliding refresh meant it never expired. NULL = never
+    // revoked, which is every existing row, so adding this logs nobody out.
+    try { db.exec(`ALTER TABLE users ADD COLUMN token_revoked_at INTEGER`); } catch (_) {}
+    // Candidate detail fields (mam 2026-08-17 "yes" to DOB/address/emergency/
+    // bank): filled by the joiner on the public form, editable by HR after.
+    try { db.exec(`ALTER TABLE employees ADD COLUMN date_of_birth TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN address TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_name TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_phone TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN bank_account_no TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN bank_ifsc TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) {}
+    // Labour quotation supporting document (2026-08): the raiser can attach a
+    // PDF/photo of the client's BOQ, contractor's rate card, or site photo —
+    // same upload endpoint AnnouncementBell already uses, just a new column.
+    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN attachment_url TEXT`); } catch (_) {}
+    // Work Order — contractor contact, site location, and who approved it
+    // (2026-08). approved_by is a fixed name picklist, not a users(id) FK —
+    // the approvers here are managers who may not all hold ERP logins.
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contact_number TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN location TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN approved_by TEXT`); } catch (_) {}
+    // Contractor's own document (ID proof / registration / agreement) —
+    // separate from work_order_file_url, which is the WO document itself.
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contractor_document_url TEXT`); } catch (_) {}
+    // Labour Master — type of manpower (2026-08): distinguishes contractor
+    // manpower from SEPL's own team and daily-wage hires, since wage
+    // register and cost rollups treat each differently.
+    try { db.exec(`ALTER TABLE labour_master ADD COLUMN manpower_type TEXT`); } catch (_) {}
+    // Worker's own document (ID proof / Aadhaar card / photo) — 2026-08.
+    try { db.exec(`ALTER TABLE labour_master ADD COLUMN document_url TEXT`); } catch (_) {}
+    // Labour quotation — contractor is now free text (2026-08), no longer
+    // forced through the Sub-Contractors master, plus their Aadhaar.
+    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN contractor_aadhaar TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) {}
@@ -4912,6 +5443,44 @@ function initializeDatabase() {
     )`);
   } catch (e) { console.error('[schema] sales_funnel_boqs create failed:', e.message); }
 
+  // ─── SOP-02 S5/S6: fixed Margin Chart + margin floor (mam 2026-08-27) ───
+  // "Margin chart, not guesswork": standard margin % per category feeds the
+  // Quote-with-margin action. Floor rule: a quote at/above the floor is
+  // approved on its own; below it goes to the Sales Head for a decision.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS quotation_margin_chart (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL UNIQUE,
+      margin_pct REAL NOT NULL DEFAULT 10,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.prepare(`INSERT INTO app_settings (key, value)
+                SELECT 'quotation_margin_floor_pct', '10'
+                WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key='quotation_margin_floor_pct')`).run();
+  } catch (e) { console.error('[schema] quotation_margin_chart create failed:', e.message); }
+
+  // ─── SOP-03 S1/S3 (mam 2026-08-27): two-clock negotiation + discount chart ─
+  // Two clocks: every negotiation event flips whose court the ball is in —
+  // 'client' = the client replied (ball comes to us), 'us' = we replied /
+  // re-quoted (ball goes to the client). Days on each side computed live.
+  // Discount chart: within quotation_discount_auto_pct → done on its own;
+  // above it → Sales Head; above quotation_discount_md_pct → MD sir.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS quotation_negotiation_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      quotation_id INTEGER REFERENCES quotations(id) ON DELETE CASCADE,
+      side TEXT NOT NULL CHECK(side IN ('us','client')),
+      note TEXT,
+      at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_by INTEGER REFERENCES users(id)
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_qnl_quote ON quotation_negotiation_log(quotation_id, at)');
+    for (const [k, v] of [['quotation_discount_auto_pct', '5'], ['quotation_discount_md_pct', '10']]) {
+      db.prepare(`INSERT INTO app_settings (key, value) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key=?)`).run(k, v, k);
+    }
+  } catch (e) { console.error('[schema] quotation_negotiation_log create failed:', e.message); }
+
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,
   // and matches loosely (case-insensitive name LIKE) so minor punctuation in
@@ -5075,6 +5644,30 @@ function initializeDatabase() {
     console.warn('[backfill] po_items.po_id link failed:', e.message);
   }
 
+  // PMS tasks raised from a Tally Bill used to save description = NULL. The PMS
+  // Tasks page renders `description` as the task text (the title is never shown
+  // there), so those tasks appeared BLANK to the person they were assigned to
+  // (mam 2026-08-19). New ones now carry the title + bill details; heal the
+  // existing blank ones the same way. Only touches rows that are actually empty,
+  // so it is safe to re-run on every boot.
+  try {
+    const r = db.prepare(`
+      UPDATE pms_tasks
+         SET description = COALESCE(NULLIF(TRIM(title), ''), 'Bill task') || char(10) || (
+               SELECT 'Bill ' || b.register_no || ' · ' || b.bill_number
+                      || COALESCE(' · ' || b.vendor_name, '')
+                      || COALESCE(' · ' || b.project_name, '')
+                 FROM tally_bills b WHERE b.id = pms_tasks.tally_bill_id
+             )
+       WHERE tally_bill_id IS NOT NULL
+         AND (description IS NULL OR TRIM(description) = '')
+         AND EXISTS (SELECT 1 FROM tally_bills b WHERE b.id = pms_tasks.tally_bill_id)
+    `).run();
+    if (r.changes > 0) console.log(`[backfill] pms_tasks.description: filled ${r.changes} blank Tally-Bill task(s) from their title + bill details`);
+  } catch (e) {
+    console.warn('[backfill] pms_tasks.description from tally bill failed:', e.message);
+  }
+
   // ─── One-time: seed item_master.current_price from the LATEST finalized ─────
   // vendor rate per item (mam 2026-07-21: "both … and always auto-update if
   // finalise rate"). NON-PIPE items only — a pipe's rate is ₹/kg, a unit that
@@ -5201,6 +5794,12 @@ function initializeDatabase() {
     'CREATE INDEX IF NOT EXISTS idx_pr_category ON payment_requests(category)',
     'CREATE INDEX IF NOT EXISTS idx_pr_site ON payment_requests(site_id)',
     'CREATE INDEX IF NOT EXISTS idx_pr_creator ON payment_requests(created_by)',
+    'CREATE INDEX IF NOT EXISTS idx_pr_created ON payment_requests(created_at DESC)',
+    // Approval trail — grows ~4-6 rows per request forever and had NO index,
+    // so every WHERE request_id=? (list prefetch, /my-inbox, detail,
+    // preReleaseGap on approve) full-scanned it (2026-08-20 payables hang
+    // audit). Composite covers request_id=? + action='approved' + ORDER BY step.
+    'CREATE INDEX IF NOT EXISTS idx_pa_request ON payment_approvals(request_id, action, step)',
     // Business book
     'CREATE INDEX IF NOT EXISTS idx_bb_company ON business_book(company_name)',
     'CREATE INDEX IF NOT EXISTS idx_bb_employee ON business_book(employee_assigned)',
@@ -5271,6 +5870,10 @@ function initializeDatabase() {
     'CREATE INDEX IF NOT EXISTS idx_po_items_item ON po_items(item_master_id)',
     // (CRM Kitting's (project_key, checkpoint_id, uploaded_at) lookup is
     // already indexed by idx_kit_entry_proj in routes/crmKitting.js.)
+    // Tally Bills: linkedTasks()/RACI look up PMS tasks by bill; the column
+    // comes from the migrations array, hence post-migration here. Partial —
+    // the overwhelming majority of pms_tasks rows (no tally link) cost nothing.
+    'CREATE INDEX IF NOT EXISTS idx_pms_tasks_tally_bill ON pms_tasks(tally_bill_id) WHERE tally_bill_id IS NOT NULL',
   ];
   for (const sql of safeIndexes) {
     try { db.exec(sql); } catch (e) { /* column missing on a stale DB — non-fatal */ }
@@ -5719,6 +6322,8 @@ in your first week. If a process feels broken, raise a Help Ticket
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
     'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets',
     'sub_contractors','ai_agent','crm_funnel','cheques','fire_noc','rental_tools','influencers','crm_kitting',
+    // Drawing Tracker (2026-08) — project drawings + permanent revision history.
+    'drawing_tracker',
     // Mam (2026-05-21): "add all module in roles& permission" — the
     // four modules below existed in the sidebar / routes / permission
     // checks but were missing from the server's seed list, so newly
@@ -5751,6 +6356,12 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
+    // SOTYN Flow — Trello-style task boards. Registered ONLY so the "See All"
+    // (can_see_all) toggle exists in Roles & Permissions: ticking it lets a role
+    // see every board (else only boards they're a member of). View/Create/etc.
+    // are not used to gate boards — access is board membership; management is
+    // board-admin.
+    'sotyn_flow',
     // Mam (2026-06-19): Labour Rate Sheet — was sharing the `quotations`
     // permission so it never showed separately in Roles & Permissions.
     // Now its own module so access can be granted/revoked on its own.
@@ -5782,6 +6393,32 @@ in your first week. If a process feels broken, raise a Help Ticket
     // (0,0,0,0,0) row for every non-admin role, so nobody gains access until an
     // admin ticks it in Roles & Permissions; Admin is auto-granted by the top-up.
     'org_structure',
+    // Director (2026-08-13): Tally Bill → PMS Task → Approval → Payment.
+    // One key gates the whole lifecycle; the per-stage actor comes from the
+    // action verb, so the roles stay configurable rather than name-bound (§2):
+    //   can_create  → Stage 1 upload a Tally bill (Site Engineer)
+    //   can_edit    → Stage 5 record payment received (Site Engineer)
+    //   can_approve → Stage 2 mark task-creation complete + Stage 4 approve /
+    //                 hold / reject (PMS Coordinator)
+    //   admin       → Director: second-level approval + post-approval unlock
+    // Stage 3 needs no permission — it belongs to whoever the PMS task is
+    // assigned to, enforced by the pms_tasks module itself.
+    'tally_bills',
+    // Client Snag — bills missing a client signature. Ordinary view/create/
+    // edit/delete are role-gated here as normal; the upload (Ajmer-only)
+    // and approve/reject (Lovely Sharma-only) actions are a SEPARATE
+    // identity gate (client_snag_gate_users, see server/db/schema.js's
+    // client_snag tables) and intentionally don't run through can_approve.
+    'client_snag',
+    // Labour Management System (2026-08).
+    //   labour_quotation    — raise / approve labour quotations
+    //   labour_rate_master  — HR-only write; everyone else reads the rates
+    //                         through the Labour Rate Window
+    // The existing 'indent_labour_payment' key is deliberately NOT renamed:
+    // roles already carry grants against it, and changing the key would
+    // silently revoke access for every user who has it. The module is renamed
+    // in the UI only.
+    'labour_quotation', 'labour_rate_master', 'labour_master', 'bill_verification',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -5928,6 +6565,73 @@ in your first week. If a process feels broken, raise a Help Ticket
          AND role_id IN (SELECT id FROM roles WHERE name='Site Engineer')`
     ).run();
   } catch (e) {}
+
+  // One-time seed for the Tally Bill workflow (Director 2026-08-13).  The
+  // per-role loops above only run on a virgin DB (existingPerms.c === 0), so a
+  // module added later would exist in Roles & Permissions with every box
+  // unticked and the page would 403 for everyone but Admin.  Seed the three
+  // spec roles to their stage, then leave the matrix alone — later hand-edits
+  // in Roles & Permissions must not be stomped on every boot, so this is
+  // guarded by a run-once flag rather than an unconditional UPDATE.
+  try {
+    const already = db.prepare("SELECT value FROM app_settings WHERE key='tally_bills_perm_seeded'").get();
+    if (!already) {
+      const grant = db.prepare(
+        `UPDATE role_permissions SET can_view=?, can_create=?, can_edit=?, can_delete=?, can_approve=?
+          WHERE module='tally_bills' AND role_id IN (SELECT id FROM roles WHERE name=?)`
+      );
+      // Site Engineer — Stage 1 upload + Stage 5 payment update.
+      grant.run(1, 1, 1, 0, 0, 'Site Engineer');
+      // Accountant / Billing Engineer — the coordinator seat: task-creation
+      // sign-off (Stage 2) and approval + release (Stage 4).
+      grant.run(1, 1, 1, 0, 1, 'Accountant');
+      grant.run(1, 1, 1, 0, 1, 'Billing Engineer');
+      // Everyone else who can already see money modules gets read-only, so the
+      // Bill Register is visible without handing out approval rights.
+      db.prepare(
+        `UPDATE role_permissions SET can_view=1
+          WHERE module='tally_bills' AND can_view=0
+            AND role_id IN (SELECT id FROM roles WHERE name IN
+                ('Purchase Manager','Sales Manager','HR Manager','Data Entry','Viewer'))`
+      ).run();
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('tally_bills_perm_seeded','1',CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET value='1'`
+      ).run();
+    }
+  } catch (e) {
+    console.warn('[tally-bills] permission seed skipped (non-fatal):', e.message);
+  }
+
+  // One-time seed for the 2026-08-17 endpoint-gating audit. ~90 previously
+  // auth-only mutating endpoints now enforce requirePermission (cashflow
+  // ledger, quotations, indent_fms GRN, hr, installation, complaints, dpr
+  // sites). Rule: any non-Viewer role that can already VIEW one of these
+  // modules keeps create+edit — everyone who could reach the page keeps
+  // working exactly as before; only direct-API writes from users who never
+  // saw the page get blocked. can_delete / can_approve are deliberately NOT
+  // promoted (they were the SoD holes — admin retains them; mam grants per
+  // role in Roles & Permissions). Run-once flag so later hand-unticks stick.
+  try {
+    const already = db.prepare("SELECT value FROM app_settings WHERE key='endpoint_gate_2026_08_17_seeded_v2'").get();
+    if (!already) {
+      const viewer = db.prepare("SELECT id FROM roles WHERE name='Viewer'").get();
+      const promote = db.prepare(
+        `UPDATE role_permissions SET can_create=1, can_edit=1
+          WHERE module=? AND can_view=1 AND (can_create=0 OR can_edit=0) AND role_id != ?`
+      );
+      for (const m of ['cashflow', 'quotations', 'indent_fms', 'hr', 'checklists', 'installation', 'complaints', 'dpr', 'procurement']) {
+        promote.run(m, viewer ? viewer.id : -1);
+      }
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('endpoint_gate_2026_08_17_seeded_v2','1',CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET value='1'`
+      ).run();
+      console.log('[perm-seed] endpoint-gate audit: view→create/edit promoted on 9 modules (run-once)');
+    }
+  } catch (e) {
+    console.warn('[perm-seed] endpoint-gate seed skipped (non-fatal):', e.message);
+  }
 
   // Seed default admin user
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@erp.com');
@@ -6200,6 +6904,16 @@ in your first week. If a process feels broken, raise a Help Ticket
     console.warn('[indent_flow_settings] migrations skipped (non-fatal):', e.message);
   }
 
+  // System Requirements — product evolution tracker (lean Phase 1).
+  // Open access + dual Business/IT approvers via app_settings.
+  // docs/SYSTEM_REQUIREMENTS.md
+  try {
+    const { runSystemRequirementsMigrations } = require('./systemRequirementsSchema');
+    runSystemRequirementsMigrations(db);
+  } catch (e) {
+    console.warn('[system_requirements] migrations skipped (non-fatal):', e.message);
+  }
+
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────
   // "in rec. against delivery note show here ok site name also show here
   // delivery note number and against it we will upload receiving".
@@ -6274,6 +6988,27 @@ in your first week. If a process feels broken, raise a Help Ticket
     'CREATE INDEX IF NOT EXISTS idx_indentitems_poi  ON indent_items(po_item_id)',
     'CREATE INDEX IF NOT EXISTS idx_payments_ref     ON payments(reference_type, reference_id)',
     'CREATE INDEX IF NOT EXISTS idx_pofoc_poi        ON po_foc_entries(po_item_id)',
+    // ── Hang audit 2026-08-21 ────────────────────────────────────────
+    // Every one of these covers a column that a correlated subquery
+    // filters on ONCE PER ROW of a list that is loaded on page mount.
+    // Without the index SQLite re-scans the whole child table per row,
+    // so cost is quadratic and — because better-sqlite3 is synchronous —
+    // the freeze is the WHOLE server, not just the one page. Measured on
+    // a production-scale copy of the DB:
+    //   /procurement/po-pipeline  151,785 ms -> 746 ms  (the 4 vendor_po_id ones)
+    //   /procurement/indents      104,310 ms -> 241 ms  (vendor_po_items.indent_item_id)
+    //   /indent-fms/tracker        19,389 ms -> 392 ms  (indent_tracker.indent_id)
+    'CREATE INDEX IF NOT EXISTS idx_vpitems_indentitem ON vendor_po_items(indent_item_id)',
+    'CREATE INDEX IF NOT EXISTS idx_indent_tracker_ind ON indent_tracker(indent_id, stage_date)',
+    'CREATE INDEX IF NOT EXISTS idx_dnotes_vpo       ON delivery_notes(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pbills_vpo       ON purchase_bills(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_grn_vpo          ON grn(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_dnotes_debit_vpo ON debit_notes(vendor_po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pms_assignee     ON pms_tasks(assigned_to, status)',
+    'CREATE INDEX IF NOT EXISTS idx_dprmat_dpr       ON dpr_material(dpr_id)',
+    'CREATE INDEX IF NOT EXISTS idx_expenses_created ON expenses(created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_notif_user       ON notifications(user_id, id DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_scoreentries_uw  ON score_entries(user_id, week_start)',
   ];
   for (const sql of hotPathIndexes) {
     try {
@@ -6282,6 +7017,47 @@ in your first week. If a process feels broken, raise a Help Ticket
       console.warn('[hot_path_index] skipped (non-fatal):', e.message, '::', sql.trim());
     }
   }
+
+  // ── Security hardening (2026-08-25): strip destructive grants ──────────
+  // Layer 1 of the 22–24 incident response ("take the gun away"): the mass
+  // wipe worked because ORDINARY roles held can_delete across ~20 modules
+  // and can_approve on quotations (the 106 PO/FOC approve spray). Run-once:
+  //   1. Snapshot the full grant table to role_permissions_snapshot_20260825
+  //      — restoring any single grant is one UPDATE, and the whole table can
+  //      be reinstated from it if this ever proves too tight.
+  //   2. Zero can_delete on the incident (band A/B) modules for every role
+  //      EXCEPT the one literally named 'Admin' (admin-equivalent by intent;
+  //      users.role='admin' bypasses role_permissions anyway).
+  //   3. Zero can_approve on quotations, same scope.
+  // A team that legitimately deletes gets the grant back per-role in
+  // Roles & Permissions — deliberate, visible re-grants, not a broad default.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='security_destructive_strip_v1'").get();
+    if (!done) {
+      const STRIP_DELETE_MODULES = [
+        'business_book', 'customers', 'crm_funnel', 'leads', 'influencers',
+        'quotations', 'solar_quotation', 'procurement', 'orders',
+        'procurement_schedule', 'snags', 'installation', 'cheques',
+        'payment_required', 'collections', 'ar_ap_tracker', 'hr', 'employees',
+        'hr_system', 'checklists', 'company_assets', 'rentals',
+        'subcon_hiring', 'sub_contractors', 'attendance',
+      ];
+      db.exec('CREATE TABLE IF NOT EXISTS role_permissions_snapshot_20260825 AS SELECT * FROM role_permissions');
+      const adminRoleId = db.prepare("SELECT id FROM roles WHERE name='Admin'").get()?.id ?? -1;
+      const ph = STRIP_DELETE_MODULES.map(() => '?').join(',');
+      const rDel = db.prepare(
+        `UPDATE role_permissions SET can_delete=0 WHERE can_delete=1 AND role_id != ? AND module IN (${ph})`
+      ).run(adminRoleId, ...STRIP_DELETE_MODULES);
+      const rApp = db.prepare(
+        "UPDATE role_permissions SET can_approve=0 WHERE can_approve=1 AND role_id != ? AND module='quotations'"
+      ).run(adminRoleId);
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('security_destructive_strip_v1', ?)")
+        .run(`deletes_stripped=${rDel.changes};approves_stripped=${rApp.changes}`);
+      console.log(`[schema] security_destructive_strip_v1: ${rDel.changes} delete grant(s) + ${rApp.changes} quotation-approve grant(s) stripped from non-Admin roles (snapshot kept)`);
+    }
+  } catch (e) { console.error('[schema] security_destructive_strip_v1 failed:', e.message); }
+
+  require('./userTotp').initialize(db);
 
   console.log('Database initialized successfully');
   return db;

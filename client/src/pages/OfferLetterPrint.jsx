@@ -173,11 +173,27 @@ export default function OfferLetterPrint() {
           </tbody>
         </table>
 
+        {/* ── From the Date of Joining onward: content updated to the current
+            SEPL offer-letter (mam 2026-08-18, Ankit Kumar reference .docx).
+            Clauses now: Date of Joining · Unauthorized Absence · Probationary
+            Period · Performance Notice Period · Resignation Notice Period ·
+            Warning. The old combined "Notice Period" and the confidentiality
+            paragraph are replaced by these. ─────────────────────────────── */}
+
         {/* Date of Joining */}
         <p className="mb-3 text-justify">
           <strong>Date of Joining:</strong>&nbsp; Your date of joining would be{' '}
           <strong>{joiningStr}</strong>. If joining does not take place on the given
           date then the offer letter will be considered invalid.
+        </p>
+
+        {/* Unauthorized Absence */}
+        <p className="mb-3 text-justify">
+          <strong>Unauthorized Absence:</strong>&nbsp; If any employee remains absent
+          from work for more than three (3) consecutive days without informing or
+          obtaining prior approval from the company, the company reserves the right
+          to terminate the employee with immediate effect without serving or paying
+          any notice period.
         </p>
 
         {/* Probationary Period */}
@@ -186,21 +202,27 @@ export default function OfferLetterPrint() {
           need to be served by candidate, after joining the job.
         </p>
 
-        {/* Notice Period */}
+        {/* Performance Notice Period */}
         <p className="mb-3 text-justify">
-          <strong>Notice Period:</strong>&nbsp; If the employee desires to leave the
-          company, he/she needs to serve the notice period of 15 days. If the
-          performance is not good then the employee can be terminated even during
-          the probation period and all salary clearance will be done after 45 days
-          even if the employee is terminated.
+          <strong>Performance Notice Period:</strong>&nbsp; In case of unsatisfactory
+          performance, a performance notice period of one (1) month will be given.
+          If the required improvement is not observed during this period, the company
+          may off board the employee within the same one-month period.
         </p>
 
-        {/* Confidentiality + sign-off */}
+        {/* Resignation Notice Period */}
+        <p className="mb-3 text-justify">
+          <strong>Resignation Notice Period:</strong>&nbsp; If an employee resigns from
+          the company, a notice period of fifteen (15) days must be served. Failing to
+          serve the required notice period may result in the salary for the notice
+          period not being paid by the company.
+        </p>
+
+        {/* Warning */}
         <p className="mb-6 text-justify">
-          Please note that the contents of this letter are confidential and should
-          not be used as a bargaining tool for negotiating employment terms with
-          any other organization. If you have any queries, please feel free to
-          contact us. We look forward to working with you.
+          <strong>Warning:</strong>&nbsp; If your performance is weak, you will receive
+          three warning emails. If there is no improvement after these warnings, the
+          company may terminate your employment immediately.
         </p>
 
         <div className="mt-10">

@@ -15,7 +15,7 @@ export default function Modal({ isOpen, onClose, title, subtitle, children, wide
   // scroll from the top with no cut-off.
   return (
     <div
-      className={`fixed inset-0 z-50 bg-black/40 !m-0 ${scrollOutside ? 'overflow-y-auto' : 'overflow-hidden'}`}
+      className={`!m-0 fixed inset-0 z-50 bg-black/40 ${scrollOutside ? 'overflow-y-auto' : 'overflow-hidden'}`}
       onClick={onClose}
     >
       <div className={`flex min-h-full items-center justify-center px-4 ${scrollOutside ? 'py-12' : 'py-4'}`}>

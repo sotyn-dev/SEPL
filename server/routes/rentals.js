@@ -548,6 +548,13 @@ router.post('/rent-requests/:id/mark-paid', requirePermission('rentals', 'edit')
   try {
     const { paid_via, transaction_ref, receipt_url } = req.body;
     const db = getDb();
+    // Audit 2026-08-17: no precondition meant a pending/rejected request could
+    // be marked paid (skipping approval), and re-firing on an already-paid row
+    // silently overwrote paid_via / transaction_ref and re-sent the push.
+    const cur = db.prepare('SELECT status, paid_at FROM rent_requests WHERE id=?').get(req.params.id);
+    if (!cur) return res.status(404).json({ error: 'Rent request not found' });
+    if (cur.status === 'paid') return res.status(409).json({ error: `Already marked paid (${cur.paid_at || 'earlier'})` });
+    if (cur.status !== 'approved') return res.status(400).json({ error: `Only an approved rent request can be marked paid (this one is ${cur.status})` });
     db.prepare(`
       UPDATE rent_requests SET
         status='paid', paid_by=?, paid_at=CURRENT_TIMESTAMP,

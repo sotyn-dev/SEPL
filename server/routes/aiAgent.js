@@ -126,6 +126,59 @@ router.put('/settings', adminOnly, (req, res) => {
   res.json({ message: 'AI settings saved' });
 });
 
+// POST /api/ai-agent/settings/test — one-click "Test connection" (mam
+// 2026-08-21: she switched to Gemini and had no way to know the key worked
+// until Vendor Rates went red). Tests the values BEING TYPED without saving
+// them; the posted key is never persisted, echoed back, or logged.
+router.post('/settings/test', adminOnly, async (req, res) => {
+  const { aiComplete, aiConfig, aiErrorMessage } = require('../lib/aiComplete');
+  const override = {
+    provider: req.body?.provider,
+    model: req.body?.model,
+    apiKey: (req.body?.api_key || '').trim() || getSetting('ai_api_key'),
+  };
+  const cfg = aiConfig(getDb(), override);
+  if (!cfg.configured) return res.status(400).json({ ok: false, error: 'Paste a key first' });
+  try {
+    const out = await aiComplete(getDb(), {
+      prompt: 'Reply with the single word: OK', maxTokens: 16, timeout: 20000, retries429: 0, override,
+    });
+    res.json({ ok: true, provider: out.provider, model: out.model, reply: out.text.slice(0, 60) });
+  } catch (e) {
+    console.error('[AI Agent /settings/test] failed:', e.status || '', e.message);
+    res.status(400).json({ ok: false, error: aiErrorMessage(e, cfg.provider) });
+  }
+});
+
+// GET /api/ai-agent/settings/models — live model list for the Admin dropdown.
+// mam 2026-08-21: the dropdown was three HARDCODED Gemini ids and Google had
+// retired all of them, so every option 404'd and she had no way to type a
+// working one. Ask her own key what it can call instead of shipping another
+// list that expires. The key stays server-side; only ids/labels go out.
+// Falls back to the static list when the key is unset or Google is unreachable.
+router.get('/settings/models', adminOnly, async (req, res) => {
+  const { listGeminiModels, AI_DEFAULTS, GEMINI_PREFERRED } = require('../lib/aiComplete');
+  const provider = String(req.query.provider || getSetting('ai_provider') || 'anthropic').toLowerCase();
+  if (provider !== 'gemini' && provider !== 'google') {
+    return res.json({ provider: 'anthropic', source: 'static', models: [
+      { id: 'claude-opus-4-7', label: 'Claude Opus 4.7 (most capable)' },
+      { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (faster, cheaper)' },
+      { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (fastest, cheapest)' },
+    ] });
+  }
+  const key = getSetting('ai_api_key');
+  const live = key ? await listGeminiModels(key) : [];
+  if (!live.length) {
+    return res.json({ provider: 'gemini', source: 'static',
+      models: GEMINI_PREFERRED.map(id => ({ id, label: id })) });
+  }
+  // Preferred (cheap, fast, non-preview) first — that's what these one-shot
+  // features want — then everything else this key can reach, A-Z.
+  const rank = (id) => { const i = GEMINI_PREFERRED.indexOf(id); return i === -1 ? 999 : i; };
+  live.sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
+  res.json({ provider: 'gemini', source: 'live', default: AI_DEFAULTS.gemini, models: live });
+});
+
 // Email (SMTP) settings — also lives in app_settings. Admin-only;
 // password is never echoed back. Separate from the AI Agent settings
 // so the UI can show two clear panels even though both go through this
@@ -202,6 +255,23 @@ const HEARTBEAT_MS = 12_000;
 // so deep Opus questions with multiple web_search iterations have room
 // to complete instead of returning a "took too long" hint.
 const ANTHROPIC_TIMEOUT_MS = 90_000;
+// GEMINI budgets (audit 2026-08-21). The Gemini chat path had NO timeout at all
+// and no walk-wide deadline: post() fetched with no signal, so one question on a
+// quota-capped key could sit through 4 models x MAX_TOOL_ITER agentic calls at
+// undici's ~300s header timeout each while the 12s heartbeat kept nginx happy
+// and client/src/api.js (axios, no timeout) waited — mam watching '…' for
+// minutes, i.e. "chat not replying good".
+//   GEMINI_CALL_TIMEOUT_MS — one generateContent request.
+//   GEMINI_DEADLINE_MS     — the WHOLE turn, hops included, checked before every
+//                            hop, every tool iteration and every 429 sleep.
+//   GEMINI_MAX_HOPS        — model hops after the first attempt. ONE, not three:
+//                            unlike lib/aiComplete's single ~40-token retry, a
+//                            chat hop restarts an entire agentic conversation.
+//   GEMINI_MIN_HOP_MS      — don't start a hop we cannot finish.
+const GEMINI_CALL_TIMEOUT_MS = 60_000;
+const GEMINI_DEADLINE_MS = 150_000;
+const GEMINI_MAX_HOPS = 1;
+const GEMINI_MIN_HOP_MS = 8_000;
 const ROW_LIMIT = 500;
 
 // Tables Claude is allowed to read. Skipping sensitive auth tables.
@@ -473,13 +543,109 @@ function safeRunQuery(db, sql) {
   }
 }
 
+// ── Solar quick-estimate tool (director ask, 2026-08-08) ───────────────────
+// query_database can already SELECT solar tables, but it can't COMPUTE — a
+// "roughly what would a 5kW residential system in Punjab cost, and what
+// subsidy applies" question needs the same math the quotation engine runs
+// (client/src/lib/solar/engine.js), not a raw row dump. This ports just the
+// pure-arithmetic slice (subsidy slabs, EMI, a rough cost from REAL configured
+// rates) — kept in sync with engine.js's computeSubsidy/computeEMI by hand,
+// not shared code, because the client build is ESM and this server is
+// CommonJS. It never fabricates a number it can't ground in configured data:
+// tariff/subsidy top-up/cost rates that aren't configured come back explicitly
+// flagged as unset, never guessed.
+function solarSubsidySlabs(realKWp) {
+  const kwp = Math.min(realKWp, 10); // PM Surya Ghar CFA eligibility ceiling
+  return kwp <= 2 ? kwp * 30000 : kwp <= 3 ? 2 * 30000 + (kwp - 2) * 18000 : 78000;
+}
+function solarEmi(principal, annualRatePct, tenureYears) {
+  const P = Math.max(0, principal || 0), n = Math.round((tenureYears || 0) * 12), r = (annualRatePct || 0) / 100 / 12;
+  if (n <= 0 || P <= 0) return { emi: 0, totalPayment: 0, totalInterest: 0 };
+  if (r <= 0) { const emi = P / n; return { emi, totalPayment: emi * n, totalInterest: 0 }; }
+  const f = Math.pow(1 + r, n), emi = (P * r * f) / (f - 1);
+  return { emi, totalPayment: emi * n, totalInterest: emi * n - P };
+}
+function runSolarQuickEstimate(db, args) {
+  const capacityKw = Number(args.capacity_kw);
+  if (!(capacityKw > 0)) return { error: 'capacity_kw must be a positive number' };
+  const state = String(args.state || '').trim();
+  const propertyType = args.property_type || 'Commercial';
+  const conn = args.conn || 'ongrid';
+  const mount = args.mount || 'rcc';
+  const dcac = Number(args.dcac) || 1.0;
+  const realKWp = capacityKw * dcac;
+
+  const stateRow = state ? db.prepare(`SELECT val1 specific_yield, val4 tariff, val5 subsidy_topup FROM solar_factors WHERE kind='state' AND name=?`).get(state) : null;
+  const specificYield = stateRow?.specific_yield || 1500; // conservative pan-India fallback if the state isn't found
+  const PR = Number(db.prepare(`SELECT value FROM solar_settings WHERE key='performance_ratio'`).get()?.value) || 0.80;
+  const annualKWh = Math.round(realKWp * specificYield * PR);
+
+  const tariff = args.tariff != null ? Number(args.tariff) : (stateRow?.tariff || null);
+  const annualSavings = tariff ? Math.round(annualKWh * tariff) : null;
+
+  const wantsSubsidy = args.apply_subsidy !== false;
+  const eligible = wantsSubsidy && propertyType === 'Residential' && conn === 'ongrid' && (mount === 'rcc' || mount === 'tin');
+  const subsidy = eligible ? Math.round(solarSubsidySlabs(realKWp) + (stateRow?.subsidy_topup || 0)) : 0;
+
+  // Deliberately NO cost/payback estimate from bare material rates: panel +
+  // inverter + structure purchase price alone is roughly HALF a real system's
+  // cost once labour, BOS (ACDB/DCDB/earthing/cabling/lightning arrestor/
+  // cleaning), contingency and margin are added — an early version of this
+  // tool did that math and produced a "0.2-year payback", which is worse
+  // than useless, it's confidently wrong. total_cost_rs must come from a real
+  // source: an actual saved quotation (query_database on solar_quotations),
+  // or a figure the user themselves supplies. Cost/EMI/payback are computed
+  // ONLY when the caller provides one — never derived here.
+  const totalCost = args.total_cost_rs != null ? Number(args.total_cost_rs) : null;
+  const netCost = totalCost != null ? Math.max(0, totalCost - subsidy) : null;
+
+  let finance = null;
+  if (netCost != null && args.loan_pct) {
+    const principal = netCost * (Number(args.loan_pct) / 100);
+    const e = solarEmi(principal, Number(args.loan_rate) || 10.5, Number(args.loan_tenure) || 5);
+    finance = { principal: Math.round(principal), emi: Math.round(e.emi), totalInterest: Math.round(e.totalInterest), totalPayment: Math.round(e.totalPayment) };
+  }
+
+  return {
+    note: 'Quick estimate only — not a formal quotation. Provide total_cost_rs from a real saved quotation (query_database) or the user for cost/EMI/payback — this tool never invents a system price from bare material rates.',
+    inputs: { capacity_kw: capacityKw, realKWp, state: state || null, property_type: propertyType, conn, mount },
+    state_data_found: !!stateRow,
+    annual_generation_kwh: annualKWh, specific_yield_used: specificYield,
+    tariff_rs_per_unit: tariff, tariff_source: args.tariff != null ? 'given' : (stateRow?.tariff ? 'state default' : 'not configured — cannot estimate savings'),
+    annual_bill_savings_rs: annualSavings,
+    subsidy_eligible: eligible, subsidy_rs: subsidy,
+    total_cost_rs: totalCost, net_cost_after_subsidy_rs: netCost,
+    finance,
+    payback_years: netCost != null && annualSavings ? +(netCost / annualSavings).toFixed(1) : null,
+  };
+}
+const SOLAR_ESTIMATE_SCHEMA = {
+  type: 'object',
+  properties: {
+    capacity_kw: { type: 'number', description: 'AC system capacity in kW (required)' },
+    state: { type: 'string', description: 'Indian state — used to look up the configured specific yield / typical tariff / subsidy top-up' },
+    property_type: { type: 'string', enum: ['Residential', 'Commercial', 'Industrial', 'Institutional', 'Agricultural'], description: 'Default Commercial. Must be Residential for PM Surya Ghar subsidy to apply.' },
+    conn: { type: 'string', enum: ['ongrid', 'zeroexport', 'hybrid', 'offgrid'], description: 'Default ongrid.' },
+    mount: { type: 'string', enum: ['ground', 'rcc', 'tin', 'carport', 'floating'], description: 'Default rcc. Subsidy needs rcc or tin.' },
+    dcac: { type: 'number', description: 'DC:AC ratio, default 1.0' },
+    tariff: { type: 'number', description: 'Override ₹/unit grid tariff; omit to use the state default if one is configured' },
+    apply_subsidy: { type: 'boolean', description: 'Default true — check PM Surya Ghar eligibility' },
+    total_cost_rs: { type: 'number', description: 'A REAL total system cost, e.g. pulled from an actual saved quotation via query_database, or given by the user. Required for payback/EMI — never estimate this yourself from material rates alone (it misses labour, BOS and margin, and will be badly wrong).' },
+    loan_pct: { type: 'number', description: 'Optional: % of net cost to finance, to also return an EMI estimate (needs total_cost_rs)' },
+    loan_rate: { type: 'number', description: 'Optional loan interest %/yr, default 10.5' },
+    loan_tenure: { type: 'number', description: 'Optional loan tenure in years, default 5' },
+  },
+  required: ['capacity_kw'],
+};
+
 // ── Google Gemini path (mam 2026-06-15: wants a FREE AI key) ───────────────
 // Runs the agent against Gemini's NATIVE generateContent API so we get BOTH
 // our function tools (read the ERP DB + module guides) AND Google Search
 // grounding — so it can quote live MARKET RATES, not only ERP data (mam:
 // "not satisfied ... give me rate from market also"). Search grounding is
 // handled server-side by Gemini; we only execute our own function calls.
-async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, db }) {
+async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, db,
+                                retries429, signal, deadlineAt, noGrounding }) {
   if (typeof fetch !== 'function') {
     const e = new Error('This server\'s Node is too old for Gemini (needs Node 18+).'); e.status = 500; throw e;
   }
@@ -495,9 +661,23 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
       description: 'Look up the official step-by-step guide for an ERP module. Use for any "how to" / training / workflow question.',
       parameters: { type: 'object', properties: { module: { type: 'string', enum: GUIDE_KEYS, description: `Module key — one of: ${GUIDE_KEYS.join(', ')}.` } }, required: ['module'] },
     },
+    {
+      name: 'solar_quick_estimate',
+      description: 'Compute generation, PM Surya Ghar subsidy and EMI for a hypothetical solar system (capacity/state/customer-type). Never invents a system cost from material rates alone — pass total_cost_rs from a real saved quotation (via query_database) for payback/EMI; without it you only get generation/subsidy. Not a formal quotation; use the Solar Quotation module for a bindable one.',
+      parameters: SOLAR_ESTIMATE_SCHEMA,
+    },
   ];
   // Both tools: our functions + Google Search grounding (for market rates).
-  let tools = [{ function_declarations: functionDeclarations }, { google_search: {} }];
+  // noGrounding is the caller's per-QUESTION memory of models that rejected
+  // grounding + function calling together. Without it every hop re-learned the
+  // incompatibility from scratch, paying one extra failed request per model
+  // (audit 2026-08-21). Per-request, not per-process, so a one-off error message
+  // that happens to match the regex can't silently kill market-rate grounding
+  // for the rest of the day.
+  const groundingBanned = noGrounding && noGrounding.has(model);
+  let tools = groundingBanned
+    ? [{ function_declarations: functionDeclarations }]
+    : [{ function_declarations: functionDeclarations }, { google_search: {} }];
 
   const contents = [];
   for (const m of history) {
@@ -512,21 +692,63 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
   // retry with backoff so a transient limit doesn't surface as an error
   // (mam 2026-06-15). The route's heartbeat keeps the connection alive while
   // we wait.
-  const post = async (body, retries = 2) => {
-    for (let attempt = 0; ; attempt++) {
-      const r = await fetch(endpoint, {
+  // retries429 lets the caller say "don't sit out a quota window here". The
+  // model walk in /ask passes 0 on a HOP (mam 2026-08-21): an agentic turn is
+  // several generateContent calls, so 4s+8s per call per hop could hang the
+  // chat for minutes when the answer is simply "try another model".
+  // Client-gone / timed-out error shapes the walk in /ask understands.
+  const gone = () => { const e = new Error('chat closed by the user'); e.status = 499; e.clientGone = true; return e; };
+  const tooSlow = () => { const e = new Error('Gemini took too long to answer'); e.status = 408; return e; };
+  const msLeft = () => (deadlineAt ? deadlineAt - Date.now() : GEMINI_CALL_TIMEOUT_MS);
+
+  // ONE generateContent request, with BOTH an abort signal (mam closed the chat
+  // panel — stop burning free-tier quota on an answer nobody will read) and a
+  // hard per-request timeout. AbortSignal.any() is Node 20.3+, so the two
+  // sources are merged by hand to stay safe on the VPS's Node.
+  const doFetch = async (payload, perAttempt) => {
+    const ac = new AbortController();
+    let timedOut = false;
+    const onAbort = () => { try { ac.abort(); } catch (_) {} };
+    if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+    const timer = setTimeout(() => { timedOut = true; onAbort(); }, Math.max(1000, perAttempt));
+    try {
+      return await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify(body),
+        body: payload,
+        signal: ac.signal,
       });
+    } catch (e) {
+      if (signal && signal.aborted) throw gone();
+      if (timedOut || e?.name === 'AbortError' || e?.name === 'TimeoutError') throw tooSlow();
+      const err = new Error(e?.message || 'Gemini request failed'); err.status = 502; throw err;
+    } finally {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    }
+  };
+
+  const post = async (body, retries = (retries429 == null ? 2 : retries429)) => {
+    const payload = JSON.stringify(body);
+    for (let attempt = 0; ; attempt++) {
+      if (signal && signal.aborted) throw gone();
+      const left = msLeft();
+      if (left <= 0) throw tooSlow();
+      const r = await doFetch(payload, Math.min(GEMINI_CALL_TIMEOUT_MS, left));
       if (r.status !== 429 || attempt >= retries) return r;
-      await sleep(4000 * (attempt + 1)); // 4s, then 8s
+      const wait = 4000 * (attempt + 1); // 4s, then 8s
+      // Never sleep out a quota window we have no time to use afterwards —
+      // hand the 429 back so the walk can hop instead.
+      if (msLeft() - wait < GEMINI_MIN_HOP_MS) return r;
+      await sleep(wait);
     }
   };
 
   const sqlRuns = [];
   let answer = '';
   for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
+    if (signal && signal.aborted) throw gone();
+    if (msLeft() <= 0) throw tooSlow();
     const body = {
       systemInstruction: { parts: [{ text: systemPrompt }] },
       contents, tools,
@@ -539,6 +761,7 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
       // retry once with our function tools only so the chat still works.
       if (tools.length > 1 && /(tool|search|grounding|function)/i.test(txt)) {
         tools = [{ function_declarations: functionDeclarations }];
+        if (noGrounding) noGrounding.add(model);   // remember for the next hop
         r = await post({ ...body, tools });
         if (!r.ok) { const t2 = await r.text().catch(() => ''); const e = new Error(t2 || `Gemini HTTP ${r.status}`); e.status = r.status; throw e; }
       } else {
@@ -563,6 +786,8 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
         resultObj = result;
       } else if (fc.name === 'get_module_guide') {
         resultObj = MODULE_GUIDES[String(args.module || '').toLowerCase().trim()] || { error: `Unknown module. Available: ${GUIDE_KEYS.join(', ')}` };
+      } else if (fc.name === 'solar_quick_estimate') {
+        resultObj = runSolarQuickEstimate(db, args);
       } else {
         resultObj = { error: `unknown tool ${fc.name}` };
       }
@@ -606,9 +831,21 @@ router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
     try { res.write(' '); } catch (_) {}
   }, HEARTBEAT_MS);
   // If mam closes the chat panel mid-call, stop the heartbeat so it
-  // doesn't keep firing into a dead socket.
-  req.on('close', () => clearInterval(heartbeat));
+  // doesn't keep firing into a dead socket — AND abort the work itself.
+  // Clearing the interval alone left the awaited Gemini walk running to
+  // completion: up to 4 models x MAX_TOOL_ITER generateContent calls for an
+  // answer nobody will ever see, which on a free tier is what actually
+  // exhausts the daily allowance when mam gives up and re-asks (audit
+  // 2026-08-21). `finished` keeps the normal end-of-response 'close' from
+  // aborting work that already succeeded.
+  const clientGone = new AbortController();
+  let finished = false;
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    if (!finished) { try { clientGone.abort(); } catch (_) {} }
+  });
   const sendJson = (status, payload) => {
+    finished = true;
     clearInterval(heartbeat);
     if (!res.headersSent) res.status(status); // status only settable before first write... but we already wrote, so this is a no-op safety
     // For error payloads we still want a 502-style outcome — but we
@@ -667,6 +904,8 @@ If a question is about the asker themselves (e.g. "who am I", "kya mera salary h
 2. web_search — search the live internet. Use this PROACTIVELY for: any question about rates / prices of materials (so you can compare our stored rate against today's market rate on IndiaMART / Justdial / cement / steel / electrical-cable industry sites), vendor news, commodity prices, GST rate lookups, supplier company details, or any fact that lives outside our database.
 
 3. get_module_guide — pull built-in step-by-step instructions for an ERP module. Use this WHENEVER the user asks "how to ...", "kaise karte hai...", "training", "guide me through ...", or asks how to submit / create / file something. Valid module keys: ${GUIDE_KEYS.join(', ')}. Always call this BEFORE saying "I don't know how" — the answer is almost always in the guide.
+
+4. solar_quick_estimate — compute (don't guess) generation / PM Surya Ghar subsidy / EMI for a HYPOTHETICAL system that ISN'T an existing saved quotation (query_database can look up a real saved quote, but can't compute a new one). It deliberately does NOT invent a system cost — bare material rates miss labour/BOS/margin and would be badly wrong. For payback or EMI, first find a real total cost (query_database against a comparable saved solar_quotations row, or ask the user) and pass it as total_cost_rs; without it you'll only get generation/subsidy, which is fine — just say cost/payback needs a real quotation. Always tell the user this is an estimate and point them to the Solar Quotation module for a bindable one. If tariff_source says "not configured", say so plainly instead of inventing a number.
 
 PERSON-BY-NAME LOOKUPS — when a user asks "who is X", "tell me about X", "X kaun hai", or any question naming a person:
   a) First check if X matches the current user identity above.  If yes, answer using that.
@@ -728,6 +967,11 @@ Guidance:
         required: ['module'],
       },
     },
+    {
+      name: 'solar_quick_estimate',
+      description: 'Compute generation, PM Surya Ghar subsidy and EMI for a hypothetical solar system (capacity/state/customer-type). Never invents a system cost from material rates alone — pass total_cost_rs from a real saved quotation (via query_database) for payback/EMI; without it you only get generation/subsidy. Not a formal quotation; use the Solar Quotation module for a bindable one.',
+      input_schema: SOLAR_ESTIMATE_SCHEMA,
+    },
   ];
   // Web search available on every model — mam: "i want real ai agent
   // which scan from all over not only from my ERP". Haiku used to
@@ -751,18 +995,117 @@ Guidance:
   const provider = (getSetting('ai_provider') || 'anthropic').toLowerCase();
   if (provider === 'gemini' || provider === 'google') {
     const gStart = Date.now();
+    const { AI_DEFAULTS, listGeminiModels, pickFreshGeminiModel, aiErrorMessage,
+            markQuotaCapped, isQuotaCapped, noteQuotaSwitch } = require('../lib/aiComplete');
     let gmodel = getSetting('ai_model');
-    if (!gmodel || !/gemini/i.test(gmodel)) gmodel = 'gemini-2.0-flash';
+    if (!gmodel || !/gemini/i.test(gmodel)) gmodel = AI_DEFAULTS.gemini;
+    // HER model, captured before any hop. Every "should this be persisted?"
+    // question below is answered against this, never against the current hop.
+    const chosen = gmodel;
+    const tried = [];                       // models excluded from further picks
+    const called = [];                      // models we ACTUALLY sent a question to (for the error text)
+    const deadlineAt = Date.now() + GEMINI_DEADLINE_MS;
+    const noGrounding = new Set();          // models that rejected Search grounding, this turn
     try {
-      const { answer, sqlRuns } = await runGeminiAgent({ apiKey, model: gmodel, systemPrompt, history: priorHistory, question, db });
+      let answer, sqlRuns;
+      // Model walk - mam 2026-08-21: after the market rates started working the
+      // chat STILL 429'd, because only lib/aiComplete knew how to step off a
+      // quota-capped model; this loop was 404-only. A chat turn is agentic
+      // (several generateContent calls per question), so it burns free-tier
+      // quota faster than anything else in the ERP and needs this most.
+      //   404 = the id is retired  -> switch AND persist (permanent) - but only
+      //         once the replacement has actually ANSWERED, and only when it was
+      //         HER model that 404'd. A 404 on a substitute we only reached
+      //         because of a 429 must never overwrite her choice.
+      //   429 = this model's free window is spent -> switch for THIS turn only,
+      //         remembered in the shared cooldown so the next question starts
+      //         on the model that answered, and Admin -> AI Settings keeps her
+      //         choice. Never persisted: the window reopens on its own.
+      // ListModels is fetched at most ONCE per question (the key's model list
+      // cannot change mid-question); the old code re-fetched it per hop.
+      let livePromise = null;
+      const live = () => (livePromise || (livePromise = listGeminiModels(
+        apiKey, Math.max(1000, Math.min(15000, deadlineAt - Date.now())))));
+      // quotaTrigger: we left HER model over quota (pre-flight or a 429 hop),
+      // so nothing in this turn may be written to app_settings.ai_model.
+      let quotaTrigger = false;
+      let firstFailure = 0;                 // status of the FIRST thing that went wrong
+      // Skip a model we already know is capped rather than spending a whole
+      // agentic turn rediscovering it - and pick the replacement with the
+      // quota-aware picker, so we don't warm-start onto a second capped model
+      // and pay hop 0's full 4s+8s back-off for nothing.
+      if (isQuotaCapped(gmodel)) {
+        const warm = pickFreshGeminiModel(await live(), [gmodel]);
+        if (warm && warm !== gmodel && !isQuotaCapped(warm)) {
+          console.warn(`[AI Agent /ask] '${gmodel}' quota-capped recently - starting on '${warm}'`);
+          tried.push(gmodel);               // never re-select the model we just skipped
+          gmodel = warm;
+          quotaTrigger = true;
+        }
+      }
+      for (let hop = 0; ; hop++) {
+        if (clientGone.signal.aborted) { const e = new Error('chat closed by the user'); e.status = 499; e.clientGone = true; throw e; }
+        tried.push(gmodel);
+        called.push(gmodel);
+        try {
+          ({ answer, sqlRuns } = await runGeminiAgent({
+            apiKey, model: gmodel, systemPrompt, history: priorHistory, question, db,
+            // First attempt keeps the normal 4s+8s back-off (a per-minute limit
+            // usually clears); once we're hopping - or once we already know the
+            // starting model was capped - fail fast. See post() above.
+            retries429: (hop === 0 && !quotaTrigger) ? undefined : 0,
+            signal: clientGone.signal, deadlineAt, noGrounding,
+          }));
+          break;
+        } catch (e1) {
+          const s = e1?.status;
+          // MARK FIRST, bail second: the old order threw on the last allowed hop
+          // before recording its 429, so the last model tried was never
+          // remembered as capped and the next question re-burned it. The raw
+          // body is passed so a per-MINUTE limit gets a ~1 min cooldown instead
+          // of parking every consumer off the model for 15.
+          if (s === 429) markQuotaCapped(gmodel, e1?.message);
+          if (!firstFailure && (s === 404 || s === 429)) firstFailure = s;
+          if (s === 429) quotaTrigger = true;
+          if (e1?.clientGone) throw e1;                       // nobody is waiting
+          if ((s !== 404 && s !== 429) || hop >= GEMINI_MAX_HOPS) throw e1;
+          if (deadlineAt - Date.now() < GEMINI_MIN_HOP_MS) throw e1;   // no time for another turn
+          const next = pickFreshGeminiModel(await live(), tried);
+          if (!next) throw e1;
+          console.warn(`[AI Agent /ask] gemini '${gmodel}' ${s === 429 ? 'quota exhausted' : 'not available'} - trying '${next}'`);
+          gmodel = next;
+        }
+      }
+      // ── Bookkeeping AFTER an answer exists (mirrors lib/aiComplete) ────────
+      // A retired id is gone for good, so persist the replacement - but only
+      // once it has answered, and only when the 404 was on HER model. A 429 is
+      // a rolling window: it lives in the shared in-memory cooldown, which also
+      // feeds lib/aiComplete so the rate/DPR features skip the capped model
+      // without burning a request of their own.
+      if (gmodel !== chosen && firstFailure === 404 && !quotaTrigger) {
+        setSetting('ai_model', gmodel);
+        noteQuotaSwitch(null, gmodel);
+        console.warn(`[AI Agent /ask] '${chosen}' is retired - saved '${gmodel}' as the model`);
+      } else {
+        noteQuotaSwitch(chosen, gmodel);
+      }
       console.log(`[AI Agent /ask] ok ${gmodel} (gemini) elapsed=${Date.now() - gStart}ms sqlRuns=${sqlRuns.length}`);
       return sendJson(200, { answer, sql_runs: sqlRuns, model: gmodel });
     } catch (e) {
-      console.error('[AI Agent /ask] Gemini call failed:', e.status, e.message);
-      let hint = '';
-      if (e.status === 401 || e.status === 403) hint = ' Check the Gemini API key in Admin → AI Settings.';
-      else if (e.status === 429) hint = ' Gemini free-tier quota hit (even after auto-retry). If this keeps happening you\'ve likely used the daily free limit — wait a while, slow down between questions, or switch to Anthropic Haiku in Admin → AI Settings.';
-      return sendJson(200, { error: `AI request failed (Gemini): ${String(e.message).slice(0, 300)}${hint}` });
+      // Client walked away: nothing to report to, just stop.
+      if (e?.clientGone || req.destroyed || res.writableEnded) {
+        clearInterval(heartbeat);
+        finished = true;
+        try { res.end(); } catch (_) {}
+        return;
+      }
+      console.error('[AI Agent /ask] Gemini call failed:', e.status, String(e.message).slice(0, 200));
+      // A readable sentence, not 300 chars of Google JSON. aiErrorMessage()
+      // already words every status (incl. the free-tier 429) for mam.
+      let msg = aiErrorMessage(e, 'gemini');
+      if (called.length > 1) msg += ` Models tried: ${called.join(', ')}.`;
+      if (e.status === 429) msg += " Google's free window reopens on its own - try again in a few minutes.";
+      return sendJson(200, { error: msg.slice(0, 500) });
     }
   }
 
@@ -836,6 +1179,14 @@ Guidance:
               is_error: false,
             });
           }
+        } else if (block.name === 'solar_quick_estimate') {
+          const result = runSolarQuickEstimate(db, block.input || {});
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(result).slice(0, 50000),
+            is_error: !!result.error,
+          });
         }
         // Other tools (web_search) are server-side at Anthropic; nothing
         // for us to do — Anthropic injects its own tool_result block.

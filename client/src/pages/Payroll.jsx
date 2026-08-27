@@ -21,6 +21,15 @@ const monthNow = () => {
 // can surface the July pattern (finalised on day 2, silently, nobody
 // noticed for a month) instead of just a neutral timestamp. Day-of-month is
 // read in IST to match how the rest of the app displays these timestamps.
+// Last calendar day of a 'YYYY-MM' month, as 'YYYY-MM-DD'. Used as the date
+// picker's max — a naive `${month}-31` is an INVALID date string in 30-day
+// months, and the HTML spec then ignores the max entirely (letting a holiday
+// be declared outside the month you're looking at).
+const monthLastDay = (m) => {
+  const [y, mo] = m.split('-').map(Number);
+  return `${m}-${String(new Date(y, mo, 0).getDate()).padStart(2, '0')}`;
+};
+
 const finaliseEarlyInfo = (finalisedAt, targetMonth) => {
   const d = parseUTC(finalisedAt);
   if (!d || !targetMonth) return null;
@@ -40,7 +49,7 @@ const SETTING_GROUPS = [
   {
     title: 'Attendance Cutoffs',
     fields: [
-      { key: 'late_after_time', label: 'Late Zone Start', help: 'Punch-in after this = late mark (e.g. 09:46). Full day; counts toward monthly grace.', type: 'time' },
+      { key: 'late_after_time', label: 'Late Zone Start', help: 'FIRST late minute — punching in AT or after this is a late mark (09:46 = on time until 09:45). Still a full day; counts toward the monthly grace, and penalty minutes are counted from the minute before this.', type: 'time' },
       { key: 'half_day_after_time', label: 'Half-Day After Time', help: 'Punch-in after this = half day, no grace (e.g. 10:00)', type: 'time' },
       { key: 'min_hours_half_day', label: 'Min Hours for Full Day', help: 'Work this many hours or more = full day; less = half day (e.g. 4)', type: 'number', step: 0.5 },
     ]
@@ -98,6 +107,8 @@ const LABEL_PILL = {
   absent_low_hours: 'bg-red-100 text-red-700',
   sunday_paid: 'bg-blue-100 text-blue-700',
   sunday_unpaid: 'bg-gray-100 text-gray-500',
+  holiday_paid: 'bg-indigo-100 text-indigo-700',
+  admin_holiday: 'bg-indigo-100 text-indigo-700',
   paid_casual_leave: 'bg-purple-100 text-purple-700',
   paid_sick_leave: 'bg-purple-100 text-purple-700',
   paid_earned_leave: 'bg-purple-100 text-purple-700',
@@ -124,6 +135,10 @@ export default function Payroll() {
   const [ovEdits, setOvEdits] = useState({});           // `${employee_id}:${field}` -> draft override (paid_days|cl|late_penalty)
   const [excludedNoSalary, setExcludedNoSalary] = useState([]); // active employees with no salary → not in payroll
   const [confirmDialog, setConfirmDialog] = useState(null); // {title, message, confirmLabel, onConfirm} | null
+  // Declared paid holidays for the open month (mam 2026-08-19) — e.g. 15 Aug.
+  const [holidays, setHolidays] = useState([]);            // [{date, name}]
+  const [holidayModal, setHolidayModal] = useState(false);
+  const [holidayForm, setHolidayForm] = useState({ date: '', name: '' });
   // CL Leave Balances tab
   const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
   const [leaveRows, setLeaveRows] = useState([]);
@@ -153,8 +168,13 @@ export default function Payroll() {
       .finally(() => { if (!silent) setLeaveLoading(false); });
   }, [leaveYear]);
 
+  const loadHolidays = useCallback(() => {
+    api.get(`/payroll/holidays?month=${month}`).then(r => setHolidays(r.data || [])).catch(() => setHolidays([]));
+  }, [month]);
+
   useEffect(() => { loadSettings(); }, [loadSettings]);
   useEffect(() => { if (tab === 'monthly') loadMonth(); }, [tab, loadMonth]);
+  useEffect(() => { if (tab === 'monthly') loadHolidays(); }, [tab, loadHolidays]);
   useEffect(() => { if (tab === 'leaves') loadLeaveBalances(); }, [tab, loadLeaveBalances]);
 
   const saveOpening = async (employeeId) => {
@@ -227,6 +247,27 @@ export default function Payroll() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // Declare / remove a company-wide paid holiday for the open month.
+  const saveHoliday = async (e) => {
+    e.preventDefault();
+    if (!holidayForm.date) return toast.error('Pick the holiday date');
+    if (!holidayForm.name.trim()) return toast.error('Give the holiday a name (e.g. Independence Day)');
+    try {
+      const r = await api.post('/payroll/holidays', { date: holidayForm.date, name: holidayForm.name.trim() });
+      toast.success(r.data.message);
+      setHolidayForm({ date: '', name: '' });
+      loadHolidays(); loadMonth();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const removeHoliday = async (date, name) => {
+    if (!confirm(`Remove holiday "${name}" on ${date}? That day will no longer be auto-paid.`)) return;
+    try {
+      await api.delete(`/payroll/holidays/${date}`);
+      toast.success('Holiday removed');
+      loadHolidays(); loadMonth();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
   // Compact editable input for a monthly override. savedVal = the value
   // currently shown (auto or already-overridden); an amber ring flags an
   // active override; clearing the box resets to auto.
@@ -247,13 +288,21 @@ export default function Payroll() {
     );
   };
 
-  // Breakdown split for the Paid Days cell. A worked Sunday is folded into
-  // present_days (att); pull it back out so "att" = weekday attendance and
-  // "sun" shows ALL Sundays credited (weekly-off + worked). Pay is unchanged;
-  // the green "+Nd Sun worked" line still shows the extra bonus on top.
+  // Column split behind Paid Days. These MUST satisfy the caption the cell
+  // prints — Paid Days = Present + Sunday + CL + Holiday — for every row, so:
+  //   Present = present_days, exactly as the server computed it (a Sunday the
+  //             person actually worked is a worked day and already lives here)
+  //   Sunday  = weekly-off Sundays credited + the EXTRA day(s) earned for
+  //             working a Sunday (sunday_worked_pay)
+  // paid_days = present_days + sunday_count + paid_leaves + holiday_days
+  //             + sunday_worked_pay, so Present + Sunday + CL + Holiday lands
+  // exactly on Paid Days. The earlier split subtracted the worked-Sunday bonus
+  // from Present and added it to Sunday, which cancelled out and left the
+  // bonus in NO column — Gagandeep showed 11.5 + 2.5 = 14 against Paid Days
+  // 16.5 (mam 2026-08-19).
   const dayBreakdown = (r) => {
     const worked = +r.sunday_worked_pay || 0;
-    const att = Math.round(((+r.present_days || 0) - worked) * 100) / 100;
+    const att = Math.round((+r.present_days || 0) * 100) / 100;
     const sun = Math.round(((+r.sunday_count || 0) + worked) * 100) / 100;
     return { att, sun };
   };
@@ -374,6 +423,18 @@ export default function Payroll() {
   };
 
   const fmt = (n) => `Rs ${(Math.round(n || 0)).toLocaleString('en-IN')}`;
+  // Compact money for the wide monthly table — the "Rs " prefix repeated on
+  // every money column cost ~25px each and the column headers already carry ₹
+  // (mam 2026-08-19: "payroll column widths are wide").
+  const fmtC = (n) => (Math.round(n || 0)).toLocaleString('en-IN');
+  // The ACTIVE late rule, read from the saved settings so the page always shows
+  // what is really being applied (mam 2026-08-19 asked for the rule she already
+  // had — it was running, just invisible on this screen).
+  const lateGrace = +(savedSettings?.late_grace_count ?? 0);
+  const lateRate = +(savedSettings?.late_per_minute_rate ?? 0);
+  const lateRuleText = savedSettings
+    ? `Arrive at or after ${savedSettings.late_after_time} (up to ${savedSettings.half_day_after_time}) = a late mark. First ${lateGrace} late marks each month are free; every late day after that is charged Rs ${lateRate} per minute. After ${savedSettings.half_day_after_time} it becomes a half day instead. Change these in Rules / Settings.`
+    : 'Late rule loading…';
   const lockTooltip = (r) => {
     if (!r.finalised_at) return 'Finalised';
     const when = fmtDateTime(r.finalised_at);
@@ -443,6 +504,11 @@ export default function Payroll() {
                 (p.ot_eligible ? (p.ot_pay || 0) : 0),
                 p.net_pay]))}
               className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Export Excel</button>
+            <button onClick={() => setHolidayModal(true)}
+              className="btn btn-secondary text-sm flex items-center gap-1"
+              title="Declare company-wide paid holidays for this month (e.g. 15 Aug) — everyone is paid for these days automatically">
+              🗓 Holidays{holidays.length ? ` (${holidays.length})` : ''}
+            </button>
             <div className="text-right">
               <p className="text-xs text-gray-500">Total Net Payout</p>
               <p className="text-2xl font-bold text-emerald-600">{fmt(total)}</p>
@@ -479,7 +545,12 @@ export default function Payroll() {
                   Finalised {fmtDateTime(list[0].finalised_at)}
                   {list[0].finalised_by_name && <> by <strong>{list[0].finalised_by_name}</strong></>}.
                   {finaliseEarly && (
-                    <> <strong>Finalised early</strong> — day {finaliseEarly.dayFinalised} of {finaliseEarly.totalDays}, {finaliseEarly.daysExcluded} day{finaliseEarly.daysExcluded === 1 ? '' : 's'} excluded.</>
+                    <> <strong>Finalised early</strong> — day {finaliseEarly.dayFinalised} of {finaliseEarly.totalDays}, {finaliseEarly.daysExcluded} day{finaliseEarly.daysExcluded === 1 ? '' : 's'} excluded.
+                      {' '}These figures are frozen from that day, so attendance marked afterwards is not counted.
+                      {paidCount === 0
+                        ? <> <strong>Click Unlock</strong> to recalculate the full month from attendance.</>
+                        : <> {paidCount} salary already marked paid, so this month can no longer be unlocked.</>}
+                    </>
                   )}
                 </div>
               )}
@@ -506,30 +577,37 @@ export default function Payroll() {
           </div>
 
           <div className="card p-0 hidden md:block overflow-x-auto">
-            <table className="freeze-head freeze-col whitespace-nowrap">
+            {/* dense-cols (mam 2026-08-19 "payroll column widths are wide") —
+                the Present/Sunday/CL/Holiday split added four columns, so the
+                row now needs the tight px-2 padding to fit without scrolling. */}
+            <table className="freeze-head freeze-col whitespace-nowrap dense-cols text-xs">
               <thead>
                 <tr>
                   <th>Employee</th>
                   <th>Dept</th>
-                  <th className="text-right">Base</th>
-                  <th className="text-right" title="Paid Days = attendance days + Sundays + paid CL/leave">Paid Days</th>
+                  <th className="text-right">Base ₹</th>
+                  <th className="text-center" title="Auto from attendance — full day = 1, half day = 0.5">Present</th>
+                  <th className="text-center" title="Sundays credited for the month. A Sunday is deducted only when BOTH the Saturday before AND the Monday after are absent. Working a Sunday earns an extra day on top.">Sunday</th>
+                  <th className="text-center" title="Paid CL / leave days — type to override (admin)">CL</th>
+                  <th className="text-center" title="Declared company holidays (🗓 Holidays button) + admin-marked holiday days — everyone paid automatically">Holiday</th>
+                  <th className="text-right" title="Paid Days = Present + Sunday + CL + Holiday (+ extra days for Sundays worked)">Paid Days</th>
                   <th className="text-center">Half</th>
                   <th className="text-center">Absent</th>
-                  <th className="text-center" title="Late count — informational only, no pay impact">Late</th>
-                  <th className="text-right" title="Late deduction (charged from late time)">Late ₹</th>
+                  <th className="text-center" title={`Number of late arrivals this month. ${lateRuleText}`}>Late</th>
+                  <th className="text-right" title={lateRuleText}>Late ₹</th>
                   <th className="text-center">Leaves</th>
                   <th className="text-right" title="Overtime for hours worked beyond 9/day, paid at salary ÷ days ÷ 9 per hour">OT (&gt;9h)</th>
-                  <th className="text-right" title="Salary before overtime is added">Before OT</th>
+                  <th className="text-right" title="Salary before overtime is added">Before OT ₹</th>
                   <th className="text-right" title="Advance salary taken this month — deducted from net pay">Advance</th>
                   <th className="text-right" title="Food allowance — added to net pay">Food</th>
-                  <th className="text-right" title="Final salary including overtime, after advance + food">Net Pay</th>
+                  <th className="text-right" title="Final salary including overtime, after advance + food">Net Pay ₹</th>
                   <th className="text-center" title="Accounts marks each person Paid after the month is finalised">Paid</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan="16" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="16" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
+                {loading && <tr><td colSpan="20" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
+                {!loading && list.length === 0 && <tr><td colSpan="20" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
                 {!loading && list.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
@@ -538,33 +616,49 @@ export default function Payroll() {
                       {r.user_linked === false && <span className="ml-1 text-[10px] bg-amber-200 text-amber-800 px-1 py-0.5 rounded" title="No login user linked — attendance can't be looked up. Open HR → Employees and set the User for this employee.">⚠ no login</span>}
                     </td>
                     <td className="text-xs text-gray-500">{r.department || '-'}</td>
-                    <td className="text-right">{fmt(r.base_salary)}</td>
-                    <td className="text-right font-semibold">
-                      {isAdmin && !r.locked
-                        ? ovInput(r, 'paid_days', r.paid_days, r.paid_days_overridden, { w: 'w-16', step: '0.5', title: 'Paid days used for salary — type to override, clear to reset to auto' })
-                        : r.paid_days}
-                      <div className="text-[9px] font-normal text-gray-400" title="weekday attendance + Sundays (incl. worked) + paid CL">
-                        att {dayBreakdown(r).att} · sun {dayBreakdown(r).sun}{r.paid_leaves ? ` · CL ${r.paid_leaves}` : ''}
-                      </div>
-                      {isAdmin && !r.locked && (
-                        <div className="text-[9px] font-normal text-gray-500 flex items-center justify-end gap-1 mt-0.5">
-                          <span>CL</span>
-                          {ovInput(r, 'cl', r.paid_leaves, r.cl_overridden, { w: 'w-12', step: '0.5', title: 'Casual / paid leave days for the month — type to override' })}
-                        </div>
-                      )}
+                    <td className="text-right">{fmtC(r.base_salary)}</td>
+                    <td className="text-center font-semibold" title="Auto from attendance (full=1, half=0.5)">{dayBreakdown(r).att}</td>
+                    <td className="text-center text-blue-700" title="Sundays credited (weekly-off + worked). Deducted only when Saturday AND Monday around it are both absent.">
+                      {dayBreakdown(r).sun}
                       {r.sunday_worked > 0 && (
                         <div className="text-[9px] font-normal text-emerald-600" title="Extra full-day pay for working on Sunday(s)">
-                          +{r.sunday_worked_pay}d for {r.sunday_worked} Sun worked
+                          +{r.sunday_worked_pay}d worked
                         </div>
                       )}
+                    </td>
+                    <td className="text-center text-purple-700">
+                      {isAdmin && !r.locked
+                        ? ovInput(r, 'cl', r.paid_leaves, r.cl_overridden, { w: 'w-11', step: '0.5', title: 'Casual / paid leave days for the month — type to override, clear to reset to auto' })
+                        : (r.paid_leaves || 0)}
+                    </td>
+                    <td className="text-center text-indigo-700" title={r.locked
+                      ? 'Holidays counted when this month was finalised (frozen snapshot)'
+                      : (holidays.length ? `Declared: ${holidays.map(h => `${h.date.slice(8)} ${h.name}`).join(', ')}` : 'No holidays declared this month — use the 🗓 Holidays button')}>
+                      {r.holiday_days || 0}
+                    </td>
+                    <td className="text-right font-semibold">
+                      {isAdmin && !r.locked
+                        ? ovInput(r, 'paid_days', r.paid_days, r.paid_days_overridden, { w: 'w-14', step: '0.5', title: 'Paid days used for salary — type to override, clear to reset to auto' })
+                        : r.paid_days}
+                      <div className="text-[9px] font-normal text-gray-400" title="Present + Sunday + CL + Holiday (+ Sundays-worked bonus)">
+                        P+S+CL+H
+                      </div>
                     </td>
                     <td className="text-center">{r.half_days || 0}</td>
                     <td className="text-center text-red-600">{r.absent_days || 0}</td>
                     <td className="text-center text-amber-600" title="Late count only — does not reduce pay. See Late ₹ for the deduction.">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
                     <td className="text-right text-amber-700">
                       {isAdmin && !r.locked
-                        ? ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-16', step: '10', title: 'Late deduction ₹ — type to override, clear to reset to auto' })
-                        : (r.late_penalty ? fmt(r.late_penalty) : '-')}
+                        ? ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-16', step: '10', title: `Late deduction — auto. ${lateRuleText}` })
+                        : (r.late_penalty ? fmtC(r.late_penalty) : '-')}
+                      {r.late_marks > 0 && (
+                        <div className="text-[9px] font-normal text-gray-400"
+                          title={`${r.late_marks} late arrival(s) this month. ${lateRuleText}`}>
+                          {r.late_marks <= lateGrace
+                            ? `${r.late_marks}/${lateGrace} free`
+                            : `${r.late_marks - lateGrace} of ${r.late_marks} charged`}
+                        </div>
+                      )}
                     </td>
                     <td className="text-center text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</td>
                     <td className="text-right text-blue-600" title={!r.ot_eligible ? 'Not OT-eligible (set in Leaves & Balances)' : ((r.ot_hours || r.ot_pay) ? `Rs ${otRate(r)}/hr × ${r.ot_hours || 0}h — paid only for hours beyond ${r.ot_threshold || 9}h/day` : 'No overtime this month')}>
@@ -573,11 +667,11 @@ export default function Payroll() {
                         : <>{r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}
                           {r.ot_hours ? <div className="text-[9px] font-normal text-gray-400">&gt;{r.ot_threshold || 9}h @ Rs {otRate(r)}/h</div> : null}</>}
                     </td>
-                    <td className="text-right text-gray-600">{fmt(r.net_before_ot ?? (r.net_pay - (r.ot_pay || 0)))}</td>
+                    <td className="text-right text-gray-600">{fmtC(r.net_before_ot ?? (r.net_pay - (r.ot_pay || 0)))}</td>
                     <td className="text-right">
                       {isAdmin && !r.locked ? (
                         <input type="number" min="0" step="100"
-                          className="input text-right w-24 inline-block"
+                          className="input text-right w-16 inline-block text-xs"
                           value={advanceEdits[r.employee_id] !== undefined ? advanceEdits[r.employee_id] : (r.advance || 0)}
                           onChange={e => setAdvanceEdits(s => ({ ...s, [r.employee_id]: e.target.value }))}
                           onBlur={e => { if (Number(e.target.value) !== Number(r.advance || 0)) saveAdvance(r.employee_id, e.target.value); }}
@@ -587,14 +681,14 @@ export default function Payroll() {
                     <td className="text-right">
                       {isAdmin && !r.locked ? (
                         <input type="number" min="0" step="100"
-                          className="input text-right w-24 inline-block"
+                          className="input text-right w-16 inline-block text-xs"
                           value={foodEdits[r.employee_id] !== undefined ? foodEdits[r.employee_id] : (r.food || 0)}
                           onChange={e => setFoodEdits(s => ({ ...s, [r.employee_id]: e.target.value }))}
                           onBlur={e => { if (Number(e.target.value) !== Number(r.food || 0)) saveFood(r.employee_id, e.target.value); }}
                           title="Food allowance — added to net pay" />
                       ) : (r.food ? <span className="text-emerald-600">+{fmt(r.food)}</span> : '-')}
                     </td>
-                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.food ? <span className="block text-[9px] font-normal text-emerald-600">incl. +₹{fmt(r.food)} food</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
+                    <td className="text-right font-bold text-emerald-700">{fmtC(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.food ? <span className="block text-[9px] font-normal text-emerald-600">incl. +₹{fmt(r.food)} food</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
                     <td className="text-center">
                       {r.locked ? (
                         <label className={`inline-flex items-center gap-1 ${canMarkPaid ? 'cursor-pointer' : 'cursor-default'}`}
@@ -606,8 +700,8 @@ export default function Payroll() {
                       ) : <span className="text-[10px] text-gray-300" title="Finalise the month to mark salary paid">—</span>}
                     </td>
                     <td className="space-x-1 whitespace-nowrap">
-                      <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">Detail</button>
-                      <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-xs">SEPL Slip</a>
+                      <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-[11px] px-1.5 py-1" title="Detail — full day-by-day calculation"><FiEye size={12} /></button>
+                      <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-[11px] px-1.5 py-1" title="Printable SEPL salary slip"><LuIndianRupee size={12} /></a>
                     </td>
                   </tr>
                 ))}
@@ -649,7 +743,7 @@ export default function Payroll() {
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">Paid Days</div>
                     <div className="font-semibold text-gray-800">{r.paid_days}</div>
-                    <div className="text-[8px] text-gray-400">att {r.present_days ?? 0}·sun {r.sunday_count ?? 0}{r.paid_leaves ? `·CL ${r.paid_leaves}` : ''}</div>
+                    <div className="text-[8px] text-gray-400">P {dayBreakdown(r).att}·Sun {dayBreakdown(r).sun}·CL {r.paid_leaves || 0}·Hol {r.holiday_days || 0}</div>
                     {r.sunday_worked > 0 && <div className="text-[8px] text-emerald-600">+{r.sunday_worked_pay}d for {r.sunday_worked} Sun worked</div>}
                   </div>
                   <div>
@@ -900,10 +994,11 @@ export default function Payroll() {
               <Stat label="Late Penalty" value={detail.late_penalty ? fmt(detail.late_penalty) : '0'} color="text-red-600" />
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <Stat label="Attendance Days" value={detail.present_days} color="text-emerald-700" />
               <Stat label="Sundays" value={detail.sunday_count} color="text-blue-600" />
               <Stat label="Paid CL/Leave" value={detail.paid_leaves} color="text-purple-600" />
+              <Stat label="Holidays" value={detail.holiday_days || 0} color="text-indigo-600" />
               <Stat label={`OT (>${detail.ot_threshold || 9}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
             </div>
 
@@ -970,6 +1065,60 @@ export default function Payroll() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Declared paid holidays for the month (mam 2026-08-19) — everyone is
+          paid for these dates automatically; shows in the Holiday column. */}
+      <Modal isOpen={holidayModal} onClose={() => setHolidayModal(false)} title={`🗓 Paid Holidays — ${month}`}>
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">
+            Declare a company-wide paid holiday (e.g. 15 August). Every employee is paid for that day
+            without any marking — it shows in the <b>Holiday</b> column and inside Paid Days.
+            Finalised months are frozen snapshots and never change.
+          </p>
+          {holidays.length === 0 ? (
+            <p className="text-sm text-gray-400 italic">No holidays declared for {month} yet.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
+                <tr><th className="px-2 py-1 text-left">Date</th><th className="px-2 py-1 text-left">Holiday</th><th className="px-2 py-1 text-right"></th></tr>
+              </thead>
+              <tbody>
+                {holidays.map(h => (
+                  <tr key={h.date} className="border-b">
+                    <td className="px-2 py-1.5 font-semibold whitespace-nowrap">{h.date}</td>
+                    <td className="px-2 py-1.5">{h.name}</td>
+                    <td className="px-2 py-1.5 text-right">
+                      {isAdmin && (
+                        <button onClick={() => removeHoliday(h.date, h.name)}
+                          className="text-xs px-2 py-0.5 rounded border border-red-300 text-red-700 hover:bg-red-50">Remove</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {isAdmin && (
+            <form onSubmit={saveHoliday} className="flex flex-wrap items-end gap-2 pt-2 border-t">
+              <div>
+                <label className="label">Date *</label>
+                <input type="date" className="input" value={holidayForm.date}
+                  min={`${month}-01`} max={monthLastDay(month)}
+                  onChange={e => setHolidayForm(f => ({ ...f, date: e.target.value }))} required />
+              </div>
+              <div className="flex-1 min-w-[160px]">
+                <label className="label">Holiday name *</label>
+                <input className="input w-full" placeholder="e.g. Independence Day" value={holidayForm.name}
+                  onChange={e => setHolidayForm(f => ({ ...f, name: e.target.value }))} required />
+              </div>
+              <button type="submit" className="btn btn-primary text-sm">Add Holiday</button>
+            </form>
+          )}
+          <div className="flex justify-end pt-1">
+            <button onClick={() => setHolidayModal(false)} className="btn btn-secondary text-sm">Close</button>
+          </div>
+        </div>
       </Modal>
 
       <ConfirmDialog
