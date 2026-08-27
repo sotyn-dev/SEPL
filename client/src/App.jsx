@@ -70,6 +70,7 @@ const HelpTickets = lazy(() => import('./pages/HelpTickets'));
 const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
 const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
+const FileViewer = lazy(() => import('./pages/FileViewer'));
 const DebitNotePrint = lazy(() => import('./pages/DebitNotePrint'));
 const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
 const DeliveryNotePrint = lazy(() => import('./pages/DeliveryNotePrint'));
@@ -152,6 +153,9 @@ export default function App() {
       <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
       {/* Print routes — auth-gated but rendered WITHOUT the sidebar / header
           chrome so the document fills the viewport cleanly. */}
+      {/* Online file viewer (mam 2026-08-27) — Excel/Word/CSV open in a tab
+          instead of downloading; Layout's link interceptor routes here. */}
+      <Route path="/file-view" element={<ProtectedRoute><FileViewer /></ProtectedRoute>} />
       <Route path="/vendor-po/:id/print" element={<ProtectedRoute><VendorPOPrint /></ProtectedRoute>} />
       <Route path="/debit-note/:id/print" element={<ProtectedRoute><DebitNotePrint /></ProtectedRoute>} />
       <Route path="/payment-advice/print" element={<ProtectedRoute><PaymentAdvicePrint /></ProtectedRoute>} />

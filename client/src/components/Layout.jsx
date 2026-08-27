@@ -444,6 +444,27 @@ export default function Layout() {
     setUserMenu(false);   // also dismiss the header avatar menu on navigation
   }, [location.pathname, isMobile]);
 
+  // WHOLE-ERP online file view (mam 2026-08-27: "which we download file if
+  // want to view... need to open online like next tab"). Browsers render
+  // PDFs/images inline, but Excel/Word/CSV links force a download — this
+  // one interceptor catches every such /uploads link on ANY page and opens
+  // the /file-view tab instead. Links with an explicit `download` attribute
+  // keep downloading; the viewer itself still offers a Download button.
+  useEffect(() => {
+    const handler = (e) => {
+      const a = e.target.closest && e.target.closest('a[href]');
+      if (!a || a.hasAttribute('download')) return;
+      const href = a.getAttribute('href') || '';
+      if (!href.includes('/uploads/')) return;
+      if (!/\.(xlsx|xls|csv|docx)(\?|$)/i.test(href)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.open(`/file-view?src=${encodeURIComponent(href)}`, '_blank');
+    };
+    document.addEventListener('click', handler, true);
+    return () => document.removeEventListener('click', handler, true);
+  }, []);
+
   // GLOBAL LOCATION TRACKING — was Attendance-page-only before, but mam's
   // team often closes that tab and just uses Leads / Procurement / etc.
   // Running it from the Layout means as long as ANY SOTYN.AI page is open in
