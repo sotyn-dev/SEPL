@@ -1059,33 +1059,14 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       <td className="text-center p-2">
         {kpi.last_week_pct != null ? <span className={vsClr(kpi.last_week_pct)}>{fmtVs(kpi.last_week_pct)}</span> : <span className="text-gray-300">—</span>}
       </td>
+      {/* Planned/Actual stay this week's cohort — mam 2026-08-26: previous
+          pendency shows ONLY in the Pending column (up), not added here. */}
       <td className="text-center p-2">
-        {isAuto ? (
-          <>
-            <span className="text-gray-700">{planned}</span>
-            {/* Backlog carryover (mam 2026-08-25): Planned = this week's tasks
-                + still-pending from ALL previous weeks — the tiny line shows
-                how much of the number is carried backlog. */}
-            {kpi.carry_prev_pending > 0 && (
-              <div className="text-[9px] text-amber-600" title="Pending carried over from previous weeks, included in Planned">
-                incl {kpi.carry_prev_pending} prev
-              </div>
-            )}
-          </>
-        ) :
+        {isAuto ? <span className="text-gray-700">{planned}</span> :
           <input type="number" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={flush} disabled={readOnly} />}
       </td>
       <td className="text-center p-2">
-        {isAuto ? (
-          <>
-            <span className="text-gray-700">{actual}</span>
-            {kpi.carry_prev_done > 0 && (
-              <div className="text-[9px] text-emerald-600" title="Previous weeks' tasks completed during this week, included in Actual">
-                incl {kpi.carry_prev_done} prev
-              </div>
-            )}
-          </>
-        ) :
+        {isAuto ? <span className="text-gray-700">{actual}</span> :
           <input type="number" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={flush} disabled={readOnly} />}
       </td>
       <td className={`text-center p-2 font-bold ${pctClr}`}>{fmtVs(kpi.actual_pct)}</td>

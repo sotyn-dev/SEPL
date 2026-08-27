@@ -654,7 +654,10 @@ const MODULE_DEFS = {
 //   onTime      — of slaJudged, how many finished within SLA (the "Time" KPI).
 function raciUserWeek(db, userId, sinceDate, untilDate) {
   const HOUR = 3600000;
-  let stepsClosed = 0, slaJudged = 0, onTime = 0, openOnUser = 0;
+  // openBefore (mam 2026-08-26): still-open steps that landed on the user
+  // BEFORE this week — kept OUT of Planned (the 2026-08-22 97-leads rule)
+  // but surfaced in the scorecard's Pending "up" so backlog stays visible.
+  let stepsClosed = 0, slaJudged = 0, onTime = 0, openOnUser = 0, openBefore = 0;
   for (const key of Object.keys(MODULE_DEFS)) {
     const def = MODULE_DEFS[key];
     let recs;
@@ -715,6 +718,8 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
           if (!recClosed && s.key === rec.current_key && responsibleId === userId) {
             const landedStr = prevRaw == null ? null : String(prevRaw).slice(0, 10);
             if (landedStr && landedStr >= sinceDate && landedStr <= untilDate) openOnUser += 1;
+            // Landed before the week (or undatable) and still open → backlog.
+            else if (!landedStr || landedStr < sinceDate) openBefore += 1;
           }
           continue;                                    // open → don't advance prev / don't close
         }
@@ -731,7 +736,7 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
       }
     }
   }
-  return { stepsClosed, slaJudged, onTime, openOnUser, stepsPlanned: stepsClosed + openOnUser };
+  return { stepsClosed, slaJudged, onTime, openOnUser, openBefore, stepsPlanned: stepsClosed + openOnUser };
 }
 
 // Same per-person weekly aggregate as raciUserWeek, but BROKEN DOWN per
@@ -748,7 +753,7 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     let t = acc.get(k);
     if (!t) {
       t = { module: mod, module_label: modLabel, step_key: stepKey, step_label: stepLabel,
-            planned: 0, actual: 0, pending: 0, sla_judged: 0, on_time: 0, pending_records: [],
+            planned: 0, actual: 0, pending: 0, pending_before: 0, sla_judged: 0, on_time: 0, pending_records: [],
             // Per-step weightage % + "for next week" commitment, set at the module-default
             // level (record_id 0) in the ⚙ Responsible editor (mam 2026-06-29).
             weight: (weight != null && weight !== '') ? +weight : null,
@@ -803,6 +808,11 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
               const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
               t.planned += 1; t.pending += 1;
               if (t.pending_records.length < 8) t.pending_records.push(rec.title);
+            } else if (!landedStr || landedStr < sinceDate) {
+              // Backlog from earlier weeks — NOT in planned (2026-08-22 rule),
+              // tracked separately for the Pending "up" figure (mam 2026-08-26).
+              const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
+              t.pending_before += 1;
             }
           }
           continue;

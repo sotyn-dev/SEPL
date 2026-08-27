@@ -482,12 +482,12 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:raci_steps_done' || source === 'auto:raci_ontime_pct') {
         if (_raciAgg === undefined) {
           try { _raciAgg = require('../utils/raciModules').raciUserWeek(db, userId, sinceDate, untilDate); }
-          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, stepsPlanned: 0 }; }
+          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, openBefore: 0, stepsPlanned: 0 }; }
         }
         // Planned = steps on their plate this week (closed this week + still open
         // on them); Actual = steps they closed this week. So % = how much of the
         // RACI work assigned to this person they have finished (mam 2026-06-27).
-        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed };
+        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed, openBefore: _raciAgg.openBefore || 0 };
         // On-time %: only meaningful when the user closed SLA-bearing steps this
         // week. Otherwise stay neutral (planned 0 → 0%) so an idle week neither
         // tanks the score nor falsely qualifies for the activity gate.
@@ -511,7 +511,7 @@ function computeScorecard(db, userId, weekStart) {
         const mod = ci >= 0 ? rest.slice(0, ci) : rest;
         const stepKey = ci >= 0 ? rest.slice(ci + 1) : '';
         const row = _raciBreakdown.find(r => r.module === mod && r.step_key === stepKey);
-        return row ? { given: row.planned, done: row.actual } : { given: 0, done: 0 };
+        return row ? { given: row.planned, done: row.actual, openBefore: row.pending_before || 0 } : { given: 0, done: 0, openBefore: 0 };
       }
 
       // Site-scoped KPIs (Site Engineer / Supervisor templates) — need
@@ -1061,33 +1061,37 @@ function computeScorecard(db, userId, weekStart) {
       //   up = total still-open as of the week end (backlog + this week)
       let pendingUp = null, pendingWk = null, pendingAuto = false;
       let carryPrevPending = 0, carryPrevDone = 0;
-      // Pre-carry cohort values — the From→To period endpoint sums THESE, so
-      // a task pending across N weeks isn't counted N times in a period.
-      let plannedCohort = null, actualCohort = null;
       if (k.data_source && k.data_source.startsWith('auto:')) {
         try {
-          const { given, done } = computeAutoCount(k.data_source, startTs, endTs);
+          const autoRes = computeAutoCount(k.data_source, startTs, endTs);
+          const { given, done } = autoRes;
           if (given !== null) {
             planned = given;
           }
           if (done !== null && done !== undefined) {
             actual = done;
           }
-          // Carry the previous pendency into the week (see computeCarry note).
+          // Previous pendency shows in the PENDING column ONLY — mam saw the
+          // first cut live (2026-08-26) and said the "incl N prev" additions
+          // in Planned/Actual should go: Planned/Actual stay this week's
+          // cohort; the backlog lives in Pending "up".
           const carry = computeCarry(k.data_source, startTs, endTs);
           if (carry) {
             carryPrevPending = carry.prevPending;
             carryPrevDone = carry.prevDone;
-            plannedCohort = given || 0;
-            actualCohort = done || 0;
-            planned = (given || 0) + carry.prevPending;
-            actual = (done || 0) + carry.prevDone;
             pendingWk = Math.max(0, (given || 0) - (done || 0));
-            pendingUp = Math.max(0, planned - actual);
+            // up = still open as of the week end: backlog not yet cleared
+            // (prevPending − prevDone) + this week's own leftover.
+            pendingUp = Math.max(0, carry.prevPending - carry.prevDone) + pendingWk;
             pendingAuto = true;
           } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
             pendingWk = Math.max(0, given - done);
-            pendingUp = pendingWk;
+            // RACI sources also report still-open backlog from earlier weeks
+            // (openBefore) — it joins "up" only, never Planned (mam 2026-08-26,
+            // keeping the 2026-08-22 week-scoped-Planned rule). Checklists
+            // have no backlog concept → openBefore is simply absent (0).
+            pendingUp = pendingWk + (autoRes.openBefore || 0);
+            carryPrevPending = autoRes.openBefore || 0;
             pendingAuto = true;
           }
         } catch (e) {
@@ -1155,8 +1159,6 @@ function computeScorecard(db, userId, weekStart) {
         pending_auto: pendingAuto,
         carry_prev_pending: carryPrevPending,
         carry_prev_done: carryPrevDone,
-        planned_cohort: plannedCohort ?? planned,
-        actual_cohort: actualCohort ?? actual,
         pending_pct: entry?.pending_pct ?? null,
         commitment: entry?.commitment ?? null,
         notes: entry?.notes ?? null,
@@ -1239,19 +1241,13 @@ router.get('/scorecard-range', (req, res) => {
       for (const k of sc.kpis) {
         const agg = byKpi.get(k.kpi_id);
         if (!agg) {
-          // Sum the pre-carry COHORT values: with the 2026-08-25 backlog
-          // carryover, weekly planned/actual re-count the same open task
-          // every week it stays pending — summing those across a period
-          // would inflate the totals. The cohort pair counts each task once.
-          byKpi.set(k.kpi_id, { ...k,
-            planned: +(k.planned_cohort ?? k.planned) || 0,
-            actual: +(k.actual_cohort ?? k.actual) || 0,
+          byKpi.set(k.kpi_id, { ...k, planned: +k.planned || 0, actual: +k.actual || 0,
             last_week_pct: null, total_uptodate: null, pending_uptodate: null,
             pending_work: null, pending_pct: null, commitment: null, notes: null,
             pending_auto: false, carry_prev_pending: 0, carry_prev_done: 0 });
         } else {
-          agg.planned += +(k.planned_cohort ?? k.planned) || 0;
-          agg.actual += +(k.actual_cohort ?? k.actual) || 0;
+          agg.planned += +k.planned || 0;
+          agg.actual += +k.actual || 0;
           // keep the latest week's definition (name/weight/direction may evolve)
           agg.group_name = k.group_name; agg.metric_name = k.metric_name;
           agg.weightage = k.weightage; agg.direction = k.direction;
