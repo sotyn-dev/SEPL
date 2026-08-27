@@ -129,14 +129,24 @@ export default function Quotations() {
               <tbody>
                 {boqs.map(b => (
                   <tr key={b.id}>
-                    <td className="font-medium">{b.title}</td>
+                    <td className="font-medium">
+                      {b.title}
+                      {/* Sales-funnel BOQs listed alongside (mam 2026-08-27) —
+                          first BOQ on a lead = FUNNEL, later additions = EXTRA. */}
+                      {b.source === 'funnel' && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold align-middle">FUNNEL</span>}
+                      {b.source === 'funnel_extra' && <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px] font-bold align-middle">EXTRA</span>}
+                      {b.boq_file_link && (
+                        <a href={b.boq_file_link} target="_blank" rel="noreferrer"
+                           className="ml-2 text-blue-600 hover:underline text-[11px]">view file</a>
+                      )}
+                    </td>
                     <td>{b.company_name}</td>
                     <td>{b.drawing_required ? 'Yes' : 'No'}</td>
                     <td>Rs {b.total_amount?.toLocaleString()}</td>
                     <td><StatusBadge status={b.status} /></td>
                     <td className="text-gray-500">{fmtDate(b.created_at)}</td>
                     <td>
-                      {canDelete('quotations') && <button onClick={async () => {
+                      {(!b.source || b.source === 'boq') && canDelete('quotations') && <button onClick={async () => {
                         if (!confirm(`Delete BOQ "${b.title}"?`)) return;
                         try { await api.delete(`/quotations/boq/${b.id}`); toast.success('Deleted'); reload(); }
                         catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
@@ -286,7 +296,8 @@ export default function Quotations() {
             <label className="label">BOQ Reference</label>
             <select className="select" value={form.boq_id} onChange={e => setForm({...form, boq_id: e.target.value})}>
               <option value="">Select</option>
-              {boqs.map(b => <option key={b.id} value={b.id}>{b.title} - Rs {b.total_amount?.toLocaleString()}</option>)}
+              {/* Native BOQs only — funnel reference rows can't back a quotation. */}
+              {boqs.filter(b => !b.source || b.source === 'boq').map(b => <option key={b.id} value={b.id}>{b.title} - Rs {b.total_amount?.toLocaleString()}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">

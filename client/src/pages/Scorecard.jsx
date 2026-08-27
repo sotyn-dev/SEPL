@@ -499,9 +499,10 @@ export default function Scorecard() {
                       vsPlan(k.actual_pct) ?? '',
                       k.total_uptodate ?? '',
                       (k.pending_uptodate != null || k.pending_work != null)
-                        ? `${k.pending_uptodate ?? ''}${k.pending_work != null ? ` / ${k.pending_work} wk` : ''}`
+                        ? `${k.pending_uptodate ?? ''}${k.pending_work != null ? ` pending / ${k.pending_work} prev done` : ''}`
                         : '',
-                      k.commitment || '',
+                      [k.commitment_prev ? `Prev: ${k.commitment_prev}` : '', k.commitment ? `Now: ${k.commitment}` : '']
+                        .filter(Boolean).join(' · '),
                     ])
                   )}
                   className="btn btn-secondary text-xs flex items-center gap-1 print:hidden"
@@ -946,7 +947,8 @@ function RaciBreakdown({ data }) {
       <div className="text-sm text-gray-600">
         Week {data.week_start} → {data.week_end} · <b>{data.totals.planned}</b> planned ·{' '}
         <b className="text-emerald-700">{data.totals.actual}</b> done ·{' '}
-        <b className="text-amber-700">{data.totals.pending}</b> pending ·{' '}
+        <b className="text-amber-700">{data.totals.pending}</b> pending
+        {data.totals.prev_done > 0 && <> · <b className="text-emerald-700">{data.totals.prev_done}</b> prev done</>} ·{' '}
         <b className={pctClr(weightedOverall)}>{weightedOverall}%</b>{hasW && <span className="text-[10px] text-gray-400"> (weighted)</span>}
       </div>
       {Object.entries(byMod).map(([mod, list]) => (
@@ -972,7 +974,14 @@ function RaciBreakdown({ data }) {
                   <td className="text-center p-2 text-indigo-700">{r.weight != null ? `${r.weight}%` : <span className="text-gray-300">—</span>}</td>
                   <td className="text-center p-2 font-semibold">{r.planned}</td>
                   <td className="text-center p-2 text-emerald-700">{r.actual}</td>
-                  <td className="text-center p-2 text-amber-700">{r.pending || ''}</td>
+                  {/* Same pair as the scorecard row's Pending column: total
+                      outstanding (week + pre-week backlog) / backlog closed
+                      this week (mam 2026-08-27 audit — no 502-vs-297 mismatch). */}
+                  <td className="text-center p-2"
+                      title={`${(r.pending || 0) + (r.pending_before || 0)} pending in total / ${r.closed_before || 0} previous completed this week`}>
+                    <span className="text-amber-700">{((r.pending || 0) + (r.pending_before || 0)) || ''}</span>
+                    {(r.closed_before || 0) > 0 && <span className="text-gray-300"> / <b className="text-emerald-700">{r.closed_before}</b></span>}
+                  </td>
                   <td className={`text-center p-2 font-bold ${pctClr(pct(r.actual, r.planned))}`}>{pct(r.actual, r.planned)}%</td>
                   <td className="text-center p-2">{r.sla_judged ? `${Math.round((r.on_time / r.sla_judged) * 100)}%` : <span className="text-gray-300">—</span>}</td>
                   <td className="p-2"><CommitmentCell row={r} /></td>
@@ -1013,6 +1022,9 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
   const [pendingUp, setPendingUp] = useState(kpi.pending_uptodate ?? '');
   const [pendingWork, setPendingWork] = useState(kpi.pending_work ?? '');
   const [commitment, setCommitment] = useState(kpi.commitment ?? '');
+  // Commitment split (mam 2026-08-27): "commitment has two type — previous
+  // pending task and current commitment". Prev = promise on the backlog.
+  const [commitmentPrev, setCommitmentPrev] = useState(kpi.commitment_prev ?? '');
   const [totalUp, setTotalUp] = useState(kpi.total_uptodate ?? '');
   useEffect(() => {
     setPlanned(kpi.planned ?? 0);
@@ -1020,8 +1032,9 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
     setPendingUp(kpi.pending_uptodate ?? '');
     setPendingWork(kpi.pending_work ?? '');
     setCommitment(kpi.commitment ?? '');
+    setCommitmentPrev(kpi.commitment_prev ?? '');
     setTotalUp(kpi.total_uptodate ?? '');
-  }, [kpi.kpi_id, kpi.planned, kpi.actual, kpi.pending_uptodate, kpi.pending_work, kpi.commitment, kpi.total_uptodate]);
+  }, [kpi.kpi_id, kpi.planned, kpi.actual, kpi.pending_uptodate, kpi.pending_work, kpi.commitment, kpi.commitment_prev, kpi.total_uptodate]);
 
   const flush = () => {
     if (readOnly) return;
@@ -1032,6 +1045,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       pending_work: pendingWork === '' ? null : Number(pendingWork),
       total_uptodate: totalUp === '' ? null : Number(totalUp),
       commitment: commitment || null,
+      commitment_prev: commitmentPrev || null,
     });
   };
 
@@ -1094,7 +1108,20 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         )}
       </td>
       <td className="p-2">
-        <input type="text" className="input text-xs w-full" placeholder="…" value={commitment} onChange={e => setCommitment(e.target.value)} onBlur={flush} disabled={readOnly} />
+        {/* Two commitments (mam 2026-08-27): the promise on the PREVIOUS
+            pending tasks, and the CURRENT week's commitment. */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] font-bold text-amber-600 w-9 flex-shrink-0 uppercase" title="Commitment on the previous pending tasks — when will the backlog be cleared?">Prev</span>
+            <input type="text" className="input text-xs w-full py-1" placeholder="previous pending — by when…"
+              value={commitmentPrev} onChange={e => setCommitmentPrev(e.target.value)} onBlur={flush} disabled={readOnly} />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] font-bold text-indigo-600 w-9 flex-shrink-0 uppercase" title="Commitment for the current week's work">Now</span>
+            <input type="text" className="input text-xs w-full py-1" placeholder="current commitment…"
+              value={commitment} onChange={e => setCommitment(e.target.value)} onBlur={flush} disabled={readOnly} />
+          </div>
+        </div>
       </td>
     </tr>
   );

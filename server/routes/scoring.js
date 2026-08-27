@@ -1167,6 +1167,7 @@ function computeScorecard(db, userId, weekStart) {
         carry_prev_done: carryPrevDone,
         pending_pct: entry?.pending_pct ?? null,
         commitment: entry?.commitment ?? null,
+        commitment_prev: entry?.commitment_prev ?? null,
         notes: entry?.notes ?? null,
       };
     });
@@ -1249,7 +1250,7 @@ router.get('/scorecard-range', (req, res) => {
         if (!agg) {
           byKpi.set(k.kpi_id, { ...k, planned: +k.planned || 0, actual: +k.actual || 0,
             last_week_pct: null, total_uptodate: null, pending_uptodate: null,
-            pending_work: null, pending_pct: null, commitment: null, notes: null,
+            pending_work: null, pending_pct: null, commitment: null, commitment_prev: null, notes: null,
             pending_auto: false, carry_prev_pending: 0, carry_prev_done: 0 });
         } else {
           agg.planned += +k.planned || 0;
@@ -1307,9 +1308,15 @@ router.get('/raci-breakdown', (req, res) => {
     const sinceDate = weekStart;
     const untilDate = shiftWeek(weekStart, 5);
     const rows = require('../utils/raciModules').raciUserWeekBreakdown(getDb(), userId, sinceDate, untilDate);
+    // totals.pending mirrors the scorecard row's Pending pair (mam 2026-08-27
+    // audit): total outstanding includes the pre-week backlog (pending_before),
+    // and prev_done = backlog steps closed this week — else the drill-down
+    // would contradict the row it expands (502 vs 297).
     const totals = rows.reduce(
-      (t, r) => ({ planned: t.planned + r.planned, actual: t.actual + r.actual, pending: t.pending + r.pending }),
-      { planned: 0, actual: 0, pending: 0 }
+      (t, r) => ({ planned: t.planned + r.planned, actual: t.actual + r.actual,
+                   pending: t.pending + r.pending + (r.pending_before || 0),
+                   prev_done: t.prev_done + (r.closed_before || 0) }),
+      { planned: 0, actual: 0, pending: 0, prev_done: 0 }
     );
     res.json({ user_id: userId, week_start: weekStart, week_end: untilDate, rows, totals });
   } catch (err) {
@@ -1321,7 +1328,7 @@ router.get('/raci-breakdown', (req, res) => {
 // PUT save a single KPI entry (planned / actual / pending counts / notes)
 router.put('/scorecard/entry', (req, res) => {
   try {
-    const { user_id, kpi_id, week_start, planned, actual, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes } = req.body;
+    const { user_id, kpi_id, week_start, planned, actual, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes } = req.body;
     if (!kpi_id || !week_start) return res.status(400).json({ error: 'kpi_id and week_start required' });
     const targetUser = parseInt(user_id, 10) || req.user.id;
     // Only admin or the target user themselves can edit
@@ -1341,8 +1348,8 @@ router.put('/scorecard/entry', (req, res) => {
       if (actualPct < 0) actualPct = 0;
     }
     db.prepare(`
-      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes, updated_by, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes, updated_by, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
       ON CONFLICT(user_id, kpi_id, week_start) DO UPDATE SET
         planned=excluded.planned,
         actual=excluded.actual,
@@ -1352,10 +1359,11 @@ router.put('/scorecard/entry', (req, res) => {
         pending_work=excluded.pending_work,
         pending_pct=excluded.pending_pct,
         commitment=excluded.commitment,
+        commitment_prev=excluded.commitment_prev,
         notes=excluded.notes,
         updated_by=excluded.updated_by,
         updated_at=CURRENT_TIMESTAMP
-    `).run(targetUser, kpi_id, week_start, planned || 0, actual || 0, actualPct, total_uptodate || null, pending_uptodate || null, pending_work || null, pending_pct || null, commitment || null, notes || null, req.user.id);
+    `).run(targetUser, kpi_id, week_start, planned || 0, actual || 0, actualPct, total_uptodate || null, pending_uptodate || null, pending_work || null, pending_pct || null, commitment || null, commitment_prev || null, notes || null, req.user.id);
     res.json({ message: 'Saved', actual_pct: actualPct });
   } catch (err) {
     console.error('scorecard save error', err);

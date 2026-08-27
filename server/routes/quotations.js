@@ -323,10 +323,61 @@ router.get('/client-boq', async (req, res) => {
   }
 });
 
-// BOQ
+// BOQ — the manually created rows PLUS every BOQ recorded on a Sales Funnel
+// lead (mam 2026-08-27: "here need come data from sales funnel boq, if add and
+// extra sales funnel boq"). Funnel rows are read-only references: the first
+// BOQ on a lead shows as FUNNEL, later ones (the "additional BOQ" path) as
+// EXTRA. Ids are prefixed (sf-/sfl-) so they can never collide with native
+// boq ids or be deleted/quoted by mistake.
 router.get('/boq', (req, res) => {
-  res.json(getDb().prepare(`SELECT b.*, l.company_name, u.name as created_by_name FROM boq b
-    LEFT JOIN leads l ON b.lead_id=l.id LEFT JOIN users u ON b.created_by=u.id ORDER BY b.created_at DESC`).all());
+  const db = getDb();
+  const native = db.prepare(`SELECT b.*, l.company_name, u.name as created_by_name, 'boq' AS source FROM boq b
+    LEFT JOIN leads l ON b.lead_id=l.id LEFT JOIN users u ON b.created_by=u.id ORDER BY b.created_at DESC`).all();
+  let funnel = [];
+  try {
+    funnel = db.prepare(`
+      SELECT fb.id, fb.funnel_id, fb.boq_file_link, fb.boq_amount AS total_amount,
+             fb.notes, fb.created_by AS created_by_name, fb.created_at,
+             COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name,
+             (SELECT COUNT(*) FROM sales_funnel_boqs x
+               WHERE x.funnel_id = fb.funnel_id
+                 AND (x.created_at < fb.created_at OR (x.created_at = fb.created_at AND x.id < fb.id))) AS prior_count
+        FROM sales_funnel_boqs fb
+        JOIN sales_funnel sf ON sf.id = fb.funnel_id
+       ORDER BY fb.created_at DESC, fb.id DESC`).all()
+      .map(r => ({
+        id: `sf-${r.id}`,
+        source: r.prior_count > 0 ? 'funnel_extra' : 'funnel',
+        title: `${r.prior_count > 0 ? 'Extra BOQ' : 'Funnel BOQ'}${r.notes ? ` — ${r.notes}` : ''}`,
+        company_name: r.company_name,
+        drawing_required: 0,
+        total_amount: r.total_amount || 0,
+        status: r.prior_count > 0 ? 'extra' : 'funnel',
+        created_at: r.created_at,
+        boq_file_link: r.boq_file_link || null,
+        created_by_name: r.created_by_name || null,
+        funnel_id: r.funnel_id,
+      }));
+    // Legacy leads whose BOQ predates the history table — the latest columns
+    // hold the only copy, so surface those too (no duplicate when history exists).
+    const legacy = db.prepare(`
+      SELECT sf.id AS funnel_id,
+             COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name,
+             COALESCE(NULLIF(sf.revised_boq_file_link,''), NULLIF(sf.boq_file_link,'')) AS boq_file_link,
+             COALESCE(sf.boq_amount, 0) AS total_amount,
+             COALESCE(sf.boq_date, sf.updated_at, sf.created_at) AS created_at
+        FROM sales_funnel sf
+       WHERE (COALESCE(sf.boq_file_link,'') <> '' OR COALESCE(sf.boq_amount, 0) > 0)
+         AND NOT EXISTS (SELECT 1 FROM sales_funnel_boqs x WHERE x.funnel_id = sf.id)`).all()
+      .map(r => ({
+        id: `sfl-${r.funnel_id}`, source: 'funnel', title: 'Funnel BOQ',
+        company_name: r.company_name, drawing_required: 0,
+        total_amount: r.total_amount, status: 'funnel', created_at: r.created_at,
+        boq_file_link: r.boq_file_link || null, funnel_id: r.funnel_id,
+      }));
+    funnel = funnel.concat(legacy);
+  } catch (e) { /* funnel tables missing on a stale DB — native list still serves */ }
+  res.json([...native, ...funnel].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
 });
 
 router.post('/boq', requirePermission('quotations', 'create'), (req, res) => {

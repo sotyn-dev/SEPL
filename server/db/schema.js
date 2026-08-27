@@ -2967,6 +2967,10 @@ function initializeDatabase() {
 
   // Safe schema migrations for columns added after initial release
   const migrations = [
+    // Scorecard commitment split (mam 2026-08-27): "commitment has two type —
+    // previous pending task and current commitment". commitment_prev = the
+    // promise on clearing the backlog; commitment stays the current-week one.
+    ['score_entries', 'commitment_prev TEXT'],
     // Tally Bill workflow: a PMS task raised from a bill carries the link back,
     // so Stage 3 can tell when the LAST linked task closes (spec §4 Stage 3).
     ['pms_tasks', 'tally_bill_id INTEGER'],
