@@ -44,6 +44,7 @@ cat > .env << 'ENV'
 PORT=5000
 JWT_SECRET=sepl-erp-secret-key-2026
 NODE_ENV=production
+SENTRY_DSN=https://e575e447cf1cafd326edd578e5a641d8@o4511335306756096.ingest.us.sentry.io/4511980139315200
 ENV
 
 # Start with PM2
