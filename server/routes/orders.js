@@ -450,13 +450,18 @@ router.delete('/planning/:id', requirePermission('orders', 'delete'), (req, res)
 
 // PO Items CRUD
 router.get('/po/:id/items', (req, res) => {
-  // Get items via business_book_id linked to this PO
-  const po = getDb().prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
-  if (po?.business_book_id) {
-    res.json(getDb().prepare('SELECT * FROM po_items WHERE business_book_id=?').all(po.business_book_id));
-  } else {
-    res.json([]);
-  }
+  const db = getDb();
+  const po = db.prepare('SELECT id, business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
+  if (!po) return res.json([]);
+  // Read the SAME scope the items save writes: this PO's rows (po_id), plus
+  // the legacy po_id-NULL rows on its business book. Reading by
+  // business_book_id ALONE returned every SIBLING PO's rows too — so after
+  // mapping + save, the reopened modal showed the siblings' unmapped copies
+  // ("mapping removed", mam 2026-08-31) and re-saving adopted sibling rows
+  // into this PO, duplicating items across the project's POs.
+  res.json(db.prepare(`SELECT * FROM po_items
+     WHERE po_id = ? OR (po_id IS NULL AND business_book_id = ?)
+     ORDER BY sr_no, id`).all(po.id, po.business_book_id || -1));
 });
 
 // Reset (zero out) labour_rate + labour_amount on every po_items row
@@ -497,13 +502,15 @@ router.post('/po/:id/auto-map-items', requirePermission('orders', 'edit'), (req,
   const db = getDb();
   const THRESHOLD = 0.95;
   try {
-    // Same scoping as GET /po/:id/items — the PO's business_book lines.
-    const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id = ?').get(+req.params.id);
-    if (!po?.business_book_id) return res.json({ total_unmapped: 0, mapped: 0, results: [] });
+    // Same scoping as GET /po/:id/items (fixed 2026-08-31): THIS PO's rows
+    // + legacy po_id-NULL rows — not every sibling PO on the business book.
+    const po = db.prepare('SELECT id, business_book_id FROM purchase_orders WHERE id = ?').get(+req.params.id);
+    if (!po) return res.json({ total_unmapped: 0, mapped: 0, results: [] });
     const rows = db.prepare(`
       SELECT id, description FROM po_items
-      WHERE business_book_id = ? AND item_master_id IS NULL AND COALESCE(description,'') <> ''
-    `).all(po.business_book_id);
+      WHERE (po_id = ? OR (po_id IS NULL AND business_book_id = ?))
+        AND item_master_id IS NULL AND COALESCE(description,'') <> ''
+    `).all(po.id, po.business_book_id || -1);
     const masters = db.prepare(`
       SELECT id, item_name, specification, size, uom FROM item_master
       WHERE COALESCE(item_name,'') <> ''
