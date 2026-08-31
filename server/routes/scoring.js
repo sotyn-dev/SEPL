@@ -337,8 +337,13 @@ function computeScorecard(db, userId, weekStart) {
         return { given, done };
       }
       if (source === 'auto:checklists') {
-        const cklAssigned = db.prepare(`SELECT COUNT(*) as c FROM checklists WHERE assigned_to=? AND COALESCE(active,1)=1`).get(userId).c;
-        const given = cklAssigned * 6;
+        // Frequency-aware planned (mam 2026-08-31: the old ×6 assumed every
+        // checklist is DAILY — a monthly task inflated the week's plan by 6).
+        // Planned = Σ per checklist of the days it actually fires Mon–Sat.
+        const { weeklyExpected } = require('../lib/checklistFrequency');
+        const ckls = db.prepare(`SELECT frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
+                                   FROM checklists WHERE assigned_to=? AND COALESCE(active,1)=1`).all(userId);
+        const given = ckls.reduce((s, c) => s + weeklyExpected(c, sinceDate), 0);
         const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
@@ -1560,15 +1565,14 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
          WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status = 'approved'`
       ).get(u.id, startTs, endTs).c;
 
-      // Checklists — assigned daily checklists (one per weekday active days)
-      // Given = number of (active checklist × weekday-in-range) the user owns.
-      // For simplicity we count active checklists assigned to this user × 6
-      // weekdays (Mon-Sat). Done = unique completion rows in range.
-      const checklistsAssigned = db.prepare(
-        `SELECT COUNT(*) as c FROM checklists
-         WHERE assigned_to = ? AND COALESCE(active, 1) = 1`
-      ).get(u.id).c;
-      const cklGiven = checklistsAssigned * 6; // Mon-Sat
+      // Checklists — frequency-aware (mam 2026-08-31): planned = the days
+      // each checklist actually fires within the Mon–Sat week, not ×6 flat.
+      const { weeklyExpected } = require('../lib/checklistFrequency');
+      const cklRows = db.prepare(
+        `SELECT frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
+           FROM checklists WHERE assigned_to = ? AND COALESCE(active, 1) = 1`
+      ).all(u.id);
+      const cklGiven = cklRows.reduce((s, c) => s + weeklyExpected(c, start), 0);
       const cklDone = db.prepare(
         `SELECT COUNT(*) as c FROM checklist_completions cc
          JOIN checklists c ON c.id = cc.checklist_id

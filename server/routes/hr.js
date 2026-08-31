@@ -1591,22 +1591,10 @@ router.get('/checklists/my-today', (req, res) => {
        AND (c.status IS NULL OR c.status = 'pending' OR c.status = 'active' OR c.status = '')`
   ).all(uid, today, uid);
 
-  const out = rows.filter(c => {
-    const f = String(c.frequency || '').toLowerCase();
-    if (!c.due_date && f !== 'daily') return f === 'daily';
-    const due = c.due_date ? new Date(c.due_date + 'T00:00:00') : null;
-    if (f === 'daily') return true;
-    if (f === 'weekly') return due && due.getDay() === todayDow;
-    if (f === 'monthly') return due && due.getDate() === todayDom;
-    if (f === 'quarterly') {
-      if (!due) return false;
-      const monthDiff = (todayMonth - (due.getMonth() + 1) + 12) % 3;
-      return monthDiff === 0 && due.getDate() === todayDom;
-    }
-    if (f === 'yearly') return due && due.getMonth() + 1 === todayMonth && due.getDate() === todayDom;
-    if (f === 'once') return c.due_date === today;
-    return false;
-  });
+  // Shared frequency rule — a monthly task with no due_date now shows on
+  // the 1st (instead of NEVER here / EVERY day on the register).
+  const { appliesOn } = require('../lib/checklistFrequency');
+  const out = rows.filter(c => appliesOn(c, today));
 
   res.json(out);
 });
@@ -1699,7 +1687,7 @@ router.get('/checklists/by-date', (req, res) => {
   const rows = db.prepare(`
     SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
            c.department, c.recurrence_start_date, c.recurrence_end_date,
-           c.fortnight_days,
+           c.fortnight_days, c.created_at,
            c.assigned_to, u.name as assigned_to_name,
            comp.id as completion_id,
            comp.proof_url, comp.notes, comp.submitted_at,
@@ -1719,27 +1707,8 @@ router.get('/checklists/by-date', (req, res) => {
   // intended day(s).  Uses due_date as the recurrence anchor for
   // monthly / quarterly / yearly — matches the followup's applies()
   // logic so by-date + followup stay in sync.
-  const todayDate = new Date(date + 'T00:00:00');
-  const dom = todayDate.getDate();
-  const filtered = rows.filter(r => {
-    const f = String(r.frequency || '').toLowerCase();
-    if (f === 'fortnightly') {
-      const csv = r.fortnight_days && String(r.fortnight_days).trim() ? r.fortnight_days : '1,15';
-      const days = csv.split(/[,;|]/).map(s => parseInt(String(s).trim(), 10)).filter(d => d >= 1 && d <= 31);
-      return days.includes(dom);
-    }
-    if (!r.due_date) return true;                  // legacy: keep generous
-    const due = new Date(String(r.due_date).slice(0, 10) + 'T00:00:00');
-    if (f === 'monthly')   return dom === due.getDate();
-    if (f === 'quarterly') {
-      if (dom !== due.getDate()) return false;
-      const diff = ((todayDate.getMonth() - due.getMonth()) % 3 + 3) % 3;
-      return diff === 0;
-    }
-    if (f === 'yearly') return todayDate.getMonth() === due.getMonth() && dom === due.getDate();
-    if (f === 'once')   return String(r.due_date).slice(0, 10) === date;
-    return true;                                    // daily / weekly / unknown
-  });
+  const { appliesOn: _appliesOn } = require('../lib/checklistFrequency');
+  const filtered = rows.filter(r => _appliesOn(r, date));
   res.json({ date, rows: filtered });
 });
 
@@ -1774,12 +1743,12 @@ router.get('/checklists/followup', (req, res) => {
   const taskSql = isAdmin
     ? `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
               c.department, c.assigned_to, u.name AS assigned_to_name,
-              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days
+              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days, c.created_at
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        ORDER BY u.name COLLATE NOCASE, c.department, c.description`
     : `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
               c.department, c.assigned_to, u.name AS assigned_to_name,
-              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days
+              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days, c.created_at
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        WHERE c.assigned_to = ?
        ORDER BY c.department, c.description`;
@@ -1802,60 +1771,13 @@ router.get('/checklists/followup', (req, res) => {
   // also respects mam's (2026-05-22) start/end recurrence window:
   // out-of-window dates ALWAYS return false so the cell renders as
   // N/A in the grid and doesn't count as "missed".
-  function applies(task, dateStr) {
-    if (task.recurrence_start_date && dateStr < task.recurrence_start_date) return false;
-    if (task.recurrence_end_date   && dateStr > task.recurrence_end_date)   return false;
-    if (!task.frequency) return true;
-    const f = task.frequency.toLowerCase();
-    if (f === 'daily') return true;
-    if (f === 'weekly') {
-      if (!task.due_date) return true;
-      return new Date(task.due_date).getDay() === new Date(dateStr).getDay();
-    }
-    // Mam (2026-05-22): fortnightly = twice a month on the two day-of-
-    // month slots stored in fortnight_days ("5,20"; default "1,15").
-    // Cell is "applicable" only when the date's day-of-month matches.
-    if (f === 'fortnightly') {
-      const csv = task.fortnight_days && String(task.fortnight_days).trim()
-        ? task.fortnight_days : '1,15';
-      const days = csv.split(/[,;|]/).map(s => parseInt(String(s).trim(), 10)).filter(d => d >= 1 && d <= 31);
-      if (days.length === 0) return false;
-      const dom = new Date(dateStr + 'T00:00:00').getDate();
-      return days.includes(dom);
-    }
-    // Mam (2026-05-22): "if here is month then you dont think selection
-    // of month if quartly" — use due_date as the recurrence anchor:
-    //   monthly   → fires on same DAY-of-MONTH as due_date, every month
-    //   quarterly → fires on same DAY-of-MONTH AND every 3rd month
-    //               offset from the due_date month
-    //   yearly    → fires on same MONTH + DAY as due_date, every year
-    // No due_date set → legacy generous behaviour (matches any day) so
-    // existing rows don't suddenly disappear from the grid.
-    const d = new Date(dateStr + 'T00:00:00');
-    const dueIso = task.due_date ? String(task.due_date).slice(0, 10) : null;
-    if (f === 'monthly') {
-      if (!dueIso) return true;     // legacy: keep generous
-      return d.getDate() === new Date(dueIso + 'T00:00:00').getDate();
-    }
-    if (f === 'quarterly') {
-      if (!dueIso) return true;
-      const due = new Date(dueIso + 'T00:00:00');
-      if (d.getDate() !== due.getDate()) return false;
-      // Same month-of-quarter: (d.month - due.month) divisible by 3
-      const diff = ((d.getMonth() - due.getMonth()) % 3 + 3) % 3;
-      return diff === 0;
-    }
-    if (f === 'yearly') {
-      if (!dueIso) return true;
-      const due = new Date(dueIso + 'T00:00:00');
-      return d.getMonth() === due.getMonth() && d.getDate() === due.getDate();
-    }
-    if (f === 'once') {
-      if (!dueIso) return true;
-      return dueIso === dateStr;
-    }
-    return true;
-  }
+  // ONE shared frequency rule (mam 2026-08-31: "monthly mean month one
+  // time — it pick every day"). See server/lib/checklistFrequency.js —
+  // the register, my-today, by-date and the scorecard all use the same
+  // appliesOn() now, so a monthly task fires ONCE a month (its due
+  // day-of-month, else the 1st) instead of showing Missed daily.
+  const { appliesOn } = require('../lib/checklistFrequency');
+  const applies = (task, dateStr) => appliesOn(task, dateStr);
 
   const rows = tasks.map(t => {
     const cells = dates.map(d => {
