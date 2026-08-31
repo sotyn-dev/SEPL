@@ -471,6 +471,11 @@ export default function Orders() {
                  title="SOP-05 live board: packages → rate enquiry → comparison → finalise → MD lock → rate contract">
                 📊 Rates Board
               </a>
+              {/* SOP-05 item-wise register (mam 2026-08-31) */}
+              <a href="/rates-items" className="btn btn-secondary flex items-center gap-2"
+                 title="SOP-05 item-wise: every item's package date, quotes, rate contract, MD flag, long-delivery">
+                📋 Item-wise Rates
+              </a>
               <button onClick={() => { setForm({ po_id: '', business_book_id: '', planned_start: '', planned_end: '', notes: '' }); setModal('planning'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Plan</button>
             </div>
           </div>
