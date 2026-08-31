@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, Fragment } from 'react';
+import { useState, useEffect, useRef, useMemo, Fragment, useCallback } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -282,6 +282,30 @@ export default function Orders() {
     } catch (err) { toast.error(err.response?.data?.error || 'Could not save the mapping'); }
   };
 
+  // ITEM-WISE planning view (mam 2026-08-31 "recreate as item wise"):
+  // the tab lists items directly, each with inline need-date inputs.
+  const [ip, setIp] = useState(null);
+  const [ipSearch, setIpSearch] = useState('');
+  const [ipPage, setIpPage] = useState(1);
+  const loadItemwise = useCallback(() => {
+    api.get('/orders/planning-itemwise', { params: { search: ipSearch, page: ipPage } })
+      .then(r => setIp(r.data)).catch(() => {});
+  }, [ipSearch, ipPage]);
+  useEffect(() => {
+    if (tab !== 'planning') return;
+    const t = setTimeout(loadItemwise, ipSearch ? 350 : 0);
+    return () => clearTimeout(t);
+  }, [tab, loadItemwise, ipSearch]);
+  const saveItemDates = async (row, patch) => {
+    const planned_start = patch.planned_start !== undefined ? patch.planned_start : row.planned_start;
+    const planned_end = patch.planned_end !== undefined ? patch.planned_end : row.planned_end;
+    try {
+      await api.put(`/orders/planning-itemwise/${row.id}`, { planned_start: planned_start || null, planned_end: planned_end || null });
+      toast.success('Need date saved');
+      loadItemwise();
+    } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
+  };
+
   // Expandable "which items" view on each planning row.
   const [openPlan, setOpenPlan] = useState({});          // { planning_id: rows|('loading') }
   const togglePlanItems = async (id) => {
@@ -479,64 +503,49 @@ export default function Orders() {
               <button onClick={() => { setForm({ po_id: '', business_book_id: '', planned_start: '', planned_end: '', notes: '' }); setModal('planning'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Plan</button>
             </div>
           </div>
-          <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th>PO</th><th>Client</th><th>Items</th><th>Start</th><th>End</th><th>Status</th></tr></thead>
+          {/* ITEM-WISE view (mam 2026-08-31 "recreate as item wise so that
+              when open so here"): items directly, inline need dates. */}
+          <div className="card p-3 flex items-center gap-2">
+            <input className="input flex-1" placeholder="Search item / PO / client…"
+              value={ipSearch} onChange={e => { setIpSearch(e.target.value); setIpPage(1); }} />
+            {ip && <span className="text-xs text-gray-500 whitespace-nowrap">{ip.total} item(s)</span>}
+          </div>
+          <div className="card p-0 overflow-x-auto"><table className="freeze-head w-full text-sm min-w-[950px]">
+            <thead><tr><th className="text-left">Item</th><th>PO</th><th>Client</th><th>Need From</th><th>Need Till</th><th>Status</th></tr></thead>
             <tbody>
-              {planning.map(p => (
-                <Fragment key={p.id}>
-                  <tr>
-                    <td>{p.po_number || <span className="text-gray-300">—</span>}</td>
-                    <td>{p.client_name}</td>
-                    <td>
-                      {/* Item-wise mapping (mam 2026-08-28) — expand to see
-                          exactly which PO items this plan covers; 🔗 Map
-                          edits/creates the mapping on an existing plan. */}
-                      <div className="flex items-center gap-2">
-                        {p.item_count > 0 ? (
-                          <button onClick={() => togglePlanItems(p.id)} className="text-blue-600 font-semibold hover:underline text-sm">
-                            {openPlan[p.id] ? '▾' : '▸'} {p.item_count} item(s)
-                          </button>
-                        ) : <span className="text-gray-300 text-xs">not mapped</span>}
-                        <button onClick={() => openMapPlan(p)}
-                          className="text-[11px] px-2 py-0.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 font-semibold"
-                          title={p.item_count > 0 ? 'Edit the item mapping' : 'Map this plan to PO items'}>
-                          🔗 Map
-                        </button>
-                      </div>
-                    </td>
-                    <td>{p.planned_start}</td><td>{p.planned_end}</td>
-                    <td><StatusBadge status={p.status} /></td>
-                  </tr>
-                  {openPlan[p.id] && (
-                    <tr className="bg-gray-50">
-                      <td colSpan="6" className="p-3">
-                        {openPlan[p.id] === 'loading' ? <span className="text-sm text-gray-400">Loading items…</span> : (
-                          <table className="w-full text-xs">
-                            <thead className="text-[10px] text-gray-500 uppercase">
-                              <tr><th className="text-left p-1">Item</th><th className="text-center p-1 w-24">Planned Qty</th><th className="text-center p-1 w-24">PO Qty</th><th className="text-center p-1 w-16">Unit</th><th className="text-right p-1 w-24">Rate</th></tr>
-                            </thead>
-                            <tbody>
-                              {openPlan[p.id].map(it => (
-                                <tr key={it.id} className="border-t">
-                                  <td className="p-1">{it.description || '—'}</td>
-                                  <td className="text-center p-1 font-semibold">{it.planned_qty ?? it.po_qty ?? '—'}</td>
-                                  <td className="text-center p-1 text-gray-500">{it.po_qty ?? '—'}</td>
-                                  <td className="text-center p-1">{it.unit || ''}</td>
-                                  <td className="text-right p-1">{it.rate ? `Rs ${(+it.rate).toLocaleString()}` : ''}</td>
-                                </tr>
-                              ))}
-                              {openPlan[p.id].length === 0 && <tr><td colSpan="5" className="text-center text-gray-400 py-2">No items mapped</td></tr>}
-                            </tbody>
-                          </table>
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
+              {(ip?.rows || []).map(r => (
+                <tr key={r.id} className="border-t">
+                  <td className="p-2">
+                    <div className="font-medium max-w-[380px] truncate" title={r.description}>{r.description}</div>
+                    <div className="text-[10px] text-gray-400">{r.quantity} {r.unit || ''}</div>
+                  </td>
+                  <td className="text-center text-xs">{r.po_number || <span className="text-gray-300">—</span>}</td>
+                  <td className="text-center text-xs">{r.client_name || ''}</td>
+                  <td className="text-center">
+                    <input type="date" className="input text-xs py-1 w-36" value={r.planned_start || ''}
+                      onChange={e => saveItemDates(r, { planned_start: e.target.value })}
+                      title="Date the site will first need this item (SOP-05.1)" />
+                  </td>
+                  <td className="text-center">
+                    <input type="date" className="input text-xs py-1 w-36" value={r.planned_end || ''}
+                      onChange={e => saveItemDates(r, { planned_end: e.target.value })} />
+                  </td>
+                  <td className="text-center">
+                    {r.planned_start ? <StatusBadge status={r.status} /> : <span className="text-[10px] text-gray-300 font-bold uppercase">no date</span>}
+                  </td>
+                </tr>
               ))}
-              {planning.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No plans yet</td></tr>}
+              {ip && ip.rows.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No items found</td></tr>}
+              {!ip && <tr><td colSpan="6" className="text-center py-8 text-gray-400">Loading items…</td></tr>}
             </tbody>
           </table></div>
+          {ip && ip.total > ip.per && (
+            <div className="flex items-center justify-center gap-3 text-sm">
+              <button disabled={ipPage <= 1} onClick={() => setIpPage(p => p - 1)} className="btn btn-secondary text-xs disabled:opacity-40">‹ Prev</button>
+              <span className="text-gray-500">Page {ipPage} / {Math.max(1, Math.ceil(ip.total / ip.per))}</span>
+              <button disabled={ipPage >= Math.ceil(ip.total / ip.per)} onClick={() => setIpPage(p => p + 1)} className="btn btn-secondary text-xs disabled:opacity-40">Next ›</button>
+            </div>
+          )}
         </>
       )}
 

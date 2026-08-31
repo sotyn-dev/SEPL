@@ -774,6 +774,67 @@ router.get('/planning/:id/items', (req, res) => {
     WHERE opi.planning_id=? ORDER BY opi.id`).all(req.params.id));
 });
 
+// ── ITEM-WISE planning view (mam 2026-08-31: "recreate as item wise so
+// that when open so here") — the Order Planning tab lists ITEMS directly,
+// each with its own need dates. Dates live on order_planning_items
+// (fallback: the parent plan's dates for rows planned before this).
+router.get('/planning-itemwise', (req, res) => {
+  const db = getDb();
+  const search = String(req.query.search || '').trim().toLowerCase();
+  const page = Math.max(1, parseInt(req.query.page || '1', 10));
+  const PER = 50;
+  const params = [];
+  let where = "COALESCE(pi.description,'') <> ''";
+  if (search) {
+    where += ` AND (LOWER(pi.description) LIKE ? OR LOWER(COALESCE(po.po_number,'')) LIKE ? OR LOWER(COALESCE(bb.client_name, bb.company_name,'')) LIKE ?)`;
+    for (let i = 0; i < 3; i++) params.push(`%${search}%`);
+  }
+  const base = `FROM po_items pi
+    LEFT JOIN purchase_orders po ON po.id = pi.po_id
+    LEFT JOIN business_book bb ON bb.id = pi.business_book_id
+    LEFT JOIN order_planning_items opi ON opi.id = (SELECT x.id FROM order_planning_items x WHERE x.po_item_id = pi.id ORDER BY x.id DESC LIMIT 1)
+    LEFT JOIN order_planning op ON op.id = opi.planning_id
+    WHERE ${where}`;
+  const total = db.prepare(`SELECT COUNT(*) c ${base}`).get(...params).c;
+  const rows = db.prepare(`SELECT pi.id, pi.description, pi.quantity, pi.unit, pi.po_id,
+      po.po_number, COALESCE(bb.client_name, bb.company_name) AS client_name,
+      opi.id AS opi_id,
+      COALESCE(opi.planned_start, op.planned_start) AS planned_start,
+      COALESCE(opi.planned_end, op.planned_end) AS planned_end,
+      COALESCE(op.status, 'pending') AS status
+    ${base}
+    ORDER BY (COALESCE(opi.planned_start, op.planned_start) IS NULL), COALESCE(opi.planned_start, op.planned_start), pi.id
+    LIMIT ${PER} OFFSET ${(page - 1) * PER}`).all(...params);
+  res.json({ total, page, per: PER, rows });
+});
+
+// Set an ITEM's need dates. Joins/creates the PO's plan on the fly so a
+// bare item can be dated in one action.
+router.put('/planning-itemwise/:poItemId', requirePermission('orders', 'edit'), (req, res) => {
+  const db = getDb();
+  const pi = db.prepare('SELECT id, po_id, business_book_id, quantity FROM po_items WHERE id=?').get(+req.params.poItemId);
+  if (!pi) return res.status(404).json({ error: 'Item not found' });
+  const ps = req.body?.planned_start || null;
+  const pe = req.body?.planned_end || null;
+  const tx = db.transaction(() => {
+    const opi = db.prepare('SELECT id FROM order_planning_items WHERE po_item_id=? ORDER BY id DESC LIMIT 1').get(pi.id);
+    if (opi) {
+      db.prepare('UPDATE order_planning_items SET planned_start=?, planned_end=? WHERE id=?').run(ps, pe, opi.id);
+      return;
+    }
+    let plan = pi.po_id ? db.prepare('SELECT id FROM order_planning WHERE po_id=? ORDER BY id DESC LIMIT 1').get(pi.po_id) : null;
+    if (!plan) {
+      const r = db.prepare('INSERT INTO order_planning (po_id, business_book_id, created_by) VALUES (?,?,?)')
+        .run(pi.po_id || null, pi.business_book_id || null, req.user.id);
+      plan = { id: r.lastInsertRowid };
+    }
+    db.prepare('INSERT INTO order_planning_items (planning_id, po_item_id, quantity, planned_start, planned_end) VALUES (?,?,?,?,?)')
+      .run(plan.id, pi.id, pi.quantity || null, ps, pe);
+  });
+  tx();
+  res.json({ ok: true });
+});
+
 const savePlanItems = (db, planningId, items) => {
   db.prepare('DELETE FROM order_planning_items WHERE planning_id=?').run(planningId);
   const ins = db.prepare('INSERT INTO order_planning_items (planning_id, po_item_id, quantity) VALUES (?,?,?)');

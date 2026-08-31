@@ -2986,6 +2986,11 @@ function initializeDatabase() {
     // SOP-05 S7 (mam 2026-08-31 item-wise system): flag items with long
     // delivery time — "order them today". Toggled on the item-wise register.
     ['item_master', 'long_delivery INTEGER DEFAULT 0'],
+    // Item-wise Order Planning (mam 2026-08-31 "recreate as item wise"):
+    // each mapped item carries its OWN need dates; plan-level dates stay
+    // as the fallback for items planned before this.
+    ['order_planning_items', 'planned_start DATE'],
+    ['order_planning_items', 'planned_end DATE'],
     // SOP-03 (mam 2026-08-27, Negotiation & order booking):
     // S3 discount gate — null=within chart, 'pending_sh' Sales Head,
     // 'pending_md' MD sir, then 'approved'/'rejected'.
