@@ -732,7 +732,25 @@ router.get('/bb/:bbId/items', (req, res) => {
 // "pick here item wise which is mapping"): order_planning_items carries
 // which items (and planned qty) each plan covers.
 router.get('/planning', (req, res) => {
-  res.json(getDb().prepare(`SELECT op.*, po.po_number, bb.client_name,
+  const db = getDb();
+  // AUTO-MAP (mam 2026-08-31 "automatically come here from Edit PO"): a plan
+  // that has a PO but no item mapping inherits ALL of that PO's items
+  // (planned qty = PO qty) on its own — the Edit-PO item grid flows straight
+  // into planning; 🔗 Map is then only for trimming/adjusting the subset.
+  // Idempotent + best-effort: only touches plans with ZERO mappings.
+  try {
+    const unmapped = db.prepare(`SELECT op.id, op.po_id FROM order_planning op
+      WHERE op.po_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM order_planning_items x WHERE x.planning_id = op.id)`).all();
+    if (unmapped.length) {
+      const ins = db.prepare(`INSERT INTO order_planning_items (planning_id, po_item_id, quantity)
+        SELECT ?, id, quantity FROM po_items
+         WHERE po_id = ? OR (po_id IS NULL AND business_book_id = (SELECT business_book_id FROM purchase_orders WHERE id = ?))`);
+      const tx = db.transaction(() => { for (const p of unmapped) ins.run(p.id, p.po_id, p.po_id); });
+      tx();
+    }
+  } catch (e) { console.warn('[planning auto-map] skipped:', e.message); }
+  res.json(db.prepare(`SELECT op.*, po.po_number, bb.client_name,
       (SELECT COUNT(*) FROM order_planning_items x WHERE x.planning_id=op.id) AS item_count
     FROM order_planning op
     LEFT JOIN purchase_orders po ON op.po_id=po.id LEFT JOIN business_book bb ON op.business_book_id=bb.id ORDER BY op.created_at DESC`).all());
