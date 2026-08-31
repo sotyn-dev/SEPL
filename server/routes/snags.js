@@ -305,9 +305,15 @@ router.put('/:id', requirePermission('snags', 'edit'), (req, res) => {
       return res.status(403).json({ error: 'Only the raiser or an approver can edit this snag' });
     }
 
+    // snag_no is deliberately NOT in this allowlist — editing (target date
+    // included) can never change the snag number (mam 2026-08-31).
     const fields = ['site_id','site_name','location','description','photo_url','priority','assigned_to','assigned_to_name','target_date'];
     const sets = []; const vals = [];
-    for (const f of fields) if (b[f] !== undefined) { sets.push(`${f}=?`); vals.push(b[f]); }
+    // '' → NULL: the edit form sends '' for a cleared site/assignee, and a
+    // bare '' in the site_id/assigned_to FK columns made the whole UPDATE die
+    // with "FOREIGN KEY constraint failed" (so editing a snag with no site
+    // was impossible — people deleted + re-raised, burning a new snag no).
+    for (const f of fields) if (b[f] !== undefined) { sets.push(`${f}=?`); vals.push(b[f] === '' ? null : b[f]); }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
     vals.push(req.params.id);
     db.prepare(`UPDATE snags SET ${sets.join(', ')} WHERE id=?`).run(...vals);

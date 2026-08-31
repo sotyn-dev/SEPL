@@ -169,7 +169,8 @@ export default function Snags() {
       priority: s.priority || 'medium',
       assigned_to: s.assigned_to || '',
       assigned_to_name: s.assigned_to_name || '',
-      target_date: s.target_date || '',
+      // Date input needs bare YYYY-MM-DD — imported rows may carry a timestamp.
+      target_date: (s.target_date || '').slice(0, 10),
     });
     setModal(true);
   };
@@ -179,7 +180,9 @@ export default function Snags() {
     if (!form.description?.trim()) return toast.error('Description is required');
     try {
       if (editingId) {
-        await api.put(`/snags/${editingId}`, form);
+        // Clearing the date stores NULL, not '' — and the snag number is
+        // never sent, so editing can never change it (server allowlist too).
+        await api.put(`/snags/${editingId}`, { ...form, target_date: form.target_date || null });
         toast.success('Snag updated');
       } else {
         const r = await api.post('/snags', form);
@@ -220,6 +223,15 @@ export default function Snags() {
   const isMine = (s) => s.raised_by === user?.id;
   const isAssignee = (s) => s.assigned_to === user?.id;
   const canActAsApprover = (s) => isMine(s) || canApprove('snags') || isAdmin();
+
+  // Target-date overdue check on the India calendar (target dates are stored
+  // as bare YYYY-MM-DD strings from the date picker).
+  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const isOverdue = (s) => s.target_date && s.status !== 'approved' && String(s.target_date).slice(0, 10) < todayIST;
+
+  // The snag being edited — its number is shown in the modal title so it's
+  // clear the number never changes on edit (mam 2026-08-31).
+  const editingSnag = editingId ? snags.find(x => x.id === editingId) : null;
 
   return (
     <div className="space-y-6">
@@ -300,13 +312,13 @@ export default function Snags() {
           <thead>
             <tr>
               <th>Snag No</th><th>Raised</th><th>Site / Location</th><th>Description</th>
-              <th>Snag Photo</th><th>Assigned To</th><th>Proof</th>
+              <th>Snag Photo</th><th>Assigned To</th><th>Target Date</th><th>Proof</th>
               <th>Priority</th><th>Status</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {snags.length === 0 && (
-              <tr><td colSpan="10" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
+              <tr><td colSpan="11" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
             )}
             {visibleRows.map((s, i) => (
               <tr key={s.id} ref={i === visibleRows.length - 1 ? setLastRowEl : undefined}>
@@ -331,6 +343,11 @@ export default function Snags() {
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
+                <td className="text-xs whitespace-nowrap">
+                  {s.target_date
+                    ? <span className={isOverdue(s) ? 'text-red-600 font-bold' : ''}>{fmtDate(s.target_date)}{isOverdue(s) && <span className="block text-[9px] font-semibold">OVERDUE</span>}</span>
+                    : <span className="text-gray-300">—</span>}
+                </td>
                 <td>
                   {s.proof_url
                     ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
@@ -367,7 +384,7 @@ export default function Snags() {
       </div>
 
       {/* RAISE / EDIT MODAL */}
-      <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); }} title={editingId ? 'Edit Snag' : 'Raise Snag'} wide>
+      <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); }} title={editingSnag ? `Edit Snag — ${editingSnag.snag_no}` : 'Raise Snag'} wide>
         <form onSubmit={save} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -438,6 +455,9 @@ export default function Snags() {
             <div>
               <label className="label">Target Date</label>
               <input type="date" className="input" value={form.target_date || ''} onChange={e => setForm(f => ({ ...f, target_date: e.target.value }))} />
+              {editingSnag && (
+                <p className="text-[10px] text-gray-400 mt-0.5">Snag no. {editingSnag.snag_no} stays the same — editing never changes it.</p>
+              )}
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t">
