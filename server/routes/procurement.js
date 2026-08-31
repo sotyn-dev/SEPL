@@ -3236,6 +3236,44 @@ router.get('/vendor-po', (req, res) => {
   res.json(rows);
 });
 
+// ── Fallback lines for POs saved WITHOUT linked vendor_po_items ──────────
+// Older POs (pre "mandatory PO items", f5632f5a 2026-08-27) could be created
+// with just a typed total — no vendor_po_items rows — so the print and the
+// Delivery Note showed "No line items" (mam 2026-08-31: "previous not showing
+// data"). This derives the lines from the PO's own indent instead. Guards:
+//   1. Multi-vendor indents: only items whose FINALISED vendor matches this
+//      PO's vendor are used; if none match by name, the whole indent is used
+//      only when this is the indent's ONLY live PO — never guess on a split.
+// Returns { ids, sum } (indent_item ids + Σ qty × final_rate) or null.
+function fallbackIndentLines(db, vendorPoId) {
+  const po = db.prepare(`
+    SELECT vp.id, vp.indent_id, v.name as vname, v.firm_name as fname
+      FROM vendor_pos vp LEFT JOIN vendors v ON v.id = vp.vendor_id
+     WHERE vp.id = ?`).get(vendorPoId);
+  if (!po || !po.indent_id) return null;
+  const cand = db.prepare(`
+    SELECT ii.id, ii.quantity, ir.final_rate, ir.final_vendor_name
+      FROM indent_items ii
+      LEFT JOIN indent_item_rates ir ON ir.id =
+        (SELECT MAX(ir2.id) FROM indent_item_rates ir2 WHERE ir2.indent_item_id = ii.id)
+     WHERE ii.indent_id = ?
+     ORDER BY ii.id`).all(po.indent_id);
+  if (!cand.length) return null;
+  const norm = s => String(s || '').trim().toLowerCase();
+  const vnames = new Set([norm(po.vname), norm(po.fname)].filter(Boolean));
+  let pick = cand.filter(c => c.final_vendor_name && vnames.has(norm(c.final_vendor_name)));
+  if (!pick.length) {
+    const others = db.prepare(`
+      SELECT COUNT(*) as c FROM vendor_pos
+       WHERE indent_id = ? AND id <> ? AND COALESCE(cancelled, 0) = 0
+    `).get(po.indent_id, po.id).c;
+    if (others > 0) return null;
+    pick = cand;
+  }
+  const sum = pick.reduce((s, c) => s + ((+c.quantity || 0) * (+c.final_rate || 0)), 0);
+  return { ids: pick.map(c => c.id), sum };
+}
+
 // Full Vendor PO payload for the print/share page — includes vendor
 // contact details, indent info, and every line item with item_master
 // fields (code, description, spec, make, uom). Used by /vendor-po/:id/print
@@ -3395,6 +3433,47 @@ router.get('/vendor-po/:id/print', (req, res) => {
     }
   }
 
+  // ── No linked lines? Derive them from the PO's indent (mam 2026-08-31:
+  // old POs printed "No line items" even though the indent has them). The
+  // derived lines are used ONLY when their sum matches the total the buyer
+  // typed on Create PO (±₹1) — a vendor already holds this document, so the
+  // print must never re-price it. On a mismatch the banner + typed-total
+  // fallback stay exactly as before.
+  if (!items.length) {
+    const fb = fallbackIndentLines(db, po.id);
+    const storedBase = Math.max(0, (+po.total_amount || 0) - (+po.freight_amount || 0));
+    if (fb && fb.ids.length && (storedBase <= 0 || Math.abs(fb.sum - storedBase) <= 1)) {
+      const ph = fb.ids.map(() => '?').join(',');
+      const derived = db.prepare(`
+        SELECT NULL as id, ii.quantity, ir.final_rate as rate,
+               (ii.quantity * COALESCE(ir.final_rate, 0)) as amount,
+               NULL as terms, NULL as credit_days,
+               NULL as weight_per_meter, NULL as original_qty_mtr,
+               ii.description, ii.make as ii_make, ii.unit, ii.required_date,
+               ii.item_type,
+               im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
+               im.type as im_type,
+               poi.description as boq_description,
+               ir.final_rate as latest_rate,
+               ir.final_vendor_name as latest_vendor,
+               NULL as po_rate_updated_at,
+               ir.finalized_at as final_rate_updated_at,
+               ir.final_terms as final_terms,
+               ir.final_credit_days as final_credit_days
+          FROM indent_items ii
+          LEFT JOIN item_master im ON im.id = ii.item_master_id
+          LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+          LEFT JOIN indent_item_rates ir
+            ON ir.id = (SELECT MAX(ir2.id) FROM indent_item_rates ir2
+                         WHERE ir2.indent_item_id = ii.id)
+         WHERE ii.id IN (${ph})
+         ORDER BY ii.id
+      `).all(...fb.ids);
+      items.push(...derived);
+      po.derived_items = 1;
+    }
+  }
+
   res.json({ po, items });
 });
 
@@ -3519,6 +3598,33 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);
+
+  // Old POs saved without linked vendor_po_items rows: derive the DN lines
+  // from the PO's indent (same fallback + vendor guard as the PO print —
+  // mam 2026-08-31 "previous not showing data"). No amount check here: a DN
+  // carries quantities only, no money to re-price.
+  if (!items.length) {
+    const fb = fallbackIndentLines(db, req.params.id);
+    if (fb && fb.ids.length) {
+      const ph = fb.ids.map(() => '?').join(',');
+      items.push(...db.prepare(`
+        SELECT NULL as id, ii.quantity,
+               COALESCE(NULLIF(TRIM(im.item_name), ''), ii.description) as description,
+               im.specification, im.size,
+               COALESCE(im.make, ii.make) as make,
+               CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
+                      THEN ii.unit ELSE COALESCE(im.uom, ii.unit) END as uom,
+               im.item_code,
+               poi.hsn_code as hsn_code,
+               im.gst as gst_text
+          FROM indent_items ii
+          LEFT JOIN item_master im ON im.id = ii.item_master_id
+          LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+         WHERE ii.id IN (${ph})
+         ORDER BY ii.id
+      `).all(...fb.ids));
+    }
+  }
 
   // mam 2026-06-30: show the RECEIVED quantity (entered on the purchase bill, saved
   // onto the auto-created challan's items_json) instead of the full ordered qty.
