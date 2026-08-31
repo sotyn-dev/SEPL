@@ -230,6 +230,58 @@ export default function Orders() {
       setPlanPicked(picked);
     } catch (e) { /* picker stays empty — plan can still save header-only */ }
   };
+  // Map items on an EXISTING plan (mam 2026-08-31: "here items show one by
+  // one mapping item from item wise") — opens the same picker, pre-ticked
+  // with the current mapping; a legacy plan without a PO picks one first.
+  const [mapPlan, setMapPlan] = useState(null);
+  const openMapPlan = async (p) => {
+    setMapPlan(p);
+    setPlanItems([]); setPlanPicked({});
+    if (!p.po_id) return;                                 // PO select shows in the modal
+    try {
+      const [pick, mapped] = await Promise.all([
+        api.get(`/orders/planning-items/${p.po_id}`),
+        api.get(`/orders/planning/${p.id}/items`),
+      ]);
+      setPlanItems(pick.data || []);
+      const byItem = {};
+      for (const m of (mapped.data || [])) byItem[m.po_item_id] = m;
+      const picked = {};
+      for (const it of (pick.data || [])) {
+        const m = byItem[it.id];
+        picked[it.id] = { checked: !!m, qty: m ? (m.planned_qty ?? '') : (it.quantity || '') };
+      }
+      setPlanPicked(picked);
+    } catch (e) { toast.error('Could not load the PO items'); }
+  };
+  const pickPoForMap = async (poId) => {
+    setMapPlan(mp => ({ ...mp, po_id: poId, _poPicked: true }));
+    setPlanItems([]); setPlanPicked({});
+    if (!poId) return;
+    try {
+      const r = await api.get(`/orders/planning-items/${poId}`);
+      setPlanItems(r.data || []);
+      const picked = {};
+      for (const it of (r.data || [])) picked[it.id] = { checked: false, qty: it.quantity || '' };
+      setPlanPicked(picked);
+    } catch (e) { toast.error('Could not load the PO items'); }
+  };
+  const saveMapPlan = async () => {
+    const items = Object.entries(planPicked)
+      .filter(([, v]) => v.checked)
+      .map(([po_item_id, v]) => ({ po_item_id: +po_item_id, quantity: v.qty === '' ? null : +v.qty }));
+    try {
+      await api.put(`/orders/planning/${mapPlan.id}`, {
+        status: mapPlan.status, planned_start: mapPlan.planned_start,
+        planned_end: mapPlan.planned_end, notes: mapPlan.notes,
+        po_id: mapPlan._poPicked ? mapPlan.po_id : undefined,
+        items,
+      });
+      toast.success(`${items.length} item(s) mapped to the plan`);
+      setMapPlan(null); setPlanItems([]); setPlanPicked({}); setOpenPlan({}); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not save the mapping'); }
+  };
+
   // Expandable "which items" view on each planning row.
   const [openPlan, setOpenPlan] = useState({});          // { planning_id: rows|('loading') }
   const togglePlanItems = async (id) => {
@@ -432,12 +484,20 @@ export default function Orders() {
                     <td>{p.client_name}</td>
                     <td>
                       {/* Item-wise mapping (mam 2026-08-28) — expand to see
-                          exactly which PO items this plan covers. */}
-                      {p.item_count > 0 ? (
-                        <button onClick={() => togglePlanItems(p.id)} className="text-blue-600 font-semibold hover:underline text-sm">
-                          {openPlan[p.id] ? '▾' : '▸'} {p.item_count} item(s)
+                          exactly which PO items this plan covers; 🔗 Map
+                          edits/creates the mapping on an existing plan. */}
+                      <div className="flex items-center gap-2">
+                        {p.item_count > 0 ? (
+                          <button onClick={() => togglePlanItems(p.id)} className="text-blue-600 font-semibold hover:underline text-sm">
+                            {openPlan[p.id] ? '▾' : '▸'} {p.item_count} item(s)
+                          </button>
+                        ) : <span className="text-gray-300 text-xs">not mapped</span>}
+                        <button onClick={() => openMapPlan(p)}
+                          className="text-[11px] px-2 py-0.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 font-semibold"
+                          title={p.item_count > 0 ? 'Edit the item mapping' : 'Map this plan to PO items'}>
+                          🔗 Map
                         </button>
-                      ) : <span className="text-gray-300 text-xs">not mapped</span>}
+                      </div>
                     </td>
                     <td>{p.planned_start}</td><td>{p.planned_end}</td>
                     <td><StatusBadge status={p.status} /></td>
@@ -790,6 +850,62 @@ export default function Orders() {
       </Modal>
 
       {/* Order Planning Modal */}
+      {/* Map items on an existing plan (mam 2026-08-31) */}
+      <Modal isOpen={!!mapPlan} onClose={() => { setMapPlan(null); setPlanItems([]); setPlanPicked({}); }} title={`Map Items — ${mapPlan?.po_number || mapPlan?.client_name || 'Plan'}`} wide>
+        {mapPlan && (
+          <div className="space-y-4">
+            {!mapPlan.po_id && (
+              <div>
+                <label className="label">This plan has no Purchase Order yet — pick one first</label>
+                <select className="select" value={mapPlan.po_id || ''} onChange={e => pickPoForMap(e.target.value)}>
+                  <option value="">Select PO</option>
+                  {pos.map(p2 => <option key={p2.id} value={p2.id}>{p2.po_number}</option>)}
+                </select>
+              </div>
+            )}
+            {planItems.length > 0 && (
+              <div className="border rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b">
+                  <span className="text-xs font-bold text-gray-600">Tick the items this plan covers ({Object.values(planPicked).filter(v => v.checked).length} of {planItems.length})</span>
+                  <div className="space-x-2 text-[11px]">
+                    <button type="button" className="text-blue-600 hover:underline" onClick={() => setPlanPicked(p2 => Object.fromEntries(Object.entries(p2).map(([k, v]) => [k, { ...v, checked: true }])))}>all</button>
+                    <button type="button" className="text-blue-600 hover:underline" onClick={() => setPlanPicked(p2 => Object.fromEntries(Object.entries(p2).map(([k, v]) => [k, { ...v, checked: false }])))}>none</button>
+                  </div>
+                </div>
+                <div className="max-h-72 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {planItems.map(it => (
+                        <tr key={it.id} className="border-t">
+                          <td className="p-1.5 w-6">
+                            <input type="checkbox" checked={planPicked[it.id]?.checked || false}
+                              onChange={e => setPlanPicked(p2 => ({ ...p2, [it.id]: { ...p2[it.id], checked: e.target.checked } }))} />
+                          </td>
+                          <td className="p-1.5">{it.description || '—'} <span className="text-gray-400">({it.unit || '—'})</span></td>
+                          <td className="p-1.5 w-28 text-right">
+                            <input type="number" className="input text-xs text-right w-24 py-1" placeholder={`${it.quantity || 0}`}
+                              value={planPicked[it.id]?.qty ?? ''} disabled={!planPicked[it.id]?.checked}
+                              onChange={e => setPlanPicked(p2 => ({ ...p2, [it.id]: { ...p2[it.id], qty: e.target.value } }))}
+                              title={`PO quantity: ${it.quantity || 0}`} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {mapPlan.po_id && planItems.length === 0 && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">Loading items… if nothing appears, this PO has no items to map.</p>
+            )}
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => { setMapPlan(null); setPlanItems([]); setPlanPicked({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={saveMapPlan} disabled={!mapPlan.po_id} className="btn btn-primary">Save Mapping</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <Modal isOpen={modal === 'planning'} onClose={() => setModal(false)} title="Create Order Plan" wide>
         <form onSubmit={savePlanning} className="space-y-4">
           <div><label className="label">Purchase Order</label><select className="select" value={form.po_id || ''} onChange={e => { setForm({ ...form, po_id: e.target.value }); loadPlanItems(e.target.value); }}><option value="">Select</option>{pos.map(p => <option key={p.id} value={p.id}>{p.po_number}</option>)}</select></div>

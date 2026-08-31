@@ -778,11 +778,13 @@ router.post('/planning', requirePermission('orders', 'create'), (req, res) => {
 });
 
 router.put('/planning/:id', requirePermission('orders', 'edit'), (req, res) => {
-  const { status, planned_start, planned_end, notes, items } = req.body;
+  const { status, planned_start, planned_end, notes, items, po_id } = req.body;
   const db = getDb();
   const tx = db.transaction(() => {
-    db.prepare('UPDATE order_planning SET status=?, planned_start=?, planned_end=?, notes=? WHERE id=?')
-      .run(status, planned_start, planned_end, notes, req.params.id);
+    // po_id: only set when the caller sends one — the map-items modal can
+    // attach a PO to a legacy plan that never had one (mam 2026-08-31).
+    db.prepare('UPDATE order_planning SET status=?, planned_start=?, planned_end=?, notes=?, po_id=COALESCE(?, po_id) WHERE id=?')
+      .run(status, planned_start, planned_end, notes, +po_id || null, req.params.id);
     if (Array.isArray(items)) savePlanItems(db, +req.params.id, items);
   });
   tx();
