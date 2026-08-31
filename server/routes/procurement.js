@@ -7682,4 +7682,136 @@ router.get('/rate-enquiry/:indentId', requirePermission('procurement', 'view'), 
   }
 });
 
+// ═══ SOP-05 ITEM-WISE register (mam 2026-08-31: "i need item wise system") ═
+// One row per BOQ item of the booked orders — each item carries its OWN
+// stage status through SOP-05:
+//   S1 package  = the item sits in an order plan (need-date = plan start)
+//   S2 enquiry  = ≥1 vendor quote exists for its Item Master
+//   S3 compare  = all 3 vendor quotes in (mam's 3-quote rule)
+//   S4-S5       = rate finalised; above our estimate (po_items.rate) → MD sir
+//   S6 contract = final rate locked (vendor + date) — valid for the project
+//   S7 long-dvl = item_master.long_delivery flag ("order them today")
+// Quotes/finals resolve via the item's Item Master (latest finalised row wins)
+// so a rate fixed once serves every order of that item — the Rate Contract.
+router.get('/rates-items', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const PER = 50;
+    const params = [];
+    let where = '1=1';
+    if (search) {
+      where += ` AND (LOWER(pi.description) LIKE ? OR LOWER(COALESCE(im.item_name,'')) LIKE ? OR LOWER(COALESCE(im.item_code,'')) LIKE ? OR LOWER(COALESCE(po.po_number,'')) LIKE ? OR LOWER(COALESCE(bb.client_name,'')) LIKE ?)`;
+      for (let i = 0; i < 5; i++) params.push(`%${search}%`);
+    }
+    const base = `
+      FROM po_items pi
+      LEFT JOIN purchase_orders po ON po.id = pi.po_id
+      LEFT JOIN business_book bb ON bb.id = pi.business_book_id
+      LEFT JOIN item_master im ON im.id = pi.item_master_id
+      WHERE ${where} AND COALESCE(pi.description,'') <> ''`;
+    const total = db.prepare(`SELECT COUNT(*) c ${base}`).get(...params).c;
+    const rows = db.prepare(`
+      SELECT pi.id, pi.po_id, pi.description, pi.quantity, pi.unit, pi.rate AS estimate_rate,
+             pi.item_master_id, im.item_code, im.item_name, COALESCE(im.long_delivery,0) AS long_delivery,
+             po.po_number, COALESCE(bb.client_name, bb.company_name) AS client_name,
+             (SELECT MIN(op.planned_start) FROM order_planning_items opi
+                JOIN order_planning op ON op.id = opi.planning_id
+               WHERE opi.po_item_id = pi.id) AS need_date,
+             rc.id AS rc_id, rc.vendor1_name AS rc_v1n, rc.vendor1_rate AS rc_v1, rc.vendor2_name AS rc_v2n, rc.vendor2_rate AS rc_v2,
+             rc.vendor3_name AS rc_v3n, rc.vendor3_rate AS rc_v3, rc.final_rate AS rc_final, rc.final_vendor_name AS rc_fvn, rc.finalized_at AS rc_fat,
+             r.vendor1_name AS ir_v1n, r.vendor1_rate AS ir_v1, r.vendor2_name AS ir_v2n, r.vendor2_rate AS ir_v2,
+             r.vendor3_name AS ir_v3n, r.vendor3_rate AS ir_v3, r.final_rate AS ir_final, r.final_vendor_name AS ir_fvn, r.finalized_at AS ir_fat
+        ${base.replace('WHERE', `LEFT JOIN rate_contracts rc ON rc.item_master_id = pi.item_master_id
+        LEFT JOIN indent_item_rates r ON r.id = (
+              SELECT r2.id FROM indent_item_rates r2
+                JOIN indent_items ii2 ON ii2.id = r2.indent_item_id
+               WHERE pi.item_master_id IS NOT NULL AND ii2.item_master_id = pi.item_master_id
+               ORDER BY (COALESCE(r2.final_rate,0) > 0) DESC, r2.id DESC LIMIT 1)
+        WHERE`)}
+      ORDER BY (need_date IS NULL), need_date, pi.id
+      LIMIT ${PER} OFFSET ${(page - 1) * PER}`).all(...params);
+    for (const it of rows) {
+      // Rate source: the item's RATE CONTRACT wins; else the latest 3-vendor
+      // row from the indent flow (a rate fixed either way serves the item).
+      const useRc = it.rc_id != null;
+      it.vendor1_name = useRc ? it.rc_v1n : it.ir_v1n; it.vendor1_rate = useRc ? it.rc_v1 : it.ir_v1;
+      it.vendor2_name = useRc ? it.rc_v2n : it.ir_v2n; it.vendor2_rate = useRc ? it.rc_v2 : it.ir_v2;
+      it.vendor3_name = useRc ? it.rc_v3n : it.ir_v3n; it.vendor3_rate = useRc ? it.rc_v3 : it.ir_v3;
+      it.final_rate = useRc ? it.rc_final : it.ir_final;
+      it.final_vendor_name = useRc ? it.rc_fvn : it.ir_fvn;
+      it.finalized_at = useRc ? it.rc_fat : it.ir_fat;
+      for (const k of Object.keys(it)) if (k.startsWith('rc_') || k.startsWith('ir_')) delete it[k];
+      const quotes = [it.vendor1_rate, it.vendor2_rate, it.vendor3_rate].filter(v => +v > 0).length;
+      it.quotes = quotes;
+      const est = +it.estimate_rate || 0;
+      const fin = +it.final_rate || 0;
+      it.stage = {
+        s1: !!it.need_date,
+        s2: quotes >= 1,
+        s3: quotes >= 3,
+        s6: fin > 0,
+        md: fin > 0 && est > 0 && fin > est,       // S5: above our estimate → MD sir
+        s7: !!it.long_delivery,
+      };
+    }
+    res.json({ total, page, per: PER, rows });
+  } catch (err) {
+    console.error('rates-items error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Inline mapping action (mam 2026-08-31 "how can i do action?"): link a BOQ
+// line to its Item Master straight from the register.
+router.put('/rates-items/map/:poItemId', requirePermission('procurement', 'edit'), (req, res) => {
+  const db = getDb();
+  const mid = +req.body?.item_master_id || null;
+  if (mid && !db.prepare('SELECT 1 FROM item_master WHERE id=?').get(mid)) {
+    return res.status(404).json({ error: 'Item Master row not found' });
+  }
+  const r = db.prepare('UPDATE po_items SET item_master_id=? WHERE id=?').run(mid, +req.params.poItemId);
+  if (!r.changes) return res.status(404).json({ error: 'BOQ item not found' });
+  res.json({ ok: true });
+});
+
+// Quotes + Rate Contract (SOP-05 S2→S6): upsert the 3 vendor quotes and the
+// finalised rate PER ITEM MASTER — locked for the project.
+router.put('/rates-items/quotes/:itemMasterId', requirePermission('procurement', 'edit'), (req, res) => {
+  const db = getDb();
+  const mid = +req.params.itemMasterId;
+  if (!db.prepare('SELECT 1 FROM item_master WHERE id=?').get(mid)) {
+    return res.status(404).json({ error: 'Item Master row not found — map the item first' });
+  }
+  const b = req.body || {};
+  const num = (v) => (+v > 0 ? +v : null);
+  const txt = (v) => (v && String(v).trim() ? String(v).trim().slice(0, 120) : null);
+  const finalRate = num(b.final_rate);
+  db.prepare(`INSERT INTO rate_contracts
+      (item_master_id, vendor1_name, vendor1_rate, vendor2_name, vendor2_rate, vendor3_name, vendor3_rate,
+       final_rate, final_vendor_name, finalized_at, updated_by, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?, CASE WHEN ? IS NOT NULL THEN CURRENT_TIMESTAMP END, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(item_master_id) DO UPDATE SET
+        vendor1_name=excluded.vendor1_name, vendor1_rate=excluded.vendor1_rate,
+        vendor2_name=excluded.vendor2_name, vendor2_rate=excluded.vendor2_rate,
+        vendor3_name=excluded.vendor3_name, vendor3_rate=excluded.vendor3_rate,
+        final_rate=excluded.final_rate, final_vendor_name=excluded.final_vendor_name,
+        finalized_at=CASE WHEN excluded.final_rate IS NOT NULL
+                          THEN COALESCE(rate_contracts.finalized_at, CURRENT_TIMESTAMP) END,
+        updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`)
+    .run(mid, txt(b.vendor1_name), num(b.vendor1_rate), txt(b.vendor2_name), num(b.vendor2_rate),
+         txt(b.vendor3_name), num(b.vendor3_rate), finalRate, txt(b.final_vendor_name), finalRate, req.user.id);
+  res.json({ ok: true, locked: finalRate != null });
+});
+
+// S7 toggle — flag/unflag long delivery on the item master.
+router.put('/rates-items/long-delivery/:itemMasterId', requirePermission('procurement', 'edit'), (req, res) => {
+  const db = getDb();
+  const flag = req.body?.flag ? 1 : 0;
+  const r = db.prepare('UPDATE item_master SET long_delivery=? WHERE id=?').run(flag, +req.params.itemMasterId);
+  if (!r.changes) return res.status(404).json({ error: 'Item Master row not found' });
+  res.json({ ok: true, long_delivery: flag });
+});
+
 module.exports = router;

@@ -2983,6 +2983,9 @@ function initializeDatabase() {
     // applicable, 'pending' = below-floor awaiting the Sales Head,
     // 'approved'/'rejected' = decided.
     ['quotations', 'margin_approval TEXT'],
+    // SOP-05 S7 (mam 2026-08-31 item-wise system): flag items with long
+    // delivery time — "order them today". Toggled on the item-wise register.
+    ['item_master', 'long_delivery INTEGER DEFAULT 0'],
     // SOP-03 (mam 2026-08-27, Negotiation & order booking):
     // S3 discount gate — null=within chart, 'pending_sh' Sales Head,
     // 'pending_md' MD sir, then 'approved'/'rejected'.
@@ -5474,6 +5477,23 @@ function initializeDatabase() {
     )`);
     db.exec('CREATE INDEX IF NOT EXISTS idx_opi_plan ON order_planning_items(planning_id)');
   } catch (e) { console.error('[schema] order_planning_items create failed:', e.message); }
+
+  // ─── SOP-05 Rate Contracts (mam 2026-08-31 item-wise actions) ───────────
+  // Pre-indent, PER-ITEM-MASTER: the 3 vendor quotes + the finalised rate,
+  // locked for the project — "no rate talk at indent time". The item-wise
+  // register reads this FIRST, falling back to the latest indent_item_rates.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS rate_contracts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_master_id INTEGER NOT NULL UNIQUE REFERENCES item_master(id),
+      vendor1_name TEXT, vendor1_rate REAL,
+      vendor2_name TEXT, vendor2_rate REAL,
+      vendor3_name TEXT, vendor3_rate REAL,
+      final_rate REAL, final_vendor_name TEXT, finalized_at DATETIME,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) { console.error('[schema] rate_contracts create failed:', e.message); }
 
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,

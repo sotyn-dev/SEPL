@@ -73,6 +73,7 @@ export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, 
           <span className="text-xs text-gray-500 bg-white border rounded-lg px-3 py-1.5">This Week ({d.week.from} → {d.week.to})</span>
           <button onClick={load} className="btn btn-secondary text-xs flex items-center gap-1"><FiRefreshCw size={13} /> Refresh</button>
           {openTo && <Link to={openTo.link} className="btn btn-primary text-xs">{openTo.label}</Link>}
+          {openTo?.extra && <Link to={openTo.extra.link} className="btn btn-secondary text-xs">{openTo.extra.label}</Link>}
         </div>
       </div>
 

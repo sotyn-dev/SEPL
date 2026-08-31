@@ -70,7 +70,7 @@ export default function RatesBoard() {
       endpoint="/procurement/rates-board"
       stageLinks={STAGE_LINKS}
       stageIcons={STAGE_ICONS}
-      openTo={{ link: '/orders?tab=planning', label: 'Open Planning' }}
+      openTo={{ link: '/orders?tab=planning', label: 'Open Planning', extra: { link: '/rates-items', label: '📋 Item-wise' } }}
       distsOf={(d) => d.dists || []}
       cardExtra={cardExtra}
       extraTiles={(d) => (d.kpis?.overdue ? [{

@@ -72,6 +72,7 @@ const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
 const FileViewer = lazy(() => import('./pages/FileViewer'));
 const ProcurementBoard = lazy(() => import('./pages/ProcurementBoard'));
+const RatesItems = lazy(() => import('./pages/RatesItems'));
 const RatesBoard = lazy(() => import('./pages/RatesBoard'));
 const RateEnquiryPrint = lazy(() => import('./pages/RateEnquiryPrint'));
 const DebitNotePrint = lazy(() => import('./pages/DebitNotePrint'));
@@ -266,6 +267,8 @@ export default function App() {
         <Route path="procurement-board" element={<ModuleRoute module="procurement"><ProcurementBoard /></ModuleRoute>} />
         {/* SOP-05 rates board (mam 2026-08-28) — vendor & rates BEFORE indent. */}
         <Route path="rates-board" element={<ModuleRoute module="procurement"><RatesBoard /></ModuleRoute>} />
+        {/* SOP-05 item-wise register (mam 2026-08-31) */}
+        <Route path="rates-items" element={<ModuleRoute module="procurement"><RatesItems /></ModuleRoute>} />
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
