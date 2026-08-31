@@ -214,11 +214,41 @@ export default function Orders() {
     }
   };
 
+  // Item-wise plan mapping (mam 2026-08-28: "pick here item wise which is
+  // mapping"). Picking a PO loads its items; each line = checkbox + planned
+  // qty (defaults to the PO qty); the mapping saves with the plan.
+  const [planItems, setPlanItems] = useState([]);        // pickable po_items
+  const [planPicked, setPlanPicked] = useState({});      // { po_item_id: {checked, qty} }
+  const loadPlanItems = async (poId) => {
+    setPlanItems([]); setPlanPicked({});
+    if (!poId) return;
+    try {
+      const r = await api.get(`/orders/planning-items/${poId}`);
+      setPlanItems(r.data || []);
+      const picked = {};
+      for (const it of (r.data || [])) picked[it.id] = { checked: true, qty: it.quantity || '' };
+      setPlanPicked(picked);
+    } catch (e) { /* picker stays empty — plan can still save header-only */ }
+  };
+  // Expandable "which items" view on each planning row.
+  const [openPlan, setOpenPlan] = useState({});          // { planning_id: rows|('loading') }
+  const togglePlanItems = async (id) => {
+    if (openPlan[id]) { setOpenPlan(o => { const n = { ...o }; delete n[id]; return n; }); return; }
+    setOpenPlan(o => ({ ...o, [id]: 'loading' }));
+    try {
+      const r = await api.get(`/orders/planning/${id}/items`);
+      setOpenPlan(o => ({ ...o, [id]: r.data || [] }));
+    } catch (e) { setOpenPlan(o => { const n = { ...o }; delete n[id]; return n; }); }
+  };
+
   const savePlanning = async (e) => {
     e.preventDefault();
-    await api.post('/orders/planning', form);
-    toast.success('Planning created');
-    setModal(false); load();
+    const items = Object.entries(planPicked)
+      .filter(([, v]) => v.checked)
+      .map(([po_item_id, v]) => ({ po_item_id: +po_item_id, quantity: v.qty === '' ? null : +v.qty }));
+    await api.post('/orders/planning', { ...form, items });
+    toast.success(items.length ? `Planning created — ${items.length} item(s) mapped` : 'Planning created');
+    setModal(false); setPlanItems([]); setPlanPicked({}); load();
   };
 
 
@@ -393,12 +423,53 @@ export default function Orders() {
             </div>
           </div>
           <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th>PO</th><th>Client</th><th>Start</th><th>End</th><th>Status</th></tr></thead>
+            <thead><tr><th>PO</th><th>Client</th><th>Items</th><th>Start</th><th>End</th><th>Status</th></tr></thead>
             <tbody>
               {planning.map(p => (
-                <tr key={p.id}><td>{p.po_number}</td><td>{p.client_name}</td><td>{p.planned_start}</td><td>{p.planned_end}</td><td><StatusBadge status={p.status} /></td></tr>
+                <Fragment key={p.id}>
+                  <tr>
+                    <td>{p.po_number || <span className="text-gray-300">—</span>}</td>
+                    <td>{p.client_name}</td>
+                    <td>
+                      {/* Item-wise mapping (mam 2026-08-28) — expand to see
+                          exactly which PO items this plan covers. */}
+                      {p.item_count > 0 ? (
+                        <button onClick={() => togglePlanItems(p.id)} className="text-blue-600 font-semibold hover:underline text-sm">
+                          {openPlan[p.id] ? '▾' : '▸'} {p.item_count} item(s)
+                        </button>
+                      ) : <span className="text-gray-300 text-xs">not mapped</span>}
+                    </td>
+                    <td>{p.planned_start}</td><td>{p.planned_end}</td>
+                    <td><StatusBadge status={p.status} /></td>
+                  </tr>
+                  {openPlan[p.id] && (
+                    <tr className="bg-gray-50">
+                      <td colSpan="6" className="p-3">
+                        {openPlan[p.id] === 'loading' ? <span className="text-sm text-gray-400">Loading items…</span> : (
+                          <table className="w-full text-xs">
+                            <thead className="text-[10px] text-gray-500 uppercase">
+                              <tr><th className="text-left p-1">Item</th><th className="text-center p-1 w-24">Planned Qty</th><th className="text-center p-1 w-24">PO Qty</th><th className="text-center p-1 w-16">Unit</th><th className="text-right p-1 w-24">Rate</th></tr>
+                            </thead>
+                            <tbody>
+                              {openPlan[p.id].map(it => (
+                                <tr key={it.id} className="border-t">
+                                  <td className="p-1">{it.description || '—'}</td>
+                                  <td className="text-center p-1 font-semibold">{it.planned_qty ?? it.po_qty ?? '—'}</td>
+                                  <td className="text-center p-1 text-gray-500">{it.po_qty ?? '—'}</td>
+                                  <td className="text-center p-1">{it.unit || ''}</td>
+                                  <td className="text-right p-1">{it.rate ? `Rs ${(+it.rate).toLocaleString()}` : ''}</td>
+                                </tr>
+                              ))}
+                              {openPlan[p.id].length === 0 && <tr><td colSpan="5" className="text-center text-gray-400 py-2">No items mapped</td></tr>}
+                            </tbody>
+                          </table>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
-              {planning.length === 0 && <tr><td colSpan="5" className="text-center py-8 text-gray-400">No plans yet</td></tr>}
+              {planning.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No plans yet</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -719,9 +790,47 @@ export default function Orders() {
       </Modal>
 
       {/* Order Planning Modal */}
-      <Modal isOpen={modal === 'planning'} onClose={() => setModal(false)} title="Create Order Plan">
+      <Modal isOpen={modal === 'planning'} onClose={() => setModal(false)} title="Create Order Plan" wide>
         <form onSubmit={savePlanning} className="space-y-4">
-          <div><label className="label">Purchase Order</label><select className="select" value={form.po_id || ''} onChange={e => setForm({ ...form, po_id: e.target.value })}><option value="">Select</option>{pos.map(p => <option key={p.id} value={p.id}>{p.po_number}</option>)}</select></div>
+          <div><label className="label">Purchase Order</label><select className="select" value={form.po_id || ''} onChange={e => { setForm({ ...form, po_id: e.target.value }); loadPlanItems(e.target.value); }}><option value="">Select</option>{pos.map(p => <option key={p.id} value={p.id}>{p.po_number}</option>)}</select></div>
+
+          {/* Item-wise mapping (mam 2026-08-28): tick which PO items this
+              plan covers + the planned qty (defaults to the PO qty). */}
+          {planItems.length > 0 && (
+            <div className="border rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 border-b">
+                <span className="text-xs font-bold text-gray-600">Map items ({Object.values(planPicked).filter(v => v.checked).length} of {planItems.length} picked)</span>
+                <div className="space-x-2 text-[11px]">
+                  <button type="button" className="text-blue-600 hover:underline" onClick={() => setPlanPicked(p => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, { ...v, checked: true }])))}>all</button>
+                  <button type="button" className="text-blue-600 hover:underline" onClick={() => setPlanPicked(p => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, { ...v, checked: false }])))}>none</button>
+                </div>
+              </div>
+              <div className="max-h-56 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <tbody>
+                    {planItems.map(it => (
+                      <tr key={it.id} className="border-t">
+                        <td className="p-1.5 w-6">
+                          <input type="checkbox" checked={planPicked[it.id]?.checked || false}
+                            onChange={e => setPlanPicked(p => ({ ...p, [it.id]: { ...p[it.id], checked: e.target.checked } }))} />
+                        </td>
+                        <td className="p-1.5">{it.description || '—'} <span className="text-gray-400">({it.unit || '—'})</span></td>
+                        <td className="p-1.5 w-28 text-right">
+                          <input type="number" className="input text-xs text-right w-24 py-1" placeholder={`${it.quantity || 0}`}
+                            value={planPicked[it.id]?.qty ?? ''} disabled={!planPicked[it.id]?.checked}
+                            onChange={e => setPlanPicked(p => ({ ...p, [it.id]: { ...p[it.id], qty: e.target.value } }))}
+                            title={`PO quantity: ${it.quantity || 0}`} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {form.po_id && planItems.length === 0 && (
+            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">This PO has no items to map — the plan will save without item mapping.</p>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Planned Start</label><input className="input" type="date" value={form.planned_start || ''} onChange={e => setForm({ ...form, planned_start: e.target.value })} /></div>
             <div><label className="label">Planned End</label><input className="input" type="date" value={form.planned_end || ''} onChange={e => setForm({ ...form, planned_end: e.target.value })} /></div>

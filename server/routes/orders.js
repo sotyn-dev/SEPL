@@ -441,7 +441,10 @@ router.delete('/po/:id', requirePermission('orders', 'delete'), (req, res) => {
 });
 
 router.delete('/planning/:id', requirePermission('orders', 'delete'), (req, res) => {
-  getDb().prepare('DELETE FROM order_planning WHERE id=?').run(req.params.id);
+  const db = getDb();
+  // Explicit — SQLite FK cascade only fires when foreign_keys pragma is on.
+  try { db.prepare('DELETE FROM order_planning_items WHERE planning_id=?').run(req.params.id); } catch (_) {}
+  db.prepare('DELETE FROM order_planning WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
 
@@ -718,24 +721,64 @@ router.get('/bb/:bbId/items', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM po_items WHERE business_book_id=?').all(req.params.bbId));
 });
 
-// Order Planning
+// Order Planning — plans map ITEM-WISE to po_items (mam 2026-08-28:
+// "pick here item wise which is mapping"): order_planning_items carries
+// which items (and planned qty) each plan covers.
 router.get('/planning', (req, res) => {
-  res.json(getDb().prepare(`SELECT op.*, po.po_number, bb.client_name FROM order_planning op
+  res.json(getDb().prepare(`SELECT op.*, po.po_number, bb.client_name,
+      (SELECT COUNT(*) FROM order_planning_items x WHERE x.planning_id=op.id) AS item_count
+    FROM order_planning op
     LEFT JOIN purchase_orders po ON op.po_id=po.id LEFT JOIN business_book bb ON op.business_book_id=bb.id ORDER BY op.created_at DESC`).all());
 });
 
+// Pickable items for a PO — its own items, plus legacy rows that predate
+// po_items.po_id (linked only through the business book).
+router.get('/planning-items/:poId', (req, res) => {
+  const db = getDb();
+  const po = db.prepare('SELECT id, business_book_id FROM purchase_orders WHERE id=?').get(req.params.poId);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  res.json(db.prepare(`SELECT id, description, quantity, unit, rate FROM po_items
+    WHERE po_id=? OR (po_id IS NULL AND business_book_id=?) ORDER BY sr_no, id`).all(po.id, po.business_book_id || -1));
+});
+
+// The items a plan maps to (for the expandable row on the Planning tab).
+router.get('/planning/:id/items', (req, res) => {
+  res.json(getDb().prepare(`SELECT opi.id, opi.po_item_id, opi.quantity AS planned_qty,
+      pi.description, pi.unit, pi.quantity AS po_qty, pi.rate
+    FROM order_planning_items opi LEFT JOIN po_items pi ON pi.id=opi.po_item_id
+    WHERE opi.planning_id=? ORDER BY opi.id`).all(req.params.id));
+});
+
+const savePlanItems = (db, planningId, items) => {
+  db.prepare('DELETE FROM order_planning_items WHERE planning_id=?').run(planningId);
+  const ins = db.prepare('INSERT INTO order_planning_items (planning_id, po_item_id, quantity) VALUES (?,?,?)');
+  for (const it of items) {
+    if (+it.po_item_id) ins.run(planningId, +it.po_item_id, +it.quantity > 0 ? +it.quantity : null);
+  }
+};
+
 router.post('/planning', requirePermission('orders', 'create'), (req, res) => {
-  const { po_id, business_book_id, planned_start, planned_end, notes } = req.body;
-  const r = getDb().prepare(
-    'INSERT INTO order_planning (po_id, business_book_id, planned_start, planned_end, notes, created_by) VALUES (?,?,?,?,?,?)'
-  ).run(po_id, business_book_id, planned_start, planned_end, notes, req.user.id);
-  res.status(201).json({ id: r.lastInsertRowid });
+  const { po_id, business_book_id, planned_start, planned_end, notes, items } = req.body;
+  const db = getDb();
+  const tx = db.transaction(() => {
+    const r = db.prepare(
+      'INSERT INTO order_planning (po_id, business_book_id, planned_start, planned_end, notes, created_by) VALUES (?,?,?,?,?,?)'
+    ).run(po_id, business_book_id, planned_start, planned_end, notes, req.user.id);
+    if (Array.isArray(items) && items.length) savePlanItems(db, r.lastInsertRowid, items);
+    return r.lastInsertRowid;
+  });
+  res.status(201).json({ id: tx() });
 });
 
 router.put('/planning/:id', requirePermission('orders', 'edit'), (req, res) => {
-  const { status, planned_start, planned_end, notes } = req.body;
-  getDb().prepare('UPDATE order_planning SET status=?, planned_start=?, planned_end=?, notes=? WHERE id=?')
-    .run(status, planned_start, planned_end, notes, req.params.id);
+  const { status, planned_start, planned_end, notes, items } = req.body;
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE order_planning SET status=?, planned_start=?, planned_end=?, notes=? WHERE id=?')
+      .run(status, planned_start, planned_end, notes, req.params.id);
+    if (Array.isArray(items)) savePlanItems(db, +req.params.id, items);
+  });
+  tx();
   res.json({ message: 'Updated' });
 });
 

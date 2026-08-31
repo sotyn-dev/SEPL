@@ -5461,6 +5461,20 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[schema] quotation_negotiation_log create failed:', e.message); }
 
+  // ─── Order Planning → PO item mapping (mam 2026-08-28: "pick here item
+  // wise which is mapping") — a plan covers SPECIFIC po_items (with the
+  // planned qty), not just a whole PO.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS order_planning_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      planning_id INTEGER REFERENCES order_planning(id) ON DELETE CASCADE,
+      po_item_id INTEGER REFERENCES po_items(id),
+      quantity REAL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_opi_plan ON order_planning_items(planning_id)');
+  } catch (e) { console.error('[schema] order_planning_items create failed:', e.message); }
+
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,
   // and matches loosely (case-insensitive name LIKE) so minor punctuation in
