@@ -7814,4 +7814,132 @@ router.put('/rates-items/long-delivery/:itemMasterId', requirePermission('procur
   res.json({ ok: true, long_delivery: flag });
 });
 
+// ═══ VENDOR SCORECARD / GAMIFICATION (mam 2026-08-31, her template file) ═══
+// SOP-05.4 vendor score card + SOP-07 S11 "report card updates on every
+// delivery". Nobody has to measure anything — the ERP measures:
+//   CREDIT (40): credit days — finalised rates' credit days, else vendor master
+//   PRICE (28): relative — 10 × lowest quote ÷ vendor's quote, avg over quotes
+//   DELIVERY (20): on-time % — GRN date vs the PO's written delivery date
+//   QUOTE SPEED (12): hrs from indent raised → vendor's quote entered
+// Weighted 0-100, normalised over the metrics that HAVE data. Tiers per
+// mam's sheet: Platinum 85+ · Gold 70-84 · Silver 55-69 · Bronze <55.
+// Quarterly reset: ?months=3 (default) scopes quotes/deliveries; 0 = all time.
+router.get('/vendor-scorecard', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const months = req.query.months === '0' ? 0 : Math.max(1, parseInt(req.query.months || '3', 10));
+    const sinceIso = months ? new Date(Date.now() - months * 30 * 864e5).toISOString().slice(0, 10) : '0000-01-01';
+    const WEIGHTS = { credit: 40, price: 28, delivery: 20, speed: 12 };
+    const creditScore = (d) => (d >= 60 ? 10 : d >= 45 ? 8 : d >= 30 ? 6 : d >= 15 ? 4 : 1);
+    const deliveryScore = (p) => (p >= 98 ? 10 : p >= 95 ? 8 : p >= 90 ? 6 : p >= 85 ? 4 : 2);
+    const speedScore = (h) => (h <= 4 ? 10 : h <= 12 ? 8 : h <= 24 ? 6 : h <= 48 ? 4 : 2);
+    const tierOf = (s) => (s >= 85 ? 'Platinum' : s >= 70 ? 'Gold' : s >= 55 ? 'Silver' : 'Bronze');
+
+    const vendors = db.prepare('SELECT id, name, firm_name, credit_days FROM vendors').all();
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    const byName = new Map();
+    for (const v of vendors) {
+      if (norm(v.name)) byName.set(norm(v.name), v.id);
+      if (norm(v.firm_name)) byName.set(norm(v.firm_name), v.id);
+    }
+    const agg = new Map();   // vendor_id → accumulators
+    const acc = (id) => {
+      if (!agg.has(id)) agg.set(id, { priceRatios: [], credit: [], speedHrs: [], quotes: 0, delivered: 0, onTime: 0, pos: 0, bills: 0 });
+      return agg.get(id);
+    };
+
+    // Quotes: 3-vendor rows (indent flow, with indent timestamps for TAT)
+    const quoteRows = db.prepare(`
+      SELECT r.vendor1_name v1n, r.vendor1_rate v1, r.vendor2_name v2n, r.vendor2_rate v2,
+             r.vendor3_name v3n, r.vendor3_rate v3, r.final_credit_days fcd, r.final_vendor_name fvn,
+             r.created_at rc, i.created_at ic
+        FROM indent_item_rates r
+        JOIN indent_items ii ON ii.id = r.indent_item_id
+        LEFT JOIN indents i ON i.id = ii.indent_id
+       WHERE date(r.created_at) >= ?`).all(sinceIso);
+    // Rate contracts (pre-indent) count for price competition too
+    const rcRows = db.prepare(`
+      SELECT vendor1_name v1n, vendor1_rate v1, vendor2_name v2n, vendor2_rate v2,
+             vendor3_name v3n, vendor3_rate v3, NULL AS fcd, NULL AS fvn, updated_at rc, NULL AS ic
+        FROM rate_contracts WHERE date(updated_at) >= ?`).all(sinceIso);
+    for (const q of [...quoteRows, ...rcRows]) {
+      const slots = [[q.v1n, +q.v1], [q.v2n, +q.v2], [q.v3n, +q.v3]].filter(([n, r]) => norm(n) && r > 0);
+      if (!slots.length) continue;
+      const lowest = Math.min(...slots.map(([, r]) => r));
+      for (const [n, r] of slots) {
+        const vid = byName.get(norm(n));
+        if (!vid) continue;
+        const a = acc(vid);
+        a.quotes += 1;
+        a.priceRatios.push(Math.min(10, (lowest / r) * 10));
+        if (q.ic && q.rc) {
+          const hrs = (new Date(String(q.rc).replace(' ', 'T') + 'Z') - new Date(String(q.ic).replace(' ', 'T') + 'Z')) / 36e5;
+          if (Number.isFinite(hrs) && hrs >= 0 && hrs < 24 * 60) a.speedHrs.push(hrs);
+        }
+      }
+      // credit days from the finalised vendor's terms
+      if (q.fvn && +q.fcd > 0) {
+        const vid = byName.get(norm(q.fvn));
+        if (vid) acc(vid).credit.push(+q.fcd);
+      }
+    }
+
+    // Deliveries: vendor POs with a written delivery date + their GRN
+    const poRows = db.prepare(`
+      SELECT vp.vendor_id, vp.expected_receipt_date erd,
+             (SELECT MIN(date(g.created_at)) FROM grn g WHERE g.vendor_po_id = vp.id) grn_date,
+             (SELECT COUNT(*) FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id) bills
+        FROM vendor_pos vp
+       WHERE COALESCE(vp.cancelled,0)=0 AND vp.vendor_id IS NOT NULL AND date(vp.created_at) >= ?`).all(sinceIso);
+    for (const p of poRows) {
+      const a = acc(p.vendor_id);
+      a.pos += 1;
+      a.bills += +p.bills || 0;
+      if (p.erd && p.grn_date) {
+        a.delivered += 1;
+        if (p.grn_date <= p.erd) a.onTime += 1;
+      }
+    }
+
+    const out = [];
+    for (const v of vendors) {
+      const a = agg.get(v.id);
+      if (!a || (a.quotes === 0 && a.pos === 0)) continue;   // never seen — skip
+      const creditDays = a.credit.length ? Math.max(...a.credit) : (+v.credit_days > 0 ? +v.credit_days : null);
+      const scores = {
+        credit: creditDays != null ? creditScore(creditDays) : null,
+        price: a.priceRatios.length ? Math.round((a.priceRatios.reduce((s, x) => s + x, 0) / a.priceRatios.length) * 100) / 100 : null,
+        delivery: a.delivered ? deliveryScore((a.onTime / a.delivered) * 100) : null,
+        speed: a.speedHrs.length ? speedScore(a.speedHrs.reduce((s, x) => s + x, 0) / a.speedHrs.length) : null,
+      };
+      let wSum = 0, sSum = 0;
+      for (const k of Object.keys(WEIGHTS)) {
+        if (scores[k] != null) { wSum += WEIGHTS[k]; sSum += WEIGHTS[k] * scores[k]; }
+      }
+      const weighted = wSum ? Math.round((sSum / wSum) * 10 * 10) / 10 : 0;
+      out.push({
+        vendor_id: v.id, vendor: v.firm_name || v.name,
+        credit_days: creditDays,
+        avg_price_ratio: scores.price,
+        ontime_pct: a.delivered ? Math.round((a.onTime / a.delivered) * 100) : null,
+        avg_quote_hrs: a.speedHrs.length ? Math.round(a.speedHrs.reduce((s, x) => s + x, 0) / a.speedHrs.length) : null,
+        scores, weighted, tier: tierOf(weighted),
+        measured: { quotes: a.quotes, pos: a.pos, deliveries: a.delivered, bills: a.bills },
+      });
+    }
+    out.sort((x, y) => y.weighted - x.weighted);
+    out.forEach((o, i) => { o.rank = i + 1; });
+    res.json({ months, weights: WEIGHTS, rows: out,
+      tiers: [
+        { tier: 'Platinum', range: '85 – 100', reward: 'First right of refusal, largest volume share' },
+        { tier: 'Gold', range: '70 – 84', reward: 'Priority allocation, fast-track for new items' },
+        { tier: 'Silver', range: '55 – 69', reward: 'Standard business' },
+        { tier: 'Bronze', range: 'Below 55', reward: 'Reduced volume, improvement plan, on notice' },
+      ] });
+  } catch (err) {
+    console.error('vendor-scorecard error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
