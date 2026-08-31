@@ -100,8 +100,12 @@ export default function Snags() {
   // is meter how much of that set is in the DOM at once.
   const visibleRows = useMemo(() => snags.slice(0, visibleCount), [snags, visibleCount]);
   const hasMore = visibleCount < snags.length;
-  // A fresh result set (any filter change) starts from the top again.
-  useEffect(() => { setVisibleCount(CHUNK); scrollBoxRef.current?.scrollTo({ top: 0 }); }, [snags]);
+  // A fresh result set from a FILTER change starts from the top again.
+  // Deliberately NOT keyed on `snags`: saving an edit reloads the list too,
+  // and resetting scroll there yanked the table back to row 1 — a different
+  // snag's number landed where the user was looking, which read as "editing
+  // changed the snag no" (mam 2026-08-31). Edits now keep scroll position.
+  useEffect(() => { setVisibleCount(CHUNK); scrollBoxRef.current?.scrollTo({ top: 0 }); }, [filters]);
 
   // Watch the last mounted row; when it nears the bottom of the scroll box,
   // mount the next chunk. Runs as an effect (not a ref callback) so
@@ -228,10 +232,6 @@ export default function Snags() {
   // as bare YYYY-MM-DD strings from the date picker).
   const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   const isOverdue = (s) => s.target_date && s.status !== 'approved' && String(s.target_date).slice(0, 10) < todayIST;
-
-  // The snag being edited — its number is shown in the modal title so it's
-  // clear the number never changes on edit (mam 2026-08-31).
-  const editingSnag = editingId ? snags.find(x => x.id === editingId) : null;
 
   return (
     <div className="space-y-6">
@@ -384,7 +384,7 @@ export default function Snags() {
       </div>
 
       {/* RAISE / EDIT MODAL */}
-      <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); }} title={editingSnag ? `Edit Snag — ${editingSnag.snag_no}` : 'Raise Snag'} wide>
+      <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); }} title={editingId ? 'Edit Snag' : 'Raise Snag'} wide>
         <form onSubmit={save} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -455,9 +455,6 @@ export default function Snags() {
             <div>
               <label className="label">Target Date</label>
               <input type="date" className="input" value={form.target_date || ''} onChange={e => setForm(f => ({ ...f, target_date: e.target.value }))} />
-              {editingSnag && (
-                <p className="text-[10px] text-gray-400 mt-0.5">Snag no. {editingSnag.snag_no} stays the same — editing never changes it.</p>
-              )}
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t">
