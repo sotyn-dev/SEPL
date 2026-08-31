@@ -61,6 +61,33 @@ function ChatImage({ url, name }) {
 // message list and the composer's reply bar.
 const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
 
+// Pasted URLs render as real clickable links (mam 2026-08-31: "if we share
+// link … show that link" — they were plain text). WhatsApp-style: trailing
+// punctuation stays text so "see https://x.com." links to x.com, not x.com.
+// Rendered as React elements (never innerHTML), so message text can't inject
+// markup — only the matched URL itself becomes an <a>.
+const URL_RE = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
+function linkify(text, keyBase = 'u') {
+  if (!text || (!text.includes('http') && !text.includes('www.'))) return [text];
+  const re = new RegExp(URL_RE.source, 'g');
+  const out = []; let last = 0; let mm;
+  while ((mm = re.exec(text))) {
+    if (mm.index > last) out.push(text.slice(last, mm.index));
+    let url = mm[0];
+    const trail = (url.match(/[.,;:!?)\]]+$/) || [''])[0];
+    if (trail) url = url.slice(0, -trail.length);
+    out.push(
+      <a key={`${keyBase}-${mm.index}`} href={url.startsWith('www.') ? `https://${url}` : url}
+        target="_blank" rel="noreferrer" className="text-blue-600 underline break-all"
+        onClick={(e) => e.stopPropagation()}>{url}</a>
+    );
+    if (trail) out.push(trail);
+    last = mm.index + mm[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
 // Memoised message list — the heavy part of the thread. Its own React.memo
 // component with stable props, so composer keystrokes, context refreshes, and
 // Layout re-renders DON'T redraw the whole conversation (perf pass). The @mention
@@ -110,16 +137,19 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
     const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return `@(${names.map(esc).join('|')})`;
   }, [members]);
+  // Mentions highlighted + URLs linkified — the plain-text stretches between
+  // mentions go through linkify() so a pasted link is clickable either way.
   const renderBody = (body) => {
-    if (!body || !mentionPattern) return body;
+    if (!body) return body;
+    if (!mentionPattern) return linkify(body);
     const re = new RegExp(mentionPattern, 'g');
     const out = []; let last = 0; let mm;
     while ((mm = re.exec(body))) {
-      if (mm.index > last) out.push(body.slice(last, mm.index));
-      out.push(<span key={mm.index} className="text-blue-400 font-semibold">@{mm[1]}</span>);
+      if (mm.index > last) out.push(...linkify(body.slice(last, mm.index), `t${last}`));
+      out.push(<span key={`m${mm.index}`} className="text-blue-400 font-semibold">@{mm[1]}</span>);
       last = mm.index + mm[0].length;
     }
-    if (last < body.length) out.push(body.slice(last));
+    if (last < body.length) out.push(...linkify(body.slice(last), `t${last}`));
     return out;
   };
   // Group consecutive messages by calendar day so each day's label can be a
@@ -1465,7 +1495,7 @@ export default function SiteChat() {
             <div className="space-y-3 text-sm">
               <div className="rounded-lg bg-[#e6ecf7] px-3 py-2">
                 {m.attachment_name && <div className="text-xs text-gray-600 mb-0.5">📎 {m.attachment_name}</div>}
-                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{m.body}</div>}
+                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{linkify(m.body, 'info')}</div>}
                 <div className="text-[10px] text-gray-500 mt-1">{m.sender_name} · {fmtDateTime(m.created_at)}</div>
               </div>
               <div>
