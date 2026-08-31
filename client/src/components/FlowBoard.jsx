@@ -36,7 +36,11 @@ const StagePct = ({ pct }) => (
 // cardExtra(stageKey, card, reload) — optional render prop: an ACTION row
 // inside a record card (e.g. ⚡ Make Plan / 📄 Enquiry Sheet) so the step
 // can be completed right on the board (mam 2026-08-28 "make it here system").
-export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, stageIcons = {}, distsOf, extraTiles, activityBadge, openTo, cardExtra }) {
+// cardAction(stageKey, card, reload) — optional: return an onClick handler to
+// open an ACTION POPUP for this card instead of navigating (mam 2026-08-31
+// "click on record → open pop of action like po approval"); return null to
+// keep the normal deep-link behaviour for that card.
+export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, stageIcons = {}, distsOf, extraTiles, activityBadge, openTo, cardExtra, cardAction }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   // "+N more" expands the column INLINE (mam 2026-08-28: "show all data
@@ -127,9 +131,12 @@ export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, 
                       {/* Record cards — each opens its tab filtered to JUST
                           that record (?q=ref) so the completing action is
                           right in front. */}
-                      {(expanded[c.key] ? c.cards : c.cards.slice(0, 3)).map((card, j) => (
+                      {(expanded[c.key] ? c.cards : c.cards.slice(0, 3)).map((card, j) => {
+                        const act = cardAction ? cardAction(c.key, card, load) : null;
+                        return (
                         <Link key={j} to={recordLink(c.key, card)} className="block border rounded-lg p-2 bg-white hover:shadow hover:border-indigo-300 transition"
-                          title={`Open ${card.ref} to complete this step`}>
+                          onClick={act ? (e) => { e.preventDefault(); act(); } : undefined}
+                          title={act ? `Act on ${card.ref} right here` : `Open ${card.ref} to complete this step`}>
                           <div className="flex items-center justify-between">
                             <span className="text-[11px] font-bold text-indigo-700 truncate">{card.ref}</span>
                             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: STAGE_COLORS[i % STAGE_COLORS.length] }} />
@@ -141,7 +148,8 @@ export default function FlowBoard({ title, subtitle, endpoint, stageLinks = {}, 
                           </div>
                           {cardExtra && cardExtra(c.key, card, load)}
                         </Link>
-                      ))}
+                        );
+                      })}
                       {/* "+N more" expands INLINE below — no page jump. */}
                       {!expanded[c.key] && c.cards.length > 3 && (
                         <button onClick={() => setExpanded(e => ({ ...e, [c.key]: true }))}

@@ -7446,9 +7446,12 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
                                   WHERE vpi.indent_item_id=ii.id AND COALESCE(vpp.cancelled,0)=0)`;
     const hasFinalRate = `EXISTS (SELECT 1 FROM indent_item_rates ir WHERE ir.indent_item_id=ii.id AND COALESCE(ir.final_rate,0) > 0)`;
     const pipeline = [
+      // rid + items_n power the board's in-place Approve/Reject popup
+      // (mam 2026-08-31: "click on record → open pop of action").
       col('indent', 'Indent Raised / Approval', 'S1', all(`
-        SELECT i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
-               COALESCE(i.raised_by_name,'') AS owner, i.created_at
+        SELECT i.id AS rid, i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
+               COALESCE(i.raised_by_name,'') AS owner, i.created_at,
+               (SELECT COUNT(*) FROM indent_items ii2 WHERE ii2.indent_id=i.id) AS items_n
           FROM indents i WHERE i.status='submitted' ORDER BY i.created_at DESC LIMIT 50`),
         cnt("SELECT COUNT(*) c FROM indents WHERE status='submitted'")),
       col('rates', 'Finalised Rate', 'RATE', all(`
@@ -7468,8 +7471,9 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
         cnt(`SELECT COUNT(DISTINCT i.id) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
               WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND ${hasFinalRate}`)),
       col('po_approval', 'PO Approval', 'APPROVE', all(`
-        SELECT vp.po_number AS ref, COALESCE(v.name,'—') AS title,
-               CASE vp.po_approval WHEN 'pending_l1' THEN 'L1 pending' ELSE 'L2 pending' END AS owner, vp.created_at
+        SELECT vp.id AS rid, vp.po_number AS ref, COALESCE(v.name,'—') AS title,
+               CASE vp.po_approval WHEN 'pending_l1' THEN 'L1 pending' ELSE 'L2 pending' END AS owner, vp.created_at,
+               vp.total_amount AS amount
           FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval IN ('pending_l1','pending_l2')
          ORDER BY vp.created_at DESC LIMIT 50`),
