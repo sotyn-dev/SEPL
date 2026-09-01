@@ -1,0 +1,20 @@
+{
+  "name": "SEPL ERP",
+  "install": "npm install",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "node server/index.js",
+      "description": "Express API + Socket.IO on port 5000. Creates and seeds the local SQLite database (data/erp.db) on first boot; default admin login is admin / admin123."
+    },
+    {
+      "name": "frontend",
+      "command": "cd client && npm run dev",
+      "description": "Vite dev server on port 3000. Proxies /api, /uploads and /socket.io to the backend on 127.0.0.1:5000. Open http://localhost:3000 to use the app."
+    }
+  ],
+  "ports": [
+    { "name": "frontend", "port": 3000 },
+    { "name": "backend", "port": 5000 }
+  ]
+}
