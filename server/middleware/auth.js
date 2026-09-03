@@ -341,7 +341,7 @@ function getUserPermissions(userId) {
 
   if (user?.role === 'admin') {
     // Admin gets everything
-    const modules = [
+    let modules = [
       'dashboard','leads','quotations','solar_quotation','orders','business_book','item_master','vendors','customers','procurement',
       'cashflow','collections','payment_required','attendance','indent_fms','dpr',
       'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','gamification','tools','rentals','client_snag',
@@ -354,8 +354,19 @@ function getUserPermissions(userId) {
       // from schema.js's ALL_MODULES and has drifted out of sync over time — a
       // new module must be added to BOTH or admin's frontend permission map
       // silently omits it (routes still work; the sidebar entry disappears).
-      'drawing_tracker'
+      'drawing_tracker',
+      // System Flow & ERP Implementation Control (2026-09)
+      'system_flow'
     ];
+    // Drift fix (2026-09-01): the hardcoded copy above was 26 modules behind
+    // schema.js's ALL_MODULES. The top-up loop in schema.js seeds EVERY module
+    // into the Admin role's role_permissions rows, so union in what the DB
+    // actually knows — admin's frontend permission map can no longer drift
+    // when a new module ships. The list above stays as a safety net only.
+    try {
+      const rows = db.prepare('SELECT DISTINCT module FROM role_permissions').all();
+      modules = [...new Set([...modules, ...rows.map(r => r.module)])];
+    } catch (_) { /* pre-seed DB — fall back to the static list */ }
     const perms = {};
     for (const m of modules) {
       perms[m] = { can_view: 1, can_create: 1, can_edit: 1, can_delete: 1, can_approve: 1, can_see_all: 1 };

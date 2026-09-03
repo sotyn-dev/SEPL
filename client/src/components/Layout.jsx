@@ -59,6 +59,9 @@ import {
   FiTrello,
   // Client Snag · bill missing client signature (2026-08-11)
   FiCamera,
+  // ERP Management · System Flow & Implementation Control (mam 2026-09-01).
+  // All eight verified unused elsewhere in this file.
+  FiCpu, FiPieChart, FiShare2, FiOctagon, FiEdit3, FiBarChart, FiWatch, FiFlag,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -167,6 +170,9 @@ const SIDEBAR_GROUPS = [
     { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
     { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag' },
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
+    // Bank module (mam 2026-08-31): payment received / paid out from PNB & HDFC
+    // in one place — statement import + reconciliation; AA sync is Phase 2.
+    { path: '/bank',             label: 'Bank',        icon: LuIndianRupee, module: 'cashflow' },
     { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
     // Expenses module removed from the menu (mam 2026-07-03). Route + page kept
     // dormant in App.jsx so it's reversible and existing links don't 404.
@@ -212,6 +218,18 @@ const SIDEBAR_GROUPS = [
     { path: '/complaints',   label: 'Complaints',   icon: FiAlertTriangle,  module: 'complaints' },
     { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null, open: true },
     { path: '/system-requirements', label: 'System Requirements', icon: FiClipboard, module: null, open: true, flag: 'system_requirements' },
+  ]},
+  // ERP MANAGEMENT — System Flow & Implementation Control (mam 2026-09-01).
+  // One page (/system-flow) with ?tab= deep links, same pattern as
+  // Drawing Tracker's ?tab=reports entry.
+  { id: 'erp_management', label: 'ERP Management', icon: FiCpu, items: [
+    { path: '/system-flow?tab=dashboard',   label: 'Flow Dashboard',     icon: FiPieChart, module: 'system_flow' },
+    { path: '/system-flow?tab=flows',       label: 'System Flow',        icon: FiShare2,   module: 'system_flow' },
+    { path: '/system-flow?tab=bottlenecks', label: 'Bottleneck Center',  icon: FiOctagon,  module: 'system_flow' },
+    { path: '/system-flow?tab=master',      label: 'System/Step Master', icon: FiEdit3,    module: 'system_flow' },
+    { path: '/system-flow?tab=performance', label: 'Person Performance', icon: FiBarChart, module: 'system_flow' },
+    { path: '/system-flow?tab=timeline',    label: 'Timeline',           icon: FiWatch,    module: 'system_flow' },
+    { path: '/system-flow?tab=escalations', label: 'Escalations',        icon: FiFlag,     module: 'system_flow' },
   ]},
   // Executive group — 3 dashboards (mam 2026-05-27).
   { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [

@@ -53,6 +53,7 @@ const Employees = lazy(() => import('./pages/Employees'));
 const Expenses = lazy(() => import('./pages/Expenses'));
 const Checklists = lazy(() => import('./pages/Checklists'));
 const CashFlow = lazy(() => import('./pages/CashFlow'));
+const Bank = lazy(() => import('./pages/Bank'));
 const Collections = lazy(() => import('./pages/Collections'));
 const ArApTracker = lazy(() => import('./pages/ArApTracker'));
 const SiteChat = lazy(() => import('./pages/SiteChat'));
@@ -68,6 +69,7 @@ const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const HelpTickets = lazy(() => import('./pages/HelpTickets'));
 const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
+const SystemFlow = lazy(() => import('./pages/SystemFlow'));
 const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
 const FileViewer = lazy(() => import('./pages/FileViewer'));
@@ -217,6 +219,7 @@ export default function App() {
         <Route path="training" element={<Training />} />
         {/* 4 Critical Systems */}
         <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
+        <Route path="bank" element={<ModuleRoute module="cashflow"><Bank /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
         <Route path="attendance" element={<ModuleRoute module="attendance"><Attendance /></ModuleRoute>} />
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
@@ -272,6 +275,8 @@ export default function App() {
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
+        {/* ERP Management — System Flow & Implementation Control (2026-09) */}
+        <Route path="system-flow" element={<ModuleRoute module="system_flow"><SystemFlow /></ModuleRoute>} />
         <Route path="system-requirements" element={<ModuleGate module="system_requirements"><SystemRequirements /></ModuleGate>} />
         <Route path="system-requirements/:id" element={<ModuleGate module="system_requirements"><SystemRequirementWorkspace /></ModuleGate>} />
         <Route path="installation" element={<ModuleRoute module="installation"><SalesBilling /></ModuleRoute>} />

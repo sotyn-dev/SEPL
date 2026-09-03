@@ -12,6 +12,30 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "client"],
       "port": 3000
+    },
+    {
+      "name": "salon-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:/Users/admin/Desktop/salon-erp", "run", "server"],
+      "port": 5055
+    },
+    {
+      "name": "salon-edge",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set DENO_TLS_CA_STORE=system,mozilla&& npx --yes deno run --allow-all --env-file=C:/Users/admin/Desktop/salon-erp/supabase/functions/.env --config C:/Users/admin/Desktop/salon-erp/supabase/functions/api/deno.json C:/Users/admin/Desktop/salon-erp/supabase/functions/api/index.ts"],
+      "port": 8000
+    },
+    {
+      "name": "salon-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:/Users/admin/Desktop/salon-erp", "run", "client"],
+      "port": 3055
+    },
+    {
+      "name": "salon-web-live",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set API_PROXY_TARGET=https://kxwejphtauqjxsruojwo.supabase.co/functions/v1/api&& npm --prefix C:/Users/admin/Desktop/salon-erp run client"],
+      "port": 3055
     }
   ]
 }

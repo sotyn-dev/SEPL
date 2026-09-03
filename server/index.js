@@ -549,6 +549,8 @@ app.use('/api/hr-system', require('./routes/hrSystem'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));
+// Bank module — statement import + reconciliation now, AA auto-sync later (mam 2026-08-31)
+app.use('/api/bank', require('./routes/bank'));
 app.use('/api/collections', require('./routes/collections'));
 // AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
@@ -562,6 +564,8 @@ app.use('/api/site-chat', requireModuleEnabled('site_chat'), require('./routes/s
 app.use('/api/sotyn-flow', requireModuleEnabled('sotyn_flow'), require('./routes/sotynFlow'));
 // System Requirements — product evolution tracker (upload-heavy; swept/quarantined)
 app.use('/api/system-requirements', requireModuleEnabled('system_requirements'), require('./routes/systemRequirements'));
+// System Flow & ERP Implementation Control (mam 2026-09-01)
+app.use('/api/system-flow', require('./routes/systemFlow'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 

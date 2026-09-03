@@ -5500,6 +5500,40 @@ function initializeDatabase() {
     )`);
   } catch (e) { console.error('[schema] rate_contracts create failed:', e.message); }
 
+  // ─── BANK module (mam 2026-08-31): payment received / payment out from
+  // the bank in ONE place. Phase 1 = statement import + reconciliation;
+  // Phase 2 = the same tables fed by Account Aggregator auto-sync
+  // (bank_transactions.source = 'aa'). No credentials are ever stored.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS bank_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bank_name TEXT NOT NULL,
+      account_label TEXT,
+      account_last4 TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS bank_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bank_account_id INTEGER REFERENCES bank_accounts(id),
+      txn_date DATE,
+      description TEXT,
+      ref_no TEXT,
+      debit REAL DEFAULT 0,
+      credit REAL DEFAULT 0,
+      balance REAL,
+      source TEXT DEFAULT 'import',
+      dedupe_hash TEXT UNIQUE,
+      matched_type TEXT,
+      matched_id INTEGER,
+      matched_note TEXT,
+      matched_by INTEGER REFERENCES users(id),
+      matched_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_banktxn_acct ON bank_transactions(bank_account_id, txn_date)');
+  } catch (e) { console.error('[schema] bank module create failed:', e.message); }
+
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,
   // and matches loosely (case-insensitive name LIKE) so minor punctuation in
@@ -6428,6 +6462,14 @@ in your first week. If a process feels broken, raise a Help Ticket
     // silently revoke access for every user who has it. The module is renamed
     // in the UI only.
     'labour_quotation', 'labour_rate_master', 'labour_master', 'bill_verification',
+    // Mam (2026-09-01): System Flow & ERP Implementation Control — manages the
+    // ERP build itself (plan → assign → develop → test → complete) with
+    // automatic bottleneck / dependency / escalation detection.
+    //   can_view    → see dashboard, flows, bottlenecks + update OWN tasks
+    //   can_create  → create flows
+    //   can_edit    → edit any flow, manage Step/Process masters
+    //   can_approve → override an incomplete-dependency completion
+    'system_flow',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -6921,6 +6963,16 @@ in your first week. If a process feels broken, raise a Help Ticket
     runSystemRequirementsMigrations(db);
   } catch (e) {
     console.warn('[system_requirements] migrations skipped (non-fatal):', e.message);
+  }
+
+  // System Flow & ERP Implementation Control (mam 2026-09-01) — the ERP
+  // build tracker: processes → systems → steps → dependencies, with
+  // computed bottleneck/escalation logic. server/routes/systemFlow.js
+  try {
+    const { runSystemFlowMigrations } = require('./systemFlowSchema');
+    runSystemFlowMigrations(db);
+  } catch (e) {
+    console.warn('[system_flow] migrations skipped (non-fatal):', e.message);
   }
 
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────
