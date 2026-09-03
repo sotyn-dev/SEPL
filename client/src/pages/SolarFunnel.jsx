@@ -10,6 +10,7 @@ import { PROJECT_TYPES } from '../lib/solar/engine';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import QualificationChat from './QualificationChat';
 import { QUAL_SECTIONS } from '../lib/solar/qualification';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const cr = (v) => `₹${fmt((v || 0) / 1e7, 2)} Cr`;
 
@@ -44,7 +45,7 @@ export default function SolarFunnel() {
   const [deals, setDeals] = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [leads, setLeads] = useState([]);
-  const [tab, setTab] = useState('pipeline');
+  const [tab, setTab] = useUrlTab(['pipeline', 'analytics', 'responsible'], 'pipeline');
   const [modal, setModal] = useState(null); // null | {} (new) | deal (edit)
   const [searchQuery, setSearchQuery] = useState('');
 

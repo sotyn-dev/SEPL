@@ -24,6 +24,7 @@ import { useAuth } from '../context/AuthContext';
 import { fmtDateTime } from '../utils/datetime';
 import { exportCsv } from '../utils/exportCsv';
 import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiClipboard, FiTrendingUp, FiTrendingDown, FiBarChart2, FiClock, FiRefreshCw, FiLink, FiLock } from 'react-icons/fi';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const fmtCol = (d) => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]} ${MONTHS[+m[2] - 1]}` : (d || ''); };
@@ -94,7 +95,7 @@ function SourceBadge({ row }) {
 
 export default function ArApTracker() {
   const { canCreate, canEdit, canDelete } = useAuth();
-  const [tab, setTab] = useState('ar');                 // ar | ap | summary | log
+  const [tab, setTab] = useUrlTab(['ar', 'ap', 'summary', 'log'], 'ar');   // ar | ap | summary | log
   const [entries, setEntries] = useState([]);
   const [summary, setSummary] = useState({ rows: [], totals: {} });
   const [log, setLog] = useState([]);

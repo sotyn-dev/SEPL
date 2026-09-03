@@ -30,6 +30,7 @@ import {
   PROJECT_TYPES, MOUNTS, ARRAY_TYPES, PROPERTY_TYPES, typeLabel,
 } from '../lib/solar/engine';
 import { STATES } from '../data/indiaLocations';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const EMPTY_RB = { ui: { panel: {}, inverter: {}, structure: {}, cable: {} }, factors: { mount: {}, array: {}, state: {} }, settings: {}, inverterSizes: [], bos: {}, labour: {} };
 
@@ -41,8 +42,8 @@ export default function SolarQuotation() {
   const [rb, setRb] = useState(EMPTY_RB);
   const [leads, setLeads] = useState([]);
   const [leadId, setLeadId] = useState('');
-  const [view, setView] = useState('internal');     // internal | client
-  const [tab, setTab] = useState('build');           // build | saved
+  const [view, setView] = useUrlTab(['internal', 'client'], 'internal', 'view');     // internal | client
+  const [tab, setTab] = useUrlTab(['build', 'saved'], 'build');           // build | saved
   const [saved, setSaved] = useState([]);
   const [currentId, setCurrentId] = useState(null);
   const [busy, setBusy] = useState(false);

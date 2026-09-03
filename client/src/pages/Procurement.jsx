@@ -2393,7 +2393,7 @@ export default function Procurement() {
                   return `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.site_name || ''}`.toLowerCase().includes(rq);
                 });
               exportCsv('vendor-rates', ['Item','Make','Qty','Unit','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'],
-                rows.map(r => [r.description || r.master_name || '', r.make || '', r.quantity ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+                rows.map(r => [r.description || r.master_name || '', r.make || '', r.qty ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
             }
           }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
           {/* SOP-07 flow board (mam 2026-08-28) — the pipeline dashboard */}

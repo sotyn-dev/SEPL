@@ -217,7 +217,7 @@ export default function Rentals() {
               const rows = buildPaymentRows().sort((a, b) => String(b.month || '').localeCompare(String(a.month || '')));
               exportCsv('rental-payments', ['Period','Req No','Property','Landlord','Amount','Paid Via','Date'], rows.map(p => [p.month, p.request_no, p.property, p.landlord, p.amount, p.paid_via, p.paid_date]));
             }
-            else if (tab === 'bookings') exportCsv('rental-bookings', ['Status','Occupant','Property','City','Site','Check-in','Check-out','Rent Share'], bookings.map(b => [b.status, b.occupant_name || b.occupant_user_name, b.property_name, b.city, b.site_name, b.check_in, b.check_out, b.rent_share]));
+            else if (tab === 'bookings') exportCsv('rental-bookings', ['Status','Occupant','Property','City','Site','Check-in','Check-out','Rent Share'], bookings.map(b => [b.status, b.occupant_name || b.occupant_user_name, b.property_name, b.city, b.site_name, b.check_in_date, b.actual_checkout_date || b.check_out_date || '', b.rent_share]));
             else exportCsv('rental-requests', ['Req #','Month','Site','Arrange For','Owner','Pay Mode','Amount','Status'], requests.map(r => [r.request_no, r.rent_month, r.site_name, r.arrange_for, r.owner_name, r.payment_mode, r.rent_amount, r.status]));
           }} className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('rentals') && tab === 'payments' && (

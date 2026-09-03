@@ -5,6 +5,7 @@ import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { FiPlus, FiTrash2, FiEdit2, FiCheck, FiFileText } from 'react-icons/fi';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 // PO/FOC Stripped (mam 2026-06-09) — workflow module.
 // Three status tabs: Non-Approved → Approved → Re-Approved.
@@ -59,7 +60,7 @@ const calc = (f) => {
 };
 
 export default function PoFocStripped() {
-  const [tab, setTab] = useState('non_approved');
+  const [tab, setTab] = useUrlTab(['non_approved', 'approved', 're_approved'], 'non_approved');
   const [entries, setEntries] = useState([]);
   const [counts, setCounts] = useState({ non_approved: 0, approved: 0, re_approved: 0 });
   const [entriesLoaded, setEntriesLoaded] = useState(false);

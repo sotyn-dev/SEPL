@@ -26,6 +26,7 @@ import {
 } from '../lib/solar/shadow';
 import { STATES } from '../data/indiaLocations';
 import { num as fmt } from '../lib/solar/format';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const DEFAULT_LOC = { lat: 30.9010, lng: 75.8573, altitude: 247, name: 'Ludhiana, Punjab' };
 const VIEW_TABS = [
@@ -62,7 +63,7 @@ export default function SolarSiteDesign() {
   const [drawMode, setDrawMode] = useState(null);      // 'surface' | 'obstruction' | null
   const [newKind, setNewKind] = useState('tank');
   const [selectedId, setSelectedId] = useState(null);
-  const [tab, setTab] = useState('plan');              // 'plan' | '3d'
+  const [tab, setTab] = useUrlTab(['plan', '3d'], 'plan');              // 'plan' | '3d'
 
   // Sun state — kept as floats so dragging feels continuous.
   const [sunT, setSunT] = useState({ doy: dateToDoy(6, 21), minutes: 12 * 60 });

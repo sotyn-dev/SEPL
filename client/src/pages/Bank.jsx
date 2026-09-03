@@ -5,13 +5,14 @@
 // arrive — the card on the Import tab explains the status to management.
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
 const MATCH_LABEL = { collection: '✅ Collection', payment: '✅ Payment', cheque: '✅ Cheque', manual: '✅ Manual' };
 
 export default function Bank() {
-  const [tab, setTab] = useState('txns');
+  const [tab, setTab] = useUrlTab(['txns', 'import', 'accounts'], 'txns');
   const [accounts, setAccounts] = useState([]);
   const [summary, setSummary] = useState(null);
   const loadAccounts = useCallback(() => {

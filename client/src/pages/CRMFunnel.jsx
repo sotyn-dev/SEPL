@@ -11,6 +11,7 @@ import { exportCsv } from '../utils/exportCsv';
 const fmt = (n) => 'Rs ' + Math.abs(Math.round(+n || 0)).toLocaleString('en-IN');
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 // CRM Sales Funnel FMS — flat 3-step tracker. Step 1: Quotation submit.
 // Step 2: Negotiation. Step 3: Win/Loss. Mam's columns from her sheet:
@@ -47,7 +48,7 @@ export default function CRMFunnel() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ q: '', step: 'all', state: '', type: '' });
-  const [view, setView] = useState('funnel');   // 'funnel' | 'responsible'
+  const [view, setView] = useUrlTab(['funnel', 'responsible'], 'funnel');   // 'funnel' | 'responsible'
   const [modal, setModal] = useState(false);
   // Read-only view modal (mam, 2026-05-16: "action as eye" on the
   // CRM funnel list).  Holds the row being inspected; null = closed.

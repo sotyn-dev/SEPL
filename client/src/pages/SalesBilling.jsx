@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiTrash2, FiCheckCircle, FiDownload, FiGrid, FiFileText, FiPackage, FiClipboard, FiPrinter, FiUsers } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import Pagination, { usePagination } from '../components/PaginationBar';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const TYPE_LABEL = { 1: 'Type 1 · Sales Order', 2: 'Type 2 · Material Delivery', 3: 'Type 3 · Installation', 4: 'Type 4 · Final' };
 const fmt = n => '₹' + Math.round(+n || 0).toLocaleString('en-IN');
@@ -21,7 +22,7 @@ const TABS = [
 
 export default function SalesBilling() {
   const { canDelete } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab(['dashboard', 'orders', 'material', 'dpr', 'responsible'], 'dashboard');
   const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState([]);
