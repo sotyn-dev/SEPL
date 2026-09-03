@@ -3066,6 +3066,10 @@ function initializeDatabase() {
     // the name so it survives if the user is later deactivated/renamed.
     ['rent_requests', 'employee_user_id INTEGER REFERENCES users(id)'],
     ['rent_requests', 'employee_name TEXT'],
+    // Rent deed / agreement — mam 2026-09-03: mandatory on every rent
+    // request, so there is always a signed document behind the payment.
+    // Nullable in SQL (existing rows predate it); the POST route enforces it.
+    ['rent_requests', 'rent_deed_url TEXT'],
     ['payroll_settings', 'late_grace_count INTEGER DEFAULT 3'],
     ['payroll_settings', 'late_per_minute_rate REAL DEFAULT 20'],
     // Salary breakdown percentages — match SEPL Tally slip format

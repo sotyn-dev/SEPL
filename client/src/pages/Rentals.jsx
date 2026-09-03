@@ -273,7 +273,7 @@ export default function Rentals() {
               <thead>
                 <tr>
                   <th>Req No</th><th>Month / Due By</th><th>Site</th><th>Arrange For</th>
-                  <th>Owner</th><th>Aadhar</th><th>Photo</th>
+                  <th>Owner</th><th>Aadhar</th><th>Deed</th><th>Photo</th>
                   <th>Pay Mode</th>
                   <th className="text-right">Amount</th><th>Status</th><th>Actions</th>
                 </tr>
@@ -320,6 +320,7 @@ export default function Rentals() {
                     </td>
                     <td className="text-xs"><div className="font-medium">{r.owner_name}</div>{r.owner_phone && <div className="text-[10px] text-gray-500">{r.owner_phone}</div>}</td>
                     <td>{r.owner_aadhar_url ? <a href={r.owner_aadhar_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 view</a> : <span className="text-gray-300 text-xs">—</span>}</td>
+                    <td>{r.rent_deed_url ? <a href={r.rent_deed_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 deed</a> : <span className="text-amber-500 text-xs" title="Rent deed missing - request predates the mandatory deed rule">⚠</span>}</td>
                     <td>
                       {r.room_photo_url ? (
                         <a href={r.room_photo_url} target="_blank" rel="noreferrer">
@@ -840,6 +841,14 @@ export default function Rentals() {
             if (!/^\d{6}$/.test(String(requestForm.pincode || ''))) {
               return toast.error('Room PIN code is required (6 digits)');
             }
+            // Rent deed is mandatory (mam 2026-09-03). Checked here as well as
+            // on the server so the message is immediate and names the field —
+            // and so it still applies for admins, whose forms skip HTML
+            // validation. Only on CREATE: rent requests raised before this
+            // shipped have no deed and must stay editable.
+            if (!requestForm.id && !String(requestForm.rent_deed_url || '').trim()) {
+              return toast.error('Rent deed is required — upload the signed rent deed / agreement');
+            }
             // If the user typed a PIN but didn't click "Verify PIN", classify
             // it now so metro_type is always saved.
             let payload = requestForm;
@@ -1047,6 +1056,30 @@ function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
               const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, owner_aadhar_url: url }));
               e.target.value = '';
             }} />
+          )}
+        </div>
+
+        <div className="col-span-2">
+          {/* Rent deed - MANDATORY (mam 2026-09-03): no rent request without the
+              signed agreement on file. The server rejects a missing deed too,
+              because admins run the app with HTML validation disabled. */}
+          <label className="label">
+            Rent Deed / Agreement <span className="text-red-600">*</span>
+            <span className="text-gray-400 font-normal text-[10px]"> (image / PDF)</span>
+          </label>
+          {form.rent_deed_url ? (
+            <div className="flex items-center gap-2">
+              <a href={form.rent_deed_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-sm">📎 Rent deed uploaded</a>
+              <button type="button" onClick={() => setForm(f => ({ ...f, rent_deed_url: '' }))} className="text-red-500 text-xs">Remove</button>
+            </div>
+          ) : (
+            <>
+              <input type="file" accept="image/*,.pdf" className="text-xs" onChange={async e => {
+                const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, rent_deed_url: url }));
+                e.target.value = '';
+              }} />
+              <div className="text-[10px] text-red-600 mt-1">Required - upload the signed rent deed before raising this request.</div>
+            </>
           )}
         </div>
 
