@@ -59,9 +59,8 @@ import {
   FiTrello,
   // Client Snag · bill missing client signature (2026-08-11)
   FiCamera,
-  // ERP Management · System Flow & Implementation Control (mam 2026-09-01).
-  // All eight verified unused elsewhere in this file.
-  FiCpu, FiPieChart, FiShare2, FiOctagon, FiEdit3, FiBarChart, FiWatch, FiFlag,
+  // ERP Management · System Flow single-click entry (mam 2026-09-01).
+  FiCpu,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -219,18 +218,11 @@ const SIDEBAR_GROUPS = [
     { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null, open: true },
     { path: '/system-requirements', label: 'System Requirements', icon: FiClipboard, module: null, open: true, flag: 'system_requirements' },
   ]},
-  // ERP MANAGEMENT — System Flow & Implementation Control (mam 2026-09-01).
-  // One page (/system-flow) with ?tab= deep links, same pattern as
-  // Drawing Tracker's ?tab=reports entry.
-  { id: 'erp_management', label: 'ERP Management', icon: FiCpu, items: [
-    { path: '/system-flow?tab=dashboard',   label: 'Flow Dashboard',     icon: FiPieChart, module: 'system_flow' },
-    { path: '/system-flow?tab=flows',       label: 'System Flow',        icon: FiShare2,   module: 'system_flow' },
-    { path: '/system-flow?tab=bottlenecks', label: 'Bottleneck Center',  icon: FiOctagon,  module: 'system_flow' },
-    { path: '/system-flow?tab=master',      label: 'System/Step Master', icon: FiEdit3,    module: 'system_flow' },
-    { path: '/system-flow?tab=performance', label: 'Person Performance', icon: FiBarChart, module: 'system_flow' },
-    { path: '/system-flow?tab=timeline',    label: 'Timeline',           icon: FiWatch,    module: 'system_flow' },
-    { path: '/system-flow?tab=escalations', label: 'Escalations',        icon: FiFlag,     module: 'system_flow' },
-  ]},
+  // ERP MANAGEMENT — System Flow & Implementation Control. Mam 2026-09-01:
+  // "if all things in one then why side bar write erp management steps" —
+  // the page carries its own tabs, so the sidebar entry is a single-click
+  // LINK GROUP (path + no items) straight to /system-flow.
+  { id: 'erp_management', label: 'ERP Management', icon: FiCpu, path: '/system-flow', module: 'system_flow', items: [] },
   // Executive group — 3 dashboards (mam 2026-05-27).
   { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [
     { path: '/dashboard/war-room', label: 'War Room',           icon: FiCrosshair, module: 'users' },
@@ -622,6 +614,9 @@ export default function Layout() {
   // routes folded into Executive) don't count.
   const groupVisible = (g) => {
     if (g.adminOnly && !isAdmin()) return false;
+    // Link group (path, no items): the header itself is the destination —
+    // visibility follows its own module/search match (ERP Management).
+    if (g.path) return itemVisible(g) && itemMatches(g);
     return g.items.some(it => !it.hidden && itemVisible(it) && itemMatches(it));
   };
   const visibleGroups = SIDEBAR_GROUPS.filter(groupVisible);
@@ -644,6 +639,7 @@ export default function Layout() {
   const crumb = (() => {
     if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label, module: SIDEBAR_DASHBOARD.module };
     for (const g of SIDEBAR_GROUPS) {
+      if (g.path === location.pathname) return { group: null, label: g.label, module: g.module };
       const it = g.items.find(m => m.path === location.pathname);
       if (it) return { group: g.label, label: it.label, module: it.module };
     }
@@ -767,6 +763,15 @@ export default function Layout() {
           {/* Collapsible accordion groups — initially closed, each opens
               independently. The chevron rotates to indicate state. */}
           {visibleGroups.map(g => {
+            // Link group — a group-styled header that IS the link (one click,
+            // no accordion): ERP Management → /system-flow (mam 2026-09-01).
+            if (g.path) return (
+              <Link key={g.id} to={g.path}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === g.path ? 'bg-white/15 text-white font-semibold' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+                <g.icon size={16} />
+                <span className="truncate flex-1 text-left">{g.label}</span>
+              </Link>
+            );
             const isOpen = isGroupOpen(g.id);
             const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it));
             const hasActiveChild = childItems.some(it => location.pathname === it.path);
