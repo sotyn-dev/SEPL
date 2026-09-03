@@ -130,6 +130,38 @@ function runSystemFlowMigrations(db) {
     console.warn('[system_flow] SOP seed skipped (non-fatal):', e.message);
   }
 
+  // Mam 2026-09-02: "on update status here should be actual link … like
+  // second photo" — every seeded SOP step links to the REAL ERP screen for
+  // its chart, so the step drawer shows "Open in ERP →" above Update Status.
+  // Chart-level defaults, NULL-guarded (admin fine-tunes per step via the
+  // Step Master "ERP Link" button and we never overwrite a manual choice).
+  const SOP_ERP_PATHS = {
+    'SOP-01': '/leads',                // Lead to first check → Sales Funnel
+    'SOP-02': '/quotations',           // BOQ to quotation
+    'SOP-03': '/business-book',        // Negotiation & order booking
+    'SOP-04': '/indent-labour-payment',// Project kickoff & planning
+    'SOP-05': '/rates-board',          // Vendor & rates BEFORE indent
+    'SOP-06': '/drawing-tracker',      // Drawing approval
+    'SOP-07': '/procurement',          // Indent to material at site
+    'SOP-08': '/rental-tools',         // Tools & RGP
+    'SOP-09': '/dpr',                  // Site work & daily report
+    'SOP-10': '/inventory',            // Material use at site
+    'SOP-11': '/indent-labour-payment',// Labour / thekedar
+    'SOP-12': '/installation',         // Extra work / change order (Sales Billing)
+    'SOP-13': '/installation',         // RA bill & sales bill
+    'SOP-14': '/installation',         // Testing & commissioning (testing bill)
+    'SOP-15': '/snags',                // Handover & snags
+    'SOP-16': '/collections',          // Collection
+    'SOP-17': '/collections',          // Final account & retention
+    'SOP-18': '/payment-required',     // Payments & cheques
+  };
+  const setSopPath = db.prepare(
+    "UPDATE sysflow_step_master SET erp_path=? WHERE name LIKE ? AND erp_path IS NULL");
+  for (const [sop, path] of Object.entries(SOP_ERP_PATHS)) {
+    setSopPath.run(path, sop + '.%');   // "SOP-01.1 · Lead entry format" etc.
+    setSopPath.run(path, sop + ' %');   // fallback-named steps "SOP-01 S3"
+  }
+
   // Configurable escalation thresholds (days overdue/blocked) — app_settings.
   const getSetting = db.prepare('SELECT value FROM app_settings WHERE key = ?');
   const setSetting = db.prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?,?)');
