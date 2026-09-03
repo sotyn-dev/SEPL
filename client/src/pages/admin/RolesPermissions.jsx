@@ -32,6 +32,9 @@ const ALL_MODULES = [
   { key: 'delegations', label: 'Delegations' },
   { key: 'pms_tasks', label: 'PMS Tasks' },
   { key: 'checklists', label: 'Checklists' },
+  // Was missing here (drift audit 2026-09-01) — the module was gated on the
+  // server but admins had no row to grant it from.
+  { key: 'tally_bills', label: 'Tally Bills — Create=upload · Edit=record payment · Approve=task-done + approve/hold/reject' },
 
   // — Sales & CRM
   { key: 'leads', label: 'Sales Funnel' },
@@ -90,6 +93,12 @@ const ALL_MODULES = [
   { key: 'rentals', label: 'Room Rentals' },
   { key: 'employees', label: 'Employees' },
   { key: 'expenses', label: 'Expenses' },
+
+  // — ERP Management (2026-09) — System Flow & Implementation Control.
+  // View = dashboards/flows + update OWN tasks · Create = create flows ·
+  // Edit = edit any flow + manage Step/Process masters + ERP links ·
+  // Approve = override an incomplete-dependency completion.
+  { key: 'system_flow', label: 'System Flow (ERP Management) — build tracker, bottlenecks, step master' },
 
   // — Platform
   { key: 'ai_agent', label: 'AI Agent (Ask SOTYN.AI)' },

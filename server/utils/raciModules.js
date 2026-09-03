@@ -293,7 +293,14 @@ const MODULE_DEFS = {
       { key: 'approved', label: 'Final Approved' },
       { key: 'po_l1', label: 'PO L1 Approval' },
       { key: 'po_l2', label: 'PO L2 Approval' },
+      // Mam (2026-09-01): the Responsible editor must mirror the module's
+      // REAL tabs — Payment and the Receiving half of Dispatch & Receiving
+      // were missing. Both are universal flow steps with own timestamps.
+      // (Vendor Rates is pre-indent (SOP-05) and Debit Notes is an
+      // exception path — neither is a per-indent step, so neither is here.)
+      { key: 'payment', label: 'PO Payment Clearance' },
       { key: 'dispatch', label: 'Dispatch / Delivery' },
+      { key: 'received', label: 'Material Received' },
       { key: 'purchase_bill', label: 'Purchase Bill' },
     ],
     rows(db) {
@@ -303,9 +310,16 @@ const MODULE_DEFS = {
                i.l1_at, i.l2_at, i.crm_at, i.approved_at, i.status, i.l1_status,
                (SELECT MIN(vp.po_l1_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l1_at,
                (SELECT MIN(vp.po_l2_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l2_at,
+               (SELECT MIN(COALESCE(vp.payment_cleared_at,
+                       CASE WHEN vp.payment_block_type IS NULL OR vp.payment_block_type='no_advance'
+                            THEN vp.created_at END))
+                  FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS payment_at,
                (SELECT MIN(dn.created_at) FROM delivery_notes dn
                   JOIN vendor_pos vp ON vp.id=dn.vendor_po_id
                  WHERE vp.indent_id=i.id) AS dispatch_at,
+               (SELECT MIN(dn.received_at) FROM delivery_notes dn
+                  LEFT JOIN vendor_pos vp ON vp.id=dn.vendor_po_id
+                 WHERE vp.indent_id=i.id OR dn.indent_id=i.id) AS received_at,
                (SELECT MIN(pb.created_at) FROM purchase_bills pb
                   JOIN vendor_pos vp ON vp.id=pb.vendor_po_id
                  WHERE vp.indent_id=i.id) AS bill_at
@@ -313,8 +327,9 @@ const MODULE_DEFS = {
         const stamps = {
           raised: r.created_at || null, l1: r.l1_at || null, l2: r.l2_at || null,
           crm: r.crm_at || null, approved: r.approved_at || null,
-          po_l1: r.po_l1_at || null, po_l2: r.po_l2_at || null, dispatch: r.dispatch_at || null,
-          purchase_bill: r.bill_at || null,
+          po_l1: r.po_l1_at || null, po_l2: r.po_l2_at || null,
+          payment: r.payment_at || null, dispatch: r.dispatch_at || null,
+          received: r.received_at || null, purchase_bill: r.bill_at || null,
         };
         // A rejected/cancelled indent is TERMINAL — nothing is waiting on
         // anyone (audit 2026-08-17: rejected indents sat "pending" at their
