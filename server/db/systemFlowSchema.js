@@ -121,6 +121,15 @@ function runSystemFlowMigrations(db) {
   const setPath = db.prepare('UPDATE sysflow_step_master SET erp_path=? WHERE name=? AND erp_path IS NULL');
   for (const [name, path] of Object.entries(ERP_PATHS)) setPath.run(path, name);
 
+  // Mam's Aug-2026 SOP flow charts → seeded as System Flows exactly once
+  // (guarded inside the seeder). Runs every boot, no-ops after the first.
+  try {
+    const { seedSystemFlowSops } = require('../scripts/seedSystemFlowSops');
+    seedSystemFlowSops(db);
+  } catch (e) {
+    console.warn('[system_flow] SOP seed skipped (non-fatal):', e.message);
+  }
+
   // Configurable escalation thresholds (days overdue/blocked) — app_settings.
   const getSetting = db.prepare('SELECT value FROM app_settings WHERE key = ?');
   const setSetting = db.prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?,?)');
