@@ -484,9 +484,25 @@ export default function Delegation() {
             // Export the same list the table shows — visibleTasks already
             // composes search + slippage filter over the server-filtered tasks
             // — so admin downloads exactly what's visible on screen.
+            // Columns mirror the on-screen table. MD 2026-09-03: "when export
+            // excel remarks also field show in excel with data" — Followup
+            // Remarks (EA -> MD) was missing, and so were the other three
+            // columns the table shows to its right, which made the download
+            // useless for reviewing follow-ups away from the screen.
             exportCsv('delegations',
-              ['Task ID','Description','Project','Assigned To','Due','Status'],
-              visibleTasks.map(t => [taskCode(t), t.description, t.project_name, t.assigned_to_name, t.due_date, t.status]));
+              ['Task ID','Description','Project','Assigned To','Due','Completed','Status','Extensions','Proof','Followup Remarks (EA → MD)'],
+              visibleTasks.map(t => [
+                taskCode(t),
+                cleanDesc(t.description || t.title),
+                t.project_name,
+                t.assigned_to_name,
+                t.due_date,
+                t.reviewed_at ? fmtDate(t.reviewed_at) : '',
+                t.status,
+                +t.extension_count || 0,
+                t.proof_url || '',
+                t.followup_remarks || '',
+              ]));
           }}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {isAdmin() && view === 'list' && (

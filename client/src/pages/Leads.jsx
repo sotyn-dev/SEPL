@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import api from '../api';
 import ResponsibilityTab from '../components/ResponsibilityTab';
-import { useUrlTab } from '../hooks/useUrlTab';
+import { useUrlTab, useUrlTabPair } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import TimePicker from '../components/TimePicker';
@@ -126,7 +126,25 @@ export default function Leads() {
   // value no branch below matches and the whole body rendered blank. With the
   // list, an unknown tab falls back to 'dashboard' (TSK-0397).
   const [tab, setTab] = useUrlTab(['dashboard', 'list', 'responsible'], 'dashboard');
-  const [stageTab, setStageTab] = useState('all');
+  // MD 2026-09-03: "every link has its function tab name". The stage tabs used
+  // to be plain useState, so clicking "Stage 2 — Qualified or Not" left the URL
+  // at /leads?tab=list — the link named the view but not the stage, a refresh
+  // dropped you back to All Leads, and a link sent to someone else opened on the
+  // wrong tab. The stage now rides in the URL under its own readable name
+  // (?stage=qualification, ?stage=site_survey, ...). 'all' is the default, so
+  // the param disappears on All Leads and the plain link stays clean.
+  // 'dashboard' stays in the accepted list so older ?stage=dashboard links still
+  // resolve, but the buttons no longer produce it - the Dashboard is the default
+  // view, so its link is simply /leads.
+  const [stageTab] = useUrlTab(['all', 'dashboard', ...STAGES], 'all', 'stage');
+  // The view and the stage move TOGETHER on every one of these buttons, and two
+  // separate url-tab writes in one handler lose one of the two keys — so they go
+  // in a single navigation. See useUrlTabPair.
+  const setPair = useUrlTabPair();
+  const goTab = (nextTab, nextStage) => setPair([
+    { key: 'tab', value: nextTab, defaultValue: 'dashboard' },
+    { key: 'stage', value: nextStage, defaultValue: 'all' },
+  ]);
   const [leads, setLeads] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [dashLoaded, setDashLoaded] = useState(false);   // the fetch has settled (ok or failed)
@@ -408,13 +426,13 @@ export default function Leads() {
           the leads are sitting today. */}
       <div className="flex gap-2 flex-wrap items-center">
         <button
-          onClick={() => { setTab('dashboard'); setStageTab('dashboard'); }}
+          onClick={() => goTab('dashboard', 'all')}
           className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
         >
           <FiTrendingUp size={14} /> Dashboard
         </button>
         <button
-          onClick={() => { setTab('list'); setStageTab('all'); }}
+          onClick={() => goTab('list', 'all')}
           className={`btn ${tab === 'list' && stageTab === 'all' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
         >
           All Leads
@@ -428,7 +446,7 @@ export default function Leads() {
           return (
             <button
               key={s}
-              onClick={() => { setTab('list'); setStageTab(s); }}
+              onClick={() => goTab('list', s)}
               className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
               title={STAGE_LABELS[s]}
             >
