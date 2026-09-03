@@ -3259,16 +3259,45 @@ function fallbackIndentLines(db, vendorPoId) {
      WHERE ii.indent_id = ?
      ORDER BY ii.id`).all(po.indent_id);
   if (!cand.length) return null;
-  const norm = s => String(s || '').trim().toLowerCase();
+  // Normalised vendor name: lower-case, drop punctuation and the boilerplate
+  // suffixes/prefixes buyers type inconsistently, so the master's
+  // "PIPELINE PRODUCTS INDIA" still matches a finalised
+  // "Pipeline Products India Pvt. Ltd." (mam 2026-09-03: the PO printed
+  // "No line items" purely because the two spellings differed).
+  const norm = s => String(s || '')
+    .toLowerCase()
+    .replace(/\b(?:m\/s|pvt|private|ltd|limited|llp|company|and)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
   const vnames = new Set([norm(po.vname), norm(po.fname)].filter(Boolean));
   let pick = cand.filter(c => c.final_vendor_name && vnames.has(norm(c.final_vendor_name)));
   if (!pick.length) {
-    const others = db.prepare(`
-      SELECT COUNT(*) as c FROM vendor_pos
-       WHERE indent_id = ? AND id <> ? AND COALESCE(cancelled, 0) = 0
+    // No per-line vendor stamp to go on (rates finalised without a vendor
+    // name, or a differently-typed one). Before giving up, drop the lines
+    // ALREADY linked to the indent's other live POs: whatever remains is
+    // unclaimed, so on a single remaining PO it can only belong to this one.
+    // This is what used to fail — the old code saw "another PO exists" and
+    // returned null, leaving a priced PO printing zero items.
+    const claimed = new Set(db.prepare(`
+      SELECT DISTINCT vpi.indent_item_id AS id
+        FROM vendor_po_items vpi
+        JOIN vendor_pos ovp ON ovp.id = vpi.vendor_po_id
+       WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
+         AND vpi.indent_item_id IS NOT NULL
+    `).all(po.indent_id, po.id).map(r => r.id));
+    const unclaimed = cand.filter(c => !claimed.has(c.id));
+    if (!unclaimed.length) return null;
+    // Any OTHER live PO on this indent that is itself unlinked leaves the
+    // split genuinely ambiguous — two unlinked POs could each own any subset.
+    // Stay silent in that case rather than guess (the caller's ±R1 total check
+    // is the last line of defence, not a licence to attribute blindly).
+    const otherUnlinked = db.prepare(`
+      SELECT COUNT(*) AS c FROM vendor_pos ovp
+       WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
+         AND NOT EXISTS (SELECT 1 FROM vendor_po_items x WHERE x.vendor_po_id = ovp.id)
     `).get(po.indent_id, po.id).c;
-    if (others > 0) return null;
-    pick = cand;
+    if (otherUnlinked > 0) return null;
+    pick = unclaimed;
   }
   const sum = pick.reduce((s, c) => s + ((+c.quantity || 0) * (+c.final_rate || 0)), 0);
   return { ids: pick.map(c => c.id), sum };
