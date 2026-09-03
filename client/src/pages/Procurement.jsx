@@ -15,6 +15,9 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
+// fmtDateIST: CSV date cells must read as IST like the screen, not raw UTC
+// (export audit 2026-09-03 — the same defect class found in Attendance).
+import { fmtDateIST } from '../utils/dateIST';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
@@ -2253,10 +2256,64 @@ export default function Procurement() {
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
             if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
-            if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, (+v.display_total || +v.total_amount || 0), v.status]));
+            // Tab ids MUST match allTabs above. 'pos'/'dispatch' were stale ids
+            // (real ones: 'vendorpo'/'delivery'), so Export Excel silently did
+            // NOTHING on those tabs — mam 2026-09-03 "excel isnot exporting".
+            // Each case now reproduces its tab's on-screen filters so the file
+            // matches the visible table, and unsupported tabs say so instead of
+            // failing silently.
+            if (tab === 'vendorpo') {
+              const q = vpoListSearch.trim().toLowerCase();
+              const rows = vendorPos.filter(v => {
+                if (vpoListStatus !== 'all' && (v.cancelled ? 'cancelled' : v.status) !== vpoListStatus) return false;
+                if (vpoListFrom && v.po_date && v.po_date < vpoListFrom) return false;
+                if (vpoListTo   && v.po_date && v.po_date > vpoListTo) return false;
+                if (!q) return true;
+                return `${v.po_number || ''} ${v.indent_number || ''} ${v.vendor_name || ''} ${v.indent_site_name || ''}`.toLowerCase().includes(q);
+              });
+              exportCsv('vendor-pos', ['PO Number','PO Date','Indent','Site','Vendor','Amount','Status'],
+                rows.map(v => [v.po_number, v.po_date, v.indent_number || '', v.indent_site_name || '', v.vendor_name,
+                  Math.round(+v.display_total || +v.total_amount || 0), v.cancelled ? 'cancelled' : v.status]));
+            }
+            if (tab === 'payment') {
+              const rows = (vendorPos || []).filter(v => !v.cancelled && v.payment_block_type);
+              exportCsv('po-payment-status', ['PO Number','PO Date','Vendor','Amount','Block Type','Block Amount','Payment Status','Cleared On','Notes'],
+                rows.map(v => [v.po_number, v.po_date, v.vendor_name, Math.round(+v.display_total || +v.total_amount || 0),
+                  v.payment_block_type || '', Math.round(+v.payment_block_amount || 0), v.payment_block_status || '',
+                  v.payment_cleared_at ? String(v.payment_cleared_at).slice(0, 10) : '', v.payment_block_notes || '']));
+            }
+            if (tab === 'debitnotes') {
+              exportCsv('debit-notes', ['DN Number','Type','Vendor','PO','Amount','Status','Reason'],
+                debitNotes.map(d => [d.dn_number, d.type, d.vendor_name || '', d.po_number || '',
+                  Math.round(+d.amount || 0), d.status || '', d.reason || '']));
+            }
+            if (tab === 'pipeline') {
+              exportCsv('po-pipeline', ['PO Number','Vendor','Site','Indent','Amount','Expected Receipt','Lead Days','Delay Days','Delay Reason','GRNs','Debit Notes','Bill Payment'],
+                pipeline.map(p2 => [p2.po_number, p2.vendor_name || '', p2.site_name || '', p2.indent_number || '',
+                  Math.round(+p2.total_amount || 0), p2.expected_receipt_date || '', p2.lead_time_days ?? '',
+                  p2.delay_days ?? '', p2.delay_reason || '', p2.grn_count ?? 0, p2.debit_count ?? 0, p2.bill_payment_status || '']));
+            }
+            if (tab === 'responsible') toast('Nothing to export on the Responsible board — pick a data tab.');
             if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
-            if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
-            if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+            if (tab === 'delivery') {
+              const q = dispListSearch.trim().toLowerCase();
+              const rows = deliveryNotes.filter(d => {
+                if (dispListStatus !== 'all' && d.status !== dispListStatus) return false;
+                if (dispListFrom && d.received_on && d.received_on.slice(0, 10) < dispListFrom) return false;
+                if (dispListTo   && d.received_on && d.received_on.slice(0, 10) > dispListTo) return false;
+                if (!q) return true;
+                return `${d.po_number || ''} ${d.vendor_po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''} ${d.raised_by_name || ''}`.toLowerCase().includes(q);
+              });
+              exportCsv('dispatch', ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'],
+                rows.map(d => [d.id, d.document_type, d.document_number,
+                  d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name,
+                  d.delivery_date, d.received_by_name,
+                  d.received_at ? fmtDateIST(d.received_at) : '', d.status]));
+            }
+            // r.item_description never existed on the API rows (GET item-rates
+            // returns ii.description) — the Item column exported blank for every
+            // row until 2026-09-03. mergedRates is what the table actually shows.
+            if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Make','Qty','Unit','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], mergedRates.map(r => [r.description || r.master_name || '', r.make || '', r.quantity ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
           }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
           {/* SOP-07 flow board (mam 2026-08-28) — the pipeline dashboard */}
           <a href="/procurement-board" className="btn btn-secondary flex items-center gap-2 text-sm"
