@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiUpload, FiUsers, FiDownload } from 'react-icons/fi';
@@ -80,6 +81,7 @@ export default function Customers() {
     }
     return true;
   });
+  const pager = usePagination(filtered);
 
   const catCounts = {};
   customers.forEach(c => { if (c.category) catCounts[c.category] = (catCounts[c.category] || 0) + 1; });
@@ -155,7 +157,7 @@ export default function Customers() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(c => (
+              {pager.pageItems.map(c => (
                 <tr key={c.id} className="border-b hover:bg-red-50/30">
                   <td className="px-2 py-2 font-mono text-[10px] text-red-600">{c.customer_code || '-'}</td>
                   <td className="px-2 py-2"><div className="font-semibold">{c.company_name}</div></td>
@@ -181,6 +183,7 @@ export default function Customers() {
             </tbody>
           </table>
         </div>
+        <Pagination {...pager} />
       </div>
 
       {/* View Modal */}

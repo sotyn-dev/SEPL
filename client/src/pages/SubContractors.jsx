@@ -7,6 +7,7 @@ import { FiPlus, FiEdit2, FiTrash2, FiPhone, FiMapPin, FiDownload } from 'react-
 import { exportCsv } from '../utils/exportCsv';
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE, CONTRACTOR_TYPES } from '../data/indiaLocations';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 // Sub-Contractor master list. Mirrors mam's Google Form 1:1 (Name, Contact,
 // Location, Type, Experience, Manpower, Tools Y/N, GST Y/N, Rate, Days to
@@ -47,6 +48,7 @@ export default function SubContractors() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [filter.q, filter.state, filter.contractor_type, filter.active]);
+  const pager = usePagination(rows);
 
   const openAdd = () => { setEditing(null); setForm(blankForm()); setModal(true); };
   const openEdit = (row) => {
@@ -175,7 +177,7 @@ export default function SubContractors() {
                 No sub-contractors yet. Click <b>+ Add Sub-Contractor</b> to add one.
               </td></tr>
             )}
-            {rows.map(r => (
+            {pager.pageItems.map(r => (
               <tr key={r.id}>
                 <td className="font-medium">{r.name}</td>
                 <td><span className="px-2 py-0.5 text-xs bg-gray-100 rounded">{r.contractor_type || '-'}</span></td>
@@ -207,6 +209,7 @@ export default function SubContractors() {
             ))}
           </tbody>
         </table>
+        <Pagination {...pager} />
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Sub-Contractor' : 'Add Sub-Contractor'} wide>

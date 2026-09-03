@@ -6,6 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2 } from 'react-icons/fi';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 export default function Employees() {
   const { canDelete, canCreate, canEdit, isAdmin, canView } = useAuth();
@@ -245,6 +246,7 @@ export default function Employees() {
   const filtered = employees.filter(e =>
     !search || [e.name, e.phone, e.email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase()))
   );
+  const pager = usePagination(filtered);
 
   return (
     <div className="space-y-4">
@@ -304,7 +306,7 @@ export default function Employees() {
           <th>Status</th><th>Actions</th>
         </tr></thead>
         <tbody>
-          {filtered.map(e => (
+          {pager.pageItems.map(e => (
             <tr key={e.id}>
               <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email}</td>
               <td>{e.designation}</td><td>{e.department}</td><td>{e.join_date}</td>
@@ -336,7 +338,7 @@ export default function Employees() {
         {filtered.length === 0 && (
           <div className="card p-6 text-center text-gray-400 text-sm">No employees found</div>
         )}
-        {filtered.map(e => (
+        {pager.pageItems.map(e => (
           <div key={e.id} className="card p-3 space-y-2">
             <div className="flex justify-between items-start gap-2">
               <div className="flex-1 min-w-0">
@@ -397,6 +399,9 @@ export default function Employees() {
           </div>
         ))}
       </div>
+
+      {/* One pagination bar shared by the desktop table and mobile cards */}
+      <Pagination {...pager} />
       </>
       )}
 

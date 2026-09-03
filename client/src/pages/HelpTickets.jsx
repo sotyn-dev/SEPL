@@ -13,6 +13,7 @@ import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2,
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDate } from '../utils/datetime';
 import { compressImage } from '../utils/compressImage';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 const STATUS_COLORS = {
   open: 'bg-red-100 text-red-700',
@@ -259,6 +260,10 @@ export default function HelpTickets() {
       || (t.assigned_to_name || '').toLowerCase().includes(q);
   });
 
+  // Numbered pagination over the final filtered list (scope + status are
+  // server-side; name + search compose above). Export keeps `filtered`.
+  const pager = usePagination(filtered);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -349,7 +354,7 @@ export default function HelpTickets() {
           </thead>
           <tbody>
             {filtered.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400 text-sm">No tickets {scope === 'mine' ? 'assigned to you' : scope === 'given' ? 'raised by you' : ''} yet.</td></tr>}
-            {filtered.map(t => {
+            {pager.pageItems.map(t => {
               const isRaiser = t.user_id === user?.id;
               const isAssignee = t.assigned_to === user?.id;
               const canClose = canFollowAll || isRaiser;
@@ -406,6 +411,7 @@ export default function HelpTickets() {
             })}
           </tbody>
         </table>
+        <Pagination {...pager} />
       </div>
 
       {/* Create Ticket Modal */}

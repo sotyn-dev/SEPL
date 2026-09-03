@@ -12,6 +12,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiPhoneCall, FiAlertTriangle, FiRefreshCw, FiTrash2, FiDownload, FiFileText } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import { LuIndianRupee } from 'react-icons/lu';
 
 export default function Collections() {
@@ -42,6 +43,11 @@ export default function Collections() {
     api.get('/auth/users?active_only=1').then(r => setUsers(r.data));
   };
   useEffect(() => { load(); }, [filter]);
+
+  // Numbered pagination over the (status-filtered) receivables list.
+  // Must sit above the `if (!summary)` early return (hook order).
+  // Export keeps using the FULL `receivables` array.
+  const pager = usePagination(receivables);
 
   const createReceivable = async (e) => {
     e.preventDefault();
@@ -309,7 +315,7 @@ export default function Collections() {
               </tr>
             </thead>
             <tbody>
-              {receivables.map(r => (
+              {pager.pageItems.map(r => (
                 <tr key={r.id}>
                   <td className="font-medium">
                     {/* Show business_book.project_name first (true site name),
@@ -367,6 +373,7 @@ export default function Collections() {
             </tbody>
           </table>
         </div>
+        <Pagination {...pager} />
       </div>
 
       {/* Edit Receivable Modal — v2 layout per mam's spec:

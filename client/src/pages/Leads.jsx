@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
 // Mam's 11-stage Sales Funnel spec (SEPL_Sales_Funnel_ERP_Build_Spec).
@@ -363,6 +364,9 @@ export default function Leads() {
     return [...map.values()];
   }, [leads]);
   const leadsMergedCount = leadGroups.filter(g => g.leads.length > 1).length;
+  // Numbered pagination over whichever list the table renders (flat leads or
+  // project groups). Export / counts keep using the FULL arrays.
+  const listPager = usePagination(groupLeads ? leadGroups : leads);
   const toggleLeadGroup = (key) => setLeadsExpanded(p => ({ ...p, [key]: !p[key] }));
   const leadClientList = (set) => { const a = [...set]; if (!a.length) return '-'; return a.length <= 2 ? a.join(', ') : `${a.slice(0,2).join(', ')} +${a.length-2} more`; };
 
@@ -542,8 +546,8 @@ export default function Leads() {
           <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2 text-right">Tentative Amt</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">SLA</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
           <tbody>
             {/* Flat list, or merged-by-project when grouping is on. */}
-            {!groupLeads && leads.map(l => renderLeadRow(l))}
-            {groupLeads && leadGroups.map(g => {
+            {!groupLeads && listPager.pageItems.map(l => renderLeadRow(l))}
+            {groupLeads && listPager.pageItems.map(g => {
               const open = !!leadsExpanded[g.key];
               return (
                 <Fragment key={g.key}>
@@ -570,7 +574,7 @@ export default function Leads() {
             })}
             {leads.length===0&&<tr><td colSpan="11" className="text-center py-8 text-gray-400">No leads</td></tr>}
           </tbody>
-        </table></div>
+        </table><Pagination {...listPager} /></div>
       </>)}
 
       {/* View + Stage Actions */}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -427,6 +428,36 @@ export default function Delegation() {
     return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${cfg[0]}`} title={cfg[1]} />;
   };
 
+  // Final visible list (free-text search + slippage filter over the already
+  // server-filtered tasks) — computed here, not inside the JSX, so the
+  // pagination hook can window it at the top level of the component.
+  const q = search.trim().toLowerCase();
+  let visibleTasks = q
+    ? tasks.filter(t =>
+        (t.task_id || '').toLowerCase().includes(q) ||
+        (t.description || '').toLowerCase().includes(q))
+    : tasks;
+  if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
+  const tasksPager = usePagination(visibleTasks);
+
+  // Pagination can put the War-Room deep-linked row (?open=<id>) on a later
+  // page where the scroll-to-row above can't find it — jump the pager to the
+  // row's page first, then scroll once it is actually rendered.
+  useEffect(() => {
+    if (!highlightId) return;
+    const i = visibleTasks.findIndex(t => String(t.id) === String(highlightId));
+    if (i < 0) return;
+    const target = Math.floor(i / tasksPager.perPage) + 1;
+    if (target !== tasksPager.page) tasksPager.setPage(target);
+    else {
+      const el = document.getElementById(`deleg-row-${highlightId}`);
+      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    // visibleTasks is recomputed inline each render — depend on the inputs
+    // that change it (tasks + filters via page), not its identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, tasks, tasksPager.page, tasksPager.perPage]);
+
   return (
     <div className="space-y-4">
       {/* Header — only admin creates new tasks. Everyone else is a user who receives them. */}
@@ -631,24 +662,15 @@ export default function Delegation() {
             </tr>
           </thead>
           <tbody>
-            {(() => {
-              const q = search.trim().toLowerCase();
-              let visibleTasks = q
-                ? tasks.filter(t =>
-                    (t.task_id || '').toLowerCase().includes(q) ||
-                    (t.description || '').toLowerCase().includes(q))
-                : tasks;
-              if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
-              return (<>
-                {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
-                {visibleTasks.map((t, idx) => {
+            {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
+            {tasksPager.pageItems.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               const canEditProject = isAdmin() || isAssigner;
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} id={`deleg-row-${t.id}`} className={`align-top ${t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}${String(t.id) === String(highlightId) ? ' ring-2 ring-amber-400 ring-inset' : ''}`}>
-                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
+                  <td className="text-center text-xs text-gray-500 font-medium">{(tasksPager.page - 1) * tasksPager.perPage + idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
                   <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>
                     <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
@@ -766,10 +788,9 @@ export default function Delegation() {
                 </tr>
               );
             })}
-              </>);
-            })()}
           </tbody>
         </table>
+        <Pagination {...tasksPager} />
       </div>
 
       {/* Mobile-only card layout REMOVED — per mam's request, the desktop

@@ -12,6 +12,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMonitor, FiSmartphone, FiCpu, FiUserPlus, FiCornerUpLeft, FiTool, FiArchive, FiTrash2, FiEdit2, FiSearch, FiClock, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime } from '../utils/datetime';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 const CATEGORIES = [
   'Laptop', 'Desktop', 'Mobile', 'Tablet', 'SIM Card',
@@ -52,6 +53,7 @@ export default function CompanyAssets() {
   const [actionForm, setActionForm] = useState({});
   const [history, setHistory] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const pager = usePagination(assets);
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -204,7 +206,7 @@ export default function CompanyAssets() {
             {assets.length === 0 && (
               <tr><td colSpan="10" className="text-center py-8 text-gray-400">No assets yet — click "Add Asset" to start the register</td></tr>
             )}
-            {assets.map(a => (
+            {pager.pageItems.map(a => (
               <tr key={a.id}>
                 <td className="font-bold text-indigo-700 text-xs">{a.asset_no}</td>
                 <td className="text-xs">{a.category || <span className="text-gray-300">—</span>}</td>
@@ -252,6 +254,7 @@ export default function CompanyAssets() {
             ))}
           </tbody>
         </table>
+        <Pagination {...pager} />
       </div>
 
       {/* ADD / EDIT MODAL */}

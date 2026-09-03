@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiEye, FiTrash2, FiExternalLink, FiTarget, FiDownload } from 'react-icons/fi';
@@ -131,6 +132,7 @@ export default function CRMFunnel() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [filter.q, filter.step, filter.state, filter.type]);
+  const pager = usePagination(rows);
 
   const openAdd = () => { setEditing(null); setForm(blank()); setModal(true); };
   const openEdit = (row) => {
@@ -303,7 +305,7 @@ export default function CRMFunnel() {
                 No leads yet. Click <b>+ Add Lead</b>.
               </td></tr>
             )}
-            {rows.map(r => (
+            {pager.pageItems.map(r => (
               <tr key={r.id}>
                 <td className="font-mono text-xs">{r.lead_no}</td>
                 <td className="font-medium">
@@ -353,6 +355,7 @@ export default function CRMFunnel() {
             ))}
           </tbody>
         </table>
+        <Pagination {...pager} />
       </div>
       </>)}
 

@@ -12,6 +12,7 @@ import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import { useAuth } from '../context/AuthContext';
 import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera, FiDownload, FiCalendar } from 'react-icons/fi';
@@ -341,6 +342,10 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
     return rows;
   }, [stock, filter.warehouse_id, typeFilter, condFilter]);
 
+  // Windows the RENDERED rows only — banner totals, row counts and the
+  // parent's CSV export all keep using the full filtered list.
+  const stockPager = usePagination(flatStock);
+
   // Total value across whatever's currently filtered. Used in the
   // summary banner — especially useful when mam picks a single site
   // and wants the bottom-line value of THAT site's stock.
@@ -446,7 +451,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
           interactions are too cramped on a phone. */}
       {flatStock.length > 0 && (
         <div className="md:hidden space-y-2">
-          {flatStock.map(r => {
+          {stockPager.pageItems.map(r => {
             const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
             const cond = r.latest_condition || '';
             const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -593,7 +598,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                 </tr>
               </thead>
               <tbody>
-                {flatStock.map(r => {
+                {stockPager.pageItems.map(r => {
                   const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
                   const cond = r.latest_condition || '';
                   const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -787,6 +792,12 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
             </table>
           </div>
         </div>
+      )}
+
+      {/* ONE shared pagination bar for both renders — the mobile cards and
+          the desktop table window the same pageItems (mobile↔desktop parity). */}
+      {flatStock.length > 0 && (
+        <div className="card p-0"><Pagination {...stockPager} /></div>
       )}
 
       {/* Edit qty / rate modal — records an ADJUST IN or OUT movement
@@ -1754,6 +1765,9 @@ function EquationTab({ warehouses }) {
   const [to, setTo] = useState(istToday());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  // Item-wise equation rows can run into the hundreds for a busy warehouse.
+  // Hook is unconditional (handles data === null) — required by React rules.
+  const eqPager = usePagination(data?.rows);
   const load = async (w = whId, f = from, t = to) => {
     if (!w) { setData(null); return; }
     setLoading(true);
@@ -1799,7 +1813,7 @@ function EquationTab({ warehouses }) {
               <th className="py-1.5 pl-2 text-right">Live</th>
             </tr></thead>
             <tbody>
-              {data.rows.map(r => (
+              {eqPager.pageItems.map(r => (
                 <tr key={r.item_master_id} className="border-b hover:bg-gray-50">
                   <td className="py-1.5 pr-2">{r.material_name} <span className="text-gray-400">({r.uom || 'nos'})</span></td>
                   <td className="py-1.5 px-2 text-right tabular-nums">{r.opening}</td>
@@ -1818,6 +1832,7 @@ function EquationTab({ warehouses }) {
               ))}
             </tbody>
           </table>
+          <Pagination {...eqPager} />
         </div>
       )}
     </div>
@@ -1825,6 +1840,8 @@ function EquationTab({ warehouses }) {
 }
 
 function MovementsTab({ movements, warehouses, filter, setFilter }) {
+  // The journal is append-only and grows forever — window what's rendered.
+  const mvmtPager = usePagination(movements);
   return (
     <>
       <div className="card p-4 grid grid-cols-1 sm:grid-cols-5 gap-3">
@@ -1870,7 +1887,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
           </thead>
           <tbody>
             {movements.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No movements yet</td></tr>}
-            {movements.map(m => (
+            {mvmtPager.pageItems.map(m => (
               <tr key={m.id} className="border-t hover:bg-gray-50">
                 <td className="px-3 py-1.5 text-[11px] text-gray-500 font-mono whitespace-nowrap">{fmtDateTime(m.created_at, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
                 <td className="px-3 py-1.5">
@@ -1903,6 +1920,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
             ))}
           </tbody>
         </table>
+        <Pagination {...mvmtPager} />
       </div>
     </>
   );

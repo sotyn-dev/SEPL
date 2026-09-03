@@ -16,6 +16,7 @@ const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.w
 import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
 import { fmtDate } from '../utils/datetime';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 export default function PMSTasks() {
   const { user, isAdmin, canCreate, canApprove } = useAuth();
@@ -307,6 +308,10 @@ export default function PMSTasks() {
     return <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${map[s] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>{s}</span>;
   };
 
+  // Numbered pagination over the server-filtered task list (scope/status/
+  // CRM/assignee/date filters all apply before this). Export keeps `tasks`.
+  const pager = usePagination(tasks);
+
   const projectOptions = projects.map(p => ({
     ...p,
     label: `${p.project_name || '(no project name)'}${p.company_name ? ' · ' + p.company_name : ''}${p.client_name ? ' · ' + p.client_name : ''}${p.crm_name ? '  — CRM: ' + p.crm_name : ''}`,
@@ -408,7 +413,7 @@ export default function PMSTasks() {
           </thead>
           <tbody>
             {tasks.length === 0 && <tr><td colSpan="11" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
-            {tasks.map((t, idx) => {
+            {pager.pageItems.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               // Mam (2026-05-21): "if in pms task site name is sushila
@@ -427,7 +432,7 @@ export default function PMSTasks() {
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
-                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
+                  <td className="text-center text-xs text-gray-500 font-medium">{(pager.page - 1) * pager.perPage + idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">PMS-{String(t.id).padStart(4, '0')}</td>
                   <td className="max-w-[220px]">
                     <div className="font-medium text-gray-800 text-xs">{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</div>
@@ -522,7 +527,7 @@ export default function PMSTasks() {
       {/* Mobile cards */}
       <div className="md:hidden space-y-2">
         {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No PMS tasks</div>}
-        {tasks.map((t, idx) => {
+        {pager.pageItems.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
           // Mirror the desktop table so the phone doesn't lock out approvers
@@ -539,7 +544,7 @@ export default function PMSTasks() {
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
                 <span className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-400 font-semibold">#{idx + 1}</span>
+                  <span className="text-[10px] text-gray-400 font-semibold">#{(pager.page - 1) * pager.perPage + idx + 1}</span>
                   <span className="font-mono text-xs text-red-700">PMS-{String(t.id).padStart(4, '0')}</span>
                 </span>
                 {statusBadge(t.status)}
@@ -595,6 +600,10 @@ export default function PMSTasks() {
           );
         })}
       </div>
+
+      {/* One shared pagination bar for the desktop table AND mobile cards
+          (mobile↔desktop parity) — both render pager.pageItems above. */}
+      <Pagination {...pager} className="card p-0" />
 
       {/* Create Modal */}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="New PMS Task" wide>

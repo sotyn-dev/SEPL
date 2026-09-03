@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { FiPlus, FiTrash2, FiEdit2, FiCheck, FiFileText } from 'react-icons/fi';
@@ -12,8 +13,6 @@ import { FiPlus, FiTrash2, FiEdit2, FiCheck, FiFileText } from 'react-icons/fi';
 
 const MARGINS = [10, 20, 30, 40, 50, 75, 100];
 const MAX_FOC = 10;
-const PENDING_CAP = 50;
-const DRAFT_CAP = 30;
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
@@ -230,6 +229,10 @@ export default function PoFocStripped() {
   const dq = draftSearch.toLowerCase().trim();
   const dToks = dq.split(/\s+/).filter(Boolean);
   const shownFiltered = dq ? shown.filter(e => dToks.every(t => (e.po_name || '').toLowerCase().includes(t))) : shown;
+  // Numbered pagination replaces the old hard render caps — one pager per list.
+  const kitPager = usePagination(shownFiltered);     // pending kits (drafts) on the Non-Approved tab
+  const pendPager = usePagination(pendingItems);     // PO items still needing a FOC kit
+  const shownPager = usePagination(shown);           // Approved / Re-Approved entry cards
 
   const entryCard = (e) => (
     <div key={e.id} className="card p-3">
@@ -308,10 +311,8 @@ export default function PoFocStripped() {
                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Pending kits ({shown.length})</div>
                 <input className="input max-w-xs" placeholder="Search pending kits…" value={draftSearch} onChange={e => setDraftSearch(e.target.value)} />
               </div>
-              {shownFiltered.slice(0, DRAFT_CAP).map(e => entryCard(e))}
-              {shownFiltered.length > DRAFT_CAP && (
-                <div className="text-xs text-gray-400 text-center">Showing {DRAFT_CAP} of {shownFiltered.length} — type to narrow.</div>
-              )}
+              {kitPager.pageItems.map(e => entryCard(e))}
+              <div className="card p-0"><Pagination {...kitPager} /></div>
               {shownFiltered.length === 0 && <div className="text-xs text-gray-400 text-center py-2">No pending kit matches “{draftSearch}”.</div>}
             </div>
           )}
@@ -320,7 +321,7 @@ export default function PoFocStripped() {
             <div className="text-sm font-semibold text-gray-700 mb-2">PO items needing FOC <span className="text-gray-400">({pendingTotal})</span></div>
             <input className="input mb-2" placeholder="Search a PO item to define its FOC…" value={pendSearch} onChange={e => setPendSearch(e.target.value)} />
             <div className="divide-y divide-gray-100">
-              {pendingItems.slice(0, PENDING_CAP).map(p => (
+              {pendPager.pageItems.map(p => (
                 <div key={p.id} className="flex items-center justify-between gap-2 py-1.5">
                   <span className="text-sm text-gray-700 truncate" title={p.display_name}>{p.display_name}</span>
                   <button onClick={() => openForPoItem(p)} className="btn btn-secondary text-xs whitespace-nowrap flex items-center gap-1"><FiPlus size={12} /> Define FOC</button>
@@ -330,9 +331,7 @@ export default function PoFocStripped() {
                 <div className="py-5 text-center text-sm text-gray-400">{pendSearch ? 'No matching PO items.' : 'All PO items have a FOC kit. 🎉'}</div>
               )}
             </div>
-            {pendingItems.length > PENDING_CAP && (
-              <div className="text-xs text-gray-400 text-center pt-2">Showing {PENDING_CAP} of {pendingItems.length} — type to narrow.</div>
-            )}
+            <Pagination {...pendPager} />
           </div>
         </>
       ) : (
@@ -342,7 +341,8 @@ export default function PoFocStripped() {
               {tab === 'approved' ? 'No approved items yet.' : 'No re-approved (changed) items.'}
             </div>
           )}
-          <div className="space-y-3">{shown.map(e => entryCard(e))}</div>
+          <div className="space-y-3">{shownPager.pageItems.map(e => entryCard(e))}</div>
+          <div className="card p-0"><Pagination {...shownPager} /></div>
         </>
       )}
 

@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -56,6 +57,9 @@ export default function Tools() {
   const [submissions, setSubmissions] = useState([]);
   const [submissionWeek, setSubmissionWeek] = useState(lastMonday());
   const [submitForm, setSubmitForm] = useState({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' });
+  // Windows the catalog table only — `tools` itself stays the full filtered
+  // list (the weekly-submission modal's picker needs every tool).
+  const toolsPager = usePagination(tools);
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -219,7 +223,7 @@ export default function Tools() {
               </thead>
               <tbody>
                 {tools.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No tools yet — click "Add Tool" to start the catalog</td></tr>}
-                {tools.map(t => (
+                {toolsPager.pageItems.map(t => (
                   <tr key={t.id} className="hover:bg-gray-50">
                     <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
                     <td className="font-medium">{t.name}</td>
@@ -259,6 +263,7 @@ export default function Tools() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...toolsPager} />
           </div>
         </>
       )}
