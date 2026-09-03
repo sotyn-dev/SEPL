@@ -3251,54 +3251,67 @@ function fallbackIndentLines(db, vendorPoId) {
       FROM vendor_pos vp LEFT JOIN vendors v ON v.id = vp.vendor_id
      WHERE vp.id = ?`).get(vendorPoId);
   if (!po || !po.indent_id) return null;
+  // ONLY lines that carry verifiable money are candidates. The caller proves a
+  // derived set is right by checking its sum against the buyer's typed total,
+  // and a line with no/zero final_rate adds R0 — it is invisible to that check
+  // and would ride onto a vendor's document unchecked. Zero-rate is the NORMAL
+  // state for stock-served, FOC and still-unpriced lines, so this is a real
+  // case, not a corner one (adversarial review 2026-09-03). A PO whose real
+  // lines are all zero-rate now prints nothing, which is the safe outcome.
   const cand = db.prepare(`
     SELECT ii.id, ii.quantity, ir.final_rate, ir.final_vendor_name
       FROM indent_items ii
       LEFT JOIN indent_item_rates ir ON ir.id =
         (SELECT MAX(ir2.id) FROM indent_item_rates ir2 WHERE ir2.indent_item_id = ii.id)
      WHERE ii.indent_id = ?
+       AND COALESCE(ii.quantity, 0) > 0
+       AND COALESCE(ir.final_rate, 0) > 0
      ORDER BY ii.id`).all(po.indent_id);
   if (!cand.length) return null;
   // Normalised vendor name: lower-case, drop punctuation and the boilerplate
-  // suffixes/prefixes buyers type inconsistently, so the master's
-  // "PIPELINE PRODUCTS INDIA" still matches a finalised
-  // "Pipeline Products India Pvt. Ltd." (mam 2026-09-03: the PO printed
-  // "No line items" purely because the two spellings differed).
+  // suffixes buyers type inconsistently, so the master's "PIPELINE PRODUCTS
+  // INDIA" still matches a finalised "Pipeline Products India Pvt. Ltd."
+  // (mam 2026-09-03). Short ambiguous tokens (co/inc/&) are deliberately NOT
+  // stripped so two distinct suppliers can never collapse onto one name.
   const norm = s => String(s || '')
     .toLowerCase()
     .replace(/\b(?:m\/s|pvt|private|ltd|limited|llp|company|and)\b/g, ' ')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
   const vnames = new Set([norm(po.vname), norm(po.fname)].filter(Boolean));
-  let pick = cand.filter(c => c.final_vendor_name && vnames.has(norm(c.final_vendor_name)));
-  if (!pick.length) {
-    // No per-line vendor stamp to go on (rates finalised without a vendor
-    // name, or a differently-typed one). Before giving up, drop the lines
-    // ALREADY linked to the indent's other live POs: whatever remains is
-    // unclaimed, so on a single remaining PO it can only belong to this one.
-    // This is what used to fail — the old code saw "another PO exists" and
-    // returned null, leaving a priced PO printing zero items.
-    const claimed = new Set(db.prepare(`
-      SELECT DISTINCT vpi.indent_item_id AS id
-        FROM vendor_po_items vpi
-        JOIN vendor_pos ovp ON ovp.id = vpi.vendor_po_id
-       WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
-         AND vpi.indent_item_id IS NOT NULL
-    `).all(po.indent_id, po.id).map(r => r.id));
-    const unclaimed = cand.filter(c => !claimed.has(c.id));
-    if (!unclaimed.length) return null;
-    // Any OTHER live PO on this indent that is itself unlinked leaves the
-    // split genuinely ambiguous — two unlinked POs could each own any subset.
-    // Stay silent in that case rather than guess (the caller's ±R1 total check
-    // is the last line of defence, not a licence to attribute blindly).
-    const otherUnlinked = db.prepare(`
-      SELECT COUNT(*) AS c FROM vendor_pos ovp
-       WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
-         AND NOT EXISTS (SELECT 1 FROM vendor_po_items x WHERE x.vendor_po_id = ovp.id)
-    `).get(po.indent_id, po.id).c;
-    if (otherUnlinked > 0) return null;
-    pick = unclaimed;
-  }
+
+  // Lines already spoken for by the indent's OTHER live POs.
+  const claimed = new Set(db.prepare(`
+    SELECT DISTINCT vpi.indent_item_id AS id
+      FROM vendor_po_items vpi
+      JOIN vendor_pos ovp ON ovp.id = vpi.vendor_po_id
+     WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
+       AND vpi.indent_item_id IS NOT NULL
+  `).all(po.indent_id, po.id).map(r => r.id));
+
+  // Is the split knowable at all? `claimed` is only trustworthy when every
+  // OTHER live PO has declared its lines. A sibling PO that is unlinked, or
+  // only PARTIALLY linked (free-text rows carry indent_item_id NULL, so its
+  // real lines still look unclaimed), leaves indent lines that belong to it
+  // looking like ours. Printing another vendor's material on this document is
+  // far worse than printing none, so stay silent.
+  const ambiguous = db.prepare(`
+    SELECT COUNT(*) AS c FROM vendor_pos ovp
+     WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
+       AND (NOT EXISTS (SELECT 1 FROM vendor_po_items x WHERE x.vendor_po_id = ovp.id)
+         OR EXISTS (SELECT 1 FROM vendor_po_items x
+                     WHERE x.vendor_po_id = ovp.id AND x.indent_item_id IS NULL))
+  `).get(po.indent_id, po.id).c;
+  if (ambiguous > 0) return null;
+
+  const unclaimed = cand.filter(c => !claimed.has(c.id));
+  if (!unclaimed.length) return null;
+  // Prefer the per-line vendor stamp; fall back to "everything still
+  // unclaimed". Both paths are restricted to unclaimed lines — the name match
+  // used to run over ALL lines, which let a line already sitting on another PO
+  // for the same vendor print here too.
+  let pick = unclaimed.filter(c => c.final_vendor_name && vnames.has(norm(c.final_vendor_name)));
+  if (!pick.length) pick = unclaimed;
   const sum = pick.reduce((s, c) => s + ((+c.quantity || 0) * (+c.final_rate || 0)), 0);
   return { ids: pick.map(c => c.id), sum };
 }
@@ -3471,7 +3484,11 @@ router.get('/vendor-po/:id/print', (req, res) => {
   if (!items.length) {
     const fb = fallbackIndentLines(db, po.id);
     const storedBase = Math.max(0, (+po.total_amount || 0) - (+po.freight_amount || 0));
-    if (fb && fb.ids.length && (storedBase <= 0 || Math.abs(fb.sum - storedBase) <= 1)) {
+    // storedBase <= 0 used to SKIP the check entirely, which printed
+    // uncorroborated lines on any PO with no/zero total. The sum match is
+    // the only proof the derived set belongs to this PO, so a PO with no
+    // total to match against gets no derived lines (review 2026-09-03).
+    if (fb && fb.ids.length && storedBase > 0 && Math.abs(fb.sum - storedBase) <= 1) {
       const ph = fb.ids.map(() => '?').join(',');
       const derived = db.prepare(`
         SELECT NULL as id, ii.quantity, ir.final_rate as rate,
@@ -3629,12 +3646,21 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
   `).all(req.params.id);
 
   // Old POs saved without linked vendor_po_items rows: derive the DN lines
-  // from the PO's indent (same fallback + vendor guard as the PO print —
-  // mam 2026-08-31 "previous not showing data"). No amount check here: a DN
-  // carries quantities only, no money to re-price.
+  // from the PO's indent (same fallback as the PO print — mam 2026-08-31
+  // "previous not showing data").
+  // The DN carries no money, so it used to skip the total check the PO print
+  // applies. That was the hole: the sum check is what proves the derived set
+  // is THIS PO's, so without it a DN could list another vendor's material and
+  // that material could be dispatched/received against the wrong PO
+  // (adversarial review 2026-09-03). The DN now demands the same corroboration
+  // and prints nothing when it fails.
   if (!items.length) {
     const fb = fallbackIndentLines(db, req.params.id);
-    if (fb && fb.ids.length) {
+    const gate = db.prepare('SELECT total_amount, freight_amount FROM vendor_pos WHERE id = ?')
+      .get(req.params.id) || {};
+    const storedBase = Math.max(0, (+gate.total_amount || 0) - (+gate.freight_amount || 0));
+    const corroborated = !!fb && (storedBase <= 0 ? false : Math.abs(fb.sum - storedBase) <= 1);
+    if (fb && fb.ids.length && corroborated) {
       const ph = fb.ids.map(() => '?').join(',');
       items.push(...db.prepare(`
         SELECT NULL as id, ii.quantity,
