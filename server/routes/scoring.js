@@ -481,6 +481,39 @@ function computeScorecard(db, userId, weekStart) {
         } catch (e) { return { given: null, done: null }; }
       }
 
+      // Data completeness — QUALITY of data entry, not volume (mam 2026-09-03:
+      // "count this ... like data completion and want to take in data entry
+      // score"). auto:data_entry_all above counts how MANY records were touched;
+      // this scores how much of the required data is actually filled.
+      //
+      // Plan = every required field across every record (Item Master, Business
+      // Book, Employees, Users); Actual = the ones filled. So the score IS the
+      // completion percentage the bars on those pages show — same library, so
+      // the KPI can never disagree with the screen.
+      //
+      // Deliberately NOT week-scoped: it is a standing snapshot of the whole
+      // dataset, like auto:items_complete and auto:site_manpower. A week where
+      // nothing is fixed scores the same as the week before, which is the point
+      // — the backlog stays visible until it is actually cleared.
+      if (source === 'auto:data_completeness') {
+        try {
+          const { completionAll } = require('../lib/dataCompletion');
+          const all = completionAll(db);
+          return { given: all.required_total, done: all.filled_total };
+        } catch (e) { return { given: null, done: null }; }
+      }
+      // One module's completeness on its own — auto:data_completeness:<module>,
+      // e.g. auto:data_completeness:business_book, for scoring a person who owns
+      // just that register.
+      if (source.startsWith('auto:data_completeness:')) {
+        try {
+          const { completionFor } = require('../lib/dataCompletion');
+          const c = completionFor(db, source.slice('auto:data_completeness:'.length));
+          if (!c) return { given: null, done: null };
+          return { given: c.required_total, done: c.filled_total };
+        } catch (e) { return { given: null, done: null }; }
+      }
+
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
       // Steps where the user is the EXPLICIT RACI Responsible (per-record, else
       // whole-module default) across every module. Computed once per user, shared.

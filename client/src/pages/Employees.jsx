@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2 } from 'react-icons/fi';
 import Pagination, { usePagination } from '../components/PaginationBar';
+import DataCompletion from '../components/DataCompletion';
 
 export default function Employees() {
   const { canDelete, canCreate, canEdit, isAdmin, canView } = useAuth();
@@ -269,6 +270,10 @@ export default function Employees() {
           <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
         </div>
       </div>
+
+      {/* Data Completion (mam 2026-09-03) — same bar as Item Master;
+          the field list and the Data Entry KPI share one definition. */}
+      <DataCompletion module="employees" />
 
       {/* Tabs — keep the roster-reconciliation flags off the main directory
           (in production the flag lists can be long and clutter the table).

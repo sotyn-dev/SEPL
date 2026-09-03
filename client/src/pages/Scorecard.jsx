@@ -126,6 +126,7 @@ const SOURCE_INFO = {
   // System / Engagement (from the audit trail)
   'auto:daily_active_users':    { plan: 'Total active (registered) users',     actual: 'Avg daily distinct users active in the system this week' },
   'auto:data_entry_all':        { plan: 'You set (e.g. 300000)',               actual: 'CREATE/UPDATE/DELETE records entered company-wide this week' },
+  'auto:data_completeness':     { plan: 'Every required field across Item Master, Business Book, Employees & Users', actual: 'Those fields actually filled — the same % the Data Completion bar shows on each page' },
   'auto:indents_approved':      { plan: 'You set',                            actual: 'Indents approved by user' },
   'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
   'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
@@ -1637,6 +1638,11 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   <optgroup label="System / Engagement">
                     <option value="auto:daily_active_users">Daily Active users — avg/day vs total users (all)</option>
                     <option value="auto:data_entry_all">Data Entry — records entered company-wide (weekly)</option>
+                    <option value="auto:data_completeness">Data Completeness — required fields filled (Item Master + Business Book + Employees + Users)</option>
+                    <option value="auto:data_completeness:item_master">Data Completeness — Item Master only</option>
+                    <option value="auto:data_completeness:business_book">Data Completeness — Business Book only</option>
+                    <option value="auto:data_completeness:employees">Data Completeness — Employees only</option>
+                    <option value="auto:data_completeness:users">Data Completeness — Users only</option>
                   </optgroup>
                   <optgroup label="Attendance">
                     <option value="auto:attendance_present_days">attendance present days (target 6)</option>

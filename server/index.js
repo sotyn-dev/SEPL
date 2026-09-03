@@ -554,6 +554,9 @@ app.use('/api/bank', require('./routes/bank'));
 app.use('/api/collections', require('./routes/collections'));
 // AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
+// Data Completion — "how much of the required data is actually filled", per
+// module. Feeds the on-page bar and the Data Entry KPI (mam 2026-09-03).
+app.use('/api/data-completion', require('./routes/dataCompletion'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
 // requireModuleEnabled: admin can switch the whole module off (see lib/features.js);
 // when off every endpoint 404s, so a pasted URL has nothing to load. NOTE this gates

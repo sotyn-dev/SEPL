@@ -8,6 +8,7 @@ import Pagination, { usePagination } from '../../components/Pagination';
 import HrIdentity from '../../components/HrIdentity';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX, FiLogOut, FiSmartphone } from 'react-icons/fi';
+import DataCompletion from '../../components/DataCompletion';
 
 export default function UserManagement() {
   const { user: me, markTotpEnabled } = useAuth();
@@ -283,6 +284,10 @@ export default function UserManagement() {
           <button onClick={openCreate} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add User</button>
         </div>
       </div>
+
+      {/* Data Completion (mam 2026-09-03) — same bar as Item Master;
+          the field list and the Data Entry KPI share one definition. */}
+      <DataCompletion module="users" />
 
       {/* Info Cards — click one to filter the list (mam 2026-07-02: a tab to
           see just the Inactive users, which were buried among the Active ones). */}
