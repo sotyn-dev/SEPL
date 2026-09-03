@@ -52,7 +52,6 @@ const CompanyAssets = lazy(() => import('./pages/CompanyAssets'));
 const Employees = lazy(() => import('./pages/Employees'));
 const Expenses = lazy(() => import('./pages/Expenses'));
 const Checklists = lazy(() => import('./pages/Checklists'));
-const CashFlow = lazy(() => import('./pages/CashFlow'));
 const Bank = lazy(() => import('./pages/Bank'));
 const Collections = lazy(() => import('./pages/Collections'));
 const ArApTracker = lazy(() => import('./pages/ArApTracker'));
@@ -218,12 +217,20 @@ export default function App() {
         <Route path="induction" element={<Induction />} />
         <Route path="training" element={<Training />} />
         {/* 4 Critical Systems */}
-        <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
+        {/* Cash Flow page deleted (mam 2026-09-03) — /cashflow now lands on the
+            Cash Flow Tracker, which is where the money question is answered.
+            The cash_flow_daily ledger tables are UNTOUCHED: Bank
+            reconciliation, Collections and Business Book still write to them. */}
+        <Route path="cashflow" element={<Navigate to="/cash-flow-tracker" replace />} />
         <Route path="bank" element={<ModuleRoute module="cashflow"><Bank /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
         <Route path="attendance" element={<ModuleRoute module="attendance"><Attendance /></ModuleRoute>} />
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
-        <Route path="ar-ap-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
+        {/* AR/AP Tracker → Cash Flow Tracker (mam 2026-09-03). New canonical
+            path; the old one redirects so War Room deep links and anyone's
+            bookmarks keep working. */}
+        <Route path="cash-flow-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
+        <Route path="ar-ap-tracker" element={<Navigate to="/cash-flow-tracker" replace />} />
         {/* WhatsApp is open to all signed-in users — access is by group
             membership, not the site_chat module permission (mam 2026-06-19).
             ModuleGate is the global on/off switch, NOT a permission check — it's

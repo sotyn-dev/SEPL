@@ -16,13 +16,13 @@ import { useModuleFlags } from '../../context/ModuleFlagsContext';
 const ALL_MODULES = [
   // — Finance & Daily Operations
   { key: 'dashboard', label: 'Dashboard' },
-  { key: 'cashflow', label: 'Cash Flow' },
+  { key: 'cashflow', label: 'Bank — cash ledger (the Cash Flow page was removed 2026-09-03; this key still gates Bank)' },
   { key: 'cheques', label: 'Cheque FMS' },
   { key: 'payment_required', label: 'Payment Required' },
   { key: 'attendance', label: 'Attendance' },
   { key: 'attendance_grid', label: 'Attendance Monthly Grid — view the monthly muster' },
   { key: 'collections', label: 'Collection Engine' },
-  { key: 'ar_ap_tracker', label: 'AR/AP Tracker' },
+  { key: 'ar_ap_tracker', label: 'Cash Flow Tracker — weekly AR/AP forecast, auto-fed from Collections + Payables' },
   { key: 'site_chat', label: 'SOTYN Chat — create/manage groups (chatting is open to all)' },
   { key: 'sotyn_flow', label: "SOTYN Flow — Create = create & own boards. See All = view & contribute (cards, comments) on every board, not just your own. Board settings, members & lists stay board-admin only." },
   { key: 'dpr', label: 'DPR' },

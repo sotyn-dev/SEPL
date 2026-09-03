@@ -31,7 +31,7 @@ import {
   // Projects children
   FiBarChart2, FiAlertCircle, FiZap, FiTool,
   // Finance children
-  FiFile, FiCreditCard, FiSend, FiList, FiRefreshCw,
+  FiFile, FiCreditCard, FiSend, FiList,
   // People children
   FiUserPlus, FiHelpCircle, FiBookOpen, FiCalendar, FiDollarSign, FiAtSign,
   // Inventory children
@@ -162,17 +162,29 @@ const SIDEBAR_GROUPS = [
     { path: '/drawing-tracker',              label: 'Drawings', icon: FiLayout,   module: 'drawing_tracker' },
     { path: '/drawing-tracker?tab=reports',  label: 'Reports',  icon: FiFileText, module: 'drawing_tracker' },
   ]},
+  // Finance restructured to FOUR entries (mam 2026-09-03): "keep cheques, keep
+  // payables and collections, link cash flow tracker with collections and
+  // payables, delete cash, rename AR/AP as Cash Flow Tracker."
+  //
+  //   • Cash Flow (the old daily-ledger + project-finance page) — DELETED.
+  //   • AR/AP Tracker — renamed Cash Flow Tracker, and it no longer needs
+  //     hand-keying: its AR side is fed from Collections and its AP side from
+  //     Payables (server/lib/arapSync.js).
+  //   • Invoices / Client Snag / Bank — off the menu per mam's "only the four",
+  //     but kept in this list as `hidden` rather than deleted: their routes are
+  //     still live, and staying in the nav data is what keeps their breadcrumb
+  //     ("Finance › Invoices") and their per-page training-video module working.
+  //     Dropping a `hidden: true` puts any of them straight back on the menu.
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
-    { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
-    { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag' },
-    { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
+    { path: '/cash-flow-tracker', label: 'Cash Flow Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
+    { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing',      hidden: true },
+    { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag',  hidden: true },
     // Bank module (mam 2026-08-31): payment received / paid out from PNB & HDFC
     // in one place — statement import + reconciliation; AA sync is Phase 2.
-    { path: '/bank',             label: 'Bank',        icon: LuIndianRupee, module: 'cashflow' },
-    { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
+    { path: '/bank',             label: 'Bank',        icon: LuIndianRupee, module: 'cashflow',    hidden: true },
     // Expenses module removed from the menu (mam 2026-07-03). Route + page kept
     // dormant in App.jsx so it's reversible and existing links don't 404.
   ]},

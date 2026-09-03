@@ -1,4 +1,15 @@
-// AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18).
+// Cash Flow Tracker — rolling weekly cash-flow forecast.
+// (Was "AR/AP Tracker"; renamed by mam on 2026-09-03 when the old Cash Flow
+// page was deleted and this became THE cash view in Finance.)
+//
+// Since 2026-09-03 it is AUTO-FED, not hand-keyed: the AR side comes from
+// Collections (outstanding receivables) and the AP side from Payables
+// (in-flight payment requests) — see server/lib/arapSync.js. Rows stay
+// editable; the moment Finance overrides an amount or date, that field is
+// pinned and the sync stops touching it. Manual and imported rows still work
+// exactly as before, for money that lives in neither module.
+//
+// Original build note (mam 2026-06-18):
 // Mirrors the "Cash Flow June-2026.xlsx": AR (expected receipts by party ×
 // week), AP (expected payments by party × week) and a Summary that nets each
 // week into a running balance. Amounts are in LAKHS (₹L).
@@ -12,7 +23,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtDateTime } from '../utils/datetime';
 import { exportCsv } from '../utils/exportCsv';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiClipboard, FiTrendingUp, FiTrendingDown, FiBarChart2, FiClock } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiClipboard, FiTrendingUp, FiTrendingDown, FiBarChart2, FiClock, FiRefreshCw, FiLink, FiLock } from 'react-icons/fi';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const fmtCol = (d) => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]} ${MONTHS[+m[2] - 1]}` : (d || ''); };
@@ -61,6 +72,26 @@ const ddmmToISO = (s) => {
   return '';
 };
 
+// Where a row came from. A pin icon means Finance overrode the amount or the
+// date, so the auto-sync has stopped touching that field — worth seeing at a
+// glance, because a pinned row is the one that can drift from its source.
+function SourceBadge({ row }) {
+  const pinned = !!(row.manual_planned || row.manual_date);
+  const style = row.source === 'collections' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    : row.source === 'payables' ? 'bg-rose-50 text-rose-700 border-rose-200'
+      : 'bg-gray-50 text-gray-500 border-gray-200';
+  const label = row.source === 'collections' ? 'Collections'
+    : row.source === 'payables' ? 'Payables' : 'Manual';
+  const why = row.source === 'manual' || !row.source
+    ? 'Added by hand or imported from Excel'
+    : `Auto-fed from ${label}${pinned ? ' — amount/date pinned by an edit, sync no longer changes it' : ''}`;
+  return (
+    <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border ${style}`} title={why}>
+      {label}{pinned && <FiLock size={9} />}
+    </span>
+  );
+}
+
 export default function ArApTracker() {
   const { canCreate, canEdit, canDelete } = useAuth();
   const [tab, setTab] = useState('ar');                 // ar | ap | summary | log
@@ -79,6 +110,8 @@ export default function ArApTracker() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [parties, setParties] = useState({ ar: [], ap: [] });
   const [bulkPaste, setBulkPaste] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncedAt, setSyncedAt] = useState(null);       // last successful manual sync
   const blankBulkRow = () => ({ party: '', due_date: '', planned: '' });
   const openBulk = () => { setBulkRows(Array.from({ length: 6 }, blankBulkRow)); setBulkPaste(''); setBulkOpen(true); };
   const setBulkCell = (i, k, v) => setBulkRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r));
@@ -123,7 +156,12 @@ export default function ArApTracker() {
   // weeks beginning at the earliest entry's week; each week shows its 2
   // collection-day columns (AR Mon/Thu, AP Tue/Fri). Entries land on the
   // collection day they settle on. 13 weeks × 2 days = 26 day columns.
+  // Cancelled money never moves, so it is kept OUT of the forecast grid (and
+  // out of the server's Summary) — a rejected payment request must not sit in
+  // the weekly balance. It stays visible in the Entries list below.
+  const gridRows = useMemo(() => rows.filter(r => r.status !== 'cancelled'), [rows]);
   const pivot = useMemo(() => {
+    const rows = gridRows;
     const parties = [...new Set(rows.map(r => r.party))].sort();
     const istToday = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
     const allDates = rows.map(r => r.due_date).filter(Boolean).sort();
@@ -143,7 +181,7 @@ export default function ArApTracker() {
     const rowTot = Object.fromEntries(parties.map(p => [p, dates.reduce((s, d) => s + (cell[`${p}|${d}`] || 0), 0)]));
     const grand = dates.reduce((s, d) => s + colTot[d], 0);
     return { dates, parties, cell, colTot, rowTot, grand, weekGroups };
-  }, [rows, kind]);
+  }, [gridRows, kind]);
 
   const openAdd = () => { setEditing(null); setForm({ kind, party: '', due_date: '', planned: '', actual: '', status: 'planned', note: '', remark: '' }); setModal(true); };
   const openEdit = (r) => { setEditing(r); setForm({ ...r, planned: r.planned ?? '', actual: r.actual ?? '', remark: '' }); setModal(true); };
@@ -171,7 +209,10 @@ export default function ArApTracker() {
   };
 
   const del = async (r) => {
-    const remark = window.prompt(`Delete ${r.kind} · ${r.party} · ${fmtCol(r.due_date)} (₹${fmtL(eff(r))}L)?\n\nEnter a reason (required):`);
+    const auto = r.source && r.source !== 'manual';
+    const remark = window.prompt(`Delete ${r.kind} · ${r.party} · ${fmtCol(r.due_date)} (₹${fmtL(eff(r))}L)?`
+      + (auto ? `\n\nThis row is auto-fed from ${r.source === 'collections' ? 'Collections' : 'Payables'}. Deleting it also stops it coming back on the next sync.` : '')
+      + '\n\nEnter a reason (required):');
     if (remark == null) return;
     if (remark.trim().length < 3) return toast.error('A reason (min 3 chars) is required to delete.');
     try { await api.delete(`/ar-ap-tracker/${r.id}`, { data: { remark: remark.trim() } }); toast.success('Deleted'); load(); }
@@ -210,6 +251,24 @@ export default function ArApTracker() {
     finally { setBulkBusy(false); }
   };
 
+  // Pull Collections + Payables in right now. The server also syncs on its own
+  // (throttled to once a minute on load), so this button is for "I just raised
+  // a payment request, show it" — it bypasses the throttle.
+  const doSync = async () => {
+    setSyncing(true);
+    try {
+      const r = await api.post('/ar-ap-tracker/sync');
+      const { created = 0, updated = 0, closed = 0, cancelled = 0 } = r.data || {};
+      const moved = created + updated + closed + cancelled;
+      toast.success(moved
+        ? `${created} new · ${updated} updated · ${closed} settled · ${cancelled} cancelled`
+        : 'Already up to date with Collections & Payables');
+      setSyncedAt(new Date());
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Sync failed'); }
+    finally { setSyncing(false); }
+  };
+
   // Roll unpaid, overdue AR entries onto the next collection day (Mon/Thu) now.
   const doRollOverdue = async () => {
     try {
@@ -239,10 +298,21 @@ export default function ArApTracker() {
       </datalist>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><FiBarChart2 className="text-blue-700" /> AR / AP Tracker</h1>
-          <p className="text-sm text-gray-500">Rolling weekly cash-flow forecast · amounts in ₹ Lakhs · every amount/date edit needs a remark</p>
+          <h1 className="text-2xl font-bold flex items-center gap-2"><FiBarChart2 className="text-blue-700" /> Cash Flow Tracker</h1>
+          <p className="text-sm text-gray-500">
+            Rolling weekly forecast · amounts in ₹ Lakhs · every amount/date edit needs a remark
+          </p>
+          <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
+            <FiLink size={11} />
+            Receivables come from <b className="text-emerald-700">Collections</b>, payables from <b className="text-rose-700">Payables</b> — kept in step automatically.
+            {syncedAt && <span className="text-gray-400">· synced {syncedAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>}
+          </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <button onClick={doSync} disabled={syncing} className="btn btn-secondary flex items-center gap-2"
+            title="Pull the latest outstanding receivables from Collections and in-flight payment requests from Payables">
+            <FiRefreshCw className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing…' : 'Sync now'}
+          </button>
           {canCreate('ar_ap_tracker') && (
             <>
               <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={e => doImport(e.target.files?.[0])} />
@@ -278,7 +348,7 @@ export default function ArApTracker() {
           <div className="card p-0 overflow-x-auto">
             <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase border-b">Forecast grid — party × week (₹L)</div>
             {pivot.parties.length === 0 ? (
-              <div className="text-center py-8 text-gray-400 text-sm">No {kind} entries yet. Click “Add {kind}”.</div>
+              <div className="text-center py-8 text-gray-400 text-sm">No {kind} entries yet — click “Sync now” to pull them from {kind === 'AR' ? 'Collections' : 'Payables'}, or “Add {kind}” to enter one by hand.</div>
             ) : (
               <table className="w-full text-xs">
                 <thead>
@@ -320,17 +390,32 @@ export default function ArApTracker() {
             <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase border-b">Entries</div>
             <table className="w-full text-sm">
               <thead><tr className="bg-gray-50 text-xs text-gray-500 uppercase">
-                <th className="text-left px-3 py-2">Party</th><th className="text-left px-3 py-2">Week</th>
+                <th className="text-left px-3 py-2">Party</th><th className="text-left px-3 py-2">Source</th><th className="text-left px-3 py-2">Week</th>
                 <th className="text-right px-3 py-2">Planned</th><th className="text-right px-3 py-2">Actual</th>
                 <th className="text-left px-3 py-2">Status</th><th className="text-left px-3 py-2">Note</th><th className="px-3 py-2"></th>
               </tr></thead>
               <tbody>
-                {rows.length === 0 && <tr><td colSpan="7" className="text-center py-6 text-gray-400">No entries.</td></tr>}
+                {rows.length === 0 && <tr><td colSpan="8" className="text-center py-6 text-gray-400">No entries.</td></tr>}
                 {rows.map(r => (
                   <tr key={r.id} className="border-t hover:bg-gray-50">
                     <td className="px-3 py-2 font-medium">{r.party}</td>
+                    <td className="px-3 py-2"><SourceBadge row={r} /></td>
                     <td className="px-3 py-2">{fmtCol(r.due_date)}</td>
-                    <td className="px-3 py-2 text-right">{fmtL(r.planned)}</td>
+                    <td className="px-3 py-2 text-right">
+                      {fmtL(r.planned)}
+                      {/* Drift: Finance pinned this figure and the source has
+                          since moved. Show both rather than silently keeping
+                          the stale one — mam needs to see the disagreement. */}
+                      {/* NOTE the !!: manual_planned comes back from SQLite as 0/1,
+                          and a bare `0 && …` renders the literal "0" next to the
+                          amount ("25" became "250"). Coerce before the guard. */}
+                      {!!(r.manual_planned && r.source && r.source !== 'manual'
+                        && r.source_amount != null && +r.source_amount !== +r.planned) && (
+                        <div className="text-[10px] text-amber-600 font-medium" title={`${r.source === 'collections' ? 'Collections' : 'Payables'} now says ₹${fmtL(r.source_amount)}L — your figure is kept`}>
+                          {r.source === 'collections' ? 'Collections' : 'Payables'}: {fmtL(r.source_amount)}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right">{r.actual == null || r.actual === '' ? <span className="text-gray-300">—</span> : <b className="text-emerald-700">{fmtL(r.actual)}</b>}</td>
                     <td className="px-3 py-2"><span className="text-[11px] px-2 py-0.5 rounded bg-gray-100">{r.status}</span></td>
                     <td className="px-3 py-2 text-gray-500 text-xs max-w-[180px] truncate" title={r.note || ''}>{r.note}</td>
