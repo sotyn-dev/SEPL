@@ -755,26 +755,41 @@ function DetailDrawer({ id, onClose, onChanged, canApproveOverride, onEdit, canE
         {d.required_action && <div className="mt-2 text-sm"><b>Required action:</b> {d.required_action}</div>}
         {d.remarks && <div className="mt-2 text-sm"><b>Remarks:</b> {d.remarks}</div>}
 
-        {/* Actual ERP module link + live pending (mam 2026-09-01) */}
-        {(d.erp_path || d.erp_pending) && (
-          <div className="mt-4 border border-blue-200 bg-blue-50/50 rounded-xl p-3">
-            <div className="text-xs font-bold text-blue-700 uppercase mb-1">Actual ERP Module</div>
-            <div className="flex flex-wrap items-center gap-3 text-sm">
-              {d.erp_path && (
-                <button onClick={() => window.open(d.erp_path, '_blank')}
-                  className="px-3 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-100">
-                  🔗 Open {d.step_name} in ERP →
-                </button>
-              )}
-              {d.erp_pending && (
-                <span className={`font-semibold ${d.erp_pending.count > 0 ? 'text-amber-700' : 'text-green-700'}`}>
-                  {d.erp_pending.count > 0 ? '⏳' : '✅'} {d.erp_pending.count} {d.erp_pending.label}
-                </span>
-              )}
-            </div>
-            <div className="text-xs text-gray-500 mt-1">Live from the real module — verify there before marking this step done.</div>
+        {/* Actual ERP module link + live pending (mam 2026-09-01). The link
+            is set by the step's DEVELOPER when the screen is built (mam
+            2026-09-02) — logged to Activity History for performance review. */}
+        <div className="mt-4 border border-blue-200 bg-blue-50/50 rounded-xl p-3">
+          <div className="text-xs font-bold text-blue-700 uppercase mb-1">Actual ERP Module</div>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            {d.erp_path ? (
+              <button onClick={() => window.open(d.erp_path, '_blank')}
+                className="px-3 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-100">
+                🔗 Open {d.step_name} in ERP →
+              </button>
+            ) : (
+              <span className="text-gray-500">No ERP link yet — the developer adds it once the screen is built.</span>
+            )}
+            {d.erp_pending && (
+              <span className={`font-semibold ${d.erp_pending.count > 0 ? 'text-amber-700' : 'text-green-700'}`}>
+                {d.erp_pending.count > 0 ? '⏳' : '✅'} {d.erp_pending.count} {d.erp_pending.label}
+              </span>
+            )}
+            {mayUpdate && (
+              <button onClick={async () => {
+                const erp_path = prompt('ERP page for this step (in-app path, e.g. /leads):', d.erp_path || '/');
+                if (!erp_path) return;
+                try {
+                  await api.put(`/system-flow/flows/${id}/erp-link`, { erp_path });
+                  toast.success('ERP link saved — logged to activity'); load(); onChanged();
+                } catch (e2) { toast.error(e2.response?.data?.error || 'Failed'); }
+              }} className="text-xs text-blue-600 hover:underline ml-auto">{d.erp_path ? 'Change link' : '+ Add link'}</button>
+            )}
           </div>
-        )}
+          <div className="text-xs text-gray-500 mt-1">
+            {d.erp_path ? 'Live from the real module — verify there before marking this step done.'
+              : 'Adding the link is part of delivering the step — it shows in Activity History with name and time.'}
+          </div>
+        </div>
 
         {/* Status update */}
         {mayUpdate && (

@@ -427,6 +427,29 @@ router.put('/flows/:id/status', requirePermission(MODULE, 'view'), (req, res) =>
   res.json({ ok: true });
 });
 
+// ── ERP link — set by the step's DEVELOPER when the screen is built
+//    (mam 2026-09-02: "link will be developer do so that we can evaluate
+//    performance"). Own developer/responsible may set it with just view
+//    permission; logged to the activity trail with user + time so the
+//    evaluation shows who delivered which screen and when. ─────────────
+router.put('/flows/:id/erp-link', requirePermission(MODULE, 'view'), (req, res) => {
+  const db = getDb();
+  const flow = db.prepare(`
+    SELECT f.*, sm.erp_path AS cur_path, sm.id AS sm_id FROM sysflow_flows f
+    JOIN sysflow_step_master sm ON sm.id = f.step_id WHERE f.id=?`).get(+req.params.id);
+  if (!flow) return res.status(404).json({ error: 'Not found' });
+  const isOwn = req.user.id === flow.responsible_id || req.user.id === flow.developer_id;
+  const canEdit = req.user.role === 'admin' || !!db.prepare(`
+    SELECT 1 FROM role_permissions rp JOIN user_roles ur ON rp.role_id=ur.role_id
+    WHERE ur.user_id=? AND rp.module=? AND rp.can_edit=1`).get(req.user.id, MODULE);
+  if (!isOwn && !canEdit) return res.status(403).json({ error: 'Only this step\'s developer/responsible (or an editor) can set its ERP link' });
+  const erpPath = String(req.body?.erp_path || '').trim();
+  if (!erpPath.startsWith('/')) return res.status(400).json({ error: 'ERP link must be an in-app path starting with / (e.g. /leads)' });
+  db.prepare('UPDATE sysflow_step_master SET erp_path=? WHERE id=?').run(erpPath, flow.sm_id);
+  logActivity(db, flow.id, req.user.id, 'erp_link_set', flow.cur_path, erpPath);
+  res.json({ ok: true });
+});
+
 // ── Dashboard: KPIs + per-process chains + WHY IS THE FLOW STOPPED ────
 router.get('/dashboard', requirePermission(MODULE, 'view'), (req, res) => {
   const db = getDb();
