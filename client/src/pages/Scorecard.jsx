@@ -349,6 +349,11 @@ export default function Scorecard() {
   // Period mode: the applied From→To aggregate replaces the weekly card in the
   // table + banner (read-only — entries/commitments are per-week concepts).
   const displayCard = periodCard || scorecard;
+  // Whose scorecard is on screen — comes from the API (admin can switch to any
+  // employee), falling back to the logged-in user so the export filename and
+  // the print letterhead are never blank.
+  const cardOwnerName = displayCard?.user?.name || scorecard?.user?.name
+    || (viewUserId === user?.id ? (user?.name || '') : '');
   const grouped = (displayCard?.kpis || []).reduce((acc, k) => {
     const g = k.group_name || 'Other';
     if (!acc[g]) acc[g] = [];
@@ -466,7 +471,7 @@ export default function Scorecard() {
           {/* Letterhead — appears only on the printed sheet */}
           <div className="hidden print:block text-center border-b-2 border-gray-800 pb-3">
             <div className="text-xl font-bold tracking-wide">SECURED ENGINEERS PVT. LTD.</div>
-            <div className="text-sm font-semibold mt-1">{periodCard ? 'Period' : 'Weekly'} Scorecard — {scorecard.user?.name || ''}</div>
+            <div className="text-sm font-semibold mt-1">{periodCard ? 'Period' : 'Weekly'} Scorecard — {cardOwnerName}</div>
             <div className="text-xs text-gray-600">
               {periodCard ? `${fmtRange(periodCard.from)} → ${fmtRange(periodCard.to)} (${periodCard.weeks_counted} weeks)` : fmtRange(weekStart)}
               {' '}· Template: {displayCard.template?.name || '—'}
@@ -487,9 +492,10 @@ export default function Scorecard() {
               {displayCard.template && (displayCard.kpis || []).length > 0 && (
                 <button
                   onClick={() => exportCsv(
-                    `scorecard-${(scorecard.user?.name || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
-                    ['Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Total Up-to-date', 'Pending', 'Commitment'],
+                    `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
+                    ['Employee', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Total Up-to-date', 'Pending', 'Commitment'],
                     (displayCard.kpis || []).map(k => [
+                      cardOwnerName,
                       k.group_name || 'Other',
                       k.metric_name || '',
                       k.weightage ?? '',

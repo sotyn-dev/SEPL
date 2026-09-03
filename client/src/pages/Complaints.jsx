@@ -197,7 +197,7 @@ export default function Complaints() {
         <h1 className="text-xl font-bold text-gray-800">Complaint Register</h1>
         <button onClick={() => exportCsv('complaints',
           ['Complaint #','Client','Company','Mobile','Category','Problem','Status','Priority','Assigned To (Step1)','Created'],
-          list.map(c => [c.complaint_number, c.client_name, c.company_name, c.mobile_number, c.category, c.problem_detail, c.status, c.priority, c.step1_assigned_to, c.created_at]))}
+          visibleList.map(c => [c.complaint_number, c.client_name, c.company_name, c.mobile_number, c.category, c.problem_detail, c.status, c.priority, c.step1_assigned_to, c.created_at]))}
           className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={14} /> Export Excel</button>
       </div>
 

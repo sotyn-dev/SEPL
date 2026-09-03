@@ -123,7 +123,11 @@ export default function Snags() {
   // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
   // photos embedded. CSV can't carry images, so this hits the server which
   // builds the workbook; filters mirror the on-screen list.
+  // `snags` is the COMPLETE filtered set (all filters run server-side), so an
+  // empty list here means the export would be a header-only workbook. Bail the
+  // same way exportCsv does rather than "downloading" nothing.
   const exportXlsx = async () => {
+    if (snags.length === 0) { toast.error('No data to export'); return; }
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));

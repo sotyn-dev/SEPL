@@ -270,7 +270,7 @@ export default function Quotations() {
             <div className="flex gap-2">
               <button onClick={() => exportCsv('boqs',
                 ['Title','Client','Drawing','Total','Status','Date'],
-                boqs.map(b => [b.title, b.client_name, b.drawing_required ? 'Yes' : 'No', b.total_amount, b.status, b.created_at]))}
+                boqs.map(b => [b.title, b.company_name, b.drawing_required ? 'Yes' : 'No', b.total_amount, b.status, b.created_at]))}
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
               <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create BOQ</button>
             </div>
@@ -336,7 +336,7 @@ export default function Quotations() {
               )}
               <button onClick={() => exportCsv('quotations',
                 ['Number','Client','Total','Discount','Final','Status','Valid Until'],
-                quotations.map(q => [q.quotation_number, q.client_name, q.total_amount, q.discount, q.final_amount, q.status, q.valid_until]))}
+                quotations.map(q => [q.quotation_number, q.company_name, q.total_amount, q.discount, q.final_amount, q.status, q.valid_until]))}
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
               <button onClick={() => { setForm({ lead_id: '', boq_id: '', total_amount: 0, discount: 0, final_amount: 0, valid_until: '', notes: '' }); setModal('quotation'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Quotation</button>
             </div>

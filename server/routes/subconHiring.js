@@ -359,7 +359,12 @@ router.get('/file/:fileId', requirePermission('subcon_hiring', 'view'), async (r
   if (!f) return res.status(404).json({ error: 'File not found' });
 
   res.setHeader('Content-Type', f.file_type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.filename)}"`);
+  // RFC 5987: percent-encoding inside a quoted filename mangles spaces into %20 in the
+  // saved name, so send the encoded form as filename* and a sanitised ASCII fallback.
+  res.setHeader(
+    'Content-Disposition',
+    `inline; filename="${String(f.filename).replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(f.filename)}`,
+  );
 
   // LOCAL driver: keep res.sendFile. Files never leave local disk on this driver, and
   // sendFile gives Accept-Ranges, ETag, Last-Modified and 304s for free — without them a

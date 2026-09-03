@@ -421,7 +421,7 @@ export default function Orders() {
             </button>
             <button onClick={() => exportCsv('purchase-orders',
               ['PO Number','Lead No','Client','Project','Category','Date','Amount','Advance','Status','Site Engineer','CRM'],
-              pos.map(p => [p.po_number, p.lead_no, p.client_name, p.project_name, p.category, p.po_date, p.total_amount, p.advance_amount, p.status, p.site_engineer_name, p.crm_name]))}
+              pos.filter(p => poMatches(p, poFilter)).map(p => [p.po_number, p.lead_no, p.bb_client || p.company_name, p.bb_project, p.bb_category, p.po_date, p.total_amount, p.advance_amount, p.status, p.site_engineer_names || p.site_engineer_name, p.crm_name]))}
               className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
             <button onClick={() => {
               setEditingPO(null);

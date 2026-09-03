@@ -1210,7 +1210,13 @@ router.get('/scorecard', (req, res) => {
     const weekStart = req.query.week_start && /^\d{4}-\d{2}-\d{2}$/.test(req.query.week_start)
       ? req.query.week_start
       : defaultWeekStart();
-    res.json(computeScorecard(getDb(), userId, weekStart));
+    const db = getDb();
+    const card = computeScorecard(db, userId, weekStart);
+    // Whose card this is — the page needs the name for the export filename and
+    // the printed letterhead (admin switches between employees, and every file
+    // was downloading as "scorecard-user-...").
+    card.user = { id: userId, name: db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '' };
+    res.json(card);
   } catch (err) {
     console.error('scorecard get error', err);
     res.status(500).json({ error: err.message });
@@ -1290,6 +1296,9 @@ router.get('/scorecard-range', (req, res) => {
 
     res.json({
       user_id: userId, period: true, from, to,
+      // Same name payload as /scorecard — the period export filename and the
+      // print letterhead read it.
+      user: { id: userId, name: db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '' },
       week_end: shiftWeek(to, 5), weeks_counted: weeksCounted,
       template, kpis, score, total_weight: totalWeight,
     });

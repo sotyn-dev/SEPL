@@ -51,6 +51,11 @@ const inr = (n) => `Rs ${(+n || 0).toLocaleString('en-IN')}`;
 // the request (hang-audit: unbounded register was the top finding).
 const PAGE_SIZE = 200;
 
+// Export chunk = the server's own REGISTER_PAGE_MAX. The export walks the
+// register in these chunks so the CSV holds the WHOLE filtered set, not just
+// the page on screen.
+const EXPORT_CHUNK = 2000;
+
 // Render ONLY the active layout instead of mounting the table and the mobile
 // cards both (the CSS-hidden copy still costs DOM + reconcile time).
 function useIsDesktop() {
@@ -143,7 +148,9 @@ export default function TallyBills() {
 
   // All setState here happens inside .then/.finally (async), never in the
   // effect body itself — react-hooks/set-state-in-effect stays quiet.
-  const load = useCallback(() => {
+  // Filter half of the query string — shared by the on-screen fetch and the
+  // export so the CSV can never drift from what the register is showing.
+  const buildParams = useCallback(() => {
     const p = new URLSearchParams();
     if (cat) p.set('category', cat);
     if (filters.project_id) p.set('project_id', filters.project_id);
@@ -153,6 +160,11 @@ export default function TallyBills() {
     if (filters.breached) p.set('breached', '1');
     if (debouncedText.vendor) p.set('vendor', debouncedText.vendor);
     if (debouncedText.search) p.set('search', debouncedText.search);
+    return p;
+  }, [cat, filters.project_id, filters.status, filters.from, filters.to, filters.breached, debouncedText]);
+
+  const load = useCallback(() => {
+    const p = buildParams();
     p.set('limit', String(PAGE_SIZE));
     p.set('offset', String(page * PAGE_SIZE));
     const seq = ++loadSeq.current;
@@ -164,7 +176,7 @@ export default function TallyBills() {
       })
       .catch(e => { if (seq === loadSeq.current) toast.error(e.response?.data?.error || 'Failed to load bills'); })
       .finally(() => { if (seq === loadSeq.current) setLoading(false); });
-  }, [cat, filters.project_id, filters.status, filters.from, filters.to, filters.breached, debouncedText, page]);
+  }, [buildParams, page]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -174,12 +186,35 @@ export default function TallyBills() {
   const pickCat = (id) => { setCat(id); setPage(0); };
   useEffect(() => { api.get('/tally-bills/meta').then(r => setMeta(r.data)).catch(() => {}); }, []);
 
-  const exportRegister = () => exportCsv('tally-bill-register',
-    ['Register No', 'Bill No', 'Vendor', 'Project', 'Category', 'Bill Amount', 'Approved', 'Variance', 'Received', 'Stage', 'Owner', 'Days in Stage', 'SLA', 'Total Days', 'Status'],
-    bills.map(b => [b.register_no, b.bill_number, b.vendor_name, b.project_name, b.category_label,
-      b.bill_amount, b.approved_amount ?? '', b.variance_amount ?? '', b.amount_received,
-      b.sla.current_stage_label, b.current_owner_name ?? '', b.sla.days_in_stage,
-      b.sla.on_hold ? 'HOLD' : b.sla.rag.toUpperCase(), b.sla.total_days_since_upload, b.status_label]));
+  // Export pulls the ENTIRE filtered register (all pages), NOT the page state
+  // `bills` — otherwise a 450-bill register silently exports the 200 rows the
+  // user happens to be looking at.
+  const [exporting, setExporting] = useState(false);
+  const exportRegister = async () => {
+    if (exporting) return;
+    setExporting(true);
+    const all = [];
+    try {
+      for (let offset = 0; ; offset += EXPORT_CHUNK) {
+        const p = buildParams();
+        p.set('limit', String(EXPORT_CHUNK));
+        p.set('offset', String(offset));
+        const r = await api.get(`/tally-bills?${p.toString()}`);
+        all.push(...r.data);
+        const totalRows = parseInt(r.headers['x-total-count'], 10) || all.length;
+        if (r.data.length === 0 || all.length >= totalRows) break;
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Export failed');
+      return;
+    } finally { setExporting(false); }
+    exportCsv('tally-bill-register',
+      ['Register No', 'Bill No', 'Vendor', 'Project', 'Category', 'Bill Amount', 'Approved', 'Variance', 'Received', 'Stage', 'Owner', 'Days in Stage', 'SLA', 'Total Days', 'Status'],
+      all.map(b => [b.register_no, b.bill_number, b.vendor_name, b.project_name, b.category_label,
+        b.bill_amount, b.approved_amount ?? '', b.variance_amount ?? '', b.amount_received,
+        b.sla.current_stage_label, b.current_owner_name ?? '', b.sla.days_in_stage,
+        b.sla.on_hold ? 'HOLD' : b.sla.rag.toUpperCase(), b.sla.total_days_since_upload, b.status_label]));
+  };
 
   return (
     <div className="space-y-4">
@@ -196,7 +231,7 @@ export default function TallyBills() {
             </button>
           )}
           {tab === 'register' && (
-            <button onClick={exportRegister} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+            <button onClick={exportRegister} disabled={exporting} className="btn btn-secondary flex items-center gap-2 text-sm disabled:opacity-60"><FiDownload /> {exporting ? 'Exporting…' : 'Export Excel'}</button>
           )}
           {canCreate(M) && (
             <button onClick={() => setUploadModal(true)} className="btn btn-primary flex items-center gap-2"><FiPlus /> Upload Tally Bill</button>

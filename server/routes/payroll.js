@@ -701,7 +701,10 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
            LEFT JOIN users u ON u.id = pr.finalised_by
            WHERE pr.month=? AND pr.employee_id=?`
         ).get(month, emp.id);
-        if (snap) return { ...snap, sunday_count: snap.sundays, locked: true };
+        // payroll_runs has no department column, so a finalised month's
+        // snapshot rows come back with a blank Dept (table + Export Excel).
+        // Overlay it from the live employee row already in hand.
+        if (snap) return { ...snap, department: emp.department, designation: emp.designation, sunday_count: snap.sundays, locked: true };
       }
       return calculateForEmployee(db, settings, emp, month);
     });

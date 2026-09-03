@@ -922,7 +922,10 @@ router.get('/labour-rates', (req, res) => {
   const { search, category } = req.query;
   const cond = [], args = [];
   if (category) { cond.push('category = ?'); args.push(category); }
-  if (search) { cond.push('LOWER(item_name) LIKE ?'); args.push('%' + String(search).toLowerCase() + '%'); }
+  // Token-wise AND, mirroring the page's own filter (LabourRate.jsx): every
+  // whitespace-separated word must appear in item_name, in any order. One
+  // contiguous LIKE made the export drop rows the table was visibly showing.
+  if (search) { String(search).toLowerCase().trim().split(/\s+/).filter(Boolean).forEach(t => { cond.push('LOWER(item_name) LIKE ?'); args.push('%' + t + '%'); }); }
   const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   res.json(db.prepare(`SELECT * FROM labour_rates ${where} ORDER BY category, item_name`).all(...args));
 });
@@ -967,7 +970,10 @@ router.get('/labour-rates/export', (req, res) => {
   const { search, category } = req.query;
   const cond = [], args = [];
   if (category) { cond.push('category = ?'); args.push(category); }
-  if (search) { cond.push('LOWER(item_name) LIKE ?'); args.push('%' + String(search).toLowerCase() + '%'); }
+  // Token-wise AND, mirroring the page's own filter (LabourRate.jsx): every
+  // whitespace-separated word must appear in item_name, in any order. One
+  // contiguous LIKE made the export drop rows the table was visibly showing.
+  if (search) { String(search).toLowerCase().trim().split(/\s+/).filter(Boolean).forEach(t => { cond.push('LOWER(item_name) LIKE ?'); args.push('%' + t + '%'); }); }
   const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   const rows = db.prepare(`SELECT * FROM labour_rates ${where} ORDER BY category, item_name`).all(...args);
   const aoa = rows.map(r => [r.item_name, r.specification || '', r.size || '', r.rate || 0, r.uom || '', r.category || '']);

@@ -1036,7 +1036,14 @@ export default function DPR() {
             <div className="flex flex-wrap gap-2 w-full sm:w-auto">
               <button onClick={() => exportCsv('dpr-reports',
                 ['Site','Date','By','Status','Plan Cost (B-plan)','Actual Cost (B-actual)','Actual Total (A)','Variance (B-act − B-plan)','Approval'],
-                dprs.map(d => {
+                dprs.filter(d => {
+                  // Same predicate as the mobile cards / desktop table below —
+                  // export must match what the filtered view shows on screen.
+                  if (!reportFilter) return true;
+                  if (reportFilter === 'pending') return d.approval_status === 'pending';
+                  if (reportFilter === 'billing') return d.billing_ready === 1 || d.billing_ready === true;
+                  return true;
+                }).map(d => {
                   const planned = !!d.is_planned_template;
                   const planB = +d.planned_cost_b || 0;
                   const actB = planned ? '' : (+d.grand_total_b || 0);

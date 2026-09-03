@@ -575,7 +575,7 @@ export default function HR() {
             <div className="flex gap-2">
               <button onClick={() => exportCsv('candidates',
                 ['Name','Phone','Email','Position','Source','Stage','Notes'],
-                candidates.map(c => [c.name, c.phone, c.email, c.position, c.source, c.current_stage, c.notes]))}
+                visibleCandidates.map(c => [c.name, c.phone, c.email, c.position, c.source, pipelineFor(c).label, c.notes]))}
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
               <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', source: 'naukri', position: '', notes: '', address: '' }); setParsedHits(null); setParsingResume(false); setModal('candidate'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Candidate</button>
             </div>

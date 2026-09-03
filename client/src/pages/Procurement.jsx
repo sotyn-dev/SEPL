@@ -2255,7 +2255,27 @@ export default function Procurement() {
           })}</div>
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
-            if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
+            if (tab === 'indents') {
+              // Mirror the tab's filteredIndents (status + category + date
+              // range + search) — the export used the raw indents array, so a
+              // filtered 12-row table still produced a CSV of every indent.
+              const q = indSearch.trim().toLowerCase();
+              const rows = indents.filter(i => {
+                if (indFilterStatus !== 'all') {
+                  const inBucket = i.status === indFilterStatus
+                    || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
+                  if (!inBucket) return false;
+                }
+                if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
+                const d = (i.created_at || i.indent_date || '').slice(0, 10);
+                if (indFilterFrom && d && d < indFilterFrom) return false;
+                if (indFilterTo   && d && d > indFilterTo) return false;
+                if (!q) return true;
+                return `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''}`.toLowerCase().includes(q);
+              });
+              exportCsv('indents', ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'],
+                rows.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
+            }
             // Tab ids MUST match allTabs above. 'pos'/'dispatch' were stale ids
             // (real ones: 'vendorpo'/'delivery'), so Export Excel silently did
             // NOTHING on those tabs — mam 2026-09-03 "excel isnot exporting".
@@ -2294,7 +2314,18 @@ export default function Procurement() {
                   p2.delay_days ?? '', p2.delay_reason || '', p2.grn_count ?? 0, p2.debit_count ?? 0, p2.bill_payment_status || '']));
             }
             if (tab === 'responsible') toast('Nothing to export on the Responsible board — pick a data tab.');
-            if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
+            if (tab === 'bills') {
+              // Mirror the Bills list's filteredBills (date range + search).
+              const blq = billsListSearch.trim().toLowerCase();
+              const rows = purchaseBills.filter(b => {
+                if (billsListFrom && b.bill_date && b.bill_date < billsListFrom) return false;
+                if (billsListTo   && b.bill_date && b.bill_date > billsListTo) return false;
+                if (!blq) return true;
+                return `${b.bill_number || ''} ${b.vendor_name || ''}`.toLowerCase().includes(blq);
+              });
+              exportCsv('purchase-bills', ['Bill No','Vendor','Date','Amount','GST','Total','Payment'],
+                rows.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
+            }
             if (tab === 'delivery') {
               const q = dispListSearch.trim().toLowerCase();
               const rows = deliveryNotes.filter(d => {
@@ -2313,7 +2344,19 @@ export default function Procurement() {
             // r.item_description never existed on the API rows (GET item-rates
             // returns ii.description) — the Item column exported blank for every
             // row until 2026-09-03. mergedRates is what the table actually shows.
-            if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Make','Qty','Unit','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], mergedRates.map(r => [r.description || r.master_name || '', r.make || '', r.quantity ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+            if (tab === 'rates') {
+              // Mirror the tab's filteredRates (status chip + search) on top of
+              // mergedRates — the export ignored both chips and the search box.
+              const rq = ratesSearch.trim().toLowerCase();
+              const rows = mergedRates
+                .filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter)
+                .filter(r => {
+                  if (!rq) return true;
+                  return `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.site_name || ''}`.toLowerCase().includes(rq);
+                });
+              exportCsv('vendor-rates', ['Item','Make','Qty','Unit','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'],
+                rows.map(r => [r.description || r.master_name || '', r.make || '', r.quantity ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+            }
           }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
           {/* SOP-07 flow board (mam 2026-08-28) — the pipeline dashboard */}
           <a href="/procurement-board" className="btn btn-secondary flex items-center gap-2 text-sm"

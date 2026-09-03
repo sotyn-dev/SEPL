@@ -297,10 +297,26 @@ export default function Checklists() {
       <div className="flex justify-between items-center">
         <h3 className="font-semibold">Checklists & Recurring Tasks</h3>
         <div className="flex gap-2">
-          <button onClick={() => exportCsv('checklists',
-            ['Description','Frequency','Due Date','Due Time','Assigned To','Status'],
-            checklists.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.status]))}
-            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          {/* Export follows the view on screen (mam: the CSV must match
+              what she is looking at).  By-date / Follow-up export the
+              INSTANCE rows with their real completion + approval state;
+              only Master Templates exports the template list — and each
+              uses the filtered dataset, not the raw fetch. */}
+          <button onClick={() => {
+            if (view === 'by-date') exportCsv(`checklists-${historyDate}`,
+              ['Person','Department','Task','Frequency','Done?','Proof','Approval','Approval Note','Approved By','Submitted'],
+              historyFiltered.map(r => [r.assigned_to_name, r.department, r.description || r.title, r.frequency,
+                r.completion_id ? 'Done' : 'Not done', r.proof_url,
+                r.approval_status || (r.completion_id ? 'pending' : ''), r.approval_note, r.approved_by_name,
+                r.submitted_at ? new Date(r.submitted_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '']));
+            if (view === 'followup') exportCsv('checklists-followup',
+              ['Person','Task ID','Frequency','Task','Planned Date','Status','Department','Proof'],
+              followupInstances.map(({ task: t, cell: c }) => [t.assigned_to_name, t.id, t.frequency, t.description,
+                c.date, c.status, t.department, c.proof_url]));
+            if (view === 'current') exportCsv('checklists',
+              ['Description','Frequency','Due Date','Due Time','Assigned To','Department'],
+              visible.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.department]));
+          }} className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {canManage() && (
             <button onClick={() => {
               // Mam (2026-05-22): "by default end date is 31/12/2026"

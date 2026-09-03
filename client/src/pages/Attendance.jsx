@@ -1020,7 +1020,14 @@ export default function Attendance() {
             <input type="date" className="input w-48" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
             <button onClick={() => exportCsv(`attendance-${filterDate || 'all'}`,
               ['Name','Date','In','Out','Hours','Site','Status'],
-              records.map(r => [r.user_name, r.date, r.punch_in_time, r.punch_out_time, r.total_hours, r.site_name, r.status]))}
+              records.map(r => [
+                r.user_name, r.date,
+                // Punch times are stored UTC — export them in IST so the CSV
+                // matches the times the table shows via fmtT (mam 2026-09-03).
+                r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                r.total_hours, r.site_name, r.status,
+              ]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
           </div>
           {/* Desktop table (mobile gets card list below — mam 2026-06-02). */}

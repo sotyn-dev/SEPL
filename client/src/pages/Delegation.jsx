@@ -431,10 +431,13 @@ export default function Delegation() {
   // Final visible list (free-text search + slippage filter over the already
   // server-filtered tasks) — computed here, not inside the JSX, so the
   // pagination hook can window it at the top level of the component.
+  // The rows carry no task_id column — the visible code is derived from the id
+  // (same as the table / mobile card render), so search and export use it too.
+  const taskCode = (t) => `TSK-${String(t.id).padStart(4, '0')}`;
   const q = search.trim().toLowerCase();
   let visibleTasks = q
     ? tasks.filter(t =>
-        (t.task_id || '').toLowerCase().includes(q) ||
+        taskCode(t).toLowerCase().includes(q) ||
         (t.description || '').toLowerCase().includes(q))
     : tasks;
   if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
@@ -478,15 +481,12 @@ export default function Delegation() {
             </div>
           )}
           <button onClick={() => {
-            // Export respects the active search filter so admin can
-            // download exactly what's visible on screen.
-            const q = search.trim().toLowerCase();
-            const rows = q
-              ? tasks.filter(t => (t.task_id || '').toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
-              : tasks;
+            // Export the same list the table shows — visibleTasks already
+            // composes search + slippage filter over the server-filtered tasks
+            // — so admin downloads exactly what's visible on screen.
             exportCsv('delegations',
               ['Task ID','Description','Project','Assigned To','Due','Status'],
-              rows.map(t => [t.task_id, t.description, t.project_name, t.assigned_to_name, t.due_date, t.status]));
+              visibleTasks.map(t => [taskCode(t), t.description, t.project_name, t.assigned_to_name, t.due_date, t.status]));
           }}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {isAdmin() && view === 'list' && (

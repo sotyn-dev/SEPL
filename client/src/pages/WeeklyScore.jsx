@@ -104,7 +104,11 @@ export default function WeeklyScore() {
         {data?.users && (
           <button onClick={() => exportCsv(`weekly-score-${weekStart}`,
             ['Rank','Employee','Dept','Given','Done','Score %'],
-            data.users.map((u, i) => [i + 1, u.name, u.department, u.given_total, u.done_total, u.score_pct]))}
+            // given_total/done_total/score_pct never existed on the API rows —
+            // /scoring returns total_given/total_done/score (scoring.js:1631),
+            // which is what the table below renders. The three CSV columns
+            // exported blank on every row until 2026-09-03.
+            data.users.map((u, i) => [i + 1, u.name, u.department || u.role || '', u.total_given, u.total_done, u.score]))}
             className="btn btn-secondary text-xs flex items-center gap-1"><FiDownload size={12} /> Export Excel</button>
         )}
       </div>

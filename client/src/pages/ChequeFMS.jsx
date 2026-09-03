@@ -226,7 +226,7 @@ export default function ChequeFMS() {
           <div className="flex gap-2">
             <button onClick={() => exportCsv('cheques',
               ['Cheque #','Payee','Bank','Date','Amount','Status','Hold Until','Raised By'],
-              visible.map(c => [c.cheque_number, c.payee_to, c.bank_name || c.bank_other, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
+              visible.map(c => [c.cheque_number, c.payee_to, c.bank_name === 'Other' ? c.bank_other : c.bank_name, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
             {canCreate('cheques') && (
               <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 justify-center">

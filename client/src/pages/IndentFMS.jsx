@@ -60,16 +60,27 @@ export default function IndentFMS() {
           <button onClick={() => setTab('grn')} className={`btn ${tab === 'grn' ? 'btn-primary' : 'btn-secondary'}`}>GRN</button>
           <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
         </div>
+        {/* Export follows the tab you are on — never exports a table you cannot see.
+            ⚙ Responsible is a settings table, so it has nothing to export. */}
+        {tab !== 'responsible' && (
         <button onClick={() => {
           if (tab === 'grn') {
             exportCsv('grns', ['GRN #','Date','Received By','Status'],
               grns.map(g => [g.grn_number, g.grn_date, g.received_by_name, g.status]));
+          } else if (tab === 'pipeline') {
+            exportCsv('active-indents',
+              ['Indent No','Date','Current Stage'],
+              (pipeline.activeIndents || []).map(ind => [
+                ind.indent_number, ind.indent_date,
+                STAGES[getStageIndex(ind.current_stage || 'indent_raised')]?.label,
+              ]));
           } else {
             exportCsv('indent-tracker',
               ['Indent #','Date','Created By','Status','Current Stage'],
               tracker.map(t => [t.indent_number, t.indent_date, t.created_by_name, t.status, t.currentStage]));
           }
         }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+        )}
       </div>
 
       {tab === 'responsible' && <ResponsibilityTab module="indent_to_dispatch" title="Indent to Dispatch" />}

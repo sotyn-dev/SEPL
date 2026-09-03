@@ -513,6 +513,22 @@ export default function PaymentRequired() {
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
 
+  // Rows actually ON SCREEN: tab (pending/approved/rejected) + the stage-tile
+  // filter + the "Approved by Lx" view.  Search / dropdown filters are already
+  // applied server-side in load(), so they're baked into `requests`.  Shared by
+  // the request list AND Export Excel — the CSV used to map raw `requests`, so
+  // exporting from the Rejected tab (or an L3 tile) dumped every request on the
+  // server instead of the handful on screen.
+  const visibleRows = (tab === 'inbox' ? myInbox : requests).filter(r => {
+    if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
+    if (tab === 'approved' && r.status !== 'final_approved') return false;
+    if (tab === 'rejected' && r.status !== 'rejected') return false;
+    // "Approved by Lx" view, else the live-stage chip filter.
+    if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
+    else if (stageFilter && stageOf(r) !== stageFilter) return false;
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -523,7 +539,7 @@ export default function PaymentRequired() {
         <div className="flex gap-2">
           <button onClick={() => exportCsv('payment-requests',
             ['Req No','Employee','Site','Category','Amount','Purpose','Step','Status','Required By','Created'],
-            requests.map(r => [r.request_no, r.employee_name, r.site_name, r.category, r.amount, r.purpose, r.current_step, r.status, r.required_by_date, r.created_at]))}
+            visibleRows.map(r => [r.request_no, r.employee_name, r.site_name, r.category, r.amount, r.purpose, displayWorkflowStage(r.current_step_name, r.category, r.current_step), r.status, r.required_by_date, r.created_at]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload size={16} /> Export Excel</button>
           {isAdmin && (
             <button onClick={openRoutingModal} className="btn btn-secondary flex items-center gap-2"
@@ -756,15 +772,8 @@ export default function PaymentRequired() {
               is still fully built by React) with no pagination — a quarter
               million DOM nodes at prod volume froze the page. ──────────── */}
           {(() => {
-            const listRows = (tab === 'inbox' ? myInbox : requests).filter(r => {
-              if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
-              if (tab === 'approved' && r.status !== 'final_approved') return false;
-              if (tab === 'rejected' && r.status !== 'rejected') return false;
-              // "Approved by Lx" view, else the live-stage chip filter.
-              if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
-              else if (stageFilter && stageOf(r) !== stageFilter) return false;
-              return true;
-            });
+            // Same rows Export Excel writes — see visibleRows above.
+            const listRows = visibleRows;
             const PAGE_SIZE = 50;
             const pageCount = Math.max(1, Math.ceil(listRows.length / PAGE_SIZE));
             const safePage = Math.min(page, pageCount - 1);

@@ -145,7 +145,7 @@ export default function SalesBilling() {
 
   // Numbered pagination — one hook per major list (hooks live here, NOT in
   // BillTable: it's re-created each render so its state would reset).
-  // Export keeps using the FULL `bills` array.
+  // Export keeps using the FULL list for the ACTIVE tab (never pageItems).
   const billsPager = usePagination(bills);        // Dashboard — all bills
   const t3Pager = usePagination(t3);              // DPR / installation bills
   const ordersPager = usePagination(orders);      // Sales Order Bills tab
@@ -234,9 +234,23 @@ export default function SalesBilling() {
         <div className="flex gap-2">
           {tab === 'dpr' && <button onClick={genInstall} className="btn btn-secondary flex items-center gap-2" title="Create Type-3 installation bills from approved DPRs"><FiCheckCircle /> Generate Installation Bills</button>}
           {(tab === 'orders' || tab === 'dashboard') && <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> New Sales Bill</button>}
-          <button onClick={() => exportCsv('sales-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Approval'],
-            bills.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.approval_status]))}
-            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export</button>
+          {tab !== 'responsible' && <button onClick={() => {
+            // Export what the ACTIVE tab actually shows — each tab is a different
+            // dataset (all bills / orders / challans / Type-3), never the raw `bills`.
+            if (tab === 'dashboard') exportCsv('sales-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Approval'],
+              bills.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.approval_status]));
+            if (tab === 'dpr') exportCsv('installation-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Sent to Client'],
+              t3.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.sent_to_client ? 'Yes' : 'No']));
+            if (tab === 'orders') exportCsv('sales-order-bills', ['Order', 'Customer', 'Project', 'Order Value', 'SO Bill No', 'SO Total', 'SO Approval', 'Final Bill No', 'Final Total', 'Final Payment'],
+              orders.map(o => {
+                const so = bills.find(b => b.business_book_id === o.id && b.bill_type === 1);
+                const final = bills.find(b => b.business_book_id === o.id && b.bill_type === 4);
+                return [(o.status === 'planning' ? '★ ' : '') + (o.lead_no || ('BB#' + o.id)), o.customer_name, o.project_name, (+o.po_amount || +o.sale_amount_without_gst || 0),
+                  so?.bill_number || '', so?.total_amount || '', so?.approval_status || '', final?.bill_number || '', final?.total_amount || '', final?.payment_status || ''];
+              }));
+            if (tab === 'material') exportCsv('material-po-vs-bill', ['Indent', 'Challan', 'Site', 'Date', 'Source', 'Items', 'Value', 'Sales Bill', 'Sales Bill No'],
+              material.map(m => [m.indent_number, m.challan_no, m.site_name, m.date, m.source, m.item_count || 0, m.value, m.sales_bill_status, m.sales_bill_number]));
+          }} className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export</button>}
         </div>
       </div>
 

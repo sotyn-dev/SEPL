@@ -152,7 +152,11 @@ export default function CompanyAssets() {
         <div className="flex gap-2">
           <button onClick={() => exportCsv('company-assets',
             ['Asset #','Category','Name/Model','Serial/IMEI','SIM/Mobile','Issued To','Condition','Status'],
-            assets.map(a => [a.asset_no, a.category, a.name, a.serial_imei, a.sim_mobile, a.issued_to_name, a.condition, a.status]))}
+            assets.map(a => [a.asset_no, a.category, a.name,
+              [a.serial_no, a.imei].filter(Boolean).join(' / '),
+              [a.mobile_number, a.carrier].filter(Boolean).join(' / '),
+              a.current_user_live_name || a.current_user_name,
+              a.condition, a.status]))}
             className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('company_assets') && (
             <button onClick={openAdd} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Asset</button>

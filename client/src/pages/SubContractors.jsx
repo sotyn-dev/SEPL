@@ -132,7 +132,9 @@ export default function SubContractors() {
         <div className="flex gap-2">
           <button onClick={() => exportCsv('sub-contractors',
             ['Name','Type','Contact','District','State','Experience','Manpower','Tools','GST','Rate','Status'],
-            rows.map(c => [c.name, c.contractor_type, c.contact_number, c.district, c.state, c.experience_years, c.manpower_strength, c.tools_owned, c.gst_number, c.rate_vs_budget, c.status]))}
+            rows.map(c => [c.name, c.contractor_type, c.phone, c.district, c.state, c.experience_years, c.manpower,
+              c.with_tools ? 'Yes' : 'No', c.has_gst ? (c.gst_number || 'Yes') : 'No', c.rate_in_budget,
+              c.active ? 'Active' : 'Inactive']))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           <button onClick={openAdd} className="btn btn-primary flex items-center gap-2">
             <FiPlus /> Add Sub-Contractor

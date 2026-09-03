@@ -327,7 +327,7 @@ export default function PMSTasks() {
         <div className="flex gap-2">
           <button onClick={() => exportCsv('pms-tasks',
             ['Task ID','Project','Created By','Description','Assigned To','Due','Status'],
-            tasks.map(t => [t.task_id, t.project_name, t.created_by_name, t.description, t.assigned_to_name, t.due_date, t.status]))}
+            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {canCreate('pms_tasks') && (
             <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New PMS Task</button>
