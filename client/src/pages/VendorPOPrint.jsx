@@ -365,7 +365,13 @@ export default function VendorPOPrint() {
                   {po.file_path
                     ? <>The items are inside the uploaded PO file — <a className="text-blue-700 underline" href={`/file-view?src=${encodeURIComponent(po.file_path)}`} target="_blank" rel="noreferrer">open the uploaded PO</a>.<br /></>
                     : null}
-                  To print the items here, open this PO in <b>Edit PO</b> (Procurement → Vendor POs), link the indent lines, and save.
+                  {/* The server can usually rebuild the lines from the indent. When
+                      it refuses, say WHY and what to do — "no line items" alone left
+                      mam re-reporting the same PO with nothing to act on
+                      (2026-09-03). */}
+                  {po.derive_blocked_reason
+                    ? <span className="block mt-1 text-[11.5px] text-amber-900">{po.derive_blocked_reason}</span>
+                    : <>To print the items here, open this PO in <b>Edit PO</b> (Procurement → Vendor POs), link the indent lines, and save.</>}
                 </td>
               </tr>
             )}

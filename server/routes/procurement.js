@@ -3247,17 +3247,16 @@ router.get('/vendor-po', (req, res) => {
 // Returns { ids, sum } (indent_item ids + Σ qty × final_rate) or null.
 function fallbackIndentLines(db, vendorPoId) {
   const po = db.prepare(`
-    SELECT vp.id, vp.indent_id, v.name as vname, v.firm_name as fname
+    SELECT vp.id, vp.indent_id, vp.vendor_id, v.name as vname, v.firm_name as fname
       FROM vendor_pos vp LEFT JOIN vendors v ON v.id = vp.vendor_id
      WHERE vp.id = ?`).get(vendorPoId);
-  if (!po || !po.indent_id) return null;
+  const none = (why) => ({ ids: [], sum: 0, reason: why });
+  if (!po) return none(null);
+  if (!po.indent_id) return none('This PO is not linked to an indent, so there are no indent lines to fall back on.');
   // ONLY lines that carry verifiable money are candidates. The caller proves a
-  // derived set is right by checking its sum against the buyer's typed total,
-  // and a line with no/zero final_rate adds R0 — it is invisible to that check
-  // and would ride onto a vendor's document unchecked. Zero-rate is the NORMAL
-  // state for stock-served, FOC and still-unpriced lines, so this is a real
-  // case, not a corner one (adversarial review 2026-09-03). A PO whose real
-  // lines are all zero-rate now prints nothing, which is the safe outcome.
+  // derived set is right by matching its sum to the buyer's typed total, and a
+  // line with no/zero final_rate adds R0 — invisible to that check, so it would
+  // ride onto a vendor's document unverified (adversarial review 2026-09-03).
   const cand = db.prepare(`
     SELECT ii.id, ii.quantity, ir.final_rate, ir.final_vendor_name
       FROM indent_items ii
@@ -3267,12 +3266,12 @@ function fallbackIndentLines(db, vendorPoId) {
        AND COALESCE(ii.quantity, 0) > 0
        AND COALESCE(ir.final_rate, 0) > 0
      ORDER BY ii.id`).all(po.indent_id);
-  if (!cand.length) return null;
+  if (!cand.length) return none('The indent has no rate-finalised lines to derive from — its lines are FOC, issued from stock, or their rates were never finalised.');
+
   // Normalised vendor name: lower-case, drop punctuation and the boilerplate
-  // suffixes buyers type inconsistently, so the master's "PIPELINE PRODUCTS
-  // INDIA" still matches a finalised "Pipeline Products India Pvt. Ltd."
-  // (mam 2026-09-03). Short ambiguous tokens (co/inc/&) are deliberately NOT
-  // stripped so two distinct suppliers can never collapse onto one name.
+  // suffixes buyers type inconsistently, so "PIPELINE PRODUCTS INDIA" matches
+  // "Pipeline Products India Pvt. Ltd." Short ambiguous tokens (co/inc/&) are
+  // deliberately NOT stripped so two real suppliers cannot collapse into one.
   const norm = s => String(s || '')
     .toLowerCase()
     .replace(/\b(?:m\/s|pvt|private|ltd|limited|llp|company|and)\b/g, ' ')
@@ -3280,7 +3279,17 @@ function fallbackIndentLines(db, vendorPoId) {
     .trim();
   const vnames = new Set([norm(po.vname), norm(po.fname)].filter(Boolean));
 
-  // Lines already spoken for by the indent's OTHER live POs.
+  // The indent's OTHER live POs, with how completely each has declared its lines.
+  const siblings = db.prepare(`
+    SELECT ovp.id, ovp.po_number, ovp.vendor_id,
+           (SELECT COUNT(*) FROM vendor_po_items x WHERE x.vendor_po_id = ovp.id) AS rows_n,
+           (SELECT COUNT(*) FROM vendor_po_items x
+             WHERE x.vendor_po_id = ovp.id AND x.indent_item_id IS NULL) AS freetext_n
+      FROM vendor_pos ovp
+     WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
+  `).all(po.indent_id, po.id);
+  const undeclared = siblings.filter(s2 => s2.rows_n === 0 || s2.freetext_n > 0);
+
   const claimed = new Set(db.prepare(`
     SELECT DISTINCT vpi.indent_item_id AS id
       FROM vendor_po_items vpi
@@ -3288,32 +3297,28 @@ function fallbackIndentLines(db, vendorPoId) {
      WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
        AND vpi.indent_item_id IS NOT NULL
   `).all(po.indent_id, po.id).map(r => r.id));
-
-  // Is the split knowable at all? `claimed` is only trustworthy when every
-  // OTHER live PO has declared its lines. A sibling PO that is unlinked, or
-  // only PARTIALLY linked (free-text rows carry indent_item_id NULL, so its
-  // real lines still look unclaimed), leaves indent lines that belong to it
-  // looking like ours. Printing another vendor's material on this document is
-  // far worse than printing none, so stay silent.
-  const ambiguous = db.prepare(`
-    SELECT COUNT(*) AS c FROM vendor_pos ovp
-     WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
-       AND (NOT EXISTS (SELECT 1 FROM vendor_po_items x WHERE x.vendor_po_id = ovp.id)
-         OR EXISTS (SELECT 1 FROM vendor_po_items x
-                     WHERE x.vendor_po_id = ovp.id AND x.indent_item_id IS NULL))
-  `).get(po.indent_id, po.id).c;
-  if (ambiguous > 0) return null;
-
   const unclaimed = cand.filter(c => !claimed.has(c.id));
-  if (!unclaimed.length) return null;
-  // Prefer the per-line vendor stamp; fall back to "everything still
-  // unclaimed". Both paths are restricted to unclaimed lines — the name match
-  // used to run over ALL lines, which let a line already sitting on another PO
-  // for the same vendor print here too.
-  let pick = unclaimed.filter(c => c.final_vendor_name && vnames.has(norm(c.final_vendor_name)));
-  if (!pick.length) pick = unclaimed;
-  const sum = pick.reduce((s, c) => s + ((+c.quantity || 0) * (+c.final_rate || 0)), 0);
-  return { ids: pick.map(c => c.id), sum };
+  if (!unclaimed.length) return none('Every rate-finalised line on this indent is already linked to another PO.');
+
+  // Path 1 — the line's own finalised vendor names this PO's vendor. That is a
+  // POSITIVE statement of ownership, so it stands even when a sibling PO has
+  // not declared its lines — UNLESS a sibling is for the SAME vendor, where the
+  // name cannot tell the two POs apart.
+  const named = unclaimed.filter(c => c.final_vendor_name && vnames.has(norm(c.final_vendor_name)));
+  if (named.length) {
+    const sameVendorSibling = siblings.some(s2 => s2.vendor_id && s2.vendor_id === po.vendor_id);
+    if (!sameVendorSibling) {
+      return { ids: named.map(c => c.id), sum: named.reduce((a, c) => a + ((+c.quantity || 0) * (+c.final_rate || 0)), 0) };
+    }
+  }
+  // Path 2 — no usable vendor stamp. Only safe once every sibling has declared
+  // its lines; otherwise their items still look unclaimed and would print here.
+  if (undeclared.length) {
+    const names = undeclared.map(s2 => s2.po_number).filter(Boolean).join(', ');
+    return none(`Cannot tell which lines belong to this PO: ${names || 'another PO'} on the same indent also has no linked lines, and the indent's lines do not record which vendor they were finalised to. Open either PO in Edit PO, tick its indent lines and save — both will then print.`);
+  }
+  const sum = unclaimed.reduce((a, c) => a + ((+c.quantity || 0) * (+c.final_rate || 0)), 0);
+  return { ids: unclaimed.map(c => c.id), sum };
 }
 
 // Full Vendor PO payload for the print/share page — includes vendor
@@ -3488,6 +3493,12 @@ router.get('/vendor-po/:id/print', (req, res) => {
     // uncorroborated lines on any PO with no/zero total. The sum match is
     // the only proof the derived set belongs to this PO, so a PO with no
     // total to match against gets no derived lines (review 2026-09-03).
+    if (fb && fb.reason) po.derive_blocked_reason = fb.reason;
+    if (fb && fb.ids.length && storedBase > 0 && !(Math.abs(fb.sum - storedBase) <= 1)) {
+      // Lines found, but they do not add up to the total the buyer typed, so we
+      // cannot prove they are this PO's. Say so instead of a bare "no items".
+      po.derive_blocked_reason = `The indent's unlinked lines add up to Rs ${Math.round(fb.sum).toLocaleString('en-IN')}, but this PO was saved for Rs ${Math.round(storedBase).toLocaleString('en-IN')}. They are not shown because they may belong to a different PO. Open this PO in Edit PO, tick its indent lines and save.`;
+    }
     if (fb && fb.ids.length && storedBase > 0 && Math.abs(fb.sum - storedBase) <= 1) {
       const ph = fb.ids.map(() => '?').join(',');
       const derived = db.prepare(`
@@ -3659,8 +3670,9 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
     const gate = db.prepare('SELECT total_amount, freight_amount FROM vendor_pos WHERE id = ?')
       .get(req.params.id) || {};
     const storedBase = Math.max(0, (+gate.total_amount || 0) - (+gate.freight_amount || 0));
-    const corroborated = !!fb && (storedBase <= 0 ? false : Math.abs(fb.sum - storedBase) <= 1);
-    if (fb && fb.ids.length && corroborated) {
+    const corroborated = !!fb && fb.ids.length > 0 && storedBase > 0 && Math.abs(fb.sum - storedBase) <= 1;
+    if (fb && fb.reason) data.derive_blocked_reason = fb.reason;
+    if (corroborated) {
       const ph = fb.ids.map(() => '?').join(',');
       items.push(...db.prepare(`
         SELECT NULL as id, ii.quantity,
