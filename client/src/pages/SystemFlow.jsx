@@ -96,7 +96,7 @@ export default function SystemFlow() {
       </div>
 
       {tab === 'dashboard'   && <DashboardTab dash={dash} flows={flows} openDetail={openDetail} />}
-      {tab === 'flows'       && <FlowsTab meta={meta} flows={flows} openDetail={openDetail} onEdit={setEditFlow} canEdit={canEdit('system_flow')} />}
+      {tab === 'flows'       && <FlowsTab meta={meta} flows={flows} openDetail={openDetail} onEdit={setEditFlow} canEdit={canEdit('system_flow')} refreshKey={refreshKey} />}
       {tab === 'bottlenecks' && <BottlenecksTab openDetail={openDetail} refreshKey={refreshKey} />}
       {tab === 'timeline'    && <TimelineTab meta={meta} flows={flows} openDetail={openDetail} />}
       {tab === 'performance' && <PerformanceTab refreshKey={refreshKey} onPick={() => setTab('flows')} />}
@@ -258,14 +258,17 @@ function DashboardTab({ dash, openDetail }) {
 
 /* ─── Flows list ─────────────────────────────────────────────────────── */
 const emptyFilters = { process: '', step: '', person: '', developer: '', status: '', priority: '', overdue: '', blocked: '', from: '', to: '', q: '' };
-function FlowsTab({ meta, openDetail, onEdit, canEdit }) {
+function FlowsTab({ meta, openDetail, onEdit, canEdit, refreshKey }) {
   const [filters, setFilters] = useState(emptyFilters);
   const [rows, setRows] = useState([]);
   const load = useCallback(() => {
     const qs = Object.entries(filters).filter(([, v]) => v !== '').map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
     api.get(`/system-flow/flows${qs ? '?' + qs : ''}`).then(r => setRows(r.data)).catch(() => {});
   }, [filters]);
-  useEffect(() => { load(); }, [load]);
+  // refreshKey: re-fetch after a save/edit/status change elsewhere on the
+  // page — without it the table kept showing stale rows after Save Changes
+  // (mam 2026-09-02: "if i edit not update").
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const set = (k, v) => setFilters(f => ({ ...f, [k]: v }));
   const sel = 'border rounded-lg px-2 py-1.5 text-sm bg-white';
