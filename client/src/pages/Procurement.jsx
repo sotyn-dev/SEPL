@@ -466,6 +466,11 @@ export default function Procurement() {
   const [editPo, setEditPo] = useState(null);
   const [editPoForm, setEditPoForm] = useState({});
   const [editPoItems, setEditPoItems] = useState([]);    // editable line items
+  // Indent lines this PO can still be attached to. A PO saved with no line
+  // rows printed "No line items" and Edit PO had nothing to tick, so the
+  // buyer could never fix it (mam 2026-09-03).
+  const [linkLines, setLinkLines] = useState([]);
+  const [linkPick, setLinkPick] = useState({});   // indent_item_id -> true
   const [editPoLocked, setEditPoLocked] = useState(false); // locked when bills/DN exist
   const [editPoLockReason, setEditPoLockReason] = useState('');
   const [editPoSaving, setEditPoSaving] = useState(false);
@@ -494,11 +499,29 @@ export default function Procurement() {
       gst_pct: v.gst_pct ?? 18,
     });
     setEditPoItems([]);
+    setLinkLines([]); setLinkPick({});
+    api.get(`/procurement/vendor-po/${v.id}/linkable-lines`)
+      .then(r => {
+        const lines = (r.data?.lines || []).filter(l => !l.taken_by && !l.linked_here);
+        setLinkLines(lines);
+        // Pre-tick the lines whose finalised rate names THIS vendor — the
+        // buyer still confirms by saving, so nothing is attached silently.
+        const pre = {};
+        for (const l of lines) if (l.vendor_match) pre[l.indent_item_id] = true;
+        setLinkPick(pre);
+      })
+      .catch(() => { setLinkLines([]); setLinkPick({}); });
     setEditPoLocked(false);
     setEditPoLockReason('');
     try {
       const r = await api.get(`/procurement/vendor-po/${v.id}/with-items`);
-      setEditPoItems((r.data?.items || []).map(it => ({
+      // Drop the synthetic 'ind-<id>' placeholders /with-items invents for
+      // legacy POs (they exist for the Mark Received modal). Edit PO used to
+      // render them as editable Line Items, but the save skips non-numeric
+      // ids — so the buyer edited rows, saw "Updated", and NOTHING changed
+      // (mam 2026-09-03). Real rows only; the Attach section below is how
+      // such a PO actually gets its lines.
+      setEditPoItems((r.data?.items || []).filter(it => Number.isFinite(+it.id)).map(it => ({
         id: it.id,
         quantity: it.quantity,
         rate: it.rate,
@@ -526,6 +549,17 @@ export default function Procurement() {
       // Include line items only when NOT locked — server will reject
       // the request 409 if we send items on a locked PO.
       const payload = { ...editPoForm };
+      const picked = linkLines.filter(l => linkPick[l.indent_item_id]);
+      if (!editPoLocked && picked.length) {
+        payload.link_items = picked.map(l => ({
+          indent_item_id: l.indent_item_id,
+          quantity: l.quantity,
+          rate: l.final_rate || 0,
+          description: l.description || l.master_name || '',
+        }));
+        // Let the server recompute the total from the lines just attached.
+        delete payload.total_amount;
+      }
       if (!editPoLocked && editPoItems.length) {
         // Strip display-only fields so the server gets the minimal shape.
         payload.items = editPoItems.map(it => ({
@@ -8244,6 +8278,94 @@ export default function Procurement() {
                 description / HSN per row.  Locked + grey when bills or
                 delivery notes already reference this PO (would
                 invalidate them).  Live total recalculates as user types. */}
+            {/* Attach indent lines (mam 2026-09-03). Shown when the indent still
+                has lines no live PO has taken. For a PO with NO line rows this is
+                the only way to make its print show items; the print page now
+                points here by name. */}
+            {!editPoLocked && linkLines.length > 0 && (
+              <div className="border-t pt-3">
+                <div className="flex items-center justify-between mb-1">
+                  <h4 className="text-sm font-semibold">
+                    {editPoItems.length === 0 ? "Attach indent lines to this PO" : "Add more indent lines"}
+                  </h4>
+                  <span className="text-[11px] text-gray-500">{Object.values(linkPick).filter(Boolean).length} of {linkLines.length} selected</span>
+                </div>
+                <p className="text-[11px] text-gray-500 mb-2">
+                  Tick the lines this PO actually covers, then Save. Lines already on another live PO are not listed.
+                  Saving recalculates this PO&apos;s total from the ticked lines.
+                </p>
+                {/* Live check against the amount the PO was saved for. The vendor
+                    holds a document for THAT value, so ticking a set that does not
+                    match it would quietly re-price the PO — show the gap instead. */}
+                {(() => {
+                  const gstPct = (editPoForm.gst_pct !== "" && editPoForm.gst_pct != null) ? +editPoForm.gst_pct : 18;
+                  const freight = +editPoForm.freight_amount || 0;
+                  // total_amount on an itemless PO IS the taxable sub-total: the print
+                  // renders it as "Sub Total" and adds GST on top (mam's VPO/2026/0173
+                  // shows 46,975 -> +IGST -> 55,431), and the derived-lines gate compares
+                  // against it the same way. Do NOT divide it by GST here or the buyer is
+                  // told to hit a target that is 18% too low.
+                  const poTaxable = Math.max(0, (+editPoForm.total_amount || 0) - freight);
+                  const sel = linkLines.filter(l => linkPick[l.indent_item_id])
+                    .reduce((a, l) => a + (+l.quantity || 0) * (+l.final_rate || 0), 0);
+                  if (!poTaxable) return null;
+                  const diff = sel - poTaxable;
+                  const ok = Math.abs(diff) <= 1;
+                  return (
+                    <div className={`text-[11px] mb-2 px-2 py-1 rounded border ${ok ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+                      {ok
+                        ? <>Selected lines match the ₹{Math.round(poTaxable).toLocaleString("en-IN")} this PO was saved for. Safe to save — the total becomes ₹{Math.round(poTaxable * (1 + gstPct / 100) + freight).toLocaleString("en-IN")} with {gstPct}% GST.</>
+                        : <>Selected ₹{Math.round(sel).toLocaleString("en-IN")} vs the ₹{Math.round(poTaxable).toLocaleString("en-IN")} this PO was saved for ({diff > 0 ? "+" : ""}{Math.round(diff).toLocaleString("en-IN")}). Saving will change the PO value the vendor was sent — tick the lines that add up to the original amount, or change the amount deliberately.</>}
+                    </div>
+                  );
+                })()}
+                <div className="max-h-56 overflow-y-auto border rounded">
+                  <table className="w-full text-[11px]">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr className="text-left text-gray-500">
+                        <th className="px-2 py-1 w-8"></th>
+                        <th className="px-2 py-1">Item</th>
+                        <th className="px-2 py-1 text-right">Qty</th>
+                        <th className="px-2 py-1 text-right">Rate</th>
+                        <th className="px-2 py-1 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {linkLines.map(l => {
+                        const on = !!linkPick[l.indent_item_id];
+                        const amt = (+l.quantity || 0) * (+l.final_rate || 0);
+                        return (
+                          <tr key={l.indent_item_id} className={`border-t ${on ? "bg-blue-50/60" : ""}`}>
+                            <td className="px-2 py-1">
+                              <input type="checkbox" checked={on}
+                                onChange={e => setLinkPick(prev => ({ ...prev, [l.indent_item_id]: e.target.checked }))} />
+                            </td>
+                            <td className="px-2 py-1">
+                              {l.master_name || l.description || "-"}
+                              {l.vendor_match ? <span className="ml-1 text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1">rate finalised to this vendor</span> : null}
+                              {!l.final_rate ? <span className="ml-1 text-[9px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1">no finalised rate</span> : null}
+                            </td>
+                            <td className="px-2 py-1 text-right whitespace-nowrap">{l.quantity} {l.uom || l.unit || ""}</td>
+                            <td className="px-2 py-1 text-right whitespace-nowrap">₹{(+l.final_rate || 0).toLocaleString("en-IN")}</td>
+                            <td className="px-2 py-1 text-right whitespace-nowrap font-semibold">₹{amt.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-blue-50 font-semibold">
+                        <td colSpan="4" className="px-2 py-1 text-right">Selected total (taxable)</td>
+                        <td className="px-2 py-1 text-right text-blue-700">
+                          ₹{linkLines.filter(l => linkPick[l.indent_item_id])
+                            .reduce((a, l) => a + (+l.quantity || 0) * (+l.final_rate || 0), 0)
+                            .toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
             {editPoItems.length > 0 && (
               <div className="border-t pt-3">
                 <div className="flex items-center justify-between mb-2">

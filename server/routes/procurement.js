@@ -4015,6 +4015,57 @@ router.get('/indents/:id/quotation', (req, res) => {
 // on top of the Vendor PO tab. Joins item_master so the Pending table can
 // show item_code + full master name (mam's ask: 'no item of item master
 // which I fill in indent').
+// Indent lines this PO could still be linked to (mam 2026-09-03).
+// A PO saved without vendor_po_items prints "No line items", and Edit PO only
+// ever showed rows that were ALREADY linked — so there was no way in the UI to
+// attach them. This lists the indent's lines that no other live PO has taken,
+// so Edit PO can offer them as tick-boxes.
+router.get('/vendor-po/:id/linkable-lines', (req, res) => {
+  const db = getDb();
+  const po = db.prepare(`
+    SELECT vp.id, vp.indent_id, vp.vendor_id, v.name AS vendor_name, v.firm_name
+      FROM vendor_pos vp LEFT JOIN vendors v ON v.id = vp.vendor_id
+     WHERE vp.id = ?`).get(req.params.id);
+  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+  if (!po.indent_id) return res.json({ indent_id: null, lines: [] });
+  const rows = db.prepare(`
+    SELECT ii.id AS indent_item_id, ii.description, ii.make, ii.quantity, ii.unit,
+           ii.item_master_id, im.item_code, im.item_name AS master_name,
+           im.specification, im.size, im.uom,
+           r.final_rate, r.final_vendor_name, r.status AS rate_status,
+           (SELECT ovp.po_number FROM vendor_po_items vpi
+              JOIN vendor_pos ovp ON ovp.id = vpi.vendor_po_id
+             WHERE vpi.indent_item_id = ii.id AND COALESCE(ovp.cancelled,0) = 0
+               AND ovp.id <> ? LIMIT 1) AS taken_by
+      FROM indent_items ii
+      LEFT JOIN indent_item_rates r ON r.id = (
+        SELECT r2.id FROM indent_item_rates r2
+         WHERE r2.indent_item_id = ii.id
+         ORDER BY CASE WHEN r2.status = 'finalized' THEN 0 ELSE 1 END,
+                  COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1)
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE ii.indent_id = ?
+       AND COALESCE(ii.quantity, 0) > 0
+       AND (ii.source IS NULL OR ii.source <> 'store')
+     ORDER BY ii.id`).all(po.id, po.indent_id);
+  // Lines already on THIS PO are returned as linked so the UI can show them ticked.
+  const mine = new Set(db.prepare(
+    'SELECT indent_item_id AS id FROM vendor_po_items WHERE vendor_po_id = ? AND indent_item_id IS NOT NULL'
+  ).all(po.id).map(r => r.id));
+  const norm = t => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const vn = new Set([norm(po.vendor_name), norm(po.firm_name)].filter(Boolean));
+  res.json({
+    indent_id: po.indent_id,
+    vendor_name: po.vendor_name,
+    lines: rows.map(r => ({
+      ...r,
+      linked_here: mine.has(r.indent_item_id) ? 1 : 0,
+      // Hint the buyer: this line's rate was finalised to THIS vendor.
+      vendor_match: r.final_vendor_name && vn.has(norm(r.final_vendor_name)) ? 1 : 0,
+    })),
+  });
+});
+
 router.get('/pending-po-items', (req, res) => {
   const db = getDb();
   const rows = db.prepare(
@@ -4383,6 +4434,55 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
   // present on each row; id is required to match an existing
   // vendor_po_items row.  Total is auto-recomputed at the end.
   let itemUpdates = 0;
+  // ATTACH indent lines to a PO that has none (mam 2026-09-03). Such POs
+  // printed "No line items" and Edit PO offered nothing to fix it, because the
+  // items block below only UPDATES rows that already exist. body.link_items[] =
+  // [{ indent_item_id, quantity, rate }] creates the missing rows.
+  if (Array.isArray(b.link_items) && b.link_items.length) {
+    if (billCount > 0) {
+      return res.status(409).json({ error: `Cannot link line items — ${billCount} purchase bill(s) reference this PO. Cancel the bill first.` });
+    }
+    const dnCount0 = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(id).c;
+    if (dnCount0 > 0) {
+      return res.status(409).json({ error: `Cannot link line items — ${dnCount0} delivery note(s) reference this PO. Cancel them first.` });
+    }
+    const poRow = db.prepare('SELECT indent_id FROM vendor_pos WHERE id=?').get(id);
+    const belongs = db.prepare('SELECT 1 FROM indent_items WHERE id=? AND indent_id=?');
+    // A line already on another LIVE PO must never be double-allocated.
+    const takenBy = db.prepare(`
+      SELECT ovp.po_number FROM vendor_po_items vpi
+        JOIN vendor_pos ovp ON ovp.id = vpi.vendor_po_id
+       WHERE vpi.indent_item_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled,0)=0 LIMIT 1`);
+    const already = db.prepare('SELECT 1 FROM vendor_po_items WHERE vendor_po_id=? AND indent_item_id=?');
+    const ins = db.prepare(`INSERT INTO vendor_po_items
+      (vendor_po_id, indent_item_id, quantity, rate, amount, description, rate_updated_at)
+      VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+    try {
+      db.transaction(() => {
+        for (const li of b.link_items) {
+          const iid = +li.indent_item_id;
+          if (!iid) continue;
+          if (!poRow?.indent_id || !belongs.get(iid, poRow.indent_id)) {
+            throw new Error('Line does not belong to the indent this PO was raised against');
+          }
+          const t = takenBy.get(iid, id);
+          if (t) throw new Error(`Line already on ${t.po_number} — remove it there first`);
+          if (already.get(id, iid)) continue;
+          const qty = +li.quantity || 0;
+          const rate = +li.rate || 0;
+          ins.run(id, iid, qty, rate, +(qty * rate).toFixed(2), li.description ? String(li.description) : null);
+          itemUpdates++;
+        }
+        // Keep the stored total in step with what was just attached, unless the
+        // caller set it explicitly in the same request.
+        if (b.total_amount === undefined) {
+          const sum = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM vendor_po_items WHERE vendor_po_id=?').get(id).t;
+          const newTotal = Math.round(sum * (1 + gstForTotal / 100) * 100) / 100;
+          db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
+        }
+      })();
+    } catch (err) { return res.status(400).json({ error: err.message }); }
+  }
   if (Array.isArray(b.items) && b.items.length) {
     // Block line-item edits when bills exist — they invalidate the bill
     // amount + GST tracking.  Mam should cancel the bill first.
