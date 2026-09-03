@@ -278,7 +278,11 @@ export default function Procurement() {
   // wrong"). Use a setter helper that writes both React state AND the URL
   // in one shot — no useEffect ping-pong.
   const [searchParams, setSearchParams] = useSearchParams();
-  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery', 'debitnotes', 'pipeline', 'responsible'];
+  // Must list EVERY id in allTabs below. 'payment' was missing, so any
+  // deep link to ?tab=payment silently fell back to 'indents' — the Payment
+  // tab could not be linked to, and an Export there exported indents
+  // (mam 2026-09-03).
+  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'payment', 'bills', 'delivery', 'debitnotes', 'pipeline', 'responsible'];
   const urlTab = searchParams.get('tab');
   const [tab, _setTab] = useState(VALID_TABS.includes(urlTab) ? urlTab : 'indents');
   const setTab = (newTab) => {
