@@ -193,7 +193,7 @@ const sourceInfoFor = (src) => {
 
 export default function Scorecard() {
   const { user, isAdmin } = useAuth();
-  const [tab, setTab] = useUrlTab('my');
+  const [tab, setTab] = useUrlTab(['my', 'assign', 'overview', 'templates', 'view'], 'my');
   const [weekStart, setWeekStart] = useState(lastMonday(0));
   const [viewUserId, setViewUserId] = useState(user?.id);
   const [scorecard, setScorecard] = useState(null);

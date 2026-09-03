@@ -123,7 +123,7 @@ const LABEL_PILL = {
 export default function Payroll() {
   const { user, canApprove, canEdit } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const [tab, setTab] = useUrlTab('monthly');
+  const [tab, setTab] = useUrlTab(['monthly', 'leaves', 'settings'], 'monthly');
   const [month, setMonth] = useState(monthNow());
   const [settings, setSettings] = useState(null);
   const [savedSettings, setSavedSettings] = useState(null);

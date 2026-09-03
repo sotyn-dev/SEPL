@@ -121,10 +121,16 @@ const isValidEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').tr
 
 export default function Leads() {
   const { canCreate, canEdit, canDelete, user } = useAuth();
-  const [tab, setTab] = useUrlTab('dashboard');
+  // STRICT list, not the loose one-arg form: in loose mode useUrlTab accepts
+  // ANY string from ?tab=, so a stale bookmark like ?tab=leads set `tab` to a
+  // value no branch below matches and the whole body rendered blank. With the
+  // list, an unknown tab falls back to 'dashboard' (TSK-0397).
+  const [tab, setTab] = useUrlTab(['dashboard', 'list', 'responsible'], 'dashboard');
   const [stageTab, setStageTab] = useState('all');
   const [leads, setLeads] = useState([]);
   const [dashboard, setDashboard] = useState(null);
+  const [dashLoaded, setDashLoaded] = useState(false);   // the fetch has settled (ok or failed)
+  const [loadError, setLoadError] = useState(null);      // why the page has no data
   const [search, setSearch] = useState('');
   // Group the funnel list by PROJECT — same collapsible layout as Business
   // Book (mam 2026-06-25: "merge project wise like business book").
@@ -156,12 +162,22 @@ export default function Leads() {
   // backend exposes a public /lookup path.
   const [influencers, setInfluencers] = useState([]);
 
+  // MD 2026-09-03 (TSK-0397, "Sales Funnel ... no sales tracking"): both calls
+  // used to end in `.catch(() => {})`. A swallowed failure left `dashboard`
+  // null, and the Dashboard tab below renders NOTHING while it is null — so any
+  // 500 / timeout / dropped connection showed the tab buttons above a blank
+  // white page, with no error, no retry, and nothing in the UI to explain it.
+  // Now a failure is recorded and surfaced, and the tab renders an explanation.
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (stageTab !== 'all' && stageTab !== 'dashboard') params.set('stage', stageTab);
-    api.get(`/sales-funnel?${params}`).then(r => setLeads(r.data)).catch(() => {});
-    api.get('/sales-funnel/dashboard').then(r => setDashboard(r.data)).catch(() => {});
+    setLoadError(null);
+    const why = (e) => e?.response?.data?.error || e?.message || 'Could not reach the server';
+    api.get(`/sales-funnel?${params}`).then(r => setLeads(r.data)).catch(e => setLoadError(why(e)));
+    api.get('/sales-funnel/dashboard')
+      .then(r => { setDashboard(r.data); setDashLoaded(true); })
+      .catch(e => { setDashLoaded(true); setLoadError(why(e)); });
   }, [search, stageTab]);
 
   useEffect(() => { load(); }, [load]);
@@ -432,6 +448,19 @@ export default function Leads() {
       </div>
 
       {tab === 'responsible' && <ResponsibilityTab module="sales_funnel" title="Sales Funnel" />}
+
+      {/* The page must never be a silent blank. If the dashboard fetch failed,
+          say so and offer a retry instead of rendering nothing (TSK-0397). */}
+      {tab === 'dashboard' && dashLoaded && !dashboard && (
+        <div className="card p-8 text-center">
+          <p className="text-gray-700 font-semibold">Sales tracking could not be loaded.</p>
+          <p className="text-sm text-gray-500 mt-1">{loadError || 'The server did not return any data.'}</p>
+          <button onClick={load} className="btn btn-primary mt-4">Try again</button>
+        </div>
+      )}
+      {tab === 'dashboard' && !dashLoaded && (
+        <div className="card p-8 text-center text-gray-400 text-sm">Loading sales tracking…</div>
+      )}
 
       {/* Dashboard Tab */}
       {tab === 'dashboard' && dashboard && (

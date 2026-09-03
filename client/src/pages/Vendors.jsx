@@ -47,7 +47,7 @@ export default function Vendors() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [vendors, setVendors] = useState([]);
   const [rates, setRates] = useState([]);
-  const [tab, setTab] = useUrlTab('vendors');
+  const [tab, setTab] = useUrlTab(['vendors', 'rates', 'scorecard'], 'vendors');
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});

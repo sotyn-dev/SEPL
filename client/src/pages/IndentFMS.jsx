@@ -23,7 +23,7 @@ export default function IndentFMS() {
   const [tracker, setTracker] = useState([]);
   const [pipeline, setPipeline] = useState({});
   const [grns, setGrns] = useState([]);
-  const [tab, setTab] = useUrlTab('pipeline');
+  const [tab, setTab] = useUrlTab(['pipeline', 'grn', 'responsible', 'tracker'], 'pipeline');
   const [modal, setModal] = useState(false);
   const [grnModal, setGrnModal] = useState(false);
   const [form, setForm] = useState({});

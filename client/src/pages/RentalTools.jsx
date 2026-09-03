@@ -58,7 +58,7 @@ const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 
 export default function RentalTools() {
   const { user, canCreate, canEdit, canApprove } = useAuth();
-  const [tab, setTab] = useUrlTab('dashboard');
+  const [tab, setTab] = useUrlTab(['dashboard', 'enquiries', 'settings'], 'dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [enquiries, setEnquiries] = useState([]);
   const [filters, setFilters] = useState({ stage: '', status: 'open', q: '' });

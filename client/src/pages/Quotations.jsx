@@ -102,7 +102,7 @@ function MarginChartEditor({ chart, reload }) {
 
 export default function Quotations() {
   const { canDelete, isAdmin } = useAuth();
-  const [tab, setTab] = useUrlTab('boq');
+  const [tab, setTab] = useUrlTab(['boq', 'quotations', 'responsible'], 'boq');
   const [boqs, setBoqs] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [leads, setLeads] = useState([]);

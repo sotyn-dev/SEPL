@@ -71,7 +71,7 @@ export default function Attendance() {
   //                 enforces marking via attendance.can_approve.)
   const canGrid = isAdmin() || canView('attendance_grid');
   const canMarkGrid = isAdmin() || canApprove('attendance');
-  const [tab, setTab] = useUrlTab('punch');
+  const [tab, setTab] = useUrlTab(['punch', 'byuser', 'dashboard', 'geofence', 'grid', 'leaves', 'myhistory', 'records', 'report'], 'punch');
   const [myToday, setMyToday] = useState(null);
   // Mam: daily attendance detail (in/out times + leave) belongs on the
   // Attendance page next to the punch UI, not on the dashboard.
