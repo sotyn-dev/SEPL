@@ -235,14 +235,80 @@ function ImportTab({ accounts, onDone }) {
         )}
       </div>
 
+      <AutoFetchCard />
+    </div>
+  );
+}
+
+// Auto-fetch status — the "no upload needed" path (mam 2026-09-04).
+// The bank emails the statement to a mailbox the ERP watches; imports run on a
+// cron through the same parser and matcher as a manual upload. Shown here (not
+// buried in a settings page) because this is where someone asks "do I still
+// have to upload?" — and a background job nobody can see is one nobody trusts.
+function AutoFetchCard() {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api.get('/bank/mail-status').then(r => setSt(r.data)).catch(() => setSt(null));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const pollNow = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post('/bank/mail-poll');
+      const d = r.data || {};
+      if (d.imported) alert(`Imported ${d.imported} statement(s): ${d.added} new transaction(s), ${d.duplicates} duplicate(s) skipped, ${d.matched} auto-matched.`);
+      else alert(`Mailbox checked — nothing new to import.${(d.problems || []).length ? '\n\n' + d.problems.join('\n') : ''}`);
+      load();
+    } catch (e) { alert(e.response?.data?.error || 'Mailbox check failed'); }
+    setBusy(false);
+  };
+
+  if (!st) return null;
+  const last = st.last_run;
+
+  if (!st.configured) {
+    return (
       <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 text-sm">
-        <div className="font-semibold text-indigo-800">🔄 Phase 2 — Automatic daily sync (Account Aggregator)</div>
+        <div className="font-semibold text-indigo-800">🔄 Automatic statements — not switched on yet</div>
         <p className="text-xs text-indigo-700 mt-1">
-          Once the company is onboarded with an RBI-licensed Account Aggregator (Setu / Finvu), both PNB and HDFC
-          transactions will land here automatically every morning — no upload needed. Same table, same matching.
-          Status: <b>waiting for TSP onboarding</b>. No netbanking password is ever stored in the ERP.
+          To stop uploading by hand: set PNB One Biz / HDFC NetBanking to <b>email the statement</b> on a schedule to a
+          mailbox the company owns, then fill the <code>BANK_MAIL_*</code> settings in the server <code>.env</code>
+          (see <code>.env.example</code>). The ERP checks that mailbox and imports whatever arrives — same parsing,
+          same auto-matching as this page.
+        </p>
+        <p className="text-[11px] text-indigo-600 mt-2">
+          Use a dedicated mailbox and an app password. The ERP never stores a netbanking password — a true
+          bank-direct feed needs Account Aggregator (Setu / Finvu) onboarding, which is paperwork, not code.
         </p>
       </div>
+    );
+  }
+
+  return (
+    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-sm">
+      <div className="font-semibold text-emerald-900">✅ Automatic statements — on</div>
+      <p className="text-xs text-emerald-800 mt-1">
+        Watching <b>{st.mailbox}</b> ({st.folder}) and importing statements as the bank sends them. No upload needed.
+        {st.senders?.length > 0 && <> Only mail from <b>{st.senders.join(', ')}</b> is considered.</>}
+      </p>
+      {last && (
+        <p className="text-[11px] text-emerald-700 mt-2">
+          Last check {last.finishedAt ? new Date(last.finishedAt).toLocaleString('en-IN') : '—'}:
+          {' '}{last.imported || 0} statement(s), {last.added || 0} new transaction(s), {last.matched || 0} auto-matched.
+          {last.error && <span className="text-red-600"> Error: {last.error}</span>}
+        </p>
+      )}
+      {last?.problems?.length > 0 && (
+        <ul className="text-[11px] text-amber-700 mt-1 list-disc ml-4">
+          {last.problems.slice(0, 4).map((p, i) => <li key={i}>{p}</li>)}
+        </ul>
+      )}
+      <button onClick={pollNow} disabled={busy}
+        className="mt-2 px-3 py-1.5 text-xs bg-emerald-600 text-white rounded disabled:opacity-50">
+        {busy ? 'Checking…' : 'Check the mailbox now'}
+      </button>
     </div>
   );
 }

@@ -272,6 +272,16 @@ try {
   console.warn('[spos-report] Scheduler not started:', e.message);
 }
 
+// Bank statement mailbox poll (mam 2026-09-04) — the bank emails the
+// statement, the ERP collects it and imports it, so nobody uploads anything.
+// Inert until BANK_MAIL_* is set in .env. Skip via ERP_DISABLE_BANK_MAIL=1.
+try {
+  const { scheduleBankMailCron } = require('./scripts/bankMailCron');
+  scheduleBankMailCron();
+} catch (e) {
+  console.warn('[bank-mail] Scheduler not started:', e.message);
+}
+
 // AR collection-day auto-roll — daily 01:00 moves unpaid, overdue AR entries
 // to the next Mon/Thu (mam 2026-06-18). Skip via ERP_DISABLE_ARAP_ROLL=1.
 try {
