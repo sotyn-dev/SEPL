@@ -3325,6 +3325,7 @@ function initializeDatabase() {
     ['employees', 'pan_number TEXT'],             // [A-Z]{5}[0-9]{4}[A-Z]
     ['employees', 'aadhaar_last4 TEXT'],          // 4 digits — never the full number
     ['employees', 'bank_name TEXT'],
+    ['employees', 'bank_branch TEXT'],            // auto-filled from IFSC (mam 2026-09-04)
     // can_see_all on role_permissions: explicit per-role-per-module toggle
     // for "scope = ALL records" vs "scope = OWN only". Decoupled from
     // can_approve so admin can grant a role full visibility without giving
@@ -5503,6 +5504,17 @@ function initializeDatabase() {
     )`);
     db.exec('CREATE INDEX IF NOT EXISTS idx_banktxn_acct ON bank_transactions(bank_account_id, txn_date)');
   } catch (e) { console.error('[schema] bank module create failed:', e.message); }
+
+  // IFSC directory cache (mam 2026-09-04: "Bank Branch (auto from IFSC)").
+  // One row per IFSC ever looked up, so bank + branch resolve locally after
+  // the first fetch — and keep resolving if the public directory is down.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS ifsc_cache (
+      ifsc TEXT PRIMARY KEY,
+      bank TEXT, branch TEXT, city TEXT, state TEXT,
+      fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) { console.error('[schema] ifsc_cache create failed:', e.message); }
 
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,

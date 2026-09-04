@@ -809,12 +809,49 @@ function masterValues(b) {
     pan_number: b.pan_number ? String(b.pan_number).trim().toUpperCase() : null,
     aadhaar_last4: b.aadhaar_last4 ? String(b.aadhaar_last4).trim() : null,
     bank_name: t(b.bank_name),
+    bank_branch: t(b.bank_branch),
     bank_account_no: b.bank_account_no ? String(b.bank_account_no).replace(/\s/g, '') : null,
     bank_ifsc: b.bank_ifsc ? String(b.bank_ifsc).trim().toUpperCase() : null,
     emergency_contact_name: t(b.emergency_contact_name),
     emergency_contact_phone: t(b.emergency_contact_phone),
   };
 }
+
+// ── IFSC lookup (mam 2026-09-04: "Bank Branch (auto from IFSC)") ────────
+// Bank name + branch are resolved from the IFSC so nobody types them by hand
+// (and mistypes them). Source: the public IFSC directory at ifsc.razorpay.com
+// — RBI data, no key, no account. An IFSC identifies a BANK BRANCH, not a
+// person; nothing about the employee leaves the server.
+// Cached in ifsc_cache: a code is fetched from the network at most once, every
+// later employee on the same branch is answered locally, and a cached code
+// keeps working when the directory is unreachable. Any failure returns a
+// message telling the user to type the bank and branch by hand — the lookup
+// is a convenience and must never block saving.
+router.get('/ifsc/:code', async (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  if (!IFSC_RE.test(code)) return res.status(400).json({ error: 'Not a valid IFSC format' });
+  const db = getDb();
+  try {
+    const hit = db.prepare('SELECT * FROM ifsc_cache WHERE ifsc=?').get(code);
+    if (hit) return res.json({ ifsc: code, bank: hit.bank, branch: hit.branch, city: hit.city, state: hit.state, source: 'cache' });
+  } catch (_) {}
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 6000);
+  try {
+    const r = await fetch(`https://ifsc.razorpay.com/${code}`, { signal: ctl.signal });
+    if (r.status === 404) return res.status(404).json({ error: 'IFSC not found in the bank directory — check the code, or type the bank and branch by hand' });
+    if (!r.ok) return res.status(502).json({ error: 'Bank directory is not answering right now — type the bank and branch by hand' });
+    const j = await r.json();
+    const out = { ifsc: code, bank: j.BANK || null, branch: j.BRANCH || null, city: j.CITY || null, state: j.STATE || null };
+    try {
+      db.prepare('INSERT OR REPLACE INTO ifsc_cache (ifsc, bank, branch, city, state) VALUES (?,?,?,?,?)')
+        .run(code, out.bank, out.branch, out.city, out.state);
+    } catch (_) {}
+    res.json({ ...out, source: 'live' });
+  } catch (e) {
+    res.status(502).json({ error: 'Could not reach the bank directory — type the bank and branch by hand' });
+  } finally { clearTimeout(timer); }
+});
 
 router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
   const { name, phone, email, designation, department, join_date, salary,
@@ -839,14 +876,14 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                            aadhar_file, pan_file, qualification_file, roster,
                            date_of_birth, gender, guardian_title, guardian_relation, guardian_name,
                            pan_number, aadhaar_last4,
-                           bank_name, bank_account_no, bank_ifsc,
+                           bank_name, bank_branch, bank_account_no, bank_ifsc,
                            emergency_contact_name, emergency_contact_phone)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
         aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
         m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
         m.pan_number, m.aadhaar_last4,
-        m.bank_name, m.bank_account_no, m.bank_ifsc,
+        m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
         m.emergency_contact_name, m.emergency_contact_phone);
   res.status(201).json({ id: r.lastInsertRowid, linked_user_id: user_id || null });
 });
@@ -984,6 +1021,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            pan_number              = COALESCE(?, pan_number),
            aadhaar_last4           = COALESCE(?, aadhaar_last4),
            bank_name               = COALESCE(?, bank_name),
+           bank_branch             = COALESCE(?, bank_branch),
            bank_account_no         = COALESCE(?, bank_account_no),
            bank_ifsc               = COALESCE(?, bank_ifsc),
            emergency_contact_name  = COALESCE(?, emergency_contact_name),
@@ -995,7 +1033,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         aadhar_file || null, pan_file || null, qualification_file || null,
         m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
         m.pan_number, m.aadhaar_last4,
-        m.bank_name, m.bank_account_no, m.bank_ifsc,
+        m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
         m.emergency_contact_name, m.emergency_contact_phone, req.params.id);
 
   // Sync the linked login's `active` flag to the employee's on-roll status.

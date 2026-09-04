@@ -19,6 +19,21 @@ export default function Employees() {
   const [bulkModal, setBulkModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});
+  // IFSC → bank + branch (mam 2026-09-04). Fires once the code is a complete
+  // 11-character IFSC. The functional setForm means a slow reply for a code the
+  // user has since changed is ignored, rather than overwriting the newer one.
+  const [ifscLookup, setIfscLookup] = useState({ status: 'idle' });
+  const lookupIfsc = async (code) => {
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(code)) { setIfscLookup({ status: 'idle' }); return; }
+    setIfscLookup({ status: 'loading' });
+    try {
+      const r = (await api.get(`/hr/ifsc/${code}`)).data;
+      setForm(f => f.bank_ifsc === code ? { ...f, bank_name: r.bank || f.bank_name, bank_branch: r.branch || f.bank_branch } : f);
+      setIfscLookup({ status: 'ok', bank: r.bank, branch: r.branch });
+    } catch (e) {
+      setIfscLookup({ status: 'error', message: e.response?.data?.error || 'Lookup failed — type the bank and branch by hand' });
+    }
+  };
   const [search, setSearch] = useState('');
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
@@ -465,7 +480,7 @@ export default function Employees() {
       )}
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Employee' : 'Add Employee'}>
+      <Modal isOpen={modal} onClose={() => { setModal(false); setIfscLookup({ status: 'idle' }); }} title={editing ? 'Edit Employee' : 'Add Employee'}>
         <form onSubmit={save} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
@@ -595,18 +610,33 @@ export default function Employees() {
           <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-400 space-y-3">
             <div className="text-xs font-semibold text-blue-800 uppercase tracking-wide">Salary bank account</div>
             <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label">Bank Name</label>
-                <input className="input" value={form.bank_name || ''} placeholder="e.g. Punjab National Bank"
-                  onChange={e => setForm({ ...form, bank_name: e.target.value })} />
-              </div>
+              {/* IFSC goes first because it drives the two fields after it. */}
               <div>
                 <label className="label">IFSC Code</label>
                 <input className="input" value={form.bank_ifsc || ''} placeholder="PUNB0020510" maxLength={11}
-                  onChange={e => setForm({ ...form, bank_ifsc: e.target.value.toUpperCase() })} />
-                <p className="text-[10px] text-gray-500 mt-0.5">4 letters, then 0, then 6 letters/digits.</p>
+                  onChange={e => {
+                    const v = e.target.value.toUpperCase().replace(/\s/g, '');
+                    setForm({ ...form, bank_ifsc: v });
+                    lookupIfsc(v);
+                  }} />
+                <p className={`text-[10px] mt-0.5 ${ifscLookup.status === 'ok' ? 'text-emerald-600' : ifscLookup.status === 'error' ? 'text-amber-700' : 'text-gray-500'}`}>
+                  {ifscLookup.status === 'loading' ? 'Looking up bank & branch…'
+                    : ifscLookup.status === 'ok' ? `✓ ${ifscLookup.bank} — ${ifscLookup.branch}`
+                    : ifscLookup.status === 'error' ? ifscLookup.message
+                    : 'Bank name and branch fill in automatically from the IFSC.'}
+                </p>
               </div>
-              <div className="col-span-2">
+              <div>
+                <label className="label">Bank Name</label>
+                <input className="input" value={form.bank_name || ''} placeholder="Fills from IFSC"
+                  onChange={e => setForm({ ...form, bank_name: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Bank Branch</label>
+                <input className="input" value={form.bank_branch || ''} placeholder="Fills from IFSC"
+                  onChange={e => setForm({ ...form, bank_branch: e.target.value })} />
+              </div>
+              <div>
                 <label className="label">Bank Account Number</label>
                 <input className="input" value={form.bank_account_no || ''} placeholder="Account number as printed on the passbook / cheque"
                   onChange={e => setForm({ ...form, bank_account_no: e.target.value.replace(/\s/g, '') })} />
