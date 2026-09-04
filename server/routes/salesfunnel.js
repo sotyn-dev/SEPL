@@ -157,6 +157,17 @@ router.get('/:id', requirePermission('leads', 'view'), (req, res) => {
 
 // Stage 1 validation per mam's spec — GST format, estimated value > 0,
 // bid deadline > today (Govt only), required fields per kind.
+// Tentative timeline is DERIVED from the tentative closing date — never
+// entered by hand (mam 2026-09-04: "directly linked with date, no manual
+// entry"). Computed here, on the server, so the stored "N days" can never
+// disagree with the date it came from. Measured from IST today.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function deriveTimeline(tentativeDate) {
+  if (!tentativeDate) return null;
+  const days = Math.round((Date.parse(tentativeDate) - Date.parse(istToday())) / 86400000);
+  return Number.isFinite(days) ? `${Math.max(0, days)} days` : null;
+}
+
 function validateStage1(b, isCreate) {
   const errors = [];
   if (!b.client_name) errors.push('Customer name is required');
@@ -170,6 +181,9 @@ function validateStage1(b, isCreate) {
     errors.push('PAN number is invalid');
   }
   if (b.estimated_value !== undefined && +b.estimated_value < 0) errors.push('Estimated value must be ≥ 0');
+  if (b.tentative_date && (!DATE_RE.test(String(b.tentative_date)) || Number.isNaN(Date.parse(b.tentative_date)))) {
+    errors.push('Tentative closing date is not a valid date');
+  }
   // Government-specific
   if (b.lead_kind === 'government') {
     if (!b.tender_id && isCreate) errors.push('Tender ID is required for Government leads');
@@ -206,6 +220,15 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
   const subTrades = Array.isArray(b.sub_trades_scope) ? b.sub_trades_scope.join(',') : (b.sub_trades_scope || null);
   const leadKind = b.lead_kind === 'government' ? 'government' : 'private';
 
+  // Tentative closing date → derived timeline, and it seeds closing_date so
+  // the lead appears on the Expected Closings dashboard from day one instead
+  // of only after Qualify. A tentative close in the past is refused.
+  const tentativeDate = b.tentative_date ? String(b.tentative_date).slice(0, 10) : null;
+  if (tentativeDate && tentativeDate < istToday()) {
+    return res.status(400).json({ error: 'Tentative closing date must be today or later' });
+  }
+  const tentativeTimeline = deriveTimeline(tentativeDate);
+
   // Mam (2026-06-01) Stage-1 form additions: building_category +
   // influencer_id/_name (denormalised name keeps history readable
   // if a partner row is renamed in the master).  GST + PAN remain
@@ -214,19 +237,19 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
   const r = db.prepare(`INSERT INTO sales_funnel
     (lead_no, client_name, company_name, phone, email, category, lead_type, lead_kind,
      gst_number, pan_number, project_name, project_location, pin_code,
-     estimated_value, tentative_timeline, sub_trades_scope, building_category,
+     estimated_value, tentative_timeline, tentative_date, closing_date, sub_trades_scope, building_category,
      tender_id, bid_deadline, emd_amount, pbg_required,
      city, address, district, state, source, influencer_id, influencer_name,
      assigned_sc, assigned_asm, assigned_asm_id,
      remarks, created_by,
      current_stage, stage_entered_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
     leadNo, b.client_name, b.company_name || null, b.phone || null, b.email || null,
     b.category || null, b.lead_type || null, leadKind,
     b.gst_number ? String(b.gst_number).toUpperCase() : null,
     b.pan_number ? String(b.pan_number).toUpperCase() : null,
     b.project_name || null, b.project_location || null, b.pin_code || null,
-    +b.estimated_value || 0, b.tentative_timeline || null, subTrades,
+    +b.estimated_value || 0, tentativeTimeline, tentativeDate, tentativeDate, subTrades,
     b.building_category || null,
     b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
     b.city || null, b.address || null, b.district || null, b.state || null,
@@ -304,13 +327,28 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
   const subTrades = Array.isArray(b.sub_trades_scope) ? b.sub_trades_scope.join(',') : (b.sub_trades_scope || null);
   const leadKind = b.lead_kind === 'government' ? 'government' : (b.lead_kind === 'private' ? 'private' : null);
 
+  // Tentative closing date → derived timeline. The past-date rule applies
+  // only when the date actually CHANGES, so editing an old lead's phone
+  // number is never blocked by a tentative date that has since gone by.
+  // closing_date follows the tentative date only while it still IS the
+  // tentative date (or is blank); once Qualify has set a firmer closing
+  // date, a Stage-1 edit must not overwrite it.
+  const prev = db.prepare('SELECT tentative_date, closing_date FROM sales_funnel WHERE id=?').get(req.params.id) || {};
+  const tentativeDate = b.tentative_date ? String(b.tentative_date).slice(0, 10) : null;
+  if (tentativeDate && tentativeDate !== prev.tentative_date && tentativeDate < istToday()) {
+    return res.status(400).json({ error: 'Tentative closing date must be today or later' });
+  }
+  const tentativeTimeline = deriveTimeline(tentativeDate);
+  const prevClosing = prev.closing_date ? String(prev.closing_date).slice(0, 10) : null;
+  const closingDate = (!prevClosing || prevClosing === prev.tentative_date) ? (tentativeDate || prevClosing) : prevClosing;
+
   db.prepare(
     `UPDATE sales_funnel SET
        client_name=?, company_name=?, phone=?, email=?,
        category=?, lead_type=?, lead_kind=COALESCE(?, lead_kind),
        gst_number=?, pan_number=?,
        project_name=?, project_location=?, pin_code=?,
-       estimated_value=?, tentative_timeline=?, sub_trades_scope=?,
+       estimated_value=?, tentative_timeline=?, tentative_date=?, closing_date=?, sub_trades_scope=?,
        tender_id=?, bid_deadline=?, emd_amount=?, pbg_required=?,
        city=?, address=?, district=?, state=?, source=?,
        assigned_sc=?, assigned_asm=?, assigned_asm_id=?, remarks=?,
@@ -322,7 +360,7 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
     b.gst_number ? String(b.gst_number).toUpperCase() : null,
     b.pan_number ? String(b.pan_number).toUpperCase() : null,
     b.project_name || null, b.project_location || null, b.pin_code || null,
-    +b.estimated_value || 0, b.tentative_timeline || null, subTrades,
+    +b.estimated_value || 0, tentativeTimeline, tentativeDate, closingDate, subTrades,
     b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
     b.city || null, b.address || null, b.district || null, b.state || null,
     b.source || null,

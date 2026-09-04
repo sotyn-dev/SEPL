@@ -3382,6 +3382,11 @@ function initializeDatabase() {
     // Commercial header
     ['sales_funnel', 'estimated_value REAL DEFAULT 0'],
     ['sales_funnel', 'tentative_timeline TEXT'],
+    // Tentative CLOSING DATE (mam 2026-09-04: "tentative time line should be
+    // directly linked with date, no manual entry"). This is the source of
+    // truth; tentative_timeline is now DERIVED from it on the server as
+    // "N days" and kept only so old rows and any reader stay intact.
+    ['sales_funnel', 'tentative_date DATE'],
     // Mam (2026-06-01): "PIC 2 BUILDING CATEGORY ALSO ADD AND GIVE
     // PIC DROP DOWN" — new field on Stage 1 lead capture, picked
     // from a 15-option list (Residential / Commercial / Educational
@@ -5515,6 +5520,24 @@ function initializeDatabase() {
       fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
   } catch (e) { console.error('[schema] ifsc_cache create failed:', e.message); }
+
+  // One-shot: give every existing lead a tentative_date from its old
+  // "N days" bucket + created_at, so the Stage-1 form shows a date for old
+  // leads too instead of a blank (mam 2026-09-04). Only fills NULLs; never
+  // touches closing_date on existing rows — that stays as Qualify set it.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='backfill_tentative_date_v1'").get();
+    if (!done) {
+      const r = db.prepare(`
+        UPDATE sales_funnel
+           SET tentative_date = date(created_at, '+' || CAST(SUBSTR(tentative_timeline, 1, INSTR(tentative_timeline, ' ') - 1) AS INTEGER) || ' days')
+         WHERE tentative_date IS NULL
+           AND tentative_timeline GLOB '[0-9]* days'
+           AND created_at IS NOT NULL`).run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('backfill_tentative_date_v1', '1')").run();
+      if (r.changes) console.log(`[migration] derived tentative_date for ${r.changes} existing lead(s) from their timeline bucket`);
+    }
+  } catch (e) { console.error('[migration] tentative_date backfill failed:', e.message); }
 
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,

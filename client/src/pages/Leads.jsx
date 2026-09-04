@@ -1077,14 +1077,33 @@ export default function Leads() {
               />
             </div>
             <div><label className="label">Estimated Value (₹)</label><input className="input" type="number" min="0" value={form.estimated_value||0} onChange={e=>F('estimated_value',+e.target.value)}/></div>
-            {/* Mam (2026-06-01): tentative timeline locked to a
-                6-option dropdown — was a freeform text field. */}
+            {/* Tentative timeline is now a DATE (mam 2026-09-04: "directly
+                linked with date, no manual entry"). It was a 6-option days
+                dropdown (mam 2026-06-01). The days are DERIVED from the date
+                and shown read-only; the quick-pick chips set the date, they
+                do not set the days. The server recomputes "N days" on save,
+                so what is stored can never disagree with the date. */}
             <div>
-              <label className="label">Tentative Timeline</label>
-              <select className="select" value={form.tentative_timeline||''} onChange={e=>F('tentative_timeline',e.target.value)}>
-                <option value="">Select…</option>
-                {TIMELINE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
+              <label className="label">Tentative Closing Date</label>
+              <input className="input" type="date"
+                min={new Date().toISOString().slice(0, 10)}
+                value={form.tentative_date ? String(form.tentative_date).slice(0, 10) : ''}
+                onChange={e=>F('tentative_date', e.target.value)} />
+              <div className="flex flex-wrap items-center gap-1 mt-1">
+                {TIMELINE_OPTIONS.map(t => {
+                  const n = parseInt(t, 10);
+                  return (
+                    <button key={t} type="button"
+                      onClick={() => { const d = new Date(); d.setDate(d.getDate() + n); F('tentative_date', d.toISOString().slice(0, 10)); }}
+                      className="px-2 py-0.5 rounded-full border text-[10px] text-gray-600 hover:bg-blue-50 hover:border-blue-300">
+                      +{n}d
+                    </button>);
+                })}
+                {form.tentative_date && (() => {
+                  const days = Math.round((Date.parse(String(form.tentative_date).slice(0, 10)) - Date.parse(new Date().toISOString().slice(0, 10))) / 86400000);
+                  return <span className={`text-[11px] ml-1 ${days < 0 ? 'text-red-600' : 'text-emerald-700'}`}>→ {days < 0 ? `${-days} days ago` : `${days} days from today`}</span>;
+                })()}
+              </div>
             </div>
             {/* Building Category — mam (2026-06-01): "PIC 2 BUILDING
                 CATEGORY ALSO ADD AND GIVE PIC DROP DOWN" — 15-option
