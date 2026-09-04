@@ -246,6 +246,7 @@ function MobileItemRow({ item, idx }) {
           ) : (
             <div className="italic text-gray-400">Manual entry (no item-master link)</div>
           )}
+          {item.remarks && <div className="text-amber-700"><span className="text-gray-400">Remarks:</span> {item.remarks}</div>}
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 pt-0.5">
             {item.item_type && <div><span className="text-gray-400">Type:</span> {item.item_type}</div>}
             {+item.master_price > 0 && (
@@ -1147,6 +1148,7 @@ export default function Procurement() {
       items: indentItems.map(it => ({
         ...it,
         make: it.make || '',
+        remarks: (it.remarks || '').trim(),
         // Strip rental fields off non-rental rows so the server doesn't
         // mistake old form state for rental data.
         rental_days: cat === 'rental' ? (+it.rental_days || null) : null,
@@ -1281,6 +1283,7 @@ export default function Procurement() {
           item_master_id: it.item_master_id || '',
           description: it.description || '',
           make: it.make || '',
+          remarks: it.remarks || '',
           quantity: +it.quantity || 0,
           unit: it.unit || 'nos',
           item_type: it.item_type || '',
@@ -3445,7 +3448,10 @@ export default function Procurement() {
                                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 border border-blue-300">🛒 PROCURE</span>
                                 )}
                               </td>
-                              <td className="py-1 pr-3">{it.make || <span className="text-gray-400">—</span>}</td>
+                              <td className="py-1 pr-3">
+                                {it.make || <span className="text-gray-400">—</span>}
+                                {it.remarks && <div className="text-[10px] text-amber-700 mt-0.5" title={it.remarks}>✎ {it.remarks}</div>}
+                              </td>
                               <td className="py-1 pr-3 text-right">{it.quantity}</td>
                               <td className="py-1 pr-3">{it.unit || '—'}</td>
                               <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}</td>
@@ -6711,6 +6717,11 @@ export default function Procurement() {
                             </div>
                           );
                           const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} title={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
+                          // Per-item remark for Purchase (mam 2026-09-04: "give
+                          // remarks options to engineer after every item, for
+                          // example colour of wire"). Optional; travels with the
+                          // item onto the indent view, the PDF and the store slip.
+                          const remarksInput = <input className="input text-sm" placeholder="Remarks for this item — e.g. red colour, 1.5 sq mm, with lugs" value={item.remarks || ''} title={item.remarks || ''} maxLength={500} onChange={e => { const n = [...indentItems]; n[i].remarks = e.target.value; setIndentItems(n); }} />;
                           // Qty input — uses NumInput so backspace/Ctrl+A
                           // doesn't snap the field back to 0 (mam 2026-05-25).
                           // emitZeroOnEmpty keeps the same number contract
@@ -6788,10 +6799,15 @@ export default function Procurement() {
                                   <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>
                                   {makeInput}
                                 </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Remarks <span className="text-gray-400 font-normal normal-case">(optional)</span></label>
+                                  {remarksInput}
+                                </div>
                               </div>
 
                               {/* DESKTOP — single row (no Required by; see
-                                  header comment above for context) */}
+                                  header comment above for context), plus a
+                                  remarks line under it (mam 2026-09-04). */}
                               <div className="hidden md:block">
                                 <div className="grid gap-2 items-center bg-white border rounded-lg p-2" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
                                   <div className="col-span-7">{masterPicker}</div>
@@ -6800,6 +6816,7 @@ export default function Procurement() {
                                   <div className="col-span-2">{qtyInput}</div>
                                   <div className="col-span-2">{unitInput}</div>
                                   {removeBtn}
+                                  <div className="col-span-full">{remarksInput}</div>
                                 </div>
                               </div>
                             </div>

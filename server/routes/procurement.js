@@ -1623,8 +1623,9 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
     `INSERT INTO indent_items
       (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount,
        item_type, is_foc, is_tool, required_date,
-       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day, weight_per_meter, unit_overridden)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day, weight_per_meter, unit_overridden,
+       remarks)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const i of (items || [])) {
     let desc = i.description || '';
@@ -1688,6 +1689,7 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
       r.lastInsertRowid, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool,
       i.required_date || null,
       extraSch, extraNon, rentDays, rentRate, wpm, unitWasOverridden ? 1 : 0,
+      String(i.remarks || '').trim().slice(0, 500) || null,
     );
   }
   // CRM funnel auto-create at RAISE time -- REMOVED (mam 2026-09-04: "i want
@@ -2363,8 +2365,8 @@ router.put('/indents/:id', (req, res) => {
               `INSERT INTO indent_items
                   (indent_id, description, quantity, unit, rate, amount, vendor_id,
                    item_master_id, make, is_foc, is_tool, item_type, po_item_id,
-                   required_date, source, parent_item_id, stock_issue_note_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'store', ?, ?)`
+                   required_date, source, parent_item_id, stock_issue_note_id, remarks)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'store', ?, ?, ?)`
             );
             // The store child copies FK columns from the parent. If the parent
             // carries a STALE reference (e.g. po_item_id whose po_items row was
@@ -2450,6 +2452,9 @@ router.put('/indents/:id', (req, res) => {
                   parent.is_foc, parent.is_tool, parent.item_type,
                   safeFk(parent.po_item_id, 'po_items'), parent.required_date,
                   parent.id, issueNoteId,
+                  // The engineer's remark rides along to the store slip —
+                  // "red colour" matters as much at the store as at Purchase.
+                  parent.remarks || null,
                 );
               }
             }
@@ -2735,8 +2740,8 @@ router.put('/indents/:id', (req, res) => {
       const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
       const insertItem = db.prepare(
         `INSERT INTO indent_items
-          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date, remarks)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
       for (const i of items) {
         let desc = i.description || '';
@@ -2773,7 +2778,8 @@ router.put('/indents/:id', (req, res) => {
         const qty = +i.quantity || 0;
         const foc = String(itemType || '').toUpperCase() === 'FOC' ? 1 : 0;
         const tool = String(itemType || '').toUpperCase() === 'RGP' ? 1 : 0;
-        insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null);
+        insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null,
+          String(i.remarks || '').trim().slice(0, 500) || null);
       }
     });
     try {

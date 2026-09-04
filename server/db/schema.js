@@ -3595,6 +3595,11 @@ function initializeDatabase() {
     // Vendor PO print's "DUE ON" column should show one date per line
     // (from the indent), not one PO-level date stamped on every row.
     ['indent_items', 'required_date DATE'],
+    // Per-item remark from the raising engineer (mam 2026-09-04: "give
+    // remarks options to engineer after every item, for example colour of
+    // wire"). Free text; shown to Purchase on the indent view, the PDF and
+    // copied onto a store-issue child so the store sees it too.
+    ['indent_items', 'remarks TEXT'],
     // Vendor POs are now uploaded from Tally rather than built inside the ERP.
     // po_date  — from the Tally PO (not the ERP creation timestamp)
     // file_path — relative URL under /uploads to the uploaded PO file (PDF/image/xlsx)
