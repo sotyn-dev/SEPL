@@ -50,6 +50,8 @@ import {
   // Drawing Tracker (2026-08) — verified unused elsewhere in this file, so the
   // no-duplicate-icons rule above still holds.
   FiPenTool, FiLayout,
+  // Sales Bill Receive — unused elsewhere in this file (no-duplicate-icons).
+  FiDownload,
   // Labour Management System group + its children (mam 2026-08).
   // All three verified unused elsewhere in this file — the
   // no-duplicate-icons rule above still holds.
@@ -132,6 +134,7 @@ const SIDEBAR_GROUPS = [
     { path: '/price-required',       label: 'RFQ Queue',          icon: FiInbox,        module: null, open: true },
     { path: '/vendors',              label: 'Vendors',            icon: FiTag,          module: 'vendors' },
     { path: '/procurement',          label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
+    { path: '/sales-bill-receive',   label: 'Sales Bill Receive', icon: FiDownload,     module: 'sales_bill_receive' },
     { path: '/orders',               label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
     // Mam (2026-05-28): backward-pass Gantt per project — surfaces
     // 'must raise indent by' date for every BOQ item.

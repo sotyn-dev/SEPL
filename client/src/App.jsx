@@ -32,6 +32,7 @@ const Attendance = lazy(() => import('./pages/Attendance'));
 const Vendors = lazy(() => import('./pages/Vendors'));
 const Customers = lazy(() => import('./pages/Customers'));
 const Procurement = lazy(() => import('./pages/Procurement'));
+const SalesBillReceive = lazy(() => import('./pages/SalesBillReceive'));
 const PriceRequired = lazy(() => import('./pages/PriceRequired'));
 const Installation = lazy(() => import('./pages/Installation'));
 const SalesBilling = lazy(() => import('./pages/SalesBilling'));
@@ -247,6 +248,7 @@ export default function App() {
         <Route path="vendors" element={<ModuleRoute module="vendors"><Vendors /></ModuleRoute>} />
         <Route path="customers" element={<ModuleRoute module="customers"><Customers /></ModuleRoute>} />
         <Route path="procurement" element={<ModuleRoute module="procurement"><Procurement /></ModuleRoute>} />
+        <Route path="sales-bill-receive" element={<ModuleRoute module="sales_bill_receive"><SalesBillReceive /></ModuleRoute>} />
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />

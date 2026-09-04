@@ -64,6 +64,7 @@ const ALL_MODULES = [
   { key: 'sub_contractors', label: 'Sub-Contractors' },
   { key: 'customers', label: 'Customers' },
   { key: 'procurement', label: 'Indent to Dispatch' },
+  { key: 'sales_bill_receive', label: 'Sales Bill Receive' },
   { key: 'procurement_schedule', label: 'Schedule (Gantt)' },
   { key: 'indent_fms', label: 'Indent FMS (legacy)' },
   { key: 'inventory', label: 'Inventory' },
