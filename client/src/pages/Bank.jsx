@@ -187,7 +187,7 @@ function ImportTab({ accounts, onDone }) {
 
   const doImport = async () => {
     if (!accountId) return alert('Pick the bank account first');
-    if (!file) return alert('Choose the statement file (CSV or Excel)');
+    if (!file) return alert('Choose the statement file (CSV, Excel or PDF)');
     setBusy(true); setResult(null);
     try {
       const fd = new FormData();
@@ -204,15 +204,19 @@ function ImportTab({ accounts, onDone }) {
       <div className="bg-white border rounded-lg p-4 space-y-3">
         <div className="font-semibold text-sm">Upload bank statement</div>
         <p className="text-xs text-gray-500">
-          Download the statement from PNB One Biz or HDFC NetBanking as <b>CSV / Excel</b> and drop it here.
-          Columns are detected automatically (Date, Narration, Withdrawal, Deposit…). Duplicate lines are skipped,
-          so re-uploading an overlapping period is safe.
+          Download the statement from PNB One Biz or HDFC NetBanking as <b>CSV / Excel</b> — or drop the PNB
+          <b> Transaction History PDF</b> straight in. Columns are detected automatically (Date, Narration,
+          Withdrawal, Deposit…). Duplicate lines are skipped, so re-uploading an overlapping period is safe.
+        </p>
+        <p className="text-[11px] text-gray-400">
+          CSV / Excel stays the most exact source. A PDF is read by column position and the account number on it
+          must match the account you pick below.
         </p>
         <select value={accountId} onChange={e => setAccountId(e.target.value)} className="border rounded px-2 py-1.5 text-sm w-full">
           <option value="">— Select bank account —</option>
           {accounts.map(a => <option key={a.id} value={a.id}>{a.bank_name}{a.account_label ? ` — ${a.account_label}` : ''}{a.account_last4 ? ` ••${a.account_last4}` : ''}</option>)}
         </select>
-        <input type="file" accept=".csv,.xls,.xlsx" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm" />
+        <input type="file" accept=".csv,.xls,.xlsx,.pdf" onChange={e => setFile(e.target.files?.[0] || null)} className="text-sm" />
         <button onClick={doImport} disabled={busy}
           className="px-4 py-2 text-sm bg-blue-600 text-white rounded disabled:opacity-50">
           {busy ? 'Importing…' : '⬆️ Import & auto-match'}
@@ -221,6 +225,11 @@ function ImportTab({ accounts, onDone }) {
           <div className="text-sm bg-green-50 border border-green-200 rounded p-3">
             ✅ Imported <b>{result.added}</b> new transaction(s), skipped <b>{result.skipped_duplicates}</b> duplicate(s),
             auto-matched <b>{result.auto_matched}</b>.{result.bad_dates > 0 && <> ⚠️ {result.bad_dates} row(s) had unreadable dates and were skipped.</>}
+            {result.source_format === 'pdf' && (
+              <> Read <b>{result.parsed_rows}</b> line(s) from {result.pages} PDF page(s).
+                {result.skipped_rows > 0 && <> ⚠️ {result.skipped_rows} line(s) carried no amount and were skipped — worth a look against the PDF.</>}
+              </>
+            )}
             <button onClick={onDone} className="ml-2 text-blue-600 underline">View transactions →</button>
           </div>
         )}

@@ -73,14 +73,77 @@ const parseDate = (v) => {
   return null;
 };
 
-router.post('/import', requirePermission('cashflow', 'create'), upload.single('file'), (req, res) => {
+// Shared tail for both the spreadsheet and the PDF path: dedupe + insert +
+// auto-reconcile. `records` are already normalised to
+// { date:'YYYY-MM-DD', description, ref, debit, credit, balance }.
+function persistStatementRows(db, accountId, records, userId) {
+  const ins = db.prepare(`INSERT OR IGNORE INTO bank_transactions
+    (bank_account_id, txn_date, description, ref_no, debit, credit, balance, source, dedupe_hash)
+    VALUES (?,?,?,?,?,?,?,?,?)`);
+  let added = 0, skipped = 0;
+  const tx = db.transaction(() => {
+    for (const r of records) {
+      const desc = String(r.description || '').trim().slice(0, 300);
+      const ref = String(r.ref || '').trim().slice(0, 60);
+      const hash = crypto.createHash('sha1')
+        .update([accountId, r.date, desc, ref, r.debit, r.credit].join('|')).digest('hex');
+      const out = ins.run(accountId, r.date, desc, ref || null, r.debit, r.credit, r.balance ?? null, 'import', hash);
+      if (out.changes) added++; else skipped++;
+    }
+  });
+  tx();
+  return { added, skipped, matched: autoMatch(db, accountId, userId) };
+}
+
+router.post('/import', requirePermission('cashflow', 'create'), upload.single('file'), async (req, res) => {
   try {
     const db = getDb();
     const accountId = +req.body?.bank_account_id;
-    if (!accountId || !db.prepare('SELECT 1 FROM bank_accounts WHERE id=?').get(accountId)) {
+    const account = accountId && db.prepare('SELECT * FROM bank_accounts WHERE id=?').get(accountId);
+    if (!account) {
       return res.status(400).json({ error: 'Pick the bank account first' });
     }
-    if (!req.file) return res.status(400).json({ error: 'Attach the statement file (CSV / Excel)' });
+    if (!req.file) return res.status(400).json({ error: 'Attach the statement file (CSV / Excel / PDF)' });
+
+    // ── PDF path (mam 2026-09-04) ────────────────────────────────────
+    // PNB One Biz hands out an "OpTransactionHistory" PDF and that is
+    // sometimes all that's to hand. Parsed POSITIONALLY — see
+    // lib/pnbPdfStatement.js for why the plain-text route is unsafe here.
+    const fsMod = require('fs');
+    // Sniff the magic bytes rather than trusting the extension — but read only
+    // the first 5, not the whole upload.
+    const sniff = () => {
+      const buf = Buffer.alloc(5);
+      let fd;
+      try { fd = fsMod.openSync(req.file.path, 'r'); fsMod.readSync(fd, buf, 0, 5, 0); }
+      catch { return false } finally { if (fd !== undefined) try { fsMod.closeSync(fd); } catch (_) {} }
+      return buf.toString('latin1') === '%PDF-';
+    };
+    const isPdf = /\.pdf$/i.test(req.file.originalname || '') || sniff();
+    if (isPdf) {
+      const { parsePnbStatementPdf } = require('../lib/pnbPdfStatement');
+      const parsed = await parsePnbStatementPdf(fsMod.readFileSync(req.file.path));
+      if (!parsed.rows.length) {
+        return res.status(400).json({ error: 'No transactions found in that PDF. It should be the PNB One Biz "Transaction History" statement — a scanned or printed-to-PDF copy has no text layer to read.' });
+      }
+      // Refuse a statement that belongs to a DIFFERENT account than the one
+      // selected — importing another account's lines would silently corrupt
+      // this account's ledger and every reconciliation built on it.
+      const last4 = String(account.account_last4 || '').trim();
+      if (last4 && parsed.accountNumber && !parsed.accountNumber.endsWith(last4)) {
+        return res.status(400).json({
+          error: `That statement is for account ending ${parsed.accountNumber.slice(-4)}, but you selected ${account.bank_name} ••${last4}. Pick the matching account.`,
+        });
+      }
+      const r = persistStatementRows(db, accountId, parsed.rows, req.user.id);
+      return res.json({
+        added: r.added, skipped_duplicates: r.skipped, bad_dates: 0, auto_matched: r.matched,
+        source_format: 'pdf', parsed_rows: parsed.rows.length, pages: parsed.pages,
+        // anchors that carried no amount — reported so a silent drop is visible
+        skipped_rows: Math.max(0, parsed.anchors - parsed.rows.length),
+      });
+    }
+
     const wb = XLSX.readFile(req.file.path, { cellDates: true, raw: false });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
@@ -103,31 +166,26 @@ router.post('/import', requirePermission('cashflow', 'create'), upload.single('f
       }
     }
     if (headRow < 0) {
-      return res.status(400).json({ error: 'Could not find the statement columns — the file needs a Date column plus Withdrawal/Debit and Deposit/Credit columns (standard PNB / HDFC export).' });
+      return res.status(400).json({ error: 'Could not find the statement columns — the file needs a Date column plus Withdrawal/Debit and Deposit/Credit columns (standard PNB / HDFC export). A PNB One Biz Transaction History PDF also works.' });
     }
-    const ins = db.prepare(`INSERT OR IGNORE INTO bank_transactions
-      (bank_account_id, txn_date, description, ref_no, debit, credit, balance, source, dedupe_hash)
-      VALUES (?,?,?,?,?,?,?,?,?)`);
-    let added = 0, skipped = 0, badDates = 0;
-    const tx = db.transaction(() => {
-      for (let r = headRow + 1; r < rows.length; r++) {
-        const row = rows[r];
-        const date = parseDate(row[cols.date]);
-        const debit = cols.debit >= 0 ? parseAmount(row[cols.debit]) : 0;
-        const credit = cols.credit >= 0 ? parseAmount(row[cols.credit]) : 0;
-        if (!date) { if (debit || credit) badDates++; continue; }
-        if (!debit && !credit) continue;
-        const desc = cols.description >= 0 ? String(row[cols.description] || '').trim().slice(0, 300) : '';
-        const ref = cols.ref >= 0 ? String(row[cols.ref] || '').trim().slice(0, 60) : '';
-        const bal = cols.balance >= 0 ? (parseAmount(row[cols.balance]) || null) : null;
-        const hash = crypto.createHash('sha1').update([accountId, date, desc, ref, debit, credit].join('|')).digest('hex');
-        const out = ins.run(accountId, date, desc, ref || null, debit, credit, bal, 'import', hash);
-        if (out.changes) added++; else skipped++;
-      }
-    });
-    tx();
-    const matched = autoMatch(db, accountId, req.user.id);
-    res.json({ added, skipped_duplicates: skipped, bad_dates: badDates, auto_matched: matched });
+    let badDates = 0;
+    const records = [];
+    for (let r = headRow + 1; r < rows.length; r++) {
+      const row = rows[r];
+      const date = parseDate(row[cols.date]);
+      const debit = cols.debit >= 0 ? parseAmount(row[cols.debit]) : 0;
+      const credit = cols.credit >= 0 ? parseAmount(row[cols.credit]) : 0;
+      if (!date) { if (debit || credit) badDates++; continue; }
+      if (!debit && !credit) continue;
+      records.push({
+        date, debit, credit,
+        description: cols.description >= 0 ? String(row[cols.description] || '') : '',
+        ref: cols.ref >= 0 ? String(row[cols.ref] || '') : '',
+        balance: cols.balance >= 0 ? (parseAmount(row[cols.balance]) || null) : null,
+      });
+    }
+    const r = persistStatementRows(db, accountId, records, req.user.id);
+    res.json({ added: r.added, skipped_duplicates: r.skipped, bad_dates: badDates, auto_matched: r.matched, source_format: 'sheet' });
   } catch (err) {
     console.error('bank import error', err);
     res.status(500).json({ error: 'Import failed: ' + err.message });
