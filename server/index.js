@@ -682,8 +682,47 @@ app.use('/uploads', async (req, res, next) => {
 app.use('/uploads', express.static(uploadsDir));
 
 // Health check for deployment platforms
+// Health + DEPLOY FINGERPRINT.
+//
+// Static files under client/dist update the moment `git reset --hard` runs,
+// but the Node process keeps serving the OLD server code until pm2 actually
+// reloads it. That gap is invisible from outside and is exactly how prod once
+// drifted 80 commits behind while every boot log looked healthy (2026-07-01).
+// Reporting the commit the RUNNING process booted from makes "did the deploy
+// take?" answerable in one request:
+//     curl -s https://securederp.in/api/health
+// If `commit` doesn't match the SHA you just pushed, pm2 never reloaded.
+//
+// Read once at boot from .git (no child process, no git binary needed); a
+// deployment without a .git directory simply reports null.
+const BOOT_COMMIT = (() => {
+  try {
+    const fsx = require('fs'); const px = require('path');
+    const gitDir = px.join(__dirname, '..', '.git');
+    const head = fsx.readFileSync(px.join(gitDir, 'HEAD'), 'utf8').trim();
+    if (head.startsWith('ref: ')) {
+      const ref = head.slice(5).trim();
+      // Loose ref first, then packed-refs (a freshly cloned/reset repo may use either).
+      const loose = px.join(gitDir, ref);
+      if (fsx.existsSync(loose)) return fsx.readFileSync(loose, 'utf8').trim().slice(0, 40);
+      const packed = fsx.readFileSync(px.join(gitDir, 'packed-refs'), 'utf8');
+      const line = packed.split('\n').find(l => l.endsWith(' ' + ref));
+      return line ? line.split(' ')[0].slice(0, 40) : null;
+    }
+    return head.slice(0, 40);   // detached HEAD
+  } catch (_) { return null; }
+})();
+const BOOTED_AT = new Date().toISOString();
+
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    commit: BOOT_COMMIT,
+    commit_short: BOOT_COMMIT ? BOOT_COMMIT.slice(0, 8) : null,
+    booted_at: BOOTED_AT,
+    uptime_seconds: Math.round(process.uptime()),
+  });
 });
 
 // Serve React build in production.
