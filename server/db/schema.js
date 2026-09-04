@@ -3306,6 +3306,25 @@ function initializeDatabase() {
     // 'general' (9:30, default) and 'early' (9:00). Drives roster-aware late /
     // half-day cutoffs in payroll + punch. See server/lib/roster.js.
     ['employees', "roster TEXT DEFAULT 'general'"],
+    // Employee master fields (mam 2026-09-04, from the Mandatory Field Spec
+    // sheet 02): gender, guardian name with a title, PAN and Aadhaar NUMBERS
+    // beside the existing document uploads, and the salary bank account.
+    //
+    // Aadhaar is stored as the LAST FOUR DIGITS ONLY — mam's decision, and the
+    // right one: payroll and PF run off UAN and the PF number, so the full
+    // number is data we would carry the risk of without ever using. The
+    // scanned card already on file covers the rare case it is needed.
+    //
+    // bank_account_no / bank_ifsc / emergency_contact_* already existed from
+    // 2026-08-17 but had no form field anywhere — this is what finally makes
+    // them enterable. bank_name is the one genuinely new banking column.
+    ['employees', 'gender TEXT'],                 // Male / Female / Other
+    ['employees', 'guardian_title TEXT'],         // Mr. / Mrs. / Sh. / Smt.
+    ['employees', 'guardian_relation TEXT'],      // Father / Spouse / Mother
+    ['employees', 'guardian_name TEXT'],
+    ['employees', 'pan_number TEXT'],             // [A-Z]{5}[0-9]{4}[A-Z]
+    ['employees', 'aadhaar_last4 TEXT'],          // 4 digits — never the full number
+    ['employees', 'bank_name TEXT'],
     // can_see_all on role_permissions: explicit per-role-per-module toggle
     // for "scope = ALL records" vs "scope = OWN only". Decoupled from
     // can_approve so admin can grant a role full visibility without giving

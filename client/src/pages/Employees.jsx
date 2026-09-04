@@ -483,6 +483,41 @@ export default function Employees() {
                 <option value="early">Early — 9:00 AM to 6:00 PM</option>
               </select>
             </div>
+            {/* Personal details (mam 2026-09-04). Guardian is title + relation
+                + name, because "Sh. Ram Kumar (Father)" is how it has to read
+                on statutory paperwork. */}
+            <div>
+              <label className="label">Gender</label>
+              <select className="select" value={form.gender || ''} onChange={e => setForm({ ...form, gender: e.target.value })}>
+                <option value="">— Select —</option>
+                {['Male', 'Female', 'Other'].map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Emergency Contact Number</label>
+              <input className="input" value={form.emergency_contact_phone || ''} placeholder="10-digit mobile"
+                onChange={e => setForm({ ...form, emergency_contact_phone: e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className="label">Father / Spouse / Mother Name</label>
+              <div className="flex gap-2">
+                <select className="select w-24" value={form.guardian_title || ''} onChange={e => setForm({ ...form, guardian_title: e.target.value })}>
+                  <option value="">Title</option>
+                  {['Mr.', 'Mrs.', 'Sh.', 'Smt.'].map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <select className="select w-32" value={form.guardian_relation || ''} onChange={e => setForm({ ...form, guardian_relation: e.target.value })}>
+                  <option value="">Relation</option>
+                  {['Father', 'Spouse', 'Mother'].map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <input className="input flex-1" value={form.guardian_name || ''} placeholder="Full name as per ID"
+                  onChange={e => setForm({ ...form, guardian_name: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <label className="label">Emergency Contact Name</label>
+              <input className="input" value={form.emergency_contact_name || ''} placeholder="Who to call"
+                onChange={e => setForm({ ...form, emergency_contact_name: e.target.value })} />
+            </div>
             <div className="col-span-2">
               <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
               <SearchableSelect
@@ -503,12 +538,31 @@ export default function Employees() {
               Highest qualification certificate. */}
           <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400 space-y-3">
             <div className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Mandatory documents{editing ? '' : ' *'}</div>
+            {/* Each document can carry its NUMBER directly above the upload
+                (mam 2026-09-04) — the number is what reports and validation
+                need; the scan is only the proof behind it.
+                Aadhaar is LAST 4 DIGITS ONLY, deliberately: payroll runs off
+                UAN / PF number, so holding the full number is risk without
+                use. The card image on file covers the rare exception. */}
             {[
-              { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card *' },
-              { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card *' },
+              { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card *',
+                num: { k: 'aadhaar_last4', label: 'Aadhaar Number — last 4 digits only', ph: 'e.g. 4355', max: 4,
+                       hint: 'Only the last 4 digits are stored. The full number is never saved in the ERP.' } },
+              { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card *',
+                num: { k: 'pan_number', label: 'PAN Number', ph: 'ABCDE1234F', max: 10,
+                       hint: '5 letters, 4 digits, 1 letter.', upper: true } },
               { key: 'qualification_file', slot: '_qualification_file', label: 'Highest Qualification Certificate *' },
-            ].map(({ key, slot, label }) => (
+            ].map(({ key, slot, label, num }) => (
               <div key={key}>
+                {num && (
+                  <div className="mb-2">
+                    <label className="label">{num.label}</label>
+                    <input
+                      className="input" value={form[num.k] || ''} placeholder={num.ph} maxLength={num.max}
+                      onChange={e => setForm({ ...form, [num.k]: num.upper ? e.target.value.toUpperCase() : e.target.value })} />
+                    <p className="text-[10px] text-gray-500 mt-0.5">{num.hint}</p>
+                  </div>
+                )}
                 <label className="label">{label} <span className="text-gray-400 font-normal text-[10px]">(PDF / JPG / PNG, max 10 MB)</span></label>
                 <input
                   className="input"
@@ -526,6 +580,31 @@ export default function Employees() {
                 {form[slot] && <p className="text-[10px] text-blue-600 mt-0.5">Selected: {form[slot].name}</p>}
               </div>
             ))}
+          </div>
+
+          {/* Salary bank account (mam 2026-09-04). The columns bank_account_no
+              and bank_ifsc have existed since 17 Aug but had no field anywhere
+              in the ERP — this is the first time they can actually be filled. */}
+          <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-400 space-y-3">
+            <div className="text-xs font-semibold text-blue-800 uppercase tracking-wide">Salary bank account</div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label">Bank Name</label>
+                <input className="input" value={form.bank_name || ''} placeholder="e.g. Punjab National Bank"
+                  onChange={e => setForm({ ...form, bank_name: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">IFSC Code</label>
+                <input className="input" value={form.bank_ifsc || ''} placeholder="PUNB0020510" maxLength={11}
+                  onChange={e => setForm({ ...form, bank_ifsc: e.target.value.toUpperCase() })} />
+                <p className="text-[10px] text-gray-500 mt-0.5">4 letters, then 0, then 6 letters/digits.</p>
+              </div>
+              <div className="col-span-2">
+                <label className="label">Bank Account Number</label>
+                <input className="input" value={form.bank_account_no || ''} placeholder="Account number as printed on the passbook / cheque"
+                  onChange={e => setForm({ ...form, bank_account_no: e.target.value.replace(/\s/g, '') })} />
+              </div>
+            </div>
           </div>
 
           <div className="flex justify-end gap-3">

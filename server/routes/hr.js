@@ -747,11 +747,71 @@ router.get('/roster-audit', (req, res) => {
   res.json({ backlog, guests });
 });
 
+// ── Employee master field validation (mam 2026-09-04) ────────────────
+// Enforced on the SERVER, not only in the form: the browser rules are a
+// convenience, these are the guarantee. Every field is optional — blank
+// passes — but a value that IS given has to be the right shape, otherwise
+// the column fills with junk that later reporting has to clean up.
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const GENDERS = ['Male', 'Female', 'Other'];
+const GUARDIAN_TITLES = ['Mr.', 'Mrs.', 'Sh.', 'Smt.'];
+const GUARDIAN_RELATIONS = ['Father', 'Spouse', 'Mother'];
+
+// Returns an error string, or null when the payload is acceptable.
+function validateEmployeeMaster(b) {
+  const up = (v) => String(v || '').trim().toUpperCase();
+  if (b.pan_number && !PAN_RE.test(up(b.pan_number))) {
+    return 'PAN must be 5 letters, 4 digits, then 1 letter — e.g. ABCDE1234F';
+  }
+  if (b.bank_ifsc && !IFSC_RE.test(up(b.bank_ifsc))) {
+    return 'IFSC must be 4 letters, then 0, then 6 letters/digits — e.g. PUNB0020510';
+  }
+  if (b.aadhaar_last4 && !/^\d{4}$/.test(String(b.aadhaar_last4).trim())) {
+    return 'Aadhaar must be the LAST 4 DIGITS only (4 digits). The full number is never stored.';
+  }
+  if (b.bank_account_no && !/^\d{6,20}$/.test(String(b.bank_account_no).replace(/\s/g, ''))) {
+    return 'Bank account number should be 6-20 digits';
+  }
+  if (b.gender && !GENDERS.includes(String(b.gender).trim())) return 'Gender must be Male, Female or Other';
+  if (b.guardian_title && !GUARDIAN_TITLES.includes(String(b.guardian_title).trim())) return 'Invalid title';
+  if (b.guardian_relation && !GUARDIAN_RELATIONS.includes(String(b.guardian_relation).trim())) return 'Relation must be Father, Spouse or Mother';
+  // An emergency contact that is the employee's own number is not an
+  // emergency contact. Cheap check, catches a real copy-paste habit.
+  const ec = String(b.emergency_contact_phone || '').replace(/\D/g, '');
+  const own = String(b.phone || '').replace(/\D/g, '');
+  if (ec && own && ec.length >= 10 && ec === own) {
+    return 'Emergency contact cannot be the employee\'s own phone number';
+  }
+  return null;
+}
+
+// Normalise the master fields into the exact shape the columns expect.
+function masterValues(b) {
+  const t = (v) => { const s = String(v ?? '').trim(); return s || null; };
+  return {
+    gender: t(b.gender),
+    guardian_title: t(b.guardian_title),
+    guardian_relation: t(b.guardian_relation),
+    guardian_name: t(b.guardian_name),
+    pan_number: b.pan_number ? String(b.pan_number).trim().toUpperCase() : null,
+    aadhaar_last4: b.aadhaar_last4 ? String(b.aadhaar_last4).trim() : null,
+    bank_name: t(b.bank_name),
+    bank_account_no: b.bank_account_no ? String(b.bank_account_no).replace(/\s/g, '') : null,
+    bank_ifsc: b.bank_ifsc ? String(b.bank_ifsc).trim().toUpperCase() : null,
+    emergency_contact_name: t(b.emergency_contact_name),
+    emergency_contact_phone: t(b.emergency_contact_phone),
+  };
+}
+
 router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
   const { name, phone, email, designation, department, join_date, salary,
           aadhar_file, pan_file, qualification_file, roster } = req.body;
   let { user_id } = req.body;
   const db = getDb();
+  const bad = validateEmployeeMaster(req.body);
+  if (bad) return res.status(400).json({ error: bad });
+  const m = masterValues(req.body);
   // Auto-link by email if user_id wasn't explicitly set
   if (!user_id && email) {
     const u = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
@@ -764,10 +824,18 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   if (!qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
   const r = db.prepare(`
     INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
-                           aadhar_file, pan_file, qualification_file, roster)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                           aadhar_file, pan_file, qualification_file, roster,
+                           gender, guardian_title, guardian_relation, guardian_name,
+                           pan_number, aadhaar_last4,
+                           bank_name, bank_account_no, bank_ifsc,
+                           emergency_contact_name, emergency_contact_phone)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
-        aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster));
+        aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
+        m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
+        m.pan_number, m.aadhaar_last4,
+        m.bank_name, m.bank_account_no, m.bank_ifsc,
+        m.emergency_contact_name, m.emergency_contact_phone);
   res.status(201).json({ id: r.lastInsertRowid, linked_user_id: user_id || null });
 });
 
@@ -860,8 +928,11 @@ function canOffboard(db, req) {
 
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
-          aadhar_file, pan_file, qualification_file, roster } = req.body;
+          aadhar_file, pan_file, qualification_file, roster, join_date } = req.body;
   const db = getDb();
+  const bad = validateEmployeeMaster(req.body);
+  if (bad) return res.status(400).json({ error: bad });
+  const m = masterValues(req.body);
 
   // Status transition INTO terminated/inactive is gated separately from the
   // ordinary edit (see canOffboard above) and scored on the breaker. A save
@@ -884,14 +955,35 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   db.prepare(`
     UPDATE employees
        SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?,
+           -- join_date was MISSING from this UPDATE (found 2026-09-04): the Edit
+           -- modal showed a Join Date input whose value was silently discarded,
+           -- so an employee saved without one could never be corrected. COALESCE
+           -- so an edit that doesn't send it can't blank an existing date.
+           join_date = COALESCE(?, join_date),
            roster = COALESCE(?, roster),
            aadhar_file        = COALESCE(?, aadhar_file),
            pan_file           = COALESCE(?, pan_file),
-           qualification_file = COALESCE(?, qualification_file)
+           qualification_file = COALESCE(?, qualification_file),
+           gender                  = COALESCE(?, gender),
+           guardian_title          = COALESCE(?, guardian_title),
+           guardian_relation       = COALESCE(?, guardian_relation),
+           guardian_name           = COALESCE(?, guardian_name),
+           pan_number              = COALESCE(?, pan_number),
+           aadhaar_last4           = COALESCE(?, aadhaar_last4),
+           bank_name               = COALESCE(?, bank_name),
+           bank_account_no         = COALESCE(?, bank_account_no),
+           bank_ifsc               = COALESCE(?, bank_ifsc),
+           emergency_contact_name  = COALESCE(?, emergency_contact_name),
+           emergency_contact_phone = COALESCE(?, emergency_contact_phone)
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null,
+        join_date || null,
         roster ? normalizeRoster(roster) : null,
-        aadhar_file || null, pan_file || null, qualification_file || null, req.params.id);
+        aadhar_file || null, pan_file || null, qualification_file || null,
+        m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
+        m.pan_number, m.aadhaar_last4,
+        m.bank_name, m.bank_account_no, m.bank_ifsc,
+        m.emergency_contact_name, m.emergency_contact_phone, req.params.id);
 
   // Sync the linked login's `active` flag to the employee's on-roll status.
   // Attendance strength counts users.active, but HR only edits employees.status —
