@@ -48,6 +48,18 @@ const MODULES = {
   // mirrors the page's OWN required markers / save-time validation, so the bar
   // scores exactly what the form already refuses to save without — audit
   // columns, derived totals and optional attachments are deliberately out.
+  // MD 2026-09-03, on seeing 104 x 14 = 1,456: "even one entry have near about
+  // 60+ field then how do you count?" — fair. The list below is now EXACTLY the
+  // page's own mandatory set (BusinessBook.jsx REQUIRED + client_name +
+  // sale_amount + actual_margin = 33), which is what the New Entry form already
+  // refuses to save without. Before this it counted 14, so an entry could score
+  // 100% here while the form still called it incomplete — the bar was easier
+  // than the form, which is the wrong way round.
+  //
+  // The six payment percentages are TEXT and are scored on PRESENCE, not > 0:
+  // "0% retention" is a real answer, and the form's own check is the same
+  // (String(v).trim() === ''). Sale Amount and Actual Margin keep > 0 because
+  // that is what the form demands of them.
   business_book: {
     table: 'business_book',
     noun: 'entries',
@@ -55,20 +67,37 @@ const MODULES = {
     fields: {
       client_name: { label: 'Client Name', cond: "TRIM(COALESCE(client_name,''))<>''" },
       company_name: { label: 'Company / Department', cond: "TRIM(COALESCE(company_name,''))<>''" },
-      project_name: { label: 'Project Name', cond: "TRIM(COALESCE(project_name,''))<>''" },
       client_contact: { label: 'Client Contact No.', cond: "TRIM(COALESCE(client_contact,''))<>''" },
       client_email: { label: 'Client Email ID', cond: "TRIM(COALESCE(client_email,''))<>''" },
       source_of_enquiry: { label: 'Source of Enquiry', cond: "TRIM(COALESCE(source_of_enquiry,''))<>''" },
-      district: { label: 'District', cond: "TRIM(COALESCE(district,''))<>''" },
+      customer_type: { label: 'Customer Type', cond: "TRIM(COALESCE(customer_type,''))<>''" },
+      client_type: { label: 'Client Type', cond: "TRIM(COALESCE(client_type,''))<>''" },
       state: { label: 'State', cond: "TRIM(COALESCE(state,''))<>''" },
+      district: { label: 'District', cond: "TRIM(COALESCE(district,''))<>''" },
+      state_code: { label: 'State Code', cond: "TRIM(COALESCE(state_code,''))<>''" },
+      gstin: { label: 'Client GSTIN', cond: "TRIM(COALESCE(gstin,''))<>''" },
       billing_address: { label: 'Billing Address', cond: "TRIM(COALESCE(billing_address,''))<>''" },
+      shipping_address: { label: 'Shipping / Site Address', cond: "TRIM(COALESCE(shipping_address,''))<>''" },
+      project_name: { label: 'Project Name', cond: "TRIM(COALESCE(project_name,''))<>''" },
       category: { label: 'Category', cond: "TRIM(COALESCE(category,''))<>''" },
-      employee_assigned: { label: 'Employee Assigned', cond: "TRIM(COALESCE(employee_assigned,''))<>''" },
       committed_start_date: { label: 'Committed Start', cond: "TRIM(COALESCE(committed_start_date,''))<>''" },
+      committed_delivery_date: { label: 'Committed Delivery', cond: "TRIM(COALESCE(committed_delivery_date,''))<>''" },
       committed_completion_date: { label: 'Committed Completion', cond: "TRIM(COALESCE(committed_completion_date,''))<>''" },
-      // The page's own rule: `if (!(Number(form.sale_amount_without_gst) > 0))`
-      // — a booked entry with a zero sale value is incomplete, not merely zero.
+      payment_advance: { label: 'Advance %', cond: "TRIM(COALESCE(CAST(payment_advance AS TEXT),''))<>''" },
+      payment_against_delivery: { label: 'Against Delivery %', cond: "TRIM(COALESCE(CAST(payment_against_delivery AS TEXT),''))<>''" },
+      payment_against_installation: { label: 'Against Installation %', cond: "TRIM(COALESCE(CAST(payment_against_installation AS TEXT),''))<>''" },
+      payment_against_commissioning: { label: 'Against Commissioning %', cond: "TRIM(COALESCE(CAST(payment_against_commissioning AS TEXT),''))<>''" },
+      payment_retention: { label: 'Retention %', cond: "TRIM(COALESCE(CAST(payment_retention AS TEXT),''))<>''" },
+      payment_credit: { label: 'Handover %', cond: "TRIM(COALESCE(CAST(payment_credit AS TEXT),''))<>''" },
+      employee_assigned: { label: 'Employee Name', cond: "TRIM(COALESCE(employee_assigned,''))<>''" },
+      management_person_name: { label: 'Management Person', cond: "TRIM(COALESCE(management_person_name,''))<>''" },
+      management_person_contact: { label: 'Management Contact', cond: "TRIM(COALESCE(management_person_contact,''))<>''" },
+      accounts_person_name: { label: 'Accounts Person', cond: "TRIM(COALESCE(accounts_person_name,''))<>''" },
+      accounts_person_contact: { label: 'Accounts Contact', cond: "TRIM(COALESCE(accounts_person_contact,''))<>''" },
+      working_sheet_link: { label: 'Working Sheet', cond: "TRIM(COALESCE(working_sheet_link,''))<>''" },
+      boq_file_link: { label: 'BOQ File', cond: "TRIM(COALESCE(boq_file_link,''))<>''" },
       sale_amount_without_gst: { label: 'Sale Amount', cond: 'COALESCE(sale_amount_without_gst,0)>0' },
+      actual_margin_pct: { label: 'Actual Margin %', cond: 'COALESCE(actual_margin_pct,0)>0' },
     },
   },
 
