@@ -383,6 +383,25 @@ router.post('/deals/:id/remark', requirePermission('solar_quotation', 'edit'), (
   res.json({ message: 'Remark added' });
 });
 
+// Edit a remark in place (mam 2026-09-04: "all stages remarks ... will be
+// editable"). Only human-typed notes — a 'remark', or the note carried on a
+// stage move — never system events like creation, and not the lost reason.
+// The text is replaced, but edited_at / edited_by_name are stamped so the
+// Activity feed shows the line was changed, by whom, and when. The event
+// must belong to the deal in the URL — an id from another deal is a 404.
+router.put('/deals/:id/events/:eventId', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const db = getDb();
+  const ev = db.prepare('SELECT id, type FROM solar_deal_events WHERE id=? AND deal_id=?').get(req.params.eventId, req.params.id);
+  if (!ev) return res.status(404).json({ error: 'Remark not found on this deal' });
+  if (!['remark', 'stage'].includes(ev.type)) return res.status(400).json({ error: 'Only remarks can be edited' });
+  const note = String(req.body?.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Remark cannot be empty' });
+  db.prepare('UPDATE solar_deal_events SET note=?, edited_at=CURRENT_TIMESTAMP, edited_by_name=? WHERE id=?')
+    .run(note.slice(0, 1000), req.user?.name || null, ev.id);
+  db.prepare('UPDATE solar_deals SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(req.params.id);
+  res.json({ message: 'Remark updated' });
+});
+
 router.post('/deals/:id/lose', requirePermission('solar_quotation', 'edit'), (req, res) => {
   const db = getDb();
   const d = db.prepare('SELECT stage FROM solar_deals WHERE id=?').get(req.params.id);
