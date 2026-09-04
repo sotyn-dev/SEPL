@@ -181,6 +181,38 @@ export default function CRMFunnel() {
     } catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
   };
 
+  // Remove the leads that Indent-to-Dispatch used to create automatically
+  // (mam 2026-09-04). The automation itself is gone; this clears what it
+  // already wrote. Shows the real numbers BEFORE deleting anything, and holds
+  // back any lead the sales team has actually worked — there is no undo.
+  const cleanupIndentLeads = async () => {
+    let p;
+    try { p = (await api.get('/crm-funnel/indent-sourced/preview')).data; }
+    catch (err) { return toast.error(err.response?.data?.error || 'Could not check'); }
+
+    if (!p.indent_sourced) return toast.success('Nothing to clean up — no leads came from Indent-to-Dispatch.');
+    if (!confirm(
+      `${p.indent_sourced} of ${p.total_leads} leads came from Indent-to-Dispatch.\n\n`
+      + `• ${p.untouched} untouched — will be DELETED\n`
+      + `• ${p.worked} already worked by sales (quote / negotiation / win-loss) — will be KEPT\n\n`
+      + `This cannot be undone. Delete the ${p.untouched} untouched lead(s)?`
+    )) return;
+
+    try {
+      const r = (await api.delete('/crm-funnel/indent-sourced?confirm=true')).data;
+      toast.success(`Deleted ${r.deleted} lead(s)`);
+      load();
+      // Only offer the worked ones as a deliberate second decision.
+      if (r.kept_worked > 0 && confirm(
+        `${r.kept_worked} lead(s) from Indent-to-Dispatch were KEPT because sales has worked them.\n\n`
+        + `Delete those too? Any quotation, negotiation or win/loss recorded on them is lost.`
+      )) {
+        const r2 = (await api.delete('/crm-funnel/indent-sourced?confirm=true&include_worked=true')).data;
+        toast.success(`Deleted ${r2.deleted} more`); load();
+      }
+    } catch (err) { toast.error(err.response?.data?.error || 'Cleanup failed'); }
+  };
+
   const stepBadge = (r) => {
     if (r.final_status === 'win') return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-emerald-100 text-emerald-800">WIN</span>;
     if (r.final_status === 'loss') return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-red-100 text-red-700">LOSS</span>;
@@ -218,6 +250,11 @@ export default function CRMFunnel() {
             ['Lead #','Client','Company','Mobile','Source','Type','Category','State','Stage','Quote Amount','Neg Status','Neg Amount','Final Status'],
             rows.map(r => [r.lead_no, r.client_name, r.company_name, r.mobile, r.source, r.type, r.category, r.state, r.final_status || (r.quotation_submitted ? 'Negotiation' : 'Quote'), r.quotation_amount, r.negotiation_status, r.negotiation_amount, r.final_status]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          {canDelete('crm_funnel') && (
+            <button onClick={cleanupIndentLeads} className="btn btn-secondary flex items-center gap-2 text-red-600">
+              <FiTrash2 /> Clean up indent leads
+            </button>
+          )}
           {canCreate('crm_funnel') && (
             <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Lead</button>
           )}

@@ -4415,66 +4415,13 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[migration] pipe full-weight rebase failed:', e.message); }
 
-  // Backfill CRM funnel requirements for EXISTING Extra indents (mam
-  // 2026-06-06: "extra schedule not go into crm funnel"). Older Extra-
-  // Schedule / Extra-Non-Schedule indents only entered the funnel on CRM
-  // approval, so ones still pending CRM never showed. Create a funnel
-  // "requirement" lead for every Extra indent that doesn't already have one
-  // (deduped by source_indent_id / [auto-indent:<id>] marker), pulling client
-  // data from the linked Business Book + the indent's item list. Also stamps
-  // source_indent_id onto any legacy entry that was missing it. Runs once.
-  try {
-    const done = db.prepare("SELECT value FROM app_settings WHERE key='backfill_extra_crm_funnel_v1'").get();
-    if (!done) {
-      const { nextSequence } = require('./nextSequence');
-      const sysId = db.prepare("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").get()?.id || null;
-      const extras = db.prepare(`
-        SELECT i.id, i.indent_number, i.site_name, i.client_name, i.indent_category, i.crm_status,
-               bb.company_name AS bb_company, bb.client_name AS bb_client, bb.client_contact AS bb_mobile,
-               COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
-               bb.billing_address AS bb_address, bb.source_of_enquiry AS bb_source,
-               bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner
-          FROM indents i
-          LEFT JOIN order_planning op ON op.id = i.planning_id
-          LEFT JOIN business_book bb ON bb.id = op.business_book_id
-         WHERE i.indent_category IN ('extra_schedule','extra_non_schedule')
-      `).all();
-      let created = 0;
-      for (const e of extras) {
-        const marker = `[auto-indent:${e.id}]`;
-        const exists = db.prepare('SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?').get(e.id, `%${marker}%`);
-        if (exists) {
-          db.prepare('UPDATE crm_funnel SET source_indent_id=? WHERE id=? AND (source_indent_id IS NULL OR source_indent_id=0)').run(e.id, exists.id);
-          continue;
-        }
-        const reqItems = db.prepare('SELECT description, quantity, unit FROM indent_items WHERE indent_id=?').all(e.id);
-        const reqText = reqItems.map(it => `${(+it.quantity || 0).toLocaleString('en-IN')}${it.unit ? ' ' + it.unit : ''} × ${it.description || 'item'}`).join('; ');
-        const totalAmt = db.prepare('SELECT COALESCE(SUM(amount),0) t FROM indent_items WHERE indent_id=?').get(e.id).t;
-        const clientName = String(e.bb_client || e.bb_company || e.client_name || e.site_name || 'Extra item').trim() || 'Extra item';
-        const companyName = e.bb_company || e.bb_client || e.site_name || null;
-        const approved = e.crm_status === 'approved';
-        const leadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
-        db.prepare(
-          `INSERT INTO crm_funnel
-             (lead_no, client_name, company_name, mobile, email, source, address,
-              state, district, remarks, category, type, lead_type, quotation_amount,
-              requirement_items, source_indent_id, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).run(
-          leadNo, clientName, companyName,
-          e.bb_mobile || null, e.bb_email || null, e.bb_source || 'Extra Indent', e.bb_address || null,
-          e.bb_state || null, e.bb_district || null,
-          `Requirement from Extra indent ${e.indent_number || e.id} (${approved ? 'CRM approved' : 'awaiting CRM approval'})`
-            + (e.bb_owner ? ` · owner ${e.bb_owner}` : '') + ` ${marker}`,
-          e.indent_category, 'Extra Item', 'Extra Enquiry', +totalAmt || 0,
-          reqText || null, e.id, sysId,
-        );
-        created++;
-      }
-      db.prepare("INSERT INTO app_settings (key, value) VALUES ('backfill_extra_crm_funnel_v1', '1')").run();
-      if (created > 0) console.log(`[migration] backfilled ${created} CRM funnel requirements from existing Extra indents`);
-    }
-  } catch (e) { console.error('[migration] extra CRM funnel backfill failed:', e.message); }
+  // Backfill of CRM funnel requirements from existing Extra indents --
+  // RETIRED (mam 2026-09-04: delete the indent-to-dispatch automation and
+  // the data it produced). It was a one-shot guarded by the app_settings key
+  // backfill_extra_crm_funnel_v1, which is already set on production, so it
+  // would not have re-run there -- but leaving it would recreate exactly the
+  // rows she is deleting on any fresh database, and would silently undo the
+  // cleanup. Removed rather than flag-guarded for that reason.
 
   // Fill blank client data on existing Extra-indent funnel leads by matching
   // the Business Book on company / client name (mam 2026-06-06: "client name,

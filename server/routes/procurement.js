@@ -1690,65 +1690,13 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
       extraSch, extraNon, rentDays, rentRate, wpm, unitWasOverridden ? 1 : 0,
     );
   }
-  // CRM funnel "requirement" at RAISE time (mam 2026-06-06: "if extra
-  // schedule also go in crm funnel and show requirement"). Extra-Schedule /
-  // Extra-Non-Schedule indents are client-billable, so the moment they're
-  // raised we drop a CRM funnel lead listing the requirement (items) + a
-  // link back to the indent, so the sales team can start quoting before CRM
-  // approval. On CRM approval the same entry is updated with the billable
-  // amount. Deduped by a [auto-indent:<id>] marker. Best-effort.
-  if (isBillable && policy === 'crm_two_level') {
-    try {
-      const { nextSequence } = require('../db/nextSequence');
-      const reqItems = db.prepare('SELECT description, quantity, unit FROM indent_items WHERE indent_id=?').all(r.lastInsertRowid);
-      const reqText = reqItems
-        .map(it => `${(+it.quantity || 0).toLocaleString('en-IN')}${it.unit ? ' ' + it.unit : ''} × ${it.description || 'item'}`)
-        .join('; ');
-      let fi = db.prepare(
-        `SELECT bb.company_name AS bb_company, bb.client_name AS bb_client,
-                bb.client_contact AS bb_mobile,
-                COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
-                bb.billing_address AS bb_address, bb.source_of_enquiry AS bb_source,
-                bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner
-           FROM order_planning op LEFT JOIN business_book bb ON bb.id = op.business_book_id
-          WHERE op.id = ?`
-      ).get(resolvedPlanningId) || {};
-      // No project link (or thin data)? Match the Business Book by name.
-      if (!fi.bb_mobile) fi = fillBbBlanks(fi, bbByName(db, site_name));
-      // Auto-priced quotation total — ONLY for Extra-Schedule (its items come
-      // from the BOQ, so previous rates exist). Extra-Non-Schedule is quoted
-      // MANUALLY (mam 2026-06-06), so its amount is left blank.
-      let quoteAmt = 0;
-      if (category === 'extra_schedule') {
-        try { quoteAmt = buildExtraQuotation(db, r.lastInsertRowid)?.supply_total || 0; } catch (_) {}
-      }
-      const marker = `[auto-indent:${r.lastInsertRowid}]`;
-      const already = db.prepare('SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?')
-        .get(r.lastInsertRowid, `%${marker}%`);
-      if (!already) {
-        // Prefer the Business Book client/company; fall back to the indent's
-        // own site name only when there's no BB link.
-        const clientName = String(fi.bb_client || fi.bb_company || site_name || 'Extra item').trim() || 'Extra item';
-        const companyName = fi.bb_company || fi.bb_client || site_name || null;
-        const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
-        db.prepare(
-          `INSERT INTO crm_funnel
-             (lead_no, client_name, company_name, mobile, email, source, address,
-              state, district, remarks, category, type, lead_type, quotation_amount,
-              requirement_items, source_indent_id, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).run(
-          funnelLeadNo, clientName, companyName,
-          fi.bb_mobile || null, fi.bb_email || null, fi.bb_source || 'Extra Indent', fi.bb_address || null,
-          fi.bb_state || null, fi.bb_district || null,
-          `Requirement from Extra indent ${indentNum} (awaiting CRM approval)`
-            + (fi.bb_owner ? ` · owner ${fi.bb_owner}` : '') + ` ${marker}`,
-          category, 'Extra Item', 'Extra Enquiry', quoteAmt,
-          reqText || null, r.lastInsertRowid, req.user.id,
-        );
-      }
-    } catch (e) { console.error('[indent] CRM funnel requirement-at-raise failed (indent saved anyway):', e.message); }
-  }
+  // CRM funnel auto-create at RAISE time -- REMOVED (mam 2026-09-04: "i want
+  // to delete that automation and previous data which come from indent to
+  // dispatch"). Extra-Schedule / Extra-Non-Schedule indents used to drop a
+  // CRM funnel lead the moment they were raised, which filled the Sales
+  // Funnel with rows carrying no quote and no amount. Extra work gets its
+  // own module instead of riding the sales pipeline.
+  // The removed block is in this commit's parent if it is ever wanted back.
 
   fireIndent(db, r.lastInsertRowid, 'indent.raised');
   res.status(201).json({ id: r.lastInsertRowid, indent_number: indentNum });
@@ -2018,86 +1966,11 @@ router.put('/indents/:id', (req, res) => {
           } catch (e) {
             console.error('[crm-approve] auto-billable line failed (CRM approval saved anyway):', e.message);
           }
-          // Mam (2026-06-03): "after crm approval indent go to crm funnel
-          // automatically".  Create one CRM Sales Funnel entry per
-          // CRM-approved Extra indent so the sales team tracks the billable
-          // enquiry without re-keying.  A [auto-indent:<id>] marker in
-          // remarks dedups in case the path is ever re-entered.
-          try {
-            let fi = db.prepare(
-              `SELECT i.indent_number, i.client_name, i.site_name,
-                      bb.company_name AS bb_company, bb.client_name AS bb_client,
-                      bb.client_contact AS bb_mobile,
-                      COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
-                      bb.billing_address AS bb_address, bb.source_of_enquiry AS bb_source,
-                      bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner,
-                      COALESCE((SELECT SUM(amount) FROM indent_items WHERE indent_id = i.id), 0) AS total_amt
-                 FROM indents i
-                 LEFT JOIN order_planning op ON op.id = i.planning_id
-                 LEFT JOIN business_book bb ON bb.id = op.business_book_id
-                WHERE i.id = ?`
-            ).get(id);
-            // No project link (or thin data)? Match the Business Book by name.
-            if (fi && !fi.bb_mobile) fi = fillBbBlanks(fi, bbByName(db, fi.site_name || fi.client_name));
-            const marker = `[auto-indent:${id}]`;
-            // The requirement entry was already created when the indent was
-            // raised (mam 2026-06-06).  On CRM approval, UPDATE it with the
-            // now-known billable amount instead of creating a duplicate.
-            const already = db.prepare(
-              `SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?`
-            ).get(id, `%${marker}%`);
-            // Prefer the Business Book client/company; site name is the fallback.
-            const clientName = String(
-              fi?.bb_client || fi?.bb_company || fi?.client_name || fi?.site_name || 'Extra item'
-            ).trim() || 'Extra item';
-            // Auto-priced quotation total — ONLY Extra-Schedule (BOQ-priced).
-            // Extra-Non-Schedule is quoted manually, so its amount stays blank.
-            let quoteAmt = 0;
-            if (cur2.indent_category === 'extra_schedule') {
-              try { quoteAmt = buildExtraQuotation(db, id)?.supply_total || 0; } catch (_) {}
-              if (!quoteAmt) quoteAmt = +fi?.total_amt || 0;
-            }
-            if (already) {
-              db.prepare(
-                `UPDATE crm_funnel
-                    SET quotation_amount = ?,
-                        remarks = REPLACE(remarks, '(awaiting CRM approval)', '(CRM approved)'),
-                        updated_at = CURRENT_TIMESTAMP
-                  WHERE id = ?`
-              ).run(quoteAmt, already.id);
-            } else {
-              const reqItems = db.prepare('SELECT description, quantity, unit FROM indent_items WHERE indent_id=?').all(id);
-              const reqText = reqItems
-                .map(it => `${(+it.quantity || 0).toLocaleString('en-IN')}${it.unit ? ' ' + it.unit : ''} × ${it.description || 'item'}`)
-                .join('; ');
-              const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
-              db.prepare(
-                `INSERT INTO crm_funnel
-                   (lead_no, client_name, company_name, mobile, email, source, address,
-                    state, district, remarks, category, type, lead_type, quotation_amount,
-                    requirement_items, source_indent_id, created_by)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-              ).run(
-                funnelLeadNo,
-                clientName,
-                fi?.bb_company || fi?.bb_client || fi?.site_name || null,
-                fi?.bb_mobile || null, fi?.bb_email || null, fi?.bb_source || 'Extra Indent', fi?.bb_address || null,
-                fi?.bb_state || null,
-                fi?.bb_district || null,
-                `Auto-created from Extra indent ${fi?.indent_number || id} on CRM approval`
-                  + (fi?.bb_owner ? ` · owner ${fi.bb_owner}` : '') + ` ${marker}`,
-                cur2.indent_category || null,
-                'Extra Item',
-                'Extra Enquiry',
-                quoteAmt,
-                reqText || null,
-                id,
-                actor.id,
-              );
-            }
-          } catch (e) {
-            console.error('[crm-approve] auto crm_funnel entry failed (CRM approval saved anyway):', e.message);
-          }
+          // CRM funnel auto-create on CRM APPROVAL -- REMOVED (mam
+          // 2026-09-04). Was: "after crm approval indent go to crm funnel
+          // automatically" (2026-06-03). Extra indents no longer create or
+          // update Sales Funnel leads; that work moves to its own module.
+          // Removed block is in this commit's parent.
           db.prepare(
             `UPDATE indents
                SET crm_status='approved',

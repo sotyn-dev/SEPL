@@ -172,6 +172,76 @@ router.put('/:id', requirePermission('crm_funnel', 'edit'), boqUpload.single('bo
   res.json({ message: 'Updated', boq_file_link: boqFileLink });
 });
 
+// ── Clean up leads that came from Indent-to-Dispatch ─────────────────
+// mam (2026-09-04): "i want to delete that automation and previous data
+// which come from indent to dispatch". The automation is gone (see
+// routes/procurement.js), but the rows it already wrote are still here —
+// 100+ Extra-Item leads with no quote and no amount, crowding the funnel.
+//
+// Deliberately REVIEW-THEN-CONFIRM rather than a one-shot delete: some of
+// these leads may since have been worked by the sales team (a quotation
+// submitted, a negotiation opened, a win/loss recorded). Deleting those
+// would destroy real work, and crm_funnel has no undo. So the preview
+// separates untouched rows from worked ones, and worked rows are kept back
+// unless they are explicitly asked for.
+const INDENT_SOURCED = `(source_indent_id IS NOT NULL OR remarks LIKE '%[auto-indent:%')`;
+// "Worked" = a human moved it along one of the three funnel steps.
+const WORKED = `(
+  COALESCE(quotation_submitted,0) = 1
+  OR COALESCE(NULLIF(TRIM(negotiation_status),''), NULL) IS NOT NULL
+  OR COALESCE(NULLIF(TRIM(final_status),''), NULL) IS NOT NULL
+)`;
+
+router.get('/indent-sourced/preview', requirePermission('crm_funnel', 'view'), (req, res) => {
+  const db = getDb();
+  try {
+    const count = (w) => db.prepare(`SELECT COUNT(*) c FROM crm_funnel WHERE ${w}`).get().c;
+    const rows = db.prepare(
+      `SELECT id, lead_no, client_name, company_name, category, quotation_amount,
+              quotation_submitted, negotiation_status, final_status, source_indent_id, created_at
+         FROM crm_funnel WHERE ${INDENT_SOURCED} ORDER BY id`
+    ).all();
+    res.json({
+      total_leads: count('1=1'),
+      indent_sourced: rows.length,
+      untouched: count(`${INDENT_SOURCED} AND NOT ${WORKED}`),
+      worked: count(`${INDENT_SOURCED} AND ${WORKED}`),
+      // The worked ones listed in full — these are the judgement call.
+      worked_rows: rows.filter(r => r.quotation_submitted === 1 || r.negotiation_status || r.final_status),
+      sample: rows.slice(0, 10),
+    });
+  } catch (e) {
+    console.error('[crm-funnel] indent-sourced preview failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/indent-sourced', requirePermission('crm_funnel', 'delete'), (req, res) => {
+  const db = getDb();
+  // Explicit confirmation required — this is a bulk, irreversible delete.
+  if (String(req.query.confirm || req.body?.confirm) !== 'true') {
+    return res.status(400).json({ error: 'Add confirm=true — this permanently deletes leads and cannot be undone.' });
+  }
+  const includeWorked = String(req.query.include_worked || req.body?.include_worked) === 'true';
+  const where = includeWorked ? INDENT_SOURCED : `${INDENT_SOURCED} AND NOT ${WORKED}`;
+  try {
+    // Capture what goes, so the response is a record of it.
+    const going = db.prepare(`SELECT id, lead_no, client_name, source_indent_id FROM crm_funnel WHERE ${where}`).all();
+    const r = db.prepare(`DELETE FROM crm_funnel WHERE ${where}`).run();
+    console.log(`[crm-funnel] ${req.user?.name || 'user ' + req.user?.id} deleted ${r.changes} indent-sourced lead(s)`
+      + (includeWorked ? ' (including worked ones)' : ' (worked ones kept)'));
+    res.json({
+      deleted: r.changes,
+      included_worked: includeWorked,
+      kept_worked: includeWorked ? 0 : db.prepare(`SELECT COUNT(*) c FROM crm_funnel WHERE ${INDENT_SOURCED} AND ${WORKED}`).get().c,
+      lead_nos: going.map(g => g.lead_no),
+    });
+  } catch (e) {
+    console.error('[crm-funnel] indent-sourced delete failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.delete('/:id', requirePermission('crm_funnel', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM crm_funnel WHERE id=?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
