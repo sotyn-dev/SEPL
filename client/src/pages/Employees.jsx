@@ -487,6 +487,13 @@ export default function Employees() {
                 + name, because "Sh. Ram Kumar (Father)" is how it has to read
                 on statutory paperwork. */}
             <div>
+              <label className="label">Date of Birth</label>
+              <input className="input" type="date" value={form.date_of_birth || ''}
+                max={new Date(Date.now() - 18 * 365.25 * 86400000).toISOString().slice(0, 10)}
+                onChange={e => setForm({ ...form, date_of_birth: e.target.value })} />
+              <p className="text-[10px] text-gray-500 mt-0.5">Must be 18 or over.</p>
+            </div>
+            <div>
               <label className="label">Gender</label>
               <select className="select" value={form.gender || ''} onChange={e => setForm({ ...form, gender: e.target.value })}>
                 <option value="">— Select —</option>

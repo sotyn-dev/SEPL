@@ -773,6 +773,17 @@ function validateEmployeeMaster(b) {
   if (b.bank_account_no && !/^\d{6,20}$/.test(String(b.bank_account_no).replace(/\s/g, ''))) {
     return 'Bank account number should be 6-20 digits';
   }
+  // Date of birth: must be a real date, and the person must be 18+ (spec HR10).
+  // Compared against IST "today" so a birthday on the boundary isn't off by
+  // the UTC gap. A date in the future is caught by the same check.
+  if (b.date_of_birth) {
+    const dob = String(b.date_of_birth).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob) || Number.isNaN(Date.parse(dob))) return 'Date of birth must be a valid date';
+    const today = new Date(Date.now() + 5.5 * 3600 * 1000);   // IST
+    const cutoff = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
+    if (new Date(dob + 'T00:00:00Z') > cutoff) return 'Employee must be at least 18 years old';
+    if (new Date(dob + 'T00:00:00Z') < new Date('1940-01-01T00:00:00Z')) return 'Date of birth looks wrong — check the year';
+  }
   if (b.gender && !GENDERS.includes(String(b.gender).trim())) return 'Gender must be Male, Female or Other';
   if (b.guardian_title && !GUARDIAN_TITLES.includes(String(b.guardian_title).trim())) return 'Invalid title';
   if (b.guardian_relation && !GUARDIAN_RELATIONS.includes(String(b.guardian_relation).trim())) return 'Relation must be Father, Spouse or Mother';
@@ -790,6 +801,7 @@ function validateEmployeeMaster(b) {
 function masterValues(b) {
   const t = (v) => { const s = String(v ?? '').trim(); return s || null; };
   return {
+    date_of_birth: t(b.date_of_birth),
     gender: t(b.gender),
     guardian_title: t(b.guardian_title),
     guardian_relation: t(b.guardian_relation),
@@ -825,14 +837,14 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   const r = db.prepare(`
     INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
                            aadhar_file, pan_file, qualification_file, roster,
-                           gender, guardian_title, guardian_relation, guardian_name,
+                           date_of_birth, gender, guardian_title, guardian_relation, guardian_name,
                            pan_number, aadhaar_last4,
                            bank_name, bank_account_no, bank_ifsc,
                            emergency_contact_name, emergency_contact_phone)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
         aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
-        m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
+        m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
         m.pan_number, m.aadhaar_last4,
         m.bank_name, m.bank_account_no, m.bank_ifsc,
         m.emergency_contact_name, m.emergency_contact_phone);
@@ -964,6 +976,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            aadhar_file        = COALESCE(?, aadhar_file),
            pan_file           = COALESCE(?, pan_file),
            qualification_file = COALESCE(?, qualification_file),
+           date_of_birth           = COALESCE(?, date_of_birth),
            gender                  = COALESCE(?, gender),
            guardian_title          = COALESCE(?, guardian_title),
            guardian_relation       = COALESCE(?, guardian_relation),
@@ -980,7 +993,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         join_date || null,
         roster ? normalizeRoster(roster) : null,
         aadhar_file || null, pan_file || null, qualification_file || null,
-        m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
+        m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
         m.pan_number, m.aadhaar_last4,
         m.bank_name, m.bank_account_no, m.bank_ifsc,
         m.emergency_contact_name, m.emergency_contact_phone, req.params.id);
