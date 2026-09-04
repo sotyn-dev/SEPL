@@ -170,11 +170,18 @@ const SIDEBAR_GROUPS = [
   //   • AR/AP Tracker — renamed Cash Flow Tracker, and it no longer needs
   //     hand-keying: its AR side is fed from Collections and its AP side from
   //     Payables (server/lib/arapSync.js).
-  //   • Invoices / Client Snag / Bank — off the menu per mam's "only the four",
+  //   • Invoices / Client Snag — off the menu per mam's "only the four",
   //     but kept in this list as `hidden` rather than deleted: their routes are
   //     still live, and staying in the nav data is what keeps their breadcrumb
   //     ("Finance › Invoices") and their per-page training-video module working.
   //     Dropping a `hidden: true` puts any of them straight back on the menu.
+  //   • Bank — VISIBLE. It was swept into the `hidden` batch above by the
+  //     consolidation commit (1ecba3fe) a few hours after it was registered
+  //     (a1ce9b80), so it appeared on the menu one morning and was gone that
+  //     afternoon. That was collateral, not a decision: "only the four" was
+  //     about the OLD Cash Flow / Invoices pages, and mam (2026-09-04) asked
+  //     for Bank back under Finance — it's where the bank statement is
+  //     uploaded and credits/debits are matched. Do NOT re-add `hidden` here.
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
@@ -184,7 +191,7 @@ const SIDEBAR_GROUPS = [
     { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag',  hidden: true },
     // Bank module (mam 2026-08-31): payment received / paid out from PNB & HDFC
     // in one place — statement import + reconciliation; AA sync is Phase 2.
-    { path: '/bank',             label: 'Bank',        icon: LuIndianRupee, module: 'cashflow',    hidden: true },
+    { path: '/bank',             label: 'Bank',        icon: LuIndianRupee, module: 'cashflow' },
     // Expenses module removed from the menu (mam 2026-07-03). Route + page kept
     // dormant in App.jsx so it's reversible and existing links don't 404.
   ]},
