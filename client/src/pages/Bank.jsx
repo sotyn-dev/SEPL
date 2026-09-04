@@ -227,7 +227,7 @@ function ImportTab({ accounts, onDone }) {
             auto-matched <b>{result.auto_matched}</b>.{result.bad_dates > 0 && <> ⚠️ {result.bad_dates} row(s) had unreadable dates and were skipped.</>}
             {result.source_format === 'pdf' && (
               <> Read <b>{result.parsed_rows}</b> line(s) from {result.pages} PDF page(s).
-                {result.skipped_rows > 0 && <> ⚠️ {result.skipped_rows} line(s) carried no amount and were skipped — worth a look against the PDF.</>}
+                {result.skipped_rows > 0 && <> <span className="text-red-700 font-semibold">⚠️ {result.skipped_rows} line(s) could not be read and were NOT imported — check these against the PDF before trusting the totals.</span></>}
               </>
             )}
             <button onClick={onDone} className="ml-2 text-blue-600 underline">View transactions →</button>

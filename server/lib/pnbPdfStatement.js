@@ -101,8 +101,19 @@ async function parsePnbStatementPdf(buffer) {
     for (const a of anchorItems) {
       const onAnchorLine = (i) => Math.abs(i.y - a.y) <= 2;
 
-      const amt = pg.items.find((i) => onAnchorLine(i) && NUM_RE.test(i.s) && i.x >= X.amtMin && i.x < X.amtMax);
-      if (!amt) continue;   // no amount on this line — not a transaction row
+      const isAmountCell = (i) => NUM_RE.test(i.s) && i.x >= X.amtMin && i.x < X.amtMax;
+      // The amount is USUALLY on the anchor line — but PNB pushes a wide
+      // amount string (>= Rs 10,00,000, i.e. 12 chars incl. separators) up
+      // onto the balance line instead, ~8pt above the anchor. Looking only at
+      // the anchor line silently dropped every RTGS-scale row: on mam's
+      // August statement that was the three LARGEST transactions of the month
+      // (Rs 18L, 18.7L, 20L) — 48% of the month's credits — reported as
+      // "carried no amount". So fall back to the balance band before giving
+      // up. Verified against the bank's own .xls export: totals now match to
+      // the paisa.
+      const amt = pg.items.find((i) => onAnchorLine(i) && isAmountCell(i))
+        || pg.items.find((i) => i.y > a.y && i.y <= a.y + BAL_ABOVE && isAmountCell(i));
+      if (!amt) continue;   // genuinely no amount on this row
 
       const bal = pg.items.find((i) => i.y > a.y && i.y <= a.y + BAL_ABOVE && NUM_RE.test(i.s) && i.x >= X.balMin);
       const txnNo = (pg.items.find((i) => onAnchorLine(i) && i.x < X.txnNoMax) || {}).s || '';
@@ -124,8 +135,16 @@ async function parsePnbStatementPdf(buffer) {
       rows.push({
         date,
         description: description.slice(0, 300),
-        // UTR / RRN out of the narration, else the cheque-number cell.
-        ref: (description.match(/\b(\d{9,})\b/) || [])[1] || (chq ? chq.s : '') || '',
+        // Deliberately the CHEQUE CELL ONLY — not a UTR scraped out of the
+        // narration. dedupe_hash is built from (account, date, description,
+        // ref, debit, credit), so a ref the spreadsheet path doesn't produce
+        // makes the SAME transaction hash differently depending on which file
+        // it arrived in. Measured on mam's August statement: descriptions were
+        // byte-identical across the .pdf and the bank's own .xls, yet 0 of 353
+        // hashes matched — purely because of this field. Importing both files
+        // for one month would then have doubled every row, in a table with no
+        // delete endpoint. The UTR is still present inside the description.
+        ref: (chq && chq.s !== '-') ? chq.s : '',
         debit: isDebit ? paise / 100 : 0,
         credit: isDebit ? 0 : paise / 100,
         balance: bal ? toPaise(bal.s) / 100 : null,

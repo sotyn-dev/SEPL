@@ -59,6 +59,26 @@ function persistStatementRows(db, accountId, records, userId) {
   const ins = db.prepare(`INSERT OR IGNORE INTO bank_transactions
     (bank_account_id, txn_date, description, ref_no, debit, credit, balance, source, dedupe_hash)
     VALUES (?,?,?,?,?,?,?,?,?)`);
+  // Second dedupe pass, whitespace-insensitive.
+  //
+  // dedupe_hash alone is not enough once the SAME statement can arrive as a
+  // spreadsheet OR as a PDF: the PDF's description is rebuilt from wrapped
+  // line fragments, so it loses the space at each wrap
+  // ("SECURED ENGINEERSPVT LTD" vs "SECURED ENGINEERS PVT LTD") and hashes
+  // differently. Measured on mam's August statement: 56 of 353 rows diverged
+  // on whitespace alone, and bank_transactions has NO delete endpoint, so
+  // those duplicates would be unremovable from the app.
+  //
+  // Deliberately NOT fixed by changing the hash function: every row already
+  // imported carries a hash built the old way, so re-hashing would make the
+  // next re-import of an existing statement duplicate everything instead.
+  // This check is additive and leaves stored hashes untouched.
+  //
+  // Two byte-identical transactions already collapse to one under the hash,
+  // so this loses nothing the current design preserved.
+  const dupCheck = db.prepare(`SELECT 1 FROM bank_transactions
+    WHERE bank_account_id=? AND txn_date=? AND debit=? AND credit=?
+      AND REPLACE(description, ' ', '') = ? LIMIT 1`);
   let added = 0, skipped = 0;
   const tx = db.transaction(() => {
     for (const r of records) {
@@ -66,6 +86,7 @@ function persistStatementRows(db, accountId, records, userId) {
       const ref = String(r.ref || '').trim().slice(0, 60);
       const hash = crypto.createHash('sha1')
         .update([accountId, r.date, desc, ref, r.debit, r.credit].join('|')).digest('hex');
+      if (dupCheck.get(accountId, r.date, r.debit, r.credit, desc.replace(/ /g, ''))) { skipped++; continue; }
       const out = ins.run(accountId, r.date, desc, ref || null, r.debit, r.credit, r.balance ?? null, r.source || 'import', hash);
       if (out.changes) added++; else skipped++;
     }
