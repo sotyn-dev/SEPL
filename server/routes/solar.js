@@ -365,6 +365,24 @@ router.post('/deals/:id/move', requirePermission('solar_quotation', 'edit'), (re
   res.json({ message: 'Moved' });
 });
 
+// Remark on the CURRENT stage, without moving the deal (mam 2026-09-04: "at
+// every step add remarks option which is optional"). Advancing already carries
+// a note, but a step often needs a note while it is still in progress — a
+// callback promised, why the survey slipped — and forcing a stage change just
+// to record that would corrupt the funnel timing the SLA tiles are built on.
+// Lands in the same solar_deal_events feed, so the Activity list is one
+// chronological story per deal.
+router.post('/deals/:id/remark', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const db = getDb();
+  const d = db.prepare('SELECT id, stage FROM solar_deals WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  const note = String(req.body?.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Remark is empty' });
+  logDealEvent(db, d.id, 'remark', d.stage, d.stage, note.slice(0, 1000), req.user);
+  db.prepare('UPDATE solar_deals SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(d.id);
+  res.json({ message: 'Remark added' });
+});
+
 router.post('/deals/:id/lose', requirePermission('solar_quotation', 'edit'), (req, res) => {
   const db = getDb();
   const d = db.prepare('SELECT stage FROM solar_deals WHERE id=?').get(req.params.id);
