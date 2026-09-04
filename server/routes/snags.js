@@ -198,6 +198,21 @@ router.get('/export.xlsx', requirePermission('snags', 'view'), async (req, res) 
     const extOf = (p) => { const e = path.extname(p).toLowerCase().slice(1); return e === 'jpg' ? 'jpeg' : e; };
     const IMG = { width: 150, height: 110 };
 
+    // Image budget (2026-09-04 — mam: "unable to export excel" on a 672-row
+    // list). Every photo was read in full as base64 and retained in the
+    // workbook, then the whole thing was buffered TWICE on the way out. Site
+    // photos come off phones at 2-5MB, so 600+ rows x 2 photos is multiple GB
+    // against a 512MB heap cap (ecosystem.config.js --max-old-space-size) —
+    // the request didn't just fail, it took the Node process down with it.
+    // Now bounded on three axes; past the budget the cell degrades to the
+    // photo URL as text, so the sheet stays useful instead of not arriving.
+    //   ?photos=0  → skip images entirely (always-works fast path)
+    const wantPhotos = req.query.photos !== '0';
+    const MAX_IMG_BYTES = 2 * 1024 * 1024;       // skip any single photo over 2MB
+    const IMG_BUDGET_BYTES = 48 * 1024 * 1024;   // total raw bytes embedded per sheet
+    let imgBytesUsed = 0;
+    let imgSkipped = 0;
+
     rows.forEach((s) => {
       const row = ws.addRow({
         snag_no: s.snag_no || '',
@@ -217,10 +232,17 @@ router.get('/export.xlsx', requirePermission('snags', 'view'), async (req, res) 
         if (!local) return false;
         const ext = extOf(local);
         if (!['png', 'jpeg', 'gif'].includes(ext)) return false;
+        if (!wantPhotos) { imgSkipped++; return false; }
         try {
+          // Check the size BEFORE reading — statSync costs nothing, whereas
+          // readFileSync on a 5MB photo has already blown the budget by the
+          // time we could measure the buffer.
+          const size = fs.statSync(local).size;
+          if (size > MAX_IMG_BYTES || imgBytesUsed + size > IMG_BUDGET_BYTES) { imgSkipped++; return false; }
           // Feed the image bytes as base64 so the picture is embedded straight
           // into the .xlsx (no S3 / external URL — the sheet is self-contained).
           const base64 = fs.readFileSync(local).toString('base64');
+          imgBytesUsed += size;
           const id = wb.addImage({ base64, extension: ext });
           ws.addImage(id, { tl: { col: colIndex0 + 0.15, row: (row.number - 1) + 0.1 }, ext: IMG });
           return true;
@@ -228,14 +250,29 @@ router.get('/export.xlsx', requirePermission('snags', 'view'), async (req, res) 
       };
       const a = embed(s.photo_url, 10);  // 'Snag Photo'  → 0-based col 10
       const b = embed(s.proof_url, 11);  // 'Proof Photo' → 0-based col 11
+      // Not embedded but a photo exists → write the link so the row still
+      // points at the evidence rather than showing an empty cell.
+      if (!a && s.photo_url) row.getCell('photo').value = String(s.photo_url);
+      if (!b && s.proof_url) row.getCell('proof').value = String(s.proof_url);
       row.height = (a || b) ? 88 : 18;   // give image rows room; keep text rows compact
     });
 
-    const buf = Buffer.from(await wb.xlsx.writeBuffer());
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="snags-${istToday()}.xlsx"`);
-    res.send(buf);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    // Surfaced so the client can tell the user some photos were left out.
+    if (imgSkipped) res.setHeader('X-Photos-Skipped', String(imgSkipped));
+    // Stream the workbook straight to the response instead of writeBuffer()
+    // + Buffer.from(), which held two full copies of the finished file in
+    // memory on top of every embedded image.
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    // Log it — a silent 500 here is why this looked like "the button does
+    // nothing". Visible in `pm2 logs erp | grep '\[snags\]'`.
+    console.error('[snags] export.xlsx failed:', err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+    else res.destroy();
+  }
 });
 
 // RAISE

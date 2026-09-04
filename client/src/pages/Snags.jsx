@@ -126,19 +126,39 @@ export default function Snags() {
   // `snags` is the COMPLETE filtered set (all filters run server-side), so an
   // empty list here means the export would be a header-only workbook. Bail the
   // same way exportCsv does rather than "downloading" nothing.
-  const exportXlsx = async () => {
+  // `photos=false` asks the server to skip embedding images. The full export
+  // can be heavy on a long list, so a failure offers this as a fallback
+  // rather than leaving the user with a dead button.
+  const exportXlsx = async (photos = true) => {
     if (snags.length === 0) { toast.error('No data to export'); return; }
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
+      if (!photos) params.set('photos', '0');
       const resp = await api.get(`/snags/export.xlsx?${params}`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([resp.data]));
       const a = document.createElement('a');
       a.href = url; a.download = `snags-${new Date().toISOString().slice(0, 10)}.xlsx`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast.success('Downloaded snags with photos');
-    } catch (e) { toast.error('Export failed'); }
+      const skipped = Number(resp.headers?.['x-photos-skipped'] || 0);
+      if (skipped) toast.success(`Downloaded — ${skipped} photo(s) too large to embed, link in the cell instead`);
+      else toast.success(photos ? 'Downloaded snags with photos' : 'Downloaded snags (no photos)');
+    } catch (e) {
+      // responseType 'blob' means an error body arrives as a Blob, not JSON —
+      // reading it is the only way to see what the server actually said.
+      // Without this the user just got "Export failed" with no clue why.
+      let msg = '';
+      try {
+        if (e.response?.data instanceof Blob) msg = JSON.parse(await e.response.data.text())?.error || '';
+        else msg = e.response?.data?.error || '';
+      } catch { /* not JSON — fall through to the generic message */ }
+      if (photos) {
+        toast.error(msg ? `Export failed: ${msg} — retrying without photos` : 'Export failed — retrying without photos');
+        return exportXlsx(false);
+      }
+      toast.error(msg ? `Export failed: ${msg}` : 'Export failed');
+    }
   };
 
   useEffect(() => {
@@ -245,7 +265,7 @@ export default function Snags() {
           <p className="text-sm text-gray-500">Management raises site snags · assignee uploads proof · raiser approves to close.</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={exportXlsx}
+          <button onClick={() => exportXlsx(true)}
             className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('snags') && (
             <button onClick={openRaise} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Snag</button>
