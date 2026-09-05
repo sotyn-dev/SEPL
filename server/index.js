@@ -41,6 +41,12 @@ try {
 
 app.use(express.json({ limit: '10mb' }));
 
+// Hang detector — logs [slow] requests and [lag] event-loop stalls with the
+// requests in flight, so `pm2 logs erp | grep -E '\[slow\]|\[lag\]'` names
+// what froze the ERP (see lib/hangDetector.js). Must sit before the routers.
+try { require('./lib/hangDetector').install(app); }
+catch (e) { console.warn('[hang-detector] not started:', e.message); }
+
 // Cache static assets (logo, icons, JS bundles) for 1 day in browser.
 // React build files have content-hashed filenames so they invalidate
 // automatically on next deploy — safe to cache aggressively.
