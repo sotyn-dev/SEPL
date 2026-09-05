@@ -42,27 +42,25 @@ export function useRateActions({ onChanged } = {}) {
       const row = mapRow;
       setMapRow(null); changed();
       // Map → straight into the Rate Contract when the line was unmapped
-      // (one click, not "map, then click the card again") — with the row
-      // RE-FETCHED, so the modal shows the Item Master's existing quotes /
-      // contract. Seeding it from this line's blanks would let one Save
-      // overwrite a contract shared by every order of that item (review
-      // 2026-09-05). If the fresh row can't be found, the card's own
-      // button opens it on the next click.
-      if (mi && !row.item_master_id) {
-        try {
-          const r = await api.get('/procurement/rates-items', { params: { search: row.description || '', page: 1 } });
-          const fresh = (r.data?.rows || []).find(x => x.id === row.id);
-          if (fresh) openQuotes(fresh);
-        } catch { /* see above */ }
-      }
+      // (one click, not "map, then click the card again"); openQuotes
+      // re-fetches the row, so the modal shows the Item Master's existing
+      // quotes / contract rather than this line's blanks.
+      if (mi && !row.item_master_id) openQuotes({ ...row, item_master_id: mi.id, item_code: mi.item_code });
     } catch (e) { toast.error(e.response?.data?.error || 'Map failed'); }
   };
 
   // 2. ₹ Quotes → S2-S6: the 3 vendor quotes + finalise the Rate Contract
   const [quoteRow, setQuoteRow] = useState(null);
   const [qf, setQf] = useState({});
-  const openQuotes = (row) => {
-    if (!row.item_master_id) { toast.error('Map the item to the Item Master first'); openMap(row); return; }
+  // Opens on the FRESH row (GET /rates-items/row/:id): a card or register
+  // line loaded minutes ago may show 0/3 while someone else has since locked
+  // this Item Master's contract — seeding the modal from the stale row would
+  // let one Save overwrite that contract for every order sharing it
+  // (review 2026-09-05). Falls back to the given row if the fetch fails.
+  const openQuotes = async (given) => {
+    if (!given.item_master_id) { toast.error('Map the item to the Item Master first'); openMap(given); return; }
+    let row = given;
+    try { const r = await api.get(`/procurement/rates-items/row/${given.id}`); if (r.data?.id) row = { ...given, ...r.data }; } catch { /* stale row, best effort */ }
     setQuoteRow(row);
     setQf({
       vendor1_name: row.vendor1_name || '', vendor1_rate: row.vendor1_rate || '',

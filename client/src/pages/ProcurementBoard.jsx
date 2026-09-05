@@ -208,7 +208,10 @@ export default function ProcurementBoard() {
   };
 
   // The tab where the FULL action UI lives, pre-filtered to just this record.
-  const tabLink = act ? `${STAGE_LINKS[act.stage]}&q=${encodeURIComponent(act.card.ref)}` : '#';
+  // A PO whose payment block is still pending is not on the Bills follow-up
+  // list yet — its next step is the Payment tab (review 2026-09-05).
+  const payFirst = act?.stage === 'purchase_bill' && act.card.payment_block_status === 'pending';
+  const tabLink = act ? `${payFirst ? '/procurement?tab=payment' : STAGE_LINKS[act.stage]}&q=${encodeURIComponent(act.card.ref)}` : '#';
   // po_create: land on the Vendor PO tab with the Create form already open
   // on this indent (Procurement.jsx consumes ?new=po&indent=).
   const createPoLink = act ? `${STAGE_LINKS.po_create}&new=po&indent=${act.card.rid}&q=${encodeURIComponent(act.card.ref)}` : '#';
@@ -328,7 +331,7 @@ export default function ProcurementBoard() {
             <div>
               <label className="label">Expected receipt date</label>
               <input type="date" className="input" value={form.expected_receipt_date || ''} onChange={e => set('expected_receipt_date', e.target.value)} />
-              <p className="text-[10px] text-gray-400 mt-1">The delay clock runs against this date. The bill itself (with its file) is entered in the Bills tab.</p>
+              <p className="text-[10px] text-gray-400 mt-1">The delay clock runs against this date. The bill itself (with its file) is entered in the Bills tab{payFirst ? ' — after the payment block on this PO is cleared (Payment tab)' : ''}.</p>
             </div>
           )}
 
@@ -394,7 +397,7 @@ export default function ProcurementBoard() {
               )}
               {stage === 'purchase_bill' && (
                 <>
-                  <Link to={tabLink} onClick={close} className="btn btn-secondary text-xs">Enter purchase bill →</Link>
+                  <Link to={tabLink} onClick={close} className="btn btn-secondary text-xs">{payFirst ? 'Payment pending — open Payment →' : 'Enter purchase bill →'}</Link>
                   <button type="button" onClick={savePoDate} disabled={saving} className="btn btn-primary">{saving ? 'Saving…' : 'Save date'}</button>
                 </>
               )}

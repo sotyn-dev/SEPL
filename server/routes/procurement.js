@@ -6987,6 +6987,9 @@ router.get('/item-rates', (req, res) => {
      -- present = ready for rates, regardless of the status column.
      WHERE (i.status IN ${APPROVED_FOR_RATES}
             OR (i.l1_status='approved' AND i.l2_status='approved'))
+       -- A soft-rejected / cancelled indent keeps its L1+L2 signatures for
+       -- audit — it must not come back as rate work (review 2026-09-05).
+       AND i.status NOT IN ('rejected','cancelled')
        -- From-store lines are fulfilled from stock — they don't need a
        -- vendor rate / PO, so only the PROCURE portion shows here.  mam
        -- (2026-06-04): a 1000 line approved as 10-store + 990-procure
@@ -7510,6 +7513,7 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
     // `po_sent` is where an indent sits after its FIRST partial PO — its
     // remaining lines must stay on the board (review 2026-09-05).
     const rateItem = `(i.status IN ${APPROVED_FOR_RATES} OR (i.l1_status='approved' AND i.l2_status='approved'))
+                      AND i.status NOT IN ('rejected','cancelled')
                       AND (ii.source IS NULL OR ii.source <> 'store')
                       AND NOT (UPPER(COALESCE(ii.item_type,''))='RGP' AND LOWER(COALESCE(ii.source,''))<>'procure')
                       AND COALESCE(ii.quantity,0) > 0`;
@@ -7567,7 +7571,7 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
       col('purchase_bill', 'Purchase Bill', 'P.BILL', all(`
         SELECT vp.id AS rid, vp.po_number AS ref, COALESCE(v.name,'—') AS title,
                COALESCE('due ' || vp.expected_receipt_date, 'bill awaited') AS owner, vp.created_at,
-               vp.expected_receipt_date, vp.total_amount AS amount
+               vp.expected_receipt_date, vp.total_amount AS amount, vp.payment_block_status
           FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
            AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)
@@ -7693,7 +7697,7 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
     const activity = [
       ...all(`SELECT 'indent' k, indent_number ref, COALESCE(raised_by_name,'Site') who, 'raised indent' verb, created_at FROM indents ORDER BY created_at DESC LIMIT 4`),
       ...all(`SELECT 'po' k, po_number ref, '' who, 'Vendor PO created' verb, created_at FROM vendor_pos WHERE COALESCE(cancelled,0)=0 ORDER BY created_at DESC LIMIT 4`),
-      ...all(`SELECT 'grn' k, grn_number ref, COALESCE(received_by,'Store') who, 'received material' verb, created_at FROM grn ORDER BY created_at DESC LIMIT 4`),
+      ...all(`SELECT 'grn' k, g.grn_number ref, COALESCE(u.name, CAST(g.received_by AS TEXT), 'Store') who, 'received material' verb, g.created_at FROM grn g LEFT JOIN users u ON u.id = g.received_by ORDER BY g.created_at DESC LIMIT 4`),
       ...all(`SELECT 'bill' k, bill_number ref, '' who, 'purchase bill booked' verb, created_at FROM purchase_bills ORDER BY created_at DESC LIMIT 3`),
       ...all(`SELECT 'debit' k, dn_number ref, '' who, 'debit note raised' verb, created_at FROM debit_notes ORDER BY created_at DESC LIMIT 2`),
     ].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 8);
@@ -7926,6 +7930,73 @@ router.get('/rate-enquiry/:indentId', requirePermission('procurement', 'view'), 
 //   S7 long-dvl = item_master.long_delivery flag ("order them today")
 // Quotes/finals resolve via the item's Item Master (latest finalised row wins)
 // so a rate fixed once serves every order of that item — the Rate Contract.
+// ── Item-wise rates rows (SOP-05): ONE implementation for the register
+// list (GET /rates-items) and the single-row fetch (GET /rates-items/row/:id)
+// that RateActions uses to open the Rate Contract modal on FRESH data — a
+// stale card/register row must never seed a Save that overwrites a contract
+// shared by every order of that Item Master (review 2026-09-05).
+function ratesItemBase(where) {
+  return `
+      FROM po_items pi
+      LEFT JOIN purchase_orders po ON po.id = pi.po_id
+      LEFT JOIN business_book bb ON bb.id = pi.business_book_id
+      LEFT JOIN item_master im ON im.id = pi.item_master_id
+      WHERE ${where} AND COALESCE(pi.description,'') <> ''`;
+}
+function ratesItemRows(db, where, params, tail) {
+  const base = ratesItemBase(where);
+  const rows = db.prepare(`
+    SELECT pi.id, pi.po_id, pi.description, pi.quantity, pi.unit, pi.rate AS estimate_rate,
+           pi.item_master_id, im.item_code, im.item_name, COALESCE(im.long_delivery,0) AS long_delivery,
+           po.po_number, COALESCE(bb.client_name, bb.company_name) AS client_name,
+           (SELECT MIN(op.planned_start) FROM order_planning_items opi
+              JOIN order_planning op ON op.id = opi.planning_id
+             WHERE opi.po_item_id = pi.id) AS need_date,
+           -- Need-till alongside need-from so the S1 cell can carry BOTH
+           -- editable dates (mam 2026-09-05: this view replaces the old
+           -- Order Planning table, which is where the dates used to be set).
+           (SELECT MIN(op.planned_end) FROM order_planning_items opi
+              JOIN order_planning op ON op.id = opi.planning_id
+             WHERE opi.po_item_id = pi.id) AS need_till,
+           rc.id AS rc_id, rc.vendor1_name AS rc_v1n, rc.vendor1_rate AS rc_v1, rc.vendor2_name AS rc_v2n, rc.vendor2_rate AS rc_v2,
+           rc.vendor3_name AS rc_v3n, rc.vendor3_rate AS rc_v3, rc.final_rate AS rc_final, rc.final_vendor_name AS rc_fvn, rc.finalized_at AS rc_fat,
+           r.vendor1_name AS ir_v1n, r.vendor1_rate AS ir_v1, r.vendor2_name AS ir_v2n, r.vendor2_rate AS ir_v2,
+           r.vendor3_name AS ir_v3n, r.vendor3_rate AS ir_v3, r.final_rate AS ir_final, r.final_vendor_name AS ir_fvn, r.finalized_at AS ir_fat
+      ${base.replace('WHERE', `LEFT JOIN rate_contracts rc ON rc.item_master_id = pi.item_master_id
+      LEFT JOIN indent_item_rates r ON r.id = (
+            SELECT r2.id FROM indent_item_rates r2
+              JOIN indent_items ii2 ON ii2.id = r2.indent_item_id
+             WHERE pi.item_master_id IS NOT NULL AND ii2.item_master_id = pi.item_master_id
+             ORDER BY (COALESCE(r2.final_rate,0) > 0) DESC, r2.id DESC LIMIT 1)
+      WHERE`)}
+    ${tail}`).all(...params);
+  for (const it of rows) {
+    // Rate source: the item's RATE CONTRACT wins; else the latest 3-vendor
+    // row from the indent flow (a rate fixed either way serves the item).
+    const useRc = it.rc_id != null;
+    it.vendor1_name = useRc ? it.rc_v1n : it.ir_v1n; it.vendor1_rate = useRc ? it.rc_v1 : it.ir_v1;
+    it.vendor2_name = useRc ? it.rc_v2n : it.ir_v2n; it.vendor2_rate = useRc ? it.rc_v2 : it.ir_v2;
+    it.vendor3_name = useRc ? it.rc_v3n : it.ir_v3n; it.vendor3_rate = useRc ? it.rc_v3 : it.ir_v3;
+    it.final_rate = useRc ? it.rc_final : it.ir_final;
+    it.final_vendor_name = useRc ? it.rc_fvn : it.ir_fvn;
+    it.finalized_at = useRc ? it.rc_fat : it.ir_fat;
+    for (const k of Object.keys(it)) if (k.startsWith('rc_') || k.startsWith('ir_')) delete it[k];
+    const quotes = [it.vendor1_rate, it.vendor2_rate, it.vendor3_rate].filter(v => +v > 0).length;
+    it.quotes = quotes;
+    const est = +it.estimate_rate || 0;
+    const fin = +it.final_rate || 0;
+    it.stage = {
+      s1: !!it.need_date,
+      s2: quotes >= 1,
+      s3: quotes >= 3,
+      s6: fin > 0,
+      md: fin > 0 && est > 0 && fin > est,       // S5: above our estimate → MD sir
+      s7: !!it.long_delivery,
+    };
+  }
+  return rows;
+}
+
 router.get('/rates-items', requirePermission('procurement', 'view'), (req, res) => {
   try {
     const db = getDb();
@@ -7938,68 +8009,23 @@ router.get('/rates-items', requirePermission('procurement', 'view'), (req, res) 
       where += ` AND (LOWER(pi.description) LIKE ? OR LOWER(COALESCE(im.item_name,'')) LIKE ? OR LOWER(COALESCE(im.item_code,'')) LIKE ? OR LOWER(COALESCE(po.po_number,'')) LIKE ? OR LOWER(COALESCE(bb.client_name,'')) LIKE ?)`;
       for (let i = 0; i < 5; i++) params.push(`%${search}%`);
     }
-    const base = `
-      FROM po_items pi
-      LEFT JOIN purchase_orders po ON po.id = pi.po_id
-      LEFT JOIN business_book bb ON bb.id = pi.business_book_id
-      LEFT JOIN item_master im ON im.id = pi.item_master_id
-      WHERE ${where} AND COALESCE(pi.description,'') <> ''`;
+    const base = ratesItemBase(where);
     const total = db.prepare(`SELECT COUNT(*) c ${base}`).get(...params).c;
-    const rows = db.prepare(`
-      SELECT pi.id, pi.po_id, pi.description, pi.quantity, pi.unit, pi.rate AS estimate_rate,
-             pi.item_master_id, im.item_code, im.item_name, COALESCE(im.long_delivery,0) AS long_delivery,
-             po.po_number, COALESCE(bb.client_name, bb.company_name) AS client_name,
-             (SELECT MIN(op.planned_start) FROM order_planning_items opi
-                JOIN order_planning op ON op.id = opi.planning_id
-               WHERE opi.po_item_id = pi.id) AS need_date,
-             -- Need-till alongside need-from so the S1 cell can carry BOTH
-             -- editable dates (mam 2026-09-05: this view replaces the old
-             -- Order Planning table, which is where the dates used to be set).
-             (SELECT MIN(op.planned_end) FROM order_planning_items opi
-                JOIN order_planning op ON op.id = opi.planning_id
-               WHERE opi.po_item_id = pi.id) AS need_till,
-             rc.id AS rc_id, rc.vendor1_name AS rc_v1n, rc.vendor1_rate AS rc_v1, rc.vendor2_name AS rc_v2n, rc.vendor2_rate AS rc_v2,
-             rc.vendor3_name AS rc_v3n, rc.vendor3_rate AS rc_v3, rc.final_rate AS rc_final, rc.final_vendor_name AS rc_fvn, rc.finalized_at AS rc_fat,
-             r.vendor1_name AS ir_v1n, r.vendor1_rate AS ir_v1, r.vendor2_name AS ir_v2n, r.vendor2_rate AS ir_v2,
-             r.vendor3_name AS ir_v3n, r.vendor3_rate AS ir_v3, r.final_rate AS ir_final, r.final_vendor_name AS ir_fvn, r.finalized_at AS ir_fat
-        ${base.replace('WHERE', `LEFT JOIN rate_contracts rc ON rc.item_master_id = pi.item_master_id
-        LEFT JOIN indent_item_rates r ON r.id = (
-              SELECT r2.id FROM indent_item_rates r2
-                JOIN indent_items ii2 ON ii2.id = r2.indent_item_id
-               WHERE pi.item_master_id IS NOT NULL AND ii2.item_master_id = pi.item_master_id
-               ORDER BY (COALESCE(r2.final_rate,0) > 0) DESC, r2.id DESC LIMIT 1)
-        WHERE`)}
-      ORDER BY (need_date IS NULL), need_date, pi.id
-      LIMIT ${PER} OFFSET ${(page - 1) * PER}`).all(...params);
-    for (const it of rows) {
-      // Rate source: the item's RATE CONTRACT wins; else the latest 3-vendor
-      // row from the indent flow (a rate fixed either way serves the item).
-      const useRc = it.rc_id != null;
-      it.vendor1_name = useRc ? it.rc_v1n : it.ir_v1n; it.vendor1_rate = useRc ? it.rc_v1 : it.ir_v1;
-      it.vendor2_name = useRc ? it.rc_v2n : it.ir_v2n; it.vendor2_rate = useRc ? it.rc_v2 : it.ir_v2;
-      it.vendor3_name = useRc ? it.rc_v3n : it.ir_v3n; it.vendor3_rate = useRc ? it.rc_v3 : it.ir_v3;
-      it.final_rate = useRc ? it.rc_final : it.ir_final;
-      it.final_vendor_name = useRc ? it.rc_fvn : it.ir_fvn;
-      it.finalized_at = useRc ? it.rc_fat : it.ir_fat;
-      for (const k of Object.keys(it)) if (k.startsWith('rc_') || k.startsWith('ir_')) delete it[k];
-      const quotes = [it.vendor1_rate, it.vendor2_rate, it.vendor3_rate].filter(v => +v > 0).length;
-      it.quotes = quotes;
-      const est = +it.estimate_rate || 0;
-      const fin = +it.final_rate || 0;
-      it.stage = {
-        s1: !!it.need_date,
-        s2: quotes >= 1,
-        s3: quotes >= 3,
-        s6: fin > 0,
-        md: fin > 0 && est > 0 && fin > est,       // S5: above our estimate → MD sir
-        s7: !!it.long_delivery,
-      };
-    }
+    const rows = ratesItemRows(db, where, params, `ORDER BY (need_date IS NULL), need_date, pi.id LIMIT ${PER} OFFSET ${(page - 1) * PER}`);
     res.json({ total, page, per: PER, rows });
   } catch (err) {
     console.error('rates-items error', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// One row, fresh — what the Rate Contract modal opens on (see ratesItemRows).
+router.get('/rates-items/row/:id', requirePermission('procurement', 'view'), (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'id required' });
+  const row = ratesItemRows(getDb(), 'pi.id = ?', [id], '')[0];
+  if (!row) return res.status(404).json({ error: 'Item not found' });
+  res.json(row);
 });
 
 // Inline mapping action (mam 2026-08-31 "how can i do action?"): link a BOQ

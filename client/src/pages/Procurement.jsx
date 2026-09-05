@@ -913,14 +913,22 @@ export default function Procurement() {
   const newPoParamHandled = useRef(false);
   useEffect(() => {
     if (newPoParamHandled.current || searchParams.get('new') !== 'po') return;
-    if (!vendors.length) return;
-    newPoParamHandled.current = true;
-    const indentId = searchParams.get('indent') || '';
-    if (indentId && !indents.length) api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => {});
-    openCreateVendorPo(indentId);
-    const next = new URLSearchParams(searchParams);
-    next.delete('new'); next.delete('indent');
-    setSearchParams(next, { replace: true });
+    const run = () => {
+      if (newPoParamHandled.current) return;
+      newPoParamHandled.current = true;
+      const indentId = searchParams.get('indent') || '';
+      if (indentId && !indents.length) api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => {});
+      openCreateVendorPo(indentId);
+      const next = new URLSearchParams(searchParams);
+      next.delete('new'); next.delete('indent');
+      setSearchParams(next, { replace: true });
+    };
+    if (vendors.length) { run(); return; }
+    // No vendor master yet (still loading, empty, or failed): open anyway
+    // after a moment rather than dead-ending the click — the modal shows
+    // an empty vendor list, which is the honest state.
+    const t = setTimeout(run, 4000);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, vendors.length]);
 

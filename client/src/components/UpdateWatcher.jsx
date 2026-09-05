@@ -26,7 +26,9 @@
 //   - mid-work → banner only, applies at the next page change.
 // Never automatic on storage-blocked browsers (in-app WhatsApp/Instagram,
 // private mode): their token lives only in memory and a reload = sign in
-// again — they get the banner and choose the moment (tokenStore.js).
+// again — they get the banner and choose the moment (tokenStore.js). The
+// flag is read at DECISION time, not at mount: it usually flips at login
+// (setToken's verify-read), long after this component mounted.
 // Loop guard: reloaded for this same build < 2 min ago and still mismatched
 // (a proxy/cache serving a stale page) → no more auto-reloads in this tab,
 // banner with Update only. Everything clears once the server reports this
@@ -62,6 +64,9 @@ const focusBusy = () => {
   } catch { return false; }
 };
 
+// Read live — see the header note.
+const blocked = () => { try { return isStorageBlocked(); } catch { return false; } };
+
 const applyNow = (build) => {
   try { sessionStorage.setItem(LOOP_KEY, JSON.stringify({ build, at: Date.now() })); } catch { /* storage blocked */ }
   window.location.reload();
@@ -74,7 +79,6 @@ export default function UpdateWatcher() {
   const [countdown, setCountdown] = useState(null);  // seconds left, or null
   const [deferred, setDeferred] = useState(false);   // "Later"
   const [loopSuspect, setLoopSuspect] = useState(false);
-  const [blocked] = useState(() => { try { return isStorageBlocked(); } catch { return false; } });
   // Refs mirror the state for the handlers, which are bound once
   // (kept in sync from an effect, after each commit).
   const pendingRef = useRef(null);
@@ -86,7 +90,7 @@ export default function UpdateWatcher() {
 
   const busy = () => focusBusy() || dirtyRef.current;
   // May this tab reload on its own right now?
-  const autoOk = () => !busy() && !deferredRef.current && !loopRef.current && !blocked;
+  const autoOk = () => !busy() && !deferredRef.current && !loopRef.current && !blocked();
 
   // A build id from either source → decide what to do with it.
   const consider = (build) => {
@@ -161,18 +165,18 @@ export default function UpdateWatcher() {
     if (location.pathname === lastPath.current) return;
     lastPath.current = location.pathname;
     dirtyRef.current = false;
-    if (pendingRef.current && !loopRef.current && !blocked && !focusBusy()) applyNow(pendingRef.current);
+    if (pendingRef.current && !loopRef.current && !blocked() && !focusBusy()) applyNow(pendingRef.current);
     else checkRef.current();
-  }, [location.pathname, blocked]);
+  }, [location.pathname]);
 
   // Countdown: one 1-second ticker while a build is pending and auto-apply
   // is allowed. Not mid-work → counts 10 → 0 and reloads. Mid-work → the
   // count pauses at "waiting" and restarts from 10 once they are free.
   useEffect(() => {
-    if (!pending || deferred || loopSuspect || blocked) return;
+    if (!pending || deferred || loopSuspect) return;
     let left = null;
     const tick = () => {
-      if (focusBusy() || dirtyRef.current) { left = null; setCountdown(null); return; }
+      if (focusBusy() || dirtyRef.current || blocked()) { left = null; setCountdown(null); return; }
       left = left == null ? COUNTDOWN_S : left - 1;
       if (left <= 0) { clearInterval(t); applyNow(pending); return; }
       setCountdown(left);
@@ -180,12 +184,13 @@ export default function UpdateWatcher() {
     const t = setInterval(tick, 1000);
     const t0 = setTimeout(tick, 0);   // first evaluation right away
     return () => { clearInterval(t); clearTimeout(t0); };
-  }, [pending, deferred, loopSuspect, blocked]);
+  }, [pending, deferred, loopSuspect]);
 
   if (!pending) return null;
-  const count = (!deferred && !loopSuspect && !blocked) ? countdown : null;
+  const isBlocked = blocked();
+  const count = (!deferred && !loopSuspect && !isBlocked) ? countdown : null;
   const note = loopSuspect ? 'could not switch automatically — click Update'
-    : blocked ? 'tap Update when you are free — you will sign in again'
+    : isBlocked ? 'tap Update when you are free — you will sign in again'
     : count != null ? `updating in ${count}s`
     : deferred ? 'will apply when you move to the next page'
     : 'waiting till you finish here — applies when you move to the next page';
