@@ -27,7 +27,7 @@ npm install -g pm2
 echo ">>> Cloning ERP code..."
 cd /root
 rm -rf /root/erp
-git clone https://github.com/Monikarajput17/SEPL.git /root/erp
+git clone https://github.com/sotyn-dev/SEPL.git /root/erp
 cd /root/erp
 
 # Install dependencies
