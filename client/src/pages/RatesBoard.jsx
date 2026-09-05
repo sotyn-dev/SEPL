@@ -9,8 +9,11 @@ import toast from 'react-hot-toast';
 import { FiFileText, FiDollarSign, FiSend, FiColumns, FiCheckCircle, FiShield, FiLock, FiTruck } from 'react-icons/fi';
 
 // One-click actions ON the board (mam 2026-08-28 "make it here system"):
-// S1 ⚡ Make Plan creates the order-planning record instantly; S2 📄 Enquiry
-// Sheet opens the ready-made SOP-05.2 rate-enquiry format for vendors.
+// S1 ⚡ Make Plan creates the order-planning record instantly; S2–S4 open
+// the Item-wise Rates register (the Order Planning tab) filtered to that
+// order, which is where quotes are entered and the vendor finalised.
+// (mam 2026-09-05: the board is linked to Order to Planning, not to the
+// indent flow — so the old per-indent enquiry-sheet button went with it.)
 const makePlan = async (card, reload) => {
   try {
     await api.post('/orders/planning', {
@@ -34,27 +37,30 @@ const cardExtra = (stageKey, card, reload) => {
       </button>
     );
   }
-  if (stageKey === 'enquiry' && card.rid) {
+  if (['enquiry', 'compare', 'finalise'].includes(stageKey) && card.rid) {
+    const q = encodeURIComponent(card.po_number || card.ref || '');
     return (
       <button
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.open(`/rate-enquiry/${card.rid}/print`, '_blank'); }}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.location.assign(`/orders?tab=planning&q=${q}`); }}
         className="mt-1 w-full text-[10px] font-bold py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
-        title="Open the SOP-05.2 rate-enquiry sheet — full project quantity, print / send to vendors">
-        📄 Enquiry Sheet
+        title="Open Order Planning filtered to this order — enter the 3 quotes / finalise there (SOP-05.2–05.4)">
+        📋 Open in planning
       </button>
     );
   }
   return null;
 };
 
+// Every rates stage lives on the Order Planning tab now (the item-wise
+// register) — not the indent-time rates tab it used to point at.
 const STAGE_LINKS = {
   packages: '/orders?tab=planning',
-  enquiry: '/procurement?tab=rates',
-  compare: '/procurement?tab=rates',
-  finalise: '/procurement?tab=rates',
-  md_lock: '/procurement?tab=rates',
-  contract: '/procurement?tab=rates',
-  long_delivery: '/procurement?tab=vendorpo',
+  enquiry: '/orders?tab=planning',
+  compare: '/orders?tab=planning',
+  finalise: '/orders?tab=planning',
+  md_lock: '/orders?tab=planning',
+  contract: '/orders?tab=planning',
+  long_delivery: '/orders?tab=planning',
 };
 
 const STAGE_ICONS = {

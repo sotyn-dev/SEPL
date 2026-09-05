@@ -4,7 +4,7 @@
 // finalise + above-estimate→MD → S6 rate contract → S7 long-delivery flag.
 // Feeds from GET /procurement/rates-items; S7 toggles on the Item Master.
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import api from '../api';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
@@ -27,7 +27,10 @@ const Chip = ({ on, label, title, color = 'emerald' }) => (
 // one implementation of this screen, not two that drift apart.
 export default function RatesItems({ embedded = false }) {
   const [data, setData] = useState(null);
-  const [search, setSearch] = useState('');
+  // Deep link: the Rates Board opens this register pre-filtered to an order
+  // (?q=<PO number>). Read once on mount; the box stays a normal input after.
+  const [urlParams] = useSearchParams();
+  const [search, setSearch] = useState(urlParams.get('q') || '');
   const [page, setPage] = useState(1);
   const [err, setErr] = useState('');
 

@@ -7674,33 +7674,64 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
     const all = (sql, ...p) => { try { return db.prepare(sql).all(...p); } catch { return []; } };
     const pctOf = (done, allc) => (allc > 0 ? Math.round((done / allc) * 100) - 100 : null);
 
-    // Latest rates row per item + how many vendor slots are filled.
-    const IR = `LEFT JOIN indent_item_rates ir ON ir.id = (SELECT MAX(x.id) FROM indent_item_rates x WHERE x.indent_item_id = ii.id)`;
-    const SLOTS = `((CASE WHEN COALESCE(ir.vendor1_rate,0) > 0 THEN 1 ELSE 0 END) +
-                    (CASE WHEN COALESCE(ir.vendor2_rate,0) > 0 THEN 1 ELSE 0 END) +
-                    (CASE WHEN COALESCE(ir.vendor3_rate,0) > 0 THEN 1 ELSE 0 END))`;
-    const BASE = `FROM indent_items ii JOIN indents i ON i.id = ii.indent_id ${IR}
-                  LEFT JOIN po_items poi ON poi.id = ii.po_item_id
-                  WHERE i.status IN ('approved','crm_approved')`;
-    const FINAL = `COALESCE(ir.final_rate, 0) > 0`;
+    // ── Source of truth = ORDER TO PLANNING, not indents ──────────────────
+    // mam (2026-09-05): "this data is link to indent to dispatch which is
+    // wrong, it is link to be order to planning". Every stage from S2 on used
+    // to count indent_items ⋈ indent_item_rates — the indent-TIME quote flow —
+    // which contradicts this board's own premise ("rates fixed BEFORE indent")
+    // and made it disagree with the Item-wise Rates register that now IS the
+    // Order Planning tab. Rebased onto the register's universe: po_items (the
+    // booked orders' BOQ lines) ⋈ rate_contracts per Item Master, with the
+    // register's exact fallback to the latest indent-flow rate row, so both
+    // screens count the same items the same way. S1 was already order-based.
+    const RSRC = `
+      LEFT JOIN rate_contracts rc ON rc.item_master_id = pi.item_master_id
+      LEFT JOIN indent_item_rates r ON r.id = (
+            SELECT r2.id FROM indent_item_rates r2
+              JOIN indent_items ii2 ON ii2.id = r2.indent_item_id
+             WHERE pi.item_master_id IS NOT NULL AND ii2.item_master_id = pi.item_master_id
+             ORDER BY (COALESCE(r2.final_rate,0) > 0) DESC, r2.id DESC LIMIT 1)`;
+    // Effective fields: the Rate Contract wins, else the indent-flow row —
+    // the same precedence the register applies in JS after its query.
+    const EF = (col) => `CASE WHEN rc.id IS NOT NULL THEN rc.${col} ELSE r.${col} END`;
+    const V1 = EF('vendor1_rate'), V2 = EF('vendor2_rate'), V3 = EF('vendor3_rate');
+    const FINAL_RATE = EF('final_rate'), FINAL_VENDOR = EF('final_vendor_name');
+    const FINALIZED_AT = EF('finalized_at'), RATE_UPDATED = EF('updated_at');
+    const SLOTS = `((CASE WHEN COALESCE(${V1},0) > 0 THEN 1 ELSE 0 END) +
+                    (CASE WHEN COALESCE(${V2},0) > 0 THEN 1 ELSE 0 END) +
+                    (CASE WHEN COALESCE(${V3},0) > 0 THEN 1 ELSE 0 END))`;
+    const FINAL = `COALESCE(${FINAL_RATE}, 0) > 0`;
+    const BASE = `FROM po_items pi
+                  LEFT JOIN purchase_orders po ON po.id = pi.po_id
+                  LEFT JOIN business_book bb ON bb.id = pi.business_book_id
+                  LEFT JOIN item_master im ON im.id = pi.item_master_id
+                  ${RSRC}
+                  WHERE COALESCE(pi.description,'') <> ''`;
+    // S5 rule verbatim from the register: final > 0 AND estimate > 0 AND final > estimate.
+    const ABOVE = `${FINAL} AND COALESCE(pi.rate,0) > 0 AND ${FINAL_RATE} > pi.rate`;
+    const WITHIN = `${FINAL} AND NOT (COALESCE(pi.rate,0) > 0 AND ${FINAL_RATE} > pi.rate)`;
+    const ITEM_REF = `COALESCE(im.item_name, pi.description, 'Item')`;
 
     const enquiryPend = cnt(`SELECT COUNT(*) c ${BASE} AND NOT ${FINAL} AND ${SLOTS} = 0`);
     const comparePend = cnt(`SELECT COUNT(*) c ${BASE} AND NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`);
     const finalisePend = cnt(`SELECT COUNT(*) c ${BASE} AND NOT ${FINAL} AND ${SLOTS} = 3`);
     const locked = cnt(`SELECT COUNT(*) c ${BASE} AND ${FINAL}`);
-    const lockedWithin = cnt(`SELECT COUNT(*) c ${BASE} AND ${FINAL} AND (COALESCE(poi.rate,0) <= 0 OR ir.final_rate <= poi.rate)`);
-    const aboveMd = cnt(`SELECT COUNT(*) c ${BASE} AND ${FINAL} AND COALESCE(poi.rate,0) > 0 AND ir.final_rate > poi.rate`);
-    const LONGP = `(LOWER(COALESCE(ir.final_terms,'')) LIKE '%week%' OR LOWER(COALESCE(ir.final_terms,'')) LIKE '%month%'
-                    OR LOWER(COALESCE(ir.final_terms,'')) LIKE '%15 d%' OR LOWER(COALESCE(ir.final_terms,'')) LIKE '%20 d%'
-                    OR LOWER(COALESCE(ir.final_terms,'')) LIKE '%30 d%')`;
-    const longDelivery = cnt(`SELECT COUNT(*) c ${BASE} AND ${FINAL} AND ${LONGP}`);
+    const lockedWithin = cnt(`SELECT COUNT(*) c ${BASE} AND ${WITHIN}`);
+    const aboveMd = cnt(`SELECT COUNT(*) c ${BASE} AND ${ABOVE}`);
+    // S7 is the Item Master flag the register toggles — no longer a guess
+    // from the wording of the indent's delivery terms.
+    const longDelivery = cnt(`SELECT COUNT(*) c ${BASE} AND COALESCE(im.long_delivery,0) = 1`);
     const pkgPend = cnt(`SELECT COUNT(*) c FROM purchase_orders po WHERE NOT EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)`);
     const pkgDone = cnt(`SELECT COUNT(*) c FROM purchase_orders po WHERE EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)`);
 
-    const byIndent = (cond, ownerText, limit = 50) => all(`
-      SELECT i.id AS rid, i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
-             COUNT(ii.id) || ' ${ownerText}' AS owner, MAX(COALESCE(ir.updated_at, ii.id)) AS created_at
-        ${BASE} AND ${cond} GROUP BY i.id ORDER BY MAX(i.created_at) DESC LIMIT ${limit}`);
+    // S2–S4 cards: one per ORDER (grouped by PO), the way they were grouped
+    // by indent before. rid = the PO id; po_number lets the board deep-link
+    // into the register filtered to that order.
+    const byPo = (cond, ownerText, limit = 50) => all(`
+      SELECT po.id AS rid, po.po_number AS po_number, COALESCE(po.po_number, 'No PO') AS ref,
+             COALESCE(bb.client_name, bb.company_name, '—') AS title,
+             COUNT(pi.id) || ' ${ownerText}' AS owner, MAX(COALESCE(${RATE_UPDATED}, po.created_at)) AS created_at
+        ${BASE} AND ${cond} GROUP BY po.id ORDER BY MAX(COALESCE(po.created_at, '')) DESC LIMIT ${limit}`);
 
     const pipeline = [
       { key: 'packages', label: 'Package List', sop: 'S1', total: pkgPend, pct: pctOf(pkgDone, pkgDone + pkgPend),
@@ -7712,33 +7743,30 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
                      ORDER BY po.created_at DESC LIMIT 50`) },
       { key: 'enquiry', label: 'Rate Enquiry', sop: 'S2', total: enquiryPend,
         pct: pctOf(comparePend + finalisePend + locked, enquiryPend + comparePend + finalisePend + locked),
-        cards: byIndent(`NOT ${FINAL} AND ${SLOTS} = 0`, 'item(s) — send enquiry') },
+        cards: byPo(`NOT ${FINAL} AND ${SLOTS} = 0`, 'item(s) — send enquiry') },
       { key: 'compare', label: 'Rate Comparison', sop: 'S3', total: comparePend,
         pct: pctOf(finalisePend + locked, comparePend + finalisePend + locked),
-        cards: byIndent(`NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`, 'item(s) — quotes awaited') },
+        cards: byPo(`NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`, 'item(s) — quotes awaited') },
       { key: 'finalise', label: 'Finalise Vendor', sop: 'S4', total: finalisePend,
         pct: pctOf(locked, finalisePend + locked),
-        cards: byIndent(`NOT ${FINAL} AND ${SLOTS} = 3`, 'item(s) — all 3 quotes in') },
+        cards: byPo(`NOT ${FINAL} AND ${SLOTS} = 3`, 'item(s) — all 3 quotes in') },
       { key: 'md_lock', label: 'Rate Lock / MD', sop: 'S5', total: aboveMd,
         pct: pctOf(lockedWithin, locked),
-        cards: all(`SELECT COALESCE(im.item_name, ii.description, 'Item') AS ref,
-                           'Rs ' || ir.final_rate || ' vs est ' || poi.rate AS title,
-                           'ABOVE estimate — MD sir' AS owner, ir.finalized_at AS created_at
-                      ${BASE.replace('LEFT JOIN po_items', 'LEFT JOIN item_master im ON im.id = ii.item_master_id LEFT JOIN po_items')}
-                       AND ${FINAL} AND COALESCE(poi.rate,0) > 0 AND ir.final_rate > poi.rate
-                     ORDER BY ir.finalized_at DESC LIMIT 50`) },
+        cards: all(`SELECT ${ITEM_REF} AS ref,
+                           'Rs ' || ${FINAL_RATE} || ' vs est ' || pi.rate AS title,
+                           'ABOVE estimate — MD sir' AS owner, ${FINALIZED_AT} AS created_at
+                      ${BASE} AND ${ABOVE}
+                     ORDER BY ${FINALIZED_AT} DESC LIMIT 50`) },
       { key: 'contract', label: 'Rate Contract', sop: 'S6', total: locked,
         pct: pctOf(locked, locked + finalisePend + comparePend + enquiryPend),
-        cards: all(`SELECT COALESCE(im.item_name, ii.description, 'Item') AS ref,
-                           COALESCE(ir.final_vendor_name, 'vendor') || ' · Rs ' || ir.final_rate AS title,
-                           'locked for project' AS owner, ir.finalized_at AS created_at
-                      ${BASE.replace('LEFT JOIN po_items', 'LEFT JOIN item_master im ON im.id = ii.item_master_id LEFT JOIN po_items')}
-                       AND ${FINAL} ORDER BY ir.finalized_at DESC LIMIT 50`) },
+        cards: all(`SELECT ${ITEM_REF} AS ref,
+                           COALESCE(${FINAL_VENDOR}, 'vendor') || ' · Rs ' || ${FINAL_RATE} AS title,
+                           'locked for project' AS owner, ${FINALIZED_AT} AS created_at
+                      ${BASE} AND ${FINAL} ORDER BY ${FINALIZED_AT} DESC LIMIT 50`) },
       { key: 'long_delivery', label: 'Long Delivery — Order Today', sop: 'S7', total: longDelivery, pct: null,
-        cards: all(`SELECT COALESCE(im.item_name, ii.description, 'Item') AS ref,
-                           COALESCE(ir.final_terms,'') AS title, 'order today' AS owner, ir.finalized_at AS created_at
-                      ${BASE.replace('LEFT JOIN po_items', 'LEFT JOIN item_master im ON im.id = ii.item_master_id LEFT JOIN po_items')}
-                       AND ${FINAL} AND ${LONGP} ORDER BY ir.finalized_at DESC LIMIT 50`) },
+        cards: all(`SELECT ${ITEM_REF} AS ref, COALESCE(po.po_number, '') AS title,
+                           'order today' AS owner, po.created_at AS created_at
+                      ${BASE} AND COALESCE(im.long_delivery,0) = 1 ORDER BY po.created_at DESC LIMIT 50`) },
     ];
 
     // Alerts: S1 packages waiting >24h, S3 3-day comparison clock, S5 MD list.
@@ -7749,20 +7777,20 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
                             AND po.created_at <= datetime('now','-1 day') ORDER BY po.created_at LIMIT 2`)) {
       alerts.push({ level: 'amber', ref: r.ref, text: 'Order booked but package/planning not made (SOP-05.1)', owner: r.owner, at: r.created_at });
     }
-    for (const r of all(`SELECT i.indent_number ref, COUNT(ii.id) n, MIN(ir.updated_at) at ${BASE}
-                          AND NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2 AND ir.updated_at <= datetime('now','-3 day')
-                          GROUP BY i.id ORDER BY MIN(ir.updated_at) LIMIT 3`)) {
+    for (const r of all(`SELECT COALESCE(po.po_number,'No PO') ref, COUNT(pi.id) n, MIN(${RATE_UPDATED}) at ${BASE}
+                          AND NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2 AND ${RATE_UPDATED} <= datetime('now','-3 day')
+                          GROUP BY po.id ORDER BY MIN(${RATE_UPDATED}) LIMIT 3`)) {
       alerts.push({ level: 'red', ref: r.ref, text: `${r.n} item(s) past the 3-day rate-comparison clock (SOP-05.3)`, owner: 'Avadesh Sharma', at: r.at });
     }
     if (aboveMd > 0) {
-      alerts.push({ level: 'red', ref: `${aboveMd} package(s)`, text: 'Finalised ABOVE estimate — needs MD sir (SOP-05.5)', owner: 'Ankur Kaplesh', at: null });
+      alerts.push({ level: 'red', ref: `${aboveMd} item(s)`, text: 'Finalised ABOVE estimate — needs MD sir (SOP-05.5)', owner: 'Ankur Kaplesh', at: null });
     }
 
     const tasks = [];
     if (pkgPend > 0) tasks.push({ text: `Make package/planning for ${pkgPend} booked order(s)`, tag: 'S1' });
     if (enquiryPend > 0) tasks.push({ text: `Send rate enquiry for ${enquiryPend} item(s) — full project qty`, tag: 'S2' });
     if (finalisePend > 0) tasks.push({ text: `Finalise vendor on ${finalisePend} item(s) (all 3 quotes in)`, tag: 'S4' });
-    if (aboveMd > 0) tasks.push({ text: `MD review: ${aboveMd} package(s) above estimate`, tag: 'S5' });
+    if (aboveMd > 0) tasks.push({ text: `MD review: ${aboveMd} item(s) above estimate`, tag: 'S5' });
     if (longDelivery > 0) tasks.push({ text: `Order ${longDelivery} long-delivery item(s) TODAY`, tag: 'S7' });
 
     const dists = [
@@ -7776,10 +7804,12 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
     ];
 
     const activity = [
-      ...all(`SELECT 'contract' k, COALESCE(ir.final_vendor_name,'vendor') who, 'locked rate on' verb,
-                     COALESCE(im.item_name, ii.description, 'item') ref, ir.finalized_at AS created_at
-                ${BASE.replace('LEFT JOIN po_items', 'LEFT JOIN item_master im ON im.id = ii.item_master_id LEFT JOIN po_items')}
-                 AND ${FINAL} AND ir.finalized_at IS NOT NULL ORDER BY ir.finalized_at DESC LIMIT 5`),
+      // One line per CONTRACT, not per order line — a contract is per Item
+      // Master and many BOQ lines share it, so group on that.
+      ...all(`SELECT 'contract' k, COALESCE(${FINAL_VENDOR},'vendor') who, 'locked rate on' verb,
+                     ${ITEM_REF} ref, MAX(${FINALIZED_AT}) AS created_at
+                ${BASE} AND ${FINAL} AND ${FINALIZED_AT} IS NOT NULL
+                GROUP BY COALESCE(pi.item_master_id, pi.id) ORDER BY created_at DESC LIMIT 5`),
       ...all(`SELECT 'package' k, COALESCE(u.name,'System') who, 'made planning for' verb,
                      COALESCE(po.po_number, 'Plan #' || op.id) ref, op.created_at
                 FROM order_planning op LEFT JOIN purchase_orders po ON po.id=op.po_id
@@ -7787,7 +7817,7 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
     ].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 8);
 
     // Overdue tile: S3 3-day breaches, in hours past the clock.
-    const breaches = all(`SELECT ir.updated_at ${BASE} AND NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2 AND ir.updated_at <= datetime('now','-3 day')`);
+    const breaches = all(`SELECT ${RATE_UPDATED} AS updated_at ${BASE} AND NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2 AND ${RATE_UPDATED} <= datetime('now','-3 day')`);
     const ages = breaches.map(r => (now - new Date(String(r.updated_at).replace(' ', 'T') + 'Z').getTime()) / 3600000).filter(h => Number.isFinite(h) && h > 0);
     const kpis = { overdue: { value: ages.length, oldest_hrs: ages.length ? Math.round(Math.max(...ages)) : 0, prev: null } };
 
