@@ -85,16 +85,16 @@ const scorePill = (s) => {
 const SOURCE_INFO = {
   manual:                       { plan: 'You set (Target column)',           actual: 'You enter weekly in the scorecard' },
   // Tasks & Tickets — Plan = items assigned this week, Actual = items completed
-  'auto:delegations':           { plan: 'Delegations assigned to user',       actual: 'Delegations completed (status=approved)' },
-  'auto:pms':                   { plan: 'PMS tasks assigned to user',         actual: 'PMS tasks completed (status=approved)' },
+  'auto:delegations':           { plan: 'Delegations DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
+  'auto:pms':                   { plan: 'PMS tasks DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
   'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
-  'auto:tickets':               { plan: 'Help tickets assigned to user',      actual: 'Tickets resolved / closed by user' },
+  'auto:tickets':               { plan: 'Help tickets DUE this week (deadline date; no date = week raised)', actual: 'Of those, resolved / closed' },
   'auto:snags':                  { plan: 'Snags raised within the week, assigned to user', actual: 'Of those, status = Approved (whenever approved)' },
   'auto:activity_log':          { plan: 'You set',                            actual: 'Create/update/delete actions the user logged this week (audit trail)' },
   // Responsibility (RACI / SLA) — cross-module accountability from the "Responsible" tabs
-  'auto:pms_all':               { plan: 'ALL PMS tasks assigned this week (company-wide)', actual: 'ALL PMS tasks done this week (company-wide)' },
-  'auto:delegations_all':       { plan: 'ALL delegations assigned this week (company-wide)', actual: 'ALL delegations done this week (company-wide)' },
-  'auto:tickets_all':           { plan: 'ALL help tickets raised this week (company-wide)', actual: 'ALL tickets resolved this week (company-wide)' },
+  'auto:pms_all':               { plan: 'ALL PMS tasks DUE this week (company-wide)', actual: 'Of those, done (company-wide)' },
+  'auto:delegations_all':       { plan: 'ALL delegations DUE this week (company-wide)', actual: 'Of those, done (company-wide)' },
+  'auto:tickets_all':           { plan: 'ALL help tickets DUE this week (company-wide)', actual: 'Of those, resolved (company-wide)' },
   'auto:snags_all':             { plan: 'ALL snags raised within the week (company-wide)', actual: 'Of those, status = Approved (company-wide)' },
   'auto:erp_module_coverage':   { plan: 'SOTYN.AI modules tracked (the target = all running)', actual: 'Modules with activity this week' },
   'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },

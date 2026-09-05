@@ -20,6 +20,17 @@ const { authMiddleware, requirePermission, adminOnly } = require('../middleware/
 
 router.use(authMiddleware);
 
+// Due-date basis (mam 2026-09-05 "change to due date"): a task belongs to the
+// week its CURRENT due date falls in — after any approved extension or manual
+// re-date — so the scorecard agrees with the Delegations page's From/To filter
+// (which is on due_date). A task with no due date falls back to the week it
+// was created, so nothing ever disappears from every week. Replaces the
+// created_at cohort of 2026-06-29; snags keep raised_at (mam's verbatim
+// formula). Shared by the Scorecard engine, the Weekly team table and its
+// detail drill-down — one rule, one number per person on every surface.
+const dueDay = (col, alias = '') => `date(COALESCE(NULLIF(${alias}${col}, ''), ${alias}created_at))`;
+const DUE_DELEG = dueDay('due_date'), DUE_PMS = dueDay('due_date'), DUE_TKT = dueDay('deadline_date');
+
 // ---------- TEMPLATES & KPIs (admin manages) ----------
 
 // List all templates
@@ -321,19 +332,21 @@ function computeScorecard(db, userId, weekStart) {
       // Actual can never exceed Planned. The old logic counted ANY task completed
       // this week (including ones assigned in earlier weeks), which gave the
       // confusing 5-given / 11-done case on Monika's Delegation row.
+      // Due-date basis (2026-09-05): Planned = tasks DUE this week, Actual = of
+      // those, done. Same cohort both sides, so Actual <= Planned still holds.
       if (source === 'auto:delegations') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status='approved'`).get(userId, since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND ${DUE_DELEG} BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND ${DUE_DELEG} BETWEEN ? AND ? AND status='approved'`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:pms') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status='approved'`).get(userId, since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND ${DUE_PMS} BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND ${DUE_PMS} BETWEEN ? AND ? AND status='approved'`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:tickets') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(userId, since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND ${DUE_TKT} BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND ${DUE_TKT} BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:checklists') {
@@ -383,18 +396,18 @@ function computeScorecard(db, userId, weekStart) {
       // WHOLE process, not just their own records (mam 2026-06-29: Sushila owns
       // ALL PMS). Same same-week cohort as the by-user versions, no assigned_to.
       if (source === 'auto:pms_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE created_at BETWEEN ? AND ? AND status='approved'`).get(since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE ${DUE_PMS} BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE ${DUE_PMS} BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:delegations_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE created_at BETWEEN ? AND ? AND status='approved'`).get(since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE ${DUE_DELEG} BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE ${DUE_DELEG} BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:tickets_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE ${DUE_TKT} BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE ${DUE_TKT} BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:snags_all') {
@@ -1056,31 +1069,31 @@ function computeScorecard(db, userId, weekStart) {
       if (!cfg) return null;
       const who = cfg.who ? `${cfg.who} AND ` : '';
       const whoArgs = cfg.who ? [userId] : [];
+      // Same due-day basis as Planned/Actual (2026-09-05): "previous" = due
+      // before this week (or created before it when undated).
+      const sinceDate = since.slice(0, 10), untilDate = until.slice(0, 10);
+      const DUE = dueDay(cfg.dueCol);
       const prevPending = db.prepare(
-        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
            AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${cfg.doneAt} >= ?))`
-      ).get(...whoArgs, since, since).c;
+      ).get(...whoArgs, sinceDate, since).c;
       const prevDone = db.prepare(
-        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
            AND (${cfg.doneCond}) AND ${cfg.doneAt} BETWEEN ? AND ?`
-      ).get(...whoArgs, since, since, until).c;
-      // Pending "up" halves, both under the due-date rule (see CARRY_CFG):
-      //   stillOpen = backlog rows (created before the week) not done as of
-      //               the week END and due on/before it;
-      //   weekOpen  = this week's cohort not done and due on/before week end.
-      // Counted directly instead of prevPending − prevDone so a task whose
-      // date moved to next week drops out cleanly instead of being clamped.
-      const untilDate = until.slice(0, 10);
-      const dueOk = `(${cfg.dueCol} IS NULL OR ${cfg.dueCol} = '' OR date(${cfg.dueCol}) <= ?)`;
+      ).get(...whoArgs, sinceDate, since, until).c;
+      // Pending "up" halves:
+      //   stillOpen = due before the week, not done as of the week END;
+      //   weekOpen  = due this week, not done.
+      // A task whose date moved to a later week is in neither: scheduled, not
+      // pending. Counted directly (not prevPending - prevDone) so nothing clamps.
       const stillOpen = db.prepare(
-        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
-           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${cfg.doneAt} > ?))
-           AND ${dueOk}`
-      ).get(...whoArgs, since, until, untilDate).c;
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
+           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${cfg.doneAt} > ?))`
+      ).get(...whoArgs, sinceDate, until).c;
       const weekOpen = db.prepare(
-        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at BETWEEN ? AND ?
-           AND NOT (${cfg.doneCond}) AND ${dueOk}`
-      ).get(...whoArgs, since, until, untilDate).c;
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} BETWEEN ? AND ?
+           AND NOT (${cfg.doneCond})`
+      ).get(...whoArgs, sinceDate, untilDate).c;
       return { prevPending, prevDone, stillOpen, weekOpen };
     };
     // Sources with no cross-week backlog concept but where the Pending column
@@ -1625,24 +1638,26 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
 
     const result = users.map(u => {
       // Delegations
+      // Due-date basis (mam 2026-09-05) — same rule as the Scorecard page so
+      // both surfaces read one number per person.
       const delGiven = db.prepare(
         `SELECT COUNT(*) as c FROM delegations
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ?`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_DELEG} BETWEEN ? AND ?`
+      ).get(u.id, start, end).c;
       const delDone = db.prepare(
         `SELECT COUNT(*) as c FROM delegations
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status = 'approved'`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_DELEG} BETWEEN ? AND ? AND status = 'approved'`
+      ).get(u.id, start, end).c;
 
       // PMS Tasks
       const pmsGiven = db.prepare(
         `SELECT COUNT(*) as c FROM pms_tasks
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ?`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_PMS} BETWEEN ? AND ?`
+      ).get(u.id, start, end).c;
       const pmsDone = db.prepare(
         `SELECT COUNT(*) as c FROM pms_tasks
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status = 'approved'`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_PMS} BETWEEN ? AND ? AND status = 'approved'`
+      ).get(u.id, start, end).c;
 
       // Checklists — frequency-aware (mam 2026-08-31): planned = the days
       // each checklist actually fires within the Mon–Sat week, not ×6 flat.
@@ -1661,12 +1676,12 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
       // Help Tickets — only count tickets ASSIGNED to this user (not raised by)
       const tktGiven = db.prepare(
         `SELECT COUNT(*) as c FROM support_tickets
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ?`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_TKT} BETWEEN ? AND ?`
+      ).get(u.id, start, end).c;
       const tktDone = db.prepare(
         `SELECT COUNT(*) as c FROM support_tickets
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status IN ('resolved', 'closed')`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_TKT} BETWEEN ? AND ? AND status IN ('resolved', 'closed')`
+      ).get(u.id, start, end).c;
 
       const totalGiven = delGiven + pmsGiven + cklGiven + tktGiven;
       const totalDone = delDone + pmsDone + cklDone + tktDone;
@@ -1738,9 +1753,9 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
                 d.submitted_at, d.reviewed_at, ab.name as assigned_by_name
          FROM delegations d
          LEFT JOIN users ab ON ab.id = d.assigned_by
-         WHERE d.assigned_to = ? AND d.created_at BETWEEN ? AND ?
-         ORDER BY d.created_at DESC`
-      ).all(userId, startTs, endTs);
+         WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} BETWEEN ? AND ?
+         ORDER BY d.due_date DESC, d.created_at DESC`
+      ).all(userId, start, end);
     } else if (moduleName === 'pms') {
       rows = db.prepare(
         `SELECT p.id, p.title, p.description, p.status, p.due_date, p.created_at,
@@ -1748,9 +1763,9 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
                 p.project_name_snapshot as project_name
          FROM pms_tasks p
          LEFT JOIN users ab ON ab.id = p.assigned_by
-         WHERE p.assigned_to = ? AND p.created_at BETWEEN ? AND ?
-         ORDER BY p.created_at DESC`
-      ).all(userId, startTs, endTs);
+         WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} BETWEEN ? AND ?
+         ORDER BY p.due_date DESC, p.created_at DESC`
+      ).all(userId, start, end);
     } else if (moduleName === 'checklists') {
       rows = db.prepare(
         `SELECT cc.id, c.title, c.description, cc.completion_date as date,
@@ -1763,12 +1778,12 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
     } else if (moduleName === 'tickets') {
       rows = db.prepare(
         `SELECT t.id, t.ticket_no, t.subject, t.priority, t.status, t.category,
-                t.created_at, t.resolved_at, ru.name as raised_by_name
+                t.created_at, t.resolved_at, t.deadline_date, ru.name as raised_by_name
          FROM support_tickets t
          LEFT JOIN users ru ON ru.id = t.user_id
-         WHERE t.assigned_to = ? AND t.created_at BETWEEN ? AND ?
-         ORDER BY t.created_at DESC`
-      ).all(userId, startTs, endTs);
+         WHERE t.assigned_to = ? AND ${dueDay('deadline_date', 't.')} BETWEEN ? AND ?
+         ORDER BY t.deadline_date DESC, t.created_at DESC`
+      ).all(userId, start, end);
     } else {
       return res.status(400).json({ error: 'Unknown module' });
     }
