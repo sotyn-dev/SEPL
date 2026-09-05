@@ -257,8 +257,13 @@ function calculateForEmployee(db, settings, employee, month) {
   const leaveByDate = {}; // date → leave_type ('casual','sick','earned','short_leave','comp_off')
   const shortLeaveByDate = {}; // date → true if short leave applied that day
   for (const lr of leaveRows) {
-    const from = new Date(lr.from_date);
-    const to = new Date(lr.to_date);
+    // Clamp the day-walk to THIS month. The old loop walked the leave's full
+    // range before filtering, so one mistyped to_date (e.g. 2999-12-31) made
+    // this request spin for years of days — and because better-sqlite3 is
+    // synchronous, it froze every user, not just the payroll page.
+    const from = new Date(lr.from_date < startDate ? startDate : lr.from_date);
+    const to = new Date(lr.to_date > endDate ? endDate : lr.to_date);
+    if (isNaN(from) || isNaN(to) || from > to) continue;
     for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
       const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       if (dateStr < startDate || dateStr > endDate) continue;

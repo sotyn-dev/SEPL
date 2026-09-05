@@ -92,6 +92,13 @@ const dbg = (...args) => { if (AUDIT_DEBUG) console.log('[audit-debug]', ...args
 function auditMiddleware(req, res, next) {
   // Bulletproof: ANY exception inside here must NOT crash the request.
   // The audit log is an observability nice-to-have, never a critical path.
+  // Every mutating request drops the read-through cache (lib/readCache), so a
+  // read that follows a write is always fresh. Sits ABOVE every skip rule on
+  // purpose: a write is a write even when auditing is off or the path is
+  // un-audited.
+  if (req && METHOD_TO_ACTION[req.method]) {
+    try { require('../lib/readCache').invalidateAll(); } catch (_) {}
+  }
   try {
     // Opt-out flag in case audit starts causing issues in prod
     if (process.env.ERP_DISABLE_AUDIT === '1') { dbg('skip ENV flag'); return next(); }

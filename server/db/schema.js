@@ -2,7 +2,9 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 
-const DB_PATH = path.join(__dirname, '..', '..', 'data', 'erp.db');
+// ERP_DB_PATH lets a perf/e2e harness point a second server at a scratch COPY
+// of the database (never the live file). Unset in production and dev.
+const DB_PATH = process.env.ERP_DB_PATH || path.join(__dirname, '..', '..', 'data', 'erp.db');
 
 let db;
 
@@ -29,6 +31,34 @@ function getDb() {
     db.pragma('mmap_size = 67108864');
     db.pragma('temp_store = MEMORY');
     db.pragma('foreign_keys = ON');
+
+    // Opt-in SQL profiler (hang audit 2026-09-05): ERP_SQL_PROFILE=<ms> logs
+    // every statement that takes at least <ms> as `[sql Nms] <statement>`, so
+    // `pm2 logs erp | grep '\[sql'` names the exact query behind a [slow]
+    // request. Zero cost when the env var is unset (the wrapper is never
+    // installed). Never on by default in production.
+    if (process.env.ERP_SQL_PROFILE) {
+      const threshold = Number(process.env.ERP_SQL_PROFILE) || 25;
+      const rawPrepare = db.prepare.bind(db);
+      const timed = (sql, fn) => (...args) => {
+        const t0 = process.hrtime.bigint();
+        try { return fn(...args); }
+        finally {
+          const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+          if (ms >= threshold) console.warn(`[sql ${ms.toFixed(0)}ms] ${String(sql).replace(/\s+/g, ' ').trim().slice(0, 240)}`);
+        }
+      };
+      db.prepare = (sql) => {
+        const stmt = rawPrepare(sql);
+        for (const m of ['all', 'get', 'run', 'iterate']) {
+          if (typeof stmt[m] === 'function') stmt[m] = timed(sql, stmt[m].bind(stmt));
+        }
+        return stmt;
+      };
+      const rawExec = db.exec.bind(db);
+      db.exec = (sql) => timed(sql, rawExec)(sql);
+      console.log(`[sql-profile] on — logging statements >= ${threshold}ms`);
+    }
   }
   return db;
 }
@@ -7081,6 +7111,33 @@ in your first week. If a process feels broken, raise a Help Ticket
     'CREATE INDEX IF NOT EXISTS idx_expenses_created ON expenses(created_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_notif_user       ON notifications(user_id, id DESC)',
     'CREATE INDEX IF NOT EXISTS idx_scoreentries_uw  ON score_entries(user_id, week_start)',
+    // ── Hang audit 2026-09-05 (live probe: 27% of requests waited >0.5 s) ──
+    // Found by sweeping all 480 GET endpoints on a production-scale copy with
+    // the SQL profiler (ERP_SQL_PROFILE) on. Each line names the endpoint it
+    // fixes; measured before → after on that copy.
+    //   rates-items: 3 correlated subqueries per PO line on these columns
+    'CREATE INDEX IF NOT EXISTS idx_indentitems_im   ON indent_items(item_master_id)',
+    'CREATE INDEX IF NOT EXISTS idx_opitems_poi      ON order_planning_items(po_item_id)',
+    //   RACI indent timeline (runs inside EVERY scorecard): received_at looked up by indent
+    'CREATE INDEX IF NOT EXISTS idx_dnotes_indent    ON delivery_notes(indent_id)',
+    'CREATE INDEX IF NOT EXISTS idx_indents_created  ON indents(created_at DESC)',
+    //   DPR loss dashboard: consecutive-loss streak walked per row by (site, date)
+    'CREATE INDEX IF NOT EXISTS idx_dpr_site_date    ON dpr(site_id, report_date)',
+    //   Admin Location page: latest ping per user
+    'CREATE INDEX IF NOT EXISTS idx_loc_user_time    ON location_tracking(user_id, time)',
+    //   Scorecard checklist KPI, System Flow activity, HR hiring counts, quotations by lead
+    'CREATE INDEX IF NOT EXISTS idx_cklcomp_user_date ON checklist_completions(user_id, completion_date)',
+    'CREATE INDEX IF NOT EXISTS idx_sysflow_act_user ON sysflow_activity(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_hrcand_request   ON hr_candidates(hiring_request_id)',
+    'CREATE INDEX IF NOT EXISTS idx_quotations_lead  ON quotations(lead_id)',
+    'CREATE INDEX IF NOT EXISTS idx_scoreentries_kpi ON score_entries(kpi_id)',
+    //   Extra-indent quotation + BOQ rate lookups match PO lines by lower-cased name
+    'CREATE INDEX IF NOT EXISTS idx_poitems_desc_lc  ON po_items(LOWER(TRIM(description)))',
+    //   Scorecard / leaderboard / weekly / commitments: the due-day expression
+    //   the KPI counts filter on. Built from lib/dueDay.js so the index and the
+    //   queries can never drift apart (SQLite matches expression indexes
+    //   structurally). Measured: 25 ms → <0.1 ms per count; leaderboard 86 s → sub-second.
+    ...require('../lib/dueDay').dueDayIndexSql(),
   ];
   for (const sql of hotPathIndexes) {
     try {

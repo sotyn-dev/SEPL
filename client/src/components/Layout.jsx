@@ -264,6 +264,7 @@ const SIDEBAR_SETTINGS = { id: 'settings', label: 'Settings', icon: FiSettings, 
   { path: '/admin/users',          label: 'Users',               icon: FiUserCheck, module: 'users' },
   { path: '/admin/roles',          label: 'Roles & Permissions', icon: FiShield,    module: 'users' },
   { path: '/admin/audit',          label: 'Audit Log',           icon: FiSearch,    module: 'users' },
+  { path: '/admin/performance',    label: 'Performance',         icon: FiActivity,  module: 'users' },
 ]};
 
 export default function Layout() {

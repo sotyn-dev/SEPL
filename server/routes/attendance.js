@@ -294,6 +294,12 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   if (status) { sql += ' AND a.status=?'; params.push(status); }
   if (date_from) { sql += ' AND a.date >= ?'; params.push(date_from); }
   if (date_to) { sql += ' AND a.date <= ?'; params.push(date_to); }
+  // No filter at all = every punch ever recorded (measured 42 MB / 5 s on a
+  // year-scale copy, and it blocks every other user while it serialises).
+  // The UI always sends a date or a range; a bare call gets the last 31 days.
+  if (!date && !user_id && !date_from && !date_to) {
+    sql += " AND a.date >= date('now', '+330 minutes', '-31 days')";
+  }
   sql += ' ORDER BY a.date DESC, a.punch_in_time DESC';
   res.json(getDb().prepare(sql).all(...params));
 });

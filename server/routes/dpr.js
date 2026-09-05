@@ -2089,8 +2089,30 @@ router.get('/loss-dashboard', (req, res) => {
 
   // Use the shared helper so the loss-dashboard streak count and the
   // alert-on-submit streak count never diverge.
+  // Bulk form of consecutiveLossDays: ONE aggregate query for every site on
+  // the page instead of one query per row (hang audit 2026-09-05 — this loop
+  // was 3.9 s on a year-scale copy, and it blocks every user while it runs).
+  // Same rule as the helper: walk back day by day from the row's date while
+  // each day is present AND a net loss; a gap or a non-loss day ends the streak.
+  const siteIds = [...new Set(rows.map(r => r.site_id).filter(id => id != null))];
+  const plBySite = new Map(); // site_id -> Map(report_date -> net P/L)
+  for (let i = 0; i < siteIds.length; i += 400) {
+    const chunk = siteIds.slice(i, i + 400);
+    const ph = chunk.map(() => '?').join(',');
+    for (const d of db.prepare(`SELECT site_id, report_date AS d, SUM(profit_loss) AS pl
+                                  FROM dpr WHERE site_id IN (${ph}) GROUP BY site_id, report_date`).all(...chunk)) {
+      if (!plBySite.has(d.site_id)) plBySite.set(d.site_id, new Map());
+      plBySite.get(d.site_id).set(d.d, +d.pl || 0);
+    }
+  }
   for (const r of rows) {
-    r.consecutive_loss_days = consecutiveLossDays(db, r.site_id, r.report_date);
+    const days = plBySite.get(r.site_id);
+    let streak = 0, cursor = r.report_date;
+    while (days && streak < 30 && days.has(cursor) && days.get(cursor) < 0) {
+      streak += 1;
+      cursor = isoMinusOneDay(cursor);
+    }
+    r.consecutive_loss_days = streak;
   }
 
   res.json(rows);

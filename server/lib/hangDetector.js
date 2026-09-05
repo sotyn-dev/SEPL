@@ -10,32 +10,54 @@
 //          the blocker is one of the listed in-flight requests, or a cron /
 //          GC pause if the list is empty.
 //
+// Since the 2026-09-05 audit the same data is also kept IN MEMORY (last 300
+// slow requests, last 200 stalls, per-route totals) and served by
+// GET /api/admin/perf → the Admin ▸ Performance page, so mam can see what is
+// slow on the live server without opening the VPS terminal.
+//
 // Cost: one Map insert/delete per request and a 500 ms timer. Tunable via
 // ERP_SLOW_MS / ERP_LAG_MS; disable with ERP_HANG_DETECTOR=0.
 
 const SLOW_MS = Number(process.env.ERP_SLOW_MS) || 2000;
 const LAG_MS = Number(process.env.ERP_LAG_MS) || 1000;
 const TICK_MS = 500;
+const KEEP_SLOW = 300;
+const KEEP_LAG = 200;
+// Per-route totals count everything that took at least this long, so the
+// table ranks routes by the blocking time they actually cost, not by a
+// threshold that only catches the very worst.
+const TRACK_MS = 200;
 
 const inflight = new Map(); // id -> { req, started }
 let seq = 0;
 let lastFinished = null;    // { label, ms, at } — the request that ended most recently
+const startedAt = Date.now();
+
+// In-memory history for the Performance page.
+const slowRing = [];        // { at, method, url, status, ms, user }
+const lagRing = [];         // { at, lag_ms, inflight: [label…], just_finished }
+const routeStats = new Map(); // "METHOD /route/pattern" -> { n, total, max, over_slow, last_at }
+let totalRequests = 0, totalSlow = 0, totalLag = 0, lagTotalMs = 0, maxLagMs = 0;
 
 // Never let a credential reach the PM2 log: a few endpoints carry the login
 // token in the query string (backup download `?token=…`, audit report), and a
 // backup download is exactly the slow request this logs. Redact by name.
 const SENSITIVE_QS = /([?&](?:token|access_token|refresh_token|secret|api_key|apikey|key|code|sig|signature|password|pass|otp)=)[^&#]*/gi;
-// One-time links carry their token as a PATH segment (/api/public/offer/:token,
-// /employee-fill/:token, /employee-upload/:token — random bytes, base64url).
-// Redact any path segment that looks like one: ≥ 20 url-safe chars, no dot
-// (so hashed asset / upload file names, which have an extension, stay).
-const SENSITIVE_PATH = /\/[A-Za-z0-9_-]{20,}(?=[/?#]|$)/g;
 function describe(req) {
   const raw = String(req.originalUrl || req.url || '');
-  const q = raw.indexOf('?');
-  const path = (q < 0 ? raw : raw.slice(0, q)).replace(SENSITIVE_PATH, '/[redacted]');
-  const qs = q < 0 ? '' : raw.slice(q).replace(SENSITIVE_QS, '$1[redacted]');
-  return `${req.method} ${(path + qs).slice(0, 160)}`;
+  const url = raw.replace(SENSITIVE_QS, '$1[redacted]').slice(0, 160);
+  return `${req.method} ${url}`;
+}
+
+// Collapse ids so /api/indents/123 and /api/indents/456 count as one route.
+function routeKey(req) {
+  const path = String(req.originalUrl || req.url || '').split('?')[0];
+  return `${req.method} ${path.replace(/\/\d+(?=\/|$)/g, '/:id')}`.slice(0, 120);
+}
+
+function pushRing(ring, item, keep) {
+  ring.push(item);
+  if (ring.length > keep) ring.splice(0, ring.length - keep);
 }
 
 function install(app) {
@@ -54,10 +76,20 @@ function install(app) {
       finished = true;
       inflight.delete(id);
       const ms = Date.now() - started;
+      totalRequests++;
       lastFinished = { label: describe(req), ms, at: Date.now() };
+      if (ms >= TRACK_MS) {
+        const k = routeKey(req);
+        const s = routeStats.get(k) || { n: 0, total: 0, max: 0, over_slow: 0, last_at: 0 };
+        s.n++; s.total += ms; s.max = Math.max(s.max, ms); s.last_at = Date.now();
+        if (ms >= SLOW_MS) s.over_slow++;
+        routeStats.set(k, s);
+      }
       if (ms >= SLOW_MS) {
+        totalSlow++;
         const who = req.user ? `${req.user.id}:${req.user.name || ''}` : '-';
         console.warn(`[slow] ${describe(req)} status=${res.statusCode} ms=${ms} user=${who}`);
+        pushRing(slowRing, { at: Date.now(), method: req.method, url: describe(req).slice(req.method.length + 1), status: res.statusCode, ms, user: who }, KEEP_SLOW);
       }
     };
     res.once('finish', done);
@@ -73,18 +105,44 @@ function install(app) {
     const lag = now - last - TICK_MS;
     last = now;
     if (lag < LAG_MS) return;
+    totalLag++; lagTotalMs += lag; maxLagMs = Math.max(maxLagMs, lag);
     const running = [...inflight.values()]
       .map(x => `${describe(x.req)} (${now - x.started}ms${x.req.user ? ', user ' + x.req.user.id : ''})`)
       .slice(0, 8);
     // The blocker usually FINISHES before this timer gets to run, so name the
     // request that ended inside the stall window as well as anything still open.
-    const just = lastFinished && (now - lastFinished.at) <= lag + TICK_MS
-      ? ` · just finished: ${lastFinished.label} (${lastFinished.ms}ms)` : '';
+    const justHit = lastFinished && (now - lastFinished.at) <= lag + TICK_MS ? lastFinished : null;
+    const just = justHit ? ` · just finished: ${justHit.label} (${justHit.ms}ms)` : '';
     console.warn(`[lag] event loop blocked ~${lag}ms · in-flight: ${running.length ? running.join(' | ') : 'none'}${just}${!running.length && !just ? ' (cron / GC / startup)' : ''}`);
+    pushRing(lagRing, { at: now, lag_ms: lag, inflight: running, just_finished: justHit ? `${justHit.label} (${justHit.ms}ms)` : null }, KEEP_LAG);
   }, TICK_MS);
   timer.unref();
 
   console.log(`[hang-detector] on — [slow] > ${SLOW_MS}ms, [lag] > ${LAG_MS}ms`);
 }
 
-module.exports = { install, SLOW_MS, LAG_MS };
+// Everything the Performance page shows. Newest first.
+function snapshot() {
+  const now = Date.now();
+  const routes = [...routeStats.entries()]
+    .map(([route, s]) => ({ route, count: s.n, total_ms: s.total, avg_ms: Math.round(s.total / s.n), max_ms: s.max, over_slow: s.over_slow, last_at: s.last_at }))
+    .sort((a, b) => b.total_ms - a.total_ms)
+    .slice(0, 60);
+  return {
+    thresholds: { slow_ms: SLOW_MS, lag_ms: LAG_MS, track_ms: TRACK_MS },
+    since: startedAt,
+    uptime_seconds: Math.round((now - startedAt) / 1000),
+    totals: { requests: totalRequests, slow_requests: totalSlow, stalls: totalLag, stall_total_ms: lagTotalMs, stall_max_ms: maxLagMs },
+    in_flight: [...inflight.values()].map(x => ({ label: describe(x.req), ms: now - x.started, user: x.req.user ? x.req.user.id : null })),
+    routes,
+    slow: [...slowRing].reverse(),
+    stalls: [...lagRing].reverse(),
+  };
+}
+
+function reset() {
+  slowRing.length = 0; lagRing.length = 0; routeStats.clear();
+  totalRequests = 0; totalSlow = 0; totalLag = 0; lagTotalMs = 0; maxLagMs = 0;
+}
+
+module.exports = { install, snapshot, reset, SLOW_MS, LAG_MS };

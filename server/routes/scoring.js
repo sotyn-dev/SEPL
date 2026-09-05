@@ -36,10 +36,9 @@ router.use(authMiddleware);
 //    Saturday before it: it belongs to the week that just ended, never to no
 //    week at all (it used to be Planned nowhere, then surface as next week's
 //    backlog).
-const dueDay = (col, alias = '') => {
-  const d = `COALESCE(date(NULLIF(${alias}${col}, '')), date(${alias}created_at, '+330 minutes'))`;
-  return `(CASE WHEN strftime('%w', ${d}) = '0' THEN date(${d}, '-1 day') ELSE ${d} END)`;
-};
+// Shared with db/schema.js so the expression INDEXES match these queries
+// exactly (hang audit 2026-09-05) — see lib/dueDay.js before editing.
+const { dueDay } = require('../lib/dueDay');
 const DUE_DELEG = dueDay('due_date'), DUE_PMS = dueDay('due_date'), DUE_TKT = dueDay('deadline_date');
 
 // ---------- TEMPLATES & KPIs (admin manages) ----------

@@ -317,9 +317,15 @@ const MODULE_DEFS = {
                (SELECT MIN(dn.created_at) FROM delivery_notes dn
                   JOIN vendor_pos vp ON vp.id=dn.vendor_po_id
                  WHERE vp.indent_id=i.id) AS dispatch_at,
-               (SELECT MIN(dn.received_at) FROM delivery_notes dn
-                  LEFT JOIN vendor_pos vp ON vp.id=dn.vendor_po_id
-                 WHERE vp.indent_id=i.id OR dn.indent_id=i.id) AS received_at,
+               -- Two indexed lookups, not one OR across two tables: the OR
+               -- form forced a full scan of delivery_notes for EVERY indent
+               -- (hang audit 2026-09-05 — 1.3 s per call, and this runs
+               -- inside every scorecard/leaderboard computation).
+               (SELECT MIN(r) FROM (
+                  SELECT dn.received_at AS r FROM delivery_notes dn
+                    JOIN vendor_pos vp ON vp.id=dn.vendor_po_id WHERE vp.indent_id=i.id
+                  UNION ALL
+                  SELECT dn.received_at FROM delivery_notes dn WHERE dn.indent_id=i.id)) AS received_at,
                (SELECT MIN(pb.created_at) FROM purchase_bills pb
                   JOIN vendor_pos vp ON vp.id=pb.vendor_po_id
                  WHERE vp.indent_id=i.id) AS bill_at
@@ -667,6 +673,31 @@ const MODULE_DEFS = {
 //                 Planned = that week's closures plus what is still open on them.
 //   slaJudged   — of the closed steps, how many had an SLA (on-time denominator).
 //   onTime      — of slaJudged, how many finished within SLA (the "Time" KPI).
+// One module's record rows + their per-record RACI, computed ONCE and shared
+// across callers for a few seconds. raciUserWeek / raciUserWeekBreakdown are
+// called once per user × week by the leaderboard, commitments graph and
+// weekly report (~100 calls per request), and NOTHING in this snapshot
+// depends on the user or the week — recomputing it each time was the single
+// biggest blocker found in the hang audit (2026-09-05). Any write request
+// clears the cache (lib/readCache), so a read after a write is never stale.
+function moduleSnapshot(db, key, def) {
+  return require('../lib/readCache').memo(`raci:module:${key}`, () => {
+    let recs;
+    try { recs = def.rows(db) || []; } catch { return null; }
+    if (!recs.length) return null;
+    const ids = recs.map(r => r.id);
+    const raciByRec = {};
+    for (let i = 0; i < ids.length; i += 400) {
+      const chunk = ids.slice(i, i + 400);
+      const ph = chunk.map(() => '?').join(',');
+      for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id IN (${ph})`, key, ...chunk)) {
+        (raciByRec[r.record_id] = raciByRec[r.record_id] || {})[r.step_key] = r;
+      }
+    }
+    return { recs, raciByRec };
+  });
+}
+
 function raciUserWeek(db, userId, sinceDate, untilDate) {
   const HOUR = 3600000;
   // openBefore (mam 2026-08-26): still-open steps that landed on the user
@@ -677,18 +708,9 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
   let stepsClosed = 0, slaJudged = 0, onTime = 0, openOnUser = 0, openBefore = 0, closedBefore = 0;
   for (const key of Object.keys(MODULE_DEFS)) {
     const def = MODULE_DEFS[key];
-    let recs;
-    try { recs = def.rows(db) || []; } catch { continue; }
-    if (!recs.length) continue;
-    const ids = recs.map(r => r.id);
-    const raciByRec = {};
-    for (let i = 0; i < ids.length; i += 400) {
-      const chunk = ids.slice(i, i + 400);
-      const ph = chunk.map(() => '?').join(',');
-      for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id IN (${ph})`, key, ...chunk)) {
-        (raciByRec[r.record_id] = raciByRec[r.record_id] || {})[r.step_key] = r;
-      }
-    }
+    const snap = moduleSnapshot(db, key, def);
+    if (!snap) continue;
+    const { recs, raciByRec } = snap;
     // Module-wide default RACI (record_id 0) — applies where a record has no own
     // assignment, so scoring matches the board's whole-module RACI (mam 2026-06-27).
     const md = {};
@@ -791,18 +813,9 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
   };
   for (const key of Object.keys(MODULE_DEFS)) {
     const def = MODULE_DEFS[key];
-    let recs;
-    try { recs = def.rows(db) || []; } catch { continue; }
-    if (!recs.length) continue;
-    const ids = recs.map(r => r.id);
-    const raciByRec = {};
-    for (let i = 0; i < ids.length; i += 400) {
-      const chunk = ids.slice(i, i + 400);
-      const ph = chunk.map(() => '?').join(',');
-      for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id IN (${ph})`, key, ...chunk)) {
-        (raciByRec[r.record_id] = raciByRec[r.record_id] || {})[r.step_key] = r;
-      }
-    }
+    const snap = moduleSnapshot(db, key, def);
+    if (!snap) continue;
+    const { recs, raciByRec } = snap;
     const md = {};
     for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id=0`, key)) md[r.step_key] = r;
     // Scorecard attribution: a step counts for a person ONLY where mam explicitly

@@ -197,7 +197,10 @@ export default function Attendance() {
       navigator.geolocation.getCurrentPosition(pos => {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
         setLocation(loc);
-        api.post('/attendance/track-location', { ...loc, address: '' }).catch(() => {});
+        // No POST here: Layout.jsx already sends the 30-second location ping
+        // for every page, so this page was writing a SECOND row per ping
+        // (2× location_tracking growth, 2× the geofence work on the server).
+        // The GPS-OFF heartbeats below stay — Layout's tracker is silent on error.
       }, (err) => {
         // GPS off / permission denied / timeout — send a "GPS OFF"
         // heartbeat so the admin Location Tracking page can surface
