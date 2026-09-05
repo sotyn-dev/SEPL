@@ -55,64 +55,239 @@ function logStatus(db, clientSnagId, action, userId, fromStatus, toStatus, note)
   `).run(clientSnagId, action, userId || null, fromStatus || null, toStatus || null, note || null);
 }
 
-// Shared filtered-list query.
+// Shared filtered-list query builder supporting full server-side filtering, searching, pagination, and sorting.
 function buildListQuery(req) {
-  const { status, priority, client, assigned_to, site, date, search } = req.query;
-  let sql = `
+  const {
+    status, priority, client, assigned_to, site, date, search,
+    snag_type, scope_category, civilScopeType, floor_zone, floor,
+    fms_stage, stage, site_id,
+    sortBy, sortOrder,
+  } = req.query || {};
+
+  const typeVal = snag_type || null;
+  const scopeVal = civilScopeType || scope_category || null;
+  const floorVal = floor || floor_zone || null;
+  const stageVal = stage || fms_stage || null;
+
+  let where = 'WHERE 1=1';
+  const params = [];
+
+  if (typeVal) {
+    where += ' AND COALESCE(cs.snag_type, \'billing_doc\') = ?';
+    params.push(typeVal);
+  }
+  if (scopeVal) {
+    where += ' AND cs.scope_category = ?';
+    params.push(scopeVal);
+  }
+  if (floorVal) {
+    where += ' AND cs.floor_zone = ?';
+    params.push(floorVal);
+  }
+  if (site_id) {
+    where += ' AND (cs.site_id = ? OR cs.site_name = ?)';
+    params.push(site_id, site_id);
+  }
+  if (status) {
+    where += ' AND cs.status = ?';
+    params.push(status);
+  }
+  if (priority) {
+    where += ' AND cs.priority = ?';
+    params.push(priority);
+  }
+  if (client) {
+    where += ' AND cs.client_name LIKE ?';
+    params.push(`%${client}%`);
+  }
+  if (assigned_to) {
+    where += ' AND cs.assigned_to = ?';
+    params.push(assigned_to);
+  }
+  if (site) {
+    where += ' AND (cs.site_name LIKE ? OR cs.location LIKE ? OR cs.site_id = ?)';
+    params.push(`%${site}%`, `%${site}%`, site);
+  }
+  if (date) {
+    where += ' AND date(cs.raised_at) = date(?)';
+    params.push(date);
+  }
+  if (stageVal) {
+    if (stageVal === 'overdue') {
+      where += " AND cs.fms_stage != 'cleared' AND cs.client_promised_date IS NOT NULL AND date(cs.client_promised_date) < date('now', 'localtime')";
+    } else {
+      where += ' AND cs.fms_stage = ?';
+      params.push(stageVal);
+    }
+  }
+  if (search) {
+    where += ` AND (
+      cs.description LIKE ? OR
+      cs.snag_no LIKE ? OR
+      cs.client_name LIKE ? OR
+      cs.site_name LIKE ? OR
+      cs.scope_category LIKE ? OR
+      cs.floor_zone LIKE ? OR
+      cs.location LIKE ? OR
+      at.name LIKE ?
+    )`;
+    const q = `%${search}%`;
+    params.push(q, q, q, q, q, q, q, q);
+  }
+
+  const baseFrom = `
+    FROM client_snags cs
+    LEFT JOIN users at ON at.id = cs.assigned_to
+    LEFT JOIN users up ON up.id = cs.uploaded_by
+    LEFT JOIN users ap ON ap.id = cs.approved_by
+    LEFT JOIN users rj ON rj.id = cs.rejected_by
+    LEFT JOIN users rb ON rb.id = cs.raised_by
+    LEFT JOIN users cb ON cb.id = cs.cleared_by
+    LEFT JOIN sites s ON s.id = cs.site_id
+  `;
+
+  const selectFields = `
     SELECT cs.*,
            at.name as assigned_to_user_name,
            up.name as uploaded_by_name,
            ap.name as approved_by_name,
            rj.name as rejected_by_name,
-           rb.name as raised_by_name
-      FROM client_snags cs
-      LEFT JOIN users at ON at.id = cs.assigned_to
-      LEFT JOIN users up ON up.id = cs.uploaded_by
-      LEFT JOIN users ap ON ap.id = cs.approved_by
-      LEFT JOIN users rj ON rj.id = cs.rejected_by
-      LEFT JOIN users rb ON rb.id = cs.raised_by
-     WHERE 1=1
+           rb.name as raised_by_name,
+           cb.name as cleared_by_name,
+           s.name as site_master_name,
+           CASE 
+             WHEN cs.fms_stage != 'cleared' AND cs.client_promised_date IS NOT NULL AND date('now', 'localtime') > date(cs.client_promised_date)
+             THEN CAST(julianday('now', 'localtime') - julianday(cs.client_promised_date) AS INT)
+             ELSE 0
+           END AS days_overdue
   `;
-  const params = [];
-  if (status) { sql += ' AND cs.status = ?'; params.push(status); }
-  if (priority) { sql += ' AND cs.priority = ?'; params.push(priority); }
-  if (client) { sql += ' AND cs.client_name LIKE ?'; params.push(`%${client}%`); }
-  if (assigned_to) { sql += ' AND cs.assigned_to = ?'; params.push(assigned_to); }
-  if (site) { sql += ' AND (cs.site_name LIKE ? OR cs.location LIKE ?)'; params.push(`%${site}%`, `%${site}%`); }
-  if (date) { sql += ' AND date(cs.raised_at) = date(?)'; params.push(date); }
-  if (search) {
-    sql += ' AND (cs.description LIKE ? OR cs.snag_no LIKE ? OR cs.client_name LIKE ? OR cs.site_name LIKE ?)';
-    const q = `%${search}%`;
-    params.push(q, q, q, q);
+
+  const countSql = `SELECT COUNT(*) as c ${baseFrom} ${where}`;
+
+  const sortMap = {
+    snag_no: 'cs.snag_no',
+    client_name: 'cs.client_name',
+    site_name: 'cs.site_name',
+    floor_zone: 'cs.floor_zone',
+    scope_category: 'cs.scope_category',
+    client_promised_date: 'cs.client_promised_date',
+    fms_stage: 'cs.fms_stage',
+    raised_at: 'cs.raised_at',
+    priority: `CASE cs.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`,
+    status: `CASE cs.status WHEN 'pending_approval' THEN 0 WHEN 'awaiting_document' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END`,
+    days_overdue: `CASE WHEN cs.fms_stage != 'cleared' AND cs.client_promised_date IS NOT NULL AND date('now', 'localtime') > date(cs.client_promised_date) THEN CAST(julianday('now', 'localtime') - julianday(cs.client_promised_date) AS INT) ELSE 0 END`,
+  };
+
+  const validSort = sortBy && sortMap[sortBy];
+  const orderDir = String(sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+  let orderClause = '';
+  if (validSort) {
+    orderClause = `ORDER BY ${validSort} ${orderDir}, cs.id DESC`;
+  } else {
+    orderClause = `ORDER BY
+      CASE WHEN cs.snag_type = 'site_readiness' THEN
+        CASE WHEN cs.fms_stage = 'cleared' THEN 2 
+             WHEN cs.client_promised_date IS NOT NULL AND date(cs.client_promised_date) < date('now', 'localtime') THEN 0 
+             ELSE 1 END
+      ELSE
+        CASE cs.status WHEN 'pending_approval' THEN 0 WHEN 'awaiting_document' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END
+      END,
+      cs.raised_at DESC`;
   }
-  sql += ` ORDER BY
-    CASE cs.status WHEN 'pending_approval' THEN 0 WHEN 'awaiting_document' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
-    cs.raised_at DESC`;
-  return { sql, params };
+
+  const selectSql = `${selectFields} ${baseFrom} ${where} ${orderClause}`;
+
+  return { selectSql, countSql, where, params, baseFrom, selectFields, orderClause };
 }
 
-// LIST
+// LIST — returns server-side filtered, paginated & counted dataset along with dashboard counters.
 router.get('/', requirePermission('client_snag', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const { sql, params } = buildListQuery(req);
-    res.json(db.prepare(sql).all(...params));
+    const { selectSql, countSql, params } = buildListQuery(req);
+
+    // Total count matching current filters
+    const total = db.prepare(countSql).get(...params).c;
+
+    // Pagination
+    const isAll = String(req.query.limit).toLowerCase() === 'all';
+    const limit = isAll ? Math.max(total, 1) : Math.max(1, Math.min(1000, parseInt(req.query.limit, 10) || 15));
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const offset = (page - 1) * limit;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const from = total === 0 ? 0 : offset;
+    const to = Math.min(offset + limit, total);
+
+    const rows = db.prepare(`${selectSql} LIMIT ? OFFSET ?`).all(...params, limit, offset);
+
+    // Dashboard metrics (summary counts)
+    const countMetric = (where, p = []) => db.prepare(`SELECT COUNT(*) as c FROM client_snags WHERE ${where}`).get(...p).c;
+    const counters = {
+      // Legacy Billing Doc Snags
+      awaiting_document: countMetric(`COALESCE(snag_type, 'billing_doc')='billing_doc' AND status='awaiting_document'`),
+      pending_approval: countMetric(`COALESCE(snag_type, 'billing_doc')='billing_doc' AND status='pending_approval'`),
+      approved: countMetric(`COALESCE(snag_type, 'billing_doc')='billing_doc' AND status='approved'`),
+      rejected: countMetric(`COALESCE(snag_type, 'billing_doc')='billing_doc' AND status='rejected'`),
+      is_uploader: isUploader(db, req.user),
+      is_approver: isApprover(db, req.user),
+
+      // Site Readiness FMS Metrics
+      sr_total_open: countMetric(`snag_type='site_readiness' AND fms_stage != 'cleared'`),
+      sr_plaster: countMetric(`snag_type='site_readiness' AND fms_stage != 'cleared' AND scope_category LIKE '%Plaster%'`),
+      sr_tiles: countMetric(`snag_type='site_readiness' AND fms_stage != 'cleared' AND scope_category LIKE '%Til%'`),
+      sr_overdue: countMetric(`snag_type='site_readiness' AND fms_stage != 'cleared' AND client_promised_date IS NOT NULL AND date(client_promised_date) < date('now', 'localtime')`),
+      sr_cleared: countMetric(`snag_type='site_readiness' AND fms_stage = 'cleared'`),
+    };
+
+    res.json({
+      rows,
+      total,
+      page,
+      limit: isAll ? 'all' : limit,
+      pages,
+      from,
+      to,
+      counters,
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// COUNTERS — role-scoped dashboard cards. Includes is_uploader/is_approver
-// so the frontend shows only the cards relevant to the logged-in user.
+// SITES — helper for the Site picker in Site Readiness
+router.get('/sites', requirePermission('client_snag', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT s.id, s.name, s.client_name, s.address, bb.company_name
+        FROM sites s
+        LEFT JOIN business_book bb ON bb.id = s.business_book_id
+       WHERE COALESCE(s.status, 'active') = 'active'
+       ORDER BY s.name ASC
+    `).all();
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// COUNTERS — role-scoped dashboard cards for both Site Readiness FMS & Billing Snags.
 router.get('/counters', requirePermission('client_snag', 'view'), (req, res) => {
   try {
     const db = getDb();
     const count = (where, params = []) => db.prepare(`SELECT COUNT(*) as c FROM client_snags WHERE ${where}`).get(...params).c;
     res.json({
-      awaiting_document: count(`status='awaiting_document'`),
-      pending_approval: count(`status='pending_approval'`),
-      approved: count(`status='approved'`),
-      rejected: count(`status='rejected'`),
+      // Legacy Billing Doc Snags
+      awaiting_document: count(`COALESCE(snag_type, 'billing_doc')='billing_doc' AND status='awaiting_document'`),
+      pending_approval: count(`COALESCE(snag_type, 'billing_doc')='billing_doc' AND status='pending_approval'`),
+      approved: count(`COALESCE(snag_type, 'billing_doc')='billing_doc' AND status='approved'`),
+      rejected: count(`COALESCE(snag_type, 'billing_doc')='billing_doc' AND status='rejected'`),
       is_uploader: isUploader(db, req.user),
       is_approver: isApprover(db, req.user),
+
+      // Site Readiness FMS Metrics
+      sr_total_open: count(`snag_type='site_readiness' AND fms_stage != 'cleared'`),
+      sr_plaster: count(`snag_type='site_readiness' AND fms_stage != 'cleared' AND scope_category LIKE '%Plaster%'`),
+      sr_tiles: count(`snag_type='site_readiness' AND fms_stage != 'cleared' AND scope_category LIKE '%Til%'`),
+      sr_overdue: count(`snag_type='site_readiness' AND fms_stage != 'cleared' AND client_promised_date IS NOT NULL AND date(client_promised_date) < date('now', 'localtime')`),
+      sr_cleared: count(`snag_type='site_readiness' AND fms_stage = 'cleared'`),
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -121,8 +296,8 @@ router.get('/counters', requirePermission('client_snag', 'view'), (req, res) => 
 router.get('/:id', requirePermission('client_snag', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const { sql } = buildListQuery({ query: {} });
-    const cs = db.prepare(sql.replace('WHERE 1=1', 'WHERE cs.id = ?')).get(req.params.id);
+    const { selectFields, baseFrom } = buildListQuery({ query: {} });
+    const cs = db.prepare(`${selectFields} ${baseFrom} WHERE cs.id = ?`).get(req.params.id);
     if (!cs) return res.status(404).json({ error: 'Not found' });
     const history = db.prepare(`
       SELECT l.*, u.name as user_name FROM client_snag_status_log l
@@ -138,26 +313,33 @@ router.get('/:id', requirePermission('client_snag', 'view'), (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// CREATE — raises a Client Snag. Ordinary role-permission (create), not
-// identity-gated: whoever notices the missing signature (billing/accounts
-// staff) raises it; Ajmer only handles the photo afterwards.
+// CREATE — raises a Client Snag or Site Readiness Item.
 router.post('/', requirePermission('client_snag', 'create'), (req, res) => {
   try {
     const b = req.body;
-    // Every field on the Create form is mandatory — enforced here too, not
-    // just in the UI, since a direct API call must be refused the same way.
-    const required = [
-      ['client_name', 'Client'], ['assigned_to', 'Assign To'], ['site_name', 'Site Name'],
-      ['location', 'Location'], ['description', 'Description'], ['before_photo_url', 'Before Photo'],
-    ];
-    for (const [field, label] of required) {
-      if (!b[field] || !String(b[field]).trim()) return res.status(400).json({ error: `${label} is required` });
+    const snagType = b.snag_type || 'site_readiness';
+
+    if (snagType === 'site_readiness') {
+      const required = [
+        ['client_name', 'Client'], ['site_name', 'Site Name'],
+        ['scope_category', 'Civil Scope Category'], ['floor_zone', 'Floor / Zone'],
+        ['description', 'Description'], ['before_photo_url', 'Before Photo'],
+      ];
+      for (const [field, label] of required) {
+        if (!b[field] || !String(b[field]).trim()) return res.status(400).json({ error: `${label} is required` });
+      }
+    } else {
+      const required = [
+        ['client_name', 'Client'], ['assigned_to', 'Assign To'], ['site_name', 'Site Name'],
+        ['location', 'Location'], ['description', 'Description'], ['before_photo_url', 'Before Photo'],
+      ];
+      for (const [field, label] of required) {
+        if (!b[field] || !String(b[field]).trim()) return res.status(400).json({ error: `${label} is required` });
+      }
     }
-    if (!['low', 'medium', 'high', 'critical'].includes(b.priority)) {
-      return res.status(400).json({ error: 'Priority is required' });
-    }
+
+    const priority = ['low', 'medium', 'high', 'critical'].includes(b.priority) ? b.priority : 'medium';
     const db = getDb();
-    const priority = b.priority;
 
     let assigneeName = b.assigned_to_name || null;
     if (!assigneeName && b.assigned_to) {
@@ -166,20 +348,31 @@ router.post('/', requirePermission('client_snag', 'create'), (req, res) => {
     }
 
     const yr = new Date().getFullYear();
-    const snagNo = nextSequence(db, 'client_snags', 'snag_no', `CS-${yr}-`, { startFrom: 0, pad: 4 });
+    const prefix = snagType === 'site_readiness' ? `SR-${yr}-` : `CS-${yr}-`;
+    const snagNo = nextSequence(db, 'client_snags', 'snag_no', prefix, { startFrom: 0, pad: 4 });
+
+    const fmsStage = b.client_promised_date ? 'intimated' : 'reported';
+    const status = 'awaiting_document';
 
     const r = db.prepare(`
       INSERT INTO client_snags (
-        snag_no, client_name, assigned_to, assigned_to_name, site_name, location,
-        description, priority, before_photo_url, status, raised_by
-      ) VALUES (?,?,?,?,?,?,?,?,?, 'awaiting_document', ?)
+        snag_no, snag_type, client_name, assigned_to, assigned_to_name, site_name, site_id,
+        location, floor_zone, scope_category, description, priority, before_photo_url,
+        client_promised_date, client_contact_person, client_contact_phone,
+        fms_stage, status, raised_by
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-      snagNo, b.client_name || null, b.assigned_to || null, assigneeName,
-      b.site_name || null, b.location || null, b.description, priority,
-      b.before_photo_url || null,
-      req.user.id
+      snagNo, snagType, b.client_name || null, b.assigned_to || null, assigneeName,
+      b.site_name || null, b.site_id || null, b.location || null, b.floor_zone || null,
+      b.scope_category || null, b.description, priority, b.before_photo_url || null,
+      b.client_promised_date || null, b.client_contact_person || null, b.client_contact_phone || null,
+      fmsStage, status, req.user.id
     );
-    logStatus(db, r.lastInsertRowid, 'CREATED', req.user.id, null, 'awaiting_document', null);
+
+    const logNote = snagType === 'site_readiness'
+      ? `Civil Scope: ${b.scope_category} on ${b.floor_zone}`
+      : null;
+    logStatus(db, r.lastInsertRowid, 'CREATED', req.user.id, null, status, logNote);
     logAuditEvent({
       user: req.user, action: 'CREATE', entity_type: 'client_snag', entity_id: r.lastInsertRowid,
       entity_label: snagNo, method: 'POST', path: '/api/client-snag', body: b,
@@ -324,6 +517,61 @@ router.post('/:id/reject', (req, res) => {
     } catch {}
 
     res.json({ message: 'Rejected — uploader can resubmit' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// INTIMATE TO CLIENT (Site Readiness FMS) — records when the client was
+// formally notified, their promised completion date for the civil scope, and notes.
+router.post('/:id/intimate', requirePermission('client_snag', 'edit'), (req, res) => {
+  try {
+    const { client_promised_date, client_contact_person, client_contact_phone, intimation_notes } = req.body;
+    if (!client_promised_date) return res.status(400).json({ error: 'Client promised date is required' });
+    const db = getDb();
+    const cs = db.prepare('SELECT * FROM client_snags WHERE id=?').get(req.params.id);
+    if (!cs) return res.status(404).json({ error: 'Not found' });
+
+    db.prepare(`
+      UPDATE client_snags
+         SET client_promised_date=?, client_contact_person=?, client_contact_phone=?,
+             intimation_notes=?, fms_stage='intimated'
+       WHERE id=?
+    `).run(client_promised_date, client_contact_person || null, client_contact_phone || null, intimation_notes || null, req.params.id);
+
+    logStatus(db, cs.id, 'INTIMATED_TO_CLIENT', req.user.id, cs.fms_stage, 'intimated',
+      `Promised date: ${client_promised_date}${intimation_notes ? ' · ' + intimation_notes : ''}`.trim());
+    logAuditEvent({
+      user: req.user, action: 'INTIMATE_CLIENT', entity_type: 'client_snag', entity_id: cs.id,
+      entity_label: cs.snag_no, method: 'POST', path: `/api/client-snag/${cs.id}/intimate`, body: req.body,
+    });
+
+    res.json({ message: 'Client intimation recorded' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// MARK CIVIL WORK CLEARED (Site Readiness FMS) — uploads the verification photo
+// showing the finished plaster/tiles and marks the item cleared.
+router.post('/:id/clear', requirePermission('client_snag', 'edit'), (req, res) => {
+  try {
+    const { cleared_photo_url, notes } = req.body;
+    if (!cleared_photo_url) return res.status(400).json({ error: 'Clearance verification photo is required' });
+    const db = getDb();
+    const cs = db.prepare('SELECT * FROM client_snags WHERE id=?').get(req.params.id);
+    if (!cs) return res.status(404).json({ error: 'Not found' });
+
+    db.prepare(`
+      UPDATE client_snags
+         SET cleared_photo_url=?, cleared_at=CURRENT_TIMESTAMP, cleared_by=?,
+             fms_stage='cleared', status='approved'
+       WHERE id=?
+    `).run(cleared_photo_url, req.user.id, req.params.id);
+
+    logStatus(db, cs.id, 'CIVIL_WORK_CLEARED', req.user.id, cs.fms_stage, 'cleared', notes || 'Civil scope verified ready for installation');
+    logAuditEvent({
+      user: req.user, action: 'CLEAR_CIVIL_SCOPE', entity_type: 'client_snag', entity_id: cs.id,
+      entity_label: cs.snag_no, method: 'POST', path: `/api/client-snag/${cs.id}/clear`, body: req.body,
+    });
+
+    res.json({ message: 'Civil scope marked as cleared' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

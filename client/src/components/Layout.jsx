@@ -144,6 +144,7 @@ const SIDEBAR_GROUPS = [
     // there is only one place in the sidebar that owns Work Orders.
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
+    { path: '/client-snag',  label: 'Site Readiness & Snags', icon: FiCamera, module: 'client_snag' },
     // WhatsApp moved OUT of this group → pinned at the bottom of the sidebar,
     // just above Change Password (mam 2026-06-19). See SIDEBAR footer render.
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
@@ -161,7 +162,7 @@ const SIDEBAR_GROUPS = [
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
     { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
-    { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag' },
+    { path: '/client-snag',      label: 'Client Snags & Site Readiness', icon: FiCamera, module: 'client_snag' },
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
     { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
     // Expenses module removed from the menu (mam 2026-07-03). Route + page kept
