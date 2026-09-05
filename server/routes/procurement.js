@@ -7500,17 +7500,33 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
                (SELECT COUNT(*) FROM indent_items ii2 WHERE ii2.indent_id=i.id) AS items_n
           FROM indents i WHERE i.status='submitted' ORDER BY i.created_at DESC LIMIT 50`),
         cnt("SELECT COUNT(*) c FROM indents WHERE status='submitted'")),
+      // Every column below carries `rid` + the fields its on-board action
+      // needs (mam 2026-09-05 "here also open actions"): the popup on the
+      // Procurement Board does the stage's real action with the real
+      // endpoint, the way Indent Approval and PO Approval already did.
+      // RATE is one card per ITEM (it was one per indent) because the action
+      // is per item: 3 vendor quotes then finalise — POST /item-rates and
+      // POST /item-rates/:id/finalize. The count follows the cards.
       col('rates', 'Finalised Rate', 'RATE', all(`
-        SELECT i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
-               COUNT(ii.id) || ' item(s) rate pending' AS owner, MAX(i.created_at) AS created_at
+        SELECT ii.id AS rid, ii.id AS indent_item_id, i.id AS indent_id, i.indent_number AS ref,
+               ii.description AS title, ii.description, ii.quantity, ii.unit, ii.make,
+               ir.id AS rate_id,
+               ir.vendor1_name, ir.vendor1_rate, ir.vendor2_name, ir.vendor2_rate, ir.vendor3_name, ir.vendor3_rate,
+               ir.final_rate, ir.final_vendor_name,
+               ((CASE WHEN COALESCE(ir.vendor1_rate,0) > 0 AND TRIM(COALESCE(ir.vendor1_name,'')) <> '' THEN 1 ELSE 0 END) +
+                (CASE WHEN COALESCE(ir.vendor2_rate,0) > 0 AND TRIM(COALESCE(ir.vendor2_name,'')) <> '' THEN 1 ELSE 0 END) +
+                (CASE WHEN COALESCE(ir.vendor3_rate,0) > 0 AND TRIM(COALESCE(ir.vendor3_name,'')) <> '' THEN 1 ELSE 0 END)) || '/3 quotes · ' || COALESCE(i.site_name, i.client_name, '—') AS owner,
+               COALESCE(ir.updated_at, i.created_at) AS created_at
           FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+          LEFT JOIN indent_item_rates ir ON ir.id = (SELECT MAX(x.id) FROM indent_item_rates x WHERE x.indent_item_id=ii.id)
          WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND NOT ${hasFinalRate}
-         GROUP BY i.id ORDER BY MAX(i.created_at) DESC LIMIT 50`),
-        cnt(`SELECT COUNT(DISTINCT i.id) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+         ORDER BY i.created_at DESC, ii.id LIMIT 50`),
+        cnt(`SELECT COUNT(*) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
               WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND NOT ${hasFinalRate}`)),
       col('po_create', 'PO Create', 'PO', all(`
-        SELECT i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
-               COUNT(ii.id) || ' item(s) ready for PO' AS owner, MAX(i.created_at) AS created_at
+        SELECT i.id AS rid, i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
+               COUNT(ii.id) || ' item(s) ready for PO' AS owner, MAX(i.created_at) AS created_at,
+               COUNT(ii.id) AS items_n
           FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
          WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND ${hasFinalRate}
          GROUP BY i.id ORDER BY MAX(i.created_at) DESC LIMIT 50`),
@@ -7525,8 +7541,9 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
          ORDER BY vp.created_at DESC LIMIT 50`),
         cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval IN ('pending_l1','pending_l2')")),
       col('purchase_bill', 'Purchase Bill', 'P.BILL', all(`
-        SELECT vp.po_number AS ref, COALESCE(v.name,'—') AS title,
-               COALESCE('due ' || vp.expected_receipt_date, 'bill awaited') AS owner, vp.created_at
+        SELECT vp.id AS rid, vp.po_number AS ref, COALESCE(v.name,'—') AS title,
+               COALESCE('due ' || vp.expected_receipt_date, 'bill awaited') AS owner, vp.created_at,
+               vp.expected_receipt_date, vp.total_amount AS amount
           FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
            AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)
@@ -7534,22 +7551,25 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
         cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
               AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)`)),
       col('sales_bill', 'Sales Bill', 'DISPATCH', all(`
-        SELECT COALESCE(dn.document_number, 'DN-' || dn.id) AS ref,
+        SELECT dn.id AS rid, COALESCE(dn.document_number, 'DN-' || dn.id) AS ref,
                COALESCE(vp.po_number, CASE WHEN dn.vendor_po_id IS NULL THEN 'From Store' ELSE '—' END) AS title,
                COALESCE(dn.document_type,'') || CASE WHEN dn.received_at IS NULL THEN ' · in transit' ELSE ' · received' END AS owner,
-               dn.created_at
+               dn.created_at,
+               dn.document_type, dn.status, dn.notes, dn.received_at, dn.vendor_po_id, dn.sales_bill_number
           FROM delivery_notes dn LEFT JOIN vendor_pos vp ON vp.id=dn.vendor_po_id
          ORDER BY dn.created_at DESC LIMIT 50`),
         cnt('SELECT COUNT(*) c FROM delivery_notes WHERE date(created_at) >= ?', wkAgo)),
       col('received', 'Received (GRN)', 'S8', all(`
-        SELECT g.grn_number AS ref, COALESCE(vp.po_number,'—') AS title,
-               COALESCE(g.received_by,'') AS owner, g.created_at
+        SELECT g.id AS rid, g.grn_number AS ref, COALESCE(vp.po_number,'—') AS title,
+               COALESCE(g.received_by,'') AS owner, g.created_at,
+               g.vendor_po_id, g.grn_date
           FROM grn g LEFT JOIN vendor_pos vp ON vp.id=g.vendor_po_id
          ORDER BY g.created_at DESC LIMIT 50`),
         cnt('SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ?', wkAgo)),
       col('billed', 'Billed / Debit', 'S9-S10', all(`
-        SELECT pb.bill_number AS ref, COALESCE(v.name,'—') AS title,
-               'Rs ' || CAST(COALESCE(pb.total_amount, pb.amount, 0) AS INTEGER) AS owner, pb.created_at
+        SELECT pb.id AS rid, pb.bill_number AS ref, COALESCE(v.name,'—') AS title,
+               'Rs ' || CAST(COALESCE(pb.total_amount, pb.amount, 0) AS INTEGER) AS owner, pb.created_at,
+               pb.vendor_po_id, pb.vendor_id, COALESCE(pb.total_amount, pb.amount, 0) AS amount
           FROM purchase_bills pb LEFT JOIN vendors v ON v.id=pb.vendor_id
          ORDER BY pb.created_at DESC LIMIT 50`),
         cnt('SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ?', wkAgo)),

@@ -900,6 +900,23 @@ export default function Procurement() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, indents]);
 
+  // ?new=po&indent=<id> — the Procurement Board's "Create Vendor PO" popup
+  // (mam 2026-09-05 "here also open actions") lands here with the Create
+  // Vendor PO modal ALREADY open on that indent, items + finalised rates
+  // loaded — the board can't host the full multer form itself. One-shot,
+  // same shape as ?approve= above; the params are stripped once consumed
+  // so a refresh doesn't reopen it.
+  const newPoParamHandled = useRef(false);
+  useEffect(() => {
+    if (newPoParamHandled.current || searchParams.get('new') !== 'po') return;
+    newPoParamHandled.current = true;
+    openCreateVendorPo(searchParams.get('indent') || '');
+    const next = new URLSearchParams(searchParams);
+    next.delete('new'); next.delete('indent');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   // Returning to this browser tab after editing an item's UOM / price on
   // the Item Master page in another tab should show the live value here.
   // Refetch the Raise-Indent data on focus; skipped for inline-edit tabs
