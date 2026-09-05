@@ -714,15 +714,38 @@ const BOOT_COMMIT = (() => {
 })();
 const BOOTED_AT = new Date().toISOString();
 
+// Build id = the entry chunk named by the index.html THIS process serves
+// (index-<hash>.js). The client compares it with the chunk it is running
+// from (client/src/components/UpdateWatcher.jsx) and moves itself to the new
+// build after a deploy (mam 2026-09-05: "it should be automatic"). Read once
+// at boot — a deploy always restarts the process. Not the git commit: dist is
+// built BEFORE the commit that ships it, so the commit would be one behind.
+const BUILD_ID = (() => {
+  try {
+    const html = require('fs').readFileSync(path.join(__dirname, '..', 'client', 'dist', 'index.html'), 'utf8');
+    const m = html.match(/<script[^>]+src="[^"]*\/(index-[A-Za-z0-9_-]+\.js)"/);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+})();
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     commit: BOOT_COMMIT,
     commit_short: BOOT_COMMIT ? BOOT_COMMIT.slice(0, 8) : null,
+    build: BUILD_ID,
     booted_at: BOOTED_AT,
     uptime_seconds: Math.round(process.uptime()),
   });
+});
+
+// Polled by every tab (focus / visibility / route change / 10 min) — keep it
+// tiny and uncacheable. Public like /api/health: it reveals only the chunk
+// name already visible in index.html.
+app.get('/api/version', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.json({ build: BUILD_ID, commit_short: BOOT_COMMIT ? BOOT_COMMIT.slice(0, 8) : null, booted_at: BOOTED_AT });
 });
 
 // Serve React build in production.
@@ -848,6 +871,10 @@ try {
   const flowSeeAll = (uid) => { try { return !!getDb().prepare("SELECT MAX(rp.can_see_all) a FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE ur.user_id=? AND rp.module='sotyn_flow'").get(uid)?.a; } catch { return false; } };
   require('./lib/sotynFlowSocket').registerBoardSocket(io, flowSeeAll);
   console.log('[flow] Socket.IO ready');
+  // Live update push: every (re)connection is told which build this process
+  // serves. `pm2 reload` drops all sockets → they reconnect → every open tab
+  // hears the new build within seconds (UpdateWatcher.jsx does the rest).
+  io.on('connection', (socket) => { try { socket.emit('app:version', { build: BUILD_ID }); } catch (_) { /* never break chat */ } });
 }
 catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
 // Bind loopback-only by default (2026-08-26): on the VPS, nginx is the sole
