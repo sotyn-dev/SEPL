@@ -28,7 +28,18 @@ router.use(authMiddleware);
 // created_at cohort of 2026-06-29; snags keep raised_at (mam's verbatim
 // formula). Shared by the Scorecard engine, the Weekly team table and its
 // detail drill-down — one rule, one number per person on every surface.
-const dueDay = (col, alias = '') => `date(COALESCE(NULLIF(${alias}${col}, ''), ${alias}created_at))`;
+// Two boundary rules (pre-push review 2026-09-05):
+//  • undated rows fall back to the IST calendar day they were created —
+//    created_at is UTC, so a 00:00–05:29 IST creation would otherwise slide
+//    to the previous day (same '+330 minutes' shift the snag formula uses);
+//  • the scoring week is Mon–Sat, so a SUNDAY due day is folded into the
+//    Saturday before it: it belongs to the week that just ended, never to no
+//    week at all (it used to be Planned nowhere, then surface as next week's
+//    backlog).
+const dueDay = (col, alias = '') => {
+  const d = `COALESCE(date(NULLIF(${alias}${col}, '')), date(${alias}created_at, '+330 minutes'))`;
+  return `(CASE WHEN strftime('%w', ${d}) = '0' THEN date(${d}, '-1 day') ELSE ${d} END)`;
+};
 const DUE_DELEG = dueDay('due_date'), DUE_PMS = dueDay('due_date'), DUE_TKT = dueDay('deadline_date');
 
 // ---------- TEMPLATES & KPIs (admin manages) ----------
@@ -284,13 +295,23 @@ router.put('/module-owners/:key', adminOnly, (req, res) => {
 // template targets. Extracted from the /scorecard route so the Champions
 // League gamification module can rank the very same scores without
 // duplicating any of the KPI math below.
-function computeScorecard(db, userId, weekStart) {
+// opts (all optional):
+//   templateId — score THIS template's KPIs for the user instead of the one
+//                assigned to them (the template editor previews a template
+//                before anyone is assigned, and needs `target_auto` per KPI)
+//   allKpis    — ignore the per-user enabled=0 switch (editor shows every row)
+function computeScorecard(db, userId, weekStart, opts = {}) {
     // Find user's template
-    const ut = db.prepare('SELECT template_id FROM score_user_template WHERE user_id=?').get(userId);
+    const ut = opts.templateId
+      ? { template_id: opts.templateId }
+      : db.prepare('SELECT template_id FROM score_user_template WHERE user_id=?').get(userId);
     if (!ut) {
       return { user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, total_weight: 0, activity: 0, message: 'No template assigned to this user yet' };
     }
     const tpl = db.prepare('SELECT * FROM score_templates WHERE id=?').get(ut.template_id);
+    if (!tpl) {
+      return { user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, total_weight: 0, activity: 0, message: 'Template not found' };
+    }
     const kpis = db.prepare('SELECT * FROM score_kpis WHERE template_id=? AND COALESCE(active,1)=1 ORDER BY display_order, id').all(ut.template_id);
 
     const lastWeekStart = shiftWeek(weekStart, -7);
@@ -567,14 +588,27 @@ function computeScorecard(db, userId, weekStart) {
           : { given: 0, done: 0, openBefore: 0, closedBefore: 0 };
       }
 
-      // Site-scoped KPIs (Site Engineer / Supervisor templates) — need
-      // the list of sites this user manages first.
-      const siteIds = siteIdsForUser();
-      if (siteIds.length === 0) {
-        // No sites mapped to this user → can't aggregate. Return zero.
-        return { given: 0, done: 0 };
+      // Site-scoped KPIs (Site Engineer / Supervisor templates) need the list
+      // of sites this user manages. ONLY those ten sources are gated: this
+      // early return used to sit in front of EVERY source below it, so a user
+      // with no site mapping (HR, sales, accounts…) read 0/0 = "on plan" for
+      // candidates shortlisted, leads created, amount received — 57 sources
+      // silently scored 100% (found 2026-09-05 while wiring target_auto: every
+      // Actual on the HR Executive template showed 0).
+      const SITE_SCOPED = new Set([
+        'auto:dpr_count', 'auto:dpr_profit', 'auto:indent_vs_bill', 'auto:indents_in_week',
+        'auto:material_received', 'auto:mb_signed', 'auto:ra_bills',
+        'auto:stock_at_site', 'auto:stock_updates', 'auto:tools_list',
+      ]);
+      let siteIds = [], inSites = '(NULL)';
+      if (SITE_SCOPED.has(source)) {
+        siteIds = siteIdsForUser();
+        if (siteIds.length === 0) {
+          // No sites mapped to this user → can't aggregate. Return zero.
+          return { given: 0, done: 0 };
+        }
+        inSites = `(${siteIds.join(',')})`;
       }
-      const inSites = `(${siteIds.join(',')})`;
 
       if (source === 'auto:dpr_profit') {
         // Planned = sum of grand_total_b (planned cost) × 1.5, Actual = sum
@@ -1073,14 +1107,21 @@ function computeScorecard(db, userId, weekStart) {
       // before this week (or created before it when undated).
       const sinceDate = since.slice(0, 10), untilDate = until.slice(0, 10);
       const DUE = dueDay(cfg.dueCol);
+      // Week END for done-timestamps = end of SUNDAY: dueDay() folds a Sunday
+      // due day into this week, so a Sunday approval must land here too, not
+      // in the gap between Sat 23:59:59 and Mon 00:00:00. datetime() makes
+      // both timestamp shapes comparable (support.js writes resolved_at as
+      // ISO 'T…Z' on one path and CURRENT_TIMESTAMP on another).
+      const weekEndTs = `${shiftWeek(sinceDate, 6)} 23:59:59`;
+      const doneTs = `datetime(${cfg.doneAt})`;
       const prevPending = db.prepare(
         `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
-           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${cfg.doneAt} >= ?))`
+           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${doneTs} >= ?))`
       ).get(...whoArgs, sinceDate, since).c;
       const prevDone = db.prepare(
         `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
-           AND (${cfg.doneCond}) AND ${cfg.doneAt} BETWEEN ? AND ?`
-      ).get(...whoArgs, sinceDate, since, until).c;
+           AND (${cfg.doneCond}) AND ${doneTs} BETWEEN ? AND ?`
+      ).get(...whoArgs, sinceDate, since, weekEndTs).c;
       // Pending "up" halves:
       //   stillOpen = due before the week, not done as of the week END;
       //   weekOpen  = due this week, not done.
@@ -1088,8 +1129,8 @@ function computeScorecard(db, userId, weekStart) {
       // pending. Counted directly (not prevPending - prevDone) so nothing clamps.
       const stillOpen = db.prepare(
         `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
-           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${cfg.doneAt} > ?))`
-      ).get(...whoArgs, sinceDate, until).c;
+           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${doneTs} > ?))`
+      ).get(...whoArgs, sinceDate, weekEndTs).c;
       const weekOpen = db.prepare(
         `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} BETWEEN ? AND ?
            AND NOT (${cfg.doneCond})`
@@ -1116,6 +1157,7 @@ function computeScorecard(db, userId, weekStart) {
     // suppress display — also pull from the score calculation so total
     // weight doesn't include disabled rows).
     const activeKpis = kpis.filter(k => {
+      if (opts.allKpis) return true;
       const o = userOverrides[k.id];
       return !o || o.enabled !== 0;
     });
@@ -1148,13 +1190,22 @@ function computeScorecard(db, userId, weekStart) {
       //   wk = this week's own leftover (cohort given − cohort done)
       //   up = total still-open as of the week end (backlog + this week)
       let pendingUp = null, pendingWk = null, pendingAuto = false;
+      // Does the ERP know the GIVEN side for this source? (tasks due, snags
+      // raised, RACI steps reached → yes; candidates shortlisted, amount
+      // received, lead conversion → no, the ERP only records the outcome and
+      // the target is a management goal typed in the template.) Reported to
+      // the UI as target_auto so the Target cell locks or opens accordingly —
+      // mam 2026-09-05: "some place I need to enter plan and some place
+      // automatically pick plan, how I can justify".
+      let targetAuto = false;
       let carryPrevPending = 0, carryPrevDone = 0;
       if (k.data_source && k.data_source.startsWith('auto:')) {
         try {
           const autoRes = computeAutoCount(k.data_source, startTs, endTs);
           const { given, done } = autoRes;
-          if (given !== null) {
+          if (given !== null && given !== undefined) {
             planned = given;
+            targetAuto = true;
           }
           if (done !== null && done !== undefined) {
             actual = done;
@@ -1241,6 +1292,7 @@ function computeScorecard(db, userId, weekStart) {
         data_source: k.data_source,
         default_planned: k.default_planned || 0,
         is_auto: k.data_source && k.data_source.startsWith('auto:'),
+        target_auto: targetAuto,            // true = Planned counted live; false = Planned is the typed target
         planned,
         actual,
         actual_pct: actualPct,
@@ -1294,7 +1346,10 @@ router.get('/scorecard', (req, res) => {
       ? req.query.week_start
       : defaultWeekStart();
     const db = getDb();
-    const card = computeScorecard(db, userId, weekStart);
+    // template_id (admin only): preview a template that may not be assigned to
+    // anyone yet — the template editor uses it for live Actuals + target_auto.
+    const templateId = req.user.role === 'admin' ? (parseInt(req.query.template_id, 10) || null) : null;
+    const card = computeScorecard(db, userId, weekStart, templateId ? { templateId, allKpis: true } : {});
     // Whose card this is — the page needs the name for the export filename and
     // the printed letterhead (admin switches between employees, and every file
     // was downloading as "scorecard-user-...").

@@ -25,10 +25,17 @@ let lastFinished = null;    // { label, ms, at } — the request that ended most
 // token in the query string (backup download `?token=…`, audit report), and a
 // backup download is exactly the slow request this logs. Redact by name.
 const SENSITIVE_QS = /([?&](?:token|access_token|refresh_token|secret|api_key|apikey|key|code|sig|signature|password|pass|otp)=)[^&#]*/gi;
+// One-time links carry their token as a PATH segment (/api/public/offer/:token,
+// /employee-fill/:token, /employee-upload/:token — random bytes, base64url).
+// Redact any path segment that looks like one: ≥ 20 url-safe chars, no dot
+// (so hashed asset / upload file names, which have an extension, stay).
+const SENSITIVE_PATH = /\/[A-Za-z0-9_-]{20,}(?=[/?#]|$)/g;
 function describe(req) {
   const raw = String(req.originalUrl || req.url || '');
-  const url = raw.replace(SENSITIVE_QS, '$1[redacted]').slice(0, 160);
-  return `${req.method} ${url}`;
+  const q = raw.indexOf('?');
+  const path = (q < 0 ? raw : raw.slice(0, q)).replace(SENSITIVE_PATH, '/[redacted]');
+  const qs = q < 0 ? '' : raw.slice(q).replace(SENSITIVE_QS, '$1[redacted]');
+  return `${req.method} ${(path + qs).slice(0, 160)}`;
 }
 
 function install(app) {

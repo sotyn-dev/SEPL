@@ -131,21 +131,21 @@ const SOURCE_INFO = {
   'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
   'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
   'auto:dispatch_sent':         { plan: 'You set',                            actual: 'Delivery notes dispatched' },
-  'auto:material_received':     { plan: 'You set',                            actual: 'Material receipts at user\'s site' },
+  'auto:material_received':     { plan: 'Indents raised for user\'s sites this week', actual: 'Of those, delivered (delivery note) at the site' },
   // Inventory
   'auto:stock_in':              { plan: 'You set',                            actual: 'Stock IN movements (count)' },
   'auto:stock_out':             { plan: 'You set',                            actual: 'Stock OUT movements (count)' },
   'auto:stock_to_site':         { plan: 'You set',                            actual: 'Stock issued from office → site' },
-  'auto:stock_updates':         { plan: 'You set',                            actual: 'Stock update events per site/week' },
-  'auto:tools_list':            { plan: 'You set',                            actual: 'Tools list rows per site' },
-  'auto:stock_at_site':         { plan: 'You set',                            actual: 'Stock-at-site flag (0/1)' },
+  'auto:stock_updates':         { plan: 'Sites the user manages (1 update each)', actual: 'Sites with a stock update this week' },
+  'auto:tools_list':            { plan: 'Sites the user manages (1 list each)',   actual: 'Sites with a tools list submitted this week' },
+  'auto:stock_at_site':         { plan: '1 (stock must be present)',             actual: 'Stock-at-site flag (0/1)' },
   // Installation & Billing
   'auto:installations_started': { plan: 'You set',                            actual: 'Installation start dates this week' },
   'auto:installations_completed':{ plan: 'You set',                           actual: 'Installations marked complete this week' },
   'auto:sales_bills':           { plan: 'You set',                            actual: 'Sales bills raised this week' },
-  'auto:ra_bills':              { plan: 'You set',                            actual: 'RA bills raised for user\'s site' },
+  'auto:ra_bills':              { plan: '3 per week (fixed SEPL norm)',          actual: 'RA bills raised for user\'s sites this week' },
   'auto:mb_filed':              { plan: 'You set',                            actual: 'MB sheets filed (count)' },
-  'auto:mb_signed':             { plan: 'You set',                            actual: 'MBs signed by client at user\'s site' },
+  'auto:mb_signed':             { plan: 'MB bills raised for user\'s sites this week', actual: 'Of those, approved / client-signed' },
   // Cash Flow
   'auto:amount_received':       { plan: 'You set',                            actual: 'Σ collections amount (by user)' },
   'auto:amount_received_all':   { plan: 'You set',                            actual: 'Σ collections amount (everyone)' },
@@ -1091,8 +1091,21 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       {/* Planned/Actual stay this week's cohort — mam 2026-08-26: previous
           pendency shows ONLY in the Pending column (up), not added here. */}
       <td className="text-center p-2">
-        {isAuto ? <span className="text-gray-700">{planned}</span> :
-          <input type="number" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={flush} disabled={readOnly} />}
+        {isAuto ? (
+          <span className="text-gray-700 cursor-help"
+                title={kpi.target_auto
+                  ? 'Counted live by the ERP — what was given this week'
+                  : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`}>
+            {planned}
+            {!kpi.target_auto && (
+              <span className={`block text-[9px] font-semibold ${+planned === 0 && +actual > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                {+planned === 0 && +actual > 0 ? 'no target set' : 'target set'}
+              </span>
+            )}
+          </span>
+        ) : (
+          <input type="number" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={flush} disabled={readOnly} />
+        )}
       </td>
       <td className="text-center p-2">
         {isAuto ? <span className="text-gray-700">{actual}</span> :
@@ -1230,7 +1243,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
   // each data source returns real data.
   const [previewUsers, setPreviewUsers] = useState([]);   // users assigned to this template
   const [previewUserId, setPreviewUserId] = useState('');
-  const [previewKpis, setPreviewKpis] = useState({});     // { kpi_id: { planned, actual, score } }
+  const [previewKpis, setPreviewKpis] = useState({});     // { kpi_id: { planned, actual, score, target_auto } }
+  const { user: me } = useAuth();
   const [previewLoading, setPreviewLoading] = useState(false);
 
   const load = useCallback(() => {
@@ -1252,9 +1266,12 @@ function TemplateKpiEditor({ templateId, onChange }) {
 
   // When user picked, fetch their scorecard and build a {kpi_id → row} lookup.
   useEffect(() => {
-    if (!previewUserId) { setPreviewKpis({}); return; }
+    // Fetched even with no preview user (falls back to the admin's own id):
+    // the engine reports target_auto per KPI — whether Planned is counted live
+    // or must be typed — and the Target cell below locks/opens on that. With
+    // template_id the server scores THIS template, assigned or not.
     setPreviewLoading(true);
-    api.get('/scoring/scorecard', { params: { user_id: previewUserId } })
+    api.get('/scoring/scorecard', { params: { user_id: previewUserId || me?.id, template_id: templateId } })
       .then(r => {
         const map = {};
         for (const k of (r.data?.kpis || [])) {
@@ -1264,7 +1281,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
       })
       .catch(() => setPreviewKpis({}))
       .finally(() => setPreviewLoading(false));
-  }, [previewUserId]);
+  }, [previewUserId, templateId, me?.id]);
 
   // Per-user KPI overrides — mam (2026-06-02): "every person different
   // KPIs" (Option B).  Three things mam can override per user:
@@ -1360,6 +1377,13 @@ function TemplateKpiEditor({ templateId, onChange }) {
       <div className="flex justify-between items-center flex-wrap gap-2">
         <p className="text-xs text-gray-500">Total weight: <span className={`font-bold ${totalWeight === 100 ? 'text-emerald-600' : 'text-amber-600'}`}>{totalWeight}%</span> {totalWeight !== 100 && '(should be 100)'}</p>
         <button onClick={() => setAdding(true)} className="btn btn-primary text-xs flex items-center gap-1"><FiPlus size={12} /> Add KPI</button>
+      </div>
+      {/* Why some Targets are typed and some are not (mam 2026-09-05: "some
+          place I need to enter plan and some place automatically pick plan,
+          how I can justify"). The engine decides per source (target_auto). */}
+      <div className="text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded p-2 flex flex-wrap gap-x-4 gap-y-1">
+        <span><span className="inline-block px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 font-semibold">auto</span> target — the ERP knows what was <b>given</b> this week (tasks due, snags raised, RACI steps reached, sites managed), so Planned is counted live. Nothing to type.</span>
+        <span><span className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-emerald-700 font-semibold">you set</span> target — the ERP records only the <b>outcome</b> (candidates shortlisted, amount received, leads created). There is no "given" count to derive a target from, so the weekly target is a management goal you type here. Leave it 0 and any actual above 0 scores 0%.</span>
       </div>
       {/* Mam (2026-06-02): "from where is actual we not show".  Pick a
           user assigned to this template → the Actual column below
@@ -1482,12 +1506,25 @@ function TemplateKpiEditor({ templateId, onChange }) {
               <td className="p-2">
                 {(() => {
                   const isAuto = k.data_source && k.data_source.startsWith('auto:');
-                  const AUTO_KEEPS_MANUAL_TARGET = ['auto:dpr_profit_by_user'];
-                  const autoLocksTarget = isAuto && !AUTO_KEEPS_MANUAL_TARGET.includes(k.data_source);
+                  // The ENGINE says whether this source produces a target
+                  // (target_auto). Until the preview loads, fall back to the
+                  // source description: "You set" = typed target. Before this,
+                  // every auto source was locked as "auto" even where the
+                  // description said "You set" — 49 sources with no box.
+                  const live = previewKpis[k.id];
+                  const autoLocksTarget = isAuto && (live
+                    ? !!live.target_auto
+                    : !/^you set/i.test(sourceInfoFor(k.data_source)?.plan || ''));
+                  const youSetHint = (
+                    <div className="text-[9px] mt-0.5 text-center text-emerald-700 font-semibold cursor-help"
+                         title="The ERP records only the outcome for this source — there is no 'given' count to derive a target from. Type the weekly target (a management goal). Leaving it 0 makes any actual above 0 score 0%.">
+                      you set
+                    </div>
+                  );
                   if (autoLocksTarget) {
                     return (
                       <div className="text-center text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-1 py-1 cursor-help"
-                           title={`Target is computed live from ${k.data_source.replace('auto:', '')} — count of items given to the user in the scoring period.`}>
+                           title={`Target is counted live from ${k.data_source.replace('auto:', '')} — the ERP knows what was given to the user in the scoring period (${sourceInfoFor(k.data_source)?.plan || 'items given'}). Nothing to type.`}>
                         auto
                       </div>
                     );
@@ -1523,18 +1560,22 @@ function TemplateKpiEditor({ templateId, onChange }) {
                             ? <span className="text-emerald-700 font-semibold">user override</span>
                             : <span className="text-gray-400">default: {k.default_planned || 0}</span>}
                         </div>
+                        {isAuto && youSetHint}
                       </div>
                     );
                   }
                   // No preview user — editing the TEMPLATE default for everyone.
                   return (
-                    <input
-                      type="number" step="0.1"
-                      className="input text-xs text-center"
-                      defaultValue={k.default_planned || 0}
-                      onBlur={e => updateKpi(k, { default_planned: +e.target.value })}
-                      title="Template default — applies to every user assigned to this template (unless overridden per-user)."
-                    />
+                    <div>
+                      <input
+                        type="number" step="0.1"
+                        className="input text-xs text-center"
+                        defaultValue={k.default_planned || 0}
+                        onBlur={e => updateKpi(k, { default_planned: +e.target.value })}
+                        title="Template default — applies to every user assigned to this template (unless overridden per-user)."
+                      />
+                      {isAuto && youSetHint}
+                    </div>
                   );
                 })()}
               </td>

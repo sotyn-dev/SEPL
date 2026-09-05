@@ -56,11 +56,13 @@ export function useRateActions({ onChanged } = {}) {
   // line loaded minutes ago may show 0/3 while someone else has since locked
   // this Item Master's contract — seeding the modal from the stale row would
   // let one Save overwrite that contract for every order sharing it
-  // (review 2026-09-05). Falls back to the given row if the fetch fails.
+  // (review 2026-09-05). If the fresh row can't be loaded the modal does NOT
+  // open on the stale one — that would re-open the very overwrite this guards.
   const openQuotes = async (given) => {
     if (!given.item_master_id) { toast.error('Map the item to the Item Master first'); openMap(given); return; }
-    let row = given;
-    try { const r = await api.get(`/procurement/rates-items/row/${given.id}`); if (r.data?.id) row = { ...given, ...r.data }; } catch { /* stale row, best effort */ }
+    let row = null;
+    try { const r = await api.get(`/procurement/rates-items/row/${given.id}`); if (r.data?.id) row = { ...given, ...r.data }; } catch { /* handled below */ }
+    if (!row) { toast.error('Could not load the latest rate row — refresh the page and try again'); return; }
     setQuoteRow(row);
     setQf({
       vendor1_name: row.vendor1_name || '', vendor1_rate: row.vendor1_rate || '',
