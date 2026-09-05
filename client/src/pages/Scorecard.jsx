@@ -1105,11 +1105,12 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       <td className="text-center p-2">
         {kpi.pending_auto ? (
           // Auto-computed pending pair (mam 2026-08-26 "19/4"):
+          // Due-date rule (2026-09-05): only open tasks due on/before week end.
           // first = ALL tasks still pending as of the week end (backlog +
           // this week's leftover); second = of the PREVIOUS tasks, how many
           // were completed during this week (green — backlog being cleared).
           <div className="flex items-center justify-center gap-1 font-semibold"
-            title={`${kpi.pending_uptodate} pending in total / ${kpi.pending_work} previous task(s) completed this week`}>
+            title={`${kpi.pending_uptodate} pending in total (open tasks due on/before week end — a task whose date was extended ahead is not counted yet) / ${kpi.pending_work} previous task(s) completed this week`}>
             <span className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate}</span>
             <span className="text-gray-300">/</span>
             <span className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work}</span>

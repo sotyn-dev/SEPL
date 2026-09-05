@@ -1006,13 +1006,19 @@ function computeScorecard(db, userId, weekStart) {
     // Planned (every prev-done item is inside prevPending by construction).
     // RACI sources are deliberately NOT here — mam rejected months-old open
     // records inflating Planned there (2026-08-22, the 97-leads case).
+    // Due-date rule (mam 2026-09-05: "if due date change or forward then pick
+    // according to dates"): a still-open task only counts as PENDING when its
+    // CURRENT due date (after any approved extension / manual re-date) is on
+    // or before the week end. A task pushed to a future date is scheduled, not
+    // pending — so the backlog reads 5-6 real overdue items, not every open
+    // task ever assigned. No due date = always pending (nothing to defer to).
     const CARRY_CFG = {
-      'auto:delegations':     { table: 'delegations',     who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at' },
-      'auto:pms':             { table: 'pms_tasks',       who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at' },
-      'auto:tickets':         { table: 'support_tickets', who: 'assigned_to=?', doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at' },
-      'auto:delegations_all': { table: 'delegations',     who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at' },
-      'auto:pms_all':         { table: 'pms_tasks',       who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at' },
-      'auto:tickets_all':     { table: 'support_tickets', who: null,            doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at' },
+      'auto:delegations':     { table: 'delegations',     who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at', dueCol: 'due_date' },
+      'auto:pms':             { table: 'pms_tasks',       who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at', dueCol: 'due_date' },
+      'auto:tickets':         { table: 'support_tickets', who: 'assigned_to=?', doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at', dueCol: 'deadline_date' },
+      'auto:delegations_all': { table: 'delegations',     who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at', dueCol: 'due_date' },
+      'auto:pms_all':         { table: 'pms_tasks',       who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at', dueCol: 'due_date' },
+      'auto:tickets_all':     { table: 'support_tickets', who: null,            doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at', dueCol: 'deadline_date' },
     };
     const computeCarry = (source, since, until) => {
       // Snags keep their special shapes: IST week bucketing on raised_at and
@@ -1032,7 +1038,19 @@ function computeScorecard(db, userId, weekStart) {
           `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
              AND status = 'approved' AND date(approved_at, '+330 minutes') BETWEEN ? AND ?`
         ).get(...whoArgs, sinceDate, sinceDate, untilDate).c;
-        return { prevPending, prevDone };
+        // Pending "up" — due-date rule: only snags whose target_date is on or
+        // before the week end (or unset) count as still pending.
+        const dueOk = `(target_date IS NULL OR target_date = '' OR date(target_date) <= ?)`;
+        const stillOpen = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
+             AND (status != 'approved' OR (approved_at IS NOT NULL AND date(approved_at, '+330 minutes') > ?))
+             AND ${dueOk}`
+        ).get(...whoArgs, sinceDate, untilDate, untilDate).c;
+        const weekOpen = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') BETWEEN ? AND ?
+             AND status != 'approved' AND ${dueOk}`
+        ).get(...whoArgs, sinceDate, untilDate, untilDate).c;
+        return { prevPending, prevDone, stillOpen, weekOpen };
       }
       const cfg = CARRY_CFG[source];
       if (!cfg) return null;
@@ -1046,7 +1064,24 @@ function computeScorecard(db, userId, weekStart) {
         `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
            AND (${cfg.doneCond}) AND ${cfg.doneAt} BETWEEN ? AND ?`
       ).get(...whoArgs, since, since, until).c;
-      return { prevPending, prevDone };
+      // Pending "up" halves, both under the due-date rule (see CARRY_CFG):
+      //   stillOpen = backlog rows (created before the week) not done as of
+      //               the week END and due on/before it;
+      //   weekOpen  = this week's cohort not done and due on/before week end.
+      // Counted directly instead of prevPending − prevDone so a task whose
+      // date moved to next week drops out cleanly instead of being clamped.
+      const untilDate = until.slice(0, 10);
+      const dueOk = `(${cfg.dueCol} IS NULL OR ${cfg.dueCol} = '' OR date(${cfg.dueCol}) <= ?)`;
+      const stillOpen = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at < ?
+           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${cfg.doneAt} > ?))
+           AND ${dueOk}`
+      ).get(...whoArgs, since, until, untilDate).c;
+      const weekOpen = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}created_at BETWEEN ? AND ?
+           AND NOT (${cfg.doneCond}) AND ${dueOk}`
+      ).get(...whoArgs, since, until, untilDate).c;
+      return { prevPending, prevDone, stillOpen, weekOpen };
     };
     // Sources with no cross-week backlog concept but where the Pending column
     // should still auto-fill with the week's own leftover (planned − actual):
@@ -1124,8 +1159,10 @@ function computeScorecard(db, userId, weekStart) {
             // leftover); second = of the PREVIOUS tasks, how many were
             // completed during this week. This week's own leftover is already
             // visible as Planned − Actual.
-            pendingUp = Math.max(0, carry.prevPending - carry.prevDone)
-                      + Math.max(0, (given || 0) - (done || 0));
+            // Due-date rule (2026-09-05): both halves come from computeCarry
+            // already filtered to tasks due on/before the week end, so a task
+            // whose date was extended into the future is not "pending" yet.
+            pendingUp = (carry.stillOpen || 0) + (carry.weekOpen || 0);
             pendingWk = carry.prevDone;
             pendingAuto = true;
           } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
