@@ -7724,14 +7724,25 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
     const pkgPend = cnt(`SELECT COUNT(*) c FROM purchase_orders po WHERE NOT EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)`);
     const pkgDone = cnt(`SELECT COUNT(*) c FROM purchase_orders po WHERE EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)`);
 
-    // S2–S4 cards: one per ORDER (grouped by PO), the way they were grouped
-    // by indent before. rid = the PO id; po_number lets the board deep-link
-    // into the register filtered to that order.
-    const byPo = (cond, ownerText, limit = 50) => all(`
-      SELECT po.id AS rid, po.po_number AS po_number, COALESCE(po.po_number, 'No PO') AS ref,
-             COALESCE(bb.client_name, bb.company_name, '—') AS title,
-             COUNT(pi.id) || ' ${ownerText}' AS owner, MAX(COALESCE(${RATE_UPDATED}, po.created_at)) AS created_at
-        ${BASE} AND ${cond} GROUP BY po.id ORDER BY MAX(COALESCE(po.created_at, '')) DESC LIMIT ${limit}`);
+    // S2–S7 cards: one per ITEM, carrying the full row the register's Rate
+    // Contract modal needs (mam 2026-09-05: clicking a card opens that modal
+    // right on the board). Same field names as /rates-items so the shared
+    // useRateActions hook can take a board card exactly as it takes a
+    // register row. `ref` is the item text — FlowBoard also uses it for the
+    // ?q= deep link, and the register searches on description.
+    const ITEM_FIELDS = `
+      pi.id AS id, pi.id AS rid, pi.po_id, pi.item_master_id, im.item_code, pi.description, pi.quantity, pi.unit,
+      pi.rate AS estimate_rate, COALESCE(im.long_delivery,0) AS long_delivery,
+      ${EF('vendor1_name')} AS vendor1_name, ${V1} AS vendor1_rate,
+      ${EF('vendor2_name')} AS vendor2_name, ${V2} AS vendor2_rate,
+      ${EF('vendor3_name')} AS vendor3_name, ${V3} AS vendor3_rate,
+      ${FINAL_RATE} AS final_rate, ${FINAL_VENDOR} AS final_vendor_name, ${FINALIZED_AT} AS finalized_at,
+      ${SLOTS} AS quotes,
+      ${ITEM_REF} AS ref,
+      COALESCE(po.po_number, 'No PO') || ' · ' || COALESCE(bb.client_name, bb.company_name, '—') AS title`;
+    const itemCards = (cond, ownerSql, orderSql, limit = 50) => all(`
+      SELECT ${ITEM_FIELDS}, ${ownerSql} AS owner, ${orderSql} AS created_at
+        ${BASE} AND ${cond} ORDER BY created_at DESC, pi.id DESC LIMIT ${limit}`);
 
     const pipeline = [
       { key: 'packages', label: 'Package List', sop: 'S1', total: pkgPend, pct: pctOf(pkgDone, pkgDone + pkgPend),
@@ -7743,30 +7754,21 @@ router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) 
                      ORDER BY po.created_at DESC LIMIT 50`) },
       { key: 'enquiry', label: 'Rate Enquiry', sop: 'S2', total: enquiryPend,
         pct: pctOf(comparePend + finalisePend + locked, enquiryPend + comparePend + finalisePend + locked),
-        cards: byPo(`NOT ${FINAL} AND ${SLOTS} = 0`, 'item(s) — send enquiry') },
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} = 0`, `'0/3 quotes — send enquiry'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
       { key: 'compare', label: 'Rate Comparison', sop: 'S3', total: comparePend,
         pct: pctOf(finalisePend + locked, comparePend + finalisePend + locked),
-        cards: byPo(`NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`, 'item(s) — quotes awaited') },
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`, `${SLOTS} || '/3 quotes — awaited'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
       { key: 'finalise', label: 'Finalise Vendor', sop: 'S4', total: finalisePend,
         pct: pctOf(locked, finalisePend + locked),
-        cards: byPo(`NOT ${FINAL} AND ${SLOTS} = 3`, 'item(s) — all 3 quotes in') },
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} = 3`, `'3/3 quotes — finalise vendor'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
       { key: 'md_lock', label: 'Rate Lock / MD', sop: 'S5', total: aboveMd,
         pct: pctOf(lockedWithin, locked),
-        cards: all(`SELECT ${ITEM_REF} AS ref,
-                           'Rs ' || ${FINAL_RATE} || ' vs est ' || pi.rate AS title,
-                           'ABOVE estimate — MD sir' AS owner, ${FINALIZED_AT} AS created_at
-                      ${BASE} AND ${ABOVE}
-                     ORDER BY ${FINALIZED_AT} DESC LIMIT 50`) },
+        cards: itemCards(ABOVE, `'Rs ' || ${FINAL_RATE} || ' vs est ' || pi.rate || ' — MD sir'`, FINALIZED_AT) },
       { key: 'contract', label: 'Rate Contract', sop: 'S6', total: locked,
         pct: pctOf(locked, locked + finalisePend + comparePend + enquiryPend),
-        cards: all(`SELECT ${ITEM_REF} AS ref,
-                           COALESCE(${FINAL_VENDOR}, 'vendor') || ' · Rs ' || ${FINAL_RATE} AS title,
-                           'locked for project' AS owner, ${FINALIZED_AT} AS created_at
-                      ${BASE} AND ${FINAL} ORDER BY ${FINALIZED_AT} DESC LIMIT 50`) },
+        cards: itemCards(FINAL, `COALESCE(${FINAL_VENDOR}, 'vendor') || ' · Rs ' || ${FINAL_RATE} || ' · locked'`, FINALIZED_AT) },
       { key: 'long_delivery', label: 'Long Delivery — Order Today', sop: 'S7', total: longDelivery, pct: null,
-        cards: all(`SELECT ${ITEM_REF} AS ref, COALESCE(po.po_number, '') AS title,
-                           'order today' AS owner, po.created_at AS created_at
-                      ${BASE} AND COALESCE(im.long_delivery,0) = 1 ORDER BY po.created_at DESC LIMIT 50`) },
+        cards: itemCards(`COALESCE(im.long_delivery,0) = 1`, `'order today'`, `po.created_at`) },
     ];
 
     // Alerts: S1 packages waiting >24h, S3 3-day comparison clock, S5 MD list.
