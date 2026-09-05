@@ -347,19 +347,23 @@ router.post('/:id/approve', adminOnly, (req, res) => {
   const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
   db.prepare(`UPDATE item_master
-                 SET approval_status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+                 SET approval_status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, rejection_reason=NULL, updated_at=CURRENT_TIMESTAMP
                WHERE id=?`).run(req.user.id, req.params.id);
   res.json({ message: 'Item approved', approval_status: 'approved' });
 });
 
+// Rejecting REQUIRES a remark (mam 2026-09-05: "when reject need to enter
+// remarks") so the person who entered the item knows what to correct.
 router.post('/:id/reject', adminOnly, (req, res) => {
   const db = getDb();
+  const reason = String(req.body?.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'Rejection remark is required' });
   const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
   db.prepare(`UPDATE item_master
-                 SET approval_status='rejected', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
-               WHERE id=?`).run(req.user.id, req.params.id);
-  res.json({ message: 'Item rejected', approval_status: 'rejected' });
+                 SET approval_status='rejected', approved_by=?, approved_at=CURRENT_TIMESTAMP, rejection_reason=?, updated_at=CURRENT_TIMESTAMP
+               WHERE id=?`).run(req.user.id, reason, req.params.id);
+  res.json({ message: 'Item rejected', approval_status: 'rejected', rejection_reason: reason });
 });
 
 router.post('/', requirePermission('item_master', 'create'), (req, res) => {

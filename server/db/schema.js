@@ -3453,6 +3453,7 @@ function initializeDatabase() {
     ['item_master', "approval_status TEXT DEFAULT 'approved'"], // approved | pending | rejected
     ['item_master', 'approved_by INTEGER REFERENCES users(id)'],
     ['item_master', 'approved_at DATETIME'],
+    ['item_master', 'rejection_reason TEXT'],                  // mandatory remark when an Admin rejects (mam 2026-09-05)
     // item_price_history exists for BOQ-row rates already; extend so a
     // full Master-page edit also lands here with the same provenance
     // fields the master row carries. Older rows keep null in these.
