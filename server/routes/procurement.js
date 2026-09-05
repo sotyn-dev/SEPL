@@ -7875,6 +7875,12 @@ router.get('/rates-items', requirePermission('procurement', 'view'), (req, res) 
              (SELECT MIN(op.planned_start) FROM order_planning_items opi
                 JOIN order_planning op ON op.id = opi.planning_id
                WHERE opi.po_item_id = pi.id) AS need_date,
+             -- Need-till alongside need-from so the S1 cell can carry BOTH
+             -- editable dates (mam 2026-09-05: this view replaces the old
+             -- Order Planning table, which is where the dates used to be set).
+             (SELECT MIN(op.planned_end) FROM order_planning_items opi
+                JOIN order_planning op ON op.id = opi.planning_id
+               WHERE opi.po_item_id = pi.id) AS need_till,
              rc.id AS rc_id, rc.vendor1_name AS rc_v1n, rc.vendor1_rate AS rc_v1, rc.vendor2_name AS rc_v2n, rc.vendor2_rate AS rc_v2,
              rc.vendor3_name AS rc_v3n, rc.vendor3_rate AS rc_v3, rc.final_rate AS rc_final, rc.final_vendor_name AS rc_fvn, rc.finalized_at AS rc_fat,
              r.vendor1_name AS ir_v1n, r.vendor1_rate AS ir_v1, r.vendor2_name AS ir_v2n, r.vendor2_rate AS ir_v2,

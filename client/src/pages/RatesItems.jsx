@@ -20,7 +20,12 @@ const Chip = ({ on, label, title, color = 'emerald' }) => (
   </span>
 );
 
-export default function RatesItems() {
+// `embedded` = rendered inside another page's tab (Orders → Order Planning,
+// mam 2026-09-05: "i want show first photo on second photo"). It only drops
+// this page's own <h1> and Rates Board link, since the host already has them;
+// everything else — search, table, actions, pager — is identical, so there is
+// one implementation of this screen, not two that drift apart.
+export default function RatesItems({ embedded = false }) {
   const [data, setData] = useState(null);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -75,6 +80,21 @@ export default function RatesItems() {
     } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
   };
 
+  // Need-from / need-till, edited straight in the S1 cell. This is the one
+  // thing the old Order Planning table did that this view could not, so it
+  // moves here rather than being lost when that table goes. Same endpoint the
+  // old table used, keyed on the SAME po_items id — it creates the PO's plan
+  // on the fly, so a bare item can be dated in one action.
+  const saveNeedDates = async (row, patch) => {
+    try {
+      await api.put(`/orders/planning-itemwise/${row.id}`, {
+        planned_start: patch.need_date !== undefined ? (patch.need_date || null) : (row.need_date || null),
+        planned_end: patch.need_till !== undefined ? (patch.need_till || null) : (row.need_till || null),
+      });
+      setData(d => d && { ...d, rows: d.rows.map(x => (x.id === row.id ? { ...x, ...patch } : x)) });
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not save the date'); }
+  };
+
   const toggleS7 = async (row) => {
     if (!row.item_master_id) return toast.error('Map this item to the Item Master first (Edit PO → Map item)');
     try {
@@ -88,16 +108,18 @@ export default function RatesItems() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-bold">Item-wise Rates</h1>
-          <p className="text-sm text-gray-500">SOP-05 · every item's own journey — package → quotes → finalise → rate contract</p>
+      {!embedded && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h1 className="text-2xl font-bold">Item-wise Rates</h1>
+            <p className="text-sm text-gray-500">SOP-05 · every item's own journey — package → quotes → finalise → rate contract</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link to="/rates-board" className="btn btn-secondary text-xs">📊 Rates Board</Link>
+            <button onClick={load} className="btn btn-secondary text-xs flex items-center gap-1"><FiRefreshCw size={13} /> Refresh</button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Link to="/rates-board" className="btn btn-secondary text-xs">📊 Rates Board</Link>
-          <button onClick={load} className="btn btn-secondary text-xs flex items-center gap-1"><FiRefreshCw size={13} /> Refresh</button>
-        </div>
-      </div>
+      )}
 
       <div className="card p-3 flex items-center gap-2">
         <FiSearch className="text-gray-400" />
@@ -114,7 +136,7 @@ export default function RatesItems() {
               <tr>
                 <th className="text-left p-2">Item</th>
                 <th className="text-left p-2 w-32">PO / Client</th>
-                <th className="text-center p-2 w-24">S1 · Package<br />(site needs)</th>
+                <th className="text-center p-2 w-44">S1 · Package<br />(need from → till)</th>
                 <th className="text-center p-2 w-20">S2-S3<br />Quotes</th>
                 <th className="text-center p-2 w-24">Estimate</th>
                 <th className="text-center p-2 w-32">S4-S6 · Rate Contract</th>
@@ -139,11 +161,16 @@ export default function RatesItems() {
                     <div className="text-[10px] text-gray-400 truncate max-w-[120px]">{r.client_name || ''}</div>
                   </td>
                   <td className="text-center p-2">
-                    {r.need_date
-                      ? <span className="text-emerald-700 font-semibold">{r.need_date}</span>
-                      : r.po_id
-                        ? <button onClick={() => makePlan(r)} className="text-[10px] px-2 py-1 rounded bg-violet-600 text-white font-bold hover:bg-violet-700" title="Create the order plan for this item's PO — SOP-05.1">⚡ Plan</button>
-                        : <Chip on={false} label="NO PO" title="No purchase order linked to this line" />}
+                    {r.po_id ? (
+                      <div className="flex flex-col gap-1 items-center">
+                        <input type="date" className="input text-[10px] py-0.5 px-1 w-32" value={r.need_date || ''}
+                          onChange={e => saveNeedDates(r, { need_date: e.target.value })}
+                          title="Date the site will FIRST need this item (SOP-05.1)" />
+                        <input type="date" className="input text-[10px] py-0.5 px-1 w-32" value={r.need_till || ''}
+                          onChange={e => saveNeedDates(r, { need_till: e.target.value })}
+                          title="Date the site needs it BY" />
+                      </div>
+                    ) : <Chip on={false} label="NO PO" title="No purchase order linked to this line" />}
                   </td>
                   <td className="text-center p-2">
                     <button onClick={() => openQuotes(r)} title="Enter the 3 vendor quotes / finalise — SOP-05.2-05.6" className="hover:opacity-75">

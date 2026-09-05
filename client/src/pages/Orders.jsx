@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, Fragment, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, Fragment } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -9,6 +9,9 @@ import { exportCsv } from '../utils/exportCsv';
 import SearchableSelect from '../components/SearchableSelect';
 import MultiUserSelect from '../components/MultiUserSelect';
 import { useAuth } from '../context/AuthContext';
+// The Order Planning tab renders the Item-wise Rates register itself
+// (mam 2026-09-05), rather than duplicating a second items table here.
+import RatesItems from './RatesItems';
 
 const CRM_OPTIONS = ['Sushila', 'Lovely'];
 
@@ -282,29 +285,10 @@ export default function Orders() {
     } catch (err) { toast.error(err.response?.data?.error || 'Could not save the mapping'); }
   };
 
-  // ITEM-WISE planning view (mam 2026-08-31 "recreate as item wise"):
-  // the tab lists items directly, each with inline need-date inputs.
-  const [ip, setIp] = useState(null);
-  const [ipSearch, setIpSearch] = useState('');
-  const [ipPage, setIpPage] = useState(1);
-  const loadItemwise = useCallback(() => {
-    api.get('/orders/planning-itemwise', { params: { search: ipSearch, page: ipPage } })
-      .then(r => setIp(r.data)).catch(() => {});
-  }, [ipSearch, ipPage]);
-  useEffect(() => {
-    if (tab !== 'planning') return;
-    const t = setTimeout(loadItemwise, ipSearch ? 350 : 0);
-    return () => clearTimeout(t);
-  }, [tab, loadItemwise, ipSearch]);
-  const saveItemDates = async (row, patch) => {
-    const planned_start = patch.planned_start !== undefined ? patch.planned_start : row.planned_start;
-    const planned_end = patch.planned_end !== undefined ? patch.planned_end : row.planned_end;
-    try {
-      await api.put(`/orders/planning-itemwise/${row.id}`, { planned_start: planned_start || null, planned_end: planned_end || null });
-      toast.success('Need date saved');
-      loadItemwise();
-    } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
-  };
+  // The item-wise planning list that used to live here was replaced by the
+  // Item-wise Rates register (mam 2026-09-05) — see the 'planning' tab below.
+  // Its state, loader and date-saver moved into RatesItems.jsx with it; the
+  // /orders/planning-itemwise endpoint is unchanged and still does the saving.
 
   // Expandable "which items" view on each planning row.
   const [openPlan, setOpenPlan] = useState({});          // { planning_id: rows|('loading') }
@@ -495,57 +479,18 @@ export default function Orders() {
                  title="SOP-05 live board: packages → rate enquiry → comparison → finalise → MD lock → rate contract">
                 📊 Rates Board
               </a>
-              {/* SOP-05 item-wise register (mam 2026-08-31) */}
-              <a href="/rates-items" className="btn btn-secondary flex items-center gap-2"
-                 title="SOP-05 item-wise: every item's package date, quotes, rate contract, MD flag, long-delivery">
-                📋 Item-wise Rates
-              </a>
               <button onClick={() => { setForm({ po_id: '', business_book_id: '', planned_start: '', planned_end: '', notes: '' }); setModal('planning'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Plan</button>
             </div>
           </div>
-          {/* ITEM-WISE view (mam 2026-08-31 "recreate as item wise so that
-              when open so here"): items directly, inline need dates. */}
-          <div className="card p-3 flex items-center gap-2">
-            <input className="input flex-1" placeholder="Search item / PO / client…"
-              value={ipSearch} onChange={e => { setIpSearch(e.target.value); setIpPage(1); }} />
-            {ip && <span className="text-xs text-gray-500 whitespace-nowrap">{ip.total} item(s)</span>}
-          </div>
-          <div className="card p-0 overflow-x-auto"><table className="freeze-head w-full text-sm min-w-[950px]">
-            <thead><tr><th className="text-left">Item</th><th>PO</th><th>Client</th><th>Need From</th><th>Need Till</th><th>Status</th></tr></thead>
-            <tbody>
-              {(ip?.rows || []).map(r => (
-                <tr key={r.id} className="border-t">
-                  <td className="p-2">
-                    <div className="font-medium max-w-[380px] truncate" title={r.description}>{r.description}</div>
-                    <div className="text-[10px] text-gray-400">{r.quantity} {r.unit || ''}</div>
-                  </td>
-                  <td className="text-center text-xs">{r.po_number || <span className="text-gray-300">—</span>}</td>
-                  <td className="text-center text-xs">{r.client_name || ''}</td>
-                  <td className="text-center">
-                    <input type="date" className="input text-xs py-1 w-36" value={r.planned_start || ''}
-                      onChange={e => saveItemDates(r, { planned_start: e.target.value })}
-                      title="Date the site will first need this item (SOP-05.1)" />
-                  </td>
-                  <td className="text-center">
-                    <input type="date" className="input text-xs py-1 w-36" value={r.planned_end || ''}
-                      onChange={e => saveItemDates(r, { planned_end: e.target.value })} />
-                  </td>
-                  <td className="text-center">
-                    {r.planned_start ? <StatusBadge status={r.status} /> : <span className="text-[10px] text-gray-300 font-bold uppercase">no date</span>}
-                  </td>
-                </tr>
-              ))}
-              {ip && ip.rows.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No items found</td></tr>}
-              {!ip && <tr><td colSpan="6" className="text-center py-8 text-gray-400">Loading items…</td></tr>}
-            </tbody>
-          </table></div>
-          {ip && ip.total > ip.per && (
-            <div className="flex items-center justify-center gap-3 text-sm">
-              <button disabled={ipPage <= 1} onClick={() => setIpPage(p => p - 1)} className="btn btn-secondary text-xs disabled:opacity-40">‹ Prev</button>
-              <span className="text-gray-500">Page {ipPage} / {Math.max(1, Math.ceil(ip.total / ip.per))}</span>
-              <button disabled={ipPage >= Math.ceil(ip.total / ip.per)} onClick={() => setIpPage(p => p + 1)} className="btn btn-secondary text-xs disabled:opacity-40">Next ›</button>
-            </div>
-          )}
+          {/* Order Planning IS the item-wise rates register now (mam
+              2026-09-05: "i want show first photo on second photo and second
+              photo is not necessary"). The old six-column table (item / PO /
+              client / need-from / need-till / status) is gone; this view shows
+              the same items with the whole SOP-05 journey beside them, and its
+              S1 cell carries BOTH need dates, so nothing that table did is
+              lost. Rendered from the same component as /rates-items — one
+              implementation, so the two screens cannot drift apart. */}
+          <RatesItems embedded />
         </>
       )}
 
