@@ -64,10 +64,11 @@ export default function RatesBoard() {
   const { openMap, openQuotes, toggleS7, modals } = useRateActions({ onChanged: () => reloadRef.current && reloadRef.current() });
 
   // Clicking the CARD opens the action (the first photo), not a page.
+  // The ref is written inside the click handler, not while FlowBoard is
+  // rendering the card (cardAction runs in the render pass).
   const cardAction = (stageKey, card, reload) => {
     if (!RATE_STAGES.includes(stageKey) || !card.id) return null;
-    reloadRef.current = reload;
-    return () => (card.item_master_id ? openQuotes(card) : openMap(card));
+    return () => { reloadRef.current = reload; card.item_master_id ? openQuotes(card) : openMap(card); };
   };
 
   const cardExtra = (stageKey, card, reload) => {

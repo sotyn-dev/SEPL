@@ -13,25 +13,37 @@
 // estimate_rate, vendor1..3 _name/_rate, final_rate, final_vendor_name,
 // long_delivery — exactly the row shape /procurement/rates-items returns,
 // and what the board's item cards now carry too.
-import { useState, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api';
 import Modal from './Modal';
 import SearchableSelect from './SearchableSelect';
 
 export function useRateActions({ onChanged } = {}) {
-  const changed = () => { try { onChanged && onChanged(); } catch (_) { /* reload is best-effort */ } };
+  const changed = () => { try { onChanged && onChanged(); } catch { /* reload is best-effort */ } };
 
   // 1. map → link the BOQ line to its Item Master
   const [mapRow, setMapRow] = useState(null);
+  // The Item Master list is fetched the first time the Map modal opens,
+  // not on mount — the board mounts this hook on every visit and most
+  // visits never map anything (review 2026-09-05).
   const [masters, setMasters] = useState([]);
-  useEffect(() => { api.get('/item-master/dropdown').then(r => setMasters(r.data || [])).catch(() => {}); }, []);
-  const openMap = (row) => setMapRow(row);
+  const mastersLoaded = useRef(false);
+  const ensureMasters = () => {
+    if (mastersLoaded.current) return;
+    mastersLoaded.current = true;
+    api.get('/item-master/dropdown').then(r => setMasters(r.data || [])).catch(() => { mastersLoaded.current = false; });
+  };
+  const openMap = (row) => { ensureMasters(); setMapRow(row); };
   const saveMap = async (mi) => {
     try {
       await api.put(`/procurement/rates-items/map/${mapRow.id}`, { item_master_id: mi?.id || null });
       toast.success(mi ? `Mapped to [${mi.item_code}]` : 'Mapping cleared');
+      const row = mapRow;
       setMapRow(null); changed();
+      // Map → straight into the Rate Contract when the line was unmapped
+      // (one click, not "map, then click the card again").
+      if (mi && !row.item_master_id) openQuotes({ ...row, item_master_id: mi.id, item_code: mi.item_code });
     } catch (e) { toast.error(e.response?.data?.error || 'Map failed'); }
   };
 
