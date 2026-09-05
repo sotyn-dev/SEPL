@@ -5694,8 +5694,20 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
 });
 
 router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req, res) => {
-  const { status, notes } = req.body;
-  getDb().prepare('UPDATE delivery_notes SET status=?, notes=? WHERE id=?').run(status, notes, req.params.id);
+  // Partial update: only the fields sent are touched. A notes-only save
+  // (Procurement Board popup) must not carry a stale status along and
+  // un-receive a dispatch that site staff marked received meanwhile
+  // (review 2026-09-05). `received` itself is set by the receive flow.
+  const { status, notes } = req.body || {};
+  const sets = []; const params = [];
+  if (status !== undefined) {
+    if (!['pending', 'received', 'partial', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    sets.push('status=?'); params.push(status);
+  }
+  if (notes !== undefined) { sets.push('notes=?'); params.push(notes || null); }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  const r = getDb().prepare(`UPDATE delivery_notes SET ${sets.join(', ')} WHERE id=?`).run(...params, req.params.id);
+  if (!r.changes) return res.status(404).json({ error: 'Dispatch not found' });
   res.json({ message: 'Updated' });
 });
 
@@ -7491,6 +7503,16 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
     const notOnPo = `NOT EXISTS (SELECT 1 FROM vendor_po_items vpi JOIN vendor_pos vpp ON vpp.id=vpi.vendor_po_id
                                   WHERE vpi.indent_item_id=ii.id AND COALESCE(vpp.cancelled,0)=0)`;
     const hasFinalRate = `EXISTS (SELECT 1 FROM indent_item_rates ir WHERE ir.indent_item_id=ii.id AND COALESCE(ir.final_rate,0) > 0)`;
+    // The RATE / PO CREATE universe is the Rates tab's (GET /item-rates):
+    // fully approved (status approved/po_sent, or L1 + L2 both signed), not
+    // from store, not returnable-RGP, qty > 0. `crm_approved` is a PRE-
+    // approval state whose items the quote endpoint refuses (403), and
+    // `po_sent` is where an indent sits after its FIRST partial PO — its
+    // remaining lines must stay on the board (review 2026-09-05).
+    const rateItem = `(i.status IN ${APPROVED_FOR_RATES} OR (i.l1_status='approved' AND i.l2_status='approved'))
+                      AND (ii.source IS NULL OR ii.source <> 'store')
+                      AND NOT (UPPER(COALESCE(ii.item_type,''))='RGP' AND LOWER(COALESCE(ii.source,''))<>'procure')
+                      AND COALESCE(ii.quantity,0) > 0`;
     const pipeline = [
       // rid + items_n power the board's in-place Approve/Reject popup
       // (mam 2026-08-31: "click on record → open pop of action").
@@ -7509,7 +7531,8 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
       // POST /item-rates/:id/finalize. The count follows the cards.
       col('rates', 'Finalised Rate', 'RATE', all(`
         SELECT ii.id AS rid, ii.id AS indent_item_id, i.id AS indent_id, i.indent_number AS ref,
-               ii.description AS title, ii.description, ii.quantity, ii.unit, ii.make,
+               COALESCE(NULLIF(TRIM(ii.description),''), im.item_name, 'Item') AS title,
+               COALESCE(NULLIF(TRIM(ii.description),''), im.item_name) AS description, ii.quantity, ii.unit, ii.make,
                ir.id AS rate_id,
                ir.vendor1_name, ir.vendor1_rate, ir.vendor2_name, ir.vendor2_rate, ir.vendor3_name, ir.vendor3_rate,
                ir.final_rate, ir.final_vendor_name,
@@ -7519,19 +7542,20 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
                COALESCE(ir.updated_at, i.created_at) AS created_at
           FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
           LEFT JOIN indent_item_rates ir ON ir.id = (SELECT MAX(x.id) FROM indent_item_rates x WHERE x.indent_item_id=ii.id)
-         WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND NOT ${hasFinalRate}
+          LEFT JOIN item_master im ON im.id = ii.item_master_id
+         WHERE ${rateItem} AND ${notOnPo} AND NOT ${hasFinalRate}
          ORDER BY i.created_at DESC, ii.id LIMIT 50`),
         cnt(`SELECT COUNT(*) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
-              WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND NOT ${hasFinalRate}`)),
+              WHERE ${rateItem} AND ${notOnPo} AND NOT ${hasFinalRate}`)),
       col('po_create', 'PO Create', 'PO', all(`
         SELECT i.id AS rid, i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
                COUNT(ii.id) || ' item(s) ready for PO' AS owner, MAX(i.created_at) AS created_at,
                COUNT(ii.id) AS items_n
           FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
-         WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND ${hasFinalRate}
+         WHERE ${rateItem} AND ${notOnPo} AND ${hasFinalRate}
          GROUP BY i.id ORDER BY MAX(i.created_at) DESC LIMIT 50`),
         cnt(`SELECT COUNT(DISTINCT i.id) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
-              WHERE i.status IN ('approved','crm_approved') AND ${notOnPo} AND ${hasFinalRate}`)),
+              WHERE ${rateItem} AND ${notOnPo} AND ${hasFinalRate}`)),
       col('po_approval', 'PO Approval', 'APPROVE', all(`
         SELECT vp.id AS rid, vp.po_number AS ref, COALESCE(v.name,'—') AS title,
                CASE vp.po_approval WHEN 'pending_l1' THEN 'L1 pending' ELSE 'L2 pending' END AS owner, vp.created_at,
@@ -7561,9 +7585,10 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
         cnt('SELECT COUNT(*) c FROM delivery_notes WHERE date(created_at) >= ?', wkAgo)),
       col('received', 'Received (GRN)', 'S8', all(`
         SELECT g.id AS rid, g.grn_number AS ref, COALESCE(vp.po_number,'—') AS title,
-               COALESCE(g.received_by,'') AS owner, g.created_at,
+               COALESCE(u.name, CAST(g.received_by AS TEXT), '') AS owner, g.created_at,
                g.vendor_po_id, g.grn_date
           FROM grn g LEFT JOIN vendor_pos vp ON vp.id=g.vendor_po_id
+          LEFT JOIN users u ON u.id = g.received_by
          ORDER BY g.created_at DESC LIMIT 50`),
         cnt('SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ?', wkAgo)),
       col('billed', 'Billed / Debit', 'S9-S10', all(`
@@ -7581,7 +7606,7 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
     {
       const onPo = `EXISTS (SELECT 1 FROM vendor_po_items vpi JOIN vendor_pos vpp ON vpp.id=vpi.vendor_po_id
                              WHERE vpi.indent_item_id=ii.id AND COALESCE(vpp.cancelled,0)=0)`;
-      const apprItems = `FROM indent_items ii JOIN indents i ON i.id=ii.indent_id WHERE i.status IN ('approved','crm_approved')`;
+      const apprItems = `FROM indent_items ii JOIN indents i ON i.id=ii.indent_id WHERE ${rateItem}`;
       const pctOf = (done, allc) => (allc > 0 ? Math.round((done / allc) * 100) - 100 : null);
       const indAll = cnt('SELECT COUNT(*) c FROM indents');
       const ratesDone = cnt(`SELECT COUNT(*) c ${apprItems} AND (${hasFinalRate} OR ${onPo})`);

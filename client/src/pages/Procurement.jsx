@@ -906,16 +906,23 @@ export default function Procurement() {
   // loaded — the board can't host the full multer form itself. One-shot,
   // same shape as ?approve= above; the params are stripped once consumed
   // so a refresh doesn't reopen it.
+  // Waits for the vendor master (pickIndentForPo pre-fills the vendor from
+  // it, through this render's closure) and pulls the indents list, which the
+  // Vendor PO tab does not load on its own but the modal's Link-to-Indent
+  // select needs (review 2026-09-05).
   const newPoParamHandled = useRef(false);
   useEffect(() => {
     if (newPoParamHandled.current || searchParams.get('new') !== 'po') return;
+    if (!vendors.length) return;
     newPoParamHandled.current = true;
-    openCreateVendorPo(searchParams.get('indent') || '');
+    const indentId = searchParams.get('indent') || '';
+    if (indentId && !indents.length) api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => {});
+    openCreateVendorPo(indentId);
     const next = new URLSearchParams(searchParams);
     next.delete('new'); next.delete('indent');
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [searchParams, vendors.length]);
 
   // Returning to this browser tab after editing an item's UOM / price on
   // the Item Master page in another tab should show the live value here.

@@ -42,8 +42,19 @@ export function useRateActions({ onChanged } = {}) {
       const row = mapRow;
       setMapRow(null); changed();
       // Map → straight into the Rate Contract when the line was unmapped
-      // (one click, not "map, then click the card again").
-      if (mi && !row.item_master_id) openQuotes({ ...row, item_master_id: mi.id, item_code: mi.item_code });
+      // (one click, not "map, then click the card again") — with the row
+      // RE-FETCHED, so the modal shows the Item Master's existing quotes /
+      // contract. Seeding it from this line's blanks would let one Save
+      // overwrite a contract shared by every order of that item (review
+      // 2026-09-05). If the fresh row can't be found, the card's own
+      // button opens it on the next click.
+      if (mi && !row.item_master_id) {
+        try {
+          const r = await api.get('/procurement/rates-items', { params: { search: row.description || '', page: 1 } });
+          const fresh = (r.data?.rows || []).find(x => x.id === row.id);
+          if (fresh) openQuotes(fresh);
+        } catch { /* see above */ }
+      }
     } catch (e) { toast.error(e.response?.data?.error || 'Map failed'); }
   };
 

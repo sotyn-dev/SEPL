@@ -30,16 +30,20 @@ import Modal from '../components/Modal';
 import { FiFileText, FiCheckCircle, FiTruck, FiPackage, FiCreditCard, FiAlertTriangle, FiClock, FiDollarSign, FiFilePlus, FiXCircle } from 'react-icons/fi';
 
 // Tab keys must be ones Procurement.jsx accepts (VALID_TABS) — an unknown
-// key silently lands on Indents. Dispatch / GRN live on 'delivery'.
+// key silently lands on Indents — and the SUB-tab must be the one that can
+// actually list the card's record, or the ?q= pre-filter shows an empty
+// table (review 2026-09-05): a PO number is on the Vendor PO 'list' sub-tab
+// (the 'pending' one lists indent items), a dispatch on Delivery 'list',
+// a bill on Bills 'bills'. GRNs are listed on the Indent FMS page.
 const STAGE_LINKS = {
   indent: '/procurement?tab=indents',
   rates: '/procurement?tab=rates',
   po_create: '/procurement?tab=vendorpo',
-  po_approval: '/procurement?tab=vendorpo',
+  po_approval: '/procurement?tab=vendorpo&subtab=list',
   purchase_bill: '/procurement?tab=bills',
-  sales_bill: '/procurement?tab=delivery',
-  received: '/procurement?tab=delivery',
-  billed: '/procurement?tab=bills',
+  sales_bill: '/procurement?tab=delivery&subtab=list',
+  received: '/indent-fms?tab=grn',
+  billed: '/procurement?tab=bills&subtab=bills',
 };
 
 const STAGE_ICONS = {
@@ -126,9 +130,10 @@ export default function ProcurementBoard() {
     const c = act.card;
     const body = { indent_item_id: c.indent_item_id };
     for (const n of [1, 2, 3]) {
-      // COALESCE upsert on the server: null keeps what was there.
-      body[`vendor${n}_name`] = String(form[`vendor${n}_name`] || '').trim() || null;
-      body[`vendor${n}_rate`] = +form[`vendor${n}_rate`] > 0 ? +form[`vendor${n}_rate`] : null;
+      // The server upsert keeps the stored value for null, so a blanked
+      // slot is sent as '' / 0 to actually clear it (same as the Rates tab).
+      body[`vendor${n}_name`] = String(form[`vendor${n}_name`] || '').trim();
+      body[`vendor${n}_rate`] = +form[`vendor${n}_rate`] > 0 ? +form[`vendor${n}_rate`] : 0;
     }
     const wantFinal = +form.final_rate > 0 || form.final_vendor_name;
     if (wantFinal && !(+form.final_rate > 0 && form.final_vendor_name)) return toast.error('To finalise, give BOTH the final rate and the final vendor');
@@ -157,10 +162,10 @@ export default function ProcurementBoard() {
     finally { setSaving(false); }
   };
 
-  // ── sales_bill: generate the Sales Bill from this dispatch (idempotent
-  // on the server — returns the existing one), or save notes. Status is
-  // sent back unchanged: the endpoint overwrites it, and "received" needs
-  // the proof-photo receive flow in the tab.
+  // ── sales_bill: generate the Sales Bill from this dispatch, or save
+  // notes. Notes-only: the status is NOT sent (site staff may have marked
+  // it received since this card was loaded — a stale status would undo
+  // that); "received" needs the proof-photo receive flow in the tab.
   const generateSalesBill = async () => {
     if (!act || saving) return;
     setSaving(true);
@@ -174,7 +179,7 @@ export default function ProcurementBoard() {
     if (!act || saving) return;
     setSaving(true);
     try {
-      await api.put(`/procurement/delivery-notes/${act.card.rid}`, { status: act.card.status || 'pending', notes: form.notes || null });
+      await api.put(`/procurement/delivery-notes/${act.card.rid}`, { notes: form.notes || null });
       done(`${act.card.ref} — notes saved`);
     } catch (e) { fail(e, 'Could not save the notes'); }
     finally { setSaving(false); }
@@ -396,11 +401,14 @@ export default function ProcurementBoard() {
               {stage === 'sales_bill' && (
                 <>
                   <button type="button" onClick={saveDnNotes} disabled={saving} className="btn btn-secondary text-xs">Save notes</button>
-                  {card.document_type !== 'sales_bill' && (
+                  {card.document_type !== 'sales_bill' && (card.sales_bill_number ? (
+                    <Link to={`${STAGE_LINKS.sales_bill}&q=${encodeURIComponent(card.sales_bill_number)}`} onClick={close}
+                      className="btn btn-primary flex items-center gap-1"><FiFileText size={14} /> Open Sales Bill {card.sales_bill_number} →</Link>
+                  ) : (
                     <button type="button" onClick={generateSalesBill} disabled={saving} className="btn btn-primary flex items-center gap-1">
-                      <FiFileText size={14} /> {card.sales_bill_number ? 'Open Sales Bill' : saving ? 'Generating…' : 'Generate Sales Bill'}
+                      <FiFileText size={14} /> {saving ? 'Generating…' : 'Generate Sales Bill'}
                     </button>
-                  )}
+                  ))}
                 </>
               )}
               {(stage === 'received' || stage === 'billed') && (
