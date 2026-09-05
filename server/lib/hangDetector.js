@@ -21,8 +21,13 @@ const inflight = new Map(); // id -> { req, started }
 let seq = 0;
 let lastFinished = null;    // { label, ms, at } — the request that ended most recently
 
+// Never let a credential reach the PM2 log: a few endpoints carry the login
+// token in the query string (backup download `?token=…`, audit report), and a
+// backup download is exactly the slow request this logs. Redact by name.
+const SENSITIVE_QS = /([?&](?:token|access_token|refresh_token|secret|api_key|apikey|key|code|sig|signature|password|pass|otp)=)[^&#]*/gi;
 function describe(req) {
-  const url = (req.originalUrl || req.url || '').slice(0, 160);
+  const raw = String(req.originalUrl || req.url || '');
+  const url = raw.replace(SENSITIVE_QS, '$1[redacted]').slice(0, 160);
   return `${req.method} ${url}`;
 }
 
