@@ -104,6 +104,7 @@ const SubContractors = lazy(() => import('./pages/SubContractors'));
 const SubconHiring = lazy(() => import('./pages/SubconHiring'));
 const ProcurementSchedule = lazy(() => import('./pages/ProcurementSchedule'));
 const CRMFunnel = lazy(() => import('./pages/CRMFunnel'));
+const SotynLeads = lazy(() => import('./pages/SotynLeads'));
 const ChequeFMS = lazy(() => import('./pages/ChequeFMS'));
 const EmailSettings = lazy(() => import('./pages/EmailSettings'));
 const EmailTriggers = lazy(() => import('./pages/EmailTriggers'));
@@ -323,6 +324,7 @@ export default function App() {
         <Route path="subcon-hiring" element={<ModuleRoute module="subcon_hiring"><SubconHiring /></ModuleRoute>} />
         <Route path="procurement-schedule" element={<ModuleRoute module="procurement_schedule"><ProcurementSchedule /></ModuleRoute>} />
         <Route path="crm-funnel" element={<ModuleRoute module="crm_funnel"><CRMFunnel /></ModuleRoute>} />
+        <Route path="sotyn-leads" element={<ModuleRoute module="sotyn_leads"><SotynLeads /></ModuleRoute>} />
         <Route path="cheques" element={<ModuleRoute module="cheques"><ChequeFMS /></ModuleRoute>} />
       </Route>
     </Routes>

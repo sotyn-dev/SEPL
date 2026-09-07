@@ -61,6 +61,8 @@ import {
   FiCamera,
   // ERP Management · System Flow single-click entry (mam 2026-09-01).
   FiCpu,
+  // Sotyn Leads · sotyn.ai website enquiry inbox (mam 2026-09-07).
+  FiRss,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -95,6 +97,9 @@ const SIDEBAR_GROUPS = [
     // (the legacy Sales Funnel) — this is the modern phase-A funnel.
     { path: '/crm-funnel',    label: 'CRM Sales Funnel',  icon: FiTrendingUp, module: 'crm_funnel' },
     { path: '/leads',         label: 'Sales Funnel',      icon: FiFilter,     module: 'leads' },
+    // Mam (2026-09-07): sotyn.ai website enquiries land here by themselves
+    // (public webhook) and are pushed into the Sales Funnel with Convert.
+    { path: '/sotyn-leads',   label: 'Sotyn Leads',       icon: FiRss,        module: 'sotyn_leads' },
     { path: '/business-book', label: 'Business Book',     icon: FiBook,       module: 'business_book' },
     { path: '/customers',     label: 'Customers',         icon: FiUser,       module: 'customers' },
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"

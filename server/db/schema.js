@@ -6511,6 +6511,15 @@ in your first week. If a process feels broken, raise a Help Ticket
     //   can_edit    → edit any flow, manage Step/Process masters
     //   can_approve → override an incomplete-dependency completion
     'system_flow',
+    // Mam (2026-09-07): Sotyn Leads — the sotyn.ai website enquiry inbox.
+    // The public webhook writes the row with no user attached; this key
+    // gates who can READ and work the inbox inside the ERP:
+    //   can_view   → see the inbox
+    //   can_edit   → set status / owner / remarks
+    //   can_create → press Convert (it creates a sales_funnel lead, so it
+    //                also needs leads.can_create)
+    //   can_delete → bin a junk submission
+    'sotyn_leads',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -7014,6 +7023,15 @@ in your first week. If a process feels broken, raise a Help Ticket
     runSystemFlowMigrations(db);
   } catch (e) {
     console.warn('[system_flow] migrations skipped (non-fatal):', e.message);
+  }
+
+  // Sotyn Leads (mam 2026-09-07) — sotyn.ai website enquiry inbox fed by
+  // the public webhook. server/routes/sotynLeads.js
+  try {
+    const { runSotynLeadsMigrations } = require('./sotynLeadsSchema');
+    runSotynLeadsMigrations(db);
+  } catch (e) {
+    console.warn('[sotyn_leads] migrations skipped (non-fatal):', e.message);
   }
 
   // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────

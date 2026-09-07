@@ -39,6 +39,10 @@ const ALL_MODULES = [
   // — Sales & CRM
   { key: 'leads', label: 'Sales Funnel' },
   { key: 'crm_funnel', label: 'CRM Sales Funnel' },
+  // Sotyn Leads (2026-09-07). Same drift trap as tally_bills above: the key is
+  // gated on the server, so without a row here nobody but Admin could ever be
+  // granted it. Convert also needs 'leads' Create — it writes a real funnel lead.
+  { key: 'sotyn_leads', label: 'Sotyn Leads — sotyn.ai website enquiries · Create=Convert to a Sales Funnel lead (also needs Sales Funnel Create) · Edit=status/owner/remarks · Delete=bin junk' },
   { key: 'fire_noc', label: 'Fire NOC Renewal' },
   { key: 'rental_tools', label: 'Rental Tools' },
   { key: 'influencers', label: 'Influencers' },

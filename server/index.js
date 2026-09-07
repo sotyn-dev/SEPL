@@ -39,6 +39,12 @@ try {
   console.warn('[perf] compression not installed — run npm install for faster pages');
 }
 
+// Sotyn Leads public webhook — mounted BEFORE the global 10 MB JSON parser on
+// purpose (audit 2026-09-07). It carries its own 32 kb express.json(); behind
+// the global parser that cap was dead code, because the body was already read
+// and an unauthenticated caller could push 10 MB through a synchronous server.
+app.use('/api/public', require('./routes/publicSotynLead'));
+
 app.use(express.json({ limit: '10mb' }));
 
 // Hang detector — logs [slow] requests and [lag] event-loop stalls with the
@@ -508,6 +514,7 @@ app.use('/api/hr', require('./routes/hr'));
 // candidates can accept / decline via /offer/:token without
 // logging in to the ERP.
 app.use('/api/public', require('./routes/publicHr'));
+app.use('/api/sotyn-leads', require('./routes/sotynLeads'));
 app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
 app.use('/api/gamification', require('./routes/champions'));
