@@ -304,6 +304,27 @@ export default function SotynLeads() {
     } finally { setImportBusy(false); }
   };
 
+  // Scan the sales@ mailbox — the other place a historical enquiry can still be,
+  // since every page links mailto:sales@securedengineers.com. Same two-step
+  // contract as the paste: preview first, write only on the second press.
+  const runMailboxScan = async (commit) => {
+    setImportBusy(true);
+    try {
+      const r = await api.post('/sotyn-leads/scan-mailbox', { commit });
+      if (commit) {
+        toast.success(`${r.data.inserted} lead${r.data.inserted === 1 ? '' : 's'} imported from the mailbox`);
+        setImportOpen(false);
+        setImportPreview(null);
+        load();
+      } else {
+        setImportPreview({ ...r.data, fromMailbox: true });
+        if (!r.data.found) toast(`Scanned ${r.data.scanned || 0} emails — no enquiries found`);
+      }
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Could not read the mailbox');
+    } finally { setImportBusy(false); }
+  };
+
   // A chat export is a .txt — read it in the browser and reuse the same paste
   // path, so the server needs no upload route and no file ever lands on disk.
   const readExportFile = (file) => {
@@ -593,13 +614,28 @@ export default function SotynLeads() {
             </div>
           )}
 
-          <div className="flex justify-end gap-2 pt-1">
-            <button onClick={() => setImportOpen(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50">Cancel</button>
-            <button onClick={() => runImport(false)} disabled={importBusy || !importText.trim()}
-                    className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50 disabled:opacity-50">
-              {importBusy && !importPreview ? 'Checking…' : 'Check what is in there'}
+          <div className="border-t pt-3">
+            <div className="text-xs text-slate-600 mb-2">
+              <b>Or search the sales mailbox.</b> Every page on the site links
+              sales@securedengineers.com, so enquiries that came by email are there.
+              This only reads — it never deletes, moves or marks anything.
+            </div>
+            <button onClick={() => runMailboxScan(false)} disabled={importBusy}
+                    className="px-3 py-1.5 text-sm border rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5 disabled:opacity-50">
+              <FiMail size={14} /> {importBusy ? 'Working…' : 'Scan sales@ mailbox'}
             </button>
-            <button onClick={() => runImport(true)} disabled={importBusy || !importPreview || !importPreview.importable}
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2 pt-1">
+            <button onClick={() => setImportOpen(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50">Cancel</button>
+            {!importPreview?.fromMailbox && (
+              <button onClick={() => runImport(false)} disabled={importBusy || !importText.trim()}
+                      className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50 disabled:opacity-50">
+                {importBusy && !importPreview ? 'Checking…' : 'Check what is in there'}
+              </button>
+            )}
+            <button onClick={() => (importPreview?.fromMailbox ? runMailboxScan(true) : runImport(true))}
+                    disabled={importBusy || !importPreview || !importPreview.importable}
                     className="px-4 py-2 text-sm font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
               {importPreview ? `Import ${importPreview.importable} lead${importPreview.importable === 1 ? '' : 's'}` : 'Import'}
             </button>

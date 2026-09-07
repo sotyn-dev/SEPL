@@ -235,26 +235,116 @@ router.delete('/:id', requirePermission('sotyn_leads', 'delete'), (req, res) => 
   res.json({ message: 'Deleted' });
 });
 
-// ── POST /import — WhatsApp ingestion ────────────────────────────────
+// ── Lead ingestion: WhatsApp paste + sales-mailbox scan ──────────────
 //
-// Mam (2026-09-07) "whatsapp ingestion banao". Every sotyn.ai form ships with an
-// empty WEBHOOK, so submissions only ever open a pre-filled WhatsApp chat to
-// +91 7009987817. This is how those leads get into the ERP without waiting for
-// the site to be fixed: paste one message, or a whole exported chat.
+// Mam (2026-09-07) "whatsapp ingestion banao" then "old data also retrive ... do
+// which is best i need data". Every sotyn.ai form ships with an empty WEBHOOK, so
+// enquiries never reach the ERP on their own. These two routes recover them from
+// the only two places they can still be: the WhatsApp messages the forms open, and
+// the sales@ mailbox every page links to.
 //
-// Two-step by design — `commit:false` (the default) parses and reports, writing
-// NOTHING. The screen shows what was found and what is already here, and only a
-// deliberate second call with commit:true inserts. An import that silently
+// Both share ONE staging path below, so dedupe, caps and the preview contract can
+// never drift apart between them.
+//
+// Two-step by design — a request without commit:true parses and reports, writing
+// NOTHING. The screen shows what was found, what is already here and what is
+// unusable, and only a deliberate second call inserts. An import that silently
 // created 300 rows on a mis-paste would be far worse than one extra click.
 //
-// Dedupe is deliberately DIFFERENT from the live webhook's: the webhook merges
-// on a 6-hour window (a double-tap on a slow connection), but a backfill is
-// months of history at once, so it matches on phone_key + form_type across ALL
-// time. Re-importing the same export is therefore a no-op, which is what makes
-// it safe to paste the whole chat again next month.
+// Dedupe is deliberately NOT the live webhook's 6-hour window: a backfill is months
+// of history at once, so it matches across ALL time — on phone_key + form_type, or
+// on email + form_type when the enquiry only carried an address. Re-running either
+// importer is therefore a no-op, which is what makes it safe to repeat.
 const MAX_IMPORT_CHARS = 5 * 1024 * 1024;   // a very long chat export, still bounded
-const MAX_IMPORT_ROWS = 1000;               // one paste cannot flood the inbox
+const MAX_IMPORT_ROWS = 1000;               // one run cannot flood the inbox
 
+const phoneKeyOf = (p) => (String(p || '').replace(/\D/g, '').slice(-10) || null);
+
+// candidates: [{ lead, at, sender, body }] — the shape BOTH parseChat() and
+// scanLeadMailbox() produce.
+function stageCandidates(db, candidates) {
+  const byPhone = db.prepare(
+    'SELECT id, name, created_at FROM sotyn_leads WHERE phone_key = ? AND form_type = ? ORDER BY id LIMIT 1'
+  );
+  const byEmail = db.prepare(
+    'SELECT id, name, created_at FROM sotyn_leads WHERE LOWER(email) = LOWER(?) AND form_type = ? ORDER BY id LIMIT 1'
+  );
+
+  const rows = [];
+  const seen = new Set();
+  for (const m of candidates) {
+    const l = m.lead;
+    // The message's own Phone line wins; a bare CTA has none, so fall back to the
+    // sender — which is a usable number only when they are not in your contacts.
+    const phone = l.phone || (/^\+?[\d ()-]{10,}$/.test(m.sender || '') ? m.sender : null);
+    const key = phoneKeyOf(phone);
+    const email = l.email || null;
+
+    const row = {
+      ...l, phone, phone_key: key, email,
+      at: m.at, sender: m.sender, body: m.body,
+      // With neither a number nor an address nobody can follow this up, and it
+      // cannot be deduped — reported, never imported.
+      skipped: (!key && !email) ? 'no phone number or email in the message' : null,
+      duplicate: null,
+    };
+
+    if (!row.skipped) {
+      const dedupeKey = (key ? 'p:' + key : 'e:' + String(email).toLowerCase()) + '|' + l.form_type;
+      const existing = key ? byPhone.get(key, l.form_type) : byEmail.get(email, l.form_type);
+      if (existing) row.duplicate = { id: existing.id, name: existing.name, created_at: existing.created_at };
+      else if (seen.has(dedupeKey)) row.duplicate = { id: null, name: 'earlier in this batch' };
+      else seen.add(dedupeKey);
+    }
+    rows.push(row);
+  }
+
+  const importable = rows.filter((r) => !r.skipped && !r.duplicate);
+  return {
+    rows,
+    importable,
+    summary: {
+      found: rows.length,
+      importable: importable.length,
+      duplicates: rows.filter((r) => r.duplicate).length,
+      skipped: rows.filter((r) => r.skipped).length,
+    },
+  };
+}
+
+// Trim a staged row down to what the preview table renders — the raw body, the
+// sender and the forensic payload stay on the server.
+const previewRow = (r) => ({
+  form_type: r.form_type, name: r.name, company: r.company, phone: r.phone,
+  email: r.email, city: r.city, trade: r.trade, team: r.team,
+  turnover: r.turnover, event: r.event, at: r.at,
+  duplicate: r.duplicate, skipped: r.skipped,
+});
+
+function insertStaged(db, importable, sourceTag) {
+  const insert = db.prepare(`
+    INSERT INTO sotyn_leads
+      (name, company, phone, phone_key, email, city, trade, team, turnover, event,
+       form_type, magnet, source, page, status, raw_json, submitted_at, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'new',?,?,COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+  `);
+  const run = db.transaction((list) => {
+    for (const r of list) {
+      insert.run(
+        r.name, r.company, r.phone, r.phone_key, r.email, r.city, r.trade, r.team,
+        r.turnover, r.event, r.form_type, r.magnet,
+        // Tagged so a recovered lead is never mistaken for a live website capture.
+        sourceTag,
+        JSON.stringify({ recovered: { via: sourceTag, sender: r.sender, at: r.at, body: r.body } }).slice(0, 4000),
+        r.at, r.at
+      );
+    }
+  });
+  run(importable);
+  return importable.length;
+}
+
+// POST /import — paste one WhatsApp message, or a whole exported chat.
 router.post('/import', requirePermission('sotyn_leads', 'create'), (req, res) => {
   const text = typeof req.body?.text === 'string' ? req.body.text : '';
   const commit = req.body?.commit === true;
@@ -264,8 +354,6 @@ router.post('/import', requirePermission('sotyn_leads', 'create'), (req, res) =>
   }
 
   const { parseChat } = require('../lib/whatsappLeadParser');
-  const phoneKey = (p) => (String(p || '').replace(/\D/g, '').slice(-10) || null);
-
   let parsed;
   try { parsed = parseChat(text); }
   catch (e) {
@@ -274,92 +362,58 @@ router.post('/import', requirePermission('sotyn_leads', 'create'), (req, res) =>
   }
 
   const db = getDb();
-  const findDupe = db.prepare(
-    'SELECT id, name, created_at FROM sotyn_leads WHERE phone_key = ? AND form_type = ? ORDER BY id LIMIT 1'
-  );
-
-  const rows = [];
-  const seenInPaste = new Set();
-  for (const m of parsed) {
-    const l = m.lead;
-    // The message's own Phone line wins; a bare CTA has none, so fall back to the
-    // sender — which is a raw number only when they are not in your contacts.
-    const phone = l.phone || (/^\+?[\d ()-]{10,}$/.test(m.sender || '') ? m.sender : null);
-    const key = phoneKey(phone);
-
-    const row = {
-      ...l,
-      phone,
-      phone_key: key,
-      at: m.at,
-      sender: m.sender,
-      body: m.body,
-      // Without a number nobody can follow this lead up, and it cannot be
-      // deduped — reported, never imported.
-      skipped: !key ? 'no phone number in the message' : null,
-      duplicate: null,
-    };
-    if (key) {
-      const existing = findDupe.get(key, l.form_type);
-      if (existing) row.duplicate = { id: existing.id, name: existing.name, created_at: existing.created_at };
-      else if (seenInPaste.has(key + '|' + l.form_type)) row.duplicate = { id: null, name: 'earlier in this paste' };
-      else seenInPaste.add(key + '|' + l.form_type);
-    }
-    rows.push(row);
-  }
-
-  const importable = rows.filter((r) => !r.skipped && !r.duplicate);
-  const summary = {
-    found: rows.length,
-    importable: importable.length,
-    duplicates: rows.filter((r) => r.duplicate).length,
-    skipped: rows.filter((r) => r.skipped).length,
-  };
-
+  const staged = stageCandidates(db, parsed);
   if (!commit) {
-    // Preview: hand back what WOULD happen, trimmed for the screen.
-    return res.json({
-      ...summary,
-      committed: false,
-      rows: rows.slice(0, 200).map((r) => ({
-        form_type: r.form_type, name: r.name, company: r.company, phone: r.phone,
-        email: r.email, city: r.city, trade: r.trade, team: r.team,
-        turnover: r.turnover, event: r.event, at: r.at,
-        duplicate: r.duplicate, skipped: r.skipped,
-      })),
-    });
+    return res.json({ ...staged.summary, committed: false, rows: staged.rows.slice(0, 200).map(previewRow) });
   }
-
-  if (!importable.length) return res.json({ ...summary, committed: true, inserted: 0 });
-  if (importable.length > MAX_IMPORT_ROWS) {
-    return res.status(413).json({ error: `That paste holds ${importable.length} new leads — import at most ${MAX_IMPORT_ROWS} at a time` });
+  if (!staged.importable.length) return res.json({ ...staged.summary, committed: true, inserted: 0 });
+  if (staged.importable.length > MAX_IMPORT_ROWS) {
+    return res.status(413).json({ error: `That paste holds ${staged.importable.length} new leads — import at most ${MAX_IMPORT_ROWS} at a time` });
   }
-
-  const insert = db.prepare(`
-    INSERT INTO sotyn_leads
-      (name, company, phone, phone_key, email, city, trade, team, turnover, event,
-       form_type, magnet, source, page, status, raw_json, submitted_at, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'new',?,?,COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
-  `);
-
   try {
-    const run = db.transaction((list) => {
-      for (const r of list) {
-        insert.run(
-          r.name, r.company, r.phone, r.phone_key, r.email, r.city, r.trade, r.team,
-          r.turnover, r.event, r.form_type, r.magnet,
-          // Tagged so an imported lead is never mistaken for a live capture.
-          'whatsapp-import',
-          JSON.stringify({ whatsapp: { sender: r.sender, at: r.at, body: r.body } }).slice(0, 4000),
-          r.at, r.at
-        );
-      }
-    });
-    run(importable);
-    console.log(`[sotyn-leads] whatsapp import by ${req.user?.name || req.user?.id}: ${importable.length} lead(s)`);
-    res.json({ ...summary, committed: true, inserted: importable.length });
+    const n = insertStaged(db, staged.importable, 'whatsapp-import');
+    console.log(`[sotyn-leads] whatsapp import by ${req.user?.name || req.user?.id}: ${n} lead(s)`);
+    res.json({ ...staged.summary, committed: true, inserted: n });
   } catch (e) {
     console.error('[sotyn-leads] import failed:', e.message);
+    res.status(500).json({ error: 'Could not save the imported leads' });
+  }
+});
+
+// POST /scan-mailbox — read website enquiries out of the sales@ mailbox.
+// Read-only against IMAP: it never deletes, moves or marks anything, so it can be
+// run again and again. Credentials live in .env on the server (lib/sotynLeadMailbox).
+router.post('/scan-mailbox', requirePermission('sotyn_leads', 'create'), async (req, res) => {
+  const commit = req.body?.commit === true;
+  const { scanLeadMailbox } = require('../lib/sotynLeadMailbox');
+
+  let scan;
+  try { scan = await scanLeadMailbox(); }
+  catch (e) {
+    console.error('[sotyn-leads] mailbox scan failed:', e.message);
+    return res.status(502).json({ error: 'Could not read the mailbox' });
+  }
+  if (!scan.configured) {
+    return res.status(400).json({ error: scan.problems[0], configured: false });
+  }
+
+  const db = getDb();
+  const staged = stageCandidates(db, scan.candidates);
+  const base = { ...staged.summary, scanned: scan.scanned, problems: scan.problems.slice(0, 10) };
+
+  if (!commit) {
+    return res.json({ ...base, committed: false, rows: staged.rows.slice(0, 200).map(previewRow) });
+  }
+  if (!staged.importable.length) return res.json({ ...base, committed: true, inserted: 0 });
+  if (staged.importable.length > MAX_IMPORT_ROWS) {
+    return res.status(413).json({ error: `The mailbox holds ${staged.importable.length} new leads — narrow SOTYN_MAIL_SINCE_DAYS and run it again` });
+  }
+  try {
+    const n = insertStaged(db, staged.importable, 'email-import');
+    console.log(`[sotyn-leads] mailbox import by ${req.user?.name || req.user?.id}: ${n} lead(s) from ${scan.scanned} message(s)`);
+    res.json({ ...base, committed: true, inserted: n });
+  } catch (e) {
+    console.error('[sotyn-leads] mailbox import failed:', e.message);
     res.status(500).json({ error: 'Could not save the imported leads' });
   }
 });
