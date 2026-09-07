@@ -109,19 +109,28 @@ function parseLeadMessage(body) {
 
 // Android:  "07/09/2026, 3:54 pm - Ankush: Webinar registration"
 // iOS:      "[07/09/2026, 3:54:12 PM] Ankush: Webinar registration"
-// Both may carry U+200E marks; iOS uses a narrow no-break space before am/pm.
-// The date/time itself is deliberately NOT strictly validated — this only has to
-// recognise where a message STARTS, so continuation lines can be joined to it.
+// Some locales export ISO dates: "2026-09-07, 15:54 - Ankush: …".
+//
+// The SENDER IS OPTIONAL on purpose. WhatsApp writes author-less notice lines
+// ("… - Messages and calls are end-to-end encrypted.", "… - Ankush changed their
+// phone number") which have no "Name:" segment. If those do not match here they
+// are treated as continuation text and GLUED onto the lead above them, polluting
+// the stored message (reproduced in the 2026-09-07 research pass). Matching them
+// as their own author-less message keeps that boundary intact; they are dropped
+// straight afterwards because they carry no lead.
+//
+// A leading BOM is matched too: WhatsApp exports are UTF-8 with a BOM, and without
+// this the FIRST message of every export was silently lost.
 const MSG_START = new RegExp(
-  '^\\u200e?' +
-  '(?:\\[)?' +                                   // iOS bracket
-  '(\\d{1,2}[\\/.-]\\d{1,2}[\\/.-]\\d{2,4})' +   // date
+  '^[\\ufeff\\u200e\\u200f]*' +               // BOM / bidi marks
+  '(?:\\[)?' +                                    // iOS bracket
+  '(\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[\\/.-]\\d{1,2}[\\/.-]\\d{2,4})' +   // ISO or dd/mm/yy
   ',?\\s+' +
-  '(\\d{1,2}:\\d{2}(?::\\d{2})?)' +              // time
-  '(?:[\\s\\u202f\\u00a0]*([ap]\\.?m\\.?))?' +   // optional am/pm
+  '(\\d{1,2}:\\d{2}(?::\\d{2})?)' +                  // time
+  '(?:[\\s\\u202f\\u00a0]*([ap]\\.?m\\.?))?' +          // optional am/pm
   '(?:\\])?' +
-  '\\s*[-–]?\\s*' +                              // Android separator
-  '([^:]{1,80}?):\\s?' +                         // sender
+  '\\s*[-–]?\\s*' +                                    // Android separator
+  '(?:([^:]{1,80}?):\\s?)?' +                          // sender — OPTIONAL (notice lines have none)
   '([\\s\\S]*)$',
   'i'
 );
@@ -137,7 +146,8 @@ const SYSTEM_LINE = /(end-to-end encrypted|secure service from Meta|Messages and
  */
 function splitChatExport(text) {
   if (!text || typeof text !== 'string') return [];
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  // Strip a leading BOM once for the whole file as well — belt and braces.
+  const lines = text.replace(/^\ufeff/, '').replace(/\r\n?/g, '\n').split('\n');
   const out = [];
   let cur = null;
 
@@ -146,9 +156,10 @@ function splitChatExport(text) {
     if (m) {
       if (cur) out.push(cur);
       cur = {
+        authorless: !m[4],   // a WhatsApp notice line, not somebody's message
         date: m[1],
         time: m[2] + (m[3] ? ' ' + m[3].replace(/\./g, '').toLowerCase() : ''),
-        sender: m[4].replace(/[\u200e\u200f]/g, '').trim(),
+        sender: (m[4] || '').replace(/[\u200e\u200f]/g, '').trim(),
         body: m[5] || '',
       };
     } else if (cur) {
@@ -160,7 +171,8 @@ function splitChatExport(text) {
   }
   if (cur) out.push(cur);
 
-  return out.filter((m) => !SYSTEM_LINE.test(m.body.split('\n')[0] || ''));
+  // Author-less lines are WhatsApp's own notices; they can never be a lead.
+  return out.filter((m) => !m.authorless && !SYSTEM_LINE.test(m.body.split('\n')[0] || ''));
 }
 
 // dd/mm/yy(yy) — Indian order, which is what WhatsApp uses on these phones.
@@ -176,7 +188,10 @@ function toSqlDateTime(date, time, offsetMinutes = IST_OFFSET_MIN) {
   if (!date) return null;
   const d = date.split(/[\/.-]/).map((n) => parseInt(n, 10));
   if (d.length !== 3 || d.some(Number.isNaN)) return null;
-  let [dd, mm, yy] = d;
+  // dd/mm/yy is the Indian order WhatsApp uses on these phones, but an ISO
+  // export (yyyy-mm-dd) leads with a 4-digit year — detect it rather than
+  // reading 2026 as a day.
+  let [dd, mm, yy] = /^\d{4}-/.test(date) ? [d[2], d[1], d[0]] : d;
   if (yy < 100) yy += 2000;
   if (dd > 31 || mm > 12) return null;
 

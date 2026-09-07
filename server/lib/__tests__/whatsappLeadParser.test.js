@@ -164,6 +164,38 @@ t('an export with no leads yields nothing rather than throwing', () => {
   const found = parseChat('07/09/2026, 4:02 pm - Ramesh: Sir?\n07/09/2026, 4:03 pm - Ankush: Ok');
   assert.strictEqual(found.length, 0);
 });
+// ── regressions from the 2026-09-07 research pass ────────────────────
+
+const BOM = String.fromCharCode(0xFEFF);
+
+t('a BOM at the start of an export does not eat the first message', () => {
+  // WhatsApp exports are UTF-8 WITH a BOM; before the fix this returned 0.
+  const found = parseChat(BOM + '07/09/2026, 3:54 pm - Ankush: Webinar registration\nName: BOM Export\nPhone: 9812300098');
+  assert.strictEqual(found.length, 1, 'the BOM swallowed the first message');
+  assert.strictEqual(found[0].lead.name, 'BOM Export');
+});
+
+t('an ISO-dated export (yyyy-mm-dd) is understood, not dropped', () => {
+  const found = parseChat('2026-09-07, 15:54 - Ankush: Webinar registration\nName: ISO Test\nPhone: 9812300095');
+  assert.strictEqual(found.length, 1, 'ISO-dated exports matched nothing at all');
+  assert.strictEqual(found[0].at, '2026-09-07 10:24:00', 'the year must not be read as the day; got ' + found[0].at);
+});
+
+t('an author-less notice between messages is not glued into the lead above it', () => {
+  const found = parseChat([
+    '07/09/2026, 3:54 pm - Ankush: Webinar registration',
+    'Name: Before System',
+    'Phone: 9812300097',
+    '08/09/2026, 9:00 am - Ankush changed their phone number',
+    '08/09/2026, 9:05 am - Ankush: New sotyn.ai demo request',
+    'Name: After System',
+    'Phone: 9812300096',
+  ].join('\n'));
+  assert.strictEqual(found.length, 2, 'expected 2 leads, got ' + found.length);
+  assert.ok(!/changed their phone/.test(found[0].body), 'the notice line was glued into the first lead');
+  assert.strictEqual(found[1].lead.name, 'After System');
+});
+
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
