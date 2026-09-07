@@ -14,6 +14,53 @@ const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
 
+// Does this user hold a right on another module? The BOQ / quotation lists are
+// shared reads with no requirePermission of their own, so when they merge in
+// CRM Sales Funnel rows (mam 2026-09-07) the CRM half has to carry the CRM
+// module's own gate — otherwise unticking "view" on crm_funnel in Roles &
+// Permissions would hide the CRM page but leave the same leads, their client
+// names and their BOQ files readable one tab away.
+const RIGHT_FIELDS = { view: 'can_view', create: 'can_create', edit: 'can_edit', delete: 'can_delete', approve: 'can_approve' };
+function hasModuleRight(db, user, module, action) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  const field = RIGHT_FIELDS[action];
+  if (!field) return false;
+  try {
+    const r = db.prepare(`SELECT MAX(rp.${field}) AS ok FROM role_permissions rp
+        JOIN user_roles ur ON ur.role_id = rp.role_id
+       WHERE ur.user_id = ? AND rp.module = ?`).get(user.id, module);
+    return !!(r && r.ok);
+  } catch (e) { return false; }
+}
+
+// A BOQ link is either an uploaded /uploads/… path or free text somebody typed
+// into "Customer BOQ Link". A pasted "drive.google.com/…" with no scheme would
+// resolve RELATIVE to the ERP (…/quotations/drive.google.com/…) and open a dead
+// SPA route instead of the BOQ, so give a bare host one (mam 2026-09-07).
+function externalLink(v) {
+  const s = String(v || '').trim();
+  if (!s) return null;
+  if (s.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(s)) return s;
+  return `https://${s}`;
+}
+
+// Name a BOQ row after the FILE it points at. A lead can now carry several
+// BOQs (mam 2026-09-07 "more upload files") and rows titled identically —
+// same client, same date, same Rs 0 — are unreadable, so the filename is the
+// only thing that tells them apart. Strips the "<epoch>-" prefix the upload
+// handler adds, and truncates the MIDDLE of a very long name so the extension
+// stays visible. Returns null when nothing file-like can be derived (a typed
+// Drive URL, say) — the caller falls back to a generic label.
+function boqFileTitle(link) {
+  let base = String(link || '').split(/[\\/]/).pop().split('?')[0].split('#')[0];
+  try { base = decodeURIComponent(base); } catch (_) { /* keep the raw text */ }
+  base = base.replace(/^\d{10,}-/, '');            // 1757248…-TFA.xlsx → TFA.xlsx
+  if (!base || !/\.[A-Za-z0-9]{1,8}$/.test(base)) return null;
+  if (base.length <= 52) return base;
+  return `${base.slice(0, 30)}…${base.slice(-18)}`;
+}
+
 // Tokenise a description for fuzzy item matching — drop noise words so the
 // distinctive keywords (Excavation, MS Pipe, 25mm…) carry the match.
 const STOP = new Set(['of','in','the','and','for','with','as','to','a','an','or','on','at','by','is','be','all','any','from','up','its','shall','etc','per','no','nos','each','including','include','included','complete','work','works','type','make','suitable','required','approved','rate','item','sqm','rmt']);
@@ -327,8 +374,9 @@ router.get('/client-boq', async (req, res) => {
 // lead (mam 2026-08-27: "here need come data from sales funnel boq, if add and
 // extra sales funnel boq"). Funnel rows are read-only references: the first
 // BOQ on a lead shows as FUNNEL, later ones (the "additional BOQ" path) as
-// EXTRA. Ids are prefixed (sf-/sfl-) so they can never collide with native
-// boq ids or be deleted/quoted by mistake.
+// EXTRA. The CRM Sales Funnel's customer BOQs list alongside them (mam
+// 2026-09-07). Ids are prefixed (sf-/sfl-/cf-) so they can never collide with
+// native boq ids or be deleted/quoted by mistake.
 router.get('/boq', (req, res) => {
   const db = getDb();
   const native = db.prepare(`SELECT b.*, l.company_name, u.name as created_by_name, 'boq' AS source FROM boq b
@@ -397,7 +445,104 @@ router.get('/boq', (req, res) => {
       }));
     }
   } catch (e) { /* funnel tables missing on a stale DB — native list still serves */ }
-  res.json([...native, ...funnel].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  // CRM Sales Funnel BOQs (mam 2026-09-07: "here boq from sales funnel and
+  // from crm sales funnel where fill Customer BOQ File (optional)"). Only
+  // leads that actually carry a BOQ file/link are listed — crm_funnel has no
+  // BOQ amount column, so these rows show 0 rather than borrowing
+  // quotation_amount, which is the QUOTE value and not a BOQ cost.
+  // Deliberately its OWN try/catch, outside the block above, so a crm failure
+  // can never wipe the sales-funnel rows already collected.
+  // Gated on the CRM module's OWN view right (see hasModuleRight): this
+  // endpoint has no requirePermission, so without the check a role whose CRM
+  // access mam has revoked would still read every CRM lead from this tab.
+  let crm = [];
+  if (hasModuleRight(db, req.user, 'crm_funnel', 'view')) {
+    try {
+      // One row per row of the row shape below — built once here so the three
+      // sources (history file, latest file, typed link) can never drift apart.
+      const emit = (r, id, label, link, createdAt) => {
+        const extra = r.lead_type === 'Extra Enquiry';
+        crm.push({
+          id,
+          source: extra ? 'crm_extra' : 'crm',
+          title: `${extra ? 'Extra BOQ' : 'CRM BOQ'}${r.lead_no ? ` — ${r.lead_no}` : ''} · ${label}`,
+          company_name: r.company_name,
+          drawing_required: 0,
+          // No BOQ amount exists on a CRM lead — 0, never an invented figure.
+          // The client blanks the Total cell for these rather than showing Rs 0.
+          total_amount: 0,
+          status: extra ? 'extra' : 'funnel',
+          created_at: createdAt,
+          boq_file_link: link,
+          created_by_name: r.created_by_name || null,
+          // crm_id, NOT funnel_id: funnel_id is a sales_funnel id and the two id
+          // spaces overlap, so quoting it would stamp a different client's lead.
+          crm_id: r.crm_id,
+        });
+      };
+      // EVERY BOQ ever attached to a lead, not just the one the column still
+      // points at (mam 2026-09-07: "which attached previous also"). One query,
+      // joined — never a lookup per lead.
+      // Its own try/catch: on a stale DB without the history table this must
+      // degrade to the old "latest columns only" list, not blank the CRM rows.
+      let crmHistory = [];
+      try {
+        crmHistory = db.prepare(`
+        SELECT cb.id, cb.crm_id, cb.boq_file_link, cb.notes, cb.created_at,
+               cf.lead_no, cf.lead_type,
+               COALESCE(NULLIF(cf.company_name,''), cf.client_name) AS company_name,
+               COALESCE(NULLIF(cb.created_by,''), u.name) AS created_by_name
+          FROM crm_funnel_boqs cb
+          JOIN crm_funnel cf ON cf.id = cb.crm_id
+          LEFT JOIN users u ON u.id = cf.created_by
+         WHERE COALESCE(cb.boq_file_link,'') <> ''
+         ORDER BY cb.created_at DESC, cb.id DESC`).all();
+      } catch (_) { /* crm_funnel_boqs missing — latest columns still list */ }
+      for (const h of crmHistory) {
+        // Titled by the file itself; the note, then a generic label, stand in
+        // when the link carries no filename.
+        emit(h, `cf-h${h.id}`, boqFileTitle(h.boq_file_link) || h.notes || 'Customer BOQ File',
+          h.boq_file_link, h.created_at);
+      }
+      // The lead's own columns can still hold a file the history never saw —
+      // the typed Customer BOQ Link always, and boq_file_link on a lead saved
+      // before this table existed and missed by the backfill. Same
+      // `historyLinks` de-duplication the sales-funnel block above uses, keyed
+      // crm_id|link, so a file that is both "latest" AND in history shows ONCE.
+      const historyLinks = new Set(crmHistory.map(h => `${h.crm_id}|${h.boq_file_link}`));
+      const crmLeads = db.prepare(`
+        SELECT cf.id AS crm_id, cf.lead_no, cf.lead_type,
+               COALESCE(NULLIF(cf.company_name,''), cf.client_name) AS company_name,
+               NULLIF(cf.boq_file_link,'') AS boq_file_link,
+               NULLIF(cf.cust_boq_link,'') AS cust_boq_link,
+               -- updated_at first: these rows are derived from the lead's own
+               -- columns, so a Customer BOQ Link typed today onto a lead opened
+               -- in June must not sort into June, below every newer BOQ. Real
+               -- uploads carry their own accurate date from the history table.
+               COALESCE(cf.updated_at, cf.created_at) AS created_at, u.name AS created_by_name
+          FROM crm_funnel cf
+          LEFT JOIN users u ON u.id = cf.created_by
+         WHERE COALESCE(cf.boq_file_link,'') <> '' OR COALESCE(cf.cust_boq_link,'') <> ''`).all();
+      for (const r of crmLeads) {
+        // The uploaded "Customer BOQ File" first, then the typed Customer BOQ
+        // Link only when it is a DIFFERENT document — one row per distinct BOQ.
+        const docs = [];
+        if (r.boq_file_link && !historyLinks.has(`${r.crm_id}|${r.boq_file_link}`)) {
+          docs.push({ label: boqFileTitle(r.boq_file_link) || 'Customer BOQ File', link: r.boq_file_link });
+        }
+        if (r.cust_boq_link && r.cust_boq_link !== r.boq_file_link
+            && !historyLinks.has(`${r.crm_id}|${r.cust_boq_link}`)) {
+          docs.push({ label: boqFileTitle(r.cust_boq_link) || 'Customer BOQ Link', link: externalLink(r.cust_boq_link) });
+        }
+        // The lead's created_at: crm_funnel has no boq_date, and updated_at
+        // would reshuffle this list on every unrelated edit to the lead.
+        // (History rows carry their own created_at, so multiple BOQs sort by
+        // when each was actually attached.)
+        docs.forEach((d, i) => emit(r, `cf-${r.crm_id}-${i}`, d.label, d.link, r.created_at));
+      }
+    } catch (e) { /* crm_funnel missing on a stale DB — the rest of the list still serves */ }
+  }
+  res.json([...native, ...funnel, ...crm].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
 });
 
 router.post('/boq', requirePermission('quotations', 'create'), (req, res) => {
@@ -438,16 +583,24 @@ router.get('/boq/:id', (req, res) => {
 });
 
 // Quotations — ERP rows PLUS quotations recorded on Sales Funnel leads
-// (mam 2026-08-27: "upload quotations show here"). A funnel lead whose
-// quotation was uploaded in the funnel (quotation_number/file/amount on
-// sales_funnel) shows as a read-only FUNNEL row — unless a real quotations
-// row already points at that lead (funnel_id), which supersedes it.
+// (mam 2026-08-27: "upload quotations show here") and on CRM Sales Funnel
+// leads (mam 2026-09-07). A funnel lead whose quotation was uploaded in the
+// funnel (quotation_number/file/amount on sales_funnel, quotation_link/amount
+// on crm_funnel) shows as a read-only FUNNEL / CRM row — unless a real
+// quotations row already points at that lead, which supersedes it.
 router.get('/', (req, res) => {
   const db = getDb();
-  const native = db.prepare(`SELECT q.*, COALESCE(l.company_name, sf.company_name, sf.client_name) AS company_name, u.name as created_by_name, 'quotation' AS source
+  // cf joined so a quote raised on a CRM Sales Funnel BOQ still shows a client
+  // name instead of a blank cell (mam 2026-09-07).
+  // NULLIF on every text branch: a cleared company_name is stored as '' (not
+  // NULL) by both funnel edit forms, and COALESCE stops at '' — which is how a
+  // quotation ends up with a blank Client cell while the same lead shows its
+  // name fine one tab away.
+  const native = db.prepare(`SELECT q.*, COALESCE(NULLIF(l.company_name,''), NULLIF(sf.company_name,''), NULLIF(sf.client_name,''), NULLIF(cf.company_name,''), cf.client_name) AS company_name, u.name as created_by_name, 'quotation' AS source
     FROM quotations q
     LEFT JOIN leads l ON q.lead_id=l.id
     LEFT JOIN sales_funnel sf ON sf.id=q.funnel_id
+    LEFT JOIN crm_funnel cf ON cf.id=q.crm_funnel_id
     LEFT JOIN users u ON q.created_by=u.id ORDER BY q.created_at DESC`).all();
   // SOP-03 S1 two clocks: starting when the quote went out (created_at) the
   // ball is with the CLIENT; each log entry flips it ('client' replied → ball
@@ -498,7 +651,40 @@ router.get('/', (req, res) => {
         created_by_name: r.quotation_sent_by || null,
       }));
   } catch (e) { /* stale DB without funnel columns — native list still serves */ }
-  res.json([...native, ...funnel].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  // The same read-only treatment for CRM Sales Funnel leads (mam 2026-09-07),
+  // so a quotation raised on a CRM BOQ — or filled straight into the CRM
+  // funnel — is visible here too. A real quotations row pointing at the lead
+  // (crm_funnel_id) supersedes it, exactly as funnel_id does above.
+  let crmQ = [];
+  if (hasModuleRight(db, req.user, 'crm_funnel', 'view')) {
+   try {
+    crmQ = db.prepare(`
+      SELECT cf.id AS crm_id, cf.lead_no, cf.quotation_link,
+             COALESCE(cf.quotation_amount, 0) AS quotation_amount,
+             -- quotation_submit_date can be an ISO string ('2026-09-07T09:12:33.123Z')
+             -- or a bare date, while every other row here is SQLite's
+             -- 'YYYY-MM-DD HH:MM:SS'. The merged list is ordered by a RAW string
+             -- compare, so normalise the shape or these rows sort to the wrong day.
+             SUBSTR(REPLACE(SUBSTR(COALESCE(cf.quotation_submit_date, cf.updated_at, cf.created_at), 1, 19), 'T', ' ') || ' 00:00:00', 1, 19) AS created_at,
+             COALESCE(NULLIF(cf.company_name,''), cf.client_name) AS company_name,
+             u.name AS created_by_name
+        FROM crm_funnel cf
+        LEFT JOIN users u ON u.id = cf.created_by
+       WHERE (COALESCE(cf.quotation_submitted,0) = 1 OR COALESCE(cf.quotation_link,'') <> '' OR COALESCE(cf.quotation_amount,0) > 0)
+         AND NOT EXISTS (SELECT 1 FROM quotations q WHERE q.crm_funnel_id = cf.id)`).all()
+      .map(r => ({
+        id: `cfq-${r.crm_id}`, source: 'crm', crm_id: r.crm_id,
+        // crm_funnel has no quotation_number column — the lead no identifies it.
+        quotation_number: r.lead_no || `CRM-${r.crm_id}`,
+        company_name: r.company_name,
+        total_amount: r.quotation_amount, discount: 0, final_amount: r.quotation_amount,
+        status: 'sent', created_at: r.created_at,
+        quotation_file_link: r.quotation_link || null,
+        created_by_name: r.created_by_name || null,
+      }));
+   } catch (e) { /* stale DB without the crm columns — the rest of the list still serves */ }
+  }
+  res.json([...native, ...funnel, ...crmQ].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
 });
 
 // ── SOP-02 S5/S6: Margin Chart + floor rule (mam 2026-08-27) ──────────────
@@ -577,6 +763,13 @@ router.post('/:id/margin-decision', (req, res) => {
                     quotation_file_link=COALESCE(?, quotation_file_link),
                     quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
         .run(q.quotation_number, q.final_amount, q.quotation_file_link || null, req.user.name || null, q.funnel_id);
+    } else if (approve && q.crm_funnel_id) {
+      // Same release for a CRM Sales Funnel quote (mam 2026-09-07) — without
+      // this a below-floor CRM quote is approved here but the CRM lead never
+      // leaves Step 1 and the team thinks no quote went out.
+      db.prepare(`UPDATE crm_funnel SET quotation_amount=?, quotation_link=COALESCE(?, quotation_link),
+                    quotation_submitted=1, quotation_submit_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(q.final_amount, q.quotation_file_link || null, q.crm_funnel_id);
     }
     res.json({ ok: true, status: approve ? 'draft' : 'rejected' });
   } catch (err) {
@@ -588,13 +781,37 @@ router.post('/:id/margin-decision', (req, res) => {
 // Quote a Sales Funnel BOQ with margin (mam 2026-08-27, SOP-02 F5-F7):
 // base = the BOQ cost, final = base × (1 + margin%). Creates a real
 // quotation row AND stamps the funnel lead's quotation_* columns so the
-// funnel board and this page stay in sync.
+// funnel board and this page stay in sync. Takes a CRM Sales Funnel BOQ the
+// same way (mam 2026-09-07) — crm_id instead of funnel_id.
 router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, res) => {
   try {
-    const { funnel_id, base_amount, margin_pct, category, quotation_file_link, valid_until, notes } = req.body || {};
+    const { funnel_id, crm_id, base_amount, margin_pct, category, quotation_file_link, valid_until, notes } = req.body || {};
     const db = getDb();
-    const sf = db.prepare('SELECT id, company_name, client_name FROM sales_funnel WHERE id=?').get(+funnel_id);
-    if (!sf) return res.status(404).json({ error: 'Funnel lead not found' });
+    // The BOQ comes either from the Sales Funnel or from the CRM Sales Funnel
+    // (mam 2026-09-07). The two ids are kept in SEPARATE fields on purpose:
+    // both tables autoincrement from 1, so one id in the wrong field would
+    // quote — and stamp — a completely different client's lead.
+    const funnelId = funnel_id != null && funnel_id !== '' ? +funnel_id : null;
+    const crmId = crm_id != null && crm_id !== '' ? +crm_id : null;
+    if (!funnelId && !crmId) return res.status(400).json({ error: 'Pick a funnel BOQ to quote' });
+    if (funnelId && crmId) return res.status(400).json({ error: 'A quotation belongs to ONE lead — send funnel_id or crm_id, not both' });
+    const sf = funnelId ? db.prepare('SELECT id, company_name, client_name FROM sales_funnel WHERE id=?').get(funnelId) : null;
+    if (funnelId && !sf) return res.status(404).json({ error: 'Funnel lead not found' });
+    const cf = crmId ? db.prepare('SELECT id, lead_no, company_name, client_name, final_status, quotation_amount FROM crm_funnel WHERE id=?').get(crmId) : null;
+    if (crmId && !cf) return res.status(404).json({ error: 'CRM lead not found' });
+    // Quoting a CRM lead WRITES to crm_funnel (below), so it needs the CRM
+    // module's own edit right — quotations:create is held by every non-Viewer
+    // role while crm_funnel edit is admin-only, so without this the CRM board
+    // could be moved by people that module refuses (mam 2026-09-07).
+    if (cf && !hasModuleRight(db, req.user, 'crm_funnel', 'edit')) {
+      return res.status(403).json({ error: 'No edit permission for crm_funnel — ask an admin to quote this CRM lead' });
+    }
+    // A closed deal's recorded quote value is history: crm_funnel keeps no
+    // revision of it, so re-quoting a won/lost lead would overwrite the real
+    // figure with no way back.
+    if (cf && ['win', 'loss'].includes(String(cf.final_status || '').toLowerCase())) {
+      return res.status(409).json({ error: `${cf.lead_no || ("CRM-" + cf.id)} is already closed (${cf.final_status}) — its quoted value can't be overwritten` });
+    }
     const base = +base_amount || 0;
     if (base <= 0) return res.status(400).json({ error: 'Enter the BOQ base amount' });
     // Margin resolution (SOP-02 S5 "margin chart, not guesswork"):
@@ -612,18 +829,26 @@ router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, re
     const finalAmt = Math.round(base * (1 + margin / 100) * 100) / 100;
     const { nextSequence } = require('../db/nextSequence');
     const qNum = nextSequence(db, 'quotations', 'quotation_number', 'QTN-', { startFrom: 0, pad: 4 });
-    const clientName = sf.company_name || sf.client_name || '';
+    const lead = sf || cf;
+    const clientName = lead.company_name || lead.client_name || '';
     const r = db.prepare(`INSERT INTO quotations
-        (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, status, margin_approval, created_by, funnel_id, margin_pct, quotation_file_link)
-        VALUES (NULL, NULL, ?, ?, 0, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`)
+        (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, status, margin_approval, created_by, funnel_id, crm_funnel_id, margin_pct, quotation_file_link)
+        VALUES (NULL, NULL, ?, ?, 0, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`)
       .run(qNum, base, finalAmt, valid_until || null,
-           notes || `Margin ${margin}%${category ? ` (${category})` : ''} on funnel BOQ — ${clientName}`,
+           notes || `Margin ${margin}%${category ? ` (${category})` : ''} on ${cf ? 'CRM funnel' : 'funnel'} BOQ — ${clientName}`,
            belowFloor ? 'pending' : null,
-           req.user.id, sf.id, margin, quotation_file_link || null);
-    if (!belowFloor) {
+           req.user.id, sf ? sf.id : null, cf ? cf.id : null, margin, quotation_file_link || null);
+    if (!belowFloor && sf) {
       db.prepare(`UPDATE sales_funnel SET quotation_number=?, quotation_amount=?, quotation_file_link=COALESCE(?, quotation_file_link),
                     quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
         .run(qNum, finalAmt, quotation_file_link || null, req.user.name || null, sf.id);
+    } else if (!belowFloor && cf) {
+      // Same stamp on the CRM lead (mam 2026-09-07). quotation_submitted=1 is
+      // what moves it out of Step 1; crm_funnel has no quotation_number /
+      // sent_by column, so the QTN number lives on the quotation row here.
+      db.prepare(`UPDATE crm_funnel SET quotation_amount=?, quotation_link=COALESCE(?, quotation_link),
+                    quotation_submitted=1, quotation_submit_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(finalAmt, quotation_file_link || null, cf.id);
     }
     res.status(201).json({
       id: r.lastInsertRowid, quotation_number: qNum, final_amount: finalAmt,
@@ -693,7 +918,11 @@ router.put('/:id', requirePermission('quotations', 'edit'), (req, res) => {
       const { nextSequence } = require('../db/nextSequence');
       const lead = prev.lead_id ? db.prepare('SELECT company_name, contact_person, email FROM leads WHERE id=?').get(prev.lead_id) : null;
       const sf = prev.funnel_id ? db.prepare('SELECT company_name, client_name FROM sales_funnel WHERE id=?').get(prev.funnel_id) : null;
-      const clientName = lead?.company_name || sf?.company_name || sf?.client_name || 'Client';
+      // A quote raised on a CRM Sales Funnel BOQ has no lead_id and no
+      // funnel_id (mam 2026-09-07) — without this the project record would be
+      // created, once and for ever, literally named "Client".
+      const cf = prev.crm_funnel_id ? db.prepare('SELECT company_name, client_name FROM crm_funnel WHERE id=?').get(prev.crm_funnel_id) : null;
+      const clientName = lead?.company_name || sf?.company_name || sf?.client_name || cf?.company_name || cf?.client_name || 'Client';
       const leadNo = nextSequence(db, 'business_book', 'lead_no', 'SEPL', { startFrom: 20000, pad: 5 });
       const bb = db.prepare(`INSERT INTO business_book
           (lead_no, client_name, company_name, project_name, sale_amount_without_gst, po_amount)

@@ -10,6 +10,10 @@ const { nextSequence } = require('../db/nextSequence');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
 const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJsonArray } = require('../lib/aiComplete');
+// "Approved PO with no purchase bill" — shared with the scorecard's
+// auto:po_bill_pending KPI so the flow-board tile and the KPI can never
+// disagree (mam 2026-09-07).
+const { poMissingBillWhere } = require('../lib/poBill');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -4093,14 +4097,17 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   try {
     const tx = db.transaction(() => {
       const r = db.prepare(
+        // created_by (2026-09-07): who raised the PO. The table never recorded
+        // it, so "whose PO is still unbilled" had to be guessed from the
+        // approval stamps — see lib/poBill. Exact from here on.
         `INSERT INTO vendor_pos
            (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
             payment_block_type, payment_block_amount, payment_block_notes, payment_block_status,
-            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, po_approval)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
+            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, created_by, po_approval)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
             pmtType, pmtAmount, pmtNotes, pmtStatus,
-            payment_terms, credit_days, freight_terms, freight_amount, gst_pct);
+            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, req.user?.id || null);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.
@@ -4663,9 +4670,12 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   try {
     const db = getDb();
     const r = db.prepare(
-      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path, material_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath, materialStatus);
+      // created_by (2026-09-07): who uploaded the bill — the row already
+      // stamps debit_notes.created_by from the same handler, so the user id
+      // was in hand all along.
+      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path, material_status, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath, materialStatus, req.user?.id || null);
 
     // Mam (2026-06-02): "in rec. against delivery note show here ok
     // site name also show here delivery note number and against it
@@ -7573,11 +7583,9 @@ router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) =
                COALESCE('due ' || vp.expected_receipt_date, 'bill awaited') AS owner, vp.created_at,
                vp.expected_receipt_date, vp.total_amount AS amount, vp.payment_block_status
           FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
-         WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
-           AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)
+         WHERE ${poMissingBillWhere()}
          ORDER BY vp.created_at DESC LIMIT 50`),
-        cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
-              AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)`)),
+        cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE ${poMissingBillWhere()}`)),
       col('sales_bill', 'Sales Bill', 'DISPATCH', all(`
         SELECT dn.id AS rid, COALESCE(dn.document_number, 'DN-' || dn.id) AS ref,
                COALESCE(vp.po_number, CASE WHEN dn.vendor_po_id IS NULL THEN 'From Store' ELSE '—' END) AS title,

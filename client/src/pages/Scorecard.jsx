@@ -119,7 +119,7 @@ const SOURCE_INFO = {
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
   'auto:quotations_sent':       { plan: 'You set',                            actual: 'Quotations sent by user' },
   'auto:meetings_planned':      { plan: 'You set',                            actual: 'Meetings scheduled this week' },
-  'auto:crm_kitting':           { plan: 'You set',                            actual: 'CRM full-kitting checkpoints the user logged (entries + photos)' },
+  'auto:crm_kitting':           { plan: 'All active checkpoints on the projects where this user is the tracker\'s CRM owner', actual: 'Of those, checkpoints complete (latest status Yes/NA) — cumulative, all 3 stages' },
   // Business Book
   'auto:bb_entries':            { plan: 'You set',                            actual: 'Business Book entries created by user' },
   'auto:bb_po_amount':          { plan: 'You set',                            actual: 'Σ PO amount on user\'s BB entries' },
@@ -129,6 +129,8 @@ const SOURCE_INFO = {
   'auto:indents_in_week':       { plan: 'Indents created for user\'s site',    actual: 'Indents created for user\'s site' },
   'auto:indent_vs_bill':        { plan: 'Indents raised for the site (this week)', actual: 'Sales bills generated for the site (this week)' },
   'auto:items_complete':        { plan: 'All indent line-items (total)',         actual: 'Items with a PO raised (procured) — company-wide' },
+  'auto:po_bill_pending':       { plan: 'POs approved this week (they now owe a bill)', actual: 'POs whose first purchase bill was uploaded this week — Pending = older approved POs still unbilled' },
+  'auto:po_bill_pending_all':   { plan: 'POs approved this week — company-wide',        actual: 'POs first billed this week — company-wide; Pending = the whole unbilled backlog' },
   // HR — Manpower (from the HR → Manpower Plan page)
   'auto:site_manpower':         { plan: 'Σ REQUIRED manpower — value slab, all projects', actual: 'Σ ACTUAL manpower on site (DPR average)' },
   'auto:attrition':             { plan: 'You set (max acceptable leavers)',    actual: 'Count of inactive/terminated staff (all-time)' },
@@ -1638,7 +1640,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:leads_qualified">leads qualified (by user)</option>
                     <option value="auto:quotations_sent">quotations sent (by user)</option>
                     <option value="auto:meetings_planned">meetings planned (this week)</option>
-                    <option value="auto:crm_kitting">CRM full kitting — checkpoints logged (by user)</option>
+                    <option value="auto:crm_kitting">CRM full kitting — checkpoints complete (user = CRM owner)</option>
                   </optgroup>
                   <optgroup label="Business Book">
                     <option value="auto:bb_entries">BB entries created (by user)</option>
@@ -1653,6 +1655,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:indents_approved">indents approved (by user)</option>
                     <option value="auto:vendor_pos_created">vendor POs created</option>
                     <option value="auto:purchase_bills">purchase bills received</option>
+                    <option value="auto:po_bill_pending">Purchase Bill — approved POs missing a bill (by owner)</option>
+                    <option value="auto:po_bill_pending_all">Purchase Bill — approved POs missing a bill (company-wide)</option>
                     <option value="auto:dispatch_sent">dispatches sent (delivery notes)</option>
                     <option value="auto:material_received">material received (site)</option>
                   </optgroup>
@@ -1796,6 +1800,10 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="auto:snags">auto: snag list</option>
             <option value="auto:raci_steps_done">auto: RACI steps (all modules)</option>
             <RaciStepOptions modules={raciModules} />
+            <optgroup label="Procurement">
+              <option value="auto:po_bill_pending">auto: Purchase Bill — approved POs missing a bill (by owner)</option>
+              <option value="auto:po_bill_pending_all">auto: Purchase Bill — approved POs missing a bill (company-wide)</option>
+            </optgroup>
             <optgroup label="ERP Management (System Flow) — by developer">
               <option value="auto:sysflow_steps">auto: System Flow steps (developer)</option>
               <option value="auto:sysflow_ontime_pct">auto: System Flow on-time % (developer)</option>

@@ -3007,6 +3007,11 @@ function initializeDatabase() {
     ['quotations', 'funnel_id INTEGER'],
     ['quotations', 'margin_pct REAL'],
     ['quotations', 'quotation_file_link TEXT'],
+    // The same quote raised on a CRM Sales Funnel BOQ (mam 2026-09-07: "here
+    // boq from sales funnel and from crm sales funnel where fill Customer BOQ
+    // File"). Its OWN column — funnel_id means sales_funnel, and the two id
+    // sequences overlap, so reusing it would stamp an unrelated client's lead.
+    ['quotations', 'crm_funnel_id INTEGER'],
     // S6 floor gate lives in its OWN column — the quotations.status CHECK
     // only allows draft/sent/negotiation/accepted/rejected, and rebuilding
     // the table on prod to relax it isn't worth the risk. null = not
@@ -3682,8 +3687,16 @@ function initializeDatabase() {
     // print page split (CGST/SGST = half each, or IGST = full) and the
     // live display_total on the list.
     ['vendor_pos', 'gst_pct REAL DEFAULT 18'],
+    // Who raised the PO / uploaded the bill (2026-09-07). Neither table ever
+    // recorded it, so the Purchase Bill KPI ("every approved PO must have a
+    // bill") had to guess the owner from the approval stamps — see
+    // lib/poBill. No backfill is possible (audit_log CREATE rows carry
+    // entity_id NULL), so historical rows stay on that fallback chain; from
+    // here on attribution is exact.
+    ['vendor_pos', 'created_by INTEGER REFERENCES users(id)'],
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
+    ['purchase_bills', 'created_by INTEGER REFERENCES users(id)'],
     // Material acceptance at bill entry (mam 2026-06-04): 'approved' (default)
     // or 'reject'.  Reject auto-raises a rejected-material debit note.
     ['purchase_bills', "material_status TEXT DEFAULT 'approved'"],
@@ -5427,6 +5440,48 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[schema] kpi_auto_sources_v7 failed:', e.message); }
 
+  // ─── Purchase Bill KPI off the RACI step (mam 2026-09-07: "every approved PO
+  //     must have a bill").  purchase_bill is the LAST step of the
+  //     indent_to_dispatch module and a record is pending at only the FIRST
+  //     unstamped step, so every step ahead of it absorbed the pipeline and
+  //     the row read Planned 0 / Actual 0 / Pending 0-of-0 for everyone.
+  //     The auto:po_bill_pending* sources
+  //     ask the Procurement flow board's own question instead, off the same
+  //     predicate (lib/poBill).
+  //     Pointed at the COMPANY-WIDE source, not the per-person one: attribution
+  //     needs a Responsible named on the Responsible (RACI) screen — that table
+  //     is empty — or vendor_pos.created_by, which is NULL on every PO that
+  //     already exists and only fills in for new ones. The attributed source
+  //     would therefore show mam 0/0, the exact symptom she complained about,
+  //     while _all shows her the real backlog today; she can switch the row to
+  //     auto:po_bill_pending herself once a Responsible is named.
+  //     Matched on the CURRENT data_source, not on template + metric name:
+  //     mam created this row by hand in production, so the repo does not know
+  //     what she called it or which template it sits on. The v8 key of the
+  //     first cut pointed it at the attributed source, so v9 re-runs and takes
+  //     that value back too — auto:po_bill_pending is days old and nobody can
+  //     have chosen it deliberately yet. ────────────────────────────────────
+  try {
+    const w9 = db.prepare("SELECT value FROM app_settings WHERE key='kpi_auto_sources_v9'").get();
+    if (!w9) {
+      const n = db.prepare(
+        `UPDATE score_kpis SET data_source = 'auto:po_bill_pending_all'
+          WHERE data_source IN ('auto:raci_step:indent_to_dispatch:purchase_bill',
+                                'auto:po_bill_pending')`
+      ).run().changes;
+      // Only ARM the guard once it actually found the row. The old source
+      // string is an inference — the repo cannot know what mam named her KPI —
+      // so a single boot against a database that does not have it yet (a fresh
+      // clone, a restored backup, the row added later) would otherwise burn the
+      // one-time flag and the repoint could never happen. The UPDATE is a
+      // single indexed no-op until it matches, so re-running it costs nothing.
+      if (n > 0) {
+        db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_auto_sources_v9', 'done')").run();
+        console.log(`[schema] kpi_auto_sources_v9: repointed ${n} Purchase Bill KPI(s) to auto:po_bill_pending_all`);
+      }
+    }
+  } catch (e) { console.error('[schema] kpi_auto_sources_v9 failed:', e.message); }
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives
@@ -5442,6 +5497,56 @@ function initializeDatabase() {
       created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
   } catch (e) { console.error('[schema] sales_funnel_boqs create failed:', e.message); }
+
+  // The same story on the CRM Sales Funnel (mam 2026-09-07: "like this type
+  // more upload files Attache Customer BOQ File (optional) which attached
+  // previous also need to data in /quotations").  crm_funnel.boq_file_link is
+  // a single column, so every new upload REPLACED the last one; the history
+  // lives here and the column keeps the LATEST, exactly as sales_funnel does
+  // above.  No boq_amount twin: crm_funnel carries no BOQ cost — its
+  // quotation_amount is the QUOTE value — and inventing one was already
+  // rejected today.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS crm_funnel_boqs (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      crm_id        INTEGER REFERENCES crm_funnel(id) ON DELETE CASCADE,
+      boq_file_link TEXT,
+      notes         TEXT,
+      created_by    TEXT,
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) { console.error('[schema] crm_funnel_boqs create failed:', e.message); }
+
+  // ─── Backfill the BOQs mam attached BEFORE the history table existed ─────
+  // "which attached previous also need to data in /quotations": every lead
+  // that already carries a boq_file_link gets one history row, dated when the
+  // LEAD was created (crm_funnel has no boq_date, and updated_at would date a
+  // 2026-06 BOQ as today).  Guarded by an app_settings key so it runs once.
+  // The guard is armed ONLY when the INSERT actually moved rows — the same
+  // trap fixed in kpi_auto_sources_v9 above: a boot against a database that
+  // has no CRM BOQ yet (a fresh clone, a restored backup, mam attaching her
+  // first file tomorrow) would otherwise burn the flag and the history would
+  // start empty forever.  The NOT EXISTS makes it idempotent regardless: a
+  // link already in the table can never be inserted twice.
+  try {
+    const cb1 = db.prepare("SELECT value FROM app_settings WHERE key='crm_funnel_boqs_backfill_v1'").get();
+    if (!cb1) {
+      const n = db.prepare(
+        `INSERT INTO crm_funnel_boqs (crm_id, boq_file_link, notes, created_by, created_at)
+         SELECT cf.id, cf.boq_file_link, 'Attached before multi-BOQ',
+                (SELECT u.name FROM users u WHERE u.id = cf.created_by),
+                COALESCE(cf.created_at, CURRENT_TIMESTAMP)
+           FROM crm_funnel cf
+          WHERE COALESCE(cf.boq_file_link,'') <> ''
+            AND NOT EXISTS (SELECT 1 FROM crm_funnel_boqs b
+                             WHERE b.crm_id = cf.id AND b.boq_file_link = cf.boq_file_link)`
+      ).run().changes;
+      if (n > 0) {
+        db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('crm_funnel_boqs_backfill_v1', 'done')").run();
+        console.log(`[schema] crm_funnel_boqs_backfill_v1: carried ${n} already-attached CRM BOQ file(s) into the history`);
+      }
+    }
+  } catch (e) { console.error('[schema] crm_funnel_boqs_backfill_v1 failed:', e.message); }
 
   // ─── SOP-02 S5/S6: fixed Margin Chart + margin floor (mam 2026-08-27) ───
   // "Margin chart, not guesswork": standard margin % per category feeds the
@@ -7134,6 +7239,10 @@ in your first week. If a process feels broken, raise a Help Ticket
     'CREATE INDEX IF NOT EXISTS idx_indent_tracker_ind ON indent_tracker(indent_id, stage_date)',
     'CREATE INDEX IF NOT EXISTS idx_dnotes_vpo       ON delivery_notes(vendor_po_id)',
     'CREATE INDEX IF NOT EXISTS idx_pbills_vpo       ON purchase_bills(vendor_po_id)',
+    //   Purchase Bill KPI (2026-09-07): "approved PO with no bill" runs three
+    //   times per user per week on the leaderboard — narrow the scan to
+    //   approved POs before the owner-resolver subqueries run per row.
+    'CREATE INDEX IF NOT EXISTS idx_vendor_pos_appr  ON vendor_pos(po_approval)',
     'CREATE INDEX IF NOT EXISTS idx_grn_vpo          ON grn(vendor_po_id)',
     'CREATE INDEX IF NOT EXISTS idx_dnotes_debit_vpo ON debit_notes(vendor_po_id)',
     'CREATE INDEX IF NOT EXISTS idx_pms_assignee     ON pms_tasks(assigned_to, status)',

@@ -9,9 +9,13 @@ import ResponsibilityTab from '../components/ResponsibilityTab';
 import { exportCsv } from '../utils/exportCsv';
 
 const fmt = (n) => 'Rs ' + Math.abs(Math.round(+n || 0)).toLocaleString('en-IN');
+// Readable name for an attached BOQ: the upload handler prefixes every stored
+// file with "<epoch>-", which is noise in the attachment list.
+const fileName = (link) => String(link || '').split('/').pop().replace(/^\d{10,}-/, '') || 'BOQ file';
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import { useUrlTab } from '../hooks/useUrlTab';
+import { fmtDate } from '../utils/datetime';
 
 // CRM Sales Funnel FMS — flat 3-step tracker. Step 1: Quotation submit.
 // Step 2: Negotiation. Step 3: Win/Loss. Mam's columns from her sheet:
@@ -37,7 +41,7 @@ const LEAD_TYPES = ['New', 'Extra Enquiry'];
 const blank = () => ({
   client_name: '', company_name: '', mobile: '', email: '', source: '',
   address: '', state: '', district: '', remarks: '', category: '', type: '',
-  lead_type: 'New', boq_file_link: '', boq_file: null,
+  lead_type: 'New', boq_file_link: '', boq_files: [],
   cust_boq_link: '', quotation_link: '', quotation_amount: 0, quotation_submitted: false,
   negotiation_status: '', negotiation_amount: 0, negotiation_remarks: '',
   final_status: '', loss_reason: '',
@@ -135,11 +139,47 @@ export default function CRMFunnel() {
   useEffect(load, [filter.q, filter.step, filter.state, filter.type]);
   const pager = usePagination(rows);
 
-  const openAdd = () => { setEditing(null); setForm(blank()); setModal(true); };
+  // Every BOQ attached to the lead being edited (mam 2026-09-07: "more upload
+  // files ... which attached previous also"). Loaded from the history endpoint
+  // when the edit modal opens; empty for a brand-new lead, which still shows
+  // the picked files locally until it is saved.
+  const [boqs, setBoqs] = useState([]);
+  const loadBoqs = (id) => {
+    if (!id) { setBoqs([]); return; }
+    api.get(`/crm-funnel/${id}/boqs`).then(r => setBoqs(r.data || [])).catch(() => setBoqs([]));
+  };
+
+  const openAdd = () => { setEditing(null); setForm(blank()); setBoqs([]); setModal(true); };
   const openEdit = (row) => {
     setEditing(row);
-    setForm({ ...row, quotation_submitted: !!row.quotation_submitted });
+    setForm({ ...row, quotation_submitted: !!row.quotation_submitted, boq_files: [] });
+    setBoqs([]);          // clear FIRST — otherwise the previous lead's files
+    loadBoqs(row.id);     // show under this one until the fetch returns
     setModal(true);
+  };
+
+  // Detach one attached BOQ. The server repoints the lead's current file at
+  // the newest remaining one, so the list view's BOQ link never dangles.
+  const removeBoq = async (b) => {
+    if (!editing) return;
+    if (!confirm(`Remove "${fileName(b.boq_file_link)}" from this lead?`)) return;
+    try {
+      await api.delete(`/crm-funnel/${editing.id}/boqs/${b.id}`);
+      // Re-read the lead before anything else. The delete bumps the lead's
+      // updated_at (it repoints boq_file_link), and this modal is still holding
+      // the pre-delete copy — saving it would hit the lost-update guard and be
+      // rejected with "someone else edited this", throwing away everything typed
+      // in the form. Refresh the optimistic-lock token and the current-file
+      // pointer so the next Save is clean.
+      try {
+        const { data } = await api.get(`/crm-funnel/${editing.id}`);
+        setEditing(data);
+        setForm(f => ({ ...f, updated_at: data.updated_at, boq_file_link: data.boq_file_link || '' }));
+      } catch (_) { /* the removal itself succeeded; the list reload below still shows truth */ }
+      loadBoqs(editing.id);
+      load();
+      toast.success('Removed');
+    } catch (err) { toast.error(err.response?.data?.error || 'Remove failed'); }
   };
   const districtOptions = form.state ? (DISTRICTS_BY_STATE[form.state] || []) : [];
 
@@ -148,17 +188,19 @@ export default function CRMFunnel() {
     if (!form.client_name?.trim()) { toast.error('Client name is required'); return; }
     setSaving(true);
     try {
-      // Build a multipart form so the BOQ file can ride along when picked.
-      // Server accepts either multipart with `boq_file` or plain JSON for
+      // Build a multipart form so the BOQ files can ride along when picked.
+      // Server accepts either multipart with `boq_files` or plain JSON for
       // backwards compatibility — using multipart always keeps it simple.
       const fd = new FormData();
       Object.entries(form).forEach(([k, v]) => {
-        if (k === 'boq_file') return;                // file appended separately
+        if (k === 'boq_files') return;               // files appended separately
         if (v === null || v === undefined) return;
         if (typeof v === 'boolean') fd.append(k, v ? '1' : '0');
         else fd.append(k, v);
       });
-      if (form.boq_file instanceof File) fd.append('boq_file', form.boq_file);
+      // One append per file under the SAME field name — multer collects them
+      // into an array, and every one is kept as its own attachment.
+      (form.boq_files || []).forEach(f => { if (f instanceof File) fd.append('boq_files', f); });
       const opts = { headers: { 'Content-Type': 'multipart/form-data' } };
       if (editing) {
         await api.put(`/crm-funnel/${editing.id}`, fd, opts);
@@ -359,8 +401,12 @@ export default function CRMFunnel() {
                 <td>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
                 <td>{r.state || '-'}</td>
                 <td>
-                  {r.cust_boq_link ? (
-                    <a className="text-red-600 hover:underline" href={r.cust_boq_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                  {/* The uploaded "Customer BOQ File" counts as the BOQ too —
+                      this cell used to read only cust_boq_link, so a lead whose
+                      BOQ was UPLOADED showed "-" on the very page it was
+                      uploaded from (mam 2026-09-07). */}
+                  {(r.cust_boq_link || r.boq_file_link) ? (
+                    <a className="text-red-600 hover:underline" href={r.cust_boq_link || r.boq_file_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
                   ) : r.source_indent_id ? (
                     <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
                   ) : '-'}
@@ -471,19 +517,55 @@ export default function CRMFunnel() {
                 onChange={(opt) => setForm({ ...form, district: opt?.value || '' })} />
             </div>
             {/* BOQ file upload — Excel / PDF / image at lead-capture time so
-                the client's BOQ stays attached from day one. Optional. */}
+                the client's BOQ stays attached from day one. Optional.
+                MULTIPLE since mam 2026-09-07 ("more upload files"): a client
+                re-sends a revised BOQ and every version has to stay, so the
+                picker takes several and the list below shows them all. */}
             <div className="sm:col-span-2">
-              <label className="label">Customer BOQ File <span className="text-gray-400 font-normal">(optional)</span></label>
+              <label className="label">Customer BOQ File <span className="text-gray-400 font-normal">(optional — you can pick more than one)</span></label>
               <input
                 className="input"
                 type="file"
+                multiple
                 accept=".xlsx,.xls,.pdf,.doc,.docx,.jpg,.jpeg,.png"
-                onChange={e => setForm({ ...form, boq_file: e.target.files?.[0] || null })}
+                onChange={e => {
+                  // APPEND, don't replace. Two revisions usually live in two
+                  // folders, so the natural gesture is to open the picker twice —
+                  // and replacing on the second pick is the exact "new upload
+                  // wipes the old one" behaviour this whole change removes.
+                  const picked = Array.from(e.target.files || []);
+                  setForm(f => {
+                    const seen = new Set((f.boq_files || []).map(x => `${x.name}|${x.size}`));
+                    return { ...f, boq_files: [...(f.boq_files || []), ...picked.filter(x => !seen.has(`${x.name}|${x.size}`))] };
+                  });
+                  e.target.value = '';   // so re-picking the same file fires onChange again
+                }}
               />
-              {form.boq_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.boq_file.name}</p>}
-              {!form.boq_file && form.boq_file_link && (
+              {(form.boq_files || []).length > 0 && (
+                <p className="text-[10px] text-emerald-600 mt-0.5">
+                  Selected: {form.boq_files.map(f => f.name).join(', ')}
+                </p>
+              )}
+              {/* Already attached — newest first, straight from the history
+                  table, so nothing an earlier upload replaced is lost. */}
+              {editing && boqs.length > 0 && (
+                <ul className="mt-1 space-y-0.5">
+                  {boqs.map(b => (
+                    <li key={b.id} className="text-[10px] text-gray-500 flex items-center gap-1.5">
+                      <a href={b.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 underline">{fileName(b.boq_file_link)}</a>
+                      <span className="text-gray-400">{fmtDate(b.created_at)}</span>
+                      {canEdit('crm_funnel') && (
+                        <button type="button" className="text-[10px] text-red-500 hover:underline" onClick={() => removeBoq(b)}>remove</button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* A new (unsaved) lead — and the moment before the history load
+                  returns — keeps the original single-link line. */}
+              {boqs.length === 0 && form.boq_file_link && (
                 <p className="text-[10px] text-gray-500 mt-0.5">
-                  Attached: <a href={form.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 underline">{form.boq_file_link.split('/').pop()}</a>
+                  Attached: <a href={form.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 underline">{fileName(form.boq_file_link)}</a>
                   {' '}<button type="button" className="text-[10px] text-red-500 hover:underline" onClick={() => setForm({ ...form, boq_file_link: '' })}>remove</button>
                 </p>
               )}

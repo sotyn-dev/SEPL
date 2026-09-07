@@ -13,6 +13,14 @@ import { fmtDate } from '../utils/datetime';
 
 const blankRow = () => ({ description: '', quantity: 1, unit: 'nos', rate: 0, item_id: null, suggestion: null });
 
+// Where a listed BOQ came from — the export must say the same thing the
+// table's badges say now that CRM Sales Funnel BOQs list here (mam 2026-09-07).
+const boqSourceLabel = (s) => s === 'funnel' ? 'Sales Funnel'
+  : s === 'funnel_extra' ? 'Sales Funnel (Extra)'
+  : s === 'crm' ? 'CRM Sales Funnel'
+  : s === 'crm_extra' ? 'CRM Sales Funnel (Extra)'
+  : 'ERP';
+
 // ── Margin Chart editor (SOP-02 S5/S6, mam 2026-08-27) ──────────────────
 // Fixed margin % per category (the chart) + the approval floor. Admin-only
 // server-side; the Quote modal's category dropdown reads from here.
@@ -101,7 +109,7 @@ function MarginChartEditor({ chart, reload }) {
 }
 
 export default function Quotations() {
-  const { canDelete, isAdmin } = useAuth();
+  const { canDelete, canEdit, isAdmin } = useAuth();
   const [tab, setTab] = useUrlTab(['boq', 'quotations', 'responsible'], 'boq');
   const [boqs, setBoqs] = useState([]);
   const [quotations, setQuotations] = useState([]);
@@ -242,7 +250,12 @@ export default function Quotations() {
     e.preventDefault();
     setQuoteBusy(true);
     try {
-      const r = await api.post('/quotations/funnel-quote', { funnel_id: quoteFor.funnel_id, ...quoteForm });
+      // ONE of the two ids, never both (mam 2026-09-07): funnel_id means a
+      // sales_funnel lead and crm_id a CRM one, and the id spaces overlap.
+      const r = await api.post('/quotations/funnel-quote', {
+        ...(quoteFor.crm_id ? { crm_id: quoteFor.crm_id } : { funnel_id: quoteFor.funnel_id }),
+        ...quoteForm,
+      });
       if (r.data.message) toast(r.data.message, { icon: '⏳', duration: 6000 });   // below-floor → Sales Head
       else toast.success(`${r.data.quotation_number} created — Rs ${r.data.final_amount.toLocaleString()}`);
       setQuoteFor(null);
@@ -269,8 +282,8 @@ export default function Quotations() {
             <h3 className="font-semibold text-gray-800">Bill of Quantities</h3>
             <div className="flex gap-2">
               <button onClick={() => exportCsv('boqs',
-                ['Title','Client','Drawing','Total','Status','Date'],
-                boqs.map(b => [b.title, b.company_name, b.drawing_required ? 'Yes' : 'No', b.total_amount, b.status, b.created_at]))}
+                ['Title','Client','Source','Drawing','Total','Status','Date'],
+                boqs.map(b => [b.title, b.company_name, boqSourceLabel(b.source), b.drawing_required ? 'Yes' : 'No', b.total_amount, b.status, b.created_at]))}
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
               <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create BOQ</button>
             </div>
@@ -286,7 +299,10 @@ export default function Quotations() {
                       {/* Sales-funnel BOQs listed alongside (mam 2026-08-27) —
                           first BOQ on a lead = FUNNEL, later additions = EXTRA. */}
                       {b.source === 'funnel' && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold align-middle">FUNNEL</span>}
-                      {b.source === 'funnel_extra' && <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px] font-bold align-middle">EXTRA</span>}
+                      {/* CRM Sales Funnel BOQs list here too (mam 2026-09-07) —
+                          violet so a CRM BOQ is never taken for a sales-funnel one. */}
+                      {(b.source === 'crm' || b.source === 'crm_extra') && <span className="ml-2 px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-[9px] font-bold align-middle">CRM</span>}
+                      {(b.source === 'funnel_extra' || b.source === 'crm_extra') && <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px] font-bold align-middle">EXTRA</span>}
                       {b.boq_file_link && (
                         <a href={b.boq_file_link} target="_blank" rel="noreferrer"
                            className="ml-2 text-blue-600 hover:underline text-[11px]">view file</a>
@@ -294,13 +310,20 @@ export default function Quotations() {
                     </td>
                     <td>{b.company_name}</td>
                     <td>{b.drawing_required ? 'Yes' : 'No'}</td>
-                    <td>Rs {b.total_amount?.toLocaleString()}</td>
+                    {/* A CRM lead carries no BOQ amount — "Rs 0" would read as
+                        a priced BOQ worth nothing (mam 2026-09-07). */}
+                    <td>{(b.source === 'crm' || b.source === 'crm_extra') ? <span className="text-gray-400">—</span> : <>Rs {b.total_amount?.toLocaleString()}</>}</td>
                     <td><StatusBadge status={b.status} /></td>
                     <td className="text-gray-500">{fmtDate(b.created_at)}</td>
                     <td>
                       <div className="flex items-center gap-1">
-                        {/* Quote this funnel BOQ with margin (SOP-02 F5-F7) */}
-                        {b.funnel_id && (
+                        {/* Quote this funnel BOQ with margin (SOP-02 F5-F7) —
+                            crm_id covers the CRM funnel rows (mam 2026-09-07). */}
+                        {/* Quoting a CRM BOQ writes to the CRM lead, so the server requires
+                            crm_funnel edit rights. Without the same gate here the
+                            button shows for everyone and 403s for all but admins —
+                            the "granted permission does nothing" shape. */}
+                        {(b.funnel_id || (b.crm_id && canEdit('crm_funnel'))) && (
                           <button onClick={() => openQuote(b)}
                             className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 font-semibold"
                             title="Create a quotation from this BOQ — base amount + margin %">
@@ -351,6 +374,8 @@ export default function Quotations() {
                       {q.quotation_number}
                       {/* Funnel-uploaded quotations listed alongside (mam 2026-08-27) */}
                       {q.source === 'funnel' && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold align-middle">FUNNEL</span>}
+                      {/* CRM-funnel quotations listed alongside (mam 2026-09-07) */}
+                      {q.source === 'crm' && <span className="ml-2 px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-[9px] font-bold align-middle">CRM</span>}
                       {q.margin_pct != null && q.margin_pct !== 0 && (
                         <div className="text-[10px] text-indigo-600">margin {q.margin_pct}%</div>
                       )}
@@ -360,7 +385,7 @@ export default function Quotations() {
                       )}
                       {/* SOP-03 S1 two clocks: days waited on each side, and
                           one-tap logging of who just replied. */}
-                      {q.source !== 'funnel' && q.clock_client_days != null && (
+                      {q.source !== 'funnel' && q.source !== 'crm' && q.clock_client_days != null && (
                         <div className="flex items-center gap-1 mt-1 text-[10px]">
                           <span className={`px-1.5 py-0.5 rounded font-semibold ${q.clock_ball === 'client' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}
                             title="Days the ball has been in the CLIENT's court">client {q.clock_client_days}d</span>
@@ -388,8 +413,11 @@ export default function Quotations() {
                       {q.discount_approval === 'rejected' && <div className="text-[9px] font-bold text-red-700 mt-0.5">DISC REJECTED</div>}
                     </td>
                     <td>
-                      {q.source === 'funnel' ? (
-                        <span className="text-[11px] text-gray-400">from Sales Funnel</span>
+                      {/* Read-only merged rows carry a synthetic string id —
+                          no status dropdown, no delete (mam 2026-09-07: the
+                          CRM rows are guarded exactly like the funnel ones). */}
+                      {(q.source === 'funnel' || q.source === 'crm') ? (
+                        <span className="text-[11px] text-gray-400">from {q.source === 'crm' ? 'CRM Sales Funnel' : 'Sales Funnel'}</span>
                       ) : q.margin_approval === 'pending' ? (
                         // SOP-02 S6: below-floor margin — Sales Head decides.
                         <div className="flex gap-1 items-center">
@@ -484,7 +512,10 @@ export default function Quotations() {
                   onChange={e => setQuoteForm(f => ({ ...f, valid_until: e.target.value }))} />
               </div>
             </div>
-            <p className="text-[11px] text-gray-400">Saves a quotation here AND stamps the Sales Funnel lead's quotation stage (number, amount, file, date).</p>
+            {/* CRM leads have no quotation-number column — don't promise one. */}
+            <p className="text-[11px] text-gray-400">{quoteFor.crm_id
+              ? "Saves a quotation here AND stamps the CRM Sales Funnel lead's quotation stage (amount, file, date)."
+              : "Saves a quotation here AND stamps the Sales Funnel lead's quotation stage (number, amount, file, date)."}</p>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setQuoteFor(null)} className="btn btn-secondary">Cancel</button>
               <button type="submit" disabled={quoteBusy} className="btn btn-primary">{quoteBusy ? 'Saving…' : 'Create Quotation'}</button>

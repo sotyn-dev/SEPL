@@ -869,12 +869,39 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         const c = db.prepare(`SELECT COUNT(*) as c FROM meetings WHERE meeting_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
         return { given: null, done: c };
       }
-      // CRM Full Kitting — each checkpoint the user logs this week (mam
-      // 2026-07-04). crm_kitting_entry is append-only, so one row per dropdown
-      // change / photo upload = one unit of kitting work done by the user.
+      // CRM Full Kitting — mam 2026-09-07: "CRM -> only CRM Full kitting".
+      // Credits the person named in the tracker's CRM column, not whoever
+      // clicked the box: the checkpoints on Consern Pharma were ticked by the
+      // Admin login, so the CRM person scored 0 while the tracker showed real
+      // progress.
+      //   Actual  = checkpoints CURRENTLY complete on her projects — the
+      //             append-only history collapsed to the latest status per
+      //             (project_key, checkpoint_id), so two edits of one box stay
+      //             ONE unit, by the tracker's own rule;
+      //   Planned = every ACTIVE checkpoint on those same projects.
+      // BOTH sides come from lib/crmKittingProgress and both are standing
+      // totals with no week window, so the ratio is "how much of my kitting is
+      // finished" and is bounded by 100%. This RETIRES the typed weekly target
+      // (120) on purpose: a cumulative count divided by a weekly number has no
+      // ceiling, pinned the row above 100% forever and rewrote every past week
+      // with today's total. Ownership is crm_kitting_project_meta.crm_owner
+      // ONLY — a project with no owner typed counts for nobody, and a name
+      // that matches two user accounts counts for nobody either. All three
+      // stages roll up into the one number (the tracker's badge is per stage).
+      // Owns NO kitting project → null/null, NOT 0/0. The engine reads 0/0 as
+      // "nothing to judge, on plan" and scores it a weighted 100% (mam
+      // 2026-08-13), which would paint the whole company green the moment this
+      // shipped — worse than the 0 she complained about, and target_auto would
+      // hide the Target box so she could not type her way out of it. null hands
+      // the row back to the manual planned/actual it uses today.
       if (source === 'auto:crm_kitting') {
-        const c = db.prepare(`SELECT COUNT(*) as c FROM crm_kitting_entry WHERE uploaded_by=? AND uploaded_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        return { given: null, done: c };
+        try {
+          const { kittingProjectsForUser, kittingProgress } = require('../lib/crmKittingProgress');
+          const keys = kittingProjectsForUser(db, userId);
+          if (!keys.length) return { given: null, done: null };
+          const p = kittingProgress(db, keys);
+          return { given: p.given, done: p.done };
+        } catch (e) { return { given: null, done: null }; }
       }
       // Activity-log data entry — how many create/update/delete actions this
       // user recorded this week, from the live audit trail (mam 2026-07-04).
@@ -919,6 +946,76 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       if (source === 'auto:dispatch_sent') {
         const c = db.prepare(`SELECT COUNT(*) as c FROM delivery_notes WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
         return { given: null, done: c };
+      }
+
+      // Purchase Bill — mam 2026-09-07: "every approved PO must have a bill".
+      // Replaces the RACI step 'indent_to_dispatch:purchase_bill' — the LAST
+      // step of that module (utils/raciModules.js:289-305) and therefore
+      // always 0: a record is pending at only the FIRST unstamped step, so
+      // every step in front of it absorbed the pipeline. Its rows are INDENTS
+      // and the bill stamp joins purchase_bills → vendor_pos → indent_id, so
+      // a PO with indent_id NULL was invisible to it anyway.
+      // This is a COMPLIANCE ratio, not a weekly throughput, because that is
+      // what mam's rule is: every approved PO must have a bill. Planned and
+      // Actual are therefore the SAME cohort, measured as at the week end:
+      //   Planned = every PO due a bill by the week end (approved, not cancelled);
+      //   Actual  = of those, the ones that HAVE a bill by the week end.
+      // Pending "up" is then Planned − Actual (computed further down), which is
+      // byte-for-byte the Procurement flow board's Purchase Bill count — the
+      // two screens cannot drift apart because they are the same subtraction.
+      //   closedBefore = backlog actually cleared this week (POs approved before
+      //                  the week whose FIRST bill landed inside it) → Pending "wk".
+      // Two cohorts was the earlier mistake: Planned = approved-this-week against
+      // Actual = billed-this-week meant a week spent clearing old bills scored
+      // Planned 0 / Actual 3, which the engine reads as 0% — clearing the backlog
+      // scored WORSE than doing nothing, and the leftover POs vanished from every
+      // column. One cohort makes the row monotone: uploading a bill can only ever
+      // move the number up. openBefore stays 0 for the same reason — the backlog
+      // is already inside Planned−Actual, and adding it again would double-count.
+      // Every query bounds the PO itself to "existed and was approved on or
+      // before the week end", not just the bill, so a past week cannot count
+      // POs that had not been raised yet.
+      // _all is the company-wide twin: no owner clause, so no untraceable PO
+      // can silently vanish from the total.
+      if (source === 'auto:po_bill_pending' || source === 'auto:po_bill_pending_all') {
+        const { PO_BILL_OWNER_SQL, PO_APPROVED_TS_IST, PO_APPROVED_DATE_IST } = require('../lib/poBill');
+        const mine = source === 'auto:po_bill_pending' ? ` AND (${PO_BILL_OWNER_SQL}) = @uid` : '';
+        // Week END = end of SUNDAY, the same bound the carry-over engine uses
+        // for done-timestamps, so a bill uploaded on Sunday lands in the week
+        // that just ended instead of the Sat 23:59:59 → Mon 00:00:00 gap.
+        const sundayDate = shiftWeek(sinceDate, 6);
+        const arg = (o) => (mine ? { ...o, uid: userId } : o);
+        const cut = `${sundayDate} 23:59:59`;
+        // The cohort: every PO that owed a bill as at the week end.
+        const planned = db.prepare(
+          `SELECT COUNT(*) c FROM vendor_pos vp
+            WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+              AND ${PO_APPROVED_TS_IST} <= @cut${mine}`
+        ).get(arg({ cut })).c;
+        // Of that same cohort, the ones that HAVE a bill by the week end.
+        // Planned − this = poMissingBillWhere('@cut') by construction, so the
+        // Pending figure and the flow board's tile are the same number.
+        const done = db.prepare(
+          `SELECT COUNT(*) c FROM vendor_pos vp
+            WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+              AND ${PO_APPROVED_TS_IST} <= @cut${mine}
+              AND EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id
+                           AND datetime(pb.created_at, '+330 minutes') <= @cut)`
+        ).get(arg({ cut })).c;
+        // Backlog cleared this week — Pending "wk". MIN(pb.created_at) so a PO
+        // with three bills counts ONCE, and created_at (server-set, +330 = IST)
+        // not bill_date: bill_date is the vendor's printed date, user-typed and
+        // freely back-datable, so scoring on it would let work move between weeks.
+        const clearedBacklog = db.prepare(
+          `SELECT COUNT(*) c FROM vendor_pos vp
+            WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+              AND ${PO_APPROVED_DATE_IST} < @ws${mine}
+              AND date((SELECT MIN(pb.created_at) FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id),
+                       '+330 minutes') BETWEEN @ws AND @we`
+        ).get(arg({ ws: sinceDate, we: sundayDate })).c;
+        // openBefore 0: the backlog is already Planned − Actual. Adding it here
+        // would show the same POs twice in the Pending column.
+        return { given: planned, done, openBefore: 0, closedBefore: clearedBacklog };
       }
 
       // ===== Inventory =====
@@ -1244,8 +1341,13 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     // Sources with no cross-week backlog concept but where the Pending column
     // should still auto-fill with the week's own leftover (planned − actual):
     // checklists are day-scoped and RACI planned is week-scoped by decision.
+    // Purchase Bill is here too (mam 2026-09-07): planned − actual is the
+    // week's own unbilled leftover and openBefore carries the older backlog,
+    // which is exactly the pair this branch adds up. Without it the repointed
+    // row would lose its auto Pending figures and fall back to typed boxes.
     const pendingWeekOnly = (source) =>
-      source === 'auto:checklists' || source === 'auto:raci_steps_done' || source.startsWith('auto:raci_step:');
+      source === 'auto:checklists' || source === 'auto:raci_steps_done' || source.startsWith('auto:raci_step:')
+      || source === 'auto:po_bill_pending' || source === 'auto:po_bill_pending_all';
 
     // Load every per-user override row for this user in ONE query so the
     // per-KPI loop below doesn't fan out to 20 small SELECTs.  Indexed by
