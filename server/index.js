@@ -39,19 +39,24 @@ try {
   console.warn('[perf] compression not installed — run npm install for faster pages');
 }
 
-// Sotyn Leads public webhook — mounted BEFORE the global 10 MB JSON parser on
-// purpose (audit 2026-09-07). It carries its own 32 kb express.json(); behind
-// the global parser that cap was dead code, because the body was already read
-// and an unauthenticated caller could push 10 MB through a synchronous server.
-app.use('/api/public', require('./routes/publicSotynLead'));
-
-app.use(express.json({ limit: '10mb' }));
 
 // Hang detector — logs [slow] requests and [lag] event-loop stalls with the
 // requests in flight, so `pm2 logs erp | grep -E '\[slow\]|\[lag\]'` names
 // what froze the ERP (see lib/hangDetector.js). Must sit before the routers.
 try { require('./lib/hangDetector').install(app); }
 catch (e) { console.warn('[hang-detector] not started:', e.message); }
+
+// Sotyn Leads public webhook. Mounted AFTER the hang detector so the one
+// internet-facing route still gets [slow] logging and in-flight tracking, but
+// BEFORE the global 10 MB JSON parser so its own 32 kb cap is real — behind
+// that parser the cap was dead code and an unauthenticated caller could push
+// 10 MB through a synchronous server (audit 2026-09-07).
+app.use('/api/public', require('./routes/publicSotynLead'));
+
+// Global body parser for every OTHER route. Deliberately last of the three:
+// the hang detector must see all traffic, and the public webhook must parse
+// its own body under a 32 kb cap before this 10 MB one can claim it.
+app.use(express.json({ limit: '10mb' }));
 
 // Cache static assets (logo, icons, JS bundles) for 1 day in browser.
 // React build files have content-hashed filenames so they invalidate

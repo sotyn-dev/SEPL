@@ -243,7 +243,7 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
      assigned_sc, assigned_asm, assigned_asm_id,
      remarks, created_by,
      current_stage, stage_entered_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'lead_capture', CURRENT_TIMESTAMP)`).run(
     leadNo, b.client_name, b.company_name || null, b.phone || null, b.email || null,
     b.category || null, b.lead_type || null, leadKind,
     b.gst_number ? String(b.gst_number).toUpperCase() : null,
@@ -262,7 +262,7 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
     b.remarks || null,
     req.user.id
   );
-  audit(db, r.lastInsertRowid, 'new_lead', 'create', req.user, {
+  audit(db, r.lastInsertRowid, 'lead_capture', 'create', req.user, {
     notes: `Captured as ${leadKind === 'government' ? 'Government tender' : 'Private quote'}` + (b.tender_id ? ` · Tender ${b.tender_id}` : '')
   });
   res.status(201).json({ id: r.lastInsertRowid, lead_no: leadNo });

@@ -138,6 +138,7 @@ const Database = require('better-sqlite3');
 // guessed — extend this list (verify the real DELETE FROM target first, and
 // its WHERE-clause column) before trusting a newly-seen route to auto-restore.
 const TABLE_RULES = [
+  { re: /^\/api\/sotyn-leads\/\d+$/, targets: [{ table: 'sotyn_leads', on: 'id' }] },
   { re: /^\/api\/tally-bills\/\d+$/, targets: [{ table: 'tally_bills', on: 'id' }] },
   { re: /^\/api\/tally-bills\/\d+\/files\/\d+$/, targets: [{ table: 'tally_bill_files', on: 'id' }] },
   { re: /^\/api\/tally-bills\/\d+\/payments\/\d+$/, targets: [{ table: 'tally_bill_payments', on: 'id' }] },

@@ -15,6 +15,7 @@
 // card (mobile↔desktop parity rule).
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
@@ -28,6 +29,14 @@ import {
 } from 'react-icons/fi';
 
 const POLL_MS = 30000;   // "always automatically fetch"
+
+// The site has THREE forms. Named once here so a new form is one edit, not five.
+const FORM = {
+  demo:    { short: 'Demo',      long: 'Demo request',          said: 'Asked for a demo / 30-day pilot',      style: 'bg-sky-50 text-sky-700 border-sky-200' },
+  magnet:  { short: 'Checklist', long: 'Checklist download',    said: 'Downloaded the 11-point checklist',    style: 'bg-purple-50 text-purple-700 border-purple-200' },
+  webinar: { short: 'Webinar',   long: 'Webinar registration',  said: 'Registered for the masterclass',       style: 'bg-rose-50 text-rose-700 border-rose-200' },
+};
+const formOf = (t) => FORM[t] || FORM.demo;
 
 const TABS = [
   { id: '', label: 'All', icon: FiInbox },
@@ -105,10 +114,10 @@ function LeadActions({ l, compact, perms, onStatus, onConvert, onRemove }) {
         </button>
       )}
       {l.converted_lead_no && (
-        <a href={`/leads?search=${encodeURIComponent(l.converted_lead_no)}`}
-           className="px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:underline inline-flex items-center gap-1">
+        <Link to="/leads" title={`Open the Sales Funnel — this enquiry became ${l.converted_lead_no}`}
+              className="px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:underline inline-flex items-center gap-1">
           {l.converted_lead_no} <FiExternalLink size={11} />
-        </a>
+        </Link>
       )}
       {perms.edit && l.status !== 'junk' && l.status !== 'converted' && (
         <button onClick={() => onStatus(l, 'junk')} aria-label={`Mark ${l.name} junk`}
@@ -283,10 +292,10 @@ export default function SotynLeads() {
     } catch { /* fall back to what is already on screen rather than export nothing */ }
     exportCsv(
       'sotyn-website-leads',
-      ['Received', 'Name', 'Company', 'Phone', 'Email', 'City', 'Trade', 'Team', 'Form', 'Magnet', 'Page', 'Campaign', 'Status', 'Funnel Lead', 'Owner', 'Remarks'],
+      ['Received', 'Name', 'Company', 'Phone', 'Email', 'City', 'Trade', 'Team', 'Turnover', 'Event', 'Form', 'Magnet', 'Page', 'Campaign', 'Status', 'Funnel Lead', 'Owner', 'Remarks'],
       all.map(r => [
         fmtDateTime(r.created_at), r.name, r.company, r.phone, r.email, r.city, r.trade, r.team,
-        r.form_type === 'magnet' ? 'Checklist' : 'Demo request', r.magnet, r.page, r.utm_campaign,
+        r.turnover, r.event, formOf(r.form_type).long, r.magnet, r.page, r.utm_campaign,
         r.status, r.converted_lead_no, r.owner_name, r.remarks,
       ].map(csvSafe))
     );
@@ -395,12 +404,13 @@ export default function SotynLeads() {
                     {l.email && <div className="text-slate-500">{l.email}</div>}
                   </td>
                   <td className="px-3 py-2 text-xs text-slate-600">
-                    {[l.city, l.trade, l.team && `${l.team} team`].filter(Boolean).join(' · ') || '—'}
+                    {[l.city, l.trade, l.team && `${l.team} team`, l.turnover].filter(Boolean).join(' · ') || '—'}
                   </td>
                   <td className="px-3 py-2 text-xs text-slate-500">
-                    <span className={`px-1.5 py-0.5 rounded border text-[10px] ${l.form_type === 'magnet' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-sky-50 text-sky-700 border-sky-200'}`}>
-                      {l.form_type === 'magnet' ? 'Checklist' : 'Demo'}
+                    <span className={`px-1.5 py-0.5 rounded border text-[10px] ${formOf(l.form_type).style}`}>
+                      {formOf(l.form_type).short}
                     </span>
+                    {l.event && <div className="mt-0.5 text-rose-700">{l.event}</div>}
                     {l.utm_campaign && <div className="mt-0.5">{l.utm_campaign}</div>}
                     {l.page && <div className="text-slate-400">{l.page}</div>}
                   </td>
@@ -431,9 +441,9 @@ export default function SotynLeads() {
             </div>
             <div className="mt-1.5 text-xs text-slate-600 space-y-0.5">
               <div>{l.phone}{l.email ? ` · ${l.email}` : ''}</div>
-              <div>{[l.city, l.trade, l.team && `${l.team} team`].filter(Boolean).join(' · ') || '—'}</div>
+              <div>{[l.city, l.trade, l.team && `${l.team} team`, l.turnover].filter(Boolean).join(' · ') || '—'}</div>
               <div className="text-slate-400">
-                {fmtDateTime(l.created_at)} · {l.form_type === 'magnet' ? 'Checklist' : 'Demo'}
+                {fmtDateTime(l.created_at)} · {formOf(l.form_type).short}
                 {l.submissions > 1 ? ` · ×${l.submissions}` : ''}
               </div>
             </div>
@@ -463,8 +473,8 @@ export default function SotynLeads() {
               {convert.company ? ` · ${convert.company}` : ''} · {convert.phone}
               {convert.email ? ` · ${convert.email}` : ''}
               <div className="mt-1">
-                {convert.form_type === 'magnet' ? 'Downloaded the 11-point checklist' : 'Asked for a demo / 30-day pilot'}
-                {convert.trade ? ` · ${convert.trade}` : ''}{convert.team ? ` · ${convert.team} team` : ''}
+                {formOf(convert.form_type).said}
+                {convert.turnover ? ` · ${convert.turnover}` : ''}{convert.trade ? ` · ${convert.trade}` : ''}{convert.team ? ` · ${convert.team} team` : ''}
                 {convert.city ? ` · ${convert.city}` : ''}
               </div>
               <div className="mt-1 text-slate-400">

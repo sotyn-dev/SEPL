@@ -7025,6 +7025,18 @@ in your first week. If a process feels broken, raise a Help Ticket
     console.warn('[system_flow] migrations skipped (non-fatal):', e.message);
   }
 
+  // Legacy stage repair (audit 2026-09-07, alongside sotyn_leads). BOTH funnel
+  // create paths wrote current_stage='new_lead', a key the 11-stage spec renamed
+  // to 'lead_capture'. The one-shot sf_stages_v2 translation has already run and
+  // is flag-guarded, so nothing was ever going to convert these again: the rows
+  // sat outside every Stage tab, scored no Stage-1 SLA, and drew the pipeline
+  // pills as 'not reached'. Unconditional and idempotent — a single indexed
+  // no-op once clean, so it needs no flag of its own.
+  try {
+    const n = db.prepare("UPDATE sales_funnel SET current_stage='lead_capture' WHERE current_stage='new_lead'").run().changes;
+    if (n > 0) console.log(`[schema] stage repair: ${n} sales_funnel row(s) new_lead -> lead_capture`);
+  } catch (e) { console.warn('[schema] stage repair skipped:', e.message); }
+
   // Sotyn Leads (mam 2026-09-07) — sotyn.ai website enquiry inbox fed by
   // the public webhook. server/routes/sotynLeads.js
   try {

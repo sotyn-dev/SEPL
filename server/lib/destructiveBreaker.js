@@ -67,6 +67,9 @@ const GUARDED_DELETE_PREFIXES = [
   '/api/inventory', '/api/complaints', '/api/client-snag', '/api/indent-fms',
   '/api/drawing-tracker', '/api/labour-master', '/api/labour-quotations',
   '/api/labour-rate-master', '/api/auth/users',
+  // Sotyn Leads (2026-09-07): website enquiries are business data — a sprayed
+  // delete of the inbox must arm and trip the lock like any other module.
+  '/api/sotyn-leads',
 ];
 
 // Non-DELETE requests that do the same damage (blocked when locked; their

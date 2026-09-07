@@ -144,8 +144,13 @@ router.post('/sotyn-lead', siteCors, express.json({ limit: '32kb' }), (req, res)
   // both is a bot or a broken embed, not a lead.
   if (!name || !phoneKey(phone)) return res.status(400).json({ ok: false, error: 'Name and phone are required' });
 
-  // magnet form sends `magnet`; demo form sends company/city/trade/team.
-  const formType = clean(b.magnet) ? 'magnet' : 'demo';
+  // Which of the site's three forms this came from, by the field only it sends:
+  //   #magnetForm (/, /book)  → `magnet`   — the 11-point checklist download
+  //   #regForm    (/webinar)  → `event`    — Contractor's Profit Masterclass seat
+  //   #demoForm   (/, /demo)  → neither    — company/city/trade/team
+  const formType = clean(b.magnet) ? 'magnet'
+    : (clean(b.event) || /webinar/i.test(String(b.source || ''))) ? 'webinar'
+    : 'demo';
   const row = {
     name,
     company: clean(b.company, 160),
@@ -154,6 +159,8 @@ router.post('/sotyn-lead', siteCors, express.json({ limit: '32kb' }), (req, res)
     city: clean(b.city, 120),
     trade: clean(b.trade, 120),
     team: clean(b.team, 120),
+    turnover: clean(b.turnover, 60),
+    event: clean(b.event, 160),
     form_type: formType,
     magnet: clean(b.magnet, 120),
     source: clean(b.source, 120) || 'sotyn.ai',
@@ -206,21 +213,25 @@ router.post('/sotyn-lead', siteCors, express.json({ limit: '32kb' }), (req, res)
                city       = COALESCE(city, ?),
                trade      = COALESCE(trade, ?),
                team       = COALESCE(team, ?),
+               turnover   = COALESCE(turnover, ?),
+               event      = COALESCE(event, ?),
                updated_at = CURRENT_TIMESTAMP
          WHERE id = ?
-      `).run(row.company, row.email, row.city, row.trade, row.team, dupe.id);
+      `).run(row.company, row.email, row.city, row.trade, row.team,
+             row.turnover, row.event, dupe.id);
       return res.json({ ok: true, id: dupe.id, duplicate: true });
     }
 
     const r = db.prepare(`
       INSERT INTO sotyn_leads
-        (name, company, phone, phone_key, email, city, trade, team,
+        (name, company, phone, phone_key, email, city, trade, team, turnover, event,
          form_type, magnet, source, page, referrer,
          utm_source, utm_medium, utm_campaign, utm_term, utm_content,
          submitted_at, ip, user_agent, raw_json, status)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new')
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new')
     `).run(
       row.name, row.company, row.phone, key, row.email, row.city, row.trade, row.team,
+      row.turnover, row.event,
       row.form_type, row.magnet, row.source, row.page, row.referrer,
       row.utm_source, row.utm_medium, row.utm_campaign, row.utm_term, row.utm_content,
       row.submitted_at, row.ip, row.user_agent, row.raw_json

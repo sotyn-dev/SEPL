@@ -32,6 +32,8 @@ function runSotynLeadsMigrations(db) {
       city TEXT,
       trade TEXT,
       team TEXT,
+      turnover TEXT,                        -- webinar form: ₹ slab the visitor picked
+      event TEXT,                           -- webinar form: which masterclass they booked
       -- where it came from
       form_type TEXT DEFAULT 'demo',        -- 'demo' | 'magnet'
       magnet TEXT,                          -- lead-magnet slug, magnet form only
@@ -69,7 +71,7 @@ function runSotynLeadsMigrations(db) {
   // webhook INSERT would 500. Same ALTER-and-swallow pattern the rest of
   // server/db/schema.js uses: SQLite has no ADD COLUMN IF NOT EXISTS, and a
   // duplicate-column error is the expected steady state.
-  for (const decl of ['phone_key TEXT']) {
+  for (const decl of ['phone_key TEXT', 'turnover TEXT', 'event TEXT']) {
     try { db.exec(`ALTER TABLE sotyn_leads ADD COLUMN ${decl}`); }
     catch (e) { if (!/duplicate column/i.test(e.message)) throw e; }
   }

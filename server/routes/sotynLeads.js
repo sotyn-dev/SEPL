@@ -49,7 +49,15 @@ router.get('/', requirePermission('sotyn_leads', 'view'), (req, res) => {
 
   const db = getDb();
   const rows = db.prepare(`
-    SELECT l.*, u.name AS owner_name, c.name AS converted_by_name
+    -- Explicit columns, not l.* : raw_json / ip / user_agent are forensic fields
+    -- the screen never renders, and the 30-second poll would ship that visitor
+    -- PII to every viewer on every tick (audit 2026-09-07).
+    SELECT l.id, l.name, l.company, l.phone, l.email, l.city, l.trade, l.team,
+           l.turnover, l.event, l.form_type, l.magnet, l.source, l.page,
+           l.utm_source, l.utm_campaign, l.status, l.owner_id, l.remarks,
+           l.submissions, l.converted_lead_id, l.converted_lead_no, l.converted_at,
+           l.submitted_at, l.created_at, l.updated_at,
+           u.name AS owner_name, c.name AS converted_by_name
       FROM sotyn_leads l
       LEFT JOIN users u ON u.id = l.owner_id
       LEFT JOIN users c ON c.id = l.converted_by
@@ -148,8 +156,15 @@ router.post('/:id/convert',
 
     // Everything the funnel has no column for is written into the remark, so
     // the salesperson opens the lead and sees the whole enquiry as submitted.
+    const FORM_LABEL = {
+      magnet: 'checklist download',
+      webinar: 'webinar registration',
+      demo: 'demo request',
+    };
     const bits = [
-      `Website enquiry from sotyn.ai (${lead.form_type === 'magnet' ? 'checklist download' : 'demo request'})`,
+      `Website enquiry from sotyn.ai (${FORM_LABEL[lead.form_type] || 'demo request'})`,
+      lead.event && `Event: ${lead.event}`,
+      lead.turnover && `Turnover: ${lead.turnover}`,
       lead.trade && `Trade: ${lead.trade}`,
       lead.team && `Team size: ${lead.team}`,
       lead.city && `City: ${lead.city}`,
@@ -171,7 +186,7 @@ router.post('/:id/convert',
             (lead_no, client_name, company_name, phone, email, project_name,
              city, source, lead_kind, remarks, created_by,
              current_stage, stage_entered_at)
-          VALUES (?,?,?,?,?,?,?,?,'private',?,?,'new_lead', CURRENT_TIMESTAMP)
+          VALUES (?,?,?,?,?,?,?,?,'private',?,?,'lead_capture', CURRENT_TIMESTAMP)
         `).run(
           leadNo, clientName, companyName, lead.phone || null, lead.email || null,
           projectName, b.city ?? lead.city ?? null, 'Website — sotyn.ai',
@@ -183,7 +198,7 @@ router.post('/:id/convert',
         try {
           db.prepare(`
             INSERT INTO sales_funnel_audit (lead_id, stage, action, actor_id, actor_name, notes)
-            VALUES (?, 'new_lead', 'create', ?, ?, ?)
+            VALUES (?, 'lead_capture', 'create', ?, ?, ?)
           `).run(r.lastInsertRowid, req.user.id, req.user.name || null,
             `Converted from Sotyn Leads #${lead.id} (sotyn.ai website)`);
         } catch { /* audit table is best-effort, never blocks the convert */ }
