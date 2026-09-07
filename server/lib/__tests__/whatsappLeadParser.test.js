@@ -196,6 +196,35 @@ t('an author-less notice between messages is not glued into the lead above it', 
   assert.strictEqual(found[1].lead.name, 'After System');
 });
 
+t('pasting SEVERAL messages at once yields one lead each, not one merged row', () => {
+  // The screen invites pasting messages, and mam pastes more than one. Before the
+  // fix this returned a single lead wearing three people's details.
+  const found = parseChat([
+    'Webinar registration', 'Name: Monika Devi', 'Phone: 919501890918', '',
+    'New sotyn.ai demo request', 'Name: Harpreet Sandhu', 'Company: Sandhu Electricals',
+    'Phone: 9814556677', 'City: Ludhiana', '',
+    'Free checklist request', 'Name: Meera Krishnan', 'Phone: 9880012345',
+    'Downloaded: 11-Point Project Savings Checklist',
+  ].join('\n'));
+  assert.strictEqual(found.length, 3, 'expected 3 separate leads, got ' + found.length);
+  assert.strictEqual(found[0].lead.name, 'Monika Devi');
+  assert.strictEqual(found[0].lead.company, null, "Monika must not inherit Harpreet's company");
+  assert.strictEqual(found[0].lead.city, null, "nor his city");
+  assert.strictEqual(found[0].lead.magnet, null, "nor Meera's checklist");
+  assert.strictEqual(found[1].lead.company, 'Sandhu Electricals');
+  assert.strictEqual(found[2].lead.form_type, 'magnet');
+});
+
+t('a huge paste cannot pin the event loop (was quadratic backtracking)', () => {
+  // 5 MB is exactly what POST /import accepts. Measured >22 s at 352 KB before
+  // the fix, i.e. tens of minutes at the cap, on a synchronous server.
+  const payload = 'hi sotynai '.repeat(90000);   // ~1 MB
+  const t0 = Date.now();
+  parseChat(payload);
+  const ms = Date.now() - t0;
+  assert.ok(ms < 2000, 'parsing ~1 MB took ' + ms + ' ms — the regex is backtracking again');
+});
+
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

@@ -38,7 +38,14 @@ const HEADERS = [
   { re: /^\s*webinar\s+registration/i, form: 'webinar' },
 ];
 // The bare CTA — a real person asking for a demo, with nothing but their number.
-const BARE_CTA = /hi\s+sotyn\.?ai.*(contracting|demo)/i;
+//
+// ANCHORED, and the gap is bounded and newline-free. The original
+// /hi\s+sotyn\.?ai.*(contracting|demo)/i put an unbounded `.*` in front of an
+// alternation, which backtracks from every position the prefix could start at:
+// measured 14 ms at 11 KB, 625 ms at 88 KB, cleanly quadratic, so the 5 MB the
+// import route accepts would pin this synchronous server for hours and freeze
+// every other screen with it (review 2026-09-07).
+const BARE_CTA = /^\s*hi\s+sotyn\.?ai\b[^\n]{0,160}?(contracting|demo)/i;
 
 // Label -> column. Everything else is kept in raw_json but not mapped.
 const LABELS = {
@@ -77,7 +84,7 @@ function parseLeadMessage(body) {
   const first = lines[0] || '';
 
   const header = HEADERS.find((h) => h.re.test(first));
-  const isBare = !header && BARE_CTA.test(text);
+  const isBare = !header && BARE_CTA.test(first);
   if (!header && !isBare) return null;
 
   const lead = {
@@ -88,6 +95,10 @@ function parseLeadMessage(body) {
   };
 
   for (const line of lines.slice(header ? 1 : 0)) {
+    // A second form header means a second message got concatenated into this
+    // body — stop, or its fields are absorbed into this lead's empty slots and
+    // one person is recorded at another's company (review 2026-09-07).
+    if (HEADERS.some((h) => h.re.test(line))) break;
     // "Label: value" — the label must be a known one, so a stray colon inside a
     // company name ("Sharma & Co: Electricals") cannot invent a field.
     const m = line.match(/^([A-Za-z][A-Za-z ]{1,14}?)\s*:\s*(.*)$/);
@@ -216,6 +227,22 @@ function toSqlDateTime(date, time, offsetMinutes = IST_OFFSET_MIN) {
        + `${p(u.getUTCHours())}:${p(u.getUTCMinutes())}:${p(u.getUTCSeconds())}`;
 }
 
+// Split a raw paste (no export timestamps) into one block per message, starting a
+// new block at every form header or bare CTA. Anything before the first header is
+// discarded — it cannot belong to a lead.
+function splitPastedBlocks(text) {
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+  const isStart = (l) => HEADERS.some((h) => h.re.test(l)) || BARE_CTA.test(l);
+  const blocks = [];
+  let cur = null;
+  for (const line of lines) {
+    if (isStart(line)) { if (cur) blocks.push(cur); cur = [line]; }
+    else if (cur) cur.push(line);
+  }
+  if (cur) blocks.push(cur);
+  return blocks.map((b) => b.join('\n'));
+}
+
 /**
  * Full pipeline: a pasted chat export (or a single pasted message) -> leads.
  * `selfNames` are the names that identify OUR side of the chat, so a lead
@@ -224,11 +251,16 @@ function toSqlDateTime(date, time, offsetMinutes = IST_OFFSET_MIN) {
 function parseChat(text) {
   const messages = splitChatExport(text);
 
-  // A single pasted message has no timestamp line at all — handle that too, so
-  // mam can paste one lead straight out of WhatsApp without exporting anything.
+  // A pasted message has no timestamp line at all — handle that too, so mam can
+  // copy leads straight out of WhatsApp without exporting anything. She may well
+  // paste SEVERAL at once (the screen invites it), so split on the form headers
+  // rather than treating the whole paste as one message: handing it all to
+  // parseLeadMessage returned a single row wearing three people's details, and
+  // silently dropped the other two (review 2026-09-07).
   if (!messages.length) {
-    const lead = parseLeadMessage(text);
-    return lead ? [{ lead, at: null, sender: null, body: text.trim() }] : [];
+    return splitPastedBlocks(text)
+      .map((block) => ({ lead: parseLeadMessage(block), at: null, sender: null, body: block.trim() }))
+      .filter((x) => x.lead);
   }
 
   const out = [];
