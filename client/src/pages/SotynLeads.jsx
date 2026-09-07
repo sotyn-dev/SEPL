@@ -146,6 +146,13 @@ export default function SotynLeads() {
   const [loadError, setLoadError] = useState('');
   const [lastSync, setLastSync] = useState(null);
   const [convert, setConvert] = useState(null);      // lead being converted
+  // WhatsApp ingestion (mam 2026-09-07). Until the site's WEBHOOK constant is
+  // filled in, every enquiry lands in WhatsApp instead of here — this is how
+  // those get in. Preview first, write only on a second, deliberate click.
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importPreview, setImportPreview] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
   const [cForm, setCForm] = useState({});
   const [saving, setSaving] = useState(false);
   const seenTop = useRef(null);                       // highest id seen, for the "new lead" toast
@@ -274,6 +281,40 @@ export default function SotynLeads() {
   const csvSafe = (v) => (v === null || v === undefined ? '' :
     /^[=+@\t\r\-]/.test(String(v)) ? "'" + String(v) : v);
 
+  // ── WhatsApp import ────────────────────────────────────────────────
+  // Nothing is written until the second button. `commit:false` asks the server
+  // what it WOULD do; the same text is then sent back with commit:true.
+  const runImport = async (commit) => {
+    if (!importText.trim()) { toast.error('Paste a WhatsApp message or an exported chat first'); return; }
+    setImportBusy(true);
+    try {
+      const r = await api.post('/sotyn-leads/import', { text: importText, commit });
+      if (commit) {
+        toast.success(`${r.data.inserted} lead${r.data.inserted === 1 ? '' : 's'} imported`);
+        setImportOpen(false);
+        setImportText('');
+        setImportPreview(null);
+        load();
+      } else {
+        setImportPreview(r.data);
+        if (!r.data.found) toast('No lead messages found in that text');
+      }
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Import failed');
+    } finally { setImportBusy(false); }
+  };
+
+  // A chat export is a .txt — read it in the browser and reuse the same paste
+  // path, so the server needs no upload route and no file ever lands on disk.
+  const readExportFile = (file) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast.error('That file is larger than 5 MB — export a shorter date range'); return; }
+    const fr = new FileReader();
+    fr.onload = () => { setImportText(String(fr.result || '')); setImportPreview(null); };
+    fr.onerror = () => toast.error('Could not read that file');
+    fr.readAsText(file);
+  };
+
   const exportRows = async () => {
     // Export what the filter says, not merely what is on screen — the list
     // endpoint is capped at 200 rows by default and silently exporting that
@@ -305,7 +346,8 @@ export default function SotynLeads() {
   const perms = useMemo(() => ({
     edit: canEdit(M),
     remove: canDelete(M),
-    convert: canCreate(M) && canCreate('leads'),
+    create: canCreate(M),                       // import: writes only to this inbox
+    convert: canCreate(M) && canCreate('leads'), // convert: writes a funnel lead too
   }), [canEdit, canDelete, canCreate]);
 
   const pager = usePagination(rows, { initialPerPage: 15 });
@@ -337,6 +379,12 @@ export default function SotynLeads() {
           <button onClick={exportRows} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5">
             <FiDownload size={14} /> Export
           </button>
+          {perms.create && (
+            <button onClick={() => { setImportOpen(true); setImportText(''); setImportPreview(null); }}
+                    className="px-3 py-1.5 text-sm border rounded-lg hover:bg-emerald-50 border-emerald-300 text-emerald-700 inline-flex items-center gap-1.5">
+              <FiMessageCircle size={14} /> Import from WhatsApp
+            </button>
+          )}
         </div>
       </div>
 
@@ -463,6 +511,101 @@ export default function SotynLeads() {
           Showing the {rows.length} most recent of {total} — narrow with a filter or search to see older ones.
         </p>
       )}
+
+      {/* Import from WhatsApp — preview, then commit */}
+      <Modal isOpen={importOpen} onClose={() => setImportOpen(false)} title="Import leads from WhatsApp" xwide>
+        <div className="space-y-3">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
+            The sotyn.ai forms currently send every enquiry to WhatsApp instead of the ERP,
+            because the website's webhook address was left blank. Until that one line is fixed,
+            paste those messages here.
+            <div className="mt-1.5 text-amber-800">
+              <b>One lead:</b> copy the message in WhatsApp and paste it below.
+              <br />
+              <b>All of them:</b> in WhatsApp open the chat → ⋮ → More → Export chat → <i>Without media</i>,
+              then pick that .txt file. Re-importing the same file is safe — anything already
+              here is skipped.
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input type="file" accept=".txt,text/plain"
+                   onChange={(e) => readExportFile(e.target.files?.[0])}
+                   className="text-xs file:mr-2 file:px-3 file:py-1.5 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-sm" />
+            {importText && <span className="text-xs text-slate-500">{importText.length.toLocaleString()} characters loaded</span>}
+          </div>
+
+          <textarea
+            value={importText}
+            onChange={(e) => { setImportText(e.target.value); setImportPreview(null); }}
+            rows={8}
+            placeholder={'Webinar registration\nName: Monika Devi\nPhone: 919501890918\nCompany: Secured engineer Pvt Ltd\nTurnover: ₹10–50 Cr\nEvent: Contractor’s Profit Masterclass'}
+            className="w-full border rounded-lg px-3 py-2 text-xs font-mono" />
+
+          {importPreview && (
+            <div className="border rounded-lg overflow-hidden">
+              <div className="px-3 py-2 bg-slate-50 border-b text-xs flex flex-wrap gap-x-4 gap-y-1">
+                <span><b className="text-slate-800">{importPreview.found}</b> lead message{importPreview.found === 1 ? '' : 's'} found</span>
+                <span className="text-emerald-700"><b>{importPreview.importable}</b> new</span>
+                <span className="text-amber-700"><b>{importPreview.duplicates}</b> already here</span>
+                <span className="text-slate-500"><b>{importPreview.skipped}</b> unusable</span>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-white sticky top-0">
+                    <tr className="text-left text-slate-500 border-b">
+                      <th className="px-2 py-1.5 font-semibold">Form</th>
+                      <th className="px-2 py-1.5 font-semibold">Name</th>
+                      <th className="px-2 py-1.5 font-semibold">Phone</th>
+                      <th className="px-2 py-1.5 font-semibold">Received</th>
+                      <th className="px-2 py-1.5 font-semibold">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(importPreview.rows || []).map((r, i) => (
+                      <tr key={i} className={`border-b last:border-0 ${r.duplicate || r.skipped ? 'bg-slate-50 text-slate-400' : ''}`}>
+                        <td className="px-2 py-1.5">
+                          <span className={`px-1.5 py-0.5 rounded border text-[10px] ${formOf(r.form_type).style}`}>
+                            {formOf(r.form_type).short}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          {r.name || <span className="italic">no name</span>}
+                          {r.company && <span className="text-slate-400"> · {r.company}</span>}
+                        </td>
+                        <td className="px-2 py-1.5">{r.phone || '—'}</td>
+                        <td className="px-2 py-1.5">{r.at ? fmtDateTime(r.at) : '—'}</td>
+                        <td className="px-2 py-1.5">
+                          {r.skipped ? <span className="text-slate-500">skipped — {r.skipped}</span>
+                            : r.duplicate ? <span className="text-amber-700">already in the inbox</span>
+                            : <span className="text-emerald-700 font-semibold">will be imported</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {importPreview.found > (importPreview.rows || []).length && (
+                <div className="px-3 py-1.5 text-[11px] text-slate-500 border-t">
+                  Showing the first {(importPreview.rows || []).length} of {importPreview.found}. All of them import.
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={() => setImportOpen(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50">Cancel</button>
+            <button onClick={() => runImport(false)} disabled={importBusy || !importText.trim()}
+                    className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50 disabled:opacity-50">
+              {importBusy && !importPreview ? 'Checking…' : 'Check what is in there'}
+            </button>
+            <button onClick={() => runImport(true)} disabled={importBusy || !importPreview || !importPreview.importable}
+                    className="px-4 py-2 text-sm font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">
+              {importPreview ? `Import ${importPreview.importable} lead${importPreview.importable === 1 ? '' : 's'}` : 'Import'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Convert → Sales Funnel */}
       <Modal isOpen={!!convert} onClose={() => setConvert(null)} title="Convert to Sales Funnel lead" wide>

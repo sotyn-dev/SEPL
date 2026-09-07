@@ -235,4 +235,133 @@ router.delete('/:id', requirePermission('sotyn_leads', 'delete'), (req, res) => 
   res.json({ message: 'Deleted' });
 });
 
+// ── POST /import — WhatsApp ingestion ────────────────────────────────
+//
+// Mam (2026-09-07) "whatsapp ingestion banao". Every sotyn.ai form ships with an
+// empty WEBHOOK, so submissions only ever open a pre-filled WhatsApp chat to
+// +91 7009987817. This is how those leads get into the ERP without waiting for
+// the site to be fixed: paste one message, or a whole exported chat.
+//
+// Two-step by design — `commit:false` (the default) parses and reports, writing
+// NOTHING. The screen shows what was found and what is already here, and only a
+// deliberate second call with commit:true inserts. An import that silently
+// created 300 rows on a mis-paste would be far worse than one extra click.
+//
+// Dedupe is deliberately DIFFERENT from the live webhook's: the webhook merges
+// on a 6-hour window (a double-tap on a slow connection), but a backfill is
+// months of history at once, so it matches on phone_key + form_type across ALL
+// time. Re-importing the same export is therefore a no-op, which is what makes
+// it safe to paste the whole chat again next month.
+const MAX_IMPORT_CHARS = 5 * 1024 * 1024;   // a very long chat export, still bounded
+const MAX_IMPORT_ROWS = 1000;               // one paste cannot flood the inbox
+
+router.post('/import', requirePermission('sotyn_leads', 'create'), (req, res) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text : '';
+  const commit = req.body?.commit === true;
+  if (!text.trim()) return res.status(400).json({ error: 'Paste a WhatsApp message or an exported chat first' });
+  if (text.length > MAX_IMPORT_CHARS) {
+    return res.status(413).json({ error: 'That export is too large — split it, or export a shorter date range' });
+  }
+
+  const { parseChat } = require('../lib/whatsappLeadParser');
+  const phoneKey = (p) => (String(p || '').replace(/\D/g, '').slice(-10) || null);
+
+  let parsed;
+  try { parsed = parseChat(text); }
+  catch (e) {
+    console.error('[sotyn-leads] import parse failed:', e.message);
+    return res.status(400).json({ error: 'Could not read that text as WhatsApp messages' });
+  }
+
+  const db = getDb();
+  const findDupe = db.prepare(
+    'SELECT id, name, created_at FROM sotyn_leads WHERE phone_key = ? AND form_type = ? ORDER BY id LIMIT 1'
+  );
+
+  const rows = [];
+  const seenInPaste = new Set();
+  for (const m of parsed) {
+    const l = m.lead;
+    // The message's own Phone line wins; a bare CTA has none, so fall back to the
+    // sender — which is a raw number only when they are not in your contacts.
+    const phone = l.phone || (/^\+?[\d ()-]{10,}$/.test(m.sender || '') ? m.sender : null);
+    const key = phoneKey(phone);
+
+    const row = {
+      ...l,
+      phone,
+      phone_key: key,
+      at: m.at,
+      sender: m.sender,
+      body: m.body,
+      // Without a number nobody can follow this lead up, and it cannot be
+      // deduped — reported, never imported.
+      skipped: !key ? 'no phone number in the message' : null,
+      duplicate: null,
+    };
+    if (key) {
+      const existing = findDupe.get(key, l.form_type);
+      if (existing) row.duplicate = { id: existing.id, name: existing.name, created_at: existing.created_at };
+      else if (seenInPaste.has(key + '|' + l.form_type)) row.duplicate = { id: null, name: 'earlier in this paste' };
+      else seenInPaste.add(key + '|' + l.form_type);
+    }
+    rows.push(row);
+  }
+
+  const importable = rows.filter((r) => !r.skipped && !r.duplicate);
+  const summary = {
+    found: rows.length,
+    importable: importable.length,
+    duplicates: rows.filter((r) => r.duplicate).length,
+    skipped: rows.filter((r) => r.skipped).length,
+  };
+
+  if (!commit) {
+    // Preview: hand back what WOULD happen, trimmed for the screen.
+    return res.json({
+      ...summary,
+      committed: false,
+      rows: rows.slice(0, 200).map((r) => ({
+        form_type: r.form_type, name: r.name, company: r.company, phone: r.phone,
+        email: r.email, city: r.city, trade: r.trade, team: r.team,
+        turnover: r.turnover, event: r.event, at: r.at,
+        duplicate: r.duplicate, skipped: r.skipped,
+      })),
+    });
+  }
+
+  if (!importable.length) return res.json({ ...summary, committed: true, inserted: 0 });
+  if (importable.length > MAX_IMPORT_ROWS) {
+    return res.status(413).json({ error: `That paste holds ${importable.length} new leads — import at most ${MAX_IMPORT_ROWS} at a time` });
+  }
+
+  const insert = db.prepare(`
+    INSERT INTO sotyn_leads
+      (name, company, phone, phone_key, email, city, trade, team, turnover, event,
+       form_type, magnet, source, page, status, raw_json, submitted_at, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'new',?,?,COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+  `);
+
+  try {
+    const run = db.transaction((list) => {
+      for (const r of list) {
+        insert.run(
+          r.name, r.company, r.phone, r.phone_key, r.email, r.city, r.trade, r.team,
+          r.turnover, r.event, r.form_type, r.magnet,
+          // Tagged so an imported lead is never mistaken for a live capture.
+          'whatsapp-import',
+          JSON.stringify({ whatsapp: { sender: r.sender, at: r.at, body: r.body } }).slice(0, 4000),
+          r.at, r.at
+        );
+      }
+    });
+    run(importable);
+    console.log(`[sotyn-leads] whatsapp import by ${req.user?.name || req.user?.id}: ${importable.length} lead(s)`);
+    res.json({ ...summary, committed: true, inserted: importable.length });
+  } catch (e) {
+    console.error('[sotyn-leads] import failed:', e.message);
+    res.status(500).json({ error: 'Could not save the imported leads' });
+  }
+});
+
 module.exports = router;
