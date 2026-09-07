@@ -890,8 +890,29 @@ Each KPI (`score_kpis`) has: group_name (`Basic | Weekly | Monthly`),
 metric_name, weightage (0–100), direction (`higher_better | lower_better`),
 `data_source` (`manual` or `auto:…` such as `auto:dpr_profit`,
 `auto:indents_in_week`, `auto:mb_signed`, `auto:pms`, `auto:checklists`,
-`auto:tickets`, `auto:delegations`, `auto:stock_at_site`, …), display_order,
+`auto:tickets`, `auto:delegations`, `auto:stock_at_site`, the ERP Management
+group below, …), display_order,
 default_planned (fixed weekly target).
+
+**ERP Management (System Flow) sources — scored on the DEVELOPER column.** The
+System Flow module (/system-flow, ERP Management) tracks the ERP build itself:
+process → system → step, each step with an Owner, a Developer, a start and a
+target date, a status (not started / in progress / testing / waiting / blocked /
+completed / cancelled) and an activity trail. Its KPI group in the data-source
+dropdown attributes work to the **Developer** (the person building the step),
+never to the RACI-style Owner. Planned/Actual use the same due-date basis as
+Tasks & Tickets (a step belongs to the week its target date falls in; no target
+= the week it was created; a Sunday folds into the Saturday before):
+
+| Source | Planned | Actual |
+|---|---|---|
+| `auto:sysflow_steps` | Steps due this week where the user is the Developer | Of those, completed (Pending carries over the still-open ones) |
+| `auto:sysflow_ontime_pct` | You set (target %) | % of the steps the developer completed this week (Mon–Sun) that finished on/before their target date; steps without a target are not judged |
+| `auto:sysflow_blocked` | You set (max, ↓ lower better) | Steps the developer builds that went blocked this week (a step counts once, in the week it got stuck) |
+| `auto:sysflow_overdue` | You set (max, ↓ lower better) | Steps the developer builds that were overdue at the week end (target passed, not completed by then) |
+| `auto:sysflow_updates` | You set | Work updates the user logged this week: status, progress, priority, remarks, ERP link (not step creation or re-dating) |
+| `auto:sysflow_all` | All steps due this week, company-wide | Of those, completed |
+| `auto:sysflow_progress_pct` | You set (target %, e.g. 100) | ERP implementation progress at the week end: steps completed ÷ steps existing by then, company-wide |
 
 ### Assignment & per-user targets
 

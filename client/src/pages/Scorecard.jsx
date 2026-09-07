@@ -99,6 +99,15 @@ const SOURCE_INFO = {
   'auto:erp_module_coverage':   { plan: 'SOTYN.AI modules tracked (the target = all running)', actual: 'Modules with activity this week' },
   'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },
   'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
+  // ERP Management (System Flow) — the ERP build tracked step by step, scored
+  // on the DEVELOPER column, not the RACI-style Owner (mam 2026-09-07).
+  'auto:sysflow_steps':         { plan: 'System Flow steps DUE this week where the user is the DEVELOPER (target date; no date = week created)', actual: 'Of those, completed' },
+  'auto:sysflow_ontime_pct':    { plan: 'You set (target %, e.g. 90)',        actual: '% of the steps the user (developer) completed this week that finished on/before their target date' },
+  'auto:sysflow_blocked':       { plan: 'You set (max acceptable — pick ↓ lower better)', actual: 'Steps the user is developing that went BLOCKED this week' },
+  'auto:sysflow_overdue':       { plan: 'You set (max acceptable — pick ↓ lower better)', actual: 'Steps the user is developing that were OVERDUE at the week end (target passed, not completed)' },
+  'auto:sysflow_updates':       { plan: 'You set',                            actual: 'Work updates the user logged this week — status, progress, priority, remarks, ERP link (not step creation or re-dating)' },
+  'auto:sysflow_all':           { plan: 'ALL System Flow steps DUE this week (company-wide)', actual: 'Of those, completed (company-wide)' },
+  'auto:sysflow_progress_pct':  { plan: 'You set (target %, e.g. 100)',       actual: 'ERP implementation progress at the week end — steps completed ÷ steps existing by then (company-wide)' },
   // DPR
   'auto:dpr_profit':            { plan: 'Σ planned cost (DPR Table B) × 1.5', actual: 'Σ actual (DPR Table A)' },
   'auto:dpr_count':             { plan: '6 days/week target',                 actual: 'DPR submissions for this site' },
@@ -1608,6 +1617,15 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:raci_ontime_pct">RACI on-time % (within SLA)</option>
                   </optgroup>
                   <RaciStepOptions modules={raciModules} />
+                  <optgroup label="ERP Management (System Flow) — by developer">
+                    <option value="auto:sysflow_steps">System Flow steps (developer — due/completed)</option>
+                    <option value="auto:sysflow_ontime_pct">System Flow on-time % (developer — completed by target date)</option>
+                    <option value="auto:sysflow_blocked">System Flow steps blocked this week (developer)</option>
+                    <option value="auto:sysflow_overdue">System Flow steps overdue at week end (developer)</option>
+                    <option value="auto:sysflow_updates">System Flow work updates logged (by user)</option>
+                    <option value="auto:sysflow_all">System Flow steps — ALL (company-wide)</option>
+                    <option value="auto:sysflow_progress_pct">ERP implementation progress % (at week end)</option>
+                  </optgroup>
                   <optgroup label="DPR (Daily Project Report)">
                     <option value="auto:dpr_profit">DPR profit (planned vs actual ₹) [site]</option>
                     <option value="auto:dpr_count">DPR count (6 days/week target) [site]</option>
@@ -1778,6 +1796,15 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="auto:snags">auto: snag list</option>
             <option value="auto:raci_steps_done">auto: RACI steps (all modules)</option>
             <RaciStepOptions modules={raciModules} />
+            <optgroup label="ERP Management (System Flow) — by developer">
+              <option value="auto:sysflow_steps">auto: System Flow steps (developer)</option>
+              <option value="auto:sysflow_ontime_pct">auto: System Flow on-time % (developer)</option>
+              <option value="auto:sysflow_blocked">auto: System Flow steps blocked this week (developer)</option>
+              <option value="auto:sysflow_overdue">auto: System Flow steps overdue at week end (developer)</option>
+              <option value="auto:sysflow_updates">auto: System Flow work updates logged</option>
+              <option value="auto:sysflow_all">auto: System Flow steps — ALL (company-wide)</option>
+              <option value="auto:sysflow_progress_pct">auto: ERP implementation progress %</option>
+            </optgroup>
           </select>
           <div className="col-span-2 flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="btn btn-secondary text-sm">Cancel</button>

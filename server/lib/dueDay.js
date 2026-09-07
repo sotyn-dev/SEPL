@@ -21,19 +21,36 @@ const dueDay = (col, alias = '') => {
   return `(CASE WHEN strftime('%w', ${d}) = '0' THEN date(${d}, '-1 day') ELSE ${d} END)`;
 };
 
-// [table, owner column, due column] — the three sources the scorecard counts.
+// [table, owner column, due column] — every (table, owner) pair the scorecard
+// counts on the due-day basis. A table can appear twice with different owner
+// columns (System Flow steps are scored for the Responsible AND the Developer).
 const DUE_SOURCES = [
   ['pms_tasks', 'assigned_to', 'due_date'],
   ['delegations', 'assigned_to', 'due_date'],
   ['support_tickets', 'assigned_to', 'deadline_date'],
+  // ERP Management (System Flow) — mam 2026-09-07 "ERP Management also show
+  // here … not as RACI, according to developer": scored on the DEVELOPER column.
+  ['sysflow_flows', 'developer_id', 'target_date'],
 ];
 
 function dueDayIndexSql() {
-  const out = [];
+  const out = [
+    // First-cut names (2026-09-05, never deployed) carried no owner column, so a
+    // second owner on the same table would have collided. Retire them, plus the
+    // responsible_id variant that was dropped when mam chose developer-basis.
+    'DROP INDEX IF EXISTS idx_pms_tasks_due_day_owner',
+    'DROP INDEX IF EXISTS idx_delegations_due_day_owner',
+    'DROP INDEX IF EXISTS idx_support_tickets_due_day_owner',
+    'DROP INDEX IF EXISTS idx_sysflow_flows_due_day_responsible_id',
+  ];
+  const seenTable = new Set();
   for (const [table, owner, col] of DUE_SOURCES) {
     const expr = dueDay(col);
-    out.push(`CREATE INDEX IF NOT EXISTS idx_${table}_due_day_owner ON ${table}(${owner}, ${expr})`);
-    out.push(`CREATE INDEX IF NOT EXISTS idx_${table}_due_day ON ${table}(${expr})`);
+    out.push(`CREATE INDEX IF NOT EXISTS idx_${table}_due_day_${owner} ON ${table}(${owner}, ${expr})`);
+    if (!seenTable.has(table)) {
+      seenTable.add(table);
+      out.push(`CREATE INDEX IF NOT EXISTS idx_${table}_due_day ON ${table}(${expr})`);
+    }
   }
   return out;
 }
