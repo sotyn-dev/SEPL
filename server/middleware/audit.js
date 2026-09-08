@@ -47,7 +47,14 @@ function summariseBody(body) {
     const safe = Array.isArray(body) ? body.slice() : { ...body };
     if (!Array.isArray(safe)) {
       for (const k of Object.keys(safe)) {
-        if (SECRET_KEYS.has(k.toLowerCase())) safe[k] = '[REDACTED]';
+        if (SECRET_KEYS.has(k.toLowerCase())) { safe[k] = '[REDACTED]'; continue; }
+        // Long free-text blobs are summarised, never stored. The audit log is
+        // for WHO did WHAT, not for keeping a second copy of the payload — and
+        // a pasted WhatsApp export or mailbox scan would otherwise write real
+        // visitors' names and phone numbers into audit_log on every click,
+        // including previews that store nothing at all (review 2026-09-07).
+        const v = safe[k];
+        if (typeof v === 'string' && v.length > 300) safe[k] = `[${v.length} characters omitted]`;
       }
     }
     const str = JSON.stringify(safe);

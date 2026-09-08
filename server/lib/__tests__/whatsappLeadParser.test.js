@@ -225,6 +225,38 @@ t('a huge paste cannot pin the event loop (was quadratic backtracking)', () => {
   assert.ok(ms < 2000, 'parsing ~1 MB took ' + ms + ' ms — the regex is backtracking again');
 });
 
+t('a US-locale export (m/d/yy) is detected, not read as d/m/y', () => {
+  // WhatsApp follows the PHONE's locale; 'English (United States)' is common on
+  // Indian handsets. 9/20 can only be a month-first date, so the whole file is mdy.
+  const found = parseChat([
+    '9/7/2026, 11:00 am - Ankush: Webinar registration', 'Name: Sep 7', 'Phone: 9812300011',
+    '9/20/2026, 11:00 am - Ankush: New sotyn.ai demo request', 'Name: Sep 20', 'Phone: 9812300012',
+  ].join('\n'));
+  assert.strictEqual(found.length, 2);
+  assert.ok(found[0].at.startsWith('2026-09-07'), 'Sep 7 was read as ' + found[0].at);
+  assert.ok(found[1].at.startsWith('2026-09-20'), 'Sep 20 was read as ' + found[1].at);
+});
+
+t('an Indian export is still read as d/m/y', () => {
+  const found = parseChat([
+    '25/12/2026, 11:00 am - Ankush: Webinar registration', 'Name: Dec 25', 'Phone: 9812300013',
+    '07/09/2026, 11:00 am - Ankush: New sotyn.ai demo request', 'Name: Sep 7', 'Phone: 9812300014',
+  ].join('\n'));
+  assert.ok(found[0].at.startsWith('2026-12-25'), 'got ' + found[0].at);
+  assert.ok(found[1].at.startsWith('2026-09-07'), 'got ' + found[1].at);
+});
+
+t('a sender name containing a colon does not lose the lead', () => {
+  // MSG_START stops the sender at the first colon, so 'Sotyn: Leads' left
+  // 'Leads: ' glued to the body and the header no longer started line 1.
+  const found = parseChat([
+    '07/09/2026, 4:10 pm - Sotyn: Leads: New sotyn.ai demo request',
+    'Name: Harpreet Sandhu', 'Company: Sandhu Electricals', 'Phone: 9814556677',
+  ].join('\n'));
+  assert.strictEqual(found.length, 1, 'the lead vanished; got ' + found.length);
+  assert.strictEqual(found[0].lead.name, 'Harpreet Sandhu');
+});
+
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

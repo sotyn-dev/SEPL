@@ -260,6 +260,22 @@ const MAX_IMPORT_ROWS = 1000;               // one run cannot flood the inbox
 
 const phoneKeyOf = (p) => (String(p || '').replace(/\D/g, '').slice(-10) || null);
 
+// Same length caps the public webhook applies — a pasted file is untrusted input.
+const cap = (v, max) => {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s ? s.slice(0, max) : null;
+};
+
+// A parsed timestamp may never be in the future. Anything ahead of now is
+// nonsense (a wrong device clock, a typo'd year) and is dropped so the row falls
+// back to the import time, rather than being written and poisoning the dedupe.
+function notFuture(at) {
+  if (!at) return null;
+  const nowSql = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  return at > nowSql ? null : at;
+}
+
 // candidates: [{ lead, at, sender, body }] — the shape BOTH parseChat() and
 // scanLeadMailbox() produce.
 function stageCandidates(db, candidates) {
@@ -278,11 +294,32 @@ function stageCandidates(db, candidates) {
     // sender — which is a usable number only when they are not in your contacts.
     const phone = l.phone || (/^\+?[\d ()-]{10,}$/.test(m.sender || '') ? m.sender : null);
     const key = phoneKeyOf(phone);
-    const email = l.email || null;
+    const email = cap(l.email, 160);
 
     const row = {
-      ...l, phone, phone_key: key, email,
-      at: m.at, sender: m.sender, body: m.body,
+      ...l,
+      // Every value is capped exactly as the public webhook caps it. These come
+      // from a pasted file, so they are no more trustworthy than a web form, and
+      // an uncapped paste could otherwise write a megabyte into a name column.
+      name: cap(l.name, 120),
+      company: cap(l.company, 160),
+      city: cap(l.city, 120),
+      trade: cap(l.trade, 120),
+      team: cap(l.team, 120),
+      turnover: cap(l.turnover, 60),
+      event: cap(l.event, 160),
+      magnet: cap(l.magnet, 120),
+      phone: cap(phone, 40), phone_key: key, email,
+      // NEVER let a parsed timestamp sit in the future. A bad device clock or a
+      // hand-typed year would otherwise poison the LIVE webhook's 6-hour dedupe
+      // permanently: `created_at > datetime('now','-6 hours')` stays true for a
+      // 2027 row forever, so every later real enquiry from that number is merged
+      // into the imported row instead of arriving — and because the merge never
+      // overwrites the name, the real visitor is silently lost. Verified against
+      // a copy of the live database (review 2026-09-07). It also pinned the row
+      // to the top of the inbox and into "Last 7 days" for good.
+      at: notFuture(m.at),
+      sender: m.sender, body: m.body,
       // With neither a number nor an address nobody can follow this up, and it
       // cannot be deduped — reported, never imported.
       skipped: (!key && !email) ? 'no phone number or email in the message' : null,

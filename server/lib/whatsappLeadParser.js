@@ -195,14 +195,16 @@ function splitChatExport(text) {
 // a 3:54 pm message displayed as 9:24 pm. So the local time is converted to UTC
 // here, with the offset explicit rather than assumed.
 const IST_OFFSET_MIN = 330;
-function toSqlDateTime(date, time, offsetMinutes = IST_OFFSET_MIN) {
+function toSqlDateTime(date, time, offsetMinutes = IST_OFFSET_MIN, order = 'dmy') {
   if (!date) return null;
   const d = date.split(/[\/.-]/).map((n) => parseInt(n, 10));
   if (d.length !== 3 || d.some(Number.isNaN)) return null;
   // dd/mm/yy is the Indian order WhatsApp uses on these phones, but an ISO
   // export (yyyy-mm-dd) leads with a 4-digit year — detect it rather than
   // reading 2026 as a day.
-  let [dd, mm, yy] = /^\d{4}-/.test(date) ? [d[2], d[1], d[0]] : d;
+  let [dd, mm, yy] = /^\d{4}-/.test(date) ? [d[2], d[1], d[0]]
+                   : order === 'mdy' ? [d[1], d[0], d[2]]
+                   : d;
   if (yy < 100) yy += 2000;
   if (dd > 31 || mm > 12) return null;
 
@@ -248,8 +250,26 @@ function splitPastedBlocks(text) {
  * `selfNames` are the names that identify OUR side of the chat, so a lead
  * forwarded BY us is still captured but attributed to the message, not the sender.
  */
+// Work out whether this export writes dd/mm or mm/dd by looking at ALL of its
+// dates: any first component over 12 can only be a day, any second component over
+// 12 can only be a month. WhatsApp follows the PHONE's locale, and "English
+// (United States)" is common on Indian handsets, so assuming dd/mm unconditionally
+// silently back-dated leads by months (review 2026-09-07). When every date in the
+// file is ambiguous (all components <= 12) we keep dd/mm, which is what the
+// Indian-locale phones this actually runs on produce.
+function inferDateOrder(messages) {
+  for (const m of messages) {
+    if (!m.date || /^\d{4}-/.test(m.date)) continue;       // ISO needs no guess
+    const [a, b] = m.date.split(/[\/.-]/).map((n) => parseInt(n, 10));
+    if (a > 12) return 'dmy';
+    if (b > 12) return 'mdy';
+  }
+  return 'dmy';
+}
+
 function parseChat(text) {
   const messages = splitChatExport(text);
+  const order = inferDateOrder(messages);
 
   // A pasted message has no timestamp line at all — handle that too, so mam can
   // copy leads straight out of WhatsApp without exporting anything. She may well
@@ -265,9 +285,17 @@ function parseChat(text) {
 
   const out = [];
   for (const m of messages) {
-    const lead = parseLeadMessage(m.body);
+    let lead = parseLeadMessage(m.body);
+    // MSG_START stops the sender at the FIRST colon, so a contact saved as
+    // "Sotyn: Leads" leaves "Leads: " glued to the front of the body and the form
+    // header no longer starts line 1 — the whole lead vanished silently. Retry
+    // once with that leftover prefix stripped (review 2026-09-07).
+    if (!lead) {
+      const stripped = m.body.replace(/^[^\n:]{1,80}:\s?/, '');
+      if (stripped !== m.body) lead = parseLeadMessage(stripped);
+    }
     if (!lead) continue;
-    out.push({ lead, at: toSqlDateTime(m.date, m.time), sender: m.sender, body: m.body.trim() });
+    out.push({ lead, at: toSqlDateTime(m.date, m.time, IST_OFFSET_MIN, order), sender: m.sender, body: m.body.trim() });
   }
   return out;
 }

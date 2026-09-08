@@ -196,6 +196,13 @@ router.post('/sotyn-lead', siteCors, express.json({ limit: '32kb' }), (req, res)
          AND form_type = ?
          AND status IN ('new','contacted','qualified')
          AND created_at > datetime('now','-6 hours')
+         -- Upper bound as well as lower. Without it a single row dated in the
+         -- future (a bad clock, a hand-typed year in an imported chat export)
+         -- satisfies "newer than 6 hours ago" FOREVER, so every later enquiry
+         -- from that number merges into it and the real visitor is lost. The
+         -- import path clamps its own dates too; this is the backstop that does
+         -- not care how the row got there (review 2026-09-07).
+         AND created_at <= datetime('now')
        ORDER BY id DESC LIMIT 1
     `).get(key, formType) : null;
 

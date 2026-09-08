@@ -153,6 +153,7 @@ export default function SotynLeads() {
   const [importText, setImportText] = useState('');
   const [importPreview, setImportPreview] = useState(null);
   const [importBusy, setImportBusy] = useState(false);
+  const importTextRef = useRef('');   // what is in the box right now, for the race guard
   const [cForm, setCForm] = useState({});
   const [saving, setSaving] = useState(false);
   const seenTop = useRef(null);                       // highest id seen, for the "new lead" toast
@@ -284,11 +285,18 @@ export default function SotynLeads() {
   // ── WhatsApp import ────────────────────────────────────────────────
   // Nothing is written until the second button. `commit:false` asks the server
   // what it WOULD do; the same text is then sent back with commit:true.
+  // The preview must belong to the text that is in the box RIGHT NOW. Without
+  // this, a slow preview landing after an edit leaves a stale count on screen and
+  // the next click commits text nobody previewed (review 2026-09-07).
   const runImport = async (commit) => {
+    const sentText = importText;
     if (!importText.trim()) { toast.error('Paste a WhatsApp message or an exported chat first'); return; }
     setImportBusy(true);
     try {
-      const r = await api.post('/sotyn-leads/import', { text: importText, commit });
+      const r = await api.post('/sotyn-leads/import', { text: sentText, commit });
+      // Typed on while it was in flight? Then this answer describes text that is
+      // no longer in the box — drop it rather than showing a count for it.
+      if (sentText !== importTextRef.current) return;
       if (commit) {
         toast.success(`${r.data.inserted} lead${r.data.inserted === 1 ? '' : 's'} imported`);
         setImportOpen(false);
@@ -331,7 +339,7 @@ export default function SotynLeads() {
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) { toast.error('That file is larger than 5 MB — export a shorter date range'); return; }
     const fr = new FileReader();
-    fr.onload = () => { setImportText(String(fr.result || '')); setImportPreview(null); };
+    fr.onload = () => { const t = String(fr.result || ''); setImportText(t); importTextRef.current = t; setImportPreview(null); };
     fr.onerror = () => toast.error('Could not read that file');
     fr.readAsText(file);
   };
@@ -401,7 +409,7 @@ export default function SotynLeads() {
             <FiDownload size={14} /> Export
           </button>
           {perms.create && (
-            <button onClick={() => { setImportOpen(true); setImportText(''); setImportPreview(null); }}
+            <button onClick={() => { setImportOpen(true); setImportText(''); importTextRef.current = ''; setImportPreview(null); }}
                     className="px-3 py-1.5 text-sm border rounded-lg hover:bg-emerald-50 border-emerald-300 text-emerald-700 inline-flex items-center gap-1.5">
               <FiMessageCircle size={14} /> Import from WhatsApp
             </button>
@@ -558,7 +566,7 @@ export default function SotynLeads() {
 
           <textarea
             value={importText}
-            onChange={(e) => { setImportText(e.target.value); setImportPreview(null); }}
+            onChange={(e) => { setImportText(e.target.value); importTextRef.current = e.target.value; setImportPreview(null); }}
             rows={8}
             placeholder={'Webinar registration\nName: Monika Devi\nPhone: 919501890918\nCompany: Secured engineer Pvt Ltd\nTurnover: ₹10–50 Cr\nEvent: Contractor’s Profit Masterclass'}
             className="w-full border rounded-lg px-3 py-2 text-xs font-mono" />
