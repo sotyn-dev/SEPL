@@ -49,6 +49,55 @@ const dayDiff = (a, b) => {
   return Math.round((x - y) / 86400000);
 };
 
+// ── the score of the system ──────────────────────────────────────────
+// Mam (2026-09-08): "this scoring is automtically from system" — and her sheet
+// already says so: step 4's method is "Automatically". So it is CALCULATED, never
+// typed, from the only thing the ERP actually knows about how the system was run:
+// whether its steps landed on time.
+//
+//   score = 100 − (penalty per late day × late days across steps 1-3), floor 0
+//
+// It stays null until steps 1-3 are all done, because a score built on half the
+// evidence would read as a real number and be acted on. The penalty is an
+// app_setting so it can be retuned without a deploy.
+const DEFAULT_PENALTY_PER_LATE_DAY = 5;
+
+function penaltyPerLateDay(db) {
+  try {
+    const r = db.prepare("SELECT value FROM app_settings WHERE key='sysflow_score_penalty_per_day'").get();
+    const n = r ? parseFloat(r.value) : NaN;
+    return Number.isFinite(n) && n >= 0 ? n : DEFAULT_PENALTY_PER_LATE_DAY;
+  } catch { return DEFAULT_PENALTY_PER_LATE_DAY; }
+}
+
+/**
+ * Compute the system's score from its steps and store it on step 4.
+ * Derived, but materialised: /stats averages it in SQL without loading every row,
+ * and it is rewritten on every change, so it cannot drift.
+ * Returns { score, late_days, complete } for the caller to explain on screen.
+ */
+function scoreSystem(db, systemId) {
+  const steps = db.prepare(
+    'SELECT step_no, planned_date, actual_date FROM sysflow_system_steps WHERE system_id=? ORDER BY step_no'
+  ).all(systemId);
+
+  const scored = steps.filter((s) => s.step_no <= 3);
+  const complete = scored.length > 0 && scored.every((s) => s.actual_date);
+  let lateDays = 0;
+  for (const s of scored) {
+    const d = dayDiff(s.actual_date, s.planned_date);
+    if (d && d > 0) lateDays += d;
+  }
+
+  const score = complete
+    ? Math.max(0, Math.round(100 - penaltyPerLateDay(db) * lateDays))
+    : null;
+
+  db.prepare('UPDATE sysflow_system_steps SET system_score = ? WHERE system_id = ? AND step_no = 4')
+    .run(score, systemId);
+  return { score, late_days: lateDays, complete };
+}
+
 /**
  * Recompute planned_date for every step of a system, in order.
  * Called after anything that can move the chain: creation, or an actual date.
@@ -86,8 +135,12 @@ function decorate(sys, steps) {
     steps: out,
     steps_done: done,
     completed: done === out.length && out.length > 0,
-    // The score lives on step 4 — it is the sheet's "Score of system".
+    // The score lives on step 4 — it is the sheet's "Score of system", calculated
+    // from the lateness of steps 1-3 (see scoreSystem), never typed in.
     system_score: (out.find((s) => s.step_no === 4) || {}).system_score ?? null,
+    score_late_days: out.filter((s) => s.step_no <= 3 && s.time_delay_days > 0)
+      .reduce((a, s) => a + s.time_delay_days, 0),
+    score_ready: out.filter((s) => s.step_no <= 3).every((s) => !!s.actual_date),
     total_delay_days: lastDelay.length ? lastDelay.reduce((a, b) => a + b, 0) : null,
   };
 }
@@ -260,6 +313,7 @@ router.post('/', requirePermission(MODULE, 'create'), (req, res) => {
         ins.run(id, s.step_no, s.step_name, s.owner_label, s.method, s.planned_days);
       }
       recalcPlanned(db, id);
+      scoreSystem(db, id);
       log(db, id, null, req.user?.id, 'CREATE', null, `${uid} · ${name}`);
       return { id, uid };
     })();
@@ -336,12 +390,11 @@ router.patch('/:id/steps/:no', requirePermission(MODULE, 'edit'), (req, res) => 
   if (req.body.person_name !== undefined) put('person_name', str(req.body.person_name, 160));
   if (req.body.pc_name !== undefined) put('pc_name', str(req.body.pc_name, 160));
   if (req.body.remarks !== undefined) put('remarks', str(req.body.remarks, 2000));
+  // The score is NOT accepted from the caller. Mam (2026-09-08): "this scoring is
+  // automtically from system" — it is derived from the steps by scoreSystem(), so
+  // a posted value is refused rather than silently ignored.
   if (req.body.system_score !== undefined) {
-    const n = req.body.system_score === null || req.body.system_score === '' ? null : parseInt(req.body.system_score, 10);
-    if (n !== null && (Number.isNaN(n) || n < 0 || n > 100)) {
-      return res.status(400).json({ error: 'Score must be between 0 and 100' });
-    }
-    put('system_score', n);
+    return res.status(400).json({ error: 'The score of the system is calculated automatically — it cannot be set by hand' });
   }
   if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
 
@@ -355,6 +408,8 @@ router.patch('/:id/steps/:no', requirePermission(MODULE, 'edit'), (req, res) => 
       if (req.body.actual_date !== undefined || req.body.planned_days !== undefined) {
         recalcPlanned(db, step.system_id);
       }
+      // Any change to a date changes the lateness the score is built from.
+      scoreSystem(db, step.system_id);
       if (req.body.actual_date !== undefined) {
         log(db, step.system_id, stepNo, req.user?.id, 'STEP_DONE', step.actual_date, req.body.actual_date || null);
       }

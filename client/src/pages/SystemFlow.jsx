@@ -223,7 +223,6 @@ export default function SystemFlow() {
         proof_url: step.proof_url || '',
         person_name: step.person_name || '',
         pc_name: step.pc_name || '',
-        system_score: step.system_score ?? '',
         remarks: step.remarks || '',
       },
     });
@@ -642,11 +641,19 @@ export default function SystemFlow() {
               </div>
             )}
             {editStep.tpl.extra === 'score' && (
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Score of system (0–100)</label>
-                <input type="number" min="0" max="100" value={editStep.draft.system_score}
-                       onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, system_score: e.target.value } })}
-                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              <div className="bg-violet-50 border border-violet-200 rounded-lg px-3 py-2">
+                <div className="text-xs font-semibold text-violet-900">Score of system — calculated</div>
+                <div className="text-3xl font-bold text-violet-800 mt-0.5">
+                  {editStep.system.score_ready
+                    ? editStep.system.system_score
+                    : <span className="text-lg font-semibold text-violet-400">pending</span>}
+                </div>
+                <div className="text-[11px] text-violet-800 mt-1">
+                  {editStep.system.score_ready
+                    ? <>100 − 5 per late day · {editStep.system.score_late_days} late day
+                        {editStep.system.score_late_days === 1 ? '' : 's'} across steps 1–3</>
+                    : <>It is worked out once steps 1, 2 and 3 all have an actual date.</>}
+                </div>
               </div>
             )}
 
