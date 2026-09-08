@@ -155,10 +155,28 @@ function runSystemFlowMigrations(db) {
         const n = db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c;
         if (!n) continue;
         try {
-          db.exec(`CREATE TABLE IF NOT EXISTS ${t}_archive_v1 AS SELECT * FROM ${t}`);
+          // NEVER delete unless THIS run wrote the archive. CREATE TABLE IF NOT
+          // EXISTS ... AS SELECT silently does nothing when the archive already
+          // exists, while the DELETE below would still run — so a re-run (after
+          // someone restores the v1 rows, or after the app_settings guard is lost
+          // in a settings restore) would wipe the live rows and log them as
+          // "archived". Reproduced on a copy of the live database.
+          if (has(`${t}_archive_v1`)) {
+            failed++;
+            console.error(`[system-flow] ${t}_archive_v1 already exists — refusing to empty ${t} again (${n} row(s) left in place)`);
+            continue;
+          }
+          db.exec(`CREATE TABLE ${t}_archive_v1 AS SELECT * FROM ${t}`);
+          // Count what the archive ACTUALLY holds, not what we hoped to copy.
+          const kept = db.prepare(`SELECT COUNT(*) c FROM ${t}_archive_v1`).get().c;
+          if (kept !== n) {
+            failed++;
+            console.error(`[system-flow] ${t}: archive holds ${kept} of ${n} row(s) — not emptying`);
+            continue;
+          }
           db.exec(`DELETE FROM ${t}`);
-          moved += n;
-          console.log(`[system-flow] archived ${n} row(s) from ${t} -> ${t}_archive_v1`);
+          moved += kept;
+          console.log(`[system-flow] archived ${kept} row(s) from ${t} -> ${t}_archive_v1`);
         } catch (inner) {
           // One stubborn table must not stop the others, and must not let the
           // one-time flag be set over an incomplete changeover.

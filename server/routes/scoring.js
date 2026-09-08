@@ -40,7 +40,8 @@ router.use(authMiddleware);
 // exactly (hang audit 2026-09-05) — see lib/dueDay.js before editing.
 const { dueDay } = require('../lib/dueDay');
 const DUE_DELEG = dueDay('due_date'), DUE_PMS = dueDay('due_date'), DUE_TKT = dueDay('deadline_date');
-const DUE_FLOW = dueDay('target_date');   // ERP Management (System Flow) steps
+const DUE_FLOW = dueDay('target_date');   // ERP Management (System Flow) v1 (retired)
+const DUE_SYSFLOW = dueDay('st.planned_date');   // System Flow v2 steps
 
 // ---------- TEMPLATES & KPIs (admin manages) ----------
 
@@ -597,90 +598,94 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       // week it was created; a Sunday folds to the Saturday before), ACTUAL =
       // of those, completed. Cancelled steps are out of both sides. Pending
       // carry-over comes from CARRY_CFG below.
+      // ── ERP Management (System Flow) — v2 tables ──────────────────────
+      // Repointed 2026-09-08. These read sysflow_flows until the module was
+      // rebuilt; that table is now permanently empty, and an empty table is NOT
+      // neutral here — computeScore turns 0 planned + 0 actual into actualPct
+      // 100, so all seven rows were about to score full marks for everyone.
+      // Attribution stays per-person on the STEP OWNER (v2 has no separate
+      // developer column; the owner is who actually holds that step).
+      const SYS_FROM = `FROM sysflow_system_steps st
+                          JOIN sysflow_systems sy ON sy.id = st.system_id AND sy.active = 1`;
+
       if (source === 'auto:sysflow_steps' || source === 'auto:sysflow_all') {
-        const who = source === 'auto:sysflow_steps' ? 'developer_id=? AND ' : '';
+        // Steps DUE in the window, and how many of those are done.
+        const who = source === 'auto:sysflow_steps' ? 'st.owner_id=? AND ' : '';
         const args = who ? [userId] : [];
-        const given = db.prepare(`SELECT COUNT(*) c FROM sysflow_flows WHERE ${who}status<>'cancelled' AND ${DUE_FLOW} BETWEEN ? AND ?`).get(...args, sinceDate, untilDate).c;
-        const done = db.prepare(`SELECT COUNT(*) c FROM sysflow_flows WHERE ${who}status='completed' AND ${DUE_FLOW} BETWEEN ? AND ?`).get(...args, sinceDate, untilDate).c;
+        const given = db.prepare(`SELECT COUNT(*) c ${SYS_FROM}
+           WHERE ${who}st.planned_date IS NOT NULL AND ${DUE_SYSFLOW} BETWEEN ? AND ?`)
+          .get(...args, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) c ${SYS_FROM}
+           WHERE ${who}st.actual_date IS NOT NULL AND st.planned_date IS NOT NULL
+             AND ${DUE_SYSFLOW} BETWEEN ? AND ?`)
+          .get(...args, sinceDate, untilDate).c;
         return { given, done };
       }
+
       if (source === 'auto:sysflow_ontime_pct') {
-        // Of the steps the user (as DEVELOPER) COMPLETED this week, % finished on
-        // or before their target date. Steps with no target date can't be judged
-        // and are left out. The week runs Mon..SUNDAY here (a Sunday completion
-        // belongs to the week that just ended — same fold as dueDay/weekEndTs;
-        // review 2026-09-07). Nothing completed → neutral 0/0 with the typed
-        // target kept, same as RACI on-time.
+        // Of the steps the user COMPLETED this week, the % finished on or before
+        // their planned date. Nothing completed → neutral 0/0 with the typed target.
         const r = db.prepare(`
           SELECT COUNT(*) n,
-                 SUM(CASE WHEN date(actual_completion_date) <= date(target_date) THEN 1 ELSE 0 END) ok
-            FROM sysflow_flows
-           WHERE developer_id=? AND status='completed'
-             AND target_date IS NOT NULL AND target_date <> ''
-             AND date(actual_completion_date) BETWEEN ? AND ?`).get(userId, sinceDate, shiftWeek(sinceDate, 6));
+                 SUM(CASE WHEN date(st.actual_date) <= date(st.planned_date) THEN 1 ELSE 0 END) ok
+            ${SYS_FROM}
+           WHERE st.owner_id=? AND st.actual_date IS NOT NULL AND st.planned_date IS NOT NULL
+             AND date(st.actual_date) BETWEEN ? AND ?`).get(userId, sinceDate, shiftWeek(sinceDate, 6));
         if (!r || !r.n) return { given: 0, done: 0, typedTarget: true };
         return { given: null, done: Math.round((r.ok / r.n) * 100) };
       }
+
       if (source === 'auto:sysflow_overdue') {
-        // The module's headline per-person number: steps the user is developing
-        // that were OVERDUE at the week end (target on/before Sunday, and not
-        // completed by then). Snapshot at the week end, so past weeks read what
-        // they were. Pair with "↓ lower better". (review 2026-09-07)
+        // Steps the user holds that were overdue AT THE WEEK END, so a past week
+        // reads what it was. Pair with "↓ lower better".
         const weekEnd = shiftWeek(sinceDate, 6);
-        const n = db.prepare(`
-          SELECT COUNT(*) c FROM sysflow_flows
-           WHERE developer_id=? AND status<>'cancelled'
-             AND target_date IS NOT NULL AND target_date <> ''
-             AND date(target_date) < ?
-             AND (status<>'completed' OR actual_completion_date IS NULL OR date(actual_completion_date) > ?)`).get(userId, weekEnd, weekEnd).c;
+        const n = db.prepare(`SELECT COUNT(*) c ${SYS_FROM}
+           WHERE st.owner_id=? AND st.planned_date IS NOT NULL
+             AND date(st.planned_date) < ?
+             AND (st.actual_date IS NULL OR date(st.actual_date) > ?)`)
+          .get(userId, weekEnd, weekEnd).c;
         return { given: null, done: n };
       }
+
       if (source === 'auto:sysflow_blocked') {
-        // Steps the user is DEVELOPING that went BLOCKED during the week —
-        // from the activity trail, so a step blocked for a month counts once,
-        // in the week it got stuck. Only the TRANSITION into blocked counts:
-        // the status route logs action='blocked' on every save while a step
-        // stays blocked (progress / remarks edits), and old_value carries the
-        // previous status — an old_value of 'blocked' is a re-save, not a new
-        // block (review 2026-09-07). Week = IST calendar days Mon..Sun, the
-        // same shift the snag formula uses, so a Sunday or early-Monday-IST
-        // event (still Sunday in UTC) lands in the right week.
-        // Pair with "↓ lower better".
-        const n = db.prepare(`
-          SELECT COUNT(DISTINCT a.flow_id) c
-            FROM sysflow_activity a JOIN sysflow_flows f ON f.id = a.flow_id
-           WHERE f.developer_id=? AND a.action='blocked'
-             AND COALESCE(a.old_value, '') <> 'blocked'
-             AND date(a.created_at, '+330 minutes') BETWEEN ? AND ?`).get(userId, sinceDate, shiftWeek(sinceDate, 6)).c;
+        // v2 has no 'blocked' status. The honest equivalent is work the person
+        // CANNOT START: their step is open and the step in front of it is itself
+        // open and already past its planned date — they are held up by someone
+        // else's late step. Pair with "↓ lower better".
+        const weekEnd = shiftWeek(sinceDate, 6);
+        const n = db.prepare(`SELECT COUNT(*) c ${SYS_FROM}
+           WHERE st.owner_id=? AND st.actual_date IS NULL
+             AND EXISTS (SELECT 1 FROM sysflow_system_steps prev
+                          WHERE prev.system_id = st.system_id
+                            AND prev.step_no = st.step_no - 1
+                            AND prev.actual_date IS NULL
+                            AND prev.planned_date IS NOT NULL
+                            AND date(prev.planned_date) < ?)`)
+          .get(userId, weekEnd).c;
         return { given: null, done: n };
       }
+
       if (source === 'auto:sysflow_updates') {
-        // WORK-progress updates the user logged (IST calendar week Mon..Sun, as
-        // above): status moves, progress, priority, remarks, required action and
-        // the ERP link. NOT step creation / assignment / re-dating / re-ordering
-        // — those are planning edits, and bulk-entering 20 steps is not "20
-        // updates" (review 2026-09-07). Keep in step with systemFlow.js
-        // logActivity action names.
+        // Work the user logged this IST week. STEP_DONE and EDIT are work;
+        // CREATE / BULK_CREATE are planning and stay out, as in v1 — registering
+        // 20 systems from a sheet is not 20 updates.
         const n = db.prepare(`
-          SELECT COUNT(*) c FROM sysflow_activity
-           WHERE user_id=? AND date(created_at, '+330 minutes') BETWEEN ? AND ?
-             AND action IN ('status_changed','blocked','unblocked','completed','reopened','dependency_overridden',
-                            'progress_changed','priority_changed','remarks_changed','required_action_changed','erp_link_set')`
-        ).get(userId, sinceDate, shiftWeek(sinceDate, 6)).c;
+          SELECT COUNT(*) c FROM sysflow_system_activity
+           WHERE user_id=? AND action IN ('STEP_DONE','EDIT')
+             AND date(created_at, '+330 minutes') BETWEEN ? AND ?`)
+          .get(userId, sinceDate, shiftWeek(sinceDate, 6)).c;
         return { given: null, done: n };
       }
+
       if (source === 'auto:sysflow_progress_pct') {
-        // ERP implementation progress AT THE WEEK END, company-wide: steps
-        // completed on/before Sunday ÷ steps that existed by Sunday (cancelled
-        // out). Week-scoped so a past week reads what it was then and the row
-        // trends 40 → 48 → 55 instead of showing today's number everywhere
-        // (review 2026-09-07). Steps carry IST created_at via '+330 minutes'.
+        // Company-wide ERP implementation progress at the week end: steps done
+        // on/before Sunday ÷ steps that existed by Sunday.
         const weekEnd = shiftWeek(sinceDate, 6);
         const r = db.prepare(`
           SELECT COUNT(*) n,
-                 SUM(CASE WHEN status='completed' AND actual_completion_date IS NOT NULL AND date(actual_completion_date) <= ? THEN 1 ELSE 0 END) done
-            FROM sysflow_flows
-           WHERE status<>'cancelled' AND date(created_at, '+330 minutes') <= ?`).get(weekEnd, weekEnd);
+                 SUM(CASE WHEN st.actual_date IS NOT NULL AND date(st.actual_date) <= ? THEN 1 ELSE 0 END) done
+            ${SYS_FROM}
+           WHERE date(sy.created_at, '+330 minutes') <= ?`).get(weekEnd, weekEnd);
         if (!r || !r.n) return { given: 0, done: 0, typedTarget: true };
         return { given: null, done: Math.round((r.done / r.n) * 100) };
       }
@@ -1263,8 +1268,10 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       // ERP Management (System Flow), attributed by DEVELOPER (mam 2026-09-07:
       // "not as RACI — according to developer"). `who` may carry extra filters;
       // the number of '?' in it decides how many times userId is bound (whoArgs).
-      'auto:sysflow_steps':     { table: 'sysflow_flows', who: "developer_id=? AND status<>'cancelled'", doneCond: "status='completed'", doneAt: 'actual_completion_date', dueCol: 'target_date' },
-      'auto:sysflow_all':       { table: 'sysflow_flows', who: "status<>'cancelled'",                     doneCond: "status='completed'", doneAt: 'actual_completion_date', dueCol: 'target_date' },
+      // v2 (2026-09-08): the steps live in sysflow_system_steps now. 'done' is
+      // simply having an actual date; there is no cancelled state to exclude.
+      'auto:sysflow_steps':     { table: 'sysflow_system_steps', who: 'owner_id=?', doneCond: 'actual_date IS NOT NULL', doneAt: 'actual_date', dueCol: 'planned_date' },
+      'auto:sysflow_all':       { table: 'sysflow_system_steps', who: null,         doneCond: 'actual_date IS NOT NULL', doneAt: 'actual_date', dueCol: 'planned_date' },
     };
     const computeCarry = (source, since, until) => {
       // Snags keep their special shapes: IST week bucketing on raised_at and
