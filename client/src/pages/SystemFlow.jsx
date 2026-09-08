@@ -1,838 +1,674 @@
-// SYSTEM FLOW & ERP IMPLEMENTATION CONTROL (mam 2026-09-01)
-// One page, 8 deep-linkable tabs (?tab=) — the sidebar's ERP MANAGEMENT
-// group items all land here. WHAT → WHO → WHEN → STATUS → WHY DELAYED →
-// WHAT IS BLOCKING → HOW MANY AFFECTED → WHO MUST SOLVE IT.
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import api from '../api';
-import { useAuth } from '../context/AuthContext';
-import { exportCsv } from '../utils/exportCsv';
-import { fmtDateTime } from '../utils/datetime';
+// SYSTEM FLOW — ERP Management system register (v2).
+//
+// Mam (2026-09-08): "change it fully, 2,3 photo is steps and 4 is create system".
+// Laid out like her spreadsheet: one row per system, with the four steps as
+// grouped column blocks — Planned · Actual · Time Delay, plus each step's own
+// extra column (proof + person, proof, PC name, score of system).
+//
+// Every desktop control is mirrored in the md:hidden mobile card (parity rule).
 
-const TABS = [
-  { id: 'dashboard',    label: 'Flow Dashboard' },
-  { id: 'flows',        label: 'System Flow' },
-  { id: 'bottlenecks',  label: 'Bottleneck Center' },
-  { id: 'timeline',     label: 'Timeline' },
-  { id: 'performance',  label: 'Person Performance' },
-  { id: 'escalations',  label: 'Escalations' },
-  { id: 'master',       label: 'Step Master' },
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
+import api from '../api';
+import Modal from '../components/Modal';
+import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
+import { fmtDateTime } from '../utils/datetime';
+import { exportCsv } from '../utils/exportCsv';
+import Pagination, { usePagination } from '../components/PaginationBar';
+import {
+  FiRefreshCw, FiDownload, FiSearch, FiPlus, FiTrash2, FiEdit2,
+  FiCheckCircle, FiClock, FiUpload, FiExternalLink,
+} from 'react-icons/fi';
+
+const M = 'system_flow';
+
+// The four steps, as the sheet defines them. The server owns the real template
+// (db/systemFlowSchema.js) and sends it in /meta; this is the display fallback.
+const FALLBACK_STEPS = [
+  { step_no: 1, step_name: 'CREATE',    owner_label: 'MONIKA',            method: 'G-form',                        planned_days: 1,  extra: 'proof_person' },
+  { step_no: 2, step_name: 'ALIGN',     owner_label: 'RESPECTIVE PERSON', method: 'UPLOAD SIGN FROM EVERY PERSON', planned_days: 1,  extra: 'proof' },
+  { step_no: 3, step_name: 'ROLL-OUT',  owner_label: 'AUTOMATIC',         method: 'MANUALLY',                      planned_days: 0,  extra: 'pc_name' },
+  { step_no: 4, step_name: 'ALIGNMENT', owner_label: 'PC',                method: 'Automatically',                 planned_days: 30, extra: 'score' },
 ];
 
-const STATUS_META = {
-  not_started: { label: 'Not Started', cls: 'bg-gray-100 text-gray-600',   icon: '○' },
-  in_progress: { label: 'In Progress', cls: 'bg-blue-100 text-blue-700',   icon: '◔' },
-  testing:     { label: 'Testing',     cls: 'bg-purple-100 text-purple-700', icon: '🧪' },
-  waiting:     { label: 'Waiting',     cls: 'bg-amber-100 text-amber-700', icon: '⏳' },
-  blocked:     { label: 'Blocked',     cls: 'bg-red-100 text-red-700',     icon: '🔴' },
-  completed:   { label: 'Completed',   cls: 'bg-green-100 text-green-700', icon: '✅' },
-  cancelled:   { label: 'Cancelled',   cls: 'bg-gray-100 text-gray-400 line-through', icon: '✕' },
+const EXTRA_LABEL = {
+  proof_person: 'Upload proof · Person',
+  proof: 'Upload proof',
+  pc_name: 'PC name',
+  score: 'Score of system',
 };
-const SEV_CLS = {
-  none: 'bg-gray-100 text-gray-500', low: 'bg-yellow-100 text-yellow-700',
-  medium: 'bg-amber-100 text-amber-800', high: 'bg-orange-100 text-orange-800',
-  critical: 'bg-red-600 text-white',
-};
-const PRIORITIES = ['low', 'medium', 'high', 'critical'];
 
-const StatusBadge = ({ s }) => {
-  const m = STATUS_META[s] || STATUS_META.not_started;
-  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${m.cls}`}>{m.icon} {m.label}</span>;
-};
-const SevBadge = ({ s }) => s && s !== 'none'
-  ? <span className={`px-2 py-0.5 rounded-full text-xs font-semibold uppercase ${SEV_CLS[s]}`}>{s}</span> : null;
+const STEP_TONE = [
+  'bg-sky-50 border-sky-200',
+  'bg-emerald-50 border-emerald-200',
+  'bg-amber-50 border-amber-200',
+  'bg-violet-50 border-violet-200',
+];
 
-const fmtD = (d) => d ? new Date(d + (d.length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—';
+const fmtDate = (d) => (d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—');
+
+// Late is red, early is green, on time is plain. The sheet's "Time Delay".
+function Delay({ days }) {
+  if (days === null || days === undefined) return <span className="text-slate-300">—</span>;
+  if (days > 0) return <span className="text-red-600 font-semibold">+{days}d</span>;
+  if (days < 0) return <span className="text-emerald-600">{days}d</span>;
+  return <span className="text-slate-500">0d</span>;
+}
+
+function StepCell({ step, tpl, onEdit, canEdit }) {
+  const extra = tpl?.extra;
+  const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  const overdue = !step.actual_date && step.planned_date && step.planned_date < today;
+  return (
+    <>
+      <td className={`px-2 py-1.5 text-xs whitespace-nowrap ${overdue ? 'text-red-600 font-semibold' : ''}`}>
+        {fmtDate(step.planned_date)}
+      </td>
+      <td className="px-2 py-1.5 text-xs whitespace-nowrap">
+        {step.actual_date
+          ? <span className="text-emerald-700">{fmtDate(step.actual_date)}</span>
+          : canEdit
+            ? <button onClick={() => onEdit(step)} className="text-blue-600 hover:underline">mark…</button>
+            : <span className="text-slate-300">—</span>}
+      </td>
+      <td className="px-2 py-1.5 text-xs whitespace-nowrap"><Delay days={step.time_delay_days} /></td>
+      <td className="px-2 py-1.5 text-xs whitespace-nowrap max-w-[150px] truncate">
+        {extra === 'score' ? (
+          step.system_score === null || step.system_score === undefined
+            ? <span className="text-slate-300">—</span>
+            : <span className="font-semibold">{step.system_score}</span>
+        ) : extra === 'pc_name' ? (step.pc_name || <span className="text-slate-300">—</span>)
+        : (
+          <span className="inline-flex items-center gap-1">
+            {step.proof_url
+              ? <a href={step.proof_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-0.5">proof <FiExternalLink size={10} /></a>
+              : <span className="text-slate-300">—</span>}
+            {extra === 'proof_person' && step.person_name && <span className="text-slate-500">· {step.person_name}</span>}
+          </span>
+        )}
+      </td>
+    </>
+  );
+}
 
 export default function SystemFlow() {
-  const { canCreate, canEdit, canApprove, isAdmin } = useAuth();
-  const [params, setParams] = useSearchParams();
-  // Unknown/removed tab ids (e.g. the old ?tab=my) fall back to the dashboard.
-  const rawTab = params.get('tab') || 'dashboard';
-  const tab = TABS.some(t => t.id === rawTab) ? rawTab : 'dashboard';
-  const setTab = (t) => setParams({ tab: t });
+  const { canCreate, canEdit, canDelete } = useAuth();
+  const perms = useMemo(() => ({
+    create: canCreate(M), edit: canEdit(M), remove: canDelete(M),
+  }), [canCreate, canEdit, canDelete]);
 
-  const [meta, setMeta] = useState({ processes: [], steps: [], users: [], statuses: [], escalation: {} });
-  const [flows, setFlows] = useState([]);
-  const [dash, setDash] = useState(null);
-  const [detailId, setDetailId] = useState(null);
-  const [showCreate, setShowCreate] = useState(false);
-  const [editFlow, setEditFlow] = useState(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const refresh = () => setRefreshKey(k => k + 1);
-
-  useEffect(() => {
-    api.get('/system-flow/meta').then(r => setMeta(r.data)).catch(() => toast.error('Could not load System Flow masters'));
-  }, [refreshKey]);
-  useEffect(() => {
-    api.get('/system-flow/flows').then(r => setFlows(r.data)).catch(() => {});
-    api.get('/system-flow/dashboard').then(r => setDash(r.data)).catch(() => {});
-  }, [refreshKey]);
-
-  const openDetail = (id) => setDetailId(id);
-
-  return (
-    <div className="p-4 md:p-6 space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-bold">🛠️ ERP Management — System Flow</h1>
-        <span className="text-xs text-gray-500 hidden md:inline">plan → assign → develop → test → complete, with automatic bottleneck detection</span>
-        <div className="ml-auto flex gap-2">
-          {canCreate('system_flow') && (
-            <button onClick={() => setShowCreate(true)}
-              className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">+ Create System Flow</button>
-          )}
-        </div>
-      </div>
-
-      {/* Tab bar */}
-      <div className="flex gap-1 overflow-x-auto border-b border-gray-200 -mb-px">
-        {TABS.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-3 py-2 text-sm whitespace-nowrap rounded-t-lg border-b-2 ${tab === t.id
-              ? 'border-blue-600 text-blue-700 font-semibold bg-blue-50'
-              : 'border-transparent text-gray-500 hover:text-gray-800'}`}>{t.label}</button>
-        ))}
-      </div>
-
-      {tab === 'dashboard'   && <DashboardTab dash={dash} flows={flows} openDetail={openDetail} />}
-      {tab === 'flows'       && <FlowsTab meta={meta} flows={flows} openDetail={openDetail} onEdit={setEditFlow} canEdit={canEdit('system_flow')} refreshKey={refreshKey} />}
-      {tab === 'bottlenecks' && <BottlenecksTab openDetail={openDetail} refreshKey={refreshKey} />}
-      {tab === 'timeline'    && <TimelineTab meta={meta} flows={flows} openDetail={openDetail} />}
-      {tab === 'performance' && <PerformanceTab refreshKey={refreshKey} onPick={() => setTab('flows')} />}
-      {tab === 'escalations' && <EscalationsTab openDetail={openDetail} refreshKey={refreshKey} />}
-      {tab === 'master'      && <MasterTab meta={meta} canManage={canEdit('system_flow') || isAdmin()} refresh={refresh} />}
-
-      {showCreate && <FlowModal meta={meta} flows={flows} onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); refresh(); }} />}
-      {editFlow && <FlowModal meta={meta} flows={flows} flow={editFlow} onClose={() => setEditFlow(null)} onSaved={() => { setEditFlow(null); refresh(); }} />}
-      {detailId && <DetailDrawer id={detailId} meta={meta} onClose={() => setDetailId(null)} onChanged={refresh}
-        canApproveOverride={canApprove('system_flow') || isAdmin()} onEdit={(f) => { setDetailId(null); setEditFlow(f); }} canEdit={canEdit('system_flow')} />}
-    </div>
-  );
-}
-
-/* ─── Dashboard ──────────────────────────────────────────────────────── */
-function DashboardTab({ dash, openDetail }) {
-  const [report, setReport] = useState(null);
-  if (!dash) return <div className="text-gray-400 py-10 text-center">Loading dashboard…</div>;
-  const k = dash.kpis;
-  const cards = [
-    ['TOTAL STEPS', k.total, 'bg-slate-50 border-slate-200 text-slate-700'],
-    ['COMPLETED', k.completed, 'bg-green-50 border-green-200 text-green-700'],
-    ['IN PROGRESS', k.in_progress, 'bg-blue-50 border-blue-200 text-blue-700'],
-    ['BLOCKED', k.blocked, 'bg-red-50 border-red-200 text-red-700'],
-    ['OVERDUE', k.overdue, 'bg-orange-50 border-orange-200 text-orange-700'],
-    ['DUE THIS WEEK', k.due_this_week, 'bg-amber-50 border-amber-200 text-amber-700'],
-    ['COMPLETION %', `${k.completion_pct}%`, 'bg-emerald-50 border-emerald-200 text-emerald-700'],
-    ['AVG DELAY', `${k.avg_delay}d`, 'bg-rose-50 border-rose-200 text-rose-700'],
-  ];
-  return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
-        {cards.map(([label, val, cls]) => (
-          <div key={label} className={`border rounded-xl p-3 ${cls}`}>
-            <div className="text-[11px] font-semibold tracking-wide opacity-80">{label}</div>
-            <div className="text-2xl font-bold">{val}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* WHY IS THE FLOW STOPPED? */}
-      <div className="bg-white border border-red-200 rounded-xl p-4">
-        <h2 className="font-bold text-red-700 mb-3">🛑 WHY IS THE FLOW STOPPED?</h2>
-        {dash.processes.filter(p => p.stopped_at).length === 0 && (
-          <div className="text-sm text-green-700">No process is currently stopped — no blocked or overdue actionable step. 🎉</div>
-        )}
-        <div className="grid md:grid-cols-2 gap-3">
-          {dash.processes.filter(p => p.stopped_at).map(p => (
-            <div key={p.process_id} className="border border-red-100 bg-red-50/50 rounded-lg p-3 cursor-pointer hover:bg-red-50" onClick={() => openDetail(p.stopped_at.id)}>
-              <div className="text-xs font-semibold text-gray-500">{p.process_name} FLOW</div>
-              <div className="font-bold text-red-700">FLOW STOPPED AT: {p.stopped_at.step_name}</div>
-              <div className="text-sm mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
-                <span className="text-gray-500">Owner</span><span className="font-medium">{p.stopped_at.owner}</span>
-                <span className="text-gray-500">Reason</span><span>{p.stopped_at.reason || '—'}</span>
-                <span className="text-gray-500">Downstream impact</span><span className="font-semibold">{p.stopped_at.downstream_impact} step(s) waiting</span>
-                <span className="text-gray-500">Recommended action</span><span>{p.stopped_at.required_action}</span>
-              </div>
-              <div className="mt-1"><SevBadge s={p.stopped_at.severity} /></div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Process flow visualization */}
-      <div className="bg-white border rounded-xl p-4">
-        <h2 className="font-bold mb-3">Process Flow</h2>
-        {dash.processes.length === 0 && <div className="text-sm text-gray-400">No flows created yet — use “+ Create System Flow”.</div>}
-        <div className="space-y-4">
-          {dash.processes.map(p => {
-            // Hierarchy: PROCESS → SYSTEM → its chain of steps (mam 2026-09-01:
-            // "under process like 4 steps" — group by system under the process).
-            const systems = [];
-            for (const s of p.steps) {
-              let g = systems.find(x => x.name === s.system_name);
-              if (!g) { g = { name: s.system_name, steps: [] }; systems.push(g); }
-              g.steps.push(s);
-            }
-            return (
-              <div key={p.process_id} className="border border-gray-100 rounded-lg p-3 bg-gray-50/50">
-                <div className="text-sm font-bold text-gray-700 tracking-wide mb-2">📁 {p.process_name}</div>
-                <div className="space-y-2 pl-3 border-l-2 border-gray-200">
-                  {systems.map(sys => (
-                    <div key={sys.name}>
-                      <div className="text-xs font-semibold text-blue-700 mb-1">🗂 {sys.name} <span className="text-gray-400 font-normal">({sys.steps.length} step{sys.steps.length > 1 ? 's' : ''})</span></div>
-                      <div className="flex items-center gap-1 overflow-x-auto pb-1">
-                        {sys.steps.map((s, i) => (
-                          <div key={s.id} className="flex items-center gap-1 shrink-0">
-                            {i > 0 && <span className="text-gray-300">→</span>}
-                            <button onClick={() => openDetail(s.id)}
-                              className={`text-left border rounded-lg px-3 py-2 min-w-[130px] hover:shadow transition
-                                ${s.is_primary_bottleneck ? 'border-red-500 ring-2 ring-red-200 bg-red-50'
-                                  : s.status === 'completed' ? 'border-green-200 bg-green-50'
-                                  : s.derived_waiting || s.status === 'waiting' ? 'border-amber-200 bg-amber-50'
-                                  : 'border-gray-200 bg-white'}`}>
-                              <div className="text-sm font-semibold truncate max-w-[160px]">{s.step_name}</div>
-                              <div className="text-xs text-gray-500 truncate">{s.owner}</div>
-                              <div className="mt-1 flex items-center gap-1">
-                                <StatusBadge s={s.derived_waiting && s.status === 'not_started' ? 'waiting' : s.status} />
-                                {s.delay_days > 0 && <span className="text-xs font-bold text-red-600">{s.delay_days}d</span>}
-                              </div>
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Weekly report */}
-      <div className="bg-white border rounded-xl p-4">
-        <div className="flex items-center gap-3">
-          <h2 className="font-bold">Weekly Management Report</h2>
-          <button onClick={() => api.get('/system-flow/weekly-report').then(r => setReport(r.data))}
-            className="px-3 py-1 text-sm border rounded-lg hover:bg-gray-50">Generate</button>
-        </div>
-        {report && (
-          <div className="mt-3 grid md:grid-cols-2 gap-4 text-sm">
-            <div className="space-y-1">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                <span className="text-gray-500">Total steps</span><b>{report.total}</b>
-                <span className="text-gray-500">Completed this week</span><b>{report.completed_this_week}</b>
-                <span className="text-gray-500">New this week</span><b>{report.new_this_week}</b>
-                <span className="text-gray-500">Pending</span><b>{report.pending}</b>
-                <span className="text-gray-500">Blocked</span><b className="text-red-600">{report.blocked}</b>
-                <span className="text-gray-500">Overdue</span><b className="text-orange-600">{report.overdue}</b>
-                <span className="text-gray-500">Completion %</span><b>{report.completion_pct}%</b>
-                <span className="text-gray-500">Avg delay</span><b>{report.avg_delay}d</b>
-              </div>
-              <div className="pt-2"><span className="text-gray-500">Systems completed this week:</span> {report.systems_completed_this_week.join(', ') || '—'}</div>
-            </div>
-            <div className="space-y-2">
-              <div>
-                <div className="font-semibold text-xs text-gray-500 uppercase">Top 5 bottlenecks</div>
-                {report.top_bottlenecks.length === 0 && <div className="text-gray-400">none</div>}
-                {report.top_bottlenecks.map(b => <div key={b.id}>{b.step_name} · {b.responsible_name} · <SevBadge s={b.severity} /></div>)}
-              </div>
-              <div>
-                <div className="font-semibold text-xs text-gray-500 uppercase">Top delayed persons</div>
-                {report.top_delayed_persons.map(p => <div key={p.person}>{p.person} — {p.delay} delay-days</div>)}
-                {report.top_delayed_persons.length === 0 && <div className="text-gray-400">none</div>}
-              </div>
-              <div>
-                <div className="font-semibold text-xs text-gray-500 uppercase">Systems with highest delay</div>
-                {report.systems_highest_delay.map(s => <div key={s.system}>{s.system} — {s.delay} delay-days</div>)}
-                {report.systems_highest_delay.length === 0 && <div className="text-gray-400">none</div>}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Flows list ─────────────────────────────────────────────────────── */
-const emptyFilters = { process: '', step: '', person: '', developer: '', status: '', priority: '', overdue: '', blocked: '', from: '', to: '', q: '' };
-function FlowsTab({ meta, openDetail, onEdit, canEdit, refreshKey }) {
-  const [filters, setFilters] = useState(emptyFilters);
   const [rows, setRows] = useState([]);
-  const load = useCallback(() => {
-    const qs = Object.entries(filters).filter(([, v]) => v !== '').map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-    api.get(`/system-flow/flows${qs ? '?' + qs : ''}`).then(r => setRows(r.data)).catch(() => {});
-  }, [filters]);
-  // refreshKey: re-fetch after a save/edit/status change elsewhere on the
-  // page — without it the table kept showing stale rows after Save Changes
-  // (mam 2026-09-02: "if i edit not update").
-  useEffect(() => { load(); }, [load, refreshKey]);
-
-  const set = (k, v) => setFilters(f => ({ ...f, [k]: v }));
-  const sel = 'border rounded-lg px-2 py-1.5 text-sm bg-white';
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2 items-center bg-white border rounded-xl p-3">
-        <input placeholder="Search flow / step / person / remarks…" value={filters.q} onChange={e => set('q', e.target.value)} className={`${sel} w-56`} />
-        <select value={filters.process} onChange={e => set('process', e.target.value)} className={sel}>
-          <option value="">Process</option>{meta.processes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        <select value={filters.step} onChange={e => set('step', e.target.value)} className={sel}>
-          <option value="">Step</option>{meta.steps.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-        <select value={filters.person} onChange={e => set('person', e.target.value)} className={sel}>
-          <option value="">Responsible</option>{meta.users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-        </select>
-        <select value={filters.developer} onChange={e => set('developer', e.target.value)} className={sel}>
-          <option value="">Developer</option>{meta.users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-        </select>
-        <select value={filters.status} onChange={e => set('status', e.target.value)} className={sel}>
-          <option value="">Status</option>{Object.entries(STATUS_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
-        </select>
-        <select value={filters.priority} onChange={e => set('priority', e.target.value)} className={sel}>
-          <option value="">Priority</option>{PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <label className="text-sm flex items-center gap-1"><input type="checkbox" checked={filters.overdue === '1'} onChange={e => set('overdue', e.target.checked ? '1' : '')} /> Overdue</label>
-        <label className="text-sm flex items-center gap-1"><input type="checkbox" checked={filters.blocked === '1'} onChange={e => set('blocked', e.target.checked ? '1' : '')} /> Blocked</label>
-        <input type="date" value={filters.from} onChange={e => set('from', e.target.value)} className={sel} title="Target from" />
-        <input type="date" value={filters.to} onChange={e => set('to', e.target.value)} className={sel} title="Target to" />
-        <button onClick={() => setFilters(emptyFilters)} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">Clear Filters</button>
-        <button onClick={() => exportCsv('system-flows',
-          ['Flow ID','Process','System','Step','Seq','Responsible','Developer','Start','Target','Completed','Status','Priority','Delay Days','Downstream','Severity','Remarks'],
-          rows.map(r => [r.flow_no, r.process_name, r.system_name, r.step_name, r.seq, r.responsible_name, r.developer_name,
-            r.start_date, r.target_date, r.actual_completion_date || '', r.status, r.priority, r.delay_days, r.downstream_impact, r.severity, r.remarks || '']))}
-          className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">Export</button>
-        <span className="text-xs text-gray-400 ml-auto">{rows.length} step(s)</span>
-      </div>
-
-      <div className="bg-white border rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
-            {['Flow ID','Process','System','Step','Owner','Developer','Start','Target','Status','Priority','Delay','Waiting on','Downstream',''].map(h => <th key={h} className="px-3 py-2 whitespace-nowrap">{h}</th>)}
-          </tr></thead>
-          <tbody>
-            {rows.map(r => (
-              <tr key={r.id} className="border-b last:border-0 hover:bg-blue-50/40 cursor-pointer" onClick={() => openDetail(r.id)}>
-                <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{r.flow_no}</td>
-                <td className="px-3 py-2">{r.process_name}</td>
-                <td className="px-3 py-2">{r.system_name}</td>
-                <td className="px-3 py-2 font-medium">{r.step_name}<span className="text-gray-400 text-xs"> #{r.seq}</span></td>
-                <td className="px-3 py-2">{r.responsible_name}</td>
-                <td className="px-3 py-2">{r.developer_name}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{fmtD(r.start_date)}</td>
-                <td className={`px-3 py-2 whitespace-nowrap ${r.is_overdue ? 'text-red-600 font-semibold' : ''}`}>{fmtD(r.target_date)}</td>
-                <td className="px-3 py-2"><StatusBadge s={r.derived_waiting && r.status === 'not_started' ? 'waiting' : r.status} /></td>
-                <td className="px-3 py-2 capitalize">{r.priority}</td>
-                <td className="px-3 py-2">{r.delay_days > 0 ? <span className="text-red-600 font-bold">{r.delay_days}d</span> : '—'}</td>
-                <td className="px-3 py-2 text-xs text-amber-700">{r.waiting_for || '—'}</td>
-                <td className="px-3 py-2 text-center">{r.downstream_impact || '—'}</td>
-                <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                  {canEdit && <button onClick={() => onEdit(r)} className="text-blue-600 text-xs hover:underline">Edit</button>}
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={14} className="px-3 py-8 text-center text-gray-400">No flows match these filters</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Bottleneck Center ──────────────────────────────────────────────── */
-function BottlenecksTab({ openDetail, refreshKey }) {
-  const [rows, setRows] = useState([]);
-  useEffect(() => { api.get('/system-flow/bottlenecks').then(r => setRows(r.data)).catch(() => {}); }, [refreshKey]);
-  return (
-    <div className="bg-white border rounded-xl overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead><tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
-          {['Rank','Flow ID','Process','System','Step','Owner','Developer','Delay','Blocked','Downstream Waiting','Depends On','Reason','Severity','Required Action'].map(h => <th key={h} className="px-3 py-2 whitespace-nowrap">{h}</th>)}
-        </tr></thead>
-        <tbody>
-          {rows.map(r => (
-            <tr key={r.id} onClick={() => openDetail(r.id)}
-              className={`border-b last:border-0 cursor-pointer hover:bg-blue-50/40 ${r.is_primary_bottleneck ? '' : 'opacity-60'}`}>
-              <td className="px-3 py-2 font-bold">{r.is_primary_bottleneck ? `#${r.rank}` : '↳'}</td>
-              <td className="px-3 py-2 font-mono text-xs">{r.flow_no}</td>
-              <td className="px-3 py-2">{r.process_name}</td>
-              <td className="px-3 py-2">{r.system_name}</td>
-              <td className="px-3 py-2 font-medium">{r.step_name}{!r.is_primary_bottleneck && <span className="text-xs text-gray-400"> (downstream impacted)</span>}</td>
-              <td className="px-3 py-2">{r.responsible_name}</td>
-              <td className="px-3 py-2">{r.developer_name}</td>
-              <td className="px-3 py-2">{r.delay_days > 0 ? <b className="text-red-600">{r.delay_days}d</b> : '—'}</td>
-              <td className="px-3 py-2">{r.blocked_days > 0 ? <b className="text-red-600">{r.blocked_days}d</b> : '—'}</td>
-              <td className="px-3 py-2 text-center font-semibold">{r.downstream_impact}</td>
-              <td className="px-3 py-2 text-xs">{r.dep_step_name || '—'}</td>
-              <td className="px-3 py-2 text-xs max-w-[220px] truncate" title={r.blocked_reason || ''}>{r.blocked_reason || (r.is_overdue ? 'Overdue' : r.derived_waiting ? `Waiting for ${r.waiting_for}` : '—')}</td>
-              <td className="px-3 py-2" title={`score ${r.bottleneck_score} = delay ${r.score_parts.delay} + blocked ${r.score_parts.blocked} + downstream ${r.score_parts.downstream} + priority ${r.score_parts.priority}`}>
-                <SevBadge s={r.severity} /></td>
-              <td className="px-3 py-2 text-xs">{r.required_action || '—'}</td>
-            </tr>
-          ))}
-          {rows.length === 0 && <tr><td colSpan={14} className="px-3 py-8 text-center text-green-600">No bottlenecks right now 🎉</td></tr>}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/* ─── Timeline (CSS gantt) ───────────────────────────────────────────── */
-function TimelineTab({ meta, flows, openDetail }) {
-  const [f, setF] = useState({ process: '', person: '', status: '', priority: '' });
-  const rows = flows.filter(r =>
-    (!f.process || r.process_id === +f.process) &&
-    (!f.person || r.responsible_id === +f.person) &&
-    (!f.status || r.status === f.status) &&
-    (!f.priority || r.priority === f.priority));
-  const dates = rows.flatMap(r => [r.start_date, r.target_date, r.actual_completion_date].filter(Boolean));
-  const min = dates.length ? dates.reduce((a, b) => a < b ? a : b) : null;
-  const max = dates.length ? dates.reduce((a, b) => a > b ? a : b) : null;
-  const span = min && max ? Math.max(1, (new Date(max) - new Date(min)) / 86400000) : 1;
-  const pct = (d) => `${Math.min(100, Math.max(0, (new Date(d) - new Date(min)) / 86400000 / span * 100))}%`;
-  const today = new Date().toISOString().slice(0, 10);
-  const sel = 'border rounded-lg px-2 py-1.5 text-sm bg-white';
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2 bg-white border rounded-xl p-3">
-        <select value={f.process} onChange={e => setF({ ...f, process: e.target.value })} className={sel}>
-          <option value="">Process</option>{meta.processes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        <select value={f.person} onChange={e => setF({ ...f, person: e.target.value })} className={sel}>
-          <option value="">Person</option>{meta.users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-        </select>
-        <select value={f.status} onChange={e => setF({ ...f, status: e.target.value })} className={sel}>
-          <option value="">Status</option>{Object.entries(STATUS_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
-        </select>
-        <select value={f.priority} onChange={e => setF({ ...f, priority: e.target.value })} className={sel}>
-          <option value="">Priority</option>{PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <span className="text-xs text-gray-400 self-center ml-auto">{min && `${fmtD(min)} → ${fmtD(max)}`}</span>
-      </div>
-      <div className="bg-white border rounded-xl p-4 overflow-x-auto">
-        {rows.length === 0 && <div className="text-gray-400 text-sm text-center py-6">No steps for these filters</div>}
-        <div className="min-w-[640px] space-y-1.5 relative">
-          {min && today >= min && today <= max && (
-            <div className="absolute top-0 bottom-0 border-l-2 border-dashed border-blue-400 z-10" style={{ left: `calc(240px + (100% - 240px) * ${(new Date(today) - new Date(min)) / 86400000 / span})` }} title="Today" />
-          )}
-          {rows.map(r => {
-            const end = r.actual_completion_date || (r.is_overdue ? today : r.target_date);
-            const left = pct(r.start_date);
-            const width = `${Math.max(2, (new Date(end) - new Date(r.start_date)) / 86400000 / span * 100)}%`;
-            return (
-              <div key={r.id} className="flex items-center gap-2 group cursor-pointer" onClick={() => openDetail(r.id)}>
-                <div className="w-[240px] shrink-0 text-xs truncate">
-                  <b>{r.step_name}</b> <span className="text-gray-400">· {r.responsible_name}</span>
-                </div>
-                <div className="flex-1 relative h-5 bg-gray-50 rounded">
-                  <div className={`absolute h-5 rounded text-[10px] text-white px-1 flex items-center overflow-hidden group-hover:opacity-90
-                    ${r.status === 'completed' ? 'bg-green-500' : r.is_overdue ? 'bg-red-500' : r.status === 'blocked' ? 'bg-red-400' : r.status === 'in_progress' || r.status === 'testing' ? 'bg-blue-500' : 'bg-gray-400'}`}
-                    style={{ left, width }}>
-                    {r.is_overdue ? `${r.delay_days}d late` : STATUS_META[r.status]?.label}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Person performance ─────────────────────────────────────────────── */
-function PerformanceTab({ refreshKey }) {
-  const [rows, setRows] = useState([]);
-  const [pick, setPick] = useState(null);
-  const [pickRows, setPickRows] = useState([]);
-  useEffect(() => { api.get('/system-flow/performance').then(r => setRows(r.data)).catch(() => {}); }, [refreshKey]);
-  useEffect(() => {
-    if (pick) api.get(`/system-flow/flows?person=${pick.person_id}`).then(r => setPickRows(r.data)).catch(() => {});
-  }, [pick]);
-  return (
-    <div className="space-y-3">
-      <div className="bg-white border rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs text-gray-500 border-b bg-gray-50">
-            {['Person','Total','Completed','In Progress','Pending','Blocked','Overdue','Completion %','Avg Delay','Bottlenecks'].map(h => <th key={h} className="px-3 py-2">{h}</th>)}
-          </tr></thead>
-          <tbody>
-            {rows.map(p => (
-              <tr key={p.person_id} className="border-b last:border-0 hover:bg-blue-50/40 cursor-pointer" onClick={() => setPick(p)}>
-                <td className="px-3 py-2 font-medium">{p.person}</td>
-                <td className="px-3 py-2">{p.total}</td>
-                <td className="px-3 py-2 text-green-700">{p.completed}</td>
-                <td className="px-3 py-2 text-blue-700">{p.in_progress}</td>
-                <td className="px-3 py-2">{p.pending}</td>
-                <td className="px-3 py-2 text-red-600">{p.blocked}</td>
-                <td className="px-3 py-2 text-orange-600">{p.overdue}</td>
-                <td className="px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <div className="w-20 h-2 bg-gray-100 rounded-full overflow-hidden"><div className={`h-2 ${p.completion_pct >= 80 ? 'bg-green-500' : p.completion_pct >= 50 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${p.completion_pct}%` }} /></div>
-                    <b>{p.completion_pct}%</b>
-                  </div>
-                </td>
-                <td className="px-3 py-2">{p.avg_delay}d</td>
-                <td className="px-3 py-2 font-bold">{p.bottlenecks || '—'}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={10} className="px-3 py-8 text-center text-gray-400">No assignments yet</td></tr>}
-          </tbody>
-        </table>
-      </div>
-      {pick && (
-        <div className="bg-white border rounded-xl p-3">
-          <div className="font-semibold mb-2">{pick.person} — assigned steps</div>
-          <div className="grid md:grid-cols-3 gap-2">
-            {pickRows.map(r => (
-              <div key={r.id} className="border rounded-lg p-2 text-sm">
-                <div className="font-medium">{r.step_name}</div>
-                <div className="text-xs text-gray-500">{r.process_name} · target {fmtD(r.target_date)}</div>
-                <div className="mt-1 flex gap-1"><StatusBadge s={r.status} />{r.delay_days > 0 && <span className="text-xs text-red-600 font-bold">{r.delay_days}d</span>}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── Escalations ────────────────────────────────────────────────────── */
-function EscalationsTab({ openDetail, refreshKey }) {
-  const [rows, setRows] = useState([]);
-  useEffect(() => { api.get('/system-flow/escalations').then(r => setRows(r.data)).catch(() => {}); }, [refreshKey]);
-  const LEVEL_CLS = { 3: 'border-red-300 bg-red-50', 2: 'border-orange-300 bg-orange-50', 1: 'border-amber-300 bg-amber-50' };
-  return (
-    <div className="space-y-2">
-      {rows.length === 0 && <div className="text-green-700 text-sm bg-white border rounded-xl p-6 text-center">No escalations — nothing overdue or blocked beyond the configured thresholds 🎉</div>}
-      {rows.map(r => (
-        <button key={r.id} onClick={() => openDetail(r.id)} className={`w-full text-left border rounded-xl p-3 hover:shadow ${LEVEL_CLS[r.escalation_level]}`}>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-bold text-red-700">🔴 {r.escalation_label}</span>
-            <SevBadge s={r.severity} />
-            <span className="font-mono text-xs text-gray-500 ml-auto">{r.flow_no}</span>
-          </div>
-          <div className="mt-1 grid md:grid-cols-4 gap-x-4 text-sm">
-            <div><span className="text-gray-500">Task:</span> <b>{r.step_name}</b> ({r.system_name})</div>
-            <div><span className="text-gray-500">Owner:</span> {r.responsible_name}</div>
-            <div><span className="text-gray-500">Delay:</span> <b className="text-red-600">{Math.max(r.delay_days, r.blocked_days)} day(s)</b></div>
-            <div><span className="text-gray-500">Impact:</span> {r.downstream_impact} downstream step(s)</div>
-          </div>
-          <div className="text-sm mt-0.5"><span className="text-gray-500">Action:</span> {r.required_action || (r.escalation_level === 3 ? 'Management review required' : r.escalation_level === 2 ? 'System head to intervene' : 'Owner to resolve')}</div>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/* ─── Step / Process master ──────────────────────────────────────────── */
-function MasterTab({ meta, canManage, refresh }) {
-  const [steps, setSteps] = useState([]);
-  const [newStep, setNewStep] = useState('');
-  const [newProc, setNewProc] = useState('');
-  const load = () => api.get('/system-flow/steps').then(r => setSteps(r.data)).catch(() => {});
-  useEffect(() => { load(); }, []);
-  const addStep = async () => {
-    if (!newStep.trim()) return;
-    try { await api.post('/system-flow/steps', { name: newStep.trim() }); setNewStep(''); load(); refresh(); toast.success('Step added'); }
-    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
-  };
-  const toggle = async (s) => {
-    try { await api.put(`/system-flow/steps/${s.id}`, { active: s.active ? 0 : 1 }); load(); refresh(); }
-    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
-  };
-  const rename = async (s) => {
-    const name = prompt('Rename step', s.name);
-    if (!name || name === s.name) return;
-    try { await api.put(`/system-flow/steps/${s.id}`, { name }); load(); refresh(); }
-    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
-  };
-  const setLink = async (s) => {
-    const erp_path = prompt('ERP page this step links to (in-app path, e.g. /procurement). Empty = no link.', s.erp_path || '/');
-    if (erp_path === null) return;
-    try { await api.put(`/system-flow/steps/${s.id}`, { erp_path }); load(); refresh(); }
-    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
-  };
-  const addProc = async () => {
-    if (!newProc.trim()) return;
-    try { await api.post('/system-flow/processes', { name: newProc.trim() }); setNewProc(''); refresh(); toast.success('Process added'); }
-    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
-  };
-  return (
-    <div className="grid md:grid-cols-2 gap-4">
-      <div className="bg-white border rounded-xl p-4">
-        <h2 className="font-bold mb-2">System Step Master</h2>
-        <p className="text-xs text-gray-500 mb-3">The “System Step Name” dropdown loads from here. Deactivated steps disappear for NEW flows; old records keep them.</p>
-        {canManage && (
-          <div className="flex gap-2 mb-3">
-            <input value={newStep} onChange={e => setNewStep(e.target.value)} onKeyDown={e => e.key === 'Enter' && addStep()}
-              placeholder="New step name…" className="border rounded-lg px-3 py-1.5 text-sm flex-1" />
-            <button onClick={addStep} className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg">Add</button>
-          </div>
-        )}
-        <div className="divide-y max-h-[480px] overflow-y-auto">
-          {steps.map(s => (
-            <div key={s.id} className="flex items-center gap-2 py-1.5 text-sm">
-              <span className={s.active ? '' : 'text-gray-400 line-through'}>{s.name}</span>
-              <span className="text-xs text-gray-400">({s.used_count} used)</span>
-              {s.erp_path && <span className="text-xs text-blue-600 font-mono">🔗 {s.erp_path}</span>}
-              {canManage && <span className="ml-auto flex gap-2">
-                <button onClick={() => setLink(s)} className="text-blue-600 text-xs hover:underline">ERP Link</button>
-                <button onClick={() => rename(s)} className="text-blue-600 text-xs hover:underline">Rename</button>
-                <button onClick={() => toggle(s)} className={`text-xs hover:underline ${s.active ? 'text-red-600' : 'text-green-600'}`}>{s.active ? 'Deactivate' : 'Activate'}</button>
-              </span>}
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="bg-white border rounded-xl p-4">
-        <h2 className="font-bold mb-2">Process Master</h2>
-        {canManage && (
-          <div className="flex gap-2 mb-3">
-            <input value={newProc} onChange={e => setNewProc(e.target.value)} onKeyDown={e => e.key === 'Enter' && addProc()}
-              placeholder="New process (e.g. QUALITY)…" className="border rounded-lg px-3 py-1.5 text-sm flex-1" />
-            <button onClick={addProc} className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg">Add</button>
-          </div>
-        )}
-        <div className="divide-y">
-          {meta.processes.map(p => <div key={p.id} className="py-1.5 text-sm">{p.name}</div>)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Create / Edit modal ────────────────────────────────────────────── */
-function FlowModal({ meta, flows, flow, onClose, onSaved }) {
-  const isEdit = !!flow;
-  const [f, setF] = useState(() => flow ? {
-    process_id: flow.process_id, system_name: flow.system_name, step_id: flow.step_id, seq: flow.seq,
-    depends_on_id: flow.depends_on_id || '', responsible_id: flow.responsible_id, developer_id: flow.developer_id,
-    start_date: flow.start_date, target_date: flow.target_date, priority: flow.priority, remarks: flow.remarks || '',
-    required_action: flow.required_action || '',
-  } : {
-    process_id: '', system_name: '', step_id: '', seq: 1, depends_on_id: '', responsible_id: '', developer_id: '',
-    start_date: new Date().toISOString().slice(0, 10), target_date: '', priority: 'medium', remarks: '', required_action: '',
-  });
+  const [stats, setStats] = useState(null);
+  const [meta, setMeta] = useState({ steps: FALLBACK_STEPS, users: [], categories: [] });
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [search, setSearch] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [status, setStatus] = useState('');
+  // Which step's columns are on screen. 0 = the full sheet view, 1-4 = one step.
+  // Mam (2026-09-08): "steps i need into pilltabs".
+  const [stepTab, setStepTab] = useState(1);
+  const [create, setCreate] = useState(null);      // the create form
+  const [editSys, setEditSys] = useState(null);    // system header being edited
+  const [editStep, setEditStep] = useState(null);  // { system, step, tpl }
   const [saving, setSaving] = useState(false);
-  const set = (k, v) => setF(x => ({ ...x, [k]: v }));
-  const inp = 'w-full border rounded-lg px-3 py-2 text-sm';
-  const save = async () => {
+  const reqSeq = useRef(0);
+
+  useEffect(() => { const t = setTimeout(() => setDebounced(search.trim()), 350); return () => clearTimeout(t); }, [search]);
+
+  const load = useCallback(async () => {
+    const seq = ++reqSeq.current;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (debounced) params.set('q', debounced);
+      if (status) params.set('status', status);
+      const [list, s] = await Promise.all([
+        api.get(`/system-flow?${params}`),
+        api.get('/system-flow/stats'),
+      ]);
+      if (seq !== reqSeq.current) return;
+      setRows(list.data?.rows || []);
+      setStats(s.data || null);
+      setLoadError('');
+    } catch (e) {
+      if (seq === reqSeq.current) setLoadError(e?.response?.data?.error || e.message || 'Could not load systems');
+    } finally {
+      if (seq === reqSeq.current) setLoading(false);
+    }
+  }, [debounced, status]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { api.get('/system-flow/meta').then((r) => setMeta(r.data)).catch(() => {}); }, []);
+
+  const steps = meta.steps?.length ? meta.steps : FALLBACK_STEPS;
+  const tplOf = (no) => steps.find((s) => s.step_no === no) || FALLBACK_STEPS[no - 1];
+  // Only the selected step's columns are rendered; 0 shows them all.
+  const shownSteps = stepTab === 0 ? steps : steps.filter((t) => t.step_no === stepTab);
+
+  // Each pill carries how much of that step is still outstanding, so the
+  // bottleneck is visible without opening the tab.
+  const stepCounts = useMemo(() => {
+    const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+    const out = {};
+    for (const t of steps) {
+      let pending = 0, overdue = 0, done = 0;
+      for (const r of rows) {
+        const st = r.steps.find((x) => x.step_no === t.step_no);
+        if (!st) continue;
+        if (st.actual_date) done++;
+        else {
+          pending++;
+          if (st.planned_date && st.planned_date < today) overdue++;
+        }
+      }
+      out[t.step_no] = { pending, overdue, done };
+    }
+    return out;
+  }, [rows, steps]);
+
+  const submitCreate = async () => {
+    if (!create.system_name?.trim()) { toast.error('System name is required'); return; }
     setSaving(true);
     try {
-      if (isEdit) { await api.put(`/system-flow/flows/${flow.id}`, f); toast.success('Flow updated'); }
-      else {
-        const r = await api.post('/system-flow/flows', f);
-        toast.success(`Flow Created Successfully — ${r.data.flow_no}`);
-      }
-      onSaved();
-    } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
+      const r = await api.post('/system-flow', create);
+      toast.success(`${r.data.uid} created`);
+      setCreate(null);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.error || 'Could not create'); }
     finally { setSaving(false); }
   };
-  const depOptions = flows.filter(r => !isEdit || r.id !== flow.id);
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-start md:items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-5" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-bold mb-4">{isEdit ? `Edit ${flow.flow_no}` : 'Create System Flow'}</h2>
-        <div className="grid md:grid-cols-2 gap-3">
-          <label className="text-sm">Process *<select value={f.process_id} onChange={e => set('process_id', e.target.value)} className={inp}>
-            <option value="">— select —</option>{meta.processes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-          <label className="text-sm">System Name *<input value={f.system_name} onChange={e => set('system_name', e.target.value)} className={inp} placeholder="e.g. Sales Management" /></label>
-          <label className="text-sm">System Step Name * <span className="text-xs text-gray-400">(from Step Master)</span>
-            <select value={f.step_id} onChange={e => set('step_id', e.target.value)} className={inp}>
-              <option value="">— select —</option>{meta.steps.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-          <label className="text-sm">Step Sequence *<input type="number" min="1" value={f.seq} onChange={e => set('seq', e.target.value)} className={inp} /></label>
-          <label className="text-sm md:col-span-2">Previous Step / Dependency<select value={f.depends_on_id} onChange={e => set('depends_on_id', e.target.value)} className={inp}>
-            <option value="">— none —</option>
-            {depOptions.map(r => <option key={r.id} value={r.id}>{r.flow_no} · {r.process_name} · {r.step_name}</option>)}</select></label>
-          <label className="text-sm">Responsible Person *<select value={f.responsible_id} onChange={e => set('responsible_id', e.target.value)} className={inp}>
-            <option value="">— select —</option>{meta.users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
-          <label className="text-sm">Developer / Creator *<select value={f.developer_id} onChange={e => set('developer_id', e.target.value)} className={inp}>
-            <option value="">— select —</option>{meta.users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
-          <label className="text-sm">Start Date *<input type="date" value={f.start_date} onChange={e => set('start_date', e.target.value)} className={inp} /></label>
-          <label className="text-sm">Target Completion Date *<input type="date" value={f.target_date} onChange={e => set('target_date', e.target.value)} className={inp} /></label>
-          <label className="text-sm">Priority<select value={f.priority} onChange={e => set('priority', e.target.value)} className={inp}>
-            {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
-          <label className="text-sm">Required Action<input value={f.required_action} onChange={e => set('required_action', e.target.value)} className={inp} placeholder="what unblocks this, if stuck" /></label>
-          <label className="text-sm md:col-span-2">Remarks<textarea value={f.remarks} onChange={e => set('remarks', e.target.value)} className={inp} rows={2} /></label>
-        </div>
-        <div className="flex justify-end gap-2 mt-4">
-          <button onClick={onClose} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
-          <button onClick={save} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-50">
-            {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Create Flow'}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
-/* ─── Detail drawer + status update + activity ───────────────────────── */
-function DetailDrawer({ id, onClose, onChanged, canApproveOverride, onEdit, canEdit }) {
-  const { user } = useAuth();
-  const [d, setD] = useState(null);
-  const [status, setStatus] = useState('');
-  const [blockedReason, setBlockedReason] = useState('');
-  const [remarks, setRemarks] = useState('');
-  const [progress, setProgress] = useState(0);
-  const load = useCallback(() => {
-    api.get(`/system-flow/flows/${id}`).then(r => {
-      setD(r.data); setStatus(r.data.status); setProgress(r.data.progress || 0);
-      setBlockedReason(r.data.blocked_reason || '');
-    }).catch(() => toast.error('Could not load step'));
-  }, [id]);
-  useEffect(() => { load(); }, [load]);
-
-  const isOwn = d && (user?.id === d.responsible_id || user?.id === d.developer_id);
-  const mayUpdate = isOwn || canEdit;
-
-  const updateStatus = async (override = false) => {
+  const submitSys = async () => {
+    setSaving(true);
     try {
-      await api.put(`/system-flow/flows/${id}/status`, {
-        status, blocked_reason: blockedReason, remarks: remarks || null, progress, override,
-      });
-      toast.success('Status updated'); setRemarks(''); load(); onChanged();
-    } catch (e) {
-      const r = e.response?.data;
-      if (r?.need_override && canApproveOverride) {
-        if (confirm(`Dependency is not completed yet. Override and complete anyway?`)) return updateStatus(true);
-      } else toast.error(r?.error || 'Update failed');
-    }
+      await api.patch(`/system-flow/${editSys.id}`, editSys);
+      toast.success('Updated');
+      setEditSys(null);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.error || 'Could not update'); }
+    finally { setSaving(false); }
   };
 
-  if (!d) return null;
-  const Row = ({ l, v, cls }) => <div className="contents"><div className="text-gray-500">{l}</div><div className={`font-medium ${cls || ''}`}>{v ?? '—'}</div></div>;
+  const submitStep = async () => {
+    setSaving(true);
+    try {
+      const { system_id, step_no, ...body } = editStep.draft;
+      await api.patch(`/system-flow/${system_id}/steps/${step_no}`, body);
+      toast.success(`Step ${step_no} updated`);
+      setEditStep(null);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.error || 'Could not update the step'); }
+    finally { setSaving(false); }
+  };
+
+  const remove = async (sys) => {
+    if (!window.confirm(`Delete ${sys.uid} — ${sys.system_name}? Its four steps go with it.`)) return;
+    try {
+      await api.delete(`/system-flow/${sys.id}`);
+      toast.success('Deleted');
+      load();
+    } catch (e) { toast.error(e?.response?.data?.error || 'Could not delete'); }
+  };
+
+  const openStep = (sys, step) => {
+    if (!perms.edit) return;
+    setEditStep({
+      system: sys, step, tpl: tplOf(step.step_no),
+      draft: {
+        system_id: sys.id, step_no: step.step_no,
+        actual_date: step.actual_date || '',
+        planned_days: step.planned_days,
+        owner_id: step.owner_id || '',
+        proof_url: step.proof_url || '',
+        person_name: step.person_name || '',
+        pc_name: step.pc_name || '',
+        system_score: step.system_score ?? '',
+        remarks: step.remarks || '',
+      },
+    });
+  };
+
+  const csvSafe = (v) => (v === null || v === undefined ? ''
+    : /^[=+@\t\r\-]/.test(String(v)) ? "'" + String(v) : v);
+
+  const exportRows = () => exportCsv(
+    'erp-system-flow',
+    ['UID', 'Timestamp', 'System Name', 'Type', 'Category', 'Frequency', "HOD's Name",
+      ...steps.flatMap((t) => [
+        `${t.step_no}. ${t.step_name} Planned`, `${t.step_name} Actual`, `${t.step_name} Delay`,
+        `${t.step_name} ${EXTRA_LABEL[t.extra]}`,
+      ])],
+    rows.map((r) => [
+      r.uid, fmtDateTime(r.created_at), r.system_name, r.type, r.system_category, r.frequency,
+      r.hod_user_name || r.hod_name,
+      ...steps.flatMap((t) => {
+        const s = r.steps.find((x) => x.step_no === t.step_no) || {};
+        const extra = t.extra === 'score' ? s.system_score
+          : t.extra === 'pc_name' ? s.pc_name
+          : [s.proof_url, t.extra === 'proof_person' ? s.person_name : null].filter(Boolean).join(' · ');
+        return [fmtDate(s.planned_date), fmtDate(s.actual_date), s.time_delay_days ?? '', extra ?? ''];
+      }),
+    ].map(csvSafe))
+  );
+
+  const pager = usePagination(rows, { initialPerPage: 15 });
+  const tiles = [
+    { label: 'Total systems', value: stats?.total ?? '—', tone: 'text-slate-800' },
+    { label: 'Completed', value: stats?.completed ?? '—', tone: 'text-emerald-700' },
+    { label: 'In progress', value: stats?.in_progress ?? '—', tone: 'text-blue-700' },
+    { label: 'Overdue', value: stats?.overdue ?? '—', tone: 'text-red-600' },
+    { label: 'Due this week', value: stats?.due_this_week ?? '—', tone: 'text-amber-700' },
+    { label: 'Completion %', value: stats ? `${stats.completion_pct}%` : '—', tone: 'text-indigo-700' },
+    { label: 'Avg delay', value: stats?.avg_delay_days === null || stats?.avg_delay_days === undefined ? '—' : `${stats.avg_delay_days}d`, tone: 'text-rose-700' },
+    { label: 'Avg score', value: stats?.avg_score === null || stats?.avg_score === undefined ? '—' : stats.avg_score, tone: 'text-violet-700' },
+  ];
+
+  const FILTERS = [
+    { id: '', label: 'All' },
+    { id: 'open', label: 'Open' },
+    { id: 'overdue', label: 'Overdue' },
+    { id: 'delayed', label: 'Delayed' },
+    { id: 'completed', label: 'Completed' },
+  ];
+
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex justify-end" onClick={onClose}>
-      <div className="bg-white w-full max-w-xl h-full overflow-y-auto p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-2">
-          <h2 className="text-lg font-bold">{d.step_name}</h2>
-          <span className="font-mono text-xs text-gray-400">{d.flow_no}</span>
-          <span className="ml-auto flex gap-2 items-center">
-            {canEdit && <button onClick={() => onEdit(d)} className="text-sm text-blue-600 hover:underline">Edit</button>}
-            <button onClick={onClose} className="text-2xl leading-none text-gray-400 hover:text-gray-700">×</button>
-          </span>
+    <div className="p-3 sm:p-5 space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">ERP Management — System Flow</h1>
+          <p className="text-sm text-slate-500">
+            Every system is registered, then runs through {steps.length} steps: {steps.map((s) => s.step_name).join(' → ')}.
+          </p>
         </div>
-        <div className="flex flex-wrap gap-2 mt-2">
-          <StatusBadge s={d.derived_waiting && d.status === 'not_started' ? 'waiting' : d.status} />
-          <SevBadge s={d.severity} />
-          {d.is_primary_bottleneck ? <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white">PRIMARY BOTTLENECK</span> : null}
-          {d.is_overdue ? <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 text-orange-700">OVERDUE {d.delay_days}d</span> : null}
-        </div>
-
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm mt-4">
-          <Row l="Process" v={d.process_name} /><Row l="System" v={d.system_name} />
-          <Row l="Sequence" v={`#${d.seq}`} /><Row l="Priority" v={d.priority} cls="capitalize" />
-          <Row l="Owner (Responsible)" v={d.responsible_name} /><Row l="Developer" v={d.developer_name} />
-          <Row l="Start Date" v={fmtD(d.start_date)} /><Row l="Target Date" v={fmtD(d.target_date)} cls={d.is_overdue ? 'text-red-600' : ''} />
-          <Row l="Actual Completion" v={fmtD(d.actual_completion_date)} /><Row l="Progress" v={`${d.progress || 0}%`} />
-          <Row l="Delay Days" v={d.delay_days > 0 ? `${d.delay_days}d` : '—'} cls={d.delay_days > 0 ? 'text-red-600' : ''} />
-          <Row l="Blocked Days" v={d.blocked_days > 0 ? `${d.blocked_days}d` : '—'} cls="text-red-600" />
-          <Row l="Downstream Impact" v={`${d.downstream_impact} step(s) waiting`} />
-          <Row l="Bottleneck score" v={`${d.bottleneck_score} (delay ${d.score_parts?.delay} + blocked ${d.score_parts?.blocked} + downstream ${d.score_parts?.downstream} + priority ${d.score_parts?.priority})`} />
-        </div>
-
-        {/* Dependency */}
-        <div className="mt-4 border rounded-xl p-3 bg-gray-50">
-          <div className="text-xs font-bold text-gray-500 uppercase mb-1">Dependency</div>
-          {d.depends_on_id ? (
-            <div className="text-sm">Depends on: <b>{d.dep_step_name}</b> <span className="font-mono text-xs text-gray-400">{d.dep_flow_no}</span>
-              <span className="ml-2"><StatusBadge s={d.dep_status} /></span>
-              {d.dep_incomplete ? <div className="text-amber-700 text-xs mt-1">⏳ Waiting for {d.dep_step_name} to complete</div> : null}
-            </div>
-          ) : <div className="text-sm text-gray-400">No dependency — this step can start any time.</div>}
-          {d.next_steps?.length > 0 && (
-            <div className="text-sm mt-2">Next steps: {d.next_steps.map(n => <span key={n.id} className="inline-block mr-2">{n.step_name} <StatusBadge s={n.status} /></span>)}</div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => load()} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5">
+            <FiRefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
+          </button>
+          <button onClick={exportRows} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5">
+            <FiDownload size={14} /> Export
+          </button>
+          {perms.create && (
+            <button onClick={() => setCreate({ system_name: '', type: '', system_category: '', frequency: '', hod_id: '', hod_name: '', remarks: '' })}
+                    className="px-3 py-1.5 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 inline-flex items-center gap-1.5">
+              <FiPlus size={14} /> Create System
+            </button>
           )}
         </div>
+      </div>
 
-        {d.blocked_reason && (
-          <div className="mt-3 border border-red-200 bg-red-50 rounded-xl p-3 text-sm">
-            <b className="text-red-700">Blocked reason:</b> {d.blocked_reason}
-            {d.blocked_since && <div className="text-xs text-gray-500">since {fmtD(d.blocked_since.slice(0, 10))}</div>}
-          </div>
-        )}
-        {d.required_action && <div className="mt-2 text-sm"><b>Required action:</b> {d.required_action}</div>}
-        {d.remarks && <div className="mt-2 text-sm"><b>Remarks:</b> {d.remarks}</div>}
+      {loadError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm">{loadError}</div>
+      )}
 
-        {/* Actual ERP module link + live pending (mam 2026-09-01). The link
-            is set by the step's DEVELOPER when the screen is built (mam
-            2026-09-02) — logged to Activity History for performance review. */}
-        <div className="mt-4 border border-blue-200 bg-blue-50/50 rounded-xl p-3">
-          <div className="text-xs font-bold text-blue-700 uppercase mb-1">Actual ERP Module</div>
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            {d.erp_path ? (
-              <button onClick={() => window.open(d.erp_path, '_blank')}
-                className="px-3 py-1.5 bg-white border border-blue-300 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-100">
-                🔗 Open {d.step_name} in ERP →
-              </button>
-            ) : (
-              <span className="text-gray-500">No ERP link yet — the developer adds it once the screen is built.</span>
-            )}
-            {d.erp_pending && (
-              <span className={`font-semibold ${d.erp_pending.count > 0 ? 'text-amber-700' : 'text-green-700'}`}>
-                {d.erp_pending.count > 0 ? '⏳' : '✅'} {d.erp_pending.count} {d.erp_pending.label}
-              </span>
-            )}
-            {mayUpdate && (
-              <button onClick={async () => {
-                const erp_path = prompt('ERP page for this step (in-app path, e.g. /leads):', d.erp_path || '/');
-                if (!erp_path) return;
-                try {
-                  await api.put(`/system-flow/flows/${id}/erp-link`, { erp_path });
-                  toast.success('ERP link saved — logged to activity'); load(); onChanged();
-                } catch (e2) { toast.error(e2.response?.data?.error || 'Failed'); }
-              }} className="text-xs text-blue-600 hover:underline ml-auto">{d.erp_path ? 'Change link' : '+ Add link'}</button>
-            )}
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+        {tiles.map((t) => (
+          <div key={t.label} className="bg-white border rounded-xl px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wide text-slate-500">{t.label}</div>
+            <div className={`text-xl font-bold ${t.tone}`}>{t.value}</div>
           </div>
-          <div className="text-xs text-gray-500 mt-1">
-            {d.erp_path ? 'Live from the real module — verify there before marking this step done.'
-              : 'Adding the link is part of delivering the step — it shows in Activity History with name and time.'}
-          </div>
-        </div>
+        ))}
+      </div>
 
-        {/* Status update */}
-        {mayUpdate && (
-          <div className="mt-4 border rounded-xl p-3">
-            <div className="text-xs font-bold text-gray-500 uppercase mb-2">Update Status</div>
-            <div className="flex flex-wrap gap-2">
-              <select value={status} onChange={e => setStatus(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
-                {Object.entries(STATUS_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
-              </select>
-              <input type="number" min="0" max="100" value={progress} onChange={e => setProgress(e.target.value)}
-                className="border rounded-lg px-2 py-1.5 text-sm w-24" title="Progress %" placeholder="%" />
-              <button onClick={() => updateStatus(false)} className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg">Save</button>
-            </div>
-            {status === 'blocked' && (
-              <input value={blockedReason} onChange={e => setBlockedReason(e.target.value)}
-                placeholder="Blocked reason (required)" className="mt-2 w-full border rounded-lg px-3 py-1.5 text-sm" />
-            )}
-            <input value={remarks} onChange={e => setRemarks(e.target.value)} placeholder="Remark for the activity log (optional)"
-              className="mt-2 w-full border rounded-lg px-3 py-1.5 text-sm" />
-          </div>
-        )}
+      {/* Step pill tabs — mam (2026-09-08): "steps i need into pilltabs" */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => setStepTab(0)}
+                className={`px-3 py-1.5 text-sm rounded-full border ${stepTab === 0 ? 'bg-slate-800 text-white border-slate-800' : 'bg-white hover:bg-slate-50'}`}>
+          All steps
+        </button>
+        {steps.map((t, i) => {
+          const c = stepCounts[t.step_no] || { pending: 0, overdue: 0 };
+          const on = stepTab === t.step_no;
+          return (
+            <button key={t.step_no} onClick={() => setStepTab(t.step_no)}
+                    title={`${t.owner_label} · ${t.method} · planned ${t.planned_days} day(s)`}
+                    className={`px-3 py-1.5 text-sm rounded-full border inline-flex items-center gap-2 ${on ? 'bg-slate-800 text-white border-slate-800' : `${STEP_TONE[i % 4]} hover:brightness-95`}`}>
+              <span className="font-semibold">{t.step_no}. {t.step_name}</span>
+              {c.pending > 0 && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${c.overdue > 0 ? 'bg-red-600 text-white' : on ? 'bg-white/20' : 'bg-white/70 text-slate-700'}`}>
+                  {c.pending} left{c.overdue > 0 ? ` · ${c.overdue} late` : ''}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
 
-        {/* Activity history */}
-        <div className="mt-4">
-          <div className="text-xs font-bold text-gray-500 uppercase mb-2">Activity History</div>
-          <div className="space-y-2">
-            {d.activity?.map(a => (
-              <div key={a.id} className="text-sm border-l-2 border-gray-200 pl-3">
-                <div className="text-xs text-gray-400">{fmtDateTime(a.created_at)} · {a.user_name || 'system'}</div>
-                <div><b className="capitalize">{a.action.replace(/_/g, ' ')}</b>
-                  {a.old_value != null && a.new_value != null && <span className="text-gray-500"> — {String(a.old_value)} → {String(a.new_value)}</span>}
-                  {a.old_value == null && a.new_value != null && <span className="text-gray-500"> — {String(a.new_value)}</span>}
-                </div>
-                {a.reason && <div className="text-xs text-gray-500">Reason: {a.reason}</div>}
-              </div>
-            ))}
-            {(!d.activity || d.activity.length === 0) && <div className="text-sm text-gray-400">No activity yet</div>}
-          </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {FILTERS.map((f) => (
+          <button key={f.id} onClick={() => setStatus(f.id)}
+                  className={`px-3 py-1.5 text-sm rounded-lg border ${status === f.id ? 'bg-slate-800 text-white border-slate-800' : 'hover:bg-slate-50'}`}>
+            {f.label}
+          </button>
+        ))}
+        <div className="relative ml-auto">
+          <FiSearch className="absolute left-2.5 top-2.5 text-slate-400" size={14} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)}
+                 placeholder="System, UID, type, category, HOD…"
+                 className="pl-8 pr-3 py-1.5 text-sm border rounded-lg w-72" />
         </div>
       </div>
+
+      {/* Desktop: the sheet's layout — one row per system, four step blocks */}
+      <div className="hidden md:block bg-white border rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="text-sm min-w-max">
+            <thead>
+              <tr className="bg-slate-100 border-b">
+                <th colSpan={7} className="px-2 py-1.5 text-left text-[11px] font-bold text-slate-600 border-r">SYSTEM</th>
+                {shownSteps.map((t, i) => (
+                  <th key={t.step_no} colSpan={4} className={`px-2 py-1.5 text-center text-[11px] font-bold border-r ${STEP_TONE[i % 4]}`}>
+                    Step {t.step_no} · {t.step_name}
+                    <div className="font-normal text-slate-500 normal-case">
+                      {t.owner_label} · {t.method} · {t.planned_days}d
+                    </div>
+                  </th>
+                ))}
+                <th className="px-2 py-1.5"></th>
+              </tr>
+              <tr className="bg-slate-50 border-b text-[11px] text-slate-500 text-left">
+                <th className="px-2 py-1.5 font-semibold">UID</th>
+                <th className="px-2 py-1.5 font-semibold">Timestamp</th>
+                <th className="px-2 py-1.5 font-semibold">System name</th>
+                <th className="px-2 py-1.5 font-semibold">Type</th>
+                <th className="px-2 py-1.5 font-semibold">Category</th>
+                <th className="px-2 py-1.5 font-semibold">Frequency</th>
+                <th className="px-2 py-1.5 font-semibold border-r">HOD</th>
+                {shownSteps.map((t, i) => (
+                  <Fragment key={t.step_no}>
+                    <th className={`px-2 py-1.5 font-semibold ${STEP_TONE[i % 4]}`}>Planned</th>
+                    <th className={`px-2 py-1.5 font-semibold ${STEP_TONE[i % 4]}`}>Actual</th>
+                    <th className={`px-2 py-1.5 font-semibold ${STEP_TONE[i % 4]}`}>Time delay</th>
+                    <th className={`px-2 py-1.5 font-semibold border-r ${STEP_TONE[i % 4]}`}>{EXTRA_LABEL[t.extra]}</th>
+                  </Fragment>
+                ))}
+                <th className="px-2 py-1.5 font-semibold text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pager.pageItems.map((r) => (
+                <tr key={r.id} className="border-b last:border-0 hover:bg-slate-50/60">
+                  <td className="px-2 py-1.5 font-mono text-xs whitespace-nowrap">{r.uid}</td>
+                  <td className="px-2 py-1.5 text-xs whitespace-nowrap text-slate-500">{fmtDateTime(r.created_at)}</td>
+                  <td className="px-2 py-1.5 font-semibold text-slate-800 max-w-[220px] truncate" title={r.system_name}>
+                    {r.system_name}
+                    {r.completed && <FiCheckCircle className="inline ml-1 text-emerald-600" size={12} />}
+                  </td>
+                  <td className="px-2 py-1.5 text-xs">{r.type || '—'}</td>
+                  <td className="px-2 py-1.5 text-xs">{r.system_category || '—'}</td>
+                  <td className="px-2 py-1.5 text-xs">{r.frequency || '—'}</td>
+                  <td className="px-2 py-1.5 text-xs border-r">{r.hod_user_name || r.hod_name || '—'}</td>
+                  {shownSteps.map((t) => {
+                    const s = r.steps.find((x) => x.step_no === t.step_no)
+                      || { step_no: t.step_no, planned_days: t.planned_days };
+                    return <StepCell key={t.step_no} step={s} tpl={t} canEdit={perms.edit} onEdit={() => openStep(r, s)} />;
+                  })}
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                    {perms.edit && (
+                      <button onClick={() => setEditSys({ ...r })} aria-label={`Edit ${r.system_name}`}
+                              className="p-1.5 text-slate-600 hover:bg-slate-100 rounded" title="Edit system"><FiEdit2 size={13} /></button>
+                    )}
+                    {perms.remove && (
+                      <button onClick={() => remove(r)} aria-label={`Delete ${r.system_name}`}
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={13} /></button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!pager.pageItems.length && (
+                <tr><td colSpan={7 + shownSteps.length * 4 + 1} className="text-center text-slate-400 py-10">
+                  {loading ? 'Loading…' : loadError ? 'Could not load the register.' : 'No systems yet. Press Create System to add the first one.'}
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <Pagination {...pager} />
+      </div>
+
+      {/* Mobile: same data, same actions */}
+      <div className="md:hidden space-y-2">
+        {pager.pageItems.map((r) => (
+          <div key={r.id} className="bg-white border rounded-xl p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="font-semibold text-slate-800">{r.system_name}</div>
+                <div className="text-[11px] text-slate-500 font-mono">{r.uid} · {fmtDateTime(r.created_at)}</div>
+              </div>
+              <div className="flex gap-1">
+                {perms.edit && <button onClick={() => setEditSys({ ...r })} aria-label={`Edit ${r.system_name}`} className="p-1.5 text-slate-600 hover:bg-slate-100 rounded"><FiEdit2 size={13} /></button>}
+                {perms.remove && <button onClick={() => remove(r)} aria-label={`Delete ${r.system_name}`} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><FiTrash2 size={13} /></button>}
+              </div>
+            </div>
+            <div className="text-xs text-slate-500 mt-1">
+              {[r.type, r.system_category, r.frequency, r.hod_user_name || r.hod_name].filter(Boolean).join(' · ') || '—'}
+            </div>
+            <div className="mt-2 space-y-1">
+              {shownSteps.map((t) => {
+                const s = r.steps.find((x) => x.step_no === t.step_no) || { step_no: t.step_no };
+                return (
+                  <button key={t.step_no} onClick={() => openStep(r, s)} disabled={!perms.edit}
+                          className="w-full text-left border rounded-lg px-2 py-1.5 text-xs flex items-center justify-between gap-2 disabled:opacity-70">
+                    <span className="font-semibold">{t.step_no}. {t.step_name}</span>
+                    <span className="text-slate-500">
+                      {fmtDate(s.planned_date)} → {s.actual_date ? fmtDate(s.actual_date) : <span className="text-blue-600">pending</span>}
+                      {' '}<Delay days={s.time_delay_days} />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        {!pager.pageItems.length && (
+          <div className="text-center text-slate-400 py-8 bg-white border rounded-xl">
+            {loading ? 'Loading…' : loadError ? 'Could not load the register.' : 'No systems yet.'}
+          </div>
+        )}
+        <Pagination {...pager} />
+      </div>
+
+      {/* Create System — the sheet's photo 4 */}
+      <Modal isOpen={!!create} onClose={() => setCreate(null)} title="Create System">
+        {create && (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-500">
+              The UID and timestamp are set automatically, and the {steps.length} steps are created with it.
+            </p>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">System name *</label>
+              <input autoFocus value={create.system_name} onChange={(e) => setCreate({ ...create, system_name: e.target.value })}
+                     className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. Daily DPR review" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Type</label>
+                <input list="sf-types" value={create.type} onChange={(e) => setCreate({ ...create, type: e.target.value })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+                <datalist id="sf-types">{(meta.types || []).map((v) => <option key={v} value={v} />)}</datalist>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">System category</label>
+                <input list="sf-cats" value={create.system_category} onChange={(e) => setCreate({ ...create, system_category: e.target.value })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+                <datalist id="sf-cats">{(meta.categories || []).map((v) => <option key={v} value={v} />)}</datalist>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Frequency</label>
+                <input list="sf-freq" value={create.frequency} onChange={(e) => setCreate({ ...create, frequency: e.target.value })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Daily / Weekly / Monthly" />
+                <datalist id="sf-freq">{(meta.frequencies || []).map((v) => <option key={v} value={v} />)}</datalist>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">HOD</label>
+                <select value={create.hod_id} onChange={(e) => setCreate({ ...create, hod_id: e.target.value })}
+                        className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">— not in the ERP —</option>
+                  {(meta.users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+              </div>
+            </div>
+            {!create.hod_id && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">HOD's name (if not an ERP user)</label>
+                <input value={create.hod_name} onChange={(e) => setCreate({ ...create, hod_name: e.target.value })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+            )}
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
+              <textarea rows={2} value={create.remarks} onChange={(e) => setCreate({ ...create, remarks: e.target.value })}
+                        className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setCreate(null)} className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50">Cancel</button>
+              <button onClick={submitCreate} disabled={saving || !create.system_name.trim()}
+                      className="px-4 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {saving ? 'Creating…' : 'Create System'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Edit the system header */}
+      <Modal isOpen={!!editSys} onClose={() => setEditSys(null)} title={editSys ? `Edit ${editSys.uid}` : ''}>
+        {editSys && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">System name *</label>
+              <input value={editSys.system_name || ''} onChange={(e) => setEditSys({ ...editSys, system_name: e.target.value })}
+                     className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Type</label>
+                <input value={editSys.type || ''} onChange={(e) => setEditSys({ ...editSys, type: e.target.value })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">System category</label>
+                <input value={editSys.system_category || ''} onChange={(e) => setEditSys({ ...editSys, system_category: e.target.value })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Frequency</label>
+                <input value={editSys.frequency || ''} onChange={(e) => setEditSys({ ...editSys, frequency: e.target.value })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">HOD</label>
+                <select value={editSys.hod_id || ''} onChange={(e) => setEditSys({ ...editSys, hod_id: e.target.value })}
+                        className="w-full border rounded-lg px-3 py-2 text-sm">
+                  <option value="">— not in the ERP —</option>
+                  {(meta.users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setEditSys(null)} className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50">Cancel</button>
+              <button onClick={submitSys} disabled={saving}
+                      className="px-4 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Work one step */}
+      <Modal isOpen={!!editStep} onClose={() => setEditStep(null)}
+             title={editStep ? `Step ${editStep.step.step_no} · ${editStep.tpl.step_name}` : ''}>
+        {editStep && (
+          <div className="space-y-3">
+            <div className="bg-slate-50 border rounded-lg px-3 py-2 text-xs text-slate-600">
+              <b>{editStep.system.uid}</b> · {editStep.system.system_name}
+              <div className="mt-0.5">
+                {editStep.tpl.owner_label} · {editStep.tpl.method} · planned {editStep.tpl.planned_days} day(s)
+                {editStep.step.planned_date && <> · planned for <b>{fmtDate(editStep.step.planned_date)}</b></>}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Actual date</label>
+                <input type="date" value={editStep.draft.actual_date}
+                       onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, actual_date: e.target.value } })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Planned days</label>
+                <input type="number" min="0" value={editStep.draft.planned_days}
+                       onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, planned_days: e.target.value } })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Who did it</label>
+              <select value={editStep.draft.owner_id}
+                      onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, owner_id: e.target.value } })}
+                      className="w-full border rounded-lg px-3 py-2 text-sm">
+                <option value="">— {editStep.tpl.owner_label} —</option>
+                {(meta.users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </div>
+
+            {/* The step's own extra column, exactly as the sheet defines it */}
+            {(editStep.tpl.extra === 'proof' || editStep.tpl.extra === 'proof_person') && (
+              <div className="grid grid-cols-1 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1 inline-flex items-center gap-1">
+                    <FiUpload size={12} /> Upload proof (link)
+                  </label>
+                  <input value={editStep.draft.proof_url} placeholder="paste the file link"
+                         onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, proof_url: e.target.value } })}
+                         className="w-full border rounded-lg px-3 py-2 text-sm" />
+                </div>
+                {editStep.tpl.extra === 'proof_person' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Person's name</label>
+                    <input value={editStep.draft.person_name}
+                           onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, person_name: e.target.value } })}
+                           className="w-full border rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                )}
+              </div>
+            )}
+            {editStep.tpl.extra === 'pc_name' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">PC name</label>
+                <input value={editStep.draft.pc_name}
+                       onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, pc_name: e.target.value } })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+            )}
+            {editStep.tpl.extra === 'score' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Score of system (0–100)</label>
+                <input type="number" min="0" max="100" value={editStep.draft.system_score}
+                       onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, system_score: e.target.value } })}
+                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
+              <textarea rows={2} value={editStep.draft.remarks}
+                        onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, remarks: e.target.value } })}
+                        className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <p className="text-[11px] text-slate-500 inline-flex items-center gap-1">
+              <FiClock size={11} /> Saving an actual date moves the planned dates of the steps behind this one.
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setEditStep(null)} className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50">Cancel</button>
+              <button onClick={submitStep} disabled={saving}
+                      className="px-4 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {saving ? 'Saving…' : 'Save step'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

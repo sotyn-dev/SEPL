@@ -1,173 +1,182 @@
-// SYSTEM FLOW & ERP IMPLEMENTATION CONTROL — SQLite schema (idempotent).
-// Mam (2026-09-01): manage the ERP build itself — planning → assigning →
-// development → testing → completion, with automatic bottleneck detection.
+// SYSTEM FLOW — the ERP Management system register.
 //
-// Tables:
-//   sysflow_processes    — process master (SALES, PURCHASE, ACCOUNTS, …)
-//   sysflow_step_master  — System Step dropdown source (admin-managed,
-//                          deactivate hides from NEW records only)
-//   sysflow_flows        — the flow steps themselves (one row = one step
-//                          of one system build). depends_on_id is the
-//                          dependency chain; "next step" is derived.
-//   sysflow_activity     — immutable audit trail (insert-only; no UPDATE/
-//                          DELETE endpoints exist for it)
+// Mam (2026-09-08): "change it fully, 2,3 photo is steps and 4 is create system".
+// The module is rebuilt to match her spreadsheet exactly:
 //
-// Bottleneck/severity/escalation are COMPUTED at read time from status +
-// dates + the dependency graph — nothing to keep in sync, no cron needed.
+//   CREATE SYSTEM (photo 4)
+//     UID · Timestamp · System Name · Type · System Category · Frequency · HOD's Name
+//
+//   THE FOUR STEPS every system runs through (photos 2 and 3)
+//     1  CREATE     Monika             G-form                          1 day
+//     2  ALIGN      respective person  upload sign from every person   1 day
+//     3  ROLL-OUT   automatic          manually                        0 days
+//     4  ALIGNMENT  PC                 automatically                  30 days
+//
+//   Each step tracks Planned · Actual · Time Delay, plus its own extra column:
+//     step 1 → upload proof + person's name
+//     step 2 → upload proof
+//     step 3 → PC name
+//     step 4 → score of system
+//
+// Mam chose "replace everything" over keeping the old model, and chose that the
+// number under each step is PLANNED DAYS. The planned date therefore chains:
+// step 1 is planned one day after the system is created, and every later step is
+// planned from the previous step's ACTUAL date (falling back to its planned date
+// while it is still open), so a slipped step moves the ones behind it.
+//
+// The previous model's rows (sysflow_flows / step_master / activity) are ARCHIVED
+// rather than dropped — see runSystemFlowMigrations. The tables themselves stay in
+// place and empty, because seven auto:sysflow_* Scorecard KPI sources query them
+// directly and a missing table would throw rather than report zero.
+
+const STEP_TEMPLATE = [
+  { step_no: 1, step_name: 'CREATE',    owner_label: 'MONIKA',            method: 'G-form',                        planned_days: 1,  extra: 'proof_person' },
+  { step_no: 2, step_name: 'ALIGN',     owner_label: 'RESPECTIVE PERSON', method: 'UPLOAD SIGN FROM EVERY PERSON', planned_days: 1,  extra: 'proof' },
+  { step_no: 3, step_name: 'ROLL-OUT',  owner_label: 'AUTOMATIC',         method: 'MANUALLY',                      planned_days: 0,  extra: 'pc_name' },
+  { step_no: 4, step_name: 'ALIGNMENT', owner_label: 'PC',                method: 'Automatically',                 planned_days: 30, extra: 'score' },
+];
 
 function runSystemFlowMigrations(db) {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS sysflow_processes (
+    -- ── the system register (photo 4) ──────────────────────────────
+    CREATE TABLE IF NOT EXISTS sysflow_systems (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      active INTEGER NOT NULL DEFAULT 1,
-      created_by INTEGER REFERENCES users(id),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS sysflow_step_master (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      active INTEGER NOT NULL DEFAULT 1,
-      created_by INTEGER REFERENCES users(id),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS sysflow_flows (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      flow_no TEXT NOT NULL UNIQUE,
-      process_id INTEGER NOT NULL REFERENCES sysflow_processes(id),
+      uid TEXT NOT NULL UNIQUE,               -- SYS-0001, issued by the server
       system_name TEXT NOT NULL,
-      step_id INTEGER NOT NULL REFERENCES sysflow_step_master(id),
-      seq INTEGER NOT NULL DEFAULT 1,
-      depends_on_id INTEGER REFERENCES sysflow_flows(id),
-      responsible_id INTEGER NOT NULL REFERENCES users(id),
-      developer_id INTEGER NOT NULL REFERENCES users(id),
-      start_date DATE NOT NULL,
-      target_date DATE NOT NULL,
-      actual_completion_date DATE,
-      priority TEXT NOT NULL DEFAULT 'medium'
-        CHECK(priority IN ('low','medium','high','critical')),
-      status TEXT NOT NULL DEFAULT 'not_started'
-        CHECK(status IN ('not_started','in_progress','testing','waiting','blocked','completed','cancelled')),
-      progress INTEGER NOT NULL DEFAULT 0,
-      blocked_reason TEXT,
-      blocked_since DATETIME,
-      required_action TEXT,
+      type TEXT,
+      system_category TEXT,
+      frequency TEXT,
+      hod_id INTEGER REFERENCES users(id),    -- HOD'S NAME, picked from users
+      hod_name TEXT,                          -- kept as typed when not an ERP user
       remarks TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
       created_by INTEGER REFERENCES users(id),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,   -- the sheet's Timestamp
       updated_by INTEGER REFERENCES users(id),
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE INDEX IF NOT EXISTS idx_sysflow_flows_status     ON sysflow_flows(status);
-    CREATE INDEX IF NOT EXISTS idx_sysflow_flows_resp       ON sysflow_flows(responsible_id);
-    CREATE INDEX IF NOT EXISTS idx_sysflow_flows_dev        ON sysflow_flows(developer_id);
-    CREATE INDEX IF NOT EXISTS idx_sysflow_flows_target     ON sysflow_flows(target_date);
-    CREATE INDEX IF NOT EXISTS idx_sysflow_flows_process    ON sysflow_flows(process_id);
-    CREATE INDEX IF NOT EXISTS idx_sysflow_flows_depends    ON sysflow_flows(depends_on_id);
-
-    CREATE TABLE IF NOT EXISTS sysflow_activity (
+    -- ── the four steps per system (photos 2 and 3) ─────────────────
+    CREATE TABLE IF NOT EXISTS sysflow_system_steps (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      flow_id INTEGER NOT NULL REFERENCES sysflow_flows(id),
+      system_id INTEGER NOT NULL REFERENCES sysflow_systems(id) ON DELETE CASCADE,
+      step_no INTEGER NOT NULL,               -- 1..4
+      step_name TEXT NOT NULL,
+      owner_label TEXT,                       -- MONIKA / RESPECTIVE PERSON / AUTOMATIC / PC
+      owner_id INTEGER REFERENCES users(id),  -- who actually holds it, when known
+      method TEXT,                            -- G-form / upload sign / manually / automatically
+      planned_days INTEGER NOT NULL DEFAULT 0,
+      planned_date DATE,                      -- chained from the previous step
+      actual_date DATE,
+      -- Time Delay is DERIVED (actual - planned) and never stored: a stored copy
+      -- goes stale the moment a planned date is recalculated.
+      proof_url TEXT,                         -- steps 1 and 2: UPLOAD PROOF
+      person_name TEXT,                       -- step 1: Persons Name
+      pc_name TEXT,                           -- step 3: PC NAME
+      system_score INTEGER,                   -- step 4: Score of system (0-100)
+      remarks TEXT,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (system_id, step_no)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sysflow_sys_created ON sysflow_systems(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sysflow_sys_hod     ON sysflow_systems(hod_id);
+    CREATE INDEX IF NOT EXISTS idx_sysflow_steps_sys   ON sysflow_system_steps(system_id, step_no);
+    CREATE INDEX IF NOT EXISTS idx_sysflow_steps_plan  ON sysflow_system_steps(planned_date);
+    CREATE INDEX IF NOT EXISTS idx_sysflow_steps_owner ON sysflow_system_steps(owner_id);
+
+    -- Kept from the old model: one audit trail per change, now keyed to a system.
+    CREATE TABLE IF NOT EXISTS sysflow_system_activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      system_id INTEGER NOT NULL REFERENCES sysflow_systems(id) ON DELETE CASCADE,
+      step_no INTEGER,
       user_id INTEGER REFERENCES users(id),
       action TEXT NOT NULL,
       old_value TEXT,
       new_value TEXT,
-      reason TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE INDEX IF NOT EXISTS idx_sysflow_activity_flow ON sysflow_activity(flow_id);
+    CREATE INDEX IF NOT EXISTS idx_sysflow_sysact ON sysflow_system_activity(system_id, created_at DESC);
+
+    -- ── retired v1 tables, kept EMPTY on purpose ───────────────────
+    -- server/routes/scoring.js queries these directly for seven auto:sysflow_*
+    -- KPI sources (columns: status, developer_id, target_date,
+    -- actual_completion_date, progress, and activity.flow_id/created_at). On a
+    -- fresh database they would not exist at all and every one of those KPIs
+    -- would throw instead of reporting zero, taking the Scorecard page with it.
+    -- Recreated here with exactly the shape those queries need.
+    CREATE TABLE IF NOT EXISTS sysflow_flows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      flow_no TEXT,
+      system_name TEXT,
+      developer_id INTEGER REFERENCES users(id),
+      responsible_id INTEGER REFERENCES users(id),
+      target_date DATE,
+      actual_completion_date DATE,
+      progress INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'not_started',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS sysflow_activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      flow_id INTEGER,
+      user_id INTEGER REFERENCES users(id),
+      action TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
-  // Seed the step master + processes once (empty tables only) so the
-  // dropdowns are usable on first open. Admin can edit/deactivate later.
-  const stepCount = db.prepare('SELECT COUNT(*) c FROM sysflow_step_master').get().c;
-  if (stepCount === 0) {
-    const ins = db.prepare('INSERT INTO sysflow_step_master (name) VALUES (?)');
-    for (const s of [
-      'Login & User Management','User Master','Customer Master','Vendor Master',
-      'Sales Order','Indent','Purchase Order','Purchase Bill','Material Receipt',
-      'Inventory','Stock Transfer','DPR','Billing','Payment','HR','Attendance',
-      'Project Management','Dashboard','Reports',
-    ]) ins.run(s);
-  }
-  const procCount = db.prepare('SELECT COUNT(*) c FROM sysflow_processes').get().c;
-  if (procCount === 0) {
-    const ins = db.prepare('INSERT INTO sysflow_processes (name, sort_order) VALUES (?,?)');
-    [['SALES',1],['PURCHASE',2],['INVENTORY',3],['PROJECT',4],['ACCOUNTS',5],['HR',6],['ADMIN',7]]
-      .forEach(([n,o]) => ins.run(n,o));
-  }
-
-  // erp_path (mam 2026-09-01): link each step type to the ACTUAL ERP module
-  // page, so Update Status can jump to the real thing and show its pending
-  // count. Guarded ALTER — idempotent.
-  const smCols = db.pragma('table_info(sysflow_step_master)').map(c => c.name);
-  if (!smCols.includes('erp_path')) {
-    db.exec('ALTER TABLE sysflow_step_master ADD COLUMN erp_path TEXT');
-  }
-  const ERP_PATHS = {
-    'Login & User Management': '/admin/users', 'User Master': '/admin/users',
-    'Customer Master': '/customers', 'Vendor Master': '/vendors',
-    'Sales Order': '/business-book', 'Indent': '/procurement',
-    'Purchase Order': '/procurement', 'Purchase Bill': '/tally-bills',
-    'Material Receipt': '/procurement', 'Inventory': '/inventory',
-    'Stock Transfer': '/inventory', 'DPR': '/dpr', 'Billing': '/billing',
-    'Payment': '/payment-required', 'HR': '/hr', 'Attendance': '/attendance',
-    'Project Management': '/pms-tasks', 'Dashboard': '/', 'Reports': '/',
-  };
-  const setPath = db.prepare('UPDATE sysflow_step_master SET erp_path=? WHERE name=? AND erp_path IS NULL');
-  for (const [name, path] of Object.entries(ERP_PATHS)) setPath.run(path, name);
-
-  // Mam's Aug-2026 SOP flow charts → seeded as System Flows exactly once
-  // (guarded inside the seeder). Runs every boot, no-ops after the first.
+  // ── the OLD model, retired ──────────────────────────────────────
+  //
+  // Mam picked "replace everything". The rows are moved into dated archive tables
+  // instead of being dropped: the outcome she chose is identical (the module is
+  // the new one and the old KPIs report zero) but a mistaken wipe of 119 real
+  // assignments would otherwise be unrecoverable. The ORIGINAL tables are left in
+  // place and empty on purpose — server/routes/scoring.js queries sysflow_flows
+  // and sysflow_activity directly for seven auto:sysflow_* KPI sources, and a
+  // missing table throws where an empty one correctly reports nothing.
+  //
+  // Guarded by a one-time flag so it can never run twice and archive an empty set
+  // over a good archive.
   try {
-    const { seedSystemFlowSops } = require('../scripts/seedSystemFlowSops');
-    seedSystemFlowSops(db);
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='sysflow_v2_archived'").get();
+    if (!done) {
+      const has = (t) => !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t);
+      let moved = 0;
+      let failed = 0;
+      // CHILD TABLES FIRST. sysflow_activity.flow_id references sysflow_flows(id)
+      // and foreign_keys is ON, so deleting the parent first fails the whole
+      // changeover with "FOREIGN KEY constraint failed" — which is exactly what
+      // happened on the first run.
+      for (const t of ['sysflow_activity', 'sysflow_flows', 'sysflow_step_master', 'sysflow_processes']) {
+        if (!has(t)) continue;
+        const n = db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c;
+        if (!n) continue;
+        try {
+          db.exec(`CREATE TABLE IF NOT EXISTS ${t}_archive_v1 AS SELECT * FROM ${t}`);
+          db.exec(`DELETE FROM ${t}`);
+          moved += n;
+          console.log(`[system-flow] archived ${n} row(s) from ${t} -> ${t}_archive_v1`);
+        } catch (inner) {
+          // One stubborn table must not stop the others, and must not let the
+          // one-time flag be set over an incomplete changeover.
+          failed++;
+          console.error(`[system-flow] could not retire ${t}: ${inner.message}`);
+        }
+      }
+      // Arm the guard ONLY on a clean sweep, so a partial run is retried next boot
+      // instead of leaving half the old model in place forever.
+      if (!failed) {
+        db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('sysflow_v2_archived', ?)")
+          .run(String(moved));
+        if (moved) console.log(`[system-flow] v2 changeover complete: ${moved} row(s) archived, old tables now empty`);
+      }
+    }
   } catch (e) {
-    console.warn('[system_flow] SOP seed skipped (non-fatal):', e.message);
+    console.error('[system-flow] archive step failed (non-fatal):', e.message);
   }
-
-  // Mam 2026-09-02: "on update status here should be actual link … like
-  // second photo" — every seeded SOP step links to the REAL ERP screen for
-  // its chart, so the step drawer shows "Open in ERP →" above Update Status.
-  // Chart-level defaults, NULL-guarded (admin fine-tunes per step via the
-  // Step Master "ERP Link" button and we never overwrite a manual choice).
-  const SOP_ERP_PATHS = {
-    'SOP-01': '/leads',                // Lead to first check → Sales Funnel
-    'SOP-02': '/quotations',           // BOQ to quotation
-    'SOP-03': '/business-book',        // Negotiation & order booking
-    'SOP-04': '/indent-labour-payment',// Project kickoff & planning
-    'SOP-05': '/rates-board',          // Vendor & rates BEFORE indent
-    'SOP-06': '/drawing-tracker',      // Drawing approval
-    'SOP-07': '/procurement',          // Indent to material at site
-    'SOP-08': '/rental-tools',         // Tools & RGP
-    'SOP-09': '/dpr',                  // Site work & daily report
-    'SOP-10': '/inventory',            // Material use at site
-    'SOP-11': '/indent-labour-payment',// Labour / thekedar
-    'SOP-12': '/installation',         // Extra work / change order (Sales Billing)
-    'SOP-13': '/installation',         // RA bill & sales bill
-    'SOP-14': '/installation',         // Testing & commissioning (testing bill)
-    'SOP-15': '/snags',                // Handover & snags
-    'SOP-16': '/collections',          // Collection
-    'SOP-17': '/collections',          // Final account & retention
-    'SOP-18': '/payment-required',     // Payments & cheques
-  };
-  const setSopPath = db.prepare(
-    "UPDATE sysflow_step_master SET erp_path=? WHERE name LIKE ? AND erp_path IS NULL");
-  for (const [sop, path] of Object.entries(SOP_ERP_PATHS)) {
-    setSopPath.run(path, sop + '.%');   // "SOP-01.1 · Lead entry format" etc.
-    setSopPath.run(path, sop + ' %');   // fallback-named steps "SOP-01 S3"
-  }
-
-  // Configurable escalation thresholds (days overdue/blocked) — app_settings.
-  const getSetting = db.prepare('SELECT value FROM app_settings WHERE key = ?');
-  const setSetting = db.prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?,?)');
-  if (!getSetting.get('sysflow_esc_l1_days')) setSetting.run('sysflow_esc_l1_days', '1');
-  if (!getSetting.get('sysflow_esc_l2_days')) setSetting.run('sysflow_esc_l2_days', '3');
-  if (!getSetting.get('sysflow_esc_l3_days')) setSetting.run('sysflow_esc_l3_days', '7');
 }
 
-module.exports = { runSystemFlowMigrations };
+module.exports = { runSystemFlowMigrations, STEP_TEMPLATE };

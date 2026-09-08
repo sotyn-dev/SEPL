@@ -1,586 +1,400 @@
-// SYSTEM FLOW & ERP IMPLEMENTATION CONTROL (mam 2026-09-01)
-// Manages the ERP build itself: what system step → who → when → status →
-// why delayed → what is blocking → how many steps affected → who must solve.
+// SYSTEM FLOW — ERP Management system register (v2).
 //
-// Everything derived (overdue, waiting, downstream impact, severity,
-// bottleneck rank, escalation level) is COMPUTED here at read time from
-// status + dates + the dependency chain — users never mark a bottleneck
-// by hand, and there is no cron to drift out of sync.
+// Mam (2026-09-08): "change it fully, 2,3 photo is steps and 4 is create system".
+// Rebuilt to her spreadsheet: a system is registered (UID, timestamp, name, type,
+// category, frequency, HOD) and then runs through FOUR fixed steps, each tracking
+// Planned / Actual / Time Delay plus its own extra column.
+//
+//   GET    /meta              → step template, users, distinct types/categories
+//   GET    /                  → the register: systems + their four steps
+//   GET    /stats             → the tiles
+//   POST   /                  → create a system (seeds its four steps)
+//   PATCH  /:id               → edit the system header
+//   PATCH  /:id/steps/:no     → work one step (actual date, proof, score…)
+//   DELETE /:id               → remove a system and its steps
+//   GET    /:id/activity      → the audit trail
+//
+// TIME DELAY IS NEVER STORED. It is actual - planned, computed on read, because a
+// stored copy goes stale the moment a planned date is recalculated upstream.
+
 const express = require('express');
-const router = express.Router();
 const { getDb } = require('../db/schema');
+const { STEP_TEMPLATE } = require('../db/systemFlowSchema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { nextSequence } = require('../db/nextSequence');
-const { istToday } = require('../lib/istDate');
-
+const router = express.Router();
 router.use(authMiddleware);
 
 const MODULE = 'system_flow';
-const STATUSES = ['not_started','in_progress','testing','waiting','blocked','completed','cancelled'];
-const OPEN = (s) => s !== 'completed' && s !== 'cancelled';
 
-const daysBetween = (a, b) => Math.floor((new Date(b) - new Date(a)) / 86400000);
-
-function escThresholds(db) {
-  const get = (k, dflt) => {
-    const r = db.prepare('SELECT value FROM app_settings WHERE key=?').get(k);
-    const n = parseInt(r?.value, 10);
-    return Number.isFinite(n) ? n : dflt;
-  };
-  return { l1: get('sysflow_esc_l1_days', 1), l2: get('sysflow_esc_l2_days', 3), l3: get('sysflow_esc_l3_days', 7) };
-}
-
-// ── The engine: load all flows, enrich with derived fields ─────────────
-function loadEnriched(db) {
-  const rows = db.prepare(`
-    SELECT f.*,
-      p.name  AS process_name,
-      sm.name AS step_name,
-      ru.name AS responsible_name,
-      du.name AS developer_name,
-      dep.status  AS dep_status,
-      dep.flow_no AS dep_flow_no,
-      deps.name   AS dep_step_name
-    FROM sysflow_flows f
-    JOIN sysflow_processes p   ON p.id = f.process_id
-    JOIN sysflow_step_master sm ON sm.id = f.step_id
-    JOIN users ru ON ru.id = f.responsible_id
-    JOIN users du ON du.id = f.developer_id
-    LEFT JOIN sysflow_flows dep ON dep.id = f.depends_on_id
-    LEFT JOIN sysflow_step_master deps ON deps.id = dep.step_id
-    ORDER BY p.sort_order, f.system_name, f.seq, f.id
-  `).all();
-
-  const today = istToday();
-  const byId = new Map(rows.map(r => [r.id, r]));
-  const children = new Map(); // depends_on_id -> [child rows]
-  for (const r of rows) {
-    if (r.depends_on_id) {
-      if (!children.has(r.depends_on_id)) children.set(r.depends_on_id, []);
-      children.get(r.depends_on_id).push(r);
-    }
-  }
-
-  // downstream impact = incomplete steps in the dependency subtree below me
-  const downstreamCache = new Map();
-  function downstream(id, seen = new Set()) {
-    if (downstreamCache.has(id)) return downstreamCache.get(id);
-    if (seen.has(id)) return 0; // circular guard (creation also prevents this)
-    seen.add(id);
-    let n = 0;
-    for (const c of (children.get(id) || [])) {
-      if (OPEN(c.status)) n += 1 + downstream(c.id, seen);
-    }
-    downstreamCache.set(id, n);
-    return n;
-  }
-
-  const PRIO_W = { low: 0, medium: 1, high: 2, critical: 4 };
-  for (const r of rows) {
-    // RULE 1 — overdue + delay days
-    r.is_overdue = OPEN(r.status) && r.target_date < today ? 1 : 0;
-    r.delay_days = r.status === 'completed'
-      ? Math.max(0, daysBetween(r.target_date, r.actual_completion_date || r.target_date))
-      : (r.is_overdue ? daysBetween(r.target_date, today) : 0);
-
-    // RULE 2 — blocked days
-    r.blocked_days = r.status === 'blocked' && r.blocked_since
-      ? Math.max(0, daysBetween(r.blocked_since.slice(0, 10), today)) : 0;
-
-    // RULE 3 — waiting on an incomplete dependency
-    const dep = r.depends_on_id ? byId.get(r.depends_on_id) : null;
-    r.dep_incomplete = dep && OPEN(dep.status) ? 1 : 0;
-    r.derived_waiting = r.dep_incomplete && ['not_started','waiting'].includes(r.status) ? 1 : 0;
-    r.waiting_for = r.derived_waiting && dep ? dep.step_name || '' : null;
-
-    // RULE 4 — downstream impact
-    r.downstream_impact = downstream(r.id);
-
-    // Severity — delay-banded, upgraded by downstream impact (transparent)
-    const worst = Math.max(r.delay_days, r.blocked_days);
-    let sev = worst > 7 ? 4 : worst >= 4 ? 3 : worst >= 2 ? 2 : worst >= 1 ? 1 : 0;
-    if ((r.status === 'blocked' || r.is_overdue) && r.downstream_impact >= 3) sev = 4;
-    else if ((r.status === 'blocked' || r.is_overdue) && r.downstream_impact >= 1) sev = Math.min(4, sev + 1);
-    if (r.status === 'blocked' && sev === 0) sev = 1;
-    r.severity = ['none','low','medium','high','critical'][sev];
-    r.severity_rank = sev;
-
-    // Transparent bottleneck score: shown with its parts, never a bare number
-    r.score_parts = {
-      delay: r.delay_days * 2,
-      blocked: r.blocked_days * 2,
-      downstream: r.downstream_impact * 3,
-      priority: PRIO_W[r.priority] || 0,
-    };
-    r.bottleneck_score = Object.values(r.score_parts).reduce((a, b) => a + b, 0);
-
-    // Escalation level from configured thresholds
-    r.escalation_level = 0;
-    if ((r.is_overdue || r.status === 'blocked') && OPEN(r.status)) {
-      const t = escThresholds(db);
-      r.escalation_level = worst >= t.l3 ? 3 : worst >= t.l2 ? 2 : worst >= t.l1 ? 1 : 0;
-    }
-  }
-
-  // RULE 25 — primary bottleneck: a stuck step whose OWN dependency is
-  // satisfied (actionable). Steps stuck only because an ancestor is stuck
-  // are downstream-impacted, never the primary.
-  for (const r of rows) {
-    const stuck = OPEN(r.status) && (r.status === 'blocked' || r.is_overdue);
-    r.is_primary_bottleneck = stuck && !r.dep_incomplete ? 1 : 0;
-  }
-  // stuck_ancestor: some step UP the dependency chain is blocked/overdue —
-  // distinguishes "waiting because of a real bottleneck" (shown in the
-  // Bottleneck Center as downstream-impacted) from normal healthy sequencing.
-  for (const r of rows) {
-    let cur = r.depends_on_id ? byId.get(r.depends_on_id) : null, hops = 0;
-    r.stuck_ancestor = 0;
-    while (cur && hops++ < 500) {
-      if (OPEN(cur.status) && (cur.status === 'blocked' || cur.is_overdue)) { r.stuck_ancestor = 1; break; }
-      cur = cur.depends_on_id ? byId.get(cur.depends_on_id) : null;
-    }
-  }
-  return rows;
-}
-
-// ── Live pending count from the ACTUAL ERP module (mam 2026-09-01:
-//    "actual erp steps to that we can link and know how much pending").
-//    Keyed by step-master name; every query is try/catch so a missing
-//    table on some deployment can never break the flow pages.
-const ERP_PENDING = {
-  'Indent':           { sql: "SELECT COUNT(*) c FROM indents WHERE status IN ('submitted','pending')", label: 'indents awaiting approval' },
-  'Purchase Order':   { sql: "SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(status,'') NOT IN ('received','closed','cancelled','rejected')", label: 'open POs' },
-  'Material Receipt': { sql: "SELECT COUNT(*) c FROM vendor_pos WHERE status='sent'", label: 'POs awaiting receipt' },
-  'Purchase Bill':    { sql: "SELECT COUNT(*) c FROM tally_bills WHERE COALESCE(status,'') NOT IN ('paid','closed','rejected')", label: 'bills open' },
-  'Inventory':        { sql: "SELECT COUNT(*) c FROM item_master WHERE approval_status='pending'", label: 'items awaiting approval' },
-  'DPR':              { sql: "SELECT COUNT(*) c FROM dpr WHERE COALESCE(approval_status,'pending')='pending'", label: 'DPRs awaiting approval' },
-  'Billing':          { sql: "SELECT COUNT(*) c FROM sales_bills WHERE COALESCE(approval_status,'pending')='pending'", label: 'bills awaiting approval' },
-  'Payment':          { sql: "SELECT COUNT(*) c FROM payment_requests WHERE COALESCE(status,'pending') IN ('pending','submitted')", label: 'payment requests pending' },
-  'Sales Order':      { sql: "SELECT COUNT(*) c FROM business_book WHERE COALESCE(status,'') NOT IN ('closed','completed','cancelled')", label: 'open orders' },
-  'Customer Master':  { sql: 'SELECT COUNT(*) c FROM customers', label: 'customers in master' },
-  'Vendor Master':    { sql: 'SELECT COUNT(*) c FROM vendors', label: 'vendors in master' },
-  'User Master':      { sql: 'SELECT COUNT(*) c FROM users WHERE COALESCE(active,1)=1', label: 'active users' },
-  'Login & User Management': { sql: 'SELECT COUNT(*) c FROM users WHERE COALESCE(active,1)=1', label: 'active users' },
-  'Project Management': { sql: "SELECT COUNT(*) c FROM pms_tasks WHERE COALESCE(status,'') NOT IN ('completed','approved','cancelled')", label: 'PMS tasks open' },
-  'Attendance':       { sql: 'SELECT COUNT(*) c FROM attendance WHERE date=?', args: () => [istToday()], label: 'marked today' },
-  'HR':               { sql: "SELECT COUNT(*) c FROM employees WHERE COALESCE(status,'active')='active'", label: 'active employees' },
+// ── planned-date chain ───────────────────────────────────────────────
+// Mam's answer: the number under each step is PLANNED DAYS.
+//   step 1 planned = the day the system was registered + 1
+//   step N planned = step N-1 ACTUAL + its days, falling back to step N-1's
+//                    PLANNED while that step is still open, so the chain always
+//                    shows a date and a slipped step pushes the ones behind it.
+const addDays = (isoDate, days) => {
+  if (!isoDate) return null;
+  const d = new Date(`${String(isoDate).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + (Number(days) || 0));
+  return d.toISOString().slice(0, 10);
 };
-function erpPending(db, stepName) {
-  const q = ERP_PENDING[stepName];
-  if (!q) return null;
-  try {
-    const args = q.args ? q.args() : [];
-    const r = db.prepare(q.sql).get(...args);
-    return { count: r?.c ?? 0, label: q.label };
-  } catch { return null; }
-}
 
-function logActivity(db, flowId, userId, action, oldV, newV, reason) {
-  db.prepare(`INSERT INTO sysflow_activity (flow_id, user_id, action, old_value, new_value, reason)
-              VALUES (?,?,?,?,?,?)`)
-    .run(flowId, userId, action, oldV == null ? null : String(oldV), newV == null ? null : String(newV), reason || null);
-}
+const dayDiff = (a, b) => {
+  if (!a || !b) return null;
+  const x = new Date(`${String(a).slice(0, 10)}T00:00:00Z`).getTime();
+  const y = new Date(`${String(b).slice(0, 10)}T00:00:00Z`).getTime();
+  if (Number.isNaN(x) || Number.isNaN(y)) return null;
+  return Math.round((x - y) / 86400000);
+};
 
-// circular-dependency guard: walking up from depId must never reach flowId
-function wouldCycle(db, flowId, depId) {
-  let cur = depId, hops = 0;
-  const up = db.prepare('SELECT depends_on_id FROM sysflow_flows WHERE id=?');
-  while (cur != null && hops++ < 500) {
-    if (cur === flowId) return true;
-    cur = up.get(cur)?.depends_on_id ?? null;
+/**
+ * Recompute planned_date for every step of a system, in order.
+ * Called after anything that can move the chain: creation, or an actual date.
+ */
+function recalcPlanned(db, systemId) {
+  const sys = db.prepare('SELECT created_at FROM sysflow_systems WHERE id = ?').get(systemId);
+  if (!sys) return;
+  const steps = db.prepare(
+    'SELECT id, step_no, planned_days, actual_date FROM sysflow_system_steps WHERE system_id = ? ORDER BY step_no'
+  ).all(systemId);
+
+  const upd = db.prepare('UPDATE sysflow_system_steps SET planned_date = ? WHERE id = ?');
+  // The register date in IST — the sheet's Timestamp is the day the row was made.
+  let base = new Date(new Date(sys.created_at + 'Z').getTime() + 330 * 60000)
+    .toISOString().slice(0, 10);
+
+  for (const s of steps) {
+    const planned = addDays(base, s.planned_days);
+    upd.run(planned, s.id);
+    // The next step waits on what actually happened; until then, on the plan.
+    base = s.actual_date ? String(s.actual_date).slice(0, 10) : planned;
   }
-  return false;
 }
 
-// ── Meta (dropdown sources) ────────────────────────────────────────────
+// Shape one system + its steps for the screen, with Time Delay computed.
+function decorate(sys, steps) {
+  const out = steps.map((s) => ({
+    ...s,
+    time_delay_days: dayDiff(s.actual_date, s.planned_date),
+  }));
+  const done = out.filter((s) => s.actual_date).length;
+  const lastDelay = out.filter((s) => s.time_delay_days !== null).map((s) => s.time_delay_days);
+  return {
+    ...sys,
+    steps: out,
+    steps_done: done,
+    completed: done === out.length && out.length > 0,
+    // The score lives on step 4 — it is the sheet's "Score of system".
+    system_score: (out.find((s) => s.step_no === 4) || {}).system_score ?? null,
+    total_delay_days: lastDelay.length ? lastDelay.reduce((a, b) => a + b, 0) : null,
+  };
+}
+
+const log = (db, systemId, stepNo, userId, action, oldV, newV) => {
+  try {
+    db.prepare(`INSERT INTO sysflow_system_activity (system_id, step_no, user_id, action, old_value, new_value)
+                VALUES (?,?,?,?,?,?)`)
+      .run(systemId, stepNo, userId || null, action,
+           oldV === undefined || oldV === null ? null : String(oldV).slice(0, 500),
+           newV === undefined || newV === null ? null : String(newV).slice(0, 500));
+  } catch (e) { console.error('[system-flow] activity log failed:', e.message); }
+};
+
+const str = (v, max) => {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s ? s.slice(0, max) : null;
+};
+const isoDate = (v) => {
+  if (!v) return null;
+  const s = String(v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+};
+
+// ── GET /meta ────────────────────────────────────────────────────────
 router.get('/meta', requirePermission(MODULE, 'view'), (req, res) => {
   const db = getDb();
   res.json({
-    processes: db.prepare('SELECT * FROM sysflow_processes WHERE active=1 ORDER BY sort_order, name').all(),
-    steps: db.prepare('SELECT * FROM sysflow_step_master WHERE active=1 ORDER BY name').all(),
-    users: db.prepare("SELECT id, name FROM users WHERE COALESCE(active,1)=1 AND COALESCE(archived,0)=0 AND username NOT LIKE '%DISABLED%' ORDER BY name").all(),
-    statuses: STATUSES,
-    escalation: escThresholds(db),
+    steps: STEP_TEMPLATE,
+    users: db.prepare("SELECT id, name FROM users WHERE active=1 ORDER BY name").all(),
+    types: db.prepare("SELECT DISTINCT type v FROM sysflow_systems WHERE type IS NOT NULL AND type<>'' ORDER BY 1").all().map((r) => r.v),
+    categories: db.prepare("SELECT DISTINCT system_category v FROM sysflow_systems WHERE system_category IS NOT NULL AND system_category<>'' ORDER BY 1").all().map((r) => r.v),
+    frequencies: db.prepare("SELECT DISTINCT frequency v FROM sysflow_systems WHERE frequency IS NOT NULL AND frequency<>'' ORDER BY 1").all().map((r) => r.v),
   });
 });
 
-// ── System Step Master CRUD (admin/manager) ────────────────────────────
-router.get('/steps', requirePermission(MODULE, 'view'), (req, res) => {
+// ── GET / — the register ─────────────────────────────────────────────
+// Bounded like every other list in this ERP: a return-everything query is what
+// freezes a synchronous server (hang audit 2026-08-21).
+router.get('/', requirePermission(MODULE, 'view'), (req, res) => {
+  const { q, status, hod_id, category } = req.query;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+  const where = ['s.active = 1'];
+  const params = [];
+  if (q) {
+    where.push('(s.system_name LIKE ? OR s.uid LIKE ? OR s.type LIKE ? OR s.system_category LIKE ? OR s.hod_name LIKE ?)');
+    const like = `%${q}%`;
+    params.push(like, like, like, like, like);
+  }
+  if (hod_id) { where.push('s.hod_id = ?'); params.push(hod_id); }
+  if (category) { where.push('s.system_category = ?'); params.push(category); }
+  const clause = `WHERE ${where.join(' AND ')}`;
+
+  const db = getDb();
+  const systems = db.prepare(`
+    SELECT s.id, s.uid, s.system_name, s.type, s.system_category, s.frequency,
+           s.hod_id, s.hod_name, s.remarks, s.created_at, s.updated_at,
+           u.name AS hod_user_name, c.name AS created_by_name
+      FROM sysflow_systems s
+      LEFT JOIN users u ON u.id = s.hod_id
+      LEFT JOIN users c ON c.id = s.created_by
+     ${clause}
+     ORDER BY s.created_at DESC, s.id DESC
+     LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+
+  const total = db.prepare(`SELECT COUNT(*) c FROM sysflow_systems s ${clause}`).get(...params).c;
+
+  // One query for every step on this page, not one per system (N+1).
+  const ids = systems.map((s) => s.id);
+  const stepsBySystem = {};
+  if (ids.length) {
+    const rows = db.prepare(`
+      SELECT st.*, u.name AS owner_name
+        FROM sysflow_system_steps st
+        LEFT JOIN users u ON u.id = st.owner_id
+       WHERE st.system_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY st.system_id, st.step_no
+    `).all(...ids);
+    for (const r of rows) (stepsBySystem[r.system_id] ||= []).push(r);
+  }
+
+  let rows = systems.map((s) => decorate(s, stepsBySystem[s.id] || []));
+  // "status" is derived, so it filters after decoration rather than in SQL.
+  if (status === 'completed') rows = rows.filter((r) => r.completed);
+  else if (status === 'open') rows = rows.filter((r) => !r.completed);
+  else if (status === 'delayed') rows = rows.filter((r) => r.steps.some((s) => s.time_delay_days > 0));
+  else if (status === 'overdue') {
+    const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+    rows = rows.filter((r) => r.steps.some((s) => !s.actual_date && s.planned_date && s.planned_date < today));
+  }
+
+  res.json({ rows, total, limit, offset });
+});
+
+// ── GET /stats — the tiles ───────────────────────────────────────────
+router.get('/stats', requirePermission(MODULE, 'view'), (req, res) => {
+  const db = getDb();
+  const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  const g = (sql, ...a) => db.prepare(sql).get(...a).c;
+
+  const total = g('SELECT COUNT(*) c FROM sysflow_systems WHERE active=1');
+  const completed = g(`
+    SELECT COUNT(*) c FROM sysflow_systems s WHERE s.active=1
+      AND NOT EXISTS (SELECT 1 FROM sysflow_system_steps st
+                       WHERE st.system_id=s.id AND st.actual_date IS NULL)
+      AND EXISTS (SELECT 1 FROM sysflow_system_steps st WHERE st.system_id=s.id)`);
+  const overdue = g(`
+    SELECT COUNT(DISTINCT st.system_id) c FROM sysflow_system_steps st
+      JOIN sysflow_systems s ON s.id=st.system_id AND s.active=1
+     WHERE st.actual_date IS NULL AND st.planned_date IS NOT NULL AND st.planned_date < ?`, today);
+  const dueThisWeek = g(`
+    SELECT COUNT(*) c FROM sysflow_system_steps st
+      JOIN sysflow_systems s ON s.id=st.system_id AND s.active=1
+     WHERE st.actual_date IS NULL AND st.planned_date BETWEEN ? AND date(?, '+7 days')`, today, today);
+
+  const delay = db.prepare(`
+    SELECT AVG(julianday(actual_date) - julianday(planned_date)) d
+      FROM sysflow_system_steps st JOIN sysflow_systems s ON s.id=st.system_id AND s.active=1
+     WHERE st.actual_date IS NOT NULL AND st.planned_date IS NOT NULL`).get().d;
+  const score = db.prepare(`
+    SELECT AVG(system_score) s FROM sysflow_system_steps st
+      JOIN sysflow_systems sy ON sy.id=st.system_id AND sy.active=1
+     WHERE st.step_no=4 AND st.system_score IS NOT NULL`).get().s;
+  const stepsDone = g('SELECT COUNT(*) c FROM sysflow_system_steps WHERE actual_date IS NOT NULL');
+  const stepsAll = g('SELECT COUNT(*) c FROM sysflow_system_steps');
+
+  res.json({
+    total, completed, overdue, due_this_week: dueThisWeek,
+    in_progress: total - completed,
+    avg_delay_days: delay === null ? null : Math.round(delay * 10) / 10,
+    avg_score: score === null ? null : Math.round(score * 10) / 10,
+    steps_done: stepsDone, steps_total: stepsAll,
+    completion_pct: stepsAll ? Math.round((stepsDone / stepsAll) * 1000) / 10 : 0,
+  });
+});
+
+// ── POST / — register a system, seeding its four steps ───────────────
+router.post('/', requirePermission(MODULE, 'create'), (req, res) => {
+  const name = str(req.body.system_name, 200);
+  if (!name) return res.status(400).json({ error: 'System name is required' });
+
+  const db = getDb();
+  const hodId = req.body.hod_id ? parseInt(req.body.hod_id, 10) : null;
+  if (hodId && !db.prepare('SELECT 1 FROM users WHERE id=?').get(hodId)) {
+    return res.status(400).json({ error: 'That HOD does not exist' });
+  }
+
+  try {
+    const out = db.transaction(() => {
+      const uid = nextSequence(db, 'sysflow_systems', 'uid', 'SYS-', { startFrom: 0, pad: 4 });
+      const r = db.prepare(`
+        INSERT INTO sysflow_systems
+          (uid, system_name, type, system_category, frequency, hod_id, hod_name, remarks, created_by)
+        VALUES (?,?,?,?,?,?,?,?,?)
+      `).run(uid, name, str(req.body.type, 120), str(req.body.system_category, 120),
+             str(req.body.frequency, 120), hodId, str(req.body.hod_name, 160),
+             str(req.body.remarks, 2000), req.user?.id || null);
+      const id = r.lastInsertRowid;
+
+      const ins = db.prepare(`
+        INSERT INTO sysflow_system_steps
+          (system_id, step_no, step_name, owner_label, method, planned_days)
+        VALUES (?,?,?,?,?,?)
+      `);
+      for (const s of STEP_TEMPLATE) {
+        ins.run(id, s.step_no, s.step_name, s.owner_label, s.method, s.planned_days);
+      }
+      recalcPlanned(db, id);
+      log(db, id, null, req.user?.id, 'CREATE', null, `${uid} · ${name}`);
+      return { id, uid };
+    })();
+    res.status(201).json(out);
+  } catch (e) {
+    console.error('[system-flow] create failed:', e.message);
+    res.status(500).json({ error: 'Could not create the system' });
+  }
+});
+
+// ── PATCH /:id — the system header ───────────────────────────────────
+router.patch('/:id', requirePermission(MODULE, 'edit'), (req, res) => {
+  const db = getDb();
+  const sys = db.prepare('SELECT * FROM sysflow_systems WHERE id=?').get(req.params.id);
+  if (!sys) return res.status(404).json({ error: 'System not found' });
+
+  const sets = [], params = [];
+  const put = (col, val) => { sets.push(`${col} = ?`); params.push(val); };
+  if (req.body.system_name !== undefined) {
+    const n = str(req.body.system_name, 200);
+    if (!n) return res.status(400).json({ error: 'System name cannot be empty' });
+    put('system_name', n);
+  }
+  if (req.body.type !== undefined) put('type', str(req.body.type, 120));
+  if (req.body.system_category !== undefined) put('system_category', str(req.body.system_category, 120));
+  if (req.body.frequency !== undefined) put('frequency', str(req.body.frequency, 120));
+  if (req.body.hod_name !== undefined) put('hod_name', str(req.body.hod_name, 160));
+  if (req.body.remarks !== undefined) put('remarks', str(req.body.remarks, 2000));
+  if (req.body.hod_id !== undefined) {
+    const id = req.body.hod_id ? parseInt(req.body.hod_id, 10) : null;
+    if (id && !db.prepare('SELECT 1 FROM users WHERE id=?').get(id)) {
+      return res.status(400).json({ error: 'That HOD does not exist' });
+    }
+    put('hod_id', id);
+  }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  sets.push('updated_at = CURRENT_TIMESTAMP', 'updated_by = ?');
+  params.push(req.user?.id || null);
+  db.prepare(`UPDATE sysflow_systems SET ${sets.join(', ')} WHERE id = ?`).run(...params, req.params.id);
+  log(db, sys.id, null, req.user?.id, 'EDIT', sys.system_name, str(req.body.system_name, 200) || sys.system_name);
+  res.json({ message: 'Updated' });
+});
+
+// ── PATCH /:id/steps/:no — work one step ─────────────────────────────
+router.patch('/:id/steps/:no', requirePermission(MODULE, 'edit'), (req, res) => {
+  const db = getDb();
+  const stepNo = parseInt(req.params.no, 10);
+  const step = db.prepare('SELECT * FROM sysflow_system_steps WHERE system_id=? AND step_no=?')
+    .get(req.params.id, stepNo);
+  if (!step) return res.status(404).json({ error: 'Step not found' });
+
+  const sets = [], params = [];
+  const put = (col, val) => { sets.push(`${col} = ?`); params.push(val); };
+
+  if (req.body.actual_date !== undefined) {
+    const d = req.body.actual_date ? isoDate(req.body.actual_date) : null;
+    if (req.body.actual_date && !d) return res.status(400).json({ error: 'Actual date must be a real date' });
+    put('actual_date', d);
+  }
+  if (req.body.owner_id !== undefined) {
+    const id = req.body.owner_id ? parseInt(req.body.owner_id, 10) : null;
+    if (id && !db.prepare('SELECT 1 FROM users WHERE id=?').get(id)) {
+      return res.status(400).json({ error: 'That user does not exist' });
+    }
+    put('owner_id', id);
+  }
+  if (req.body.planned_days !== undefined) {
+    const n = parseInt(req.body.planned_days, 10);
+    if (Number.isNaN(n) || n < 0 || n > 3650) return res.status(400).json({ error: 'Planned days must be between 0 and 3650' });
+    put('planned_days', n);
+  }
+  if (req.body.proof_url !== undefined) put('proof_url', str(req.body.proof_url, 500));
+  if (req.body.person_name !== undefined) put('person_name', str(req.body.person_name, 160));
+  if (req.body.pc_name !== undefined) put('pc_name', str(req.body.pc_name, 160));
+  if (req.body.remarks !== undefined) put('remarks', str(req.body.remarks, 2000));
+  if (req.body.system_score !== undefined) {
+    const n = req.body.system_score === null || req.body.system_score === '' ? null : parseInt(req.body.system_score, 10);
+    if (n !== null && (Number.isNaN(n) || n < 0 || n > 100)) {
+      return res.status(400).json({ error: 'Score must be between 0 and 100' });
+    }
+    put('system_score', n);
+  }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  sets.push('updated_at = CURRENT_TIMESTAMP', 'updated_by = ?');
+  params.push(req.user?.id || null);
+
+  try {
+    db.transaction(() => {
+      db.prepare(`UPDATE sysflow_system_steps SET ${sets.join(', ')} WHERE id = ?`).run(...params, step.id);
+      // An actual date (or a changed target) moves every step behind this one.
+      if (req.body.actual_date !== undefined || req.body.planned_days !== undefined) {
+        recalcPlanned(db, step.system_id);
+      }
+      if (req.body.actual_date !== undefined) {
+        log(db, step.system_id, stepNo, req.user?.id, 'STEP_DONE', step.actual_date, req.body.actual_date || null);
+      }
+    })();
+    res.json({ message: 'Updated' });
+  } catch (e) {
+    console.error('[system-flow] step update failed:', e.message);
+    res.status(500).json({ error: 'Could not update the step' });
+  }
+});
+
+// ── DELETE /:id ──────────────────────────────────────────────────────
+router.delete('/:id', requirePermission(MODULE, 'delete'), (req, res) => {
+  const db = getDb();
+  const sys = db.prepare('SELECT * FROM sysflow_systems WHERE id=?').get(req.params.id);
+  if (!sys) return res.status(404).json({ error: 'System not found' });
+  try {
+    db.transaction(() => {
+      db.prepare('DELETE FROM sysflow_system_steps WHERE system_id=?').run(sys.id);
+      db.prepare('DELETE FROM sysflow_systems WHERE id=?').run(sys.id);
+      log(db, sys.id, null, req.user?.id, 'DELETE', `${sys.uid} · ${sys.system_name}`, null);
+    })();
+    res.json({ message: 'Deleted' });
+  } catch (e) {
+    console.error('[system-flow] delete failed:', e.message);
+    res.status(500).json({ error: 'Could not delete the system' });
+  }
+});
+
+// ── GET /:id/activity ────────────────────────────────────────────────
+router.get('/:id/activity', requirePermission(MODULE, 'view'), (req, res) => {
   const db = getDb();
   res.json(db.prepare(`
-    SELECT s.*, (SELECT COUNT(*) FROM sysflow_flows f WHERE f.step_id=s.id) AS used_count
-    FROM sysflow_step_master s ORDER BY s.active DESC, s.name`).all());
-});
-router.post('/steps', requirePermission(MODULE, 'edit'), (req, res) => {
-  const name = String(req.body?.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'Step name required' });
-  try {
-    const r = getDb().prepare('INSERT INTO sysflow_step_master (name, created_by) VALUES (?,?)').run(name, req.user.id);
-    res.status(201).json({ id: r.lastInsertRowid });
-  } catch { res.status(409).json({ error: 'Step already exists' }); }
-});
-router.put('/steps/:id', requirePermission(MODULE, 'edit'), (req, res) => {
-  const db = getDb();
-  const step = db.prepare('SELECT * FROM sysflow_step_master WHERE id=?').get(+req.params.id);
-  if (!step) return res.status(404).json({ error: 'Not found' });
-  const name = req.body?.name != null ? String(req.body.name).trim() : step.name;
-  const active = req.body?.active != null ? (req.body.active ? 1 : 0) : step.active;
-  const erpPath = req.body?.erp_path !== undefined
-    ? (String(req.body.erp_path).trim() || null) : step.erp_path;
-  if (!name) return res.status(400).json({ error: 'Step name required' });
-  if (erpPath && !erpPath.startsWith('/')) return res.status(400).json({ error: 'ERP link must be an in-app path starting with /' });
-  try {
-    db.prepare('UPDATE sysflow_step_master SET name=?, active=?, erp_path=? WHERE id=?').run(name, active, erpPath, step.id);
-    res.json({ ok: true });
-  } catch { res.status(409).json({ error: 'Step name already exists' }); }
-});
-
-// ── Process master ─────────────────────────────────────────────────────
-router.post('/processes', requirePermission(MODULE, 'edit'), (req, res) => {
-  const name = String(req.body?.name || '').trim().toUpperCase();
-  if (!name) return res.status(400).json({ error: 'Process name required' });
-  try {
-    const r = getDb().prepare('INSERT INTO sysflow_processes (name, sort_order, created_by) VALUES (?,?,?)')
-      .run(name, +req.body?.sort_order || 99, req.user.id);
-    res.status(201).json({ id: r.lastInsertRowid });
-  } catch { res.status(409).json({ error: 'Process already exists' }); }
-});
-
-// ── Flows: list (all filters + search) ─────────────────────────────────
-router.get('/flows', requirePermission(MODULE, 'view'), (req, res) => {
-  const db = getDb();
-  let rows = loadEnriched(db);
-  const q = req.query;
-  const like = (s, needle) => String(s || '').toLowerCase().includes(needle);
-  if (q.process) rows = rows.filter(r => r.process_id === +q.process);
-  if (q.system) rows = rows.filter(r => like(r.system_name, String(q.system).toLowerCase()));
-  if (q.step) rows = rows.filter(r => r.step_id === +q.step);
-  if (q.person) rows = rows.filter(r => r.responsible_id === +q.person);
-  if (q.developer) rows = rows.filter(r => r.developer_id === +q.developer);
-  if (q.status) rows = rows.filter(r => r.status === q.status);
-  if (q.priority) rows = rows.filter(r => r.priority === q.priority);
-  if (q.overdue === '1') rows = rows.filter(r => r.is_overdue);
-  if (q.blocked === '1') rows = rows.filter(r => r.status === 'blocked');
-  if (q.from) rows = rows.filter(r => r.target_date >= q.from);
-  if (q.to) rows = rows.filter(r => r.target_date <= q.to);
-  if (q.q) {
-    const n = String(q.q).toLowerCase();
-    rows = rows.filter(r =>
-      like(r.flow_no, n) || like(r.process_name, n) || like(r.system_name, n) ||
-      like(r.step_name, n) || like(r.responsible_name, n) || like(r.developer_name, n) ||
-      like(r.status, n) || like(r.remarks, n));
-  }
-  res.json(rows);
-});
-
-// ── Flow detail + activity + downstream list ───────────────────────────
-router.get('/flows/:id', requirePermission(MODULE, 'view'), (req, res) => {
-  const db = getDb();
-  const rows = loadEnriched(db);
-  const flow = rows.find(r => r.id === +req.params.id);
-  if (!flow) return res.status(404).json({ error: 'Not found' });
-  flow.next_steps = rows.filter(r => r.depends_on_id === flow.id)
-    .map(r => ({ id: r.id, flow_no: r.flow_no, step_name: r.step_name, status: r.status }));
-  flow.activity = db.prepare(`
-    SELECT a.*, u.name AS user_name FROM sysflow_activity a
-    LEFT JOIN users u ON u.id = a.user_id
-    WHERE a.flow_id=? ORDER BY a.id DESC`).all(flow.id);
-  // Link to the ACTUAL ERP module + its live pending count
-  const sm = db.prepare('SELECT erp_path FROM sysflow_step_master WHERE id=?').get(flow.step_id);
-  flow.erp_path = sm?.erp_path || null;
-  flow.erp_pending = erpPending(db, flow.step_name);
-  res.json(flow);
-});
-
-// ── Create flow ────────────────────────────────────────────────────────
-router.post('/flows', requirePermission(MODULE, 'create'), (req, res) => {
-  const db = getDb();
-  const b = req.body || {};
-  const need = ['process_id','system_name','step_id','seq','responsible_id','developer_id','start_date','target_date'];
-  for (const f of need) if (b[f] == null || b[f] === '') return res.status(400).json({ error: `${f.replace(/_/g,' ')} is required` });
-
-  const step = db.prepare('SELECT * FROM sysflow_step_master WHERE id=?').get(+b.step_id);
-  if (!step) return res.status(400).json({ error: 'Unknown system step' });
-  if (!step.active) return res.status(400).json({ error: 'This system step is deactivated — pick an active one' });
-  if (!db.prepare('SELECT 1 FROM sysflow_processes WHERE id=?').get(+b.process_id)) return res.status(400).json({ error: 'Unknown process' });
-  if (String(b.target_date) < String(b.start_date)) return res.status(400).json({ error: 'Target date cannot be before start date' });
-  for (const uf of ['responsible_id','developer_id'])
-    if (!db.prepare('SELECT 1 FROM users WHERE id=?').get(+b[uf])) return res.status(400).json({ error: `Unknown user for ${uf.replace('_id','')}` });
-  if (b.depends_on_id && !db.prepare('SELECT 1 FROM sysflow_flows WHERE id=?').get(+b.depends_on_id))
-    return res.status(400).json({ error: 'Dependency flow not found' });
-  if (b.priority && !['low','medium','high','critical'].includes(b.priority)) return res.status(400).json({ error: 'Bad priority' });
-
-  const flowNo = nextSequence(db, 'sysflow_flows', 'flow_no', 'ERP-FLOW-', { pad: 4 });
-  const r = db.prepare(`
-    INSERT INTO sysflow_flows (flow_no, process_id, system_name, step_id, seq, depends_on_id,
-      responsible_id, developer_id, start_date, target_date, priority, remarks, created_by, updated_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(flowNo, +b.process_id, String(b.system_name).trim(), +b.step_id, +b.seq || 1,
-      b.depends_on_id ? +b.depends_on_id : null, +b.responsible_id, +b.developer_id,
-      b.start_date, b.target_date, b.priority || 'medium', b.remarks || null, req.user.id, req.user.id);
-  logActivity(db, r.lastInsertRowid, req.user.id, 'created', null, `${flowNo} · ${step.name}`);
-  logActivity(db, r.lastInsertRowid, req.user.id, 'assigned', null,
-    db.prepare('SELECT name FROM users WHERE id=?').get(+b.responsible_id)?.name || '');
-  res.status(201).json({ id: r.lastInsertRowid, flow_no: flowNo });
-});
-
-// ── Edit flow (fields; status has its own endpoint) ────────────────────
-router.put('/flows/:id', requirePermission(MODULE, 'edit'), (req, res) => {
-  const db = getDb();
-  const flow = db.prepare('SELECT * FROM sysflow_flows WHERE id=?').get(+req.params.id);
-  if (!flow) return res.status(404).json({ error: 'Not found' });
-  const b = req.body || {};
-
-  if (b.step_id && +b.step_id !== flow.step_id) {
-    const step = db.prepare('SELECT * FROM sysflow_step_master WHERE id=?').get(+b.step_id);
-    if (!step) return res.status(400).json({ error: 'Unknown system step' });
-    // (deactivated steps stay valid on EXISTING records; only new picks blocked client-side)
-  }
-  const start = b.start_date || flow.start_date;
-  const target = b.target_date || flow.target_date;
-  if (String(target) < String(start)) return res.status(400).json({ error: 'Target date cannot be before start date' });
-
-  if (b.depends_on_id !== undefined && b.depends_on_id !== flow.depends_on_id) {
-    if (b.depends_on_id != null && b.depends_on_id !== '') {
-      const depId = +b.depends_on_id;
-      if (depId === flow.id) return res.status(400).json({ error: 'A step cannot depend on itself' });
-      if (!db.prepare('SELECT 1 FROM sysflow_flows WHERE id=?').get(depId)) return res.status(400).json({ error: 'Dependency flow not found' });
-      if (wouldCycle(db, flow.id, depId)) return res.status(400).json({ error: 'That dependency would create a circular chain' });
-    }
-  }
-
-  const fields = ['process_id','system_name','step_id','seq','depends_on_id','responsible_id',
-    'developer_id','start_date','target_date','priority','required_action','remarks','progress'];
-  const label = { responsible_id: 'reassigned', developer_id: 'developer_changed', target_date: 'due_date_changed',
-    priority: 'priority_changed', depends_on_id: 'dependency_changed' };
-  const updates = [];
-  const vals = [];
-  for (const f of fields) {
-    if (b[f] === undefined) continue;
-    let v = b[f] === '' ? null : b[f];
-    if (['process_id','step_id','seq','depends_on_id','responsible_id','developer_id','progress'].includes(f) && v != null) v = +v;
-    if (String(v) === String(flow[f])) continue;
-    updates.push(`${f}=?`); vals.push(v);
-    logActivity(db, flow.id, req.user.id, label[f] || `${f}_changed`, flow[f], v, b.reason);
-  }
-  if (!updates.length) return res.json({ ok: true, unchanged: true });
-  vals.push(req.user.id, flow.id);
-  db.prepare(`UPDATE sysflow_flows SET ${updates.join(',')}, updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(...vals);
-  res.json({ ok: true });
-});
-
-// ── Status update — My Tasks path: owner/developer may update their OWN
-//    step with only view permission; anyone else needs edit permission ──
-router.put('/flows/:id/status', requirePermission(MODULE, 'view'), (req, res) => {
-  const db = getDb();
-  const flow = db.prepare(`
-    SELECT f.*, dep.status AS dep_status FROM sysflow_flows f
-    LEFT JOIN sysflow_flows dep ON dep.id = f.depends_on_id
-    WHERE f.id=?`).get(+req.params.id);
-  if (!flow) return res.status(404).json({ error: 'Not found' });
-
-  const isOwn = req.user.id === flow.responsible_id || req.user.id === flow.developer_id;
-  const isAdmin = req.user.role === 'admin';
-  const canEdit = isAdmin || !!db.prepare(`
-    SELECT 1 FROM role_permissions rp JOIN user_roles ur ON rp.role_id=ur.role_id
-    WHERE ur.user_id=? AND rp.module=? AND rp.can_edit=1`).get(req.user.id, MODULE);
-  if (!isOwn && !canEdit) return res.status(403).json({ error: "Not your task — you can only update steps assigned to you" });
-
-  const b = req.body || {};
-  const status = b.status;
-  if (!STATUSES.includes(status)) return res.status(400).json({ error: 'Bad status' });
-  if (status === 'blocked' && !String(b.blocked_reason || '').trim())
-    return res.status(400).json({ error: 'Blocked status requires a blocked reason' });
-
-  // Dependency gate: cannot complete while the dependency is incomplete,
-  // unless an approver overrides (logged).
-  if (status === 'completed' && flow.depends_on_id && OPEN(flow.dep_status || 'not_started')) {
-    const canApprove = isAdmin || !!db.prepare(`
-      SELECT 1 FROM role_permissions rp JOIN user_roles ur ON rp.role_id=ur.role_id
-      WHERE ur.user_id=? AND rp.module=? AND rp.can_approve=1`).get(req.user.id, MODULE);
-    if (!b.override) return res.status(409).json({ error: 'Dependency step is not completed yet', need_override: true, can_override: canApprove });
-    if (!canApprove) return res.status(403).json({ error: 'Only an approver can override an incomplete dependency' });
-    logActivity(db, flow.id, req.user.id, 'dependency_overridden', flow.dep_status, 'completed-with-override', b.reason || b.remarks);
-  }
-
-  let completion = null;
-  if (status === 'completed') {
-    completion = b.actual_completion_date || istToday();
-    if (String(completion) < String(flow.start_date)) return res.status(400).json({ error: 'Completion date cannot be before start date' });
-  }
-  const blockedSince = status === 'blocked' ? (flow.status === 'blocked' ? flow.blocked_since : new Date().toISOString()) : null;
-
-  db.prepare(`UPDATE sysflow_flows SET status=?, blocked_reason=?, blocked_since=?,
-      actual_completion_date=?, progress=?, remarks=COALESCE(?, remarks),
-      required_action=COALESCE(?, required_action),
-      updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-    .run(status, status === 'blocked' ? String(b.blocked_reason).trim() : null, blockedSince,
-      completion, status === 'completed' ? 100 : (b.progress != null ? +b.progress : flow.progress),
-      b.remarks || null, b.required_action || null, req.user.id, flow.id);
-
-  const action = status === 'blocked' ? 'blocked'
-    : flow.status === 'blocked' && status !== 'blocked' ? 'unblocked'
-    : status === 'completed' ? 'completed'
-    : flow.status === 'completed' && status !== 'completed' ? 'reopened'
-    : 'status_changed';
-  logActivity(db, flow.id, req.user.id, action, flow.status, status, b.blocked_reason || b.reason);
-  res.json({ ok: true });
-});
-
-// ── ERP link — set by the step's DEVELOPER when the screen is built
-//    (mam 2026-09-02: "link will be developer do so that we can evaluate
-//    performance"). Own developer/responsible may set it with just view
-//    permission; logged to the activity trail with user + time so the
-//    evaluation shows who delivered which screen and when. ─────────────
-router.put('/flows/:id/erp-link', requirePermission(MODULE, 'view'), (req, res) => {
-  const db = getDb();
-  const flow = db.prepare(`
-    SELECT f.*, sm.erp_path AS cur_path, sm.id AS sm_id FROM sysflow_flows f
-    JOIN sysflow_step_master sm ON sm.id = f.step_id WHERE f.id=?`).get(+req.params.id);
-  if (!flow) return res.status(404).json({ error: 'Not found' });
-  const isOwn = req.user.id === flow.responsible_id || req.user.id === flow.developer_id;
-  const canEdit = req.user.role === 'admin' || !!db.prepare(`
-    SELECT 1 FROM role_permissions rp JOIN user_roles ur ON rp.role_id=ur.role_id
-    WHERE ur.user_id=? AND rp.module=? AND rp.can_edit=1`).get(req.user.id, MODULE);
-  if (!isOwn && !canEdit) return res.status(403).json({ error: 'Only this step\'s developer/responsible (or an editor) can set its ERP link' });
-  const erpPath = String(req.body?.erp_path || '').trim();
-  if (!erpPath.startsWith('/')) return res.status(400).json({ error: 'ERP link must be an in-app path starting with / (e.g. /leads)' });
-  db.prepare('UPDATE sysflow_step_master SET erp_path=? WHERE id=?').run(erpPath, flow.sm_id);
-  logActivity(db, flow.id, req.user.id, 'erp_link_set', flow.cur_path, erpPath);
-  res.json({ ok: true });
-});
-
-// ── Dashboard: KPIs + per-process chains + WHY IS THE FLOW STOPPED ────
-router.get('/dashboard', requirePermission(MODULE, 'view'), (req, res) => {
-  const db = getDb();
-  const rows = loadEnriched(db);
-  const today = istToday();
-  const week = new Date(new Date(today) .getTime() + 7 * 86400000).toISOString().slice(0, 10);
-  const active = rows.filter(r => r.status !== 'cancelled');
-  const completed = active.filter(r => r.status === 'completed');
-  const overdue = active.filter(r => r.is_overdue);
-  const kpis = {
-    total: active.length,
-    completed: completed.length,
-    in_progress: active.filter(r => ['in_progress','testing'].includes(r.status)).length,
-    blocked: active.filter(r => r.status === 'blocked').length,
-    overdue: overdue.length,
-    due_this_week: active.filter(r => OPEN(r.status) && r.target_date >= today && r.target_date <= week).length,
-    completion_pct: active.length ? Math.round(completed.length / active.length * 1000) / 10 : 0,
-    avg_delay: overdue.length ? Math.round(overdue.reduce((a, r) => a + r.delay_days, 0) / overdue.length * 10) / 10 : 0,
-  };
-
-  // Per-process chain + first blocking point ("why is the flow stopped")
-  const processes = [];
-  const byProc = new Map();
-  for (const r of rows.filter(r => r.status !== 'cancelled')) {
-    if (!byProc.has(r.process_id)) { byProc.set(r.process_id, []); }
-    byProc.get(r.process_id).push(r);
-  }
-  for (const [pid, list] of byProc) {
-    // order by dependency chain where possible, else seq
-    const stopped = list.filter(r => r.is_primary_bottleneck)
-      .sort((a, b) => b.bottleneck_score - a.bottleneck_score)[0] || null;
-    processes.push({
-      process_id: pid,
-      process_name: list[0].process_name,
-      steps: list.map(r => ({
-        id: r.id, flow_no: r.flow_no, step_name: r.step_name, system_name: r.system_name,
-        owner: r.responsible_name, status: r.status, is_overdue: r.is_overdue,
-        delay_days: r.delay_days, derived_waiting: r.derived_waiting, severity: r.severity,
-        is_primary_bottleneck: r.is_primary_bottleneck, seq: r.seq,
-      })),
-      stopped_at: stopped && {
-        id: stopped.id, flow_no: stopped.flow_no, step_name: stopped.step_name,
-        owner: stopped.responsible_name, reason: stopped.blocked_reason ||
-          (stopped.is_overdue ? `Overdue by ${stopped.delay_days} day(s)` : ''),
-        downstream_impact: stopped.downstream_impact,
-        required_action: stopped.required_action ||
-          (stopped.status === 'blocked' ? 'Resolve the blocker' : 'Complete the overdue step'),
-        delay_days: stopped.delay_days, blocked_days: stopped.blocked_days, severity: stopped.severity,
-      },
-    });
-  }
-  res.json({ kpis, processes });
-});
-
-// ── Bottleneck Center (ranked) ─────────────────────────────────────────
-router.get('/bottlenecks', requirePermission(MODULE, 'view'), (req, res) => {
-  const rows = loadEnriched(getDb())
-    .filter(r => OPEN(r.status) && (r.status === 'blocked' || r.is_overdue || (r.derived_waiting && r.stuck_ancestor)));
-  rows.sort((a, b) =>
-    (b.is_primary_bottleneck - a.is_primary_bottleneck) ||
-    (b.severity_rank - a.severity_rank) ||
-    (b.downstream_impact - a.downstream_impact) ||
-    (b.delay_days - a.delay_days) ||
-    (b.blocked_days - a.blocked_days));
-  res.json(rows.map((r, i) => ({ rank: i + 1, ...r })));
-});
-
-// ── Person performance ─────────────────────────────────────────────────
-router.get('/performance', requirePermission(MODULE, 'view'), (req, res) => {
-  const rows = loadEnriched(getDb()).filter(r => r.status !== 'cancelled');
-  const by = new Map();
-  for (const r of rows) {
-    if (!by.has(r.responsible_id)) by.set(r.responsible_id, { person_id: r.responsible_id, person: r.responsible_name,
-      total: 0, completed: 0, in_progress: 0, pending: 0, blocked: 0, overdue: 0, delay_sum: 0, delay_n: 0, bottlenecks: 0 });
-    const p = by.get(r.responsible_id);
-    p.total++;
-    if (r.status === 'completed') p.completed++;
-    else if (['in_progress','testing'].includes(r.status)) p.in_progress++;
-    else p.pending++;
-    if (r.status === 'blocked') p.blocked++;
-    if (r.is_overdue) { p.overdue++; p.delay_sum += r.delay_days; p.delay_n++; }
-    if (r.is_primary_bottleneck) p.bottlenecks++;
-  }
-  const out = [...by.values()].map(p => ({
-    ...p,
-    completion_pct: p.total ? Math.round(p.completed / p.total * 100) : 0,
-    avg_delay: p.delay_n ? Math.round(p.delay_sum / p.delay_n * 10) / 10 : 0,
-  })).sort((a, b) => b.bottlenecks - a.bottlenecks || b.overdue - a.overdue || a.person.localeCompare(b.person));
-  res.json(out);
-});
-
-// ── Escalations (computed from configurable thresholds) ────────────────
-router.get('/escalations', requirePermission(MODULE, 'view'), (req, res) => {
-  const rows = loadEnriched(getDb())
-    .filter(r => r.escalation_level > 0)
-    .sort((a, b) => b.escalation_level - a.escalation_level || b.bottleneck_score - a.bottleneck_score);
-  const LEVELS = { 1: 'Level 1 — Owner', 2: 'Level 2 — Department/System Head', 3: 'Level 3 — Management' };
-  res.json(rows.map(r => ({ ...r, escalation_label: LEVELS[r.escalation_level] })));
-});
-
-// ── Weekly management report ───────────────────────────────────────────
-router.get('/weekly-report', requirePermission(MODULE, 'view'), (req, res) => {
-  const rows = loadEnriched(getDb()).filter(r => r.status !== 'cancelled');
-  const today = istToday();
-  const weekAgo = new Date(new Date(today).getTime() - 7 * 86400000).toISOString().slice(0, 10);
-  const completed = rows.filter(r => r.status === 'completed');
-  const overdue = rows.filter(r => r.is_overdue);
-  const bySystem = new Map();
-  for (const r of overdue) {
-    bySystem.set(r.system_name, (bySystem.get(r.system_name) || 0) + r.delay_days);
-  }
-  res.json({
-    total: rows.length,
-    completed_this_week: completed.filter(r => (r.actual_completion_date || '') >= weekAgo).length,
-    new_this_week: rows.filter(r => (r.created_at || '').slice(0, 10) >= weekAgo).length,
-    pending: rows.filter(r => OPEN(r.status)).length,
-    blocked: rows.filter(r => r.status === 'blocked').length,
-    overdue: overdue.length,
-    completion_pct: rows.length ? Math.round(completed.length / rows.length * 1000) / 10 : 0,
-    avg_delay: overdue.length ? Math.round(overdue.reduce((a, r) => a + r.delay_days, 0) / overdue.length * 10) / 10 : 0,
-    top_bottlenecks: rows.filter(r => r.is_primary_bottleneck)
-      .sort((a, b) => b.bottleneck_score - a.bottleneck_score).slice(0, 5),
-    top_delayed_persons: (() => {
-      const m = new Map();
-      for (const r of overdue) m.set(r.responsible_name, (m.get(r.responsible_name) || 0) + r.delay_days);
-      return [...m.entries()].map(([person, delay]) => ({ person, delay })).sort((a, b) => b.delay - a.delay).slice(0, 5);
-    })(),
-    systems_highest_delay: [...bySystem.entries()].map(([system, delay]) => ({ system, delay }))
-      .sort((a, b) => b.delay - a.delay).slice(0, 5),
-    systems_completed_this_week: [...new Set(completed.filter(r => (r.actual_completion_date || '') >= weekAgo).map(r => r.system_name))],
-  });
+    SELECT a.*, u.name AS user_name
+      FROM sysflow_system_activity a
+      LEFT JOIN users u ON u.id = a.user_id
+     WHERE a.system_id = ?
+     ORDER BY a.created_at DESC, a.id DESC
+     LIMIT 200
+  `).all(req.params.id));
 });
 
 module.exports = router;
