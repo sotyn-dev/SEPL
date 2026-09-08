@@ -386,6 +386,9 @@ function initializeDatabase() {
       state TEXT,
       billing_address TEXT,
       shipping_address TEXT,
+      site_location_url TEXT,
+      site_latitude REAL,
+      site_longitude REAL,
       guarantee_required TEXT DEFAULT 'No',
       guarantee_percentage TEXT,
       sale_amount_without_gst REAL DEFAULT 0,
@@ -1259,6 +1262,9 @@ function initializeDatabase() {
       name TEXT NOT NULL,
       address TEXT,
       client_name TEXT,
+      location_url TEXT,
+      latitude REAL,
+      longitude REAL,
       po_id INTEGER REFERENCES purchase_orders(id),
       business_book_id INTEGER REFERENCES business_book(id),
       site_engineer_id INTEGER REFERENCES users(id),
@@ -2727,6 +2733,28 @@ function initializeDatabase() {
       submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(checklist_id, user_id, completion_date)
     );
+
+    -- Project Schedule Tasks (Google Gantter / WBS interactive schedule)
+    CREATE TABLE IF NOT EXISTS project_schedule_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id) ON DELETE CASCADE,
+      wbs_code TEXT,
+      task_name TEXT NOT NULL,
+      parent_id INTEGER,
+      outline_level INTEGER DEFAULT 1,
+      start_date DATE,
+      end_date DATE,
+      duration_days INTEGER DEFAULT 1,
+      progress_pct INTEGER DEFAULT 0,
+      dependencies TEXT,
+      is_milestone INTEGER DEFAULT 0,
+      assigned_to TEXT,
+      status TEXT DEFAULT 'planned',
+      sort_order INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_proj_tasks_project ON project_schedule_tasks(project_id, sort_order);
   `);
 
   // Feature schemas extracted into their own files for readability. Invoked
@@ -3781,6 +3809,13 @@ function initializeDatabase() {
     ['proj_work_orders', 'routed_by INTEGER'],
     ['proj_work_orders', 'routed_by_name TEXT'],
     ['proj_work_orders', 'routed_at DATETIME'],
+    // Business Book & Sites: Project / site map location & GPS directions
+    ['business_book', 'site_location_url TEXT'],
+    ['business_book', 'site_latitude REAL'],
+    ['business_book', 'site_longitude REAL'],
+    ['sites', 'location_url TEXT'],
+    ['sites', 'latitude REAL'],
+    ['sites', 'longitude REAL'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index

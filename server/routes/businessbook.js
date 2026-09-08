@@ -64,6 +64,7 @@ try {
 const ALL_FIELDS = [
   'lead_type', 'client_name', 'company_name', 'project_name', 'client_contact', 'client_email', 'email_address',
   'source_of_enquiry', 'district', 'state', 'state_code', 'gstin', 'billing_address', 'shipping_address',
+  'site_location_url', 'site_latitude', 'site_longitude',
   'guarantee_required', 'guarantee_percentage', 'sale_amount_without_gst', 'po_amount',
   'management_discount_pct', 'management_discount_amount', 'net_sale_amount',
   'order_type', 'penalty_clause', 'penalty_clause_date',
@@ -175,12 +176,12 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
   b.po_amount = fin.poAmount;
   b.management_discount_pct = fin.discountPct;
   b.management_discount_amount = fin.discountAmount;
-  b.net_sale_amount = fin.netSale;
   const balanceAmount = (b.po_amount || 0) - (b.advance_received || 0);
 
   const r = db.prepare(`INSERT INTO business_book (
     lead_no, lead_type, client_name, company_name, project_name, client_contact, client_email, email_address,
     source_of_enquiry, district, state, state_code, gstin, billing_address, shipping_address,
+    site_location_url, site_latitude, site_longitude,
     guarantee_required, guarantee_percentage, sale_amount_without_gst, po_amount,
     management_discount_pct, management_discount_amount, net_sale_amount,
     order_type, penalty_clause, penalty_clause_date,
@@ -202,9 +203,10 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     tpa_labour_link, tpa_labour_signed_link, final_drawing_link,
     working_sheet_link,
     remarks, created_by
-  ) VALUES (${Array(75).fill('?').join(',')})`).run(
+  ) VALUES (${Array(78).fill('?').join(',')})`).run(
     leadNo, b.lead_type || 'Private', b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
     b.source_of_enquiry, b.district, b.state, b.state_code || null, b.gstin || null, b.billing_address, b.shipping_address,
+    b.site_location_url || null, b.site_latitude ? Number(b.site_latitude) : null, b.site_longitude ? Number(b.site_longitude) : null,
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
     b.management_discount_pct || 0, b.management_discount_amount || 0, b.net_sale_amount || 0,
     b.order_type || 'Supply', b.penalty_clause || 'No', b.penalty_clause_date || null,
@@ -238,10 +240,22 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
   // Auto-create DPR Site
   const siteName = b.company_name || b.project_name || `${b.client_name} - ${b.category || 'Project'}`;
   const siteAddress = b.shipping_address || b.billing_address || `${b.district || ''}, ${b.state || ''}`;
+  const siteLat = b.site_latitude ? Number(b.site_latitude) : null;
+  const siteLng = b.site_longitude ? Number(b.site_longitude) : null;
   const siteResult = db.prepare(
-    'INSERT INTO sites (name, address, client_name, business_book_id, supervisor) VALUES (?,?,?,?,?)'
-  ).run(siteName, siteAddress, b.client_name || b.company_name, bbId, b.employee_assigned || b.management_person_name);
+    'INSERT INTO sites (name, address, client_name, business_book_id, supervisor, location_url, latitude, longitude) VALUES (?,?,?,?,?,?,?,?)'
+  ).run(siteName, siteAddress, b.client_name || b.company_name, bbId, b.employee_assigned || b.management_person_name, b.site_location_url || null, siteLat, siteLng);
   const siteId = siteResult.lastInsertRowid;
+
+  // Auto-seed geofence if coordinates are provided
+  if (siteLat && siteLng) {
+    try {
+      db.prepare('INSERT INTO geofence_settings (site_id, site_name, latitude, longitude, radius_meters) VALUES (?,?,?,?,?)')
+        .run(siteId, siteName, siteLat, siteLng, 200);
+    } catch (e) {
+      console.warn('[business_book] geofence auto-seed skipped:', e.message);
+    }
+  }
 
   // Auto-create Cash Flow entry for advance
   if (b.advance_received && b.advance_received > 0) {
@@ -298,6 +312,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
   getDb().prepare(`UPDATE business_book SET
     lead_type=?, client_name=?, company_name=?, project_name=?, client_contact=?, client_email=?, email_address=?,
     source_of_enquiry=?, district=?, state=?, state_code=?, gstin=?, billing_address=?, shipping_address=?,
+    site_location_url=?, site_latitude=?, site_longitude=?,
     guarantee_required=?, guarantee_percentage=?, sale_amount_without_gst=?, po_amount=?,
     management_discount_pct=?, management_discount_amount=?, net_sale_amount=?,
     order_type=?, penalty_clause=?, penalty_clause_date=?,
@@ -321,6 +336,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     remarks=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(
     b.lead_type, b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
     b.source_of_enquiry, b.district, b.state, b.state_code || null, b.gstin || null, b.billing_address, b.shipping_address,
+    b.site_location_url || null, b.site_latitude ? Number(b.site_latitude) : null, b.site_longitude ? Number(b.site_longitude) : null,
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
     b.management_discount_pct || 0, b.management_discount_amount || 0, b.net_sale_amount || 0,
     b.order_type, b.penalty_clause, b.penalty_clause_date || null,
@@ -343,6 +359,29 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     b.working_sheet_link || null,
     b.remarks, b.status, req.params.id
   );
+
+  // Update linked site & geofence
+  const siteLat = b.site_latitude ? Number(b.site_latitude) : null;
+  const siteLng = b.site_longitude ? Number(b.site_longitude) : null;
+  try {
+    getDb().prepare('UPDATE sites SET location_url=?, latitude=?, longitude=? WHERE business_book_id=?')
+      .run(b.site_location_url || null, siteLat, siteLng, req.params.id);
+    if (siteLat && siteLng) {
+      const site = getDb().prepare('SELECT id, name FROM sites WHERE business_book_id=?').get(req.params.id);
+      if (site) {
+        const gf = getDb().prepare('SELECT id FROM geofence_settings WHERE site_id=?').get(site.id);
+        if (gf) {
+          getDb().prepare('UPDATE geofence_settings SET latitude=?, longitude=? WHERE id=?').run(siteLat, siteLng, gf.id);
+        } else {
+          getDb().prepare('INSERT INTO geofence_settings (site_id, site_name, latitude, longitude, radius_meters) VALUES (?,?,?,?,?)')
+            .run(site.id, site.name, siteLat, siteLng, 200);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[business_book] sites/geofence update skipped:', e.message);
+  }
+
   res.json({ message: 'Updated' });
 });
 

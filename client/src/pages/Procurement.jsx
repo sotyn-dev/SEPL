@@ -12,7 +12,7 @@ import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw, FiLoader } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
 
@@ -292,23 +292,31 @@ export default function Procurement() {
   // ⚙ Workflow Settings popup — approval gate config (who may act + on/off).
   const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
   const [indents, setIndents] = useState([]);
+  const [indTotal, setIndTotal] = useState(0);
+  const [indLoading, setIndLoading] = useState(false);
+  const [indKpis, setIndKpis] = useState(null);
+  const [indApprovalMeta, setIndApprovalMeta] = useState(null);
+  const [indL2Enabled, setIndL2Enabled] = useState(false);
+  const [indentLookup, setIndentLookup] = useState([]);
   // Row-INVARIANT approval context. The L1/L2 approvers and the L2 switch are a
   // whole-module setting, so every indent row carries the SAME values — they were
   // being recomputed per row, in two separate render paths (desktop table and
   // mobile cards), which read as if approvers could differ per indent. Derived
-  // once here from the first row instead.
+  // once here from server approval_meta or the first row instead.
   // Row-DEPENDENT checks (isCreator, blockSelfL2, isAssignedCrm) stay in the maps.
   const approvalCtx = useMemo(() => {
     const r = indents[0] || {};
     // Prefer the ids LIST (a gate may name several approvers); fall back to the
     // pre-2026-07-23 single id so a stale cached bundle still gates correctly.
     const idsFor = (gate) => {
+      const metaList = indApprovalMeta?.[`${gate}_approver_ids`];
+      if (Array.isArray(metaList) && metaList.length) return metaList;
       const list = r[`${gate}_approver_ids`];
       if (Array.isArray(list) && list.length) return list;
       const single = r[`${gate}_approver_id`];
       return single != null ? [single] : [];
     };
-    const l2On = !!r.l2_enabled;
+    const l2On = indL2Enabled || !!r.l2_enabled;
     const canActL1 = isAdmin() || idsFor('l1').includes(user?.id);
     const canActL2 = isAdmin() || idsFor('l2').includes(user?.id);
     return {
@@ -323,15 +331,15 @@ export default function Procurement() {
       // CRM approvers named in ⚙ Workflow Settings — an ADDITIONAL allow on top
       // of the existing rule, not a replacement. Pure membership; the rest of the
       // CRM chain stays in the maps.
-      crmNamed: (r.crm_approver_ids || []).includes(user?.id),
+      crmNamed: (indApprovalMeta?.crm_approver_ids || r.crm_approver_ids || []).includes(user?.id),
     };
-  }, [indents, user?.id]);
+  }, [indents, indApprovalMeta, indL2Enabled, user?.id]);
   // L2 approval on/off switch (mam 2026-07-21). The toggle button itself lives
   // in the ⚙ Responsible tab (next to the L1/L2 approver names). Here we just
-  // DERIVE the current state from the loaded indents (every row carries
+  // DERIVE the current state from the loaded metadata or indents (every row carries
   // i.l2_enabled) — so the tiles, filter and buttons reflect it, and it auto-
   // refreshes whenever the indent list reloads (e.g. on tab switch).
-  const l2Enabled = indents.some(i => !!i.l2_enabled);
+  const l2Enabled = indL2Enabled || indents.some(i => !!i.l2_enabled);
   const [vendorPos, setVendorPos] = useState([]);
   // Indent raising window (mam 2026-06-16): { isSaturday, emergencyActive,
   // allowed }. Saturday-only raising with an admin one-day emergency override.
@@ -644,7 +652,16 @@ export default function Procurement() {
   const [indFilterFrom, setIndFilterFrom]         = useState('');
   const [indFilterTo, setIndFilterTo]             = useState('');
   const [indSearch, setIndSearch]                 = useState('');
+  const [indSearchInput, setIndSearchInput]       = useState('');
   const [indPage, setIndPage]                     = useState(1);
+
+  // Debounce indSearchInput -> indSearch so search requests don't fire on every keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIndSearch(indSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [indSearchInput]);
   // Vendor Rates
   const [ratesSearch, setRatesSearch]           = useState('');
   const [ratesPage, setRatesPage]               = useState(1);
@@ -657,18 +674,41 @@ export default function Procurement() {
     _setVpoSubTab(st);
     setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
   };
-  const [vpoPendingSearch, setVpoPendingSearch] = useState('');
+  const [vpoPendingSearch, setVpoPendingSearch]           = useState('');
+  const [vpoPendingSearchInput, setVpoPendingSearchInput] = useState('');
+  const [vpoPendingTotal, setVpoPendingTotal]             = useState(0);
+  const [vpoPendingReadyCount, setVpoPendingReadyCount]   = useState(0);
+  const [vpoPendingLoading, setVpoPendingLoading]         = useState(false);
   // Default to 'finalized' — mam (2026-05-25): "I WANT SHOW HERE AFTER
   // RATE FINIALISE".  Only finalized rates are ready for a Vendor PO;
   // pending/quoted items still need purchase team to negotiate.  Mam can
   // flip the dropdown to "All" to see everything if she wants.
-  const [vpoPendingStatus, setVpoPendingStatus] = useState('finalized');
-  const [vpoPendingPage, setVpoPendingPage]     = useState(1);
-  const [vpoListSearch, setVpoListSearch]       = useState('');
-  const [vpoListStatus, setVpoListStatus]       = useState('all');
-  const [vpoListFrom, setVpoListFrom]           = useState('');
-  const [vpoListTo, setVpoListTo]               = useState('');
-  const [vpoListPage, setVpoListPage]           = useState(1);
+  const [vpoPendingStatus, setVpoPendingStatus]           = useState('finalized');
+  const [vpoPendingPage, setVpoPendingPage]               = useState(1);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setVpoPendingSearch(vpoPendingSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [vpoPendingSearchInput]);
+
+  const [vpoListSearch, setVpoListSearch]                 = useState('');
+  const [vpoListSearchInput, setVpoListSearchInput]       = useState('');
+  const [vpoListTotal, setVpoListTotal]                   = useState(0);
+  const [vpoListLoading, setVpoListLoading]               = useState(false);
+  const [vpoListKpis, setVpoListKpis]                     = useState(null);
+  const [vpoListStatus, setVpoListStatus]                 = useState('all');
+  const [vpoListFrom, setVpoListFrom]                     = useState('');
+  const [vpoListTo, setVpoListTo]                         = useState('');
+  const [vpoListPage, setVpoListPage]                     = useState(1);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setVpoListSearch(vpoListSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [vpoListSearchInput]);
   // Purchase Bills sub-tabs (followup | bills) — URL-synced
   const [billsSubTab, _setBillsSubTab] = useState(
     urlTab === 'bills' && ['followup','bills'].includes(urlSubTab) ? urlSubTab : 'followup'
@@ -677,19 +717,44 @@ export default function Procurement() {
     _setBillsSubTab(st);
     setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
   };
-  const [billsFuSearch, setBillsFuSearch]       = useState('');
-  const [billsFuExpFrom, setBillsFuExpFrom]     = useState('');
-  const [billsFuExpTo, setBillsFuExpTo]         = useState('');
-  const [billsFuPage, setBillsFuPage]           = useState(1);
+  const [billsFuSearch, setBillsFuSearch]             = useState('');
+  const [billsFuSearchInput, setBillsFuSearchInput]   = useState('');
+  const [billsFuExpFrom, setBillsFuExpFrom]           = useState('');
+  const [billsFuExpTo, setBillsFuExpTo]               = useState('');
+  const [billsFuPage, setBillsFuPage]                 = useState(1);
+  const [billsFuTotal, setBillsFuTotal]               = useState(0);
+  const [billsFuBlockedCount, setBillsFuBlockedCount] = useState(0);
+  const [billsFuLoading, setBillsFuLoading]           = useState(false);
+  const [billsFuRows, setBillsFuRows]                 = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setBillsFuSearch(billsFuSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [billsFuSearchInput]);
+
   // ─── Payment tab state (mam 2026-05-27) ───
   // Top-level Payment tab between Vendor PO and Purchase Bills.
   // 3 pill segments: all / urgent (pending advance/old dues) / cleared (done).
-  const [paymentPill, setPaymentPill]           = useState('urgent');
-  const [paymentSearch, setPaymentSearch]       = useState('');
-  const [billsListSearch, setBillsListSearch]   = useState('');
-  const [billsListFrom, setBillsListFrom]       = useState('');
-  const [billsListTo, setBillsListTo]           = useState('');
-  const [billsListPage, setBillsListPage]       = useState(1);
+  const [paymentPill, setPaymentPill]                 = useState('urgent');
+  const [paymentSearch, setPaymentSearch]             = useState('');
+
+  const [billsListSearch, setBillsListSearch]         = useState('');
+  const [billsListSearchInput, setBillsListSearchInput] = useState('');
+  const [billsListFrom, setBillsListFrom]             = useState('');
+  const [billsListTo, setBillsListTo]                 = useState('');
+  const [billsListPage, setBillsListPage]             = useState(1);
+  const [billsListTotal, setBillsListTotal]           = useState(0);
+  const [billsListLoading, setBillsListLoading]       = useState(false);
+  const [billsListRows, setBillsListRows]             = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setBillsListSearch(billsListSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [billsListSearchInput]);
   // Dispatch sub-tabs (ready | list) — URL-synced
   const [dispatchSubTab, _setDispatchSubTab] = useState(
     urlTab === 'delivery' && ['ready','list'].includes(urlSubTab) ? urlSubTab : 'ready'
@@ -698,13 +763,37 @@ export default function Procurement() {
     _setDispatchSubTab(st);
     setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
   };
-  const [dispReadySearch, setDispReadySearch]   = useState('');
-  const [dispReadyPage, setDispReadyPage]       = useState(1);
-  const [dispListSearch, setDispListSearch]     = useState('');
-  const [dispListStatus, setDispListStatus]     = useState('all');
-  const [dispListFrom, setDispListFrom]         = useState('');
-  const [dispListTo, setDispListTo]             = useState('');
-  const [dispListPage, setDispListPage]         = useState(1);
+  const [dispReadySearch, setDispReadySearch]           = useState('');
+  const [dispReadySearchInput, setDispReadySearchInput] = useState('');
+  const [dispReadyPage, setDispReadyPage]               = useState(1);
+  const [dispReadyTotal, setDispReadyTotal]             = useState(0);
+  const [dispReadyLoading, setDispReadyLoading]         = useState(false);
+  const [dispReadyRows, setDispReadyRows]               = useState([]);
+  const [dispReadySbPending, setDispReadySbPending]     = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDispReadySearch(dispReadySearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [dispReadySearchInput]);
+
+  const [dispListSearch, setDispListSearch]             = useState('');
+  const [dispListSearchInput, setDispListSearchInput]   = useState('');
+  const [dispListStatus, setDispListStatus]             = useState('all');
+  const [dispListFrom, setDispListFrom]                 = useState('');
+  const [dispListTo, setDispListTo]                     = useState('');
+  const [dispListPage, setDispListPage]                 = useState(1);
+  const [dispListTotal, setDispListTotal]               = useState(0);
+  const [dispListLoading, setDispListLoading]           = useState(false);
+  const [dispListRows, setDispListRows]                 = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDispListSearch(dispListSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [dispListSearchInput]);
   const [expandedIndents, setExpandedIndents] = useState(() => new Set());
   const toggleIndentRow = (id) => setExpandedIndents(prev => {
     const next = new Set(prev);
@@ -742,6 +831,233 @@ export default function Procurement() {
     api.get('/hr/employees').then(r => setEmployees((r.data || []).filter(e => !e.status || e.status === 'active'))).catch(() => setEmployees([]));
     // Warehouses · 403 for non-inventory users → silently empty list.
     api.get('/inventory/warehouses').then(r => setWarehouses(r.data || [])).catch(() => setWarehouses([]));
+    api.get('/procurement/indents/lookup').then(r => setIndentLookup(r.data || [])).catch(() => setIndentLookup([]));
+  };
+
+  // Central paginated loader for indents
+  const fetchIndentsPage = async () => {
+    setIndLoading(true);
+    try {
+      const res = await api.get('/procurement/indents', {
+        params: {
+          page: indPage,
+          limit: indPerPage,
+          status: indFilterStatus !== 'all' ? indFilterStatus : undefined,
+          category: indFilterCategory !== 'all' ? indFilterCategory : undefined,
+          from: indFilterFrom || undefined,
+          to: indFilterTo || undefined,
+          q: indSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setIndents(res.data.rows);
+        setIndTotal(res.data.total || 0);
+        if (res.data.kpis) setIndKpis(res.data.kpis);
+        if (res.data.approval_meta) setIndApprovalMeta(res.data.approval_meta);
+        if (res.data.l2_enabled !== undefined) setIndL2Enabled(!!res.data.l2_enabled);
+      } else if (Array.isArray(res.data)) {
+        setIndents(res.data);
+        setIndTotal(res.data.length);
+      }
+    } catch (err) {
+      console.error('[fetchIndentsPage] failed:', err);
+      setIndents([]);
+      setIndTotal(0);
+    } finally {
+      setIndLoading(false);
+    }
+  };
+
+  // Central paginated loader for Vendor PO list
+  const fetchVpoListPage = async () => {
+    setVpoListLoading(true);
+    try {
+      const res = await api.get('/procurement/vendor-po', {
+        params: {
+          page: vpoListPage,
+          limit: vpoListPerPage,
+          status: vpoListStatus !== 'all' ? vpoListStatus : undefined,
+          from: vpoListFrom || undefined,
+          to: vpoListTo || undefined,
+          q: vpoListSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setVendorPos(res.data.rows);
+        setVpoListTotal(res.data.total || 0);
+        if (res.data.kpis) setVpoListKpis(res.data.kpis);
+      } else if (Array.isArray(res.data)) {
+        setVendorPos(res.data);
+        setVpoListTotal(res.data.length);
+      }
+    } catch (err) {
+      console.error('[fetchVpoListPage] failed:', err);
+      setVendorPos([]);
+      setVpoListTotal(0);
+    } finally {
+      setVpoListLoading(false);
+    }
+  };
+
+  // Central paginated loader for Pending PO Items
+  const fetchVpoPendingPage = async () => {
+    setVpoPendingLoading(true);
+    try {
+      const res = await api.get('/procurement/pending-po-items', {
+        params: {
+          page: vpoPendingPage,
+          limit: vpoPendingPerPage,
+          status: vpoPendingStatus !== 'all' ? vpoPendingStatus : undefined,
+          q: vpoPendingSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setPendingPoItems(res.data.rows);
+        setVpoPendingTotal(res.data.total || 0);
+        setVpoPendingReadyCount(res.data.ready_count || 0);
+      } else if (Array.isArray(res.data)) {
+        setPendingPoItems(res.data);
+        setVpoPendingTotal(res.data.length);
+        setVpoPendingReadyCount(res.data.filter(p => (p.rate_status || 'pending') === 'finalized').length);
+      }
+    } catch (err) {
+      console.error('[fetchVpoPendingPage] failed:', err);
+      setPendingPoItems([]);
+      setVpoPendingTotal(0);
+    } finally {
+      setVpoPendingLoading(false);
+    }
+  };
+
+  // Central paginated loader for POs awaiting Purchase Bill (Follow-up)
+  const fetchBillsFuPage = async () => {
+    setBillsFuLoading(true);
+    try {
+      const res = await api.get('/procurement/purchase-bills/followup', {
+        params: {
+          page: billsFuPage,
+          limit: billsFuPerPage,
+          from: billsFuExpFrom || undefined,
+          to: billsFuExpTo || undefined,
+          q: billsFuSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setBillsFuRows(res.data.rows);
+        setBillsFuTotal(res.data.total || 0);
+        setBillsFuBlockedCount(res.data.blocked_count || 0);
+      } else if (Array.isArray(res.data)) {
+        setBillsFuRows(res.data);
+        setBillsFuTotal(res.data.length);
+        setBillsFuBlockedCount(0);
+      }
+    } catch (err) {
+      console.error('[fetchBillsFuPage] failed:', err);
+      setBillsFuRows([]);
+      setBillsFuTotal(0);
+      setBillsFuBlockedCount(0);
+    } finally {
+      setBillsFuLoading(false);
+    }
+  };
+
+  // Central paginated loader for Purchase Bills
+  const fetchBillsListPage = async () => {
+    setBillsListLoading(true);
+    try {
+      const res = await api.get('/procurement/purchase-bills', {
+        params: {
+          page: billsListPage,
+          limit: billsListPerPage,
+          from: billsListFrom || undefined,
+          to: billsListTo || undefined,
+          q: billsListSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setPurchaseBills(res.data.rows);
+        setBillsListRows(res.data.rows);
+        setBillsListTotal(res.data.total || 0);
+      } else if (Array.isArray(res.data)) {
+        setPurchaseBills(res.data);
+        setBillsListRows(res.data);
+        setBillsListTotal(res.data.length);
+      }
+    } catch (err) {
+      console.error('[fetchBillsListPage] failed:', err);
+      setPurchaseBills([]);
+      setBillsListRows([]);
+      setBillsListTotal(0);
+    } finally {
+      setBillsListLoading(false);
+    }
+  };
+
+  // Per-tab loaders.  Each returns a Promise that resolves when all of
+  // that tab's required data is in state.  Tabs declare their full
+  // dependency set so an indirect tab switch (e.g. Bills uses vendorPos
+  // too) still works.
+  // Central paginated loader for Ready to Dispatch POs
+  const fetchDispReadyPage = async () => {
+    setDispReadyLoading(true);
+    try {
+      const res = await api.get('/procurement/delivery-notes/ready', {
+        params: {
+          page: dispReadyPage,
+          limit: dispReadyPerPage,
+          q: dispReadySearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setDispReadyRows(res.data.rows);
+        setDispReadyTotal(res.data.total || 0);
+        setDispReadySbPending(res.data.from_store || []);
+      } else if (Array.isArray(res.data)) {
+        setDispReadyRows(res.data);
+        setDispReadyTotal(res.data.length);
+        setDispReadySbPending([]);
+      }
+    } catch (err) {
+      console.error('[fetchDispReadyPage] failed:', err);
+      setDispReadyRows([]);
+      setDispReadyTotal(0);
+      setDispReadySbPending([]);
+    } finally {
+      setDispReadyLoading(false);
+    }
+  };
+
+  // Central paginated loader for Dispatch & Receiving Notes
+  const fetchDispListPage = async () => {
+    setDispListLoading(true);
+    try {
+      const res = await api.get('/procurement/delivery-notes', {
+        params: {
+          page: dispListPage,
+          limit: dispListPerPage,
+          status: dispListStatus !== 'all' ? dispListStatus : undefined,
+          from: dispListFrom || undefined,
+          to: dispListTo || undefined,
+          q: dispListSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setDeliveryNotes(res.data.rows);
+        setDispListRows(res.data.rows);
+        setDispListTotal(res.data.total || 0);
+      } else if (Array.isArray(res.data)) {
+        setDeliveryNotes(res.data);
+        setDispListRows(res.data);
+        setDispListTotal(res.data.length);
+      }
+    } catch (err) {
+      console.error('[fetchDispListPage] failed:', err);
+      setDeliveryNotes([]);
+      setDispListRows([]);
+      setDispListTotal(0);
+    } finally {
+      setDispListLoading(false);
+    }
   };
 
   // Per-tab loaders.  Each returns a Promise that resolves when all of
@@ -750,24 +1066,21 @@ export default function Procurement() {
   // too) still works.
   const TAB_FETCHERS = {
     indents: () => Promise.all([
-      api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
-      // Also pull Vendor POs so the Raise-Indent KPI strip can show the
-      // real "PO Generate" count + "Payment Required" total (mam 2026-06-12).
-      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
+      fetchIndentsPage(),
+      api.get('/procurement/indents/lookup').then(r => setIndentLookup(r.data || [])).catch(() => setIndentLookup([])),
       // Is raising open today? (Saturday-only + admin emergency override.)
       api.get('/procurement/indent-raise-window').then(r => setRaiseWindow(r.data)).catch(() => setRaiseWindow(null)),
     ]),
     rates: () => Promise.all([
-      api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
       api.get('/procurement/item-rates').then(r => setItemRates(r.data || [])).catch(() => setItemRates([])),
     ]),
     vendorpo: () => Promise.all([
-      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
-      api.get('/procurement/pending-po-items').then(r => setPendingPoItems(r.data || [])).catch(() => setPendingPoItems([])),
+      fetchVpoListPage(),
+      fetchVpoPendingPage(),
     ]),
     bills: () => Promise.all([
-      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
-      api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
+      fetchBillsFuPage(),
+      fetchBillsListPage(),
     ]),
     // Mam (2026-06-15) "auto generated, no Dispatch click": opening this tab
     // first sweeps every Ready-to-Dispatch PO and auto-creates its client
@@ -779,9 +1092,8 @@ export default function Procurement() {
         if (n > 0) toast.success(`${n} Sales Bill${n > 1 ? 's' : ''} auto-generated`, { duration: 5000 });
       })
       .catch(() => {}).then(() => Promise.all([
-      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
-      api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
-      api.get('/procurement/delivery-notes').then(r => setDeliveryNotes(r.data)).catch(() => setDeliveryNotes([])),
+      fetchDispReadyPage(),
+      fetchDispListPage(),
     ])),
   };
 
@@ -870,6 +1182,90 @@ export default function Procurement() {
     loadTab(tab, { force: tab === 'indents' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  // When indent filters or page change while on the indents tab, re-fetch the page
+  const isFirstIndentsLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'indents') return;
+    if (isFirstIndentsLoad.current) {
+      isFirstIndentsLoad.current = false;
+      return;
+    }
+    fetchIndentsPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indPage, indPerPage, indFilterStatus, indFilterCategory, indFilterFrom, indFilterTo, indSearch]);
+
+  // When Vendor PO list pagination / filters / search change while on the vendorpo tab:
+  const isFirstVpoListLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'vendorpo' || vpoSubTab !== 'list') return;
+    if (isFirstVpoListLoad.current) {
+      isFirstVpoListLoad.current = false;
+      return;
+    }
+    fetchVpoListPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, vpoSubTab, vpoListPage, vpoListPerPage, vpoListStatus, vpoListFrom, vpoListTo, vpoListSearch]);
+
+  // When Pending PO items pagination / filters / search change while on the vendorpo tab:
+  const isFirstVpoPendingLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'vendorpo' || vpoSubTab !== 'pending') return;
+    if (isFirstVpoPendingLoad.current) {
+      isFirstVpoPendingLoad.current = false;
+      return;
+    }
+    fetchVpoPendingPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, vpoSubTab, vpoPendingPage, vpoPendingPerPage, vpoPendingStatus, vpoPendingSearch]);
+
+  // When Bills Follow-up pagination / filters / search change while on the bills tab:
+  const isFirstBillsFuLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'bills' || billsSubTab !== 'followup') return;
+    if (isFirstBillsFuLoad.current) {
+      isFirstBillsFuLoad.current = false;
+      return;
+    }
+    fetchBillsFuPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, billsSubTab, billsFuPage, billsFuPerPage, billsFuExpFrom, billsFuExpTo, billsFuSearch]);
+
+  // When Bills List pagination / filters / search change while on the bills tab:
+  const isFirstBillsListLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'bills' || billsSubTab !== 'bills') return;
+    if (isFirstBillsListLoad.current) {
+      isFirstBillsListLoad.current = false;
+      return;
+    }
+    fetchBillsListPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, billsSubTab, billsListPage, billsListPerPage, billsListFrom, billsListTo, billsListSearch]);
+
+  // When Ready to Dispatch pagination / search change while on the delivery tab:
+  const isFirstDispReadyLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'delivery' || dispatchSubTab !== 'ready') return;
+    if (isFirstDispReadyLoad.current) {
+      isFirstDispReadyLoad.current = false;
+      return;
+    }
+    fetchDispReadyPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, dispatchSubTab, dispReadyPage, dispReadyPerPage, dispReadySearch]);
+
+  // When Dispatch List pagination / filters / search change while on the delivery tab:
+  const isFirstDispListLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'delivery' || dispatchSubTab !== 'list') return;
+    if (isFirstDispListLoad.current) {
+      isFirstDispListLoad.current = false;
+      return;
+    }
+    fetchDispListPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, dispatchSubTab, dispListPage, dispListPerPage, dispListStatus, dispListFrom, dispListTo, dispListSearch]);
 
   // Deep-link from the War Room "My Approvals" inbox: ?approve=<indentId>
   // opens that indent's FULL qty-wise approval modal (mam 2026-06-24: dashboard
@@ -2279,10 +2675,120 @@ export default function Procurement() {
           })}</div>
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
-            if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
-            if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
-            if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
-            if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
+            if (tab === 'indents') {
+              const toastId = toast.loading('Fetching matching indents for export...');
+              api.get('/procurement/indents', {
+                params: {
+                  export: 1,
+                  status: indFilterStatus !== 'all' ? indFilterStatus : undefined,
+                  category: indFilterCategory !== 'all' ? indFilterCategory : undefined,
+                  from: indFilterFrom || undefined,
+                  to: indFilterTo || undefined,
+                  q: indSearch.trim() || undefined,
+                }
+              }).then(res => {
+                toast.dismiss(toastId);
+                const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                exportCsv('indents', ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], rows.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
+              }).catch(err => {
+                toast.dismiss(toastId);
+                toast.error('Export failed: ' + (err.response?.data?.error || err.message));
+              });
+              return;
+            }
+            if (tab === 'vendorpo' || tab === 'pos') {
+              const toastId = toast.loading('Fetching vendor POs for export...');
+              api.get('/procurement/vendor-po', {
+                params: {
+                  export: 1,
+                  status: vpoListStatus !== 'all' ? vpoListStatus : undefined,
+                  from: vpoListFrom || undefined,
+                  to: vpoListTo || undefined,
+                  q: vpoListSearch.trim() || undefined,
+                }
+              }).then(res => {
+                toast.dismiss(toastId);
+                const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                exportCsv('vendor-pos', ['PO Number','PO Date','Vendor','Amount','Status'], rows.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
+              }).catch(err => {
+                toast.dismiss(toastId);
+                toast.error('Export failed: ' + (err.response?.data?.error || err.message));
+              });
+              return;
+            }
+            if (tab === 'bills') {
+              const toastId = toast.loading('Exporting bills...');
+              if (billsSubTab === 'followup') {
+                api.get('/procurement/purchase-bills/followup', {
+                  params: {
+                    export: 1,
+                    from: billsFuExpFrom || undefined,
+                    to: billsFuExpTo || undefined,
+                    q: billsFuSearch.trim() || undefined,
+                  }
+                }).then(res => {
+                  toast.dismiss(toastId);
+                  const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                  exportCsv('purchase-bills-followup', ['PO Number','Indent','Vendor','PO Date','Expected Receipt','Amount'], rows.map(p => [p.po_number, p.indent_number, p.vendor_name, p.po_date, p.expected_receipt_date, +p.display_total || +p.total_amount || 0]));
+                }).catch(err => {
+                  toast.dismiss(toastId);
+                  toast.error('Export failed: ' + (err.response?.data?.error || err.message));
+                });
+              } else {
+                api.get('/procurement/purchase-bills', {
+                  params: {
+                    export: 1,
+                    from: billsListFrom || undefined,
+                    to: billsListTo || undefined,
+                    q: billsListSearch.trim() || undefined,
+                  }
+                }).then(res => {
+                  toast.dismiss(toastId);
+                  const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                  exportCsv('purchase-bills', ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], rows.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
+                }).catch(err => {
+                  toast.dismiss(toastId);
+                  toast.error('Export failed: ' + (err.response?.data?.error || err.message));
+                });
+              }
+              return;
+            }
+            if (tab === 'dispatch' || tab === 'delivery') {
+              const toastId = toast.loading('Exporting dispatch...');
+              if (dispatchSubTab === 'ready') {
+                api.get('/procurement/delivery-notes/ready', {
+                  params: {
+                    export: 1,
+                    q: dispReadySearch.trim() || undefined,
+                  }
+                }).then(res => {
+                  toast.dismiss(toastId);
+                  const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                  exportCsv('ready-to-dispatch', ['PO Number','Vendor','PO Date','Expected Receipt','Amount'], rows.map(p => [p.po_number, p.vendor_name, p.po_date, p.expected_receipt_date, +p.display_total || +p.total_amount || 0]));
+                }).catch(err => {
+                  toast.dismiss(toastId);
+                  toast.error('Export failed: ' + (err.response?.data?.error || err.message));
+                });
+              } else {
+                api.get('/procurement/delivery-notes', {
+                  params: {
+                    export: 1,
+                    status: dispListStatus !== 'all' ? dispListStatus : undefined,
+                    from: dispListFrom || undefined,
+                    to: dispListTo || undefined,
+                    q: dispListSearch.trim() || undefined,
+                  }
+                }).then(res => {
+                  toast.dismiss(toastId);
+                  const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                  exportCsv('dispatch', ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], rows.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
+                }).catch(err => {
+                  toast.dismiss(toastId);
+                  toast.error('Export failed: ' + (err.response?.data?.error || err.message));
+                });
+              }
+              return;
+            }
             if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
           }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
           {/* Approval flow control — who may act at each gate (L1 / L2 / CRM /
@@ -2304,62 +2810,22 @@ export default function Procurement() {
       {tab === 'responsible' && <ResponsibilityTab module="indent_to_dispatch" title="Indent to Dispatch" />}
 
       {tab === 'indents' && (() => {
-        // ── Filtering / search ─────────────────────────────────────────
-        // mam (2026-05-25): filter by date range + status + search by
-        // indent id / site.  All client-side off the already-loaded
-        // indents array — no extra API calls.
-        //
-        // Two scopes:
-        //   kpiScope        — indents matching date+search ONLY (no status
-        //                     filter, so KPI tiles can still show all 5
-        //                     status breakdowns within the date range).
-        //   filteredIndents — kpiScope further filtered by status (drives
-        //                     the table + pagination).
-        // Mam (2026-05-25 follow-up): "data filter also from to according
-        // to that amounts count change" — tiles now respect from/to + search.
-        const q = indSearch.trim().toLowerCase();
-        const matchesDateAndSearch = (i) => {
-          if (indFilterFrom) {
-            const d = (i.created_at || i.indent_date || '').slice(0, 10);
-            if (d && d < indFilterFrom) return false;
-          }
-          if (indFilterTo) {
-            const d = (i.created_at || i.indent_date || '').slice(0, 10);
-            if (d && d > indFilterTo) return false;
-          }
-          if (q) {
-            const hay = `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''} ${(i.indent_category || 'material').replace(/_/g, ' ')}`.toLowerCase();
-            if (!hay.includes(q)) return false;
-          }
-          return true;
+        // ── Database-driven pagination & filtering ─────────────────────
+        const indTotalPages = Math.max(1, Math.ceil(indTotal / indPerPage));
+        const indFrom = indTotal > 0 ? (indPage - 1) * indPerPage : 0;
+        const indTo = Math.min(indFrom + indPerPage, indTotal);
+        const indPg = {
+          page: indPage,
+          pages: indTotalPages,
+          perPage: indPerPage,
+          total: indTotal,
+          from: indFrom,
+          to: indTo,
+          setPage: setIndPage,
+          rows: indents,
+          hasPrev: indPage > 1,
+          hasNext: indPage < indTotalPages,
         };
-        const kpiScope = indents.filter(matchesDateAndSearch);
-        const filteredIndents = indents.filter(i => {
-          // 'submitted' (Pending L1) ALSO matches crm_approved — after the CRM
-          // step an EXTRA-NON indent still awaits L1, so it belongs in the same
-          // bucket (server treats crm_approved like submitted for L1). It was
-          // hidden from the Pending-L1 filter before (mam 2026-07-04).
-          if (indFilterStatus !== 'all') {
-            const inBucket = i.status === indFilterStatus
-              || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
-            if (!inBucket) return false;
-          }
-          if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
-          if (indFilterFrom) {
-            const d = (i.created_at || i.indent_date || '').slice(0, 10);
-            if (d && d < indFilterFrom) return false;
-          }
-          if (indFilterTo) {
-            const d = (i.created_at || i.indent_date || '').slice(0, 10);
-            if (d && d > indFilterTo) return false;
-          }
-          if (q) {
-            const hay = `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''}`.toLowerCase();
-            if (!hay.includes(q)) return false;
-          }
-          return true;
-        });
-        const indPg = usePagination(filteredIndents, indPerPage, indPage, setIndPage);
         return (
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
@@ -2418,33 +2884,26 @@ export default function Procurement() {
               to that amounts count change" — tiles now react to date+search
               filters so the totals always match what's in the table below. */}
           {(() => {
-            const sum = (arr) => arr.reduce((s, i) => s + (+i.budget_amount || 0), 0);
-            const byStatus = (s) => kpiScope.filter(i => i.status === s);
-            // Pending L1 = 'submitted' + 'crm_approved'. After the CRM step an
-            // EXTRA-NON indent sits in crm_approved but still awaits L1 sign-off
-            // (server treats it exactly like 'submitted' for L1), so it must
-            // count here — it was silently missing before (mam 2026-07-04).
-            const submitted   = kpiScope.filter(i => i.status === 'submitted' || i.status === 'crm_approved');
-            const l1Approved  = byStatus('l1_approved');   // Pending L2 (only when L2 switch is ON)
-            const approved    = byStatus('approved');
-            const rejected    = byStatus('rejected');
-            const poSent      = byStatus('po_sent');
+            const kpis = indKpis || {
+              total_count: indTotal,
+              total_budget: 0,
+              submitted_count: 0,
+              submitted_budget: 0,
+              l1_approved_count: 0,
+              l1_approved_budget: 0,
+              approved_count: 0,
+              approved_budget: 0,
+              rejected_count: 0,
+              rejected_budget: 0,
+              po_sent_count: 0,
+              po_sent_budget: 0,
+              post_approval_count: 0,
+              po_gen_count: (vendorPos || []).length,
+              po_gen_amount: (vendorPos || []).reduce((s, p) => s + (+p.total_amount || 0), 0),
+              pay_req_count: 0,
+              pay_req_amount: 0,
+            };
             const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim());
-            // Billable booked once an indent clears approval (mam 2026-06-16):
-            // total BOQ sale value of every indent that has PASSED approval —
-            // approved or anything beyond it (PO sent / dispatched / received).
-            // Sums the same billable_amount shown in the list's Billable column.
-            const billableSum = (arr) => arr.reduce((s, i) => s + (+i.billable_amount || 0), 0);
-            const postApproval = kpiScope.filter(i => ['approved', 'po_sent', 'dispatched', 'received'].includes(i.status));
-            // PO Generate + Payment Required (mam 2026-06-12) — sourced from
-            // the Vendor PO list, not the indents, so the count matches the
-            // "View by PO" tab exactly.  Payment Required = POs still pending
-            // an advance / old-dues clearance (same filter as the Payment tab).
-            const poGenCount  = (vendorPos || []).length;
-            const poGenAmount = (vendorPos || []).reduce((s, p) => s + (+p.total_amount || 0), 0);
-            const urgentPos   = (vendorPos || []).filter(p => !p.cancelled && p.payment_block_status === 'pending');
-            const payReqCount = urgentPos.length;
-            const payReqAmount = urgentPos.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
             // Clicking a tile sets the status filter to that bucket so mam
             // can drill from the dashboard view into the matching rows
             // without typing in the toolbar.
@@ -2473,7 +2932,7 @@ export default function Procurement() {
               <>
                 {filterActive && (
                   <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 flex items-center gap-2">
-                    📊 Showing totals for the current filter ({kpiScope.length} of {indents.length} indents).
+                    📊 Showing totals for the current filter ({kpis.total_count} matching indents).
                   </div>
                 )}
                 {/* KPI tiles auto-fit one row on large screens (mam 2026-06-12):
@@ -2481,17 +2940,17 @@ export default function Procurement() {
                     L2 tile is added only when the L2 switch is ON. PO Generate +
                     Payment Required jump to their own tabs on click. */}
                 <div className={`grid grid-cols-2 sm:grid-cols-4 ${l2Enabled ? 'lg:grid-cols-8' : 'lg:grid-cols-7'} gap-2`}>
-                  {tile('Total Indents',     kpiScope.length,   sum(kpiScope),   { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700',    ring: 'ring-gray-400'    }, 'all')}
-                  {tile(l2Enabled ? 'Pending L1' : 'Pending Approval',  submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
-                  {l2Enabled && tile('Pending L2', l1Approved.length, sum(l1Approved), { border: 'border-purple-300',  bg: 'bg-purple-50',   text: 'text-purple-700',  ring: 'ring-purple-400'  }, 'l1_approved')}
-                  {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
+                  {tile('Total Indents',     kpis.total_count,        kpis.total_budget,        { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700',    ring: 'ring-gray-400'    }, 'all')}
+                  {tile(l2Enabled ? 'Pending L1' : 'Pending Approval',  kpis.submitted_count,  kpis.submitted_budget,  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
+                  {l2Enabled && tile('Pending L2', kpis.l1_approved_count, kpis.l1_approved_budget, { border: 'border-purple-300',  bg: 'bg-purple-50',   text: 'text-purple-700',  ring: 'ring-purple-400'  }, 'l1_approved')}
+                  {tile('Approved',          kpis.approved_count,     kpis.approved_budget,     { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
                   {/* Billable · Approved (mam 2026-06-16): BOQ sale value booked
                       once indents clear approval. Clicking jumps to the Approved
                       bucket — closest single-status filter to "post-approval". */}
-                  {tile('Billable · Approved', postApproval.length, billableSum(postApproval), { border: 'border-indigo-300', bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-400' }, 'approved')}
-                  {tile('Rejected',          rejected.length,   sum(rejected),   { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700',     ring: 'ring-red-400'     }, 'rejected')}
-                  {tile('PO Generate',       poGenCount,        poGenAmount,     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, null, () => { setTab('vendorpo'); setVpoSubTab('list'); })}
-                  {tile('Payment Required',  payReqCount,       payReqAmount,    { border: 'border-rose-300',    bg: 'bg-rose-50',     text: 'text-rose-700',    ring: 'ring-rose-400'    }, null, () => setTab('payment'))}
+                  {tile('Billable · Approved', kpis.post_approval_count, 0,                      { border: 'border-indigo-300', bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-400' }, 'approved')}
+                  {tile('Rejected',          kpis.rejected_count,     kpis.rejected_budget,     { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700',     ring: 'ring-red-400'     }, 'rejected')}
+                  {tile('PO Generate',       kpis.po_gen_count,        kpis.po_gen_amount,      { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, null, () => { setTab('vendorpo'); setVpoSubTab('list'); })}
+                  {tile('Payment Required',  kpis.pay_req_count,       kpis.pay_req_amount,     { border: 'border-rose-300',    bg: 'bg-rose-50',     text: 'text-rose-700',    ring: 'ring-rose-400'    }, null, () => setTab('payment'))}
                 </div>
               </>
             );
@@ -2502,13 +2961,13 @@ export default function Procurement() {
             <div className="flex-1 min-w-[180px]">
               <label className="label text-[10px] mb-0.5">Search · indent no / site / raised by</label>
               <input className="input text-xs" placeholder="e.g. IND-0070 or Jeewan Mala"
-                value={indSearch} onChange={e => { setIndSearch(e.target.value); setIndPage(1); }} />
+                value={indSearchInput} onChange={e => { setIndSearchInput(e.target.value); setIndPage(1); }} />
             </div>
             <div>
               <label className="label text-[10px] mb-0.5">Status</label>
               <select className="select text-xs" value={indFilterStatus}
                 onChange={e => { setIndFilterStatus(e.target.value); setIndPage(1); }}>
-                <option value="all">All ({indents.length})</option>
+                <option value="all">All {indKpis ? `(${indKpis.total_count})` : ''}</option>
                 <option value="submitted">{l2Enabled ? 'Pending L1' : 'Pending Approval'}</option>
                 {l2Enabled && <option value="l1_approved">Pending L2</option>}
                 <option value="approved">Approved</option>
@@ -2541,14 +3000,15 @@ export default function Procurement() {
               <input className="input text-xs" type="date" value={indFilterTo}
                 onChange={e => { setIndFilterTo(e.target.value); setIndPage(1); }} />
             </div>
-            {(indSearch || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo) && (
+            {(indSearchInput || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo) && (
               <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                onClick={() => { setIndSearch(''); setIndFilterStatus('all'); setIndFilterCategory('all'); setIndFilterFrom(''); setIndFilterTo(''); setIndPage(1); }}>
+                onClick={() => { setIndSearchInput(''); setIndSearch(''); setIndFilterStatus('all'); setIndFilterCategory('all'); setIndFilterFrom(''); setIndFilterTo(''); setIndPage(1); }}>
                 Reset
               </button>
             )}
-            <div className="ml-auto text-[11px] text-gray-500">
-              Showing <span className="font-semibold text-gray-700">{filteredIndents.length}</span> of {indents.length}
+            <div className="ml-auto text-[11px] text-gray-500 flex items-center gap-2">
+              {indLoading && <FiRefreshCw className="animate-spin text-blue-500" size={12} />}
+              Showing <span className="font-semibold text-gray-700">{indTotal > 0 ? `${indPg.from + 1}–${indPg.to}` : 0}</span> of {indTotal}
             </div>
           </div>
 
@@ -2560,11 +3020,15 @@ export default function Procurement() {
               Hidden ≥ md so desktop keeps the full table with every
               column intact. */}
           <div className="md:hidden space-y-3">
-            {indents.length === 0 && (
-              <div className="card p-6 text-center text-gray-400 text-sm">No indents yet</div>
+            {indLoading && indents.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">Loading indents...</div>
             )}
-            {indents.length > 0 && filteredIndents.length === 0 && (
-              <div className="card p-6 text-center text-gray-400 text-sm">No indents match the current filters — try Reset</div>
+            {!indLoading && indents.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">
+                {(indSearch || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo)
+                  ? 'No indents match the current filters — try Reset'
+                  : 'No indents yet'}
+              </div>
             )}
             {indPg.rows.map(i => {
               const items = i.items || [];
@@ -3380,8 +3844,12 @@ export default function Procurement() {
                 </Fragment>
               );
               })}
-              {indents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
-              {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
+              {indLoading && indents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">Loading indents...</td></tr>}
+              {!indLoading && indents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">
+                {(indSearch || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo)
+                  ? 'No indents match the current filters — try Reset'
+                  : 'No indents yet'}
+              </td></tr>}
             </tbody>
           </table>
           <Pagination pg={indPg} setPerPage={setIndPerPage} className="border-t border-gray-100" />
@@ -3797,25 +4265,33 @@ export default function Procurement() {
         //   pending  → "Pending for Vendor PO" (yellow highlight, items waiting)
         //   list     → "View by PO"            (the full vendor_pos table)
         // Each sub-tab has its own search + filter + pagination state.
-        const pSearch = vpoPendingSearch.trim().toLowerCase();
-        const filteredPending = pendingPoItems.filter(p => {
-          if (vpoPendingStatus !== 'all' && (p.rate_status || 'pending') !== vpoPendingStatus) return false;
-          if (!pSearch) return true;
-          const hay = `${p.indent_number || ''} ${p.site_name || ''} ${p.master_name || ''} ${p.description || ''}`.toLowerCase();
-          return hay.includes(pSearch);
-        });
-        const pendingPg = usePagination(filteredPending, vpoPendingPerPage, vpoPendingPage, setVpoPendingPage);
+        const vpoPendingTotalPages = Math.max(1, Math.ceil(vpoPendingTotal / vpoPendingPerPage));
+        const pendingPg = {
+          page: vpoPendingPage,
+          pages: vpoPendingTotalPages,
+          perPage: vpoPendingPerPage,
+          total: vpoPendingTotal,
+          from: vpoPendingTotal > 0 ? (vpoPendingPage - 1) * vpoPendingPerPage : 0,
+          to: Math.min((vpoPendingPage - 1) * vpoPendingPerPage + vpoPendingPerPage, vpoPendingTotal),
+          setPage: setVpoPendingPage,
+          rows: pendingPoItems,
+          hasPrev: vpoPendingPage > 1,
+          hasNext: vpoPendingPage < vpoPendingTotalPages,
+        };
 
-        const lSearch = vpoListSearch.trim().toLowerCase();
-        const filteredList = vendorPos.filter(v => {
-          if (vpoListStatus !== 'all' && (v.cancelled ? 'cancelled' : v.status) !== vpoListStatus) return false;
-          if (vpoListFrom && v.po_date && v.po_date < vpoListFrom) return false;
-          if (vpoListTo   && v.po_date && v.po_date > vpoListTo) return false;
-          if (!lSearch) return true;
-          const hay = `${v.po_number || ''} ${v.indent_number || ''} ${v.vendor_name || ''} ${v.indent_site_name || ''}`.toLowerCase();
-          return hay.includes(lSearch);
-        });
-        const listPg = usePagination(filteredList, vpoListPerPage, vpoListPage, setVpoListPage);
+        const vpoListTotalPages = Math.max(1, Math.ceil(vpoListTotal / vpoListPerPage));
+        const listPg = {
+          page: vpoListPage,
+          pages: vpoListTotalPages,
+          perPage: vpoListPerPage,
+          total: vpoListTotal,
+          from: vpoListTotal > 0 ? (vpoListPage - 1) * vpoListPerPage : 0,
+          to: Math.min((vpoListPage - 1) * vpoListPerPage + vpoListPerPage, vpoListTotal),
+          setPage: setVpoListPage,
+          rows: vendorPos,
+          hasPrev: vpoListPage > 1,
+          hasNext: vpoListPage < vpoListTotalPages,
+        };
         return (
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
@@ -3828,28 +4304,27 @@ export default function Procurement() {
           <div className="flex gap-1 border-b border-gray-200">
             <button onClick={() => setVpoSubTab('pending')}
               className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${vpoSubTab === 'pending' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-              Pending for Vendor PO <span className="ml-1 text-[10px] opacity-80">({pendingPoItems.length})</span>
+              Pending for Vendor PO <span className="ml-1 text-[10px] opacity-80">({vpoPendingTotal})</span>
             </button>
             <button onClick={() => setVpoSubTab('list')}
               className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${vpoSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-              View by PO <span className="ml-1 text-[10px] opacity-80">({vendorPos.length})</span>
+              View by PO <span className="ml-1 text-[10px] opacity-80">({vpoListTotal})</span>
             </button>
           </div>
 
           {/* ===== Sub-tab 1: Pending for Vendor PO ===== */}
-          {vpoSubTab === 'pending' && pendingPoItems.length === 0 && (
-            <div className="card text-center py-8 text-gray-400 text-xs">All finalized rates are already on a Vendor PO. 🎉</div>
+          {vpoSubTab === 'pending' && !vpoPendingLoading && vpoPendingTotal === 0 && (
+            <div className="card text-center py-8 text-gray-400 text-xs">
+              {(vpoPendingSearch || vpoPendingStatus !== 'all') ? 'No pending items match the current filters — try Reset.' : 'All finalized rates are already on a Vendor PO. 🎉'}
+            </div>
           )}
-          {vpoSubTab === 'pending' && pendingPoItems.length > 0 && (
+          {vpoSubTab === 'pending' && (vpoPendingTotal > 0 || vpoPendingLoading) && (
             <div className="card p-3 bg-amber-50 border border-amber-200">
               <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                 <h4 className="font-semibold text-amber-800 text-sm">
                   Pending for Vendor PO
                   <span className="text-xs font-normal text-amber-600 ml-2">
-                    ({(() => {
-                      const finalisedCount = pendingPoItems.filter(p => (p.rate_status || 'pending') === 'finalized').length;
-                      return `${finalisedCount} ready · ${pendingPoItems.length} total`;
-                    })()})
+                    ({vpoPendingReadyCount} ready · {vpoPendingTotal} total)
                   </span>
                 </h4>
                 <span className="text-[11px] text-amber-700">Showing finalized-rate items by default — flip the Rate Status filter to see still-quoting / pending items.</span>
@@ -3859,7 +4334,7 @@ export default function Procurement() {
                 <div className="flex-1 min-w-[200px]">
                   <label className="label text-[10px] mb-0.5 text-amber-900">Search · indent no / item</label>
                   <input className="input text-xs" placeholder="e.g. IND-0070 or CHECK NUT"
-                    value={vpoPendingSearch} onChange={e => { setVpoPendingSearch(e.target.value); setVpoPendingPage(1); }} />
+                    value={vpoPendingSearchInput} onChange={e => { setVpoPendingSearchInput(e.target.value); setVpoPendingPage(1); }} />
                 </div>
                 <div>
                   <label className="label text-[10px] mb-0.5 text-amber-900">Rate Status</label>
@@ -3871,12 +4346,13 @@ export default function Procurement() {
                     <option value="all">All (show everything)</option>
                   </select>
                 </div>
-                {(vpoPendingSearch || vpoPendingStatus !== 'all') && (
+                {(vpoPendingSearchInput || vpoPendingStatus !== 'all') && (
                   <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                    onClick={() => { setVpoPendingSearch(''); setVpoPendingStatus('all'); setVpoPendingPage(1); }}>Reset</button>
+                    onClick={() => { setVpoPendingSearchInput(''); setVpoPendingSearch(''); setVpoPendingStatus('all'); setVpoPendingPage(1); }}>Reset</button>
                 )}
-                <div className="ml-auto text-[11px] text-amber-900">
-                  Showing <span className="font-semibold">{filteredPending.length}</span> of {pendingPoItems.length}
+                <div className="ml-auto text-[11px] text-amber-900 flex items-center gap-2">
+                  {vpoPendingLoading && <FiRefreshCw className="animate-spin text-amber-600" size={12} />}
+                  Showing <span className="font-semibold">{vpoPendingTotal > 0 ? `${pendingPg.from + 1}–${pendingPg.to}` : 0}</span> of {vpoPendingTotal}
                 </div>
               </div>
               <div className="hidden md:block overflow-auto max-h-[70vh]">
@@ -3891,7 +4367,12 @@ export default function Procurement() {
                     <th className="px-2 py-1"></th>
                   </tr></thead>
                   <tbody>
-                    {pendingPg.rows.map(p => {
+                    {vpoPendingLoading && (
+                      <tr><td colSpan="7" className="text-center py-6 text-amber-700">
+                        <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading pending items...
+                      </td></tr>
+                    )}
+                    {!vpoPendingLoading && pendingPg.rows.map(p => {
                       // Prefer Item Master values for display (what mam picked in the indent)
                       const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
                       return (
@@ -3917,7 +4398,7 @@ export default function Procurement() {
                         </tr>
                       );
                     })}
-                    {filteredPending.length === 0 && (
+                    {!vpoPendingLoading && vpoPendingTotal === 0 && (
                       <tr><td colSpan="7" className="text-center py-6 text-amber-700">No items match the current filters.</td></tr>
                     )}
                   </tbody>
@@ -3931,7 +4412,12 @@ export default function Procurement() {
                   on right, site row with pin, 3-col info grid, links
                   row with border-top, big full-width action button. */}
               <div className="md:hidden space-y-3">
-                {pendingPg.rows.map(p => {
+                {vpoPendingLoading && (
+                  <div className="card p-6 text-center text-gray-400 text-sm">
+                    <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading pending items...
+                  </div>
+                )}
+                {!vpoPendingLoading && pendingPg.rows.map(p => {
                   const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
                   const stat = p.rate_status || 'pending';
                   return (
@@ -3962,9 +4448,7 @@ export default function Procurement() {
                         <div className="text-[10px] text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
                           {p.make && <span>Make: <b className="text-gray-700">{p.make}</b></span>}
                           {p.item_type && (
-                            <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>
-                              {p.item_type}
-                            </span>
+                            <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>{p.item_type}</span>
                           )}
                         </div>
                       </div>
@@ -3994,7 +4478,7 @@ export default function Procurement() {
                     </div>
                   );
                 })}
-                {filteredPending.length === 0 && (
+                {!vpoPendingLoading && vpoPendingTotal === 0 && (
                   <div className="card p-6 text-center text-gray-400 text-sm">No items match the current filters.</div>
                 )}
               </div>
@@ -4009,7 +4493,7 @@ export default function Procurement() {
                 <div className="flex-1 min-w-[200px]">
                   <label className="label text-[10px] mb-0.5">Search · PO no / indent / vendor / site</label>
                   <input className="input text-xs" placeholder="e.g. VPO-0042 or IND-0070"
-                    value={vpoListSearch} onChange={e => { setVpoListSearch(e.target.value); setVpoListPage(1); }} />
+                    value={vpoListSearchInput} onChange={e => { setVpoListSearchInput(e.target.value); setVpoListPage(1); }} />
                 </div>
                 <div>
                   <label className="label text-[10px] mb-0.5">Status</label>
@@ -4031,12 +4515,13 @@ export default function Procurement() {
                   <input className="input text-xs" type="date" value={vpoListTo}
                     onChange={e => { setVpoListTo(e.target.value); setVpoListPage(1); }} />
                 </div>
-                {(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) && (
+                {(vpoListSearchInput || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) && (
                   <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                    onClick={() => { setVpoListSearch(''); setVpoListStatus('all'); setVpoListFrom(''); setVpoListTo(''); setVpoListPage(1); }}>Reset</button>
+                    onClick={() => { setVpoListSearchInput(''); setVpoListSearch(''); setVpoListStatus('all'); setVpoListFrom(''); setVpoListTo(''); setVpoListPage(1); }}>Reset</button>
                 )}
-                <div className="ml-auto text-[11px] text-gray-500">
-                  Showing <span className="font-semibold text-gray-700">{filteredList.length}</span> of {vendorPos.length}
+                <div className="ml-auto text-[11px] text-gray-500 flex items-center gap-2">
+                  {vpoListLoading && <FiRefreshCw className="animate-spin text-blue-500" size={12} />}
+                  Showing <span className="font-semibold text-gray-700">{vpoListTotal > 0 ? `${listPg.from + 1}–${listPg.to}` : 0}</span> of {vpoListTotal}
                 </div>
               </div>
 
@@ -4143,8 +4628,10 @@ export default function Procurement() {
                   </td>
                 </tr>
               ))}
-              {vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
-              {vendorPos.length > 0 && filteredList.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No POs match the current filters.</td></tr>}
+              {vpoListLoading && vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">Loading vendor POs...</td></tr>}
+              {!vpoListLoading && vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">
+                {(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) ? 'No POs match the current filters — try Reset' : 'No vendor POs yet — click "Create Vendor PO"'}
+              </td></tr>}
             </tbody>
             <tfoot><tr><td colSpan="8" className="border-t border-gray-100"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></td></tr></tfoot>
           </table></div>
@@ -4258,8 +4745,8 @@ export default function Procurement() {
                 </div>
               </div>
             ))}
-            {vendorPos.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No vendor POs yet — click "Create Vendor PO"</div>}
-            {vendorPos.length > 0 && filteredList.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No POs match the current filters.</div>}
+            {vpoListLoading && vendorPos.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">Loading vendor POs...</div>}
+            {!vpoListLoading && vendorPos.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">{(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) ? 'No POs match the current filters — try Reset' : 'No vendor POs yet — click "Create Vendor PO"'}</div>}
             <Pagination pg={listPg} setPerPage={setVpoListPerPage} />
           </div>
             </>
@@ -4551,45 +5038,42 @@ export default function Procurement() {
       })()}
 
       {tab === 'bills' && (() => {
-        // POs that don't have a bill yet — sorted by Expected Receipt Date
-        // so the purchase team chases the oldest first. Uses client-side
-        // filtering off the already-loaded vendorPos + purchaseBills.
-        const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
         const today = new Date().toISOString().slice(0, 10);
-        const pendingPos = vendorPos
-          // Skip cancelled POs — they're not waiting for a bill anymore.
-          .filter(po => !billedPoIds.has(po.id) && !po.cancelled)
-          // Payment gate (mam 2026-05-27): POs still blocked on advance /
-          // old dues do NOT appear in Purchase Bill follow-up — Accounts
-          // handles them in the Payment tab first. Once cleared (or if no
-          // payment block at all), they land here for the bill chase.
-          .filter(po => po.payment_block_status !== 'pending')
-          .sort((a, b) => {
-            const ax = a.expected_receipt_date || '9999-12-31';
-            const bx = b.expected_receipt_date || '9999-12-31';
-            return ax.localeCompare(bx);
-          });
 
-        // Sub-tab filtering (mam 2026-05-25)
-        const fSearch = billsFuSearch.trim().toLowerCase();
-        const filteredFu = pendingPos.filter(po => {
-          if (billsFuExpFrom && po.expected_receipt_date && po.expected_receipt_date < billsFuExpFrom) return false;
-          if (billsFuExpTo   && po.expected_receipt_date && po.expected_receipt_date > billsFuExpTo) return false;
-          if (!fSearch) return true;
-          const hay = `${po.po_number || ''} ${po.indent_number || ''} ${po.vendor_name || ''} ${po.indent_site_name || ''}`.toLowerCase();
-          return hay.includes(fSearch);
-        });
-        const fuPg = usePagination(filteredFu, billsFuPerPage, billsFuPage, setBillsFuPage);
+        // Server-driven pagination & filtering for Follow-up (POs awaiting bill)
+        const fuTotalPages = Math.max(1, Math.ceil(billsFuTotal / billsFuPerPage));
+        const fuFrom = billsFuTotal > 0 ? (billsFuPage - 1) * billsFuPerPage : 0;
+        const fuTo = Math.min(fuFrom + billsFuPerPage, billsFuTotal);
+        const fuPg = {
+          page: billsFuPage,
+          pages: fuTotalPages,
+          perPage: billsFuPerPage,
+          total: billsFuTotal,
+          from: fuFrom,
+          to: fuTo,
+          setPage: setBillsFuPage,
+          rows: billsFuRows,
+          hasPrev: billsFuPage > 1,
+          hasNext: billsFuPage < fuTotalPages,
+        };
 
-        const blSearch = billsListSearch.trim().toLowerCase();
-        const filteredBills = purchaseBills.filter(b => {
-          if (billsListFrom && b.bill_date && b.bill_date < billsListFrom) return false;
-          if (billsListTo   && b.bill_date && b.bill_date > billsListTo) return false;
-          if (!blSearch) return true;
-          const hay = `${b.bill_number || ''} ${b.vendor_name || ''}`.toLowerCase();
-          return hay.includes(blSearch);
-        });
-        const billsListPg = usePagination(filteredBills, billsListPerPage, billsListPage, setBillsListPage);
+        // Server-driven pagination & filtering for Purchase Bills list
+        const billsListTotalPages = Math.max(1, Math.ceil(billsListTotal / billsListPerPage));
+        const billsListFromIdx = billsListTotal > 0 ? (billsListPage - 1) * billsListPerPage : 0;
+        const billsListToIdx = Math.min(billsListFromIdx + billsListPerPage, billsListTotal);
+        const billsListPg = {
+          page: billsListPage,
+          pages: billsListTotalPages,
+          perPage: billsListPerPage,
+          total: billsListTotal,
+          from: billsListFromIdx,
+          to: billsListToIdx,
+          setPage: setBillsListPage,
+          rows: billsListRows,
+          hasPrev: billsListPage > 1,
+          hasNext: billsListPage < billsListTotalPages,
+        };
+
         const daysDiff = (d) => {
           if (!d) return null;
           const dt = new Date(d); const tdt = new Date(today);
@@ -4628,11 +5112,11 @@ export default function Procurement() {
             <div className="flex gap-1 border-b border-gray-200 -mb-px">
               <button onClick={() => setBillsSubTab('followup')}
                 className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${billsSubTab === 'followup' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Follow-up <span className="ml-1 text-[10px] opacity-80">({pendingPos.length})</span>
+                Follow-up <span className="ml-1 text-[10px] opacity-80">({billsFuTotal})</span>
               </button>
               <button onClick={() => setBillsSubTab('bills')}
                 className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${billsSubTab === 'bills' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Purchase Bills <span className="ml-1 text-[10px] opacity-80">({purchaseBills.length})</span>
+                Purchase Bills <span className="ml-1 text-[10px] opacity-80">({billsListTotal})</span>
               </button>
             </div>
             {billsSubTab === 'bills' && (
@@ -4641,33 +5125,27 @@ export default function Procurement() {
           </div>
 
           {/* ===== Sub-tab 1: Follow-up ===== */}
-          {/* Heads-up banner when POs are hidden behind the payment gate.
-              Tells the purchase team where those POs went so they don't
-              wonder why a PO they just created isn't showing up here. */}
-          {billsSubTab === 'followup' && (() => {
-            const blockedCount = (vendorPos || []).filter(po =>
-              !po.cancelled && !billedPoIds.has(po.id) && po.payment_block_status === 'pending'
-            ).length;
-            if (blockedCount === 0) return null;
-            return (
-              <div className="card p-2.5 bg-red-50 border border-red-200 text-[11px] text-red-800 flex items-center gap-2 flex-wrap">
-                <span>🚨 <b>{blockedCount}</b> PO{blockedCount === 1 ? '' : 's'} hidden — blocked on payment.</span>
-                <button type="button" onClick={() => setTab('payment')} className="text-red-700 underline font-semibold hover:text-red-900">
-                  Go to Payment tab →
-                </button>
-                <span className="opacity-70">Accounts clears them first, then they appear here automatically.</span>
-              </div>
-            );
-          })()}
-          {billsSubTab === 'followup' && pendingPos.length === 0 && (
-            <div className="card text-center py-8 text-gray-400 text-xs">No POs awaiting a Purchase Bill. 🎉</div>
+          {/* Heads-up banner when POs are hidden behind the payment gate. */}
+          {billsSubTab === 'followup' && billsFuBlockedCount > 0 && (
+            <div className="card p-2.5 bg-red-50 border border-red-200 text-[11px] text-red-800 flex items-center gap-2 flex-wrap">
+              <span>🚨 <b>{billsFuBlockedCount}</b> PO{billsFuBlockedCount === 1 ? '' : 's'} hidden — blocked on payment.</span>
+              <button type="button" onClick={() => setTab('payment')} className="text-red-700 underline font-semibold hover:text-red-900">
+                Go to Payment tab →
+              </button>
+              <span className="opacity-70">Accounts clears them first, then they appear here automatically.</span>
+            </div>
           )}
-          {billsSubTab === 'followup' && pendingPos.length > 0 && (
+          {billsSubTab === 'followup' && billsFuTotal === 0 && !billsFuLoading && (
+            <div className="card text-center py-8 text-gray-400 text-xs">
+              {(billsFuSearch || billsFuExpFrom || billsFuExpTo) ? 'No POs match the current filters.' : 'No POs awaiting a Purchase Bill. 🎉'}
+            </div>
+          )}
+          {billsSubTab === 'followup' && (billsFuTotal > 0 || billsFuLoading) && (
             <div className="card p-3 bg-amber-50 border border-amber-200">
               <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
                 <h4 className="font-semibold text-amber-800 text-sm">
                   Follow-up: POs awaiting Purchase Bill
-                  <span className="text-xs font-normal text-amber-600 ml-2">({pendingPos.length} PO{pendingPos.length === 1 ? '' : 's'})</span>
+                  <span className="text-xs font-normal text-amber-600 ml-2">({billsFuTotal} PO{billsFuTotal === 1 ? '' : 's'})</span>
                 </h4>
                 <span className="text-[11px] text-amber-700">Sorted by Expected Receipt Date — chase the oldest first</span>
               </div>
@@ -4677,7 +5155,7 @@ export default function Procurement() {
                 <div className="flex-1 min-w-[200px]">
                   <label className="label text-[10px] mb-0.5 text-amber-900">Search · PO no / indent no / vendor</label>
                   <input className="input text-xs" placeholder="e.g. VPO-0042 or IND-0070"
-                    value={billsFuSearch} onChange={e => { setBillsFuSearch(e.target.value); setBillsFuPage(1); }} />
+                    value={billsFuSearchInput} onChange={e => { setBillsFuSearchInput(e.target.value); setBillsFuPage(1); }} />
                 </div>
                 <div>
                   <label className="label text-[10px] mb-0.5 text-amber-900">Expected From</label>
@@ -4689,22 +5167,18 @@ export default function Procurement() {
                   <input className="input text-xs" type="date" value={billsFuExpTo}
                     onChange={e => { setBillsFuExpTo(e.target.value); setBillsFuPage(1); }} />
                 </div>
-                {(billsFuSearch || billsFuExpFrom || billsFuExpTo) && (
+                {(billsFuSearchInput || billsFuSearch || billsFuExpFrom || billsFuExpTo) && (
                   <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                    onClick={() => { setBillsFuSearch(''); setBillsFuExpFrom(''); setBillsFuExpTo(''); setBillsFuPage(1); }}>Reset</button>
+                    onClick={() => { setBillsFuSearchInput(''); setBillsFuSearch(''); setBillsFuExpFrom(''); setBillsFuExpTo(''); setBillsFuPage(1); }}>Reset</button>
                 )}
                 <div className="ml-auto text-[11px] text-amber-900">
-                  Showing <span className="font-semibold">{filteredFu.length}</span> of {pendingPos.length}
+                  Showing <span className="font-semibold">{billsFuTotal > 0 ? `${fuPg.from + 1}–${fuPg.to}` : 0}</span> of {billsFuTotal}
                 </div>
               </div>
               <div className="hidden md:block overflow-auto max-h-[70vh]">
                 <table className="text-xs freeze-head">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">PO Number</th>
-                    {/* Indent column added (mam, 2026-05-20: "show here
-                        also indent number").  Carries indent_number +
-                        site sub-text so mam can trace a PO back to its
-                        raising indent without opening the row. */}
                     <th className="px-2 py-1 text-left">Indent</th>
                     <th className="px-2 py-1 text-left">Vendor</th>
                     <th className="px-2 py-1">PO Date</th>
@@ -4715,7 +5189,12 @@ export default function Procurement() {
                     <th className="px-2 py-1"></th>
                   </tr></thead>
                   <tbody>
-                    {fuPg.rows.map(po => {
+                    {billsFuLoading && (
+                      <tr><td colSpan="9" className="text-center py-8 text-amber-700">
+                        <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading follow-up POs...
+                      </td></tr>
+                    )}
+                    {!billsFuLoading && fuPg.rows.map(po => {
                       const d = daysDiff(po.expected_receipt_date);
                       let chip;
                       if (!po.expected_receipt_date) chip = <span className="text-gray-400">— no date —</span>;
@@ -4736,11 +5215,6 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center">{chip}</td>
-                          {/* Show the LIVE computed total (items × 1.18 GST)
-                              from display_total — matches what the PO print
-                              shows.  Mam, 2026-05-16: header total drifted from
-                              the line items.  Drift chip warns when the stored
-                              total disagrees with the items sum. */}
                           <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
                             Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
                             {+po.total_amount_drift > 1 && (
@@ -4750,14 +5224,7 @@ export default function Procurement() {
                             )}
                           </td>
                           <td className="px-2 py-1.5 text-center">
-                            {/* Always show "View PO" — opens the SOTYN.AI-generated
-                                print page (PDF-able). If a Tally / signed scan
-                                was also uploaded, show a second link below. */}
                             <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-[11px] font-semibold whitespace-nowrap">📄 View PO</a>
-                            {/* Mam (2026-05-22): auto-generated Delivery Note
-                                per PO — opens print-ready page, no DN row
-                                needed.  Uses the SEPL template format mam
-                                shared. */}
                             <div><a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:text-emerald-900 underline text-[11px] font-semibold whitespace-nowrap">🚚 Delivery Note</a></div>
                             {po.file_path && (
                               <div><a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">📎 attached file</a></div>
@@ -4775,7 +5242,12 @@ export default function Procurement() {
 
               {/* Mobile cards — polished pattern matching Indents (mam). */}
               <div className="md:hidden space-y-3">
-                {fuPg.rows.map(po => {
+                {billsFuLoading && (
+                  <div className="card p-6 text-center text-amber-700 text-sm">
+                    <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
+                  </div>
+                )}
+                {!billsFuLoading && fuPg.rows.map(po => {
                   const d = daysDiff(po.expected_receipt_date);
                   let chip;
                   if (!po.expected_receipt_date) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-500 uppercase">no date</span>;
@@ -4836,9 +5308,6 @@ export default function Procurement() {
                     </div>
                   );
                 })}
-                {filteredFu.length === 0 && (
-                  <div className="card p-6 text-center text-amber-700 text-sm">No POs match the current filters.</div>
-                )}
               </div>
               <Pagination pg={fuPg} setPerPage={setBillsFuPerPage} className="border-t border-amber-200 pt-2" />
             </div>
@@ -4851,7 +5320,7 @@ export default function Procurement() {
                 <div className="flex-1 min-w-[200px]">
                   <label className="label text-[10px] mb-0.5">Search · bill no / vendor</label>
                   <input className="input text-xs" placeholder="e.g. PB-0042 or vendor name"
-                    value={billsListSearch} onChange={e => { setBillsListSearch(e.target.value); setBillsListPage(1); }} />
+                    value={billsListSearchInput} onChange={e => { setBillsListSearchInput(e.target.value); setBillsListPage(1); }} />
                 </div>
                 <div>
                   <label className="label text-[10px] mb-0.5">Bill Date From</label>
@@ -4863,18 +5332,19 @@ export default function Procurement() {
                   <input className="input text-xs" type="date" value={billsListTo}
                     onChange={e => { setBillsListTo(e.target.value); setBillsListPage(1); }} />
                 </div>
-                {(billsListSearch || billsListFrom || billsListTo) && (
+                {(billsListSearchInput || billsListSearch || billsListFrom || billsListTo) && (
                   <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                    onClick={() => { setBillsListSearch(''); setBillsListFrom(''); setBillsListTo(''); setBillsListPage(1); }}>Reset</button>
+                    onClick={() => { setBillsListSearchInput(''); setBillsListSearch(''); setBillsListFrom(''); setBillsListTo(''); setBillsListPage(1); }}>Reset</button>
                 )}
                 <div className="ml-auto text-[11px] text-gray-500">
-                  Showing <span className="font-semibold text-gray-700">{filteredBills.length}</span> of {purchaseBills.length}
+                  Showing <span className="font-semibold text-gray-700">{billsListTotal > 0 ? `${billsListPg.from + 1}–${billsListPg.to}` : 0}</span> of {billsListTotal}
                 </div>
               </div>
           <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
             <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
-              {billsListPg.rows.map(b => (
+              {billsListLoading && <tr><td colSpan="10" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
+              {!billsListLoading && billsListPg.rows.map(b => (
                 <tr key={b.id}>
                   <td className="font-medium">{b.bill_number}</td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
                   <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
@@ -4897,21 +5367,25 @@ export default function Procurement() {
                     {b.vendor_po_id && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
                     {canDelete('procurement') && <button onClick={async () => {
                     if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
-                    try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
+                    try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); fetchBillsListPage(); }
                     catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
                   }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
                   </td>
                 </tr>
               ))}
-              {purchaseBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
-              {purchaseBills.length > 0 && filteredBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills match the current filters.</td></tr>}
+              {!billsListLoading && billsListTotal === 0 && (
+                <tr><td colSpan="10" className="text-center py-8 text-gray-400">
+                  {(billsListSearch || billsListFrom || billsListTo) ? 'No bills match the current filters.' : 'No bills yet'}
+                </td></tr>
+              )}
             </tbody>
             <tfoot><tr><td colSpan="10" className="border-t border-gray-100"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></td></tr></tfoot>
           </table></div>
 
           {/* Mobile cards — polished pattern matching Indents (mam). */}
           <div className="md:hidden space-y-3">
-            {billsListPg.rows.map(b => (
+            {billsListLoading && <div className="card p-6 text-center text-gray-500 text-sm"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...</div>}
+            {!billsListLoading && billsListPg.rows.map(b => (
               <div key={b.id} className="card p-3 space-y-2">
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
@@ -4953,8 +5427,6 @@ export default function Procurement() {
                 )}
                 {(b.vendor_po_id || canDelete('procurement')) && (
                   <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-                    {/* Edit received qty — desktop-table action, now on mobile too
-                        (mam 2026-07-06: edit options must show on the phone). */}
                     {b.vendor_po_id && (
                       <button onClick={() => openEditQty(b)} title="Edit received qty (updates the challan)"
                         className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit qty</button>
@@ -4962,7 +5434,7 @@ export default function Procurement() {
                     {canDelete('procurement') && (
                       <button onClick={async () => {
                         if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
-                        try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
+                        try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); fetchBillsListPage(); }
                         catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
                       }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
                         <FiTrash2 size={11} /> Delete
@@ -4972,8 +5444,11 @@ export default function Procurement() {
                 )}
               </div>
             ))}
-            {purchaseBills.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No bills yet</div>}
-            {purchaseBills.length > 0 && filteredBills.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No bills match the current filters.</div>}
+            {!billsListLoading && billsListTotal === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">
+                {(billsListSearch || billsListFrom || billsListTo) ? 'No bills match the current filters.' : 'No bills yet'}
+              </div>
+            )}
             <Pagination pg={billsListPg} setPerPage={setBillsListPerPage} />
           </div>
             </>
@@ -4983,49 +5458,40 @@ export default function Procurement() {
       })()}
 
       {tab === 'delivery' && (() => {
-        // "Ready to Dispatch" — billed POs that still need a client SALES
-        // BILL.  mam (2026-06-04): uploading a bill now auto-creates a
-        // challan (a receiving doc), so the old "billed but no delivery
-        // note" rule always came up empty.  The remaining action is the
-        // Sales Bill, so list POs that have a bill but NO sales bill yet.
-        const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
-        // A PO counts as sales-billed when it has a sales_bill delivery note
-        // OR its challan carries a sales_bill_number. The auto-challan from
-        // a Purchase Bill does NOT count.
-        const salesBilledPoIds = new Set(
-          deliveryNotes.filter(d => d.document_type === 'sales_bill' || d.sales_bill_number).map(d => d.vendor_po_id).filter(Boolean)
-        );
-        const readyToDispatch = vendorPos.filter(po =>
-          billedPoIds.has(po.id) && !salesBilledPoIds.has(po.id) && !po.cancelled
-        );
-        // Sales-Bill-pending challans with NO Vendor PO (i.e. from-store
-        // challans) — they can't ride the PO list above, so surface them
-        // here too (mam 2026-06-04: "if SB pending, also show in Ready to
-        // Dispatch").  PO challans that are SB-pending are already covered
-        // by readyToDispatch (billed PO, not yet sales-billed).
-        const sbPendingDNs = deliveryNotes.filter(d =>
-          d.sales_bill_pending === 1 && !d.sales_bill_number && d.document_type === 'challan' && !d.vendor_po_id
-        );
+        // Server-driven pagination & filtering for Ready to Dispatch
+        const readyTotalPages = Math.max(1, Math.ceil(dispReadyTotal / dispReadyPerPage));
+        const readyFromIdx = dispReadyTotal > 0 ? (dispReadyPage - 1) * dispReadyPerPage : 0;
+        const readyToIdx = Math.min(readyFromIdx + dispReadyPerPage, dispReadyTotal);
+        const readyPg = {
+          page: dispReadyPage,
+          pages: readyTotalPages,
+          perPage: dispReadyPerPage,
+          total: dispReadyTotal,
+          from: readyFromIdx,
+          to: readyToIdx,
+          setPage: setDispReadyPage,
+          rows: dispReadyRows,
+          hasPrev: dispReadyPage > 1,
+          hasNext: dispReadyPage < readyTotalPages,
+        };
+        const sbPendingDNs = dispReadySbPending || [];
 
-        // Sub-tab filtering (mam 2026-05-25)
-        const rSearch = dispReadySearch.trim().toLowerCase();
-        const filteredReady = readyToDispatch.filter(po => {
-          if (!rSearch) return true;
-          const hay = `${po.po_number || ''} ${po.vendor_name || ''} ${po.indent_number || ''}`.toLowerCase();
-          return hay.includes(rSearch);
-        });
-        const readyPg = usePagination(filteredReady, dispReadyPerPage, dispReadyPage, setDispReadyPage);
-
-        const dSearch = dispListSearch.trim().toLowerCase();
-        const filteredDispatch = deliveryNotes.filter(d => {
-          if (dispListStatus !== 'all' && d.status !== dispListStatus) return false;
-          if (dispListFrom && d.received_on && d.received_on.slice(0, 10) < dispListFrom) return false;
-          if (dispListTo   && d.received_on && d.received_on.slice(0, 10) > dispListTo) return false;
-          if (!dSearch) return true;
-          const hay = `${d.po_number || ''} ${d.vendor_po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''} ${d.raised_by_name || ''}`.toLowerCase();
-          return hay.includes(dSearch);
-        });
-        const dispListPg = usePagination(filteredDispatch, dispListPerPage, dispListPage, setDispListPage);
+        // Server-driven pagination & filtering for Dispatch & Receiving Notes
+        const dispListTotalPages = Math.max(1, Math.ceil(dispListTotal / dispListPerPage));
+        const dispListFromIdx = dispListTotal > 0 ? (dispListPage - 1) * dispListPerPage : 0;
+        const dispListToIdx = Math.min(dispListFromIdx + dispListPerPage, dispListTotal);
+        const dispListPg = {
+          page: dispListPage,
+          pages: dispListTotalPages,
+          perPage: dispListPerPage,
+          total: dispListTotal,
+          from: dispListFromIdx,
+          to: dispListToIdx,
+          setPage: setDispListPage,
+          rows: dispListRows,
+          hasPrev: dispListPage > 1,
+          hasNext: dispListPage < dispListTotalPages,
+        };
         // Detect item-type hint for each PO (if any indent_item linked is type=PO,
         // suggest Sales Bill; else suggest Challan). We don't have per-item info
         // on the client, so the dropdown defaults to Sales Bill and user can switch.
@@ -5309,18 +5775,20 @@ export default function Procurement() {
             <div className="flex gap-1 border-b border-gray-200 -mb-px">
               <button onClick={() => setDispatchSubTab('ready')}
                 className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'ready' ? 'border-indigo-500 text-indigo-700 bg-indigo-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Ready to Dispatch <span className="ml-1 text-[10px] opacity-80">({readyToDispatch.length + sbPendingDNs.length})</span>
+                Ready to Dispatch <span className="ml-1 text-[10px] opacity-80">({dispReadyTotal + (sbPendingDNs.length)})</span>
               </button>
               <button onClick={() => setDispatchSubTab('list')}
                 className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Dispatch &amp; Receiving <span className="ml-1 text-[10px] opacity-80">({deliveryNotes.length})</span>
+                Dispatch &amp; Receiving <span className="ml-1 text-[10px] opacity-80">({dispListTotal})</span>
               </button>
             </div>
           </div>
 
           {/* ===== Sub-tab 1: Ready to dispatch ===== */}
-          {dispatchSubTab === 'ready' && readyToDispatch.length === 0 && sbPendingDNs.length === 0 && (
-            <div className="card text-center py-8 text-gray-400 text-xs">Nothing awaiting a Sales Bill / dispatch. 🎉</div>
+          {dispatchSubTab === 'ready' && dispReadyTotal === 0 && sbPendingDNs.length === 0 && !dispReadyLoading && (
+            <div className="card text-center py-8 text-gray-400 text-xs">
+              {(dispReadySearchInput || dispReadySearch) ? 'No POs match the current search.' : 'Nothing awaiting a Sales Bill / dispatch. 🎉'}
+            </div>
           )}
           {/* From-store (no-PO) challans awaiting a Sales Bill — mam 2026-06-04. */}
           {dispatchSubTab === 'ready' && sbPendingDNs.length > 0 && (
@@ -5354,12 +5822,12 @@ export default function Procurement() {
               </div>
             </div>
           )}
-          {dispatchSubTab === 'ready' && readyToDispatch.length > 0 && (
+          {dispatchSubTab === 'ready' && (dispReadyTotal > 0 || dispReadyLoading) && (
             <div className="card p-3 bg-indigo-50 border border-indigo-200">
               <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
                 <h4 className="font-semibold text-indigo-800 text-sm">
                   Ready to Dispatch
-                  <span className="text-xs font-normal text-indigo-600 ml-2">({readyToDispatch.length} PO{readyToDispatch.length === 1 ? '' : 's'})</span>
+                  <span className="text-xs font-normal text-indigo-600 ml-2">({dispReadyTotal} PO{dispReadyTotal === 1 ? '' : 's'})</span>
                 </h4>
                 <span className="text-[11px] text-indigo-700">POs with Purchase Bill uploaded but no Dispatch yet — Sales Bill for PO items, Challan for FOC/RGP</span>
               </div>
@@ -5368,14 +5836,14 @@ export default function Procurement() {
                 <div className="flex-1 min-w-[200px]">
                   <label className="label text-[10px] mb-0.5 text-indigo-900">Search · PO no / vendor / indent</label>
                   <input className="input text-xs" placeholder="e.g. VPO-0042"
-                    value={dispReadySearch} onChange={e => { setDispReadySearch(e.target.value); setDispReadyPage(1); }} />
+                    value={dispReadySearchInput} onChange={e => { setDispReadySearchInput(e.target.value); setDispReadyPage(1); }} />
                 </div>
-                {dispReadySearch && (
+                {(dispReadySearchInput || dispReadySearch) && (
                   <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                    onClick={() => { setDispReadySearch(''); setDispReadyPage(1); }}>Reset</button>
+                    onClick={() => { setDispReadySearchInput(''); setDispReadySearch(''); setDispReadyPage(1); }}>Reset</button>
                 )}
                 <div className="ml-auto text-[11px] text-indigo-900">
-                  Showing <span className="font-semibold">{filteredReady.length}</span> of {readyToDispatch.length}
+                  Showing <span className="font-semibold">{dispReadyTotal > 0 ? `${readyPg.from + 1}–${readyPg.to}` : 0}</span> of {dispReadyTotal}
                 </div>
               </div>
               <div className="hidden md:block overflow-auto max-h-[70vh]">
@@ -5389,7 +5857,12 @@ export default function Procurement() {
                     <th className="px-2 py-1"></th>
                   </tr></thead>
                   <tbody>
-                    {readyPg.rows.map(po => (
+                    {dispReadyLoading && (
+                      <tr><td colSpan="6" className="text-center py-8 text-indigo-700">
+                        <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading ready to dispatch POs...
+                      </td></tr>
+                    )}
+                    {!dispReadyLoading && readyPg.rows.map(po => (
                       <tr key={po.id} className="border-b border-indigo-100">
                         <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">
                           {po.po_number}
@@ -5412,8 +5885,8 @@ export default function Procurement() {
                         </td>
                       </tr>
                     ))}
-                    {filteredReady.length === 0 && (
-                      <tr><td colSpan="6" className="text-center py-6 text-indigo-700">No POs match the current filters.</td></tr>
+                    {!dispReadyLoading && dispReadyTotal === 0 && (
+                      <tr><td colSpan="6" className="text-center py-6 text-indigo-700">No POs match the current search.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -5421,7 +5894,12 @@ export default function Procurement() {
 
               {/* Mobile cards — polished pattern matching Indents (mam). */}
               <div className="md:hidden space-y-3">
-                {readyPg.rows.map(po => (
+                {dispReadyLoading && (
+                  <div className="card p-6 text-center text-indigo-700 text-sm">
+                    <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
+                  </div>
+                )}
+                {!dispReadyLoading && readyPg.rows.map(po => (
                   <div key={po.id} className="card p-3 space-y-2">
                     <div className="flex justify-between items-start gap-2">
                       <div className="flex-1 min-w-0">
@@ -5460,8 +5938,8 @@ export default function Procurement() {
                     <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
                   </div>
                 ))}
-                {filteredReady.length === 0 && (
-                  <div className="card p-6 text-center text-indigo-700 text-sm">No POs match the current filters.</div>
+                {!dispReadyLoading && dispReadyTotal === 0 && (
+                  <div className="card p-6 text-center text-indigo-700 text-sm">No POs match the current search.</div>
                 )}
               </div>
               <Pagination pg={readyPg} setPerPage={setDispReadyPerPage} className="border-t border-indigo-200 pt-2" />
@@ -5491,7 +5969,7 @@ export default function Procurement() {
                 <div className="flex-1 min-w-[200px]">
                   <label className="label text-[10px] mb-0.5">Search · PO no / doc no / received by</label>
                   <input className="input text-xs" placeholder="e.g. VPO-0042"
-                    value={dispListSearch} onChange={e => { setDispListSearch(e.target.value); setDispListPage(1); }} />
+                    value={dispListSearchInput} onChange={e => { setDispListSearchInput(e.target.value); setDispListPage(1); }} />
                 </div>
                 <div>
                   <label className="label text-[10px] mb-0.5">Status</label>
@@ -5512,12 +5990,12 @@ export default function Procurement() {
                   <input className="input text-xs" type="date" value={dispListTo}
                     onChange={e => { setDispListTo(e.target.value); setDispListPage(1); }} />
                 </div>
-                {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) && (
+                {(dispListSearchInput || dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) && (
                   <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                    onClick={() => { setDispListSearch(''); setDispListStatus('all'); setDispListFrom(''); setDispListTo(''); setDispListPage(1); }}>Reset</button>
+                    onClick={() => { setDispListSearchInput(''); setDispListSearch(''); setDispListStatus('all'); setDispListFrom(''); setDispListTo(''); setDispListPage(1); }}>Reset</button>
                 )}
                 <div className="ml-auto text-[11px] text-gray-500">
-                  Showing <span className="font-semibold text-gray-700">{filteredDispatch.length}</span> of {deliveryNotes.length}
+                  Showing <span className="font-semibold text-gray-700">{dispListTotal > 0 ? `${dispListPg.from + 1}–${dispListPg.to}` : 0}</span> of {dispListTotal}
                 </div>
               </div>
           <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
@@ -5539,7 +6017,8 @@ export default function Procurement() {
                   "Ready to Dispatch" sub-tab where the client Sales Bill /
                   Delivery Note is created; once created, the real DN shows here
                   for the client's signed receipt. */}
-              {dispListPg.rows.map(d => (
+              {dispListLoading && <tr><td colSpan="12" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading dispatches...</td></tr>}
+              {!dispListLoading && dispListPg.rows.map(d => (
                 <tr key={d.id}>
                   <td className="font-mono font-semibold text-blue-800">
                     {d.document_number || <span className="text-gray-300 font-sans">—</span>}
@@ -5631,14 +6110,17 @@ export default function Procurement() {
                     )}
                     {canDelete('procurement') && <button onClick={async () => {
                       if (!confirm(`Delete dispatch #${d.id}?`)) return;
-                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); load(); }
+                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); fetchDispListPage(); }
                       catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
                     }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
                   </td>
                 </tr>
               ))}
-              {deliveryNotes.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
-              {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
+              {!dispListLoading && dispListTotal === 0 && (
+                <tr><td colSpan="12" className="text-center py-8 text-gray-400">
+                  {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) ? 'No dispatches match the current filters.' : 'No dispatches yet'}
+                </td></tr>
+              )}
             </tbody>
             <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
           </table></div>
@@ -5652,7 +6134,12 @@ export default function Procurement() {
           <div className="md:hidden space-y-3">
             {/* Vendor-PO "Upload Receiving" cards removed — receiving is only
                 against client delivery notes (mam 2026-06-06). */}
-            {dispListPg.rows.map(d => (
+            {dispListLoading && (
+              <div className="card p-6 text-center text-gray-500 text-sm">
+                <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
+              </div>
+            )}
+            {!dispListLoading && dispListPg.rows.map(d => (
               <div key={d.id} className="card p-3 space-y-2">
                 <div className="flex justify-between items-start gap-2">
                   <div className="flex-1 min-w-0">
@@ -5743,7 +6230,7 @@ export default function Procurement() {
                   {canDelete('procurement') && (
                     <button onClick={async () => {
                       if (!confirm(`Delete dispatch #${d.id}?`)) return;
-                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); load(); }
+                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); fetchDispListPage(); }
                       catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
                     }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
                       <FiTrash2 size={11} /> Delete
@@ -5752,8 +6239,11 @@ export default function Procurement() {
                 </div>
               </div>
             ))}
-            {deliveryNotes.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches yet</div>}
-            {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches match the current filters.</div>}
+            {!dispListLoading && dispListTotal === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">
+                {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) ? 'No dispatches match the current filters.' : 'No dispatches yet'}
+              </div>
+            )}
             <Pagination pg={dispListPg} setPerPage={setDispListPerPage} />
           </div>
             </>
@@ -6824,7 +7314,7 @@ export default function Procurement() {
               <label className="label">Link to Indent <span className="text-gray-400 font-normal">(optional)</span></label>
               <select className="select" value={form.indent_id || ''} onChange={e => pickIndentForPo(e.target.value)}>
                 <option value="">— No indent link —</option>
-                {indents.map(i => <option key={i.id} value={i.id}>{i.indent_number} — {i.site_name}</option>)}
+                {(indentLookup.length ? indentLookup : indents).map(i => <option key={i.id} value={i.id}>{i.indent_number} — {i.site_name}</option>)}
               </select>
               <p className="text-[10px] text-gray-400 mt-0.5">Picking an indent auto-fills the vendor + loads its items below for selection.</p>
             </div>

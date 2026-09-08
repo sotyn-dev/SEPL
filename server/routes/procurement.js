@@ -812,35 +812,134 @@ router.get('/indents', (req, res) => {
   // to its actual raiser.  Now we OR-in a name match on the
   // raised_by_name field — set by the same form that captured the
   // indent — so engineers always see what they put their name on.
-  const where = canSeeAll
-    ? ''
-    : `WHERE (i.created_by = ?
-             OR (i.raised_by_name IS NOT NULL
-                 AND LENGTH(TRIM(i.raised_by_name)) > 0
-                 AND LOWER(TRIM(i.raised_by_name)) = LOWER(TRIM(?))))`;
-  const params = canSeeAll ? [] : [req.user.id, req.user.name || ''];
-  const indents = db.prepare(
-    `SELECT i.*, u.name as created_by_name,
+  const {
+    page: rawPage,
+    limit: rawLimit,
+    status,
+    category,
+    from,
+    to,
+    search,
+    q,
+    export: isExport,
+  } = req.query;
+
+  const searchTerm = (search || q || '').trim();
+
+  // Base permission where conditions
+  const baseConds = [];
+  const baseParams = [];
+  if (!canSeeAll) {
+    baseConds.push(`(i.created_by = ? OR (i.raised_by_name IS NOT NULL AND LENGTH(TRIM(i.raised_by_name)) > 0 AND LOWER(TRIM(i.raised_by_name)) = LOWER(TRIM(?))))`);
+    baseParams.push(req.user.id, req.user.name || '');
+  }
+
+  // Date and search filters (apply to both kpiScope and the list)
+  const kpiConds = [...baseConds];
+  const kpiParams = [...baseParams];
+
+  if (from) {
+    kpiConds.push(`DATE(COALESCE(i.indent_date, i.created_at)) >= DATE(?)`);
+    kpiParams.push(from);
+  }
+  if (to) {
+    kpiConds.push(`DATE(COALESCE(i.indent_date, i.created_at)) <= DATE(?)`);
+    kpiParams.push(to);
+  }
+  if (searchTerm) {
+    kpiConds.push(`(
+      i.indent_number LIKE ? OR
+      i.site_name LIKE ? OR
+      i.client_name LIKE ? OR
+      i.raised_by_name LIKE ? OR
+      u.name LIKE ?
+    )`);
+    const like = `%${searchTerm}%`;
+    kpiParams.push(like, like, like, like, like);
+  }
+
+  // Specific list filters (status, category)
+  const listConds = [...kpiConds];
+  const listParams = [...kpiParams];
+
+  if (status && status !== 'all') {
+    if (status === 'submitted') {
+      listConds.push(`i.status IN ('submitted', 'crm_approved')`);
+    } else {
+      listConds.push(`i.status = ?`);
+      listParams.push(status);
+    }
+  }
+
+  if (category && category !== 'all') {
+    listConds.push(`COALESCE(NULLIF(TRIM(i.indent_category), ''), 'material') = ?`);
+    listParams.push(category);
+  }
+
+  const kpiWhereSql = kpiConds.length ? `WHERE ${kpiConds.join(' AND ')}` : '';
+  const listWhereSql = listConds.length ? `WHERE ${listConds.join(' AND ')}` : '';
+
+  // Compute KPI summary dashboard numbers directly on DB
+  const kpiAgg = db.prepare(`
+    SELECT
+      COUNT(DISTINCT i.id) as total_count,
+      COALESCE(SUM(ib.budget), 0) as total_budget,
+      COUNT(DISTINCT CASE WHEN i.status IN ('submitted', 'crm_approved') THEN i.id END) as submitted_count,
+      COALESCE(SUM(CASE WHEN i.status IN ('submitted', 'crm_approved') THEN ib.budget ELSE 0 END), 0) as submitted_budget,
+      COUNT(DISTINCT CASE WHEN i.status = 'l1_approved' THEN i.id END) as l1_approved_count,
+      COALESCE(SUM(CASE WHEN i.status = 'l1_approved' THEN ib.budget ELSE 0 END), 0) as l1_approved_budget,
+      COUNT(DISTINCT CASE WHEN i.status = 'approved' THEN i.id END) as approved_count,
+      COALESCE(SUM(CASE WHEN i.status = 'approved' THEN ib.budget ELSE 0 END), 0) as approved_budget,
+      COUNT(DISTINCT CASE WHEN i.status = 'rejected' THEN i.id END) as rejected_count,
+      COALESCE(SUM(CASE WHEN i.status = 'rejected' THEN ib.budget ELSE 0 END), 0) as rejected_budget,
+      COUNT(DISTINCT CASE WHEN i.status = 'po_sent' THEN i.id END) as po_sent_count,
+      COALESCE(SUM(CASE WHEN i.status = 'po_sent' THEN ib.budget ELSE 0 END), 0) as po_sent_budget,
+      COUNT(DISTINCT CASE WHEN i.status IN ('approved', 'po_sent', 'dispatched', 'received') THEN i.id END) as post_approval_count
+    FROM indents i
+    LEFT JOIN users u ON i.created_by = u.id
+    LEFT JOIN (
+      SELECT ii.indent_id,
+             SUM(
+               COALESCE(
+                 NULLIF(im.current_price, 0),
+                 (SELECT iph.rate FROM item_price_history iph WHERE iph.item_id = ii.item_master_id ORDER BY iph.created_at DESC LIMIT 1),
+                 0
+               ) * COALESCE(ii.quantity, 0)
+             ) as budget
+      FROM indent_items ii
+      LEFT JOIN item_master im ON ii.item_master_id = im.id
+      GROUP BY ii.indent_id
+    ) ib ON ib.indent_id = i.id
+    ${kpiWhereSql}
+  `).get(...kpiParams) || {};
+
+  const poGen = db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as amount FROM vendor_pos WHERE COALESCE(cancelled, 0) = 0`).get() || { count: 0, amount: 0 };
+  const payReq = db.prepare(`SELECT COUNT(*) as count, COALESCE(SUM(payment_block_amount), 0) as amount FROM vendor_pos WHERE COALESCE(cancelled, 0) = 0 AND payment_block_status = 'pending'`).get() || { count: 0, amount: 0 };
+
+  const isPaginated = rawPage != null && isExport !== '1';
+  const page = Math.max(1, parseInt(rawPage, 10) || 1);
+  const limit = Math.min(500, Math.max(1, parseInt(rawLimit, 10) || 15));
+  const offset = (page - 1) * limit;
+
+  const total = db.prepare(`
+    SELECT COUNT(*) as c
+    FROM indents i
+    LEFT JOIN users u ON i.created_by = u.id
+    ${listWhereSql}
+  `).get(...listParams).c;
+
+  let indentsSql = `
+    SELECT i.*, u.name as created_by_name,
             au.name as approved_by_name,
             ru.name as rejected_by_name,
             l1u.name as l1_by_name,
             l2u.name as l2_by_name,
             cu.name as crm_by_name,
-            -- Order Planning context (mam 2026-06-03): for Extra-item CRM
-            -- approval, surface which project/site this indent belongs to
-            -- via planning_id → order_planning → business_book, plus the
-            -- CRM owner.  Display-only; does NOT restrict who can approve.
             COALESCE(NULLIF(TRIM(opb.project_name), ''),
                      NULLIF(TRIM(opb.company_name), ''),
                      NULLIF(TRIM(opb.client_name), '')) as planning_project,
             opb.owner as planning_owner,
-            -- CRM person assigned on the linked Client PO (Sushila/Lovely).
-            -- The frontend lets this person act on the CRM stage even without
-            -- crm_funnel role access — must agree with the server gate.
             opo.crm_name as planning_crm_name,
-            -- Billable preview (mam 2026-06-16): the order's Business Book and
-            -- its Against-Delivery % so the list can show BOQ-sale value and
-            -- the delivery-billable slice next to the internal Budget.
             op.business_book_id AS business_book_id,
             opb.payment_against_delivery AS bb_delivery_terms
      FROM indents i
@@ -853,89 +952,75 @@ router.get('/indents', (req, res) => {
      LEFT JOIN order_planning op ON op.id = i.planning_id
      LEFT JOIN business_book opb ON opb.id = op.business_book_id
      LEFT JOIN purchase_orders opo ON opo.id = op.po_id
-     ${where}
-     ORDER BY i.created_at DESC`
-  ).all(...params);
+     ${listWhereSql}
+     ORDER BY i.created_at DESC
+  `;
 
-  // Pull every indent_item in one query and group client-side so the
-  // listing can show what was raised without a per-row API call.
-  // Also pulls item_master.item_code / specification / size so the expanded
-  // view can show the actual Sub-Item (Item Master entry) alongside the
-  // BOQ description — the BOQ description is often very long and identical
-  // across rows of the same BOQ, so the sub-item column is what tells the
-  // rows apart at a glance.
-  //
-  // Budget rate resolution (mam 2026-05-25 follow-up):
-  //   1. Prefer im.current_price (the item-wise master sheet rate)
-  //   2. If that's 0 or NULL, fall back to the MOST RECENT rate from
-  //      item_price_history for the same item_master_id — covers older
-  //      items that haven't been re-priced into the master yet
-  //   3. Otherwise 0  →  UI shows "—"
-  // rate_source tells the UI which fallback hit so mam knows whether the
-  // displayed rate came from master or history.
-  const allItems = db.prepare(
-    `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity, ii.po_item_id,
-            -- Show the CURRENT Item Master UOM for linked items so a later
-            -- unit change in Item Master reflects here (mam 2026-06-10);
-            -- manual lines keep their own stored unit. EXCEPTION: a per-line
-            -- unit override set by the approver (unit_overridden=1, e.g. MTR→KG
-            -- at approval) WINS over the master UOM — otherwise the master UOM
-            -- masks it (mam 2026-07-01: "changed to KG but BoQ still showed MTR").
-            CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
-                   THEN ii.unit ELSE COALESCE(NULLIF(im.uom, ''), ii.unit) END AS unit, ii.item_type, ii.item_master_id,
-            ii.is_extra_schedule, ii.is_extra_non_schedule,
-            ii.rental_days, ii.rental_rate_per_day,
-            -- Source split (mam 2026-06-02): 'store' lines came from
-            -- existing office inventory at approval; 'procure' lines
-            -- continue through the normal vendor PO flow. parent_item_id
-            -- ties a 'store' child to its 'procure' sibling on the same
-            -- BOQ line.  sin.note_number is the printable SI/####.
-            ii.source, ii.parent_item_id, ii.stock_issue_note_id,
-            sin.note_number as stock_issue_number,
-            sin.issued_at as stock_issued_at,
-            im.item_code, im.item_name as master_name,
-            im.specification as master_specification, im.size as master_size,
-            COALESCE(
-              NULLIF(im.current_price, 0),
-              (SELECT iph.rate
-                 FROM item_price_history iph
-                WHERE iph.item_id = ii.item_master_id
-                ORDER BY iph.created_at DESC
-                LIMIT 1),
-              0
-            ) as master_price,
-            CASE
-              WHEN COALESCE(im.current_price, 0) > 0 THEN 'master'
-              WHEN (SELECT iph.rate FROM item_price_history iph
-                     WHERE iph.item_id = ii.item_master_id
-                     ORDER BY iph.created_at DESC LIMIT 1) > 0 THEN 'history'
-              ELSE 'none'
-            END as rate_source,
-            COALESCE(
-              NULLIF(im.current_price, 0),
-              (SELECT iph.rate
-                 FROM item_price_history iph
-                WHERE iph.item_id = ii.item_master_id
-                ORDER BY iph.created_at DESC
-                LIMIT 1),
-              0
-            ) * COALESCE(ii.quantity, 0) as line_budget,
-            -- PO coverage (mam 2026-06-23): how much of this indent line is
-            -- already on a (non-cancelled) Vendor PO. The UI shows the
-            -- still-pending qty = indent qty − po_qty (e.g. 100 indent, 70
-            -- on a PO → 30 pending).
-            COALESCE((
-              SELECT SUM(vpi.quantity)
-                FROM vendor_po_items vpi
-                JOIN vendor_pos vp ON vp.id = vpi.vendor_po_id
-               WHERE vpi.indent_item_id = ii.id
-                 AND COALESCE(vp.cancelled, 0) = 0
-            ), 0) as po_qty
-     FROM indent_items ii
-     LEFT JOIN item_master im ON ii.item_master_id = im.id
-     LEFT JOIN stock_issue_notes sin ON sin.id = ii.stock_issue_note_id
-     ORDER BY ii.id`
-  ).all();
+  let indents;
+  if (isPaginated) {
+    indentsSql += ` LIMIT ? OFFSET ?`;
+    indents = db.prepare(indentsSql).all(...listParams, limit, offset);
+  } else {
+    indents = db.prepare(indentsSql).all(...listParams);
+  }
+
+  // Scoped item fetching: only fetch indent_items for the indents being returned!
+  const indentIds = indents.map(i => i.id);
+  let allItems = [];
+  if (indentIds.length > 0) {
+    const placeholders = indentIds.map(() => '?').join(',');
+    allItems = db.prepare(
+      `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity, ii.po_item_id,
+              CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
+                     THEN ii.unit ELSE COALESCE(NULLIF(im.uom, ''), ii.unit) END AS unit,
+              ii.item_type, ii.item_master_id,
+              ii.is_extra_schedule, ii.is_extra_non_schedule,
+              ii.rental_days, ii.rental_rate_per_day,
+              ii.source, ii.parent_item_id, ii.stock_issue_note_id,
+              sin.note_number as stock_issue_number,
+              sin.issued_at as stock_issued_at,
+              im.item_code, im.item_name as master_name,
+              im.specification as master_specification, im.size as master_size,
+              COALESCE(
+                NULLIF(im.current_price, 0),
+                (SELECT iph.rate
+                   FROM item_price_history iph
+                  WHERE iph.item_id = ii.item_master_id
+                  ORDER BY iph.created_at DESC
+                  LIMIT 1),
+                0
+              ) as master_price,
+              CASE
+                WHEN COALESCE(im.current_price, 0) > 0 THEN 'master'
+                WHEN (SELECT iph.rate FROM item_price_history iph
+                       WHERE iph.item_id = ii.item_master_id
+                       ORDER BY iph.created_at DESC LIMIT 1) > 0 THEN 'history'
+                ELSE 'none'
+              END as rate_source,
+              COALESCE(
+                NULLIF(im.current_price, 0),
+                (SELECT iph.rate
+                   FROM item_price_history iph
+                  WHERE iph.item_id = ii.item_master_id
+                  ORDER BY iph.created_at DESC
+                  LIMIT 1),
+                0
+              ) * COALESCE(ii.quantity, 0) as line_budget,
+              COALESCE((
+                SELECT SUM(vpi.quantity)
+                  FROM vendor_po_items vpi
+                  JOIN vendor_pos vp ON vp.id = vpi.vendor_po_id
+                 WHERE vpi.indent_item_id = ii.id
+                   AND COALESCE(vp.cancelled, 0) = 0
+              ), 0) as po_qty
+       FROM indent_items ii
+       LEFT JOIN item_master im ON ii.item_master_id = im.id
+       LEFT JOIN stock_issue_notes sin ON sin.id = ii.stock_issue_note_id
+       WHERE ii.indent_id IN (${placeholders})
+       ORDER BY ii.id`
+    ).all(...indentIds);
+  }
+
   const itemsByIndent = new Map();
   const budgetByIndent = new Map();
   for (const it of allItems) {
@@ -1100,7 +1185,7 @@ router.get('/indents', (req, res) => {
     crm: crmList.map(u => u.name).join(', ') || null,
   };
 
-  res.json(indents.map(i => ({
+  const rows = indents.map(i => ({
     ...i,
     boq_file_link: findBoq(i.site_name || i.client_name),
     items: itemsByIndent.get(i.id) || [],
@@ -1118,7 +1203,60 @@ router.get('/indents', (req, res) => {
     // CRM named approvers — additional allow; empty list grants nobody extra.
     crm_approver_ids: crmList.map(u => u.id),
     l2_enabled: l2On,
-  })));
+  }));
+
+  if (isPaginated) {
+    return res.json({
+      rows,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      kpis: {
+        total_count: kpiAgg.total_count || 0,
+        total_budget: kpiAgg.total_budget || 0,
+        submitted_count: kpiAgg.submitted_count || 0,
+        submitted_budget: kpiAgg.submitted_budget || 0,
+        l1_approved_count: kpiAgg.l1_approved_count || 0,
+        l1_approved_budget: kpiAgg.l1_approved_budget || 0,
+        approved_count: kpiAgg.approved_count || 0,
+        approved_budget: kpiAgg.approved_budget || 0,
+        rejected_count: kpiAgg.rejected_count || 0,
+        rejected_budget: kpiAgg.rejected_budget || 0,
+        po_sent_count: kpiAgg.po_sent_count || 0,
+        po_sent_budget: kpiAgg.po_sent_budget || 0,
+        post_approval_count: kpiAgg.post_approval_count || 0,
+        po_gen_count: poGen.count || 0,
+        po_gen_amount: poGen.amount || 0,
+        pay_req_count: payReq.count || 0,
+        pay_req_amount: payReq.amount || 0,
+      },
+      l2_enabled: l2On,
+      approval_meta: {
+        l1_approver_ids: l1List.map(u => u.id),
+        l2_approver_ids: l2List.map(u => u.id),
+        crm_approver_ids: crmList.map(u => u.id),
+      }
+    });
+  }
+
+  res.json(rows);
+});
+
+// Lightweight indent lookup for dropdown pickers (e.g. Create Vendor PO)
+router.get('/indents/lookup', (req, res) => {
+  try {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT id, indent_number, site_name, client_name
+      FROM indents
+      ORDER BY id DESC
+      LIMIT 200
+    `).all();
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── L2 approval on/off switch (mam 2026-07-21) — DEAD, NO CALLERS ──────
@@ -3182,10 +3320,80 @@ router.get('/indents/:id', (req, res) => {
 // as its own exception type (TODO).
 router.get('/vendor-po', (req, res) => {
   const db = getDb();
-  // Mam (2026-05-20): "show here also indent number so that easily
-  // can see".  Added LEFT JOIN indents so each row carries
-  // indent_number + site_name for the Follow-up table.
-  const rows = db.prepare(`
+  const { page, limit, status, from, to, q, search, export: isExport } = req.query;
+
+  const whereClauses = [];
+  const params = [];
+
+  // Filter by status: 'cancelled' checks vp.cancelled = 1; others check status and cancelled = 0
+  if (status && status !== 'all') {
+    if (status === 'cancelled') {
+      whereClauses.push('vp.cancelled = 1');
+    } else {
+      whereClauses.push('COALESCE(vp.cancelled, 0) = 0 AND vp.status = ?');
+      params.push(status);
+    }
+  }
+
+  // Date range filters on po_date
+  if (from) {
+    whereClauses.push('DATE(vp.po_date) >= ?');
+    params.push(from);
+  }
+  if (to) {
+    whereClauses.push('DATE(vp.po_date) <= ?');
+    params.push(to);
+  }
+
+  // Search keyword across PO number, indent number, vendor name, site name
+  const queryStr = (q || search || '').trim().toLowerCase();
+  if (queryStr) {
+    whereClauses.push('(LOWER(COALESCE(vp.po_number, \'\')) LIKE ? OR LOWER(COALESCE(ind.indent_number, \'\')) LIKE ? OR LOWER(COALESCE(v.name, \'\')) LIKE ? OR LOWER(COALESCE(ind.site_name, \'\')) LIKE ?)');
+    const likeParam = `%${queryStr}%`;
+    params.push(likeParam, likeParam, likeParam, likeParam);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
+
+  let total = 0;
+  let kpis = null;
+
+  if (isPaginated) {
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) as c
+      FROM vendor_pos vp
+      LEFT JOIN vendors v ON vp.vendor_id = v.id
+      LEFT JOIN indents ind ON vp.indent_id = ind.id
+      ${whereSql}
+    `).get(...params);
+    total = totalRow ? totalRow.c : 0;
+
+    // KPI aggregates across current filter scope:
+    const kpiRow = db.prepare(`
+      SELECT 
+        COUNT(*) as total_count,
+        COALESCE(SUM(vp.total_amount), 0) as total_amount,
+        SUM(CASE WHEN COALESCE(vp.cancelled, 0) = 0 AND vp.payment_block_status = 'pending' THEN 1 ELSE 0 END) as urgent_count,
+        COALESCE(SUM(CASE WHEN COALESCE(vp.cancelled, 0) = 0 AND vp.payment_block_status = 'pending' THEN vp.payment_block_amount ELSE 0 END), 0) as urgent_amount
+      FROM vendor_pos vp
+      LEFT JOIN vendors v ON vp.vendor_id = v.id
+      LEFT JOIN indents ind ON vp.indent_id = ind.id
+      ${whereSql}
+    `).get(...params);
+
+    kpis = {
+      total_count: kpiRow?.total_count || 0,
+      total_amount: kpiRow?.total_amount || 0,
+      urgent_count: kpiRow?.urgent_count || 0,
+      urgent_amount: kpiRow?.urgent_amount || 0,
+    };
+  }
+
+  let selectSql = `
     SELECT vp.*, v.name as vendor_name,
            ind.indent_number, ind.site_name as indent_site_name,
            pcu.name as payment_cleared_by_name,
@@ -3202,20 +3410,19 @@ router.get('/vendor-po', (req, res) => {
     LEFT JOIN users l1u ON vp.po_l1_by = l1u.id
     LEFT JOIN users l2u ON vp.po_l2_by = l2u.id
     LEFT JOIN users rju ON vp.po_reject_by = rju.id
+    ${whereSql}
     ORDER BY vp.created_at DESC
-  `).all();
-  // Who the PO is waiting on right now (list badge + which buttons render).
-  // Resolved ONCE per request from the same resolver the approve/reject gate
-  // uses — this used to be a second hardcoded copy (PO_NEXT), so the chip could
-  // name one person while the gate accepted another. The ids array is what the
-  // client tests membership against; the name string is display only.
-  //
-  // The DISPLAY name falls all the way back to the hardcoded PO_APPROVERS label,
-  // even when that name doesn't resolve to a user — so the badge always reads
-  // "Pending L1 · Nitin Jain" like the old PO_NEXT did, never a blank "· ". The
-  // ids array does NOT get this string fallback (you can't gate a button to a
-  // non-user): if the name resolves, its id is there; if not, only admin + the
-  // stand-in can act — which is exactly what the server gate enforces too.
+  `;
+
+  let rows;
+  if (isPaginated) {
+    const offset = (pageNum - 1) * limitNum;
+    selectSql += ' LIMIT ? OFFSET ?';
+    rows = db.prepare(selectSql).all(...params, limitNum, offset);
+  } else {
+    rows = db.prepare(selectSql).all(...params);
+  }
+
   const poL1 = poApproversFor(db, 1);
   const poL2 = poApproversFor(db, 2);
   const poNameOf = { pending_l1: poL1.map(a => a.name).join(', ') || PO_APPROVERS[1],
@@ -3227,14 +3434,22 @@ router.get('/vendor-po', (req, res) => {
     r.po_l2_approver_ids = poL2.map(a => a.id);
     r.po_pending_approver_ids = r.po_approval === 'pending_l1' ? r.po_l1_approver_ids
                               : r.po_approval === 'pending_l2' ? r.po_l2_approver_ids : [];
-  }
-  // Surface drift so the frontend can show a small warning chip if
-  // the stored header total disagrees with the items sum.
-  for (const r of rows) {
     const stored = +r.total_amount || 0;
     const live = +r.display_total || 0;
     r.total_amount_drift = Math.round(Math.abs(stored - live));
   }
+
+  if (isPaginated) {
+    return res.json({
+      rows,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.max(1, Math.ceil(total / limitNum)),
+      kpis,
+    });
+  }
+
   res.json(rows);
 });
 
@@ -3808,39 +4023,127 @@ router.get('/indents/:id/quotation', (req, res) => {
 // which I fill in indent').
 router.get('/pending-po-items', (req, res) => {
   const db = getDb();
-  const rows = db.prepare(
-    `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity, ii.unit, ii.item_type,
-            ii.item_master_id, im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
-            COALESCE(ii.weight_per_meter, im.weight_per_meter) as weight_per_meter,
-            i.id as indent_id, i.indent_number, i.site_name, i.raised_by_name,
-            r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.status as rate_status
-     FROM indent_items ii
-     JOIN indents i ON ii.indent_id = i.id
-     -- One rate row per item, FINALISED first (mam 2026-07-02: a finalised item
-     -- must reliably reach the Vendor PO step; a plain join both duplicated the
-     -- line and could surface a non-finalised duplicate rate row).
-     LEFT JOIN indent_item_rates r ON r.id = (
-       SELECT r2.id FROM indent_item_rates r2
-        WHERE r2.indent_item_id = ii.id
-        ORDER BY CASE WHEN r2.status = 'finalized' THEN 0 ELSE 1 END,
-                 COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1
-     )
-     LEFT JOIN item_master im ON im.id = ii.item_master_id
-     WHERE NOT EXISTS (
+  const { page, limit, status, q, search, export: isExport } = req.query;
+
+  const baseWhere = [
+    `NOT EXISTS (
        SELECT 1 FROM vendor_po_items vpi
          JOIN vendor_pos vp ON vp.id = vpi.vendor_po_id
         WHERE vpi.indent_item_id = ii.id
           AND COALESCE(vp.cancelled, 0) = 0
-     )
-       -- Exclude from-store lines — fulfilled from stock, not pending for PO.
-       AND (ii.source IS NULL OR ii.source <> 'store')
-       -- Lines the approver zeroed out (approved qty 0) aren't procured.
-       AND COALESCE(ii.quantity, 0) > 0
-     ORDER BY
-       CASE WHEN r.status = 'finalized' THEN 0 ELSE 1 END,
-       i.created_at DESC, ii.id`
-  ).all();
-  res.json(rows);
+     )`,
+    `(ii.source IS NULL OR ii.source <> 'store')`,
+    `COALESCE(ii.quantity, 0) > 0`,
+  ];
+  const params = [];
+
+  // Status filter: finalized / quoted / pending / all
+  if (status && status !== 'all') {
+    if (status === 'finalized') {
+      baseWhere.push("r.status = 'finalized'");
+    } else if (status === 'quoted') {
+      baseWhere.push("r.status = 'quoted'");
+    } else if (status === 'pending') {
+      baseWhere.push("(r.status IS NULL OR r.status = 'pending')");
+    }
+  }
+
+  // Keyword search across indent_number, site_name, master_name, description
+  const queryStr = (q || search || '').trim().toLowerCase();
+  if (queryStr) {
+    baseWhere.push("(LOWER(COALESCE(i.indent_number, '')) LIKE ? OR LOWER(COALESCE(i.site_name, '')) LIKE ? OR LOWER(COALESCE(im.item_name, '')) LIKE ? OR LOWER(COALESCE(ii.description, '')) LIKE ?)");
+    const likeParam = `%${queryStr}%`;
+    params.push(likeParam, likeParam, likeParam, likeParam);
+  }
+
+  const whereSql = `WHERE ${baseWhere.join(' AND ')}`;
+
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
+
+  let total = 0;
+  let readyCount = 0;
+
+  if (isPaginated) {
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) as c
+      FROM indent_items ii
+      JOIN indents i ON ii.indent_id = i.id
+      LEFT JOIN indent_item_rates r ON r.id = (
+        SELECT r2.id FROM indent_item_rates r2
+         WHERE r2.indent_item_id = ii.id
+         ORDER BY CASE WHEN r2.status = 'finalized' THEN 0 ELSE 1 END,
+                  COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1
+      )
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+      ${whereSql}
+    `).get(...params);
+    total = totalRow ? totalRow.c : 0;
+
+    // Ready count (how many finalized in the database across all pending items):
+    const readyRow = db.prepare(`
+      SELECT COUNT(*) as c
+      FROM indent_items ii
+      JOIN indents i ON ii.indent_id = i.id
+      LEFT JOIN indent_item_rates r ON r.id = (
+        SELECT r2.id FROM indent_item_rates r2
+         WHERE r2.indent_item_id = ii.id
+         ORDER BY CASE WHEN r2.status = 'finalized' THEN 0 ELSE 1 END,
+                  COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1
+      )
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM vendor_po_items vpi
+          JOIN vendor_pos vp ON vp.id = vpi.vendor_po_id
+         WHERE vpi.indent_item_id = ii.id
+           AND COALESCE(vp.cancelled, 0) = 0
+      )
+        AND (ii.source IS NULL OR ii.source <> 'store')
+        AND COALESCE(ii.quantity, 0) > 0
+        AND r.status = 'finalized'
+    `).get();
+    readyCount = readyRow ? readyRow.c : 0;
+  }
+
+  let selectSql = `
+    SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity, ii.unit, ii.item_type,
+           ii.item_master_id, im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
+           COALESCE(ii.weight_per_meter, im.weight_per_meter) as weight_per_meter,
+           i.id as indent_id, i.indent_number, i.site_name, i.raised_by_name,
+           r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.status as rate_status
+    FROM indent_items ii
+    JOIN indents i ON ii.indent_id = i.id
+    LEFT JOIN indent_item_rates r ON r.id = (
+      SELECT r2.id FROM indent_item_rates r2
+       WHERE r2.indent_item_id = ii.id
+       ORDER BY CASE WHEN r2.status = 'finalized' THEN 0 ELSE 1 END,
+                COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1
+    )
+    LEFT JOIN item_master im ON im.id = ii.item_master_id
+    ${whereSql}
+    ORDER BY
+      CASE WHEN r.status = 'finalized' THEN 0 ELSE 1 END,
+      i.created_at DESC, ii.id
+  `;
+
+  let rows;
+  if (isPaginated) {
+    const offset = (pageNum - 1) * limitNum;
+    selectSql += ' LIMIT ? OFFSET ?';
+    rows = db.prepare(selectSql).all(...params, limitNum, offset);
+    return res.json({
+      rows,
+      total,
+      ready_count: readyCount,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.max(1, Math.ceil(total / limitNum)),
+    });
+  } else {
+    rows = db.prepare(selectSql).all(...params);
+    return res.json(rows);
+  }
 });
 
 // Upload a Vendor PO that was created in Tally.
@@ -4334,17 +4637,180 @@ router.delete('/item-rates/:rate_id', needsApprove, (req, res) => {
   res.json({ message: 'Rate cleared' });
 });
 
-// Purchase Bills
+// Purchase Bills (paginated + search + date range + backward-compat)
 router.get('/purchase-bills', (req, res) => {
-  // debit_total = sum of non-cancelled debit notes on this bill's PO.
-  // net_payable = bill total − debits (mam 2026-06-04: the auto extra-rate
-  // debit deducts from what we pay the vendor).
-  res.json(getDb().prepare(`SELECT pb.*, v.name as vendor_name,
+  const db = getDb();
+  const { page, limit, from, to, q, search, export: isExport } = req.query;
+
+  const whereClauses = [];
+  const params = [];
+
+  if (from) {
+    whereClauses.push('DATE(pb.bill_date) >= ?');
+    params.push(from);
+  }
+  if (to) {
+    whereClauses.push('DATE(pb.bill_date) <= ?');
+    params.push(to);
+  }
+
+  const queryStr = (q || search || '').trim().toLowerCase();
+  if (queryStr) {
+    whereClauses.push('(LOWER(COALESCE(pb.bill_number, \'\')) LIKE ? OR LOWER(COALESCE(v.name, \'\')) LIKE ?)');
+    const likeParam = `%${queryStr}%`;
+    params.push(likeParam, likeParam);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
+
+  if (isPaginated) {
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) as c
+      FROM purchase_bills pb
+      LEFT JOIN vendors v ON pb.vendor_id = v.id
+      ${whereSql}
+    `).get(...params);
+    const total = totalRow ? totalRow.c : 0;
+
+    const offset = (pageNum - 1) * limitNum;
+    const rows = db.prepare(`
+      SELECT pb.*, v.name as vendor_name,
+        COALESCE((SELECT SUM(d.amount) FROM debit_notes d
+                   WHERE d.vendor_po_id = pb.vendor_po_id
+                     AND d.status <> 'cancelled'), 0) AS debit_total
+      FROM purchase_bills pb
+      LEFT JOIN vendors v ON pb.vendor_id = v.id
+      ${whereSql}
+      ORDER BY pb.created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limitNum, offset);
+
+    return res.json({
+      rows,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1
+    });
+  }
+
+  // Raw array for export or backward compat
+  const rows = db.prepare(`
+    SELECT pb.*, v.name as vendor_name,
       COALESCE((SELECT SUM(d.amount) FROM debit_notes d
                  WHERE d.vendor_po_id = pb.vendor_po_id
                    AND d.status <> 'cancelled'), 0) AS debit_total
     FROM purchase_bills pb
-    LEFT JOIN vendors v ON pb.vendor_id=v.id ORDER BY pb.created_at DESC`).all());
+    LEFT JOIN vendors v ON pb.vendor_id = v.id
+    ${whereSql}
+    ORDER BY pb.created_at DESC
+  `).all(...params);
+
+  res.json(rows);
+});
+
+// Follow-up: POs awaiting Purchase Bill (paginated + search + expected-date range + blocked_count)
+router.get('/purchase-bills/followup', (req, res) => {
+  const db = getDb();
+  const { page, limit, from, to, q, search, export: isExport } = req.query;
+
+  // 1. Calculate blocked_count (POs waiting for bill but blocked on payment gate)
+  const blockedRow = db.prepare(`
+    SELECT COUNT(*) as c
+    FROM vendor_pos vp
+    WHERE COALESCE(vp.cancelled, 0) = 0
+      AND vp.payment_block_status = 'pending'
+      AND NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id)
+  `).get();
+  const blocked_count = blockedRow ? blockedRow.c : 0;
+
+  // 2. Base criteria for follow-up: not cancelled, not blocked, no purchase bill
+  const whereClauses = [
+    'COALESCE(vp.cancelled, 0) = 0',
+    '(vp.payment_block_status IS NULL OR vp.payment_block_status != \'pending\')',
+    'NOT EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id)'
+  ];
+  const params = [];
+
+  if (from) {
+    whereClauses.push('DATE(vp.expected_receipt_date) >= ?');
+    params.push(from);
+  }
+  if (to) {
+    whereClauses.push('DATE(vp.expected_receipt_date) <= ?');
+    params.push(to);
+  }
+
+  const queryStr = (q || search || '').trim().toLowerCase();
+  if (queryStr) {
+    whereClauses.push('(LOWER(COALESCE(vp.po_number, \'\')) LIKE ? OR LOWER(COALESCE(v.name, \'\')) LIKE ? OR LOWER(COALESCE(ind.indent_number, \'\')) LIKE ? OR LOWER(COALESCE(ind.site_name, \'\')) LIKE ?)');
+    const likeParam = `%${queryStr}%`;
+    params.push(likeParam, likeParam, likeParam, likeParam);
+  }
+
+  const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
+
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) as c
+    FROM vendor_pos vp
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    ${whereSql}
+  `).get(...params);
+  const total = totalRow ? totalRow.c : 0;
+
+  let selectSql = `
+    SELECT vp.id, vp.po_number, vp.po_date, vp.total_amount, vp.expected_receipt_date,
+           vp.vendor_id, vp.payment_block_status, vp.delay_reason, vp.file_path,
+           v.name as vendor_name,
+           ind.indent_number, ind.site_name as indent_site_name,
+           COALESCE((
+             SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
+             FROM vendor_po_items vpi
+             WHERE vpi.vendor_po_id = vp.id
+           ), vp.total_amount) as display_total
+    FROM vendor_pos vp
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    ${whereSql}
+    ORDER BY (CASE WHEN vp.expected_receipt_date IS NULL OR vp.expected_receipt_date = '' THEN '9999-12-31' ELSE vp.expected_receipt_date END) ASC, vp.id DESC
+  `;
+
+  let rows;
+  if (isPaginated) {
+    const offset = (pageNum - 1) * limitNum;
+    selectSql += ' LIMIT ? OFFSET ?';
+    rows = db.prepare(selectSql).all(...params, limitNum, offset);
+  } else {
+    rows = db.prepare(selectSql).all(...params);
+  }
+
+  for (const r of rows) {
+    const stored = +r.total_amount || 0;
+    const live = +r.display_total || 0;
+    r.total_amount_drift = Math.round(Math.abs(stored - live));
+  }
+
+  if (isPaginated) {
+    return res.json({
+      rows,
+      total,
+      blocked_count,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1
+    });
+  }
+
+  res.json(rows);
 });
 
 // Per-item PO qty vs RECEIVED qty for a Vendor PO — feeds the Bill-upload
@@ -4876,14 +5342,84 @@ router.get('/po-pipeline', (req, res) => {
 // Dispatch (delivery_notes) — a dispatch entry is either a Sales Bill
 // (for PO items sold to client) or a Delivery Challan (FOC / RGP items).
 // After dispatch, mam records who received it via the /receive endpoint.
+// Dispatch (delivery_notes) — paginated + search + status + date range + backward-compat
 router.get('/delivery-notes', (req, res) => {
-  // Mam (2026-06-02 follow-up): "company name also show which we fill
-  // indent which is our site name".  Use the indent's own site_name
-  // text (what mam typed when raising the indent — e.g. "Emerald land
-  // india pvt ltd (Imperial Golf)") as the primary label, falling back
-  // to sites.name (short master name) only if the indent didn't snapshot
-  // a value.  COALESCE picks the first non-NULL non-empty option.
-  res.json(getDb().prepare(`
+  const db = getDb();
+  const { page, limit, status, from, to, q, search, export: isExport } = req.query;
+
+  const whereClauses = [];
+  const params = [];
+
+  if (status && status !== 'all') {
+    whereClauses.push('dn.status = ?');
+    params.push(status);
+  }
+
+  if (from) {
+    whereClauses.push('DATE(COALESCE(dn.received_at, dn.delivery_date)) >= ?');
+    params.push(from);
+  }
+  if (to) {
+    whereClauses.push('DATE(COALESCE(dn.received_at, dn.delivery_date)) <= ?');
+    params.push(to);
+  }
+
+  const queryStr = (q || search || '').trim().toLowerCase();
+  if (queryStr) {
+    whereClauses.push('(LOWER(COALESCE(dn.document_number, \'\')) LIKE ? OR LOWER(COALESCE(vp.po_number, \'\')) LIKE ? OR LOWER(COALESCE(dn.received_by_name, \'\')) LIKE ? OR LOWER(COALESCE(i.raised_by_name, \'\')) LIKE ? OR LOWER(COALESCE(v.name, \'\')) LIKE ? OR LOWER(COALESCE(i.site_name, \'\')) LIKE ?)');
+    const likeParam = `%${queryStr}%`;
+    params.push(likeParam, likeParam, likeParam, likeParam, likeParam, likeParam);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
+
+  if (isPaginated) {
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) as c
+      FROM delivery_notes dn
+      LEFT JOIN users u ON dn.received_by = u.id
+      LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
+      LEFT JOIN vendors v ON vp.vendor_id = v.id
+      LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
+      ${whereSql}
+    `).get(...params);
+    const total = totalRow ? totalRow.c : 0;
+
+    const offset = (pageNum - 1) * limitNum;
+    const rows = db.prepare(`
+      SELECT dn.*,
+        u.name as received_by_user_name,
+        vp.po_number as vendor_po_number,
+        vp.indent_id as vendor_po_indent_id,
+        v.name as vendor_name,
+        i.indent_number as indent_number,
+        NULLIF(TRIM(i.raised_by_name), '') as raised_by_name,
+        NULLIF(TRIM(i.site_name), '') as site_name
+      FROM delivery_notes dn
+      LEFT JOIN users u ON dn.received_by = u.id
+      LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
+      LEFT JOIN vendors v ON vp.vendor_id = v.id
+      LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
+      ${whereSql}
+      ORDER BY dn.created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limitNum, offset);
+
+    return res.json({
+      rows,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1
+    });
+  }
+
+  // Raw array for export or backward compat
+  const rows = db.prepare(`
     SELECT dn.*,
       u.name as received_by_user_name,
       vp.po_number as vendor_po_number,
@@ -4896,13 +5432,109 @@ router.get('/delivery-notes', (req, res) => {
     LEFT JOIN users u ON dn.received_by = u.id
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
     LEFT JOIN vendors v ON vp.vendor_id = v.id
-    -- Resolve the indent from the Vendor PO, OR (for from-store challans
-    -- with no PO) directly from delivery_notes.indent_id.  No sites JOIN:
-    -- it matched site_name to itself (circular) and fanned out into
-    -- DUPLICATE rows when a site name wasn't unique (mam 2026-06-04).
     LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
+    ${whereSql}
     ORDER BY dn.created_at DESC
-  `).all());
+  `).all(...params);
+
+  res.json(rows);
+});
+
+// Ready to Dispatch: Billed POs needing client Sales Bill + From-Store Challans pending Sales Bill
+router.get('/delivery-notes/ready', (req, res) => {
+  const db = getDb();
+  const { page, limit, q, search, export: isExport } = req.query;
+
+  // 1. From-store challans pending Sales Bill
+  const sbPendingDNs = db.prepare(`
+    SELECT dn.*, NULLIF(TRIM(i.site_name), '') as site_name
+    FROM delivery_notes dn
+    LEFT JOIN indents i ON i.id = dn.indent_id
+    WHERE dn.sales_bill_pending = 1
+      AND dn.sales_bill_number IS NULL
+      AND dn.document_type = 'challan'
+      AND dn.vendor_po_id IS NULL
+    ORDER BY dn.id DESC
+  `).all();
+
+  // 2. Ready to Dispatch POs: billed, not cancelled, no sales bill delivery note
+  const whereClauses = [
+    'COALESCE(vp.cancelled, 0) = 0',
+    'EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id)',
+    `NOT EXISTS (
+      SELECT 1 FROM delivery_notes dn
+      WHERE dn.vendor_po_id = vp.id
+        AND (dn.document_type = 'sales_bill' OR dn.sales_bill_number IS NOT NULL)
+    )`
+  ];
+  const params = [];
+
+  const queryStr = (q || search || '').trim().toLowerCase();
+  if (queryStr) {
+    whereClauses.push('(LOWER(COALESCE(vp.po_number, \'\')) LIKE ? OR LOWER(COALESCE(v.name, \'\')) LIKE ? OR LOWER(COALESCE(ind.indent_number, \'\')) LIKE ? OR LOWER(COALESCE(ind.site_name, \'\')) LIKE ?)');
+    const likeParam = `%${queryStr}%`;
+    params.push(likeParam, likeParam, likeParam, likeParam);
+  }
+
+  const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  const isPaginated = !isExport && !isNaN(pageNum) && !isNaN(limitNum) && pageNum > 0 && limitNum > 0;
+
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) as c
+    FROM vendor_pos vp
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    ${whereSql}
+  `).get(...params);
+  const total = totalRow ? totalRow.c : 0;
+
+  let selectSql = `
+    SELECT vp.id, vp.po_number, vp.po_date, vp.total_amount, vp.expected_receipt_date,
+           vp.vendor_id, v.name as vendor_name,
+           ind.indent_number, ind.site_name as indent_site_name,
+           COALESCE((
+             SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
+             FROM vendor_po_items vpi
+             WHERE vpi.vendor_po_id = vp.id
+           ), vp.total_amount) as display_total
+    FROM vendor_pos vp
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    ${whereSql}
+    ORDER BY vp.id DESC
+  `;
+
+  let rows;
+  if (isPaginated) {
+    const offset = (pageNum - 1) * limitNum;
+    selectSql += ' LIMIT ? OFFSET ?';
+    rows = db.prepare(selectSql).all(...params, limitNum, offset);
+  } else {
+    rows = db.prepare(selectSql).all(...params);
+  }
+
+  for (const r of rows) {
+    const stored = +r.total_amount || 0;
+    const live = +r.display_total || 0;
+    r.total_amount_drift = Math.round(Math.abs(stored - live));
+  }
+
+  if (isPaginated) {
+    return res.json({
+      rows,
+      total,
+      from_store: sbPendingDNs,
+      from_store_count: sbPendingDNs.length,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1
+    });
+  }
+
+  res.json(rows);
 });
 
 // Create a dispatch entry. Multipart/form-data so we can carry the

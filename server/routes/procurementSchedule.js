@@ -903,4 +903,465 @@ router.delete('/snapshot/:id', requirePermission('procurement_schedule', 'delete
   res.json({ ok: true });
 });
 
+// ─── GOOGLE GANTTER / WBS EXECUTION SCHEDULE PARSERS ──────────────
+
+function normalizeDateISO(str) {
+  if (!str) return null;
+  const s = String(str).trim();
+  if (!s) return null;
+  // Match YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // Match DD/MM/YYYY or DD-MM-YYYY
+  const dmy = s.match(/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{4})/);
+  if (dmy) {
+    const day = dmy[1].padStart(2, '0');
+    const month = dmy[2].padStart(2, '0');
+    return `${dmy[3]}-${month}-${day}`;
+  }
+  // Try Date parse
+  const parsed = Date.parse(s);
+  if (!isNaN(parsed)) {
+    return new Date(parsed).toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function parseDurationDays(str, start, end) {
+  if (typeof str === 'number') return Math.max(0, Math.round(str));
+  const s = String(str || '').trim().toLowerCase();
+  const numMatch = s.match(/^(\d+(?:\.\d+)?)/);
+  if (numMatch) return Math.max(0, Math.round(parseFloat(numMatch[1])));
+  // If ISO duration PT40H0M0S
+  const isoMatch = s.match(/pt(?:(\d+)h)?(?:(\d+)m)?/i);
+  if (isoMatch) {
+    const hrs = parseInt(isoMatch[1] || '0', 10);
+    return Math.max(1, Math.round(hrs / 8));
+  }
+  if (start && end) {
+    const d1 = new Date(start + 'T00:00:00').getTime();
+    const d2 = new Date(end + 'T00:00:00').getTime();
+    const diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+    return Math.max(0, diff);
+  }
+  return 1;
+}
+
+function parseGantterXml(xml) {
+  const tasks = [];
+  const taskRegex = /<Task\b[^>]*>([\s\S]*?)<\/Task>/gi;
+  let match;
+  let order = 0;
+  while ((match = taskRegex.exec(xml)) !== null) {
+    const body = match[1];
+    const getTag = (tag) => {
+      const m = body.match(new RegExp(`<${tag}[^>]*>([^<]*)<\\/${tag}>`, 'i'));
+      return m ? m[1].trim() : '';
+    };
+
+    const name = getTag('Name');
+    if (!name) continue;
+
+    const uid = getTag('UID') || getTag('ID');
+    const wbs = getTag('OutlineNumber') || getTag('WBS');
+    const outlineLevel = parseInt(getTag('OutlineLevel') || '1', 10);
+    const start = normalizeDateISO(getTag('Start'));
+    const finish = normalizeDateISO(getTag('Finish'));
+    const duration = parseDurationDays(getTag('Duration'), start, finish);
+    const percentComplete = Math.min(100, Math.max(0, parseInt(getTag('PercentComplete') || '0', 10)));
+    const isMilestone = getTag('Milestone') === '1' || duration === 0 ? 1 : 0;
+
+    const preds = [];
+    const predRegex = /<PredecessorLink\b[^>]*>([\s\S]*?)<\/PredecessorLink>/gi;
+    let pMatch;
+    while ((pMatch = predRegex.exec(body)) !== null) {
+      const pBody = pMatch[1];
+      const pUidMatch = pBody.match(/<PredecessorUID[^>]*>([^<]*)<\/PredecessorUID>/i);
+      const pTypeMatch = pBody.match(/<Type[^>]*>([^<]*)<\/Type>/i);
+      if (pUidMatch) {
+        preds.push({
+          uid: pUidMatch[1].trim(),
+          type: (pTypeMatch && pTypeMatch[1] === '0') ? 'FF' : 'FS'
+        });
+      }
+    }
+
+    order++;
+    tasks.push({
+      uid,
+      wbs_code: wbs || String(order),
+      task_name: name,
+      outline_level: outlineLevel || 1,
+      start_date: start,
+      end_date: finish || start,
+      duration_days: duration,
+      progress_pct: percentComplete,
+      dependencies: preds.length > 0 ? JSON.stringify(preds) : null,
+      is_milestone: isMilestone,
+      sort_order: order,
+    });
+  }
+  return tasks;
+}
+
+function parseSpreadsheetSchedule(text) {
+  if (!text || !text.trim()) return [];
+  const lines = text.trim().split(/\r?\n/).filter(l => l.trim().length > 0);
+  if (lines.length === 0) return [];
+
+  const firstLine = lines[0];
+  let delimiter = '\t';
+  if (firstLine.includes('\t')) delimiter = '\t';
+  else if (firstLine.includes(';') && (firstLine.split(';').length > firstLine.split(',').length)) delimiter = ';';
+  else if (firstLine.includes(',')) delimiter = ',';
+
+  const splitLine = (l) => {
+    if (delimiter === '\t') return l.split('\t').map(c => c.trim().replace(/^"|"$/g, ''));
+    const pattern = new RegExp(`(?:^|${delimiter})(?:"([^"]*(?:""[^"]*)*)"|([^"${delimiter}]*))`, 'g');
+    const cols = [];
+    let m;
+    while ((m = pattern.exec(l)) !== null) {
+      cols.push((m[1] !== undefined ? m[1].replace(/""/g, '"') : m[2] || '').trim());
+    }
+    return cols;
+  };
+
+  const headerCols = splitLine(firstLine).map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  let startRow = 0;
+
+  let wbsIdx = headerCols.findIndex(h => h === 'wbs' || h === 'id' || h === 'no');
+  let nameIdx = headerCols.findIndex(h => h.includes('task') || h.includes('name') || h.includes('activity') || h.includes('description'));
+  let durIdx = headerCols.findIndex(h => h.includes('duration') || h.includes('days'));
+  let startIdx = headerCols.findIndex(h => h.includes('start') || h.includes('from') || h.includes('begin'));
+  let endIdx = headerCols.findIndex(h => h.includes('end') || h.includes('finish') || h.includes('to') || h.includes('completion'));
+  let predIdx = headerCols.findIndex(h => h.includes('pred') || h.includes('depend') || h.includes('link'));
+  let progIdx = headerCols.findIndex(h => h.includes('prog') || h.includes('percent') || h.includes('complete') || h.includes('%'));
+  let assignIdx = headerCols.findIndex(h => h.includes('assign') || h.includes('resource') || h.includes('owner'));
+
+  if (nameIdx !== -1 || (startIdx !== -1 && endIdx !== -1)) {
+    startRow = 1;
+  } else {
+    wbsIdx = 0; nameIdx = 1; durIdx = 2; startIdx = 3; endIdx = 4; predIdx = 5; progIdx = 6;
+    startRow = 0;
+  }
+
+  const tasks = [];
+  let order = 0;
+  for (let i = startRow; i < lines.length; i++) {
+    const cols = splitLine(lines[i]);
+    const taskName = nameIdx !== -1 ? cols[nameIdx] : (cols[1] || cols[0]);
+    if (!taskName) continue;
+
+    order++;
+    const wbs = wbsIdx !== -1 && cols[wbsIdx] ? cols[wbsIdx] : String(order);
+    const start = startIdx !== -1 ? normalizeDateISO(cols[startIdx]) : null;
+    const end = endIdx !== -1 ? normalizeDateISO(cols[endIdx]) : null;
+    const durRaw = durIdx !== -1 ? cols[durIdx] : null;
+    const duration = parseDurationDays(durRaw, start, end);
+    const preds = predIdx !== -1 && cols[predIdx] ? cols[predIdx] : null;
+    const progRaw = progIdx !== -1 ? cols[progIdx] : null;
+    let progress = 0;
+    if (progRaw) {
+      const p = parseFloat(progRaw.replace('%', ''));
+      if (!isNaN(p)) progress = p > 1 ? Math.min(100, Math.round(p)) : Math.round(p * 100);
+    }
+    const assigned = assignIdx !== -1 && cols[assignIdx] ? cols[assignIdx] : null;
+
+    const level = wbs ? wbs.split('.').filter(Boolean).length : 1;
+    const isMilestone = duration === 0 || /milestone/i.test(taskName) ? 1 : 0;
+
+    tasks.push({
+      wbs_code: wbs,
+      task_name: taskName,
+      outline_level: Math.max(1, level),
+      start_date: start || new Date().toISOString().slice(0, 10),
+      end_date: end || start || new Date().toISOString().slice(0, 10),
+      duration_days: duration,
+      progress_pct: progress,
+      dependencies: preds,
+      is_milestone: isMilestone,
+      assigned_to: assigned,
+      sort_order: order,
+    });
+  }
+  return tasks;
+}
+
+function parseGantterJson(json) {
+  let list = [];
+  if (Array.isArray(json)) list = json;
+  else if (json && Array.isArray(json.tasks)) list = json.tasks;
+  else if (json && Array.isArray(json.data)) list = json.data;
+
+  let order = 0;
+  return list.map(t => {
+    order++;
+    const start = normalizeDateISO(t.start || t.start_date || t.startDate);
+    const end = normalizeDateISO(t.finish || t.end || t.end_date || t.endDate);
+    const duration = parseDurationDays(t.duration || t.duration_days, start, end);
+    const wbs = t.wbs || t.wbs_code || t.outline_number || String(order);
+    const level = t.level || t.outline_level || (wbs ? wbs.split('.').length : 1);
+    const progress = Math.min(100, Math.max(0, parseInt(t.progress || t.progress_pct || t.percent_complete || '0', 10)));
+    const isMilestone = t.is_milestone || t.milestone || duration === 0 ? 1 : 0;
+    const preds = typeof t.dependencies === 'string' ? t.dependencies : (t.dependencies ? JSON.stringify(t.dependencies) : (t.predecessors || null));
+
+    return {
+      wbs_code: wbs,
+      task_name: t.name || t.task_name || `Task ${order}`,
+      outline_level: level,
+      start_date: start,
+      end_date: end || start,
+      duration_days: duration,
+      progress_pct: progress,
+      dependencies: preds,
+      is_milestone: isMilestone,
+      assigned_to: t.assigned_to || t.resource || null,
+      sort_order: order,
+    };
+  });
+}
+
+// ─── EXECUTION TASKS ENDPOINTS (GANTTER / WBS) ────────────────────
+
+// GET /procurement-schedule/:project_id/execution-tasks
+router.get('/:project_id/execution-tasks', requirePermission('procurement_schedule', 'view'), (req, res) => {
+  const pid = +req.params.project_id;
+  const db = getDb();
+  const tasks = db.prepare('SELECT * FROM project_schedule_tasks WHERE project_id = ? ORDER BY sort_order ASC, id ASC').all(pid);
+  res.json(tasks);
+});
+
+// POST /procurement-schedule/:project_id/execution-tasks — Create task
+router.post('/:project_id/execution-tasks', requirePermission('procurement_schedule', 'edit'), (req, res) => {
+  const pid = +req.params.project_id;
+  const t = req.body || {};
+  if (!t.task_name || !t.task_name.trim()) return res.status(400).json({ error: 'task_name is required' });
+  const db = getDb();
+
+  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM project_schedule_tasks WHERE project_id = ?').get(pid).m;
+  const r = db.prepare(`
+    INSERT INTO project_schedule_tasks (
+      project_id, wbs_code, task_name, parent_id, outline_level,
+      start_date, end_date, duration_days, progress_pct,
+      dependencies, is_milestone, assigned_to, status, sort_order
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    pid,
+    t.wbs_code || String(maxOrder + 1),
+    t.task_name.trim(),
+    t.parent_id || null,
+    t.outline_level || 1,
+    t.start_date || new Date().toISOString().slice(0, 10),
+    t.end_date || t.start_date || new Date().toISOString().slice(0, 10),
+    t.duration_days !== undefined ? +t.duration_days : 1,
+    t.progress_pct !== undefined ? +t.progress_pct : 0,
+    typeof t.dependencies === 'string' ? t.dependencies : (t.dependencies ? JSON.stringify(t.dependencies) : null),
+    t.is_milestone ? 1 : 0,
+    t.assigned_to || null,
+    t.status || 'planned',
+    maxOrder + 1
+  );
+
+  const newTask = db.prepare('SELECT * FROM project_schedule_tasks WHERE id = ?').get(r.lastInsertRowid);
+  res.status(201).json({ task: newTask });
+});
+
+// PUT /procurement-schedule/:project_id/execution-tasks/:taskId — Update task
+router.put('/:project_id/execution-tasks/:taskId', requirePermission('procurement_schedule', 'edit'), (req, res) => {
+  const pid = +req.params.project_id;
+  const taskId = +req.params.taskId;
+  const t = req.body || {};
+  const db = getDb();
+
+  db.prepare(`
+    UPDATE project_schedule_tasks SET
+      wbs_code = COALESCE(?, wbs_code),
+      task_name = COALESCE(?, task_name),
+      parent_id = ?,
+      outline_level = COALESCE(?, outline_level),
+      start_date = COALESCE(?, start_date),
+      end_date = COALESCE(?, end_date),
+      duration_days = COALESCE(?, duration_days),
+      progress_pct = COALESCE(?, progress_pct),
+      dependencies = ?,
+      is_milestone = COALESCE(?, is_milestone),
+      assigned_to = ?,
+      status = COALESCE(?, status),
+      sort_order = COALESCE(?, sort_order),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND project_id = ?
+  `).run(
+    t.wbs_code,
+    t.task_name ? t.task_name.trim() : null,
+    t.parent_id !== undefined ? t.parent_id : null,
+    t.outline_level,
+    t.start_date,
+    t.end_date,
+    t.duration_days !== undefined ? +t.duration_days : null,
+    t.progress_pct !== undefined ? +t.progress_pct : null,
+    typeof t.dependencies === 'string' ? t.dependencies : (t.dependencies ? JSON.stringify(t.dependencies) : null),
+    t.is_milestone !== undefined ? (t.is_milestone ? 1 : 0) : null,
+    t.assigned_to !== undefined ? t.assigned_to : null,
+    t.status,
+    t.sort_order !== undefined ? +t.sort_order : null,
+    taskId,
+    pid
+  );
+
+  const updated = db.prepare('SELECT * FROM project_schedule_tasks WHERE id = ?').get(taskId);
+  res.json({ task: updated });
+});
+
+// DELETE /procurement-schedule/:project_id/execution-tasks/:taskId
+router.delete('/:project_id/execution-tasks/:taskId', requirePermission('procurement_schedule', 'edit'), (req, res) => {
+  const pid = +req.params.project_id;
+  const taskId = +req.params.taskId;
+  const db = getDb();
+  db.prepare('DELETE FROM project_schedule_tasks WHERE (id = ? OR parent_id = ?) AND project_id = ?').run(taskId, taskId, pid);
+  res.json({ ok: true });
+});
+
+// POST /procurement-schedule/:project_id/execution-tasks/bulk-save — Bulk save / reorder
+router.post('/:project_id/execution-tasks/bulk-save', requirePermission('procurement_schedule', 'edit'), (req, res) => {
+  const pid = +req.params.project_id;
+  const { tasks } = req.body || {};
+  if (!Array.isArray(tasks)) return res.status(400).json({ error: 'tasks:array required' });
+
+  const db = getDb();
+  const tx = db.transaction(() => {
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
+      if (t.id) {
+        db.prepare(`
+          UPDATE project_schedule_tasks SET
+            wbs_code = ?, task_name = ?, parent_id = ?, outline_level = ?,
+            start_date = ?, end_date = ?, duration_days = ?, progress_pct = ?,
+            dependencies = ?, is_milestone = ?, assigned_to = ?, status = ?,
+            sort_order = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND project_id = ?
+        `).run(
+          t.wbs_code || String(i + 1), t.task_name, t.parent_id || null, t.outline_level || 1,
+          t.start_date, t.end_date, t.duration_days || 1, t.progress_pct || 0,
+          typeof t.dependencies === 'string' ? t.dependencies : (t.dependencies ? JSON.stringify(t.dependencies) : null),
+          t.is_milestone ? 1 : 0, t.assigned_to || null, t.status || 'planned',
+          i + 1, t.id, pid
+        );
+      } else {
+        db.prepare(`
+          INSERT INTO project_schedule_tasks (
+            project_id, wbs_code, task_name, parent_id, outline_level,
+            start_date, end_date, duration_days, progress_pct,
+            dependencies, is_milestone, assigned_to, status, sort_order
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          pid, t.wbs_code || String(i + 1), t.task_name, t.parent_id || null, t.outline_level || 1,
+          t.start_date, t.end_date, t.duration_days || 1, t.progress_pct || 0,
+          typeof t.dependencies === 'string' ? t.dependencies : (t.dependencies ? JSON.stringify(t.dependencies) : null),
+          t.is_milestone ? 1 : 0, t.assigned_to || null, t.status || 'planned', i + 1
+        );
+      }
+    }
+  });
+  tx();
+  const all = db.prepare('SELECT * FROM project_schedule_tasks WHERE project_id = ? ORDER BY sort_order ASC, id ASC').all(pid);
+  res.json({ tasks: all, count: all.length });
+});
+
+const importUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// POST /procurement-schedule/:project_id/import-gantter — Import XML/JSON/CSV/pasted spreadsheet
+router.post('/:project_id/import-gantter', requirePermission('procurement_schedule', 'edit'), importUpload.single('file'), (req, res) => {
+  const pid = +req.params.project_id;
+  const rawText = req.file ? req.file.buffer.toString('utf8') : (req.body?.content || req.body?.text || '');
+  const mode = req.body?.mode || 'replace';
+
+  if (!rawText || !rawText.trim()) return res.status(400).json({ error: 'Schedule data is required' });
+
+  let parsed = [];
+  const raw = rawText.trim();
+
+  if (raw.startsWith('<?xml') || raw.startsWith('<Project') || /<Task\b/i.test(raw)) {
+    parsed = parseGantterXml(raw);
+  } else if (raw.startsWith('{') || raw.startsWith('[')) {
+    try {
+      const json = JSON.parse(raw);
+      parsed = parseGantterJson(json);
+    } catch (_) {
+      parsed = parseSpreadsheetSchedule(raw);
+    }
+  } else {
+    parsed = parseSpreadsheetSchedule(raw);
+  }
+
+  if (parsed.length === 0) {
+    return res.status(400).json({ error: 'Could not parse any tasks from provided data. Please check format.' });
+  }
+
+  const db = getDb();
+  const tx = db.transaction(() => {
+    if (mode !== 'append') {
+      db.prepare('DELETE FROM project_schedule_tasks WHERE project_id = ?').run(pid);
+    }
+    const currentMax = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM project_schedule_tasks WHERE project_id = ?').get(pid).m;
+    const ins = db.prepare(`
+      INSERT INTO project_schedule_tasks (
+        project_id, wbs_code, task_name, parent_id, outline_level,
+        start_date, end_date, duration_days, progress_pct,
+        dependencies, is_milestone, assigned_to, status, sort_order
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (let i = 0; i < parsed.length; i++) {
+      const t = parsed[i];
+      const pct = Math.max(0, Math.min(100, t.progress_pct || 0));
+      const status = t.status || (pct === 100 ? 'completed' : pct > 0 ? 'in_progress' : 'planned');
+      ins.run(
+        pid,
+        t.wbs_code || String(currentMax + i + 1),
+        t.task_name,
+        t.parent_id || null,
+        t.outline_level || 1,
+        t.start_date || new Date().toISOString().slice(0, 10),
+        t.end_date || t.start_date || new Date().toISOString().slice(0, 10),
+        t.duration_days ?? (t.is_milestone ? 0 : 1),
+        pct,
+        typeof t.dependencies === 'string' ? t.dependencies : (t.dependencies ? JSON.stringify(t.dependencies) : null),
+        t.is_milestone ? 1 : 0,
+        t.assigned_to || null,
+        status,
+        currentMax + i + 1
+      );
+    }
+  });
+  tx();
+
+  const all = db.prepare('SELECT * FROM project_schedule_tasks WHERE project_id = ? ORDER BY sort_order ASC, id ASC').all(pid);
+  res.json({ success: true, count: all.length, tasks: all });
+});
+
+// GET /procurement-schedule/:project_id/export-gantter — Export to CSV
+router.get('/:project_id/export-gantter', requirePermission('procurement_schedule', 'view'), (req, res) => {
+  const pid = +req.params.project_id;
+  const db = getDb();
+  const tasks = db.prepare('SELECT * FROM project_schedule_tasks WHERE project_id = ? ORDER BY sort_order ASC, id ASC').all(pid);
+
+  const headers = ['WBS', 'Task Name', 'Duration (Days)', 'Start Date', 'Finish Date', 'Predecessors', '% Complete', 'Milestone', 'Assigned To', 'Status'];
+  const rows = tasks.map(t => [
+    t.wbs_code || '',
+    t.task_name || '',
+    t.duration_days || 0,
+    t.start_date || '',
+    t.end_date || '',
+    t.dependencies || '',
+    t.progress_pct || 0,
+    t.is_milestone ? 'Yes' : 'No',
+    t.assigned_to || '',
+    t.status || ''
+  ]);
+
+  const csv = [headers, ...rows].map(r => r.map(c => `"${(c ?? '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename=project-${pid}-schedule.csv`);
+  res.send(csv);
+});
+
 module.exports = router;
