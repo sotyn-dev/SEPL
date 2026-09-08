@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import api from '../api';
 import ResponsibilityTab from '../components/ResponsibilityTab';
-import { useUrlTab } from '../hooks/useUrlTab';
+import { useUrlTab, useUrlTabPair } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import TimePicker from '../components/TimePicker';
@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
 // Mam's 11-stage Sales Funnel spec (SEPL_Sales_Funnel_ERP_Build_Spec).
@@ -120,10 +121,34 @@ const isValidEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').tr
 
 export default function Leads() {
   const { canCreate, canEdit, canDelete, user } = useAuth();
-  const [tab, setTab] = useUrlTab('dashboard');
-  const [stageTab, setStageTab] = useState('all');
+  // STRICT list, not the loose one-arg form: in loose mode useUrlTab accepts
+  // ANY string from ?tab=, so a stale bookmark like ?tab=leads set `tab` to a
+  // value no branch below matches and the whole body rendered blank. With the
+  // list, an unknown tab falls back to 'dashboard' (TSK-0397).
+  const [tab, setTab] = useUrlTab(['dashboard', 'list', 'responsible'], 'dashboard');
+  // MD 2026-09-03: "every link has its function tab name". The stage tabs used
+  // to be plain useState, so clicking "Stage 2 — Qualified or Not" left the URL
+  // at /leads?tab=list — the link named the view but not the stage, a refresh
+  // dropped you back to All Leads, and a link sent to someone else opened on the
+  // wrong tab. The stage now rides in the URL under its own readable name
+  // (?stage=qualification, ?stage=site_survey, ...). 'all' is the default, so
+  // the param disappears on All Leads and the plain link stays clean.
+  // 'dashboard' stays in the accepted list so older ?stage=dashboard links still
+  // resolve, but the buttons no longer produce it - the Dashboard is the default
+  // view, so its link is simply /leads.
+  const [stageTab] = useUrlTab(['all', 'dashboard', ...STAGES], 'all', 'stage');
+  // The view and the stage move TOGETHER on every one of these buttons, and two
+  // separate url-tab writes in one handler lose one of the two keys — so they go
+  // in a single navigation. See useUrlTabPair.
+  const setPair = useUrlTabPair();
+  const goTab = (nextTab, nextStage) => setPair([
+    { key: 'tab', value: nextTab, defaultValue: 'dashboard' },
+    { key: 'stage', value: nextStage, defaultValue: 'all' },
+  ]);
   const [leads, setLeads] = useState([]);
   const [dashboard, setDashboard] = useState(null);
+  const [dashLoaded, setDashLoaded] = useState(false);   // the fetch has settled (ok or failed)
+  const [loadError, setLoadError] = useState(null);      // why the page has no data
   const [search, setSearch] = useState('');
   // Group the funnel list by PROJECT — same collapsible layout as Business
   // Book (mam 2026-06-25: "merge project wise like business book").
@@ -155,12 +180,22 @@ export default function Leads() {
   // backend exposes a public /lookup path.
   const [influencers, setInfluencers] = useState([]);
 
+  // MD 2026-09-03 (TSK-0397, "Sales Funnel ... no sales tracking"): both calls
+  // used to end in `.catch(() => {})`. A swallowed failure left `dashboard`
+  // null, and the Dashboard tab below renders NOTHING while it is null — so any
+  // 500 / timeout / dropped connection showed the tab buttons above a blank
+  // white page, with no error, no retry, and nothing in the UI to explain it.
+  // Now a failure is recorded and surfaced, and the tab renders an explanation.
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
     if (stageTab !== 'all' && stageTab !== 'dashboard') params.set('stage', stageTab);
-    api.get(`/sales-funnel?${params}`).then(r => setLeads(r.data)).catch(() => {});
-    api.get('/sales-funnel/dashboard').then(r => setDashboard(r.data)).catch(() => {});
+    setLoadError(null);
+    const why = (e) => e?.response?.data?.error || e?.message || 'Could not reach the server';
+    api.get(`/sales-funnel?${params}`).then(r => setLeads(r.data)).catch(e => setLoadError(why(e)));
+    api.get('/sales-funnel/dashboard')
+      .then(r => { setDashboard(r.data); setDashLoaded(true); })
+      .catch(e => { setDashLoaded(true); setLoadError(why(e)); });
   }, [search, stageTab]);
 
   useEffect(() => { load(); }, [load]);
@@ -363,6 +398,9 @@ export default function Leads() {
     return [...map.values()];
   }, [leads]);
   const leadsMergedCount = leadGroups.filter(g => g.leads.length > 1).length;
+  // Numbered pagination over whichever list the table renders (flat leads or
+  // project groups). Export / counts keep using the FULL arrays.
+  const listPager = usePagination(groupLeads ? leadGroups : leads);
   const toggleLeadGroup = (key) => setLeadsExpanded(p => ({ ...p, [key]: !p[key] }));
   const leadClientList = (set) => { const a = [...set]; if (!a.length) return '-'; return a.length <= 2 ? a.join(', ') : `${a.slice(0,2).join(', ')} +${a.length-2} more`; };
 
@@ -388,13 +426,13 @@ export default function Leads() {
           the leads are sitting today. */}
       <div className="flex gap-2 flex-wrap items-center">
         <button
-          onClick={() => { setTab('dashboard'); setStageTab('dashboard'); }}
+          onClick={() => goTab('dashboard', 'all')}
           className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
         >
           <FiTrendingUp size={14} /> Dashboard
         </button>
         <button
-          onClick={() => { setTab('list'); setStageTab('all'); }}
+          onClick={() => goTab('list', 'all')}
           className={`btn ${tab === 'list' && stageTab === 'all' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
         >
           All Leads
@@ -408,7 +446,7 @@ export default function Leads() {
           return (
             <button
               key={s}
-              onClick={() => { setTab('list'); setStageTab(s); }}
+              onClick={() => goTab('list', s)}
               className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
               title={STAGE_LABELS[s]}
             >
@@ -428,6 +466,19 @@ export default function Leads() {
       </div>
 
       {tab === 'responsible' && <ResponsibilityTab module="sales_funnel" title="Sales Funnel" />}
+
+      {/* The page must never be a silent blank. If the dashboard fetch failed,
+          say so and offer a retry instead of rendering nothing (TSK-0397). */}
+      {tab === 'dashboard' && dashLoaded && !dashboard && (
+        <div className="card p-8 text-center">
+          <p className="text-gray-700 font-semibold">Sales tracking could not be loaded.</p>
+          <p className="text-sm text-gray-500 mt-1">{loadError || 'The server did not return any data.'}</p>
+          <button onClick={load} className="btn btn-primary mt-4">Try again</button>
+        </div>
+      )}
+      {tab === 'dashboard' && !dashLoaded && (
+        <div className="card p-8 text-center text-gray-400 text-sm">Loading sales tracking…</div>
+      )}
 
       {/* Dashboard Tab */}
       {tab === 'dashboard' && dashboard && (
@@ -542,8 +593,8 @@ export default function Leads() {
           <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2 text-right">Tentative Amt</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">SLA</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
           <tbody>
             {/* Flat list, or merged-by-project when grouping is on. */}
-            {!groupLeads && leads.map(l => renderLeadRow(l))}
-            {groupLeads && leadGroups.map(g => {
+            {!groupLeads && listPager.pageItems.map(l => renderLeadRow(l))}
+            {groupLeads && listPager.pageItems.map(g => {
               const open = !!leadsExpanded[g.key];
               return (
                 <Fragment key={g.key}>
@@ -570,7 +621,7 @@ export default function Leads() {
             })}
             {leads.length===0&&<tr><td colSpan="11" className="text-center py-8 text-gray-400">No leads</td></tr>}
           </tbody>
-        </table></div>
+        </table><Pagination {...listPager} /></div>
       </>)}
 
       {/* View + Stage Actions */}
@@ -1026,14 +1077,33 @@ export default function Leads() {
               />
             </div>
             <div><label className="label">Estimated Value (₹)</label><input className="input" type="number" min="0" value={form.estimated_value||0} onChange={e=>F('estimated_value',+e.target.value)}/></div>
-            {/* Mam (2026-06-01): tentative timeline locked to a
-                6-option dropdown — was a freeform text field. */}
+            {/* Tentative timeline is now a DATE (mam 2026-09-04: "directly
+                linked with date, no manual entry"). It was a 6-option days
+                dropdown (mam 2026-06-01). The days are DERIVED from the date
+                and shown read-only; the quick-pick chips set the date, they
+                do not set the days. The server recomputes "N days" on save,
+                so what is stored can never disagree with the date. */}
             <div>
-              <label className="label">Tentative Timeline</label>
-              <select className="select" value={form.tentative_timeline||''} onChange={e=>F('tentative_timeline',e.target.value)}>
-                <option value="">Select…</option>
-                {TIMELINE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
+              <label className="label">Tentative Closing Date</label>
+              <input className="input" type="date"
+                min={new Date().toISOString().slice(0, 10)}
+                value={form.tentative_date ? String(form.tentative_date).slice(0, 10) : ''}
+                onChange={e=>F('tentative_date', e.target.value)} />
+              <div className="flex flex-wrap items-center gap-1 mt-1">
+                {TIMELINE_OPTIONS.map(t => {
+                  const n = parseInt(t, 10);
+                  return (
+                    <button key={t} type="button"
+                      onClick={() => { const d = new Date(); d.setDate(d.getDate() + n); F('tentative_date', d.toISOString().slice(0, 10)); }}
+                      className="px-2 py-0.5 rounded-full border text-[10px] text-gray-600 hover:bg-blue-50 hover:border-blue-300">
+                      +{n}d
+                    </button>);
+                })}
+                {form.tentative_date && (() => {
+                  const days = Math.round((Date.parse(String(form.tentative_date).slice(0, 10)) - Date.parse(new Date().toISOString().slice(0, 10))) / 86400000);
+                  return <span className={`text-[11px] ml-1 ${days < 0 ? 'text-red-600' : 'text-emerald-700'}`}>→ {days < 0 ? `${-days} days ago` : `${days} days from today`}</span>;
+                })()}
+              </div>
             </div>
             {/* Building Category — mam (2026-06-01): "PIC 2 BUILDING
                 CATEGORY ALSO ADD AND GIVE PIC DROP DOWN" — 15-option

@@ -8,6 +8,7 @@ import { FiPlus, FiEdit2, FiTrash2, FiClock, FiCheck, FiAlertTriangle, FiPapercl
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime } from '../utils/datetime';
 import { useUrlTab } from '../hooks/useUrlTab';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 // Cheque FMS — 3-stage cheque workflow.
 //   Stage 1: raise/issue a cheque (this page's "+ Issue Cheque" button)
@@ -170,6 +171,10 @@ export default function ChequeFMS() {
     });
   }, [cheques, dateFrom, dateTo]);
 
+  // Numbered pagination over the final filtered list (all status tabs share
+  // this one table). Export keeps using the FULL `visible` array.
+  const pager = usePagination(visible);
+
   const counts = useMemo(() => {
     const m = { pending: 0, clear: 0, hold: 0, bounce: 0, stopped: 0, cancel: 0 };
     // Parallel amount-sum map so the Total Value tile can switch
@@ -221,7 +226,7 @@ export default function ChequeFMS() {
           <div className="flex gap-2">
             <button onClick={() => exportCsv('cheques',
               ['Cheque #','Payee','Bank','Date','Amount','Status','Hold Until','Raised By'],
-              visible.map(c => [c.cheque_number, c.payee_to, c.bank_name || c.bank_other, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
+              visible.map(c => [c.cheque_number, c.payee_to, c.bank_name === 'Other' ? c.bank_other : c.bank_name, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
             {canCreate('cheques') && (
               <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 justify-center">
@@ -300,7 +305,7 @@ export default function ChequeFMS() {
           </thead>
           <tbody>
             {visible.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">{(dateFrom || dateTo) ? 'No cheques in this date range' : 'No cheques in this tab'}</td></tr>}
-            {visible.map(c => {
+            {pager.pageItems.map(c => {
               const due = c.action_due === 1;
               return (
                 <tr key={c.id} className={`border-b ${due ? 'bg-red-50/40' : ''}`}>
@@ -335,6 +340,7 @@ export default function ChequeFMS() {
             })}
           </tbody>
         </table>
+        <Pagination {...pager} />
       </div>
       )}
 

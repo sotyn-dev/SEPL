@@ -15,6 +15,9 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
+// fmtDateIST: CSV date cells must read as IST like the screen, not raw UTC
+// (export audit 2026-09-03 — the same defect class found in Attendance).
+import { fmtDateIST } from '../utils/dateIST';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
@@ -243,6 +246,7 @@ function MobileItemRow({ item, idx }) {
           ) : (
             <div className="italic text-gray-400">Manual entry (no item-master link)</div>
           )}
+          {item.remarks && <div className="text-amber-700"><span className="text-gray-400">Remarks:</span> {item.remarks}</div>}
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 pt-0.5">
             {item.item_type && <div><span className="text-gray-400">Type:</span> {item.item_type}</div>}
             {+item.master_price > 0 && (
@@ -275,7 +279,11 @@ export default function Procurement() {
   // wrong"). Use a setter helper that writes both React state AND the URL
   // in one shot — no useEffect ping-pong.
   const [searchParams, setSearchParams] = useSearchParams();
-  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery', 'debitnotes', 'pipeline', 'responsible'];
+  // Must list EVERY id in allTabs below. 'payment' was missing, so any
+  // deep link to ?tab=payment silently fell back to 'indents' — the Payment
+  // tab could not be linked to, and an Export there exported indents
+  // (mam 2026-09-03).
+  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'payment', 'bills', 'delivery', 'debitnotes', 'pipeline', 'responsible'];
   const urlTab = searchParams.get('tab');
   const [tab, _setTab] = useState(VALID_TABS.includes(urlTab) ? urlTab : 'indents');
   const setTab = (newTab) => {
@@ -431,16 +439,9 @@ export default function Procurement() {
   // into the indent, so raising an indent never blocks on someone else
   // populating the catalogue first.
   const [ppeQuickAdd, setPpeQuickAdd] = useState({ open: false, name: '', qty: 1, saving: false });
-  // Site + Department category lock. Rule is keyed on whether ANY indent
-  // has ever been raised for this exact site+department pair — NOT on
-  // whether a PPE Kit exists:
-  //   exists === true  → this pair already has indent history → PPE Kit
-  //                       locked, every other category unlocked.
-  //   exists === false → brand-new pair → PPE Kit is the ONLY unlocked
-  //                       category (raise the PPE Kit indent first).
-  //   exists === null  → not checked yet (no site/department picked, or
-  //                       the check is in flight) → everything locked.
-  const [siteDeptStatus, setSiteDeptStatus] = useState({ checking: false, exists: null, error: null });
+  // Category lock REMOVED (mam 2026-08-26, 3rd revision: "all category is
+  // accessible" for everyone) — the 13-Aug PPE-first gate is gone; only the
+  // Wed/Sat indent-day rule still gates raising.
   // Editable per-line items for the Sales Bill / Delivery Note modal.
   // Pre-filled from Client PO (po_items) so the rate column shows the
   // SELLING price (what we invoice the client), not vendor cost. Mam can
@@ -466,6 +467,11 @@ export default function Procurement() {
   const [editPo, setEditPo] = useState(null);
   const [editPoForm, setEditPoForm] = useState({});
   const [editPoItems, setEditPoItems] = useState([]);    // editable line items
+  // Indent lines this PO can still be attached to. A PO saved with no line
+  // rows printed "No line items" and Edit PO had nothing to tick, so the
+  // buyer could never fix it (mam 2026-09-03).
+  const [linkLines, setLinkLines] = useState([]);
+  const [linkPick, setLinkPick] = useState({});   // indent_item_id -> true
   const [editPoLocked, setEditPoLocked] = useState(false); // locked when bills/DN exist
   const [editPoLockReason, setEditPoLockReason] = useState('');
   const [editPoSaving, setEditPoSaving] = useState(false);
@@ -490,13 +496,33 @@ export default function Procurement() {
       // Freight terms + charge (mam 2026-06-12).
       freight_terms: v.freight_terms || '',
       freight_amount: v.freight_amount || '',
+      // GST % (mam 2026-08-12) — default 18, editable per PO.
+      gst_pct: v.gst_pct ?? 18,
     });
     setEditPoItems([]);
+    setLinkLines([]); setLinkPick({});
+    api.get(`/procurement/vendor-po/${v.id}/linkable-lines`)
+      .then(r => {
+        const lines = (r.data?.lines || []).filter(l => !l.taken_by && !l.linked_here);
+        setLinkLines(lines);
+        // Pre-tick the lines whose finalised rate names THIS vendor — the
+        // buyer still confirms by saving, so nothing is attached silently.
+        const pre = {};
+        for (const l of lines) if (l.vendor_match) pre[l.indent_item_id] = true;
+        setLinkPick(pre);
+      })
+      .catch(() => { setLinkLines([]); setLinkPick({}); });
     setEditPoLocked(false);
     setEditPoLockReason('');
     try {
       const r = await api.get(`/procurement/vendor-po/${v.id}/with-items`);
-      setEditPoItems((r.data?.items || []).map(it => ({
+      // Drop the synthetic 'ind-<id>' placeholders /with-items invents for
+      // legacy POs (they exist for the Mark Received modal). Edit PO used to
+      // render them as editable Line Items, but the save skips non-numeric
+      // ids — so the buyer edited rows, saw "Updated", and NOTHING changed
+      // (mam 2026-09-03). Real rows only; the Attach section below is how
+      // such a PO actually gets its lines.
+      setEditPoItems((r.data?.items || []).filter(it => Number.isFinite(+it.id)).map(it => ({
         id: it.id,
         quantity: it.quantity,
         rate: it.rate,
@@ -524,6 +550,17 @@ export default function Procurement() {
       // Include line items only when NOT locked — server will reject
       // the request 409 if we send items on a locked PO.
       const payload = { ...editPoForm };
+      const picked = linkLines.filter(l => linkPick[l.indent_item_id]);
+      if (!editPoLocked && picked.length) {
+        payload.link_items = picked.map(l => ({
+          indent_item_id: l.indent_item_id,
+          quantity: l.quantity,
+          rate: l.final_rate || 0,
+          description: l.description || l.master_name || '',
+        }));
+        // Let the server recompute the total from the lines just attached.
+        delete payload.total_amount;
+      }
       if (!editPoLocked && editPoItems.length) {
         // Strip display-only fields so the server gets the minimal shape.
         payload.items = editPoItems.map(it => ({
@@ -701,6 +738,16 @@ export default function Procurement() {
   const [dispReadySearch, setDispReadySearch]   = useState('');
   const [dispReadyPage, setDispReadyPage]       = useState(1);
   const [dispListSearch, setDispListSearch]     = useState('');
+  // Deep link from the flow boards (mam 2026-08-28: "click → open only that
+  // thing"): ?q=<record no> pre-fills every tab's search box so the opened
+  // tab shows JUST the clicked record, with its action in front.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('q');
+    if (!q) return;
+    setIndSearch(q); setRatesSearch(q); setVpoListSearch(q); setVpoPendingSearch(q);
+    setBillsListSearch(q); setBillsFuSearch(q); setDispReadySearch(q); setDispListSearch(q);
+    setPaymentSearch(q);
+  }, []);
   const [dispListStatus, setDispListStatus]     = useState('all');
   const [dispListFrom, setDispListFrom]         = useState('');
   const [dispListTo, setDispListTo]             = useState('');
@@ -825,42 +872,6 @@ export default function Procurement() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Site + Department category lock — recheck every time either changes
-  // while the Raise Indent modal is open. Never reuse a stale result: a
-  // different site or a different department is a different pair.
-  useEffect(() => {
-    if (modal !== 'indent') return;
-    const site = (form.site_name || '').trim();
-    const dept = (form.department || '').trim();
-    if (!site || !dept) {
-      setSiteDeptStatus({ checking: false, exists: null, error: null });
-      return;
-    }
-    let cancelled = false;
-    setSiteDeptStatus({ checking: true, exists: null, error: null });
-    api.get('/procurement/site-department-status', { params: { siteId: site, departmentId: dept } })
-      .then(r => { if (!cancelled) setSiteDeptStatus({ checking: false, exists: !!r.data.exists, error: null }); })
-      .catch(err => { if (!cancelled) setSiteDeptStatus({ checking: false, exists: null, error: err.response?.data?.error || 'Could not check Site + Department' }); });
-    return () => { cancelled = true; };
-  }, [modal, form.site_name, form.department]);
-
-  // Whenever the lock result changes, if the currently-picked category is
-  // no longer allowed, snap to an allowed one and clear the item rows
-  // (their shape differs between PPE Kit and the BOQ-based categories).
-  // PPE Kit is never forced away from — it's always allowed.
-  useEffect(() => {
-    // Skip while editing an existing indent — its category was already
-    // valid when raised (server excludes the indent's own row from the
-    // exists-check), so don't yank the category out from under an edit.
-    if (modal !== 'indent' || editingIndentId || siteDeptStatus.checking || siteDeptStatus.exists === null) return;
-    const cur = form.indent_category || 'material';
-    if (cur === 'ppe_kit' || siteDeptStatus.exists) return;
-    setForm(f => ({ ...f, indent_category: 'ppe_kit' }));
-    setIndentItems([{ ...EMPTY_ITEM }]);
-    setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [siteDeptStatus.checking, siteDeptStatus.exists, modal]);
-
   // Tab switch → lazy fetch the new tab's data (cached if already loaded).
   // Raise-Indent is a live dashboard — its UNIT / RATE / LINE BUDGET pull
   // the CURRENT Item Master UOM + price — so always refetch it fresh
@@ -888,6 +899,38 @@ export default function Procurement() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, indents]);
+
+  // ?new=po&indent=<id> — the Procurement Board's "Create Vendor PO" popup
+  // (mam 2026-09-05 "here also open actions") lands here with the Create
+  // Vendor PO modal ALREADY open on that indent, items + finalised rates
+  // loaded — the board can't host the full multer form itself. One-shot,
+  // same shape as ?approve= above; the params are stripped once consumed
+  // so a refresh doesn't reopen it.
+  // Waits for the vendor master (pickIndentForPo pre-fills the vendor from
+  // it, through this render's closure) and pulls the indents list, which the
+  // Vendor PO tab does not load on its own but the modal's Link-to-Indent
+  // select needs (review 2026-09-05).
+  const newPoParamHandled = useRef(false);
+  useEffect(() => {
+    if (newPoParamHandled.current || searchParams.get('new') !== 'po') return;
+    const run = () => {
+      if (newPoParamHandled.current) return;
+      newPoParamHandled.current = true;
+      const indentId = searchParams.get('indent') || '';
+      if (indentId && !indents.length) api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => {});
+      openCreateVendorPo(indentId);
+      const next = new URLSearchParams(searchParams);
+      next.delete('new'); next.delete('indent');
+      setSearchParams(next, { replace: true });
+    };
+    if (vendors.length) { run(); return; }
+    // No vendor master yet (still loading, empty, or failed): open anyway
+    // after a moment rather than dead-ending the click — the modal shows
+    // an empty vendor list, which is the honest state.
+    const t = setTimeout(run, 4000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, vendors.length]);
 
   // Returning to this browser tab after editing an item's UOM / price on
   // the Item Master page in another tab should show the live value here.
@@ -1065,21 +1108,6 @@ export default function Procurement() {
     // Server enforces the same rules, but failing fast in the UI gives
     // a better error UX (row number + specific cause).
     const cat = form.indent_category || 'material';
-    // Site + Department category lock — fail fast client-side too (server
-    // re-checks with the authoritative same-instant query in case this
-    // went stale, e.g. someone else raised the pair's first indent
-    // between the last check and Submit). Skipped while editing: this
-    // indent's own row makes the frontend's un-excluded check unreliable
-    // (the server's exists-check excludes the row being edited, this one
-    // can't without a second round-trip) — the backend is authoritative there.
-    if (!editingIndentId) {
-      if (siteDeptStatus.checking || siteDeptStatus.exists === null) {
-        return toast.error('Still checking this Site + Department — wait a moment and try again.');
-      }
-      if (!siteDeptStatus.exists && cat !== 'ppe_kit') {
-        return toast.error('This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.');
-      }
-    }
     // RGP no longer requires BOQ (mam 2026-05-27): returnable material is
     // picked directly from Item Master, not tied to the Client PO BOQ.
     const needsBoq = (cat === 'material' || cat === 'extra_schedule');
@@ -1132,6 +1160,9 @@ export default function Procurement() {
     // SPOS off-day rule: routine indents Wed + Sat only; any other day
     // needs the Emergency tick + reason (server enforces too).
     const offDay = !!raiseWindow && !raiseWindow.allowed;
+    if (offDay && !editingIndentId && !isAdmin()) {
+      return toast.error('Indents are raised on Wednesday & Saturday only. Ask an admin to open emergency raising for today.');
+    }
     if (offDay && !editingIndentId && !form.is_emergency) {
       return toast.error('Today is not an indent day (Wed/Sat). Tick "Emergency indent" and write the reason to raise it now.');
     }
@@ -1149,6 +1180,7 @@ export default function Procurement() {
       items: indentItems.map(it => ({
         ...it,
         make: it.make || '',
+        remarks: (it.remarks || '').trim(),
         // Strip rental fields off non-rental rows so the server doesn't
         // mistake old form state for rental data.
         rental_days: cat === 'rental' ? (+it.rental_days || null) : null,
@@ -1283,6 +1315,7 @@ export default function Procurement() {
           item_master_id: it.item_master_id || '',
           description: it.description || '',
           make: it.make || '',
+          remarks: it.remarks || '',
           quantity: +it.quantity || 0,
           unit: it.unit || 'nos',
           item_type: it.item_type || '',
@@ -1581,6 +1614,7 @@ export default function Procurement() {
       total_amount: '',
       remarks: '',
       po_file: null,
+      gst_pct: 18,
     });
     setIndentItemsForPo([]);
     setPoItemSelection({});
@@ -1646,6 +1680,8 @@ export default function Procurement() {
     if (!s.checked) return sum;
     return sum + poLineQtyForAmount(it, s) * (+s.rate || 0);
   }, 0);
+  // Effective GST % for the Create-PO preview — blank/invalid falls back to 18.
+  const poGstPct = (form.gst_pct !== '' && form.gst_pct != null && +form.gst_pct >= 0) ? +form.gst_pct : 18;
 
   // Upload a Tally Vendor PO. The backend endpoint is multipart/form-data —
   // metadata fields + an optional file + a JSON-encoded items array for the
@@ -1678,6 +1714,16 @@ export default function Procurement() {
         return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate };
       });
 
+    // Mandatory items (mam 2026-08-27 "civic sense"): a PO must carry at
+    // least one linked line. Say WHY when ticked lines got filtered out
+    // (missing rate/qty) instead of silently creating an empty PO.
+    if (items.length === 0) {
+      const checkedCount = Object.values(poItemSelection).filter(v => v && v.checked).length;
+      return toast.error(checkedCount > 0
+        ? `${checkedCount} line(s) are ticked but missing quantity or rate — every line needs both before the PO can be created`
+        : 'Tick at least one indent item — a Vendor PO cannot be created without items');
+    }
+
     const fd = new FormData();
     if (form.po_date) fd.append('po_date', form.po_date);
     if (form.expected_receipt_date) fd.append('expected_receipt_date', form.expected_receipt_date);
@@ -1688,6 +1734,9 @@ export default function Procurement() {
     // Freight terms + charge (mam 2026-06-12) — printed on the PDF PO.
     if (form.freight_terms) fd.append('freight_terms', form.freight_terms);
     if (+form.freight_amount > 0) fd.append('freight_amount', form.freight_amount);
+    // GST % (mam 2026-08-12) — default 18, editable (e.g. 5). Server
+    // falls back to 18 on blank/invalid.
+    if (form.gst_pct !== undefined && form.gst_pct !== '') fd.append('gst_pct', form.gst_pct);
     if (items.length) fd.append('items', JSON.stringify(items));
     if (form.po_file) fd.append('file', form.po_file);
     // Internal payment-block fields (mam 2026-05-27). Never printed on PO.
@@ -2279,12 +2328,117 @@ export default function Procurement() {
           })}</div>
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
-            if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
-            if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
-            if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
-            if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
-            if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+            if (tab === 'indents') {
+              // Mirror the tab's filteredIndents (status + category + date
+              // range + search) — the export used the raw indents array, so a
+              // filtered 12-row table still produced a CSV of every indent.
+              const q = indSearch.trim().toLowerCase();
+              const rows = indents.filter(i => {
+                if (indFilterStatus !== 'all') {
+                  const inBucket = i.status === indFilterStatus
+                    || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
+                  if (!inBucket) return false;
+                }
+                if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
+                const d = (i.created_at || i.indent_date || '').slice(0, 10);
+                if (indFilterFrom && d && d < indFilterFrom) return false;
+                if (indFilterTo   && d && d > indFilterTo) return false;
+                if (!q) return true;
+                return `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''}`.toLowerCase().includes(q);
+              });
+              exportCsv('indents', ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'],
+                rows.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
+            }
+            // Tab ids MUST match allTabs above. 'pos'/'dispatch' were stale ids
+            // (real ones: 'vendorpo'/'delivery'), so Export Excel silently did
+            // NOTHING on those tabs — mam 2026-09-03 "excel isnot exporting".
+            // Each case now reproduces its tab's on-screen filters so the file
+            // matches the visible table, and unsupported tabs say so instead of
+            // failing silently.
+            if (tab === 'vendorpo') {
+              const q = vpoListSearch.trim().toLowerCase();
+              const rows = vendorPos.filter(v => {
+                if (vpoListStatus !== 'all' && (v.cancelled ? 'cancelled' : v.status) !== vpoListStatus) return false;
+                if (vpoListFrom && v.po_date && v.po_date < vpoListFrom) return false;
+                if (vpoListTo   && v.po_date && v.po_date > vpoListTo) return false;
+                if (!q) return true;
+                return `${v.po_number || ''} ${v.indent_number || ''} ${v.vendor_name || ''} ${v.indent_site_name || ''}`.toLowerCase().includes(q);
+              });
+              exportCsv('vendor-pos', ['PO Number','PO Date','Indent','Site','Vendor','Amount','Status'],
+                rows.map(v => [v.po_number, v.po_date, v.indent_number || '', v.indent_site_name || '', v.vendor_name,
+                  Math.round(+v.display_total || +v.total_amount || 0), v.cancelled ? 'cancelled' : v.status]));
+            }
+            if (tab === 'payment') {
+              const rows = (vendorPos || []).filter(v => !v.cancelled && v.payment_block_type);
+              exportCsv('po-payment-status', ['PO Number','PO Date','Vendor','Amount','Block Type','Block Amount','Payment Status','Cleared On','Notes'],
+                rows.map(v => [v.po_number, v.po_date, v.vendor_name, Math.round(+v.display_total || +v.total_amount || 0),
+                  v.payment_block_type || '', Math.round(+v.payment_block_amount || 0), v.payment_block_status || '',
+                  v.payment_cleared_at ? String(v.payment_cleared_at).slice(0, 10) : '', v.payment_block_notes || '']));
+            }
+            if (tab === 'debitnotes') {
+              exportCsv('debit-notes', ['DN Number','Type','Vendor','PO','Amount','Status','Reason'],
+                debitNotes.map(d => [d.dn_number, d.type, d.vendor_name || '', d.po_number || '',
+                  Math.round(+d.amount || 0), d.status || '', d.reason || '']));
+            }
+            if (tab === 'pipeline') {
+              exportCsv('po-pipeline', ['PO Number','Vendor','Site','Indent','Amount','Expected Receipt','Lead Days','Delay Days','Delay Reason','GRNs','Debit Notes','Bill Payment'],
+                pipeline.map(p2 => [p2.po_number, p2.vendor_name || '', p2.site_name || '', p2.indent_number || '',
+                  Math.round(+p2.total_amount || 0), p2.expected_receipt_date || '', p2.lead_time_days ?? '',
+                  p2.delay_days ?? '', p2.delay_reason || '', p2.grn_count ?? 0, p2.debit_count ?? 0, p2.bill_payment_status || '']));
+            }
+            if (tab === 'responsible') toast('Nothing to export on the Responsible board — pick a data tab.');
+            if (tab === 'bills') {
+              // Mirror the Bills list's filteredBills (date range + search).
+              const blq = billsListSearch.trim().toLowerCase();
+              const rows = purchaseBills.filter(b => {
+                if (billsListFrom && b.bill_date && b.bill_date < billsListFrom) return false;
+                if (billsListTo   && b.bill_date && b.bill_date > billsListTo) return false;
+                if (!blq) return true;
+                return `${b.bill_number || ''} ${b.vendor_name || ''}`.toLowerCase().includes(blq);
+              });
+              exportCsv('purchase-bills', ['Bill No','Vendor','Date','Amount','GST','Total','Payment'],
+                rows.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
+            }
+            if (tab === 'delivery') {
+              const q = dispListSearch.trim().toLowerCase();
+              const rows = deliveryNotes.filter(d => {
+                if (dispListStatus !== 'all' && d.status !== dispListStatus) return false;
+                if (dispListFrom && d.received_on && d.received_on.slice(0, 10) < dispListFrom) return false;
+                if (dispListTo   && d.received_on && d.received_on.slice(0, 10) > dispListTo) return false;
+                if (!q) return true;
+                return `${d.po_number || ''} ${d.vendor_po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''} ${d.raised_by_name || ''}`.toLowerCase().includes(q);
+              });
+              exportCsv('dispatch', ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'],
+                rows.map(d => [d.id, d.document_type, d.document_number,
+                  d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name,
+                  d.delivery_date, d.received_by_name,
+                  d.received_at ? fmtDateIST(d.received_at) : '', d.status]));
+            }
+            // r.item_description never existed on the API rows (GET item-rates
+            // returns ii.description) — the Item column exported blank for every
+            // row until 2026-09-03. mergedRates is what the table actually shows.
+            if (tab === 'rates') {
+              // Mirror the tab's filteredRates (status chip + search) on top of
+              // mergedRates — the export ignored both chips and the search box.
+              const rq = ratesSearch.trim().toLowerCase();
+              const rows = mergedRates
+                .filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter)
+                .filter(r => {
+                  if (!rq) return true;
+                  return `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.site_name || ''}`.toLowerCase().includes(rq);
+                });
+              exportCsv('vendor-rates', ['Item','Make','Qty','Unit','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'],
+                rows.map(r => [r.description || r.master_name || '', r.make || '', r.qty ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+            }
           }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
+          {/* SOP-07 flow board (mam 2026-08-28) — the pipeline dashboard */}
+          <a href="/procurement-board" className="btn btn-secondary flex items-center gap-2 text-sm"
+             title="Live SOP-07 pipeline: indent → PO → dispatch → GRN → bill">
+            📊 Flow Board
+          </a>
+          {/* Training video button moved to the shared Layout header
+              (mam 2026-08-26: "every where") — same "procurement" module
+              key, so previously added videos still show. */}
           {/* Approval flow control — who may act at each gate (L1 / L2 / CRM /
               PO L1 / PO L2 / Revoke) and which optional gates are on. Separate
               from ⚙ Responsible: that tab is per-record RACI reporting, this is
@@ -2365,13 +2519,20 @@ export default function Procurement() {
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="text-sm font-semibold">Raise Indent</h3>
             {(() => {
-              const raiseClosed = !!raiseWindow && !raiseWindow.allowed;
+              // mam 2026-08-20: raising is strictly Wed/Sat — the button is
+              // OFF on any other day. The only way back in on an off-day is
+              // the admin's "Open the whole day" toggle in the banner below
+              // (raiseWindow.allowed flips true), at which point indents
+              // raised are auto-flagged EMERGENCY server-side.
+              const closed = !!raiseWindow && !raiseWindow.allowed;
+              const adminEmergencyOpen = !!raiseWindow && raiseWindow.allowed && !raiseWindow.isIndentDay;
               return (
                 <button
-                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', department: '', is_emergency: false, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
-                  title={raiseClosed ? 'Off-day — opens as an EMERGENCY indent (reason required)' : ''}
-                  className={`btn flex items-center gap-2 ${raiseClosed ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
-                  <FiPlus /> {raiseClosed ? 'Raise Emergency Indent' : 'Raise Indent'}
+                  disabled={closed}
+                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material', department: '', is_emergency: adminEmergencyOpen, emergency_reason: '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
+                  title={closed ? 'Indents are raised on Wednesday & Saturday only' : adminEmergencyOpen ? 'Admin opened today — indents raised now are flagged EMERGENCY' : ''}
+                  className={`btn flex items-center gap-2 ${closed ? 'btn-secondary opacity-50 cursor-not-allowed' : adminEmergencyOpen ? 'btn-secondary !border-red-300 !text-red-700' : 'btn-primary'}`}>
+                  <FiPlus /> {adminEmergencyOpen ? 'Raise Emergency Indent' : 'Raise Indent'}
                 </button>
               );
             })()}
@@ -3319,7 +3480,10 @@ export default function Procurement() {
                                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 border border-blue-300">🛒 PROCURE</span>
                                 )}
                               </td>
-                              <td className="py-1 pr-3">{it.make || <span className="text-gray-400">—</span>}</td>
+                              <td className="py-1 pr-3">
+                                {it.make || <span className="text-gray-400">—</span>}
+                                {it.remarks && <div className="text-[10px] text-amber-700 mt-0.5" title={it.remarks}>✎ {it.remarks}</div>}
+                              </td>
                               <td className="py-1 pr-3 text-right">{it.quantity}</td>
                               <td className="py-1 pr-3">{it.unit || '—'}</td>
                               <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}</td>
@@ -4056,7 +4220,7 @@ export default function Procurement() {
                   </td>
                   <td>{v.po_date || <span className="text-gray-300">—</span>}</td>
                   <td>{v.vendor_name}</td>
-                  <td>Rs {v.total_amount?.toLocaleString()}</td>
+                  <td>Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</td>
                   <td>
                     <div className="flex flex-col gap-1">
                       <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-xs flex items-center gap-1">
@@ -4194,7 +4358,7 @@ export default function Procurement() {
                   </div>
                   <div className="text-right">
                     <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                    <div className="font-semibold text-emerald-700">Rs {(+v.total_amount || 0).toLocaleString('en-IN')}</div>
+                    <div className="font-semibold text-emerald-700">Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</div>
                   </div>
                 </div>
                 {/* Links row */}
@@ -4736,7 +4900,7 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center">{chip}</td>
-                          {/* Show the LIVE computed total (items × 1.18 GST)
+                          {/* Show the LIVE computed total (items + the PO's GST %)
                               from display_total — matches what the PO print
                               shows.  Mam, 2026-05-16: header total drifted from
                               the line items.  Drift chip warns when the stored
@@ -4744,7 +4908,7 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
                             Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
                             {+po.total_amount_drift > 1 && (
-                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + 18% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
                                 ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
                               </div>
                             )}
@@ -5402,7 +5566,7 @@ export default function Procurement() {
                         <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
                           Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
                           {+po.total_amount_drift > 1 && (
-                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + 18% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
                               ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
                             </div>
                           )}
@@ -5961,25 +6125,34 @@ export default function Procurement() {
           </div>
           {/* SPOS emergency section — shows only when raising OFF-day (not
               Wed/Sat, no admin day-open). Reason is mandatory; the indent is
-              flagged ⚡EMERGENCY for approvers + the <5% KPI. */}
+              flagged ⚡EMERGENCY for approvers + the <5% KPI.
+              Admin-only self-service (mam 2026-08-20): regular users may
+              raise ONLY on Wed/Sat — the whole-day override is admin's
+              call via the banner toggle, not a per-user emergency tick. */}
           {!editingIndentId && raiseWindow && !raiseWindow.allowed && (
-            <div className="border border-red-300 bg-red-50 rounded p-3 space-y-2">
-              <label className="flex items-start gap-2 text-xs cursor-pointer">
-                <input type="checkbox" className="mt-0.5"
-                  checked={!!form.is_emergency}
-                  onChange={e => setForm({ ...form, is_emergency: e.target.checked })} />
-                <span>
-                  <span className="font-semibold text-red-700">⚡ Emergency indent — today is not an indent day (Wed/Sat)</span>
-                  <span className="text-red-600 block mt-0.5">Tick to confirm this cannot wait for the next routine indent day. It will carry an EMERGENCY flag through approval and count toward the emergency-indent KPI (target &lt; 5%).</span>
-                </span>
-              </label>
-              {form.is_emergency && (
-                <textarea className="input" rows="2" required
-                  placeholder="Why can't this wait for Wednesday/Saturday? (mandatory)"
-                  value={form.emergency_reason || ''}
-                  onChange={e => setForm({ ...form, emergency_reason: e.target.value })} />
-              )}
-            </div>
+            isAdmin() ? (
+              <div className="border border-red-300 bg-red-50 rounded p-3 space-y-2">
+                <label className="flex items-start gap-2 text-xs cursor-pointer">
+                  <input type="checkbox" className="mt-0.5"
+                    checked={!!form.is_emergency}
+                    onChange={e => setForm({ ...form, is_emergency: e.target.checked })} />
+                  <span>
+                    <span className="font-semibold text-red-700">⚡ Emergency indent — today is not an indent day (Wed/Sat)</span>
+                    <span className="text-red-600 block mt-0.5">Tick to confirm this cannot wait for the next routine indent day. It will carry an EMERGENCY flag through approval and count toward the emergency-indent KPI (target &lt; 5%).</span>
+                  </span>
+                </label>
+                {form.is_emergency && (
+                  <textarea className="input" rows="2" required
+                    placeholder="Why can't this wait for Wednesday/Saturday? (mandatory)"
+                    value={form.emergency_reason || ''}
+                    onChange={e => setForm({ ...form, emergency_reason: e.target.value })} />
+                )}
+              </div>
+            ) : (
+              <div className="border border-amber-300 bg-amber-50 rounded p-3 text-xs text-amber-800">
+                🔒 Indents are raised on <b>Wednesday &amp; Saturday</b> only. If today's material can't wait, ask an admin to open emergency raising for the day.
+              </div>
+            )
           )}
           {/* Header — Site from Business Book, Raised By from Employees. Stacks on mobile. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -6037,34 +6210,9 @@ export default function Procurement() {
               capture (days × rate/day with the rent-vs-buy block). */}
           <div>
             <label className="label">Category *</label>
-            {/* ─── Site + Department category lock ──────────────────────
-                PPE Kit is ALWAYS selectable. The other 5 categories need
-                the site+department pair to already have indent history:
-                  pair exists     → Material / RGP / Extra / Rental open
-                  pair is new     → Material / RGP / Extra / Rental locked,
-                                     raise the PPE Kit indent first
-                  not checked yet → same 5 locked (pick site+dept first) */}
-            {(!form.site_name || !form.department) ? (
-              <div className="text-[11px] rounded-lg border border-gray-200 bg-gray-50 text-gray-500 px-2.5 py-1.5 mb-1.5">
-                Pick a Site and Department above to unlock Material / RGP / Extra / Rental. PPE Kit is always available.
-              </div>
-            ) : siteDeptStatus.checking ? (
-              <div className="text-[11px] rounded-lg border border-blue-200 bg-blue-50 text-blue-700 px-2.5 py-1.5 mb-1.5 flex items-center gap-1.5">
-                <FiRefreshCw size={12} className="animate-spin" /> Checking Site + Department…
-              </div>
-            ) : siteDeptStatus.error ? (
-              <div className="text-[11px] rounded-lg border border-red-200 bg-red-50 text-red-700 px-2.5 py-1.5 mb-1.5">
-                Could not check Site + Department: {siteDeptStatus.error}
-              </div>
-            ) : siteDeptStatus.exists ? (
-              <div className="text-[11px] rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 px-2.5 py-1.5 mb-1.5">
-                This Site + Department combination already exists — every category is available.
-              </div>
-            ) : (
-              <div className="text-[11px] rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-800 px-2.5 py-1.5 mb-1.5">
-                This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock the rest.
-              </div>
-            )}
+            {/* Category lock removed (mam 2026-08-26, 3rd revision) —
+                every category is open to everyone; only the Wed/Sat
+                indent-day rule still gates raising. */}
             <div className="flex gap-1 flex-wrap">
               {[
                 { id: 'material',           label: 'Material',         hint: 'BOQ items (PO + FOC). RGP hidden.' },
@@ -6075,21 +6223,11 @@ export default function Procurement() {
                 { id: 'ppe_kit',            label: 'PPE Kit',          hint: 'PPE Kit items — no BOQ. Item name + Quantity. Always available.' },
               ].map(c => {
                 const active = (form.indent_category || 'material') === c.id;
-                // PPE Kit is never gated. The other 5 need the site+department
-                // pair to already have indent history.
-                const notCheckedYet = !form.site_name || !form.department || siteDeptStatus.checking || siteDeptStatus.exists === null;
-                const locked = c.id !== 'ppe_kit' && (notCheckedYet || !siteDeptStatus.exists);
-                const lockReason = notCheckedYet
-                  ? 'Pick a Site and Department first.'
-                  : 'This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.';
                 return (
                   <button
                     key={c.id}
                     type="button"
-                    disabled={locked}
-                    aria-disabled={locked}
                     onClick={() => {
-                      if (locked) return;
                       // Reset items when category changes — different categories
                       // have incompatible row shapes (BOQ vs flat Item Master).
                       setForm(f => ({ ...f, indent_category: c.id }));
@@ -6097,13 +6235,11 @@ export default function Procurement() {
                       setPpeQuickAdd({ open: false, name: '', qty: 1, saving: false });
                     }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
-                      locked
-                        ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
-                        : active
-                          ? 'bg-blue-700 text-white border-blue-700 shadow-sm'
-                          : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:text-blue-700'
+                      active
+                        ? 'bg-blue-700 text-white border-blue-700 shadow-sm'
+                        : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:text-blue-700'
                     }`}
-                    title={locked ? lockReason : c.hint}
+                    title={c.hint}
                   >
                     {c.label}
                   </button>
@@ -6613,6 +6749,11 @@ export default function Procurement() {
                             </div>
                           );
                           const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} title={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
+                          // Per-item remark for Purchase (mam 2026-09-04: "give
+                          // remarks options to engineer after every item, for
+                          // example colour of wire"). Optional; travels with the
+                          // item onto the indent view, the PDF and the store slip.
+                          const remarksInput = <input className="input text-sm" placeholder="Remarks for this item — e.g. red colour, 1.5 sq mm, with lugs" value={item.remarks || ''} title={item.remarks || ''} maxLength={500} onChange={e => { const n = [...indentItems]; n[i].remarks = e.target.value; setIndentItems(n); }} />;
                           // Qty input — uses NumInput so backspace/Ctrl+A
                           // doesn't snap the field back to 0 (mam 2026-05-25).
                           // emitZeroOnEmpty keeps the same number contract
@@ -6690,10 +6831,15 @@ export default function Procurement() {
                                   <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>
                                   {makeInput}
                                 </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Remarks <span className="text-gray-400 font-normal normal-case">(optional)</span></label>
+                                  {remarksInput}
+                                </div>
                               </div>
 
                               {/* DESKTOP — single row (no Required by; see
-                                  header comment above for context) */}
+                                  header comment above for context), plus a
+                                  remarks line under it (mam 2026-09-04). */}
                               <div className="hidden md:block">
                                 <div className="grid gap-2 items-center bg-white border rounded-lg p-2" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
                                   <div className="col-span-7">{masterPicker}</div>
@@ -6702,6 +6848,7 @@ export default function Procurement() {
                                   <div className="col-span-2">{qtyInput}</div>
                                   <div className="col-span-2">{unitInput}</div>
                                   {removeBtn}
+                                  <div className="col-span-full">{remarksInput}</div>
                                 </div>
                               </div>
                             </div>
@@ -6866,6 +7013,13 @@ export default function Procurement() {
               <input className="input text-right" type="number" step="0.01" min="0" placeholder="0" value={form.freight_amount || ''} onChange={e => setForm({...form, freight_amount: e.target.value})} />
               <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
             </div>
+            {/* GST % (mam 2026-08-12: "gst 18% but some time 5%") — default 18,
+                editable per PO. Drives the print page GST split + list total. */}
+            <div>
+              <label className="label">GST % <span className="text-gray-400 font-normal">(default 18)</span></label>
+              <input className="input text-right" type="number" step="0.01" min="0" max="100" placeholder="18" value={form.gst_pct ?? 18} onChange={e => setForm({...form, gst_pct: e.target.value})} />
+              <p className="text-[10px] text-gray-400 mt-0.5">Change when the material attracts a different slab (e.g. 5%). Used on the PO print &amp; totals.</p>
+            </div>
           </div>
 
           {/* Optional item linking — when an indent is picked, the uploader
@@ -6941,8 +7095,12 @@ export default function Procurement() {
                         <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
                             <td className="px-2 py-1 text-right text-gray-700">Rs {(+form.freight_amount).toLocaleString()}</td></tr>
                       )}
-                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total:</td>
+                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total (taxable):</td>
                           <td className="px-2 py-2 text-right font-bold text-red-700">Rs {(poTotal + (+form.freight_amount || 0)).toLocaleString()}</td></tr>
+                      <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">GST @ {poGstPct}%:</td>
+                          <td className="px-2 py-1 text-right text-gray-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (poGstPct / 100)).toLocaleString()}</td></tr>
+                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
+                          <td className="px-2 py-2 text-right font-bold text-red-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (1 + poGstPct / 100)).toLocaleString()}</td></tr>
                     </tfoot>
                   </table>
                 </div>
@@ -8093,6 +8251,13 @@ export default function Procurement() {
                        onChange={e => setEditPoForm({ ...editPoForm, freight_amount: e.target.value })} />
                 <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
               </div>
+              <div>
+                <label className="label">GST %</label>
+                <input className="input text-right" type="number" step="0.01" min="0" max="100" placeholder="18"
+                       value={editPoForm.gst_pct ?? 18}
+                       onChange={e => setEditPoForm({ ...editPoForm, gst_pct: e.target.value })} />
+                <p className="text-[10px] text-gray-400 mt-0.5">Default 18 — change when the material attracts a different slab (e.g. 5%). Used on the PO print &amp; totals.</p>
+              </div>
             </div>
 
             {/* Payment-before-material (INTERNAL — mam 2026-05-27).
@@ -8162,6 +8327,94 @@ export default function Procurement() {
                 description / HSN per row.  Locked + grey when bills or
                 delivery notes already reference this PO (would
                 invalidate them).  Live total recalculates as user types. */}
+            {/* Attach indent lines (mam 2026-09-03). Shown when the indent still
+                has lines no live PO has taken. For a PO with NO line rows this is
+                the only way to make its print show items; the print page now
+                points here by name. */}
+            {!editPoLocked && linkLines.length > 0 && (
+              <div className="border-t pt-3">
+                <div className="flex items-center justify-between mb-1">
+                  <h4 className="text-sm font-semibold">
+                    {editPoItems.length === 0 ? "Attach indent lines to this PO" : "Add more indent lines"}
+                  </h4>
+                  <span className="text-[11px] text-gray-500">{Object.values(linkPick).filter(Boolean).length} of {linkLines.length} selected</span>
+                </div>
+                <p className="text-[11px] text-gray-500 mb-2">
+                  Tick the lines this PO actually covers, then Save. Lines already on another live PO are not listed.
+                  Saving recalculates this PO&apos;s total from the ticked lines.
+                </p>
+                {/* Live check against the amount the PO was saved for. The vendor
+                    holds a document for THAT value, so ticking a set that does not
+                    match it would quietly re-price the PO — show the gap instead. */}
+                {(() => {
+                  const gstPct = (editPoForm.gst_pct !== "" && editPoForm.gst_pct != null) ? +editPoForm.gst_pct : 18;
+                  const freight = +editPoForm.freight_amount || 0;
+                  // total_amount on an itemless PO IS the taxable sub-total: the print
+                  // renders it as "Sub Total" and adds GST on top (mam's VPO/2026/0173
+                  // shows 46,975 -> +IGST -> 55,431), and the derived-lines gate compares
+                  // against it the same way. Do NOT divide it by GST here or the buyer is
+                  // told to hit a target that is 18% too low.
+                  const poTaxable = Math.max(0, (+editPoForm.total_amount || 0) - freight);
+                  const sel = linkLines.filter(l => linkPick[l.indent_item_id])
+                    .reduce((a, l) => a + (+l.quantity || 0) * (+l.final_rate || 0), 0);
+                  if (!poTaxable) return null;
+                  const diff = sel - poTaxable;
+                  const ok = Math.abs(diff) <= 1;
+                  return (
+                    <div className={`text-[11px] mb-2 px-2 py-1 rounded border ${ok ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+                      {ok
+                        ? <>Selected lines match the ₹{Math.round(poTaxable).toLocaleString("en-IN")} this PO was saved for. Safe to save — the total becomes ₹{Math.round(poTaxable * (1 + gstPct / 100) + freight).toLocaleString("en-IN")} with {gstPct}% GST.</>
+                        : <>Selected ₹{Math.round(sel).toLocaleString("en-IN")} vs the ₹{Math.round(poTaxable).toLocaleString("en-IN")} this PO was saved for ({diff > 0 ? "+" : ""}{Math.round(diff).toLocaleString("en-IN")}). Saving will change the PO value the vendor was sent — tick the lines that add up to the original amount, or change the amount deliberately.</>}
+                    </div>
+                  );
+                })()}
+                <div className="max-h-56 overflow-y-auto border rounded">
+                  <table className="w-full text-[11px]">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr className="text-left text-gray-500">
+                        <th className="px-2 py-1 w-8"></th>
+                        <th className="px-2 py-1">Item</th>
+                        <th className="px-2 py-1 text-right">Qty</th>
+                        <th className="px-2 py-1 text-right">Rate</th>
+                        <th className="px-2 py-1 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {linkLines.map(l => {
+                        const on = !!linkPick[l.indent_item_id];
+                        const amt = (+l.quantity || 0) * (+l.final_rate || 0);
+                        return (
+                          <tr key={l.indent_item_id} className={`border-t ${on ? "bg-blue-50/60" : ""}`}>
+                            <td className="px-2 py-1">
+                              <input type="checkbox" checked={on}
+                                onChange={e => setLinkPick(prev => ({ ...prev, [l.indent_item_id]: e.target.checked }))} />
+                            </td>
+                            <td className="px-2 py-1">
+                              {l.master_name || l.description || "-"}
+                              {l.vendor_match ? <span className="ml-1 text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1">rate finalised to this vendor</span> : null}
+                              {!l.final_rate ? <span className="ml-1 text-[9px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1">no finalised rate</span> : null}
+                            </td>
+                            <td className="px-2 py-1 text-right whitespace-nowrap">{l.quantity} {l.uom || l.unit || ""}</td>
+                            <td className="px-2 py-1 text-right whitespace-nowrap">₹{(+l.final_rate || 0).toLocaleString("en-IN")}</td>
+                            <td className="px-2 py-1 text-right whitespace-nowrap font-semibold">₹{amt.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-blue-50 font-semibold">
+                        <td colSpan="4" className="px-2 py-1 text-right">Selected total (taxable)</td>
+                        <td className="px-2 py-1 text-right text-blue-700">
+                          ₹{linkLines.filter(l => linkPick[l.indent_item_id])
+                            .reduce((a, l) => a + (+l.quantity || 0) * (+l.final_rate || 0), 0)
+                            .toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
             {editPoItems.length > 0 && (
               <div className="border-t pt-3">
                 <div className="flex items-center justify-between mb-2">
@@ -8228,9 +8481,9 @@ export default function Procurement() {
                         </td>
                       </tr>
                       <tr className="bg-blue-50 font-semibold text-blue-800">
-                        <td colSpan="6" className="px-2 py-2 text-right">+ 18% GST · Grand Total</td>
+                        <td colSpan="6" className="px-2 py-2 text-right">+ {(editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18}% GST · Grand Total</td>
                         <td className="px-2 py-2 text-right">
-                          ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * 1.18).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * (1 + ((editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18) / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                     </tfoot>
@@ -8238,7 +8491,7 @@ export default function Procurement() {
                 </div>
                 {!editPoLocked && (
                   <p className="text-[10px] text-gray-500 mt-1">
-                    Saving will auto-recompute the PO's Total Amount from these line items (× 1.18 GST).
+                    Saving will auto-recompute the PO's Total Amount from these line items (+ the GST % above).
                   </p>
                 )}
               </div>

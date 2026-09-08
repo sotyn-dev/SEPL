@@ -156,6 +156,44 @@ export default function Rentals() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // The Payments Log merges paid rent_requests (the primary workflow) with
+  // legacy rental_payments. Both the tab and its Export Excel read from this
+  // one builder so the CSV always matches what's on screen.
+  const buildPaymentRows = () => {
+    const all = [];
+    for (const r of (requests || []).filter(r => r.status === 'paid')) {
+      all.push({
+        id: `req-${r.id}`,
+        month: r.rent_month,
+        property: r.site_name || r.site_name_live || '—',
+        landlord: r.owner_name,
+        amount: r.rent_amount,
+        paid_date: r.paid_at ? r.paid_at.slice(0, 10) : null,
+        paid_via: r.paid_via,
+        ref: r.transaction_ref,
+        receipt: r.receipt_url,
+        notes: r.notes,
+        request_no: r.request_no,
+        arrange_for: r.arrange_for,
+      });
+    }
+    for (const p of (payments || [])) {
+      all.push({
+        id: `pay-${p.id}`,
+        month: p.period_month,
+        property: p.property_name || '—',
+        landlord: p.landlord_name,
+        amount: p.amount_paid,
+        paid_date: p.paid_date,
+        paid_via: p.paid_via,
+        ref: p.transaction_ref,
+        receipt: p.receipt_url,
+        notes: p.notes,
+      });
+    }
+    return all;
+  };
+
   const savePayment = async (e) => {
     e.preventDefault();
     try {
@@ -175,9 +213,12 @@ export default function Rentals() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => {
-            if (tab === 'payments') exportCsv('rental-payments', ['Period','Property','Occupant','Amount','Paid Via','Date'], payments.map(p => [p.period_month, p.property_name, p.occupant_name, p.amount, p.paid_via, p.paid_on]));
-            else if (tab === 'bookings') exportCsv('rental-bookings', ['Status','Occupant','Property','City','Site','Check-in','Check-out','Rent Share'], bookings.map(b => [b.status, b.occupant_name || b.occupant_user_name, b.property_name, b.city, b.site_name, b.check_in, b.check_out, b.rent_share]));
-            else exportCsv('rental-requests', ['Req #','Month','Site','Arrange For','Owner','Pay Mode','Amount','Status'], requests.map(r => [r.request_no, r.rent_month, r.site_name, r.arrange_for, r.owner_name, r.payment_mode, r.amount, r.status]));
+            if (tab === 'payments') {
+              const rows = buildPaymentRows().sort((a, b) => String(b.month || '').localeCompare(String(a.month || '')));
+              exportCsv('rental-payments', ['Period','Req No','Property','Landlord','Amount','Paid Via','Date'], rows.map(p => [p.month, p.request_no, p.property, p.landlord, p.amount, p.paid_via, p.paid_date]));
+            }
+            else if (tab === 'bookings') exportCsv('rental-bookings', ['Status','Occupant','Property','City','Site','Check-in','Check-out','Rent Share'], bookings.map(b => [b.status, b.occupant_name || b.occupant_user_name, b.property_name, b.city, b.site_name, b.check_in_date, b.actual_checkout_date || b.check_out_date || '', b.rent_share]));
+            else exportCsv('rental-requests', ['Req #','Month','Site','Arrange For','Owner','Pay Mode','Amount','Status'], requests.map(r => [r.request_no, r.rent_month, r.site_name, r.arrange_for, r.owner_name, r.payment_mode, r.rent_amount, r.status]));
           }} className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('rentals') && tab === 'payments' && (
             <button onClick={() => { setPaymentForm({ period_month: monthNow(), paid_via: 'Bank' }); setPaymentModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Record Payment</button>
@@ -232,7 +273,7 @@ export default function Rentals() {
               <thead>
                 <tr>
                   <th>Req No</th><th>Month / Due By</th><th>Site</th><th>Arrange For</th>
-                  <th>Owner</th><th>Aadhar</th><th>Photo</th>
+                  <th>Owner</th><th>Aadhar</th><th>Deed</th><th>Photo</th>
                   <th>Pay Mode</th>
                   <th className="text-right">Amount</th><th>Status</th><th>Actions</th>
                 </tr>
@@ -279,6 +320,7 @@ export default function Rentals() {
                     </td>
                     <td className="text-xs"><div className="font-medium">{r.owner_name}</div>{r.owner_phone && <div className="text-[10px] text-gray-500">{r.owner_phone}</div>}</td>
                     <td>{r.owner_aadhar_url ? <a href={r.owner_aadhar_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 view</a> : <span className="text-gray-300 text-xs">—</span>}</td>
+                    <td>{r.rent_deed_url ? <a href={r.rent_deed_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 deed</a> : <span className="text-amber-500 text-xs" title="Rent deed missing - request predates the mandatory deed rule">⚠</span>}</td>
                     <td>
                       {r.room_photo_url ? (
                         <a href={r.room_photo_url} target="_blank" rel="noreferrer">
@@ -489,37 +531,7 @@ export default function Rentals() {
           rental_payments into a single chronological view. */}
       {tab === 'payments' && (() => {
         // Build a unified row list from both sources
-        const all = [];
-        for (const r of (requests || []).filter(r => r.status === 'paid')) {
-          all.push({
-            id: `req-${r.id}`,
-            month: r.rent_month,
-            property: r.site_name || r.site_name_live || '—',
-            landlord: r.owner_name,
-            amount: r.rent_amount,
-            paid_date: r.paid_at ? r.paid_at.slice(0, 10) : null,
-            paid_via: r.paid_via,
-            ref: r.transaction_ref,
-            receipt: r.receipt_url,
-            notes: r.notes,
-            request_no: r.request_no,
-            arrange_for: r.arrange_for,
-          });
-        }
-        for (const p of (payments || [])) {
-          all.push({
-            id: `pay-${p.id}`,
-            month: p.period_month,
-            property: p.property_name || '—',
-            landlord: p.landlord_name,
-            amount: p.amount_paid,
-            paid_date: p.paid_date,
-            paid_via: p.paid_via,
-            ref: p.transaction_ref,
-            receipt: p.receipt_url,
-            notes: p.notes,
-          });
-        }
+        const all = buildPaymentRows();
         // Group by month (descending)
         const byMonth = {};
         for (const r of all) {
@@ -829,6 +841,14 @@ export default function Rentals() {
             if (!/^\d{6}$/.test(String(requestForm.pincode || ''))) {
               return toast.error('Room PIN code is required (6 digits)');
             }
+            // Rent deed is mandatory (mam 2026-09-03). Checked here as well as
+            // on the server so the message is immediate and names the field —
+            // and so it still applies for admins, whose forms skip HTML
+            // validation. Only on CREATE: rent requests raised before this
+            // shipped have no deed and must stay editable.
+            if (!requestForm.id && !String(requestForm.rent_deed_url || '').trim()) {
+              return toast.error('Rent deed is required — upload the signed rent deed / agreement');
+            }
             // If the user typed a PIN but didn't click "Verify PIN", classify
             // it now so metro_type is always saved.
             let payload = requestForm;
@@ -1036,6 +1056,30 @@ function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
               const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, owner_aadhar_url: url }));
               e.target.value = '';
             }} />
+          )}
+        </div>
+
+        <div className="col-span-2">
+          {/* Rent deed - MANDATORY (mam 2026-09-03): no rent request without the
+              signed agreement on file. The server rejects a missing deed too,
+              because admins run the app with HTML validation disabled. */}
+          <label className="label">
+            Rent Deed / Agreement <span className="text-red-600">*</span>
+            <span className="text-gray-400 font-normal text-[10px]"> (image / PDF)</span>
+          </label>
+          {form.rent_deed_url ? (
+            <div className="flex items-center gap-2">
+              <a href={form.rent_deed_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-sm">📎 Rent deed uploaded</a>
+              <button type="button" onClick={() => setForm(f => ({ ...f, rent_deed_url: '' }))} className="text-red-500 text-xs">Remove</button>
+            </div>
+          ) : (
+            <>
+              <input type="file" accept="image/*,.pdf" className="text-xs" onChange={async e => {
+                const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, rent_deed_url: url }));
+                e.target.value = '';
+              }} />
+              <div className="text-[10px] text-red-600 mt-1">Required - upload the signed rent deed before raising this request.</div>
+            </>
           )}
         </div>
 

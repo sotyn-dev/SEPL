@@ -21,6 +21,7 @@ import {
 // — reused here for the Training Library tab icon.
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime, fmtDate, fmtTime } from '../utils/datetime';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 const candidateStatuses = ['lead','called','qualified','interview_scheduled','interview_done','offer_sent','accepted','onboarded','rejected'];
 const sources = ['facebook','naukri','linkedin','reference','other'];
@@ -66,6 +67,25 @@ function pipelineFor(c) {
   }
   return { label: s, color: 'bg-gray-100 text-gray-700 border-gray-300', next: null };
 }
+
+// Mam (2026-05-22 ATS Phase 1 spec): 7-stage pipeline.
+//   Applied → Screening → Interview → Final Round → Selected
+//   + Rejected + On Hold (overlay)
+// bucketFor maps existing status + is_on_hold flag to a pill id.
+// On Hold takes precedence — a held candidate at any stage
+// shows only in the On Hold filter (avoid double-counting).
+// (Module-scope: shared by the stage pills and the top-level pagination.)
+const bucketFor = (c) => {
+  if (c.is_on_hold) return 'on_hold';
+  const s = c.status || 'lead';
+  if (s === 'rejected') return 'rejected';
+  if (s === 'lead' || s === 'called')        return 'applied';
+  if (s === 'interview_scheduled')           return 'screening';
+  if (s === 'interview_done')                return 'interview';
+  if (s === 'qualified')                     return 'final_round';
+  if (['offer_sent','accepted','onboarded'].includes(s)) return 'selected';
+  return 'applied';
+};
 
 export default function HR() {
   const { canDelete } = useAuth();
@@ -120,6 +140,14 @@ export default function HR() {
     api.get('/hr/employees').then(r => setEmployees(r.data || [])).catch(() => setEmployees([]));
   };
   useEffect(() => { load(); }, []);
+
+  // Candidates-tab pagination — the table itself renders inside a
+  // conditional tab block, so the hook (and the filtered list it windows)
+  // must live here at the component top level.
+  const visibleCandidates = stageFilter === 'all'
+    ? candidates
+    : candidates.filter(c => bucketFor(c) === stageFilter);
+  const candPager = usePagination(visibleCandidates);
 
   // Generic file upload helper — reuses /upload, returns the served URL.
   const uploadFile = async (file) => {
@@ -522,23 +550,9 @@ export default function HR() {
       {tab === 'training'        && <TrainingTab />}
 
       {tab === 'candidates' && (() => {
-        // Mam (2026-05-22 ATS Phase 1 spec): 7-stage pipeline.
-        //   Applied → Screening → Interview → Final Round → Selected
-        //   + Rejected + On Hold (overlay)
-        // bucketFor maps existing status + is_on_hold flag to a pill id.
-        // On Hold takes precedence — a held candidate at any stage
-        // shows only in the On Hold filter (avoid double-counting).
-        const bucketFor = (c) => {
-          if (c.is_on_hold) return 'on_hold';
-          const s = c.status || 'lead';
-          if (s === 'rejected') return 'rejected';
-          if (s === 'lead' || s === 'called')        return 'applied';
-          if (s === 'interview_scheduled')           return 'screening';
-          if (s === 'interview_done')                return 'interview';
-          if (s === 'qualified')                     return 'final_round';
-          if (['offer_sent','accepted','onboarded'].includes(s)) return 'selected';
-          return 'applied';
-        };
+        // bucketFor + visibleCandidates + candPager live at module /
+        // component top level (see above) — hooks can't sit inside this
+        // conditional tab block.
         const STAGE_PILLS = [
           { id: 'applied',     label: '1 · APPLIED',     color: 'bg-blue-500' },
           { id: 'screening',   label: '2 · SCREENING',   color: 'bg-indigo-500' },
@@ -552,9 +566,6 @@ export default function HR() {
           acc[s.id] = candidates.filter(c => bucketFor(c) === s.id).length;
           return acc;
         }, {});
-        const visibleCandidates = stageFilter === 'all'
-          ? candidates
-          : candidates.filter(c => bucketFor(c) === stageFilter);
         return (<>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <div>
@@ -564,7 +575,7 @@ export default function HR() {
             <div className="flex gap-2">
               <button onClick={() => exportCsv('candidates',
                 ['Name','Phone','Email','Position','Source','Stage','Notes'],
-                candidates.map(c => [c.name, c.phone, c.email, c.position, c.source, c.current_stage, c.notes]))}
+                visibleCandidates.map(c => [c.name, c.phone, c.email, c.position, c.source, pipelineFor(c).label, c.notes]))}
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
               <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', source: 'naukri', position: '', notes: '', address: '' }); setParsedHits(null); setParsingResume(false); setModal('candidate'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Candidate</button>
             </div>
@@ -614,7 +625,7 @@ export default function HR() {
                 </tr>
               </thead>
               <tbody>
-                {visibleCandidates.map(c => {
+                {candPager.pageItems.map(c => {
                   const p = pipelineFor(c);
                   return (
                     <tr key={c.id} className="border-t hover:bg-gray-50/60 align-top">
@@ -748,6 +759,7 @@ export default function HR() {
                 )}
               </tbody>
             </table>
+            <Pagination {...candPager} />
           </div>
         </>);
       })()}

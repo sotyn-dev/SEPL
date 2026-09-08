@@ -71,7 +71,7 @@ export default function Attendance() {
   //                 enforces marking via attendance.can_approve.)
   const canGrid = isAdmin() || canView('attendance_grid');
   const canMarkGrid = isAdmin() || canApprove('attendance');
-  const [tab, setTab] = useUrlTab('punch');
+  const [tab, setTab] = useUrlTab(['punch', 'byuser', 'dashboard', 'geofence', 'grid', 'leaves', 'myhistory', 'records', 'report'], 'punch');
   const [myToday, setMyToday] = useState(null);
   // Mam: daily attendance detail (in/out times + leave) belongs on the
   // Attendance page next to the punch UI, not on the dashboard.
@@ -197,7 +197,10 @@ export default function Attendance() {
       navigator.geolocation.getCurrentPosition(pos => {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
         setLocation(loc);
-        api.post('/attendance/track-location', { ...loc, address: '' }).catch(() => {});
+        // No POST here: Layout.jsx already sends the 30-second location ping
+        // for every page, so this page was writing a SECOND row per ping
+        // (2× location_tracking growth, 2× the geofence work on the server).
+        // The GPS-OFF heartbeats below stay — Layout's tracker is silent on error.
       }, (err) => {
         // GPS off / permission denied / timeout — send a "GPS OFF"
         // heartbeat so the admin Location Tracking page can surface
@@ -569,6 +572,9 @@ export default function Attendance() {
         </>}
         {canGrid && <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>}
         {isAdmin() && <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>}
+        {/* Training video button moved to the shared Layout header
+            (mam 2026-08-26: "every where") — same "attendance" module key,
+            so previously added videos still show. */}
       </div>
 
       {/* MONTHLY ATTENDANCE GRID TAB */}
@@ -1017,7 +1023,14 @@ export default function Attendance() {
             <input type="date" className="input w-48" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
             <button onClick={() => exportCsv(`attendance-${filterDate || 'all'}`,
               ['Name','Date','In','Out','Hours','Site','Status'],
-              records.map(r => [r.user_name, r.date, r.punch_in_time, r.punch_out_time, r.total_hours, r.site_name, r.status]))}
+              records.map(r => [
+                r.user_name, r.date,
+                // Punch times are stored UTC — export them in IST so the CSV
+                // matches the times the table shows via fmtT (mam 2026-09-03).
+                r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                r.total_hours, r.site_name, r.status,
+              ]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
           </div>
           {/* Desktop table (mobile gets card list below — mam 2026-06-02). */}

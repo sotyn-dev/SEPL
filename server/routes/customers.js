@@ -71,8 +71,20 @@ router.post('/', requirePermission('customers', 'create'), (req, res) => {
 
 // PUT update (customer_code is read-only)
 router.put('/:id', requirePermission('customers', 'edit'), (req, res) => {
-  const b = req.body || {};
-  getDb().prepare(
+  const raw = req.body || {};
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM customers WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Customer not found' });
+  // Lost-update guard (audit 2026-08-17, same pattern as Business Book).
+  if (raw.updated_at && existing.updated_at && String(raw.updated_at) !== String(existing.updated_at)) {
+    return res.status(409).json({
+      error: 'This customer was edited by someone else while you had it open. Please reload and re-apply your change.',
+      stale: true,
+    });
+  }
+  const b = { ...existing };
+  for (const k of Object.keys(raw)) { if (raw[k] !== undefined) b[k] = raw[k]; }
+  db.prepare(
     'UPDATE customers SET category=?, company_name=?, sub_company_name=?, company_registration_address=?, contact_no=?, email=?, concern_person_name=?, concern_person_email=?, concern_person_address=?, updated_at=CURRENT_TIMESTAMP WHERE id=?'
   ).run(b.category || '', b.company_name || '', b.sub_company_name || '', b.company_registration_address || '', b.contact_no || '', b.email || '', b.concern_person_name || '', b.concern_person_email || '', b.concern_person_address || '', req.params.id);
   res.json({ message: 'Updated' });

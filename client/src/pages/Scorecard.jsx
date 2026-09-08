@@ -11,7 +11,7 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget } from 'react-icons/fi';
+import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget, FiPrinter } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import {
   ResponsiveContainer, ComposedChart, Bar, Line, Cell,
@@ -50,6 +50,16 @@ const lastMonday = (offsetWeeks = 0) => {
   return d.toISOString().slice(0, 10);
 };
 
+// Monday of the week containing the given yyyy-mm-dd (scoring weeks are Mon-Sat).
+const mondayOf = (dateStr) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d)) return null;
+  const dow = d.getDay();
+  d.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
 const fmtRange = (start) => {
   const s = new Date(start), e = new Date(start);
   e.setDate(s.getDate() + 5);
@@ -75,22 +85,31 @@ const scorePill = (s) => {
 const SOURCE_INFO = {
   manual:                       { plan: 'You set (Target column)',           actual: 'You enter weekly in the scorecard' },
   // Tasks & Tickets — Plan = items assigned this week, Actual = items completed
-  'auto:delegations':           { plan: 'Delegations assigned to user',       actual: 'Delegations completed (status=approved)' },
-  'auto:pms':                   { plan: 'PMS tasks assigned to user',         actual: 'PMS tasks completed (status=approved)' },
+  'auto:delegations':           { plan: 'Delegations DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
+  'auto:pms':                   { plan: 'PMS tasks DUE this week (current due date; no date = week created)', actual: 'Of those, completed (status=approved)' },
   'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
-  'auto:tickets':               { plan: 'Help tickets assigned to user',      actual: 'Tickets resolved / closed by user' },
-  'auto:snags':                  { plan: 'Snags raised on user this week',    actual: 'Of those, approved (closed) within the SAME week' },
+  'auto:tickets':               { plan: 'Help tickets DUE this week (deadline date; no date = week raised)', actual: 'Of those, resolved / closed' },
+  'auto:snags':                  { plan: 'Snags raised within the week, assigned to user', actual: 'Of those, status = Approved (whenever approved)' },
   'auto:activity_log':          { plan: 'You set',                            actual: 'Create/update/delete actions the user logged this week (audit trail)' },
   // Responsibility (RACI / SLA) — cross-module accountability from the "Responsible" tabs
-  'auto:pms_all':               { plan: 'ALL PMS tasks assigned this week (company-wide)', actual: 'ALL PMS tasks done this week (company-wide)' },
-  'auto:delegations_all':       { plan: 'ALL delegations assigned this week (company-wide)', actual: 'ALL delegations done this week (company-wide)' },
-  'auto:tickets_all':           { plan: 'ALL help tickets raised this week (company-wide)', actual: 'ALL tickets resolved this week (company-wide)' },
-  'auto:snags_all':             { plan: 'ALL snags raised this week (company-wide)', actual: 'Of those, approved (closed) within the SAME week (company-wide)' },
+  'auto:pms_all':               { plan: 'ALL PMS tasks DUE this week (company-wide)', actual: 'Of those, done (company-wide)' },
+  'auto:delegations_all':       { plan: 'ALL delegations DUE this week (company-wide)', actual: 'Of those, done (company-wide)' },
+  'auto:tickets_all':           { plan: 'ALL help tickets DUE this week (company-wide)', actual: 'Of those, resolved (company-wide)' },
+  'auto:snags_all':             { plan: 'ALL snags raised within the week (company-wide)', actual: 'Of those, status = Approved (company-wide)' },
   'auto:erp_module_coverage':   { plan: 'SOTYN.AI modules tracked (the target = all running)', actual: 'Modules with activity this week' },
   'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },
   'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
+  // ERP Management (System Flow) — the ERP build tracked step by step, scored
+  // on the DEVELOPER column, not the RACI-style Owner (mam 2026-09-07).
+  'auto:sysflow_steps':         { plan: 'System Flow steps DUE this week where the user is the DEVELOPER (target date; no date = week created)', actual: 'Of those, completed' },
+  'auto:sysflow_ontime_pct':    { plan: 'You set (target %, e.g. 90)',        actual: '% of the steps the user (developer) completed this week that finished on/before their target date' },
+  'auto:sysflow_blocked':       { plan: 'You set (max acceptable — pick ↓ lower better)', actual: 'Steps the user is developing that went BLOCKED this week' },
+  'auto:sysflow_overdue':       { plan: 'You set (max acceptable — pick ↓ lower better)', actual: 'Steps the user is developing that were OVERDUE at the week end (target passed, not completed)' },
+  'auto:sysflow_updates':       { plan: 'You set',                            actual: 'Work updates the user logged this week — status, progress, priority, remarks, ERP link (not step creation or re-dating)' },
+  'auto:sysflow_all':           { plan: 'ALL System Flow steps DUE this week (company-wide)', actual: 'Of those, completed (company-wide)' },
+  'auto:sysflow_progress_pct':  { plan: 'You set (target %, e.g. 100)',       actual: 'ERP implementation progress at the week end — steps completed ÷ steps existing by then (company-wide)' },
   // DPR
-  'auto:dpr_profit':            { plan: 'Σ planned cost (DPR Table B)',       actual: 'Σ actual cost (DPR Table B)' },
+  'auto:dpr_profit':            { plan: 'Σ planned cost (DPR Table B) × 1.5', actual: 'Σ actual (DPR Table A)' },
   'auto:dpr_count':             { plan: '6 days/week target',                 actual: 'DPR submissions for this site' },
   'auto:dpr_by_user':           { plan: '6 DPRs/week target',                 actual: 'DPRs submitted BY this user' },
   'auto:dpr_profit_by_user':    { plan: 'You set (Target column)',            actual: 'Σ profit/loss across user\'s DPRs' },
@@ -100,7 +119,7 @@ const SOURCE_INFO = {
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
   'auto:quotations_sent':       { plan: 'You set',                            actual: 'Quotations sent by user' },
   'auto:meetings_planned':      { plan: 'You set',                            actual: 'Meetings scheduled this week' },
-  'auto:crm_kitting':           { plan: 'You set',                            actual: 'CRM full-kitting checkpoints the user logged (entries + photos)' },
+  'auto:crm_kitting':           { plan: 'All active checkpoints on the projects where this user is the tracker\'s CRM owner', actual: 'Of those, checkpoints complete (latest status Yes/NA) — cumulative, all 3 stages' },
   // Business Book
   'auto:bb_entries':            { plan: 'You set',                            actual: 'Business Book entries created by user' },
   'auto:bb_po_amount':          { plan: 'You set',                            actual: 'Σ PO amount on user\'s BB entries' },
@@ -110,31 +129,34 @@ const SOURCE_INFO = {
   'auto:indents_in_week':       { plan: 'Indents created for user\'s site',    actual: 'Indents created for user\'s site' },
   'auto:indent_vs_bill':        { plan: 'Indents raised for the site (this week)', actual: 'Sales bills generated for the site (this week)' },
   'auto:items_complete':        { plan: 'All indent line-items (total)',         actual: 'Items with a PO raised (procured) — company-wide' },
+  'auto:po_bill_pending':       { plan: 'POs approved this week (they now owe a bill)', actual: 'POs whose first purchase bill was uploaded this week — Pending = older approved POs still unbilled' },
+  'auto:po_bill_pending_all':   { plan: 'POs approved this week — company-wide',        actual: 'POs first billed this week — company-wide; Pending = the whole unbilled backlog' },
   // HR — Manpower (from the HR → Manpower Plan page)
   'auto:site_manpower':         { plan: 'Σ REQUIRED manpower — value slab, all projects', actual: 'Σ ACTUAL manpower on site (DPR average)' },
   'auto:attrition':             { plan: 'You set (max acceptable leavers)',    actual: 'Count of inactive/terminated staff (all-time)' },
   // System / Engagement (from the audit trail)
   'auto:daily_active_users':    { plan: 'Total active (registered) users',     actual: 'Avg daily distinct users active in the system this week' },
   'auto:data_entry_all':        { plan: 'You set (e.g. 300000)',               actual: 'CREATE/UPDATE/DELETE records entered company-wide this week' },
+  'auto:data_completeness':     { plan: 'Every required field across Item Master, Business Book, Employees & Users', actual: 'Those fields actually filled — the same % the Data Completion bar shows on each page' },
   'auto:indents_approved':      { plan: 'You set',                            actual: 'Indents approved by user' },
   'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
   'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
   'auto:dispatch_sent':         { plan: 'You set',                            actual: 'Delivery notes dispatched' },
-  'auto:material_received':     { plan: 'You set',                            actual: 'Material receipts at user\'s site' },
+  'auto:material_received':     { plan: 'Indents raised for user\'s sites this week', actual: 'Of those, delivered (delivery note) at the site' },
   // Inventory
   'auto:stock_in':              { plan: 'You set',                            actual: 'Stock IN movements (count)' },
   'auto:stock_out':             { plan: 'You set',                            actual: 'Stock OUT movements (count)' },
   'auto:stock_to_site':         { plan: 'You set',                            actual: 'Stock issued from office → site' },
-  'auto:stock_updates':         { plan: 'You set',                            actual: 'Stock update events per site/week' },
-  'auto:tools_list':            { plan: 'You set',                            actual: 'Tools list rows per site' },
-  'auto:stock_at_site':         { plan: 'You set',                            actual: 'Stock-at-site flag (0/1)' },
+  'auto:stock_updates':         { plan: 'Sites the user manages (1 update each)', actual: 'Sites with a stock update this week' },
+  'auto:tools_list':            { plan: 'Sites the user manages (1 list each)',   actual: 'Sites with a tools list submitted this week' },
+  'auto:stock_at_site':         { plan: '1 (stock must be present)',             actual: 'Stock-at-site flag (0/1)' },
   // Installation & Billing
   'auto:installations_started': { plan: 'You set',                            actual: 'Installation start dates this week' },
   'auto:installations_completed':{ plan: 'You set',                           actual: 'Installations marked complete this week' },
   'auto:sales_bills':           { plan: 'You set',                            actual: 'Sales bills raised this week' },
-  'auto:ra_bills':              { plan: 'You set',                            actual: 'RA bills raised for user\'s site' },
+  'auto:ra_bills':              { plan: '3 per week (fixed SEPL norm)',          actual: 'RA bills raised for user\'s sites this week' },
   'auto:mb_filed':              { plan: 'You set',                            actual: 'MB sheets filed (count)' },
-  'auto:mb_signed':             { plan: 'You set',                            actual: 'MBs signed by client at user\'s site' },
+  'auto:mb_signed':             { plan: 'MB bills raised for user\'s sites this week', actual: 'Of those, approved / client-signed' },
   // Cash Flow
   'auto:amount_received':       { plan: 'You set',                            actual: 'Σ collections amount (by user)' },
   'auto:amount_received_all':   { plan: 'You set',                            actual: 'Σ collections amount (everyone)' },
@@ -156,6 +178,12 @@ const SOURCE_INFO = {
   'auto:attendance_late_days':  { plan: 'You set (lower better)',             actual: 'Late days this week' },
   'auto:attendance_absent_days':{ plan: '0 days target',                      actual: 'Absent days this week' },
   'auto:leaves_applied':        { plan: 'You set',                            actual: 'Leave requests filed by user' },
+  // Complaints — Plan auto-fills from the complaints RAISED in the week;
+  // Actual = of that same week's complaints, how many are resolved/closed
+  // (mam 2026-08-20: "plan 10 complaint but resolve 9" → 90%). Both sources
+  // return the same pair server-side, so the hint is the same for both.
+  'auto:complaints_raised':     { plan: 'Complaints raised this week (company-wide)', actual: 'Of those, resolved / closed' },
+  'auto:complaints_resolved':   { plan: 'Complaints raised this week (company-wide)', actual: 'Of those, resolved / closed' },
   // Master Data
   'auto:customers_added':       { plan: 'You set',                            actual: 'Customers added by user' },
   'auto:vendors_added':         { plan: 'You set',                            actual: 'Vendors added by user' },
@@ -163,21 +191,51 @@ const SOURCE_INFO = {
 const sourceInfoFor = (src) => {
   // Per-step RACI sources are dynamic (auto:raci_step:<module>:<step>) — one hint covers them all.
   if (src && src.startsWith('auto:raci_step:')) {
-    return { plan: 'This step on the user this week (closed + still open)', actual: 'This step the user closed this week' };
+    // Kept in step with raciUserWeek(): Planned is now week-scoped on BOTH
+    // sides. It used to read "closed + still open", which was true but
+    // misleading — "still open" meant every open record ever, so a step could
+    // show 97 planned from leads sitting since March (mam 2026-08-22).
+    return {
+      plan: 'Closed this week + still open from work that reached the user this week',
+      actual: 'This step the user closed this week',
+    };
   }
   return SOURCE_INFO[src] || { plan: '—', actual: '—' };
 };
 
 export default function Scorecard() {
   const { user, isAdmin } = useAuth();
-  const [tab, setTab] = useUrlTab('my');
+  const [tab, setTab] = useUrlTab(['my', 'assign', 'overview', 'templates', 'view'], 'my');
   const [weekStart, setWeekStart] = useState(lastMonday(0));
   const [viewUserId, setViewUserId] = useState(user?.id);
   const [scorecard, setScorecard] = useState(null);
   const [savingKpi, setSavingKpi] = useState(null);
   const [templates, setTemplates] = useState([]);
+  // Inline rename of the open template's heading (mam 2026-08-22 "rename title").
+  const [renamingTpl, setRenamingTpl] = useState(false);
+  const [renameVal, setRenameVal] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
   const [assignments, setAssignments] = useState([]);
   const [tplDetail, setTplDetail] = useState(null);
+  // Save the inline template rename. Patches the open modal AND re-pulls the
+  // list so the Templates tab and the Assign dropdowns don't keep showing the
+  // old name until a reload.
+  const saveTplName = async () => {
+    const name = renameVal.trim();
+    if (!name || !tplDetail || name === tplDetail.name) { setRenamingTpl(false); return; }
+    setRenameSaving(true);
+    try {
+      await api.put(`/scoring/templates/${tplDetail.id}`, { name });
+      setTplDetail(d => (d ? { ...d, name } : d));
+      api.get('/scoring/templates').then(r => setTemplates(r.data)).catch(() => {});
+      setRenamingTpl(false);
+      toast.success('Template renamed');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not rename the template');
+    } finally {
+      setRenameSaving(false);
+    }
+  };
   const [overview, setOverview] = useState(null);
   // "RACI Steps" row → step-wise breakdown shown INLINE, expanded under the row
   // on the page (mam 2026-06-27: show it here, like an expand — not in a popup).
@@ -237,12 +295,93 @@ export default function Scorecard() {
   };
 
   // Group KPIs by group_name for the table render
-  const grouped = (scorecard?.kpis || []).reduce((acc, k) => {
+
+  // Mam 2026-08-17: "one time last 6 months score count show" — ONE aggregate
+  // figure: the average weekly vs-plan variance across the last 26 weeks
+  // (weeks without a scored template are skipped, count shown alongside).
+  const [sixMonth, setSixMonth] = useState(null);
+  useEffect(() => {
+    let on = true;
+    setSixMonth(null);
+    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${weekStart}&weeks=26`)
+      .then(r => {
+        if (!on) return;
+        const vals = (r.data?.weeks || []).map(w => w.actual_pct).filter(v => v != null);
+        setSixMonth(vals.length
+          ? { avg: Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100, n: vals.length }
+          : { avg: null, n: 0 });
+      })
+      .catch(() => { if (on) setSixMonth({ avg: null, n: 0 }); });
+    return () => { on = false; };
+  }, [viewUserId, weekStart]);
+
+  // Mam 2026-08-17: "give me start to end date manual because in onetime i
+  // want last one month" — a manual From/To range that shows ONE average for
+  // that window. Snaps to whole scoring weeks (Mon-Sat): the range runs from
+  // the week containing From through the week containing To.
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
+  // Mam 2026-08-17: "period select and give apply button" — typing a date no
+  // longer triggers a half-picked calculation; the score computes only when
+  // Apply is pressed (rangeApplied snapshots the dates at that moment).
+  const [rangeApplied, setRangeApplied] = useState(null);
+  const [rangeStat, setRangeStat] = useState(null);
+  // The FULL scorecard aggregated over the applied period — when set, the MIS
+  // table shows these summed values instead of the single week (read-only).
+  const [periodCard, setPeriodCard] = useState(null);
+  useEffect(() => {
+    if (!rangeApplied) { setPeriodCard(null); return; }
+    let on = true;
+    api.get(`/scoring/scorecard-range?user_id=${viewUserId}&from=${rangeApplied.from}&to=${rangeApplied.to}`)
+      .then(r => { if (on) setPeriodCard(r.data); })
+      .catch(() => { if (on) setPeriodCard(null); });
+    return () => { on = false; };
+  }, [rangeApplied, viewUserId]);
+  useEffect(() => {
+    if (!rangeApplied) { setRangeStat(null); return; }
+    let from = mondayOf(rangeApplied.from), to = mondayOf(rangeApplied.to);
+    if (!from || !to) { setRangeStat(null); return; }
+    if (from > to) [from, to] = [to, from];            // swapped dates — just fix them
+    const nWeeks = Math.min(53, Math.round((new Date(to) - new Date(from)) / (7 * 864e5)) + 1);
+    let on = true;
+    setRangeStat({ loading: true });
+    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${to}&weeks=${nWeeks}`)
+      .then(r => {
+        if (!on) return;
+        const vals = (r.data?.weeks || []).map(w => w.actual_pct).filter(v => v != null);
+        setRangeStat({
+          from, to, n: vals.length,
+          avg: vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 : null,
+        });
+      })
+      .catch(() => { if (on) setRangeStat(null); });
+    return () => { on = false; };
+  }, [rangeApplied, viewUserId]);
+
+  // Period mode: the applied From→To aggregate replaces the weekly card in the
+  // table + banner (read-only — entries/commitments are per-week concepts).
+  const displayCard = periodCard || scorecard;
+  // Whose scorecard is on screen — comes from the API (admin can switch to any
+  // employee), falling back to the logged-in user so the export filename and
+  // the print letterhead are never blank.
+  const cardOwnerName = displayCard?.user?.name || scorecard?.user?.name
+    || (viewUserId === user?.id ? (user?.name || '') : '');
+  const grouped = (displayCard?.kpis || []).reduce((acc, k) => {
     const g = k.group_name || 'Other';
     if (!acc[g]) acc[g] = [];
     acc[g].push(k);
     return acc;
   }, {});
+
+  // Mam 2026-08-17: "add option for print this scoring also". Browser-print of
+  // just the scorecard area — a body class + CSS in index.css hides the rest
+  // of the app (sidebar, tabs, pickers) while printing.
+  const printScorecard = () => {
+    document.body.classList.add('print-scorecard');
+    const done = () => { document.body.classList.remove('print-scorecard'); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done);
+    setTimeout(() => window.print(), 60);
+  };
 
   return (
     <div className="space-y-6">
@@ -283,10 +422,49 @@ export default function Scorecard() {
             <label className="label">Week starting (Monday)</label>
             <input type="date" className="input" value={weekStart} onChange={e => setWeekStart(e.target.value)} />
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1 flex-wrap items-center">
             <button onClick={() => setWeekStart(lastMonday(1))} className="btn btn-secondary text-xs">Last Week</button>
             <button onClick={() => setWeekStart(lastMonday(0))} className="btn btn-secondary text-xs">This Week</button>
             <button onClick={() => setWeekStart(lastMonday(2))} className="btn btn-secondary text-xs">Two Weeks Ago</button>
+            {/* Mam 2026-08-17: "add with two weeks last 6 months also" — jump
+                to any week of the last 6 months without date-picker gymnastics. */}
+            <select
+              className="input text-xs w-auto py-1.5"
+              value={Array.from({ length: 26 }, (_, i) => lastMonday(i)).includes(weekStart) ? weekStart : ''}
+              onChange={e => e.target.value && setWeekStart(e.target.value)}>
+              <option value="" disabled>Last 6 months…</option>
+              {Array.from({ length: 26 }, (_, i) => {
+                const m = lastMonday(i);
+                return (
+                  <option key={m} value={m}>
+                    {fmtRange(m)}{i === 0 ? ' · this week' : ''}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+          {/* Mam 2026-08-17: manual From→To period — one average score for any
+              window (e.g. last one month). Result shows in the score banner. */}
+          <div>
+            <label className="label">Period score (from → to)</label>
+            <div className="flex items-center gap-1">
+              <input type="date" className="input text-xs w-auto py-1.5" title="Period from"
+                value={rangeFrom} onChange={e => setRangeFrom(e.target.value)} />
+              <span className="text-xs text-gray-400">→</span>
+              <input type="date" className="input text-xs w-auto py-1.5" title="Period to"
+                value={rangeTo} onChange={e => setRangeTo(e.target.value)} />
+              <button
+                onClick={() => setRangeApplied({ from: rangeFrom, to: rangeTo })}
+                disabled={!rangeFrom || !rangeTo}
+                className="btn btn-primary text-xs py-1.5 disabled:opacity-40"
+                title="Calculate the score for this period">
+                Apply
+              </button>
+              {(rangeFrom || rangeTo || rangeApplied) && (
+                <button onClick={() => { setRangeFrom(''); setRangeTo(''); setRangeApplied(null); }}
+                  className="text-gray-400 hover:text-red-600 text-sm px-1" title="Clear period">✕</button>
+              )}
+            </div>
           </div>
           {/* Admin-only employee switcher — pick anyone to inspect their MIS
               without leaving the My Scorecard tab. */}
@@ -301,20 +479,35 @@ export default function Scorecard() {
 
       {/* MY SCORECARD */}
       {(tab === 'my' || tab === 'view') && scorecard && (
-        <>
+        <div id="scorecard-print-area" className="space-y-6">
+          {/* Letterhead — appears only on the printed sheet */}
+          <div className="hidden print:block text-center border-b-2 border-gray-800 pb-3">
+            <div className="text-xl font-bold tracking-wide">SECURED ENGINEERS PVT. LTD.</div>
+            <div className="text-sm font-semibold mt-1">{periodCard ? 'Period' : 'Weekly'} Scorecard — {cardOwnerName}</div>
+            <div className="text-xs text-gray-600">
+              {periodCard ? `${fmtRange(periodCard.from)} → ${fmtRange(periodCard.to)} (${periodCard.weeks_counted} weeks)` : fmtRange(weekStart)}
+              {' '}· Template: {displayCard.template?.name || '—'}
+            </div>
+          </div>
           <div className="card p-4 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-indigo-50 to-blue-50">
             <div>
               <p className="text-xs text-gray-500">Template</p>
-              <p className="text-lg font-bold">{scorecard.template?.name || <span className="text-amber-600">No template assigned</span>}</p>
-              {scorecard.template?.description && <p className="text-xs text-gray-500">{scorecard.template.description}</p>}
+              <p className="text-lg font-bold">{displayCard.template?.name || <span className="text-amber-600">No template assigned</span>}</p>
+              {displayCard.template?.description && <p className="text-xs text-gray-500">{displayCard.template.description}</p>}
+              {periodCard && (
+                <span className="inline-block mt-1 text-[11px] font-bold px-2 py-0.5 rounded bg-indigo-600 text-white">
+                  PERIOD {fmtRange(periodCard.from).replace(/ \d{4}$/, '')} → {fmtRange(periodCard.to)} · {periodCard.weeks_counted} wks
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-3">
-              {scorecard.template && (scorecard.kpis || []).length > 0 && (
+              {displayCard.template && (displayCard.kpis || []).length > 0 && (
                 <button
                   onClick={() => exportCsv(
-                    `scorecard-${(scorecard.user?.name || 'user').replace(/\s+/g, '-')}-${weekStart}`,
-                    ['Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Total Up-to-date', 'Pending', 'Commitment'],
-                    (scorecard.kpis || []).map(k => [
+                    `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
+                    ['Employee', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Total Up-to-date', 'Pending', 'Commitment'],
+                    (displayCard.kpis || []).map(k => [
+                      cardOwnerName,
                       k.group_name || 'Other',
                       k.metric_name || '',
                       k.weightage ?? '',
@@ -323,41 +516,83 @@ export default function Scorecard() {
                       k.actual ?? 0,
                       vsPlan(k.actual_pct) ?? '',
                       k.total_uptodate ?? '',
-                      k.pending_uptodate ?? k.pending_work ?? '',
-                      k.commitment || '',
+                      (k.pending_uptodate != null || k.pending_work != null)
+                        ? `${k.pending_uptodate ?? ''}${k.pending_work != null ? ` pending / ${k.pending_work} prev done` : ''}`
+                        : '',
+                      [k.commitment_prev ? `Prev: ${k.commitment_prev}` : '', k.commitment ? `Now: ${k.commitment}` : '']
+                        .filter(Boolean).join(' · '),
                     ])
                   )}
-                  className="btn btn-secondary text-xs flex items-center gap-1"
+                  className="btn btn-secondary text-xs flex items-center gap-1 print:hidden"
                   title="Download this scorecard as CSV (opens in Excel)"
                 ><FiDownload size={14} /> Export Excel</button>
               )}
+              {scorecard.template && (scorecard.kpis || []).length > 0 && (
+                <button onClick={printScorecard}
+                  className="btn btn-secondary text-xs flex items-center gap-1 print:hidden"
+                  title="Print this scorecard (or save as PDF)"
+                ><FiPrinter size={14} /> Print</button>
+              )}
               <div className="text-right">
-                <p className="text-xs text-gray-500">Weekly Score <span className="text-gray-400">vs plan</span></p>
+                <p className="text-xs text-gray-500">{periodCard ? 'Period Score' : 'Weekly Score'} <span className="text-gray-400">vs plan</span></p>
                 {(() => {
                   // Headline = variance from plan (achievement% − 100), 2 decimals:
                   // 0% = on plan, negative = behind, positive = ahead (mam 2026-07-04).
                   // Engine score stays the raw achievement % so the Champions League /
                   // War Room keep ranking higher-better; this is display-only.
-                  if (!scorecard.template) return <p className="text-3xl font-bold text-gray-300">—</p>;
-                  const headVs = (scorecard.score ?? 0) - 100;
-                  return <p className={`text-3xl font-bold ${vsClr(scorecard.score)}`}>{headVs > 0 ? '+' : ''}{headVs.toFixed(2)}%</p>;
+                  // In period mode this is the weighted score of the SUMMED table.
+                  if (!displayCard.template) return <p className="text-3xl font-bold text-gray-300">—</p>;
+                  const headVs = (displayCard.score ?? 0) - 100;
+                  return <p className={`text-3xl font-bold ${vsClr(displayCard.score)}`}>{headVs > 0 ? '+' : ''}{headVs.toFixed(2)}%</p>;
                 })()}
               </div>
+              {/* Mam 2026-08-17: one-shot 6-month aggregate — avg of the weekly
+                  vs-plan variances over the 26 weeks ending at the viewed week. */}
+              <div className="text-right border-l border-indigo-200 pl-3">
+                <p className="text-xs text-gray-500">Last 6 Months <span className="text-gray-400">avg vs plan</span></p>
+                {sixMonth == null
+                  ? <p className="text-2xl font-bold text-gray-300">…</p>
+                  : sixMonth.avg == null
+                    ? <p className="text-2xl font-bold text-gray-300">—</p>
+                    : <p className={`text-2xl font-bold ${vsClr(sixMonth.avg + 100)}`}>{sixMonth.avg > 0 ? '+' : ''}{sixMonth.avg.toFixed(2)}%</p>}
+                {sixMonth?.n > 0 && <p className="text-[10px] text-gray-400">across {sixMonth.n} scored week{sixMonth.n === 1 ? '' : 's'}</p>}
+              </div>
+              {/* One-shot score for the manually picked From→To period. */}
+              {rangeStat && (
+                <div className="text-right border-l border-indigo-200 pl-3">
+                  <p className="text-xs text-gray-500">Selected Period <span className="text-gray-400">avg vs plan</span></p>
+                  {rangeStat.loading
+                    ? <p className="text-2xl font-bold text-gray-300">…</p>
+                    : rangeStat.avg == null
+                      ? <p className="text-2xl font-bold text-gray-300">—</p>
+                      : <p className={`text-2xl font-bold ${vsClr(rangeStat.avg + 100)}`}>{rangeStat.avg > 0 ? '+' : ''}{rangeStat.avg.toFixed(2)}%</p>}
+                  {!rangeStat.loading && (
+                    <p className="text-[10px] text-gray-400">
+                      {rangeStat.n > 0
+                        ? `${fmtRange(rangeStat.from).replace(/ \d{4}$/, '')} → ${fmtRange(rangeStat.to)} · ${rangeStat.n} scored wk${rangeStat.n === 1 ? '' : 's'}`
+                        : 'no scored weeks in this period'}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
           {/* Weekly commitment — the employee's promise for the coming week,
               last week's committed target, and a committed-vs-delivered graph
-              so they SEE the gap (mam 2026-07-06). */}
-          <CommitmentPanel viewUserId={viewUserId} weekStart={weekStart} />
+              so they SEE the gap (mam 2026-07-06). Print shows the MIS tables
+              only, so this interactive panel stays screen-only. */}
+          <div className="print:hidden">
+            <CommitmentPanel viewUserId={viewUserId} weekStart={weekStart} />
+          </div>
 
-          {!scorecard.template && (
+          {!displayCard.template && (
             <div className="card p-6 text-center text-gray-400 text-sm">
               No template assigned to this user yet. {isAdmin() && <span>Open the <button className="text-blue-600 underline" onClick={() => setTab('assign')}>Assign Templates</button> tab to set one.</span>}
             </div>
           )}
 
-          {scorecard.template && Object.keys(grouped).map(groupName => (
+          {displayCard.template && Object.keys(grouped).map(groupName => (
             <div key={groupName} className="card p-0 overflow-x-auto">
               <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 font-bold text-amber-800 text-sm">{groupName}</div>
               <table className="w-full text-xs">
@@ -383,9 +618,9 @@ export default function Scorecard() {
                           kpi={k}
                           saving={savingKpi === k.kpi_id}
                           onSave={(patch) => saveEntry(k, patch)}
-                          readOnly={viewUserId !== user.id && !isAdmin()}
-                          onStepWise={isRaci ? toggleRaci : null}
-                          stepWiseOpen={isRaci && raci.open}
+                          readOnly={!!periodCard || (viewUserId !== user.id && !isAdmin())}
+                          onStepWise={isRaci && !periodCard ? toggleRaci : null}
+                          stepWiseOpen={isRaci && !periodCard && raci.open}
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">
@@ -403,7 +638,7 @@ export default function Scorecard() {
               </table>
             </div>
           ))}
-        </>
+        </div>
       )}
 
       {/* TEAM OVERVIEW (existing weekly aggregator) */}
@@ -456,8 +691,50 @@ export default function Scorecard() {
         <AssignTemplates assignments={assignments} templates={templates} reload={() => api.get('/scoring/assignments').then(r => setAssignments(r.data))} />
       )}
 
-      {/* Template detail modal */}
-      <Modal isOpen={!!tplDetail} onClose={() => setTplDetail(null)} title={tplDetail?.name || 'Template'} wide>
+      {/* Template detail modal. The heading doubles as an inline rename (mam
+          2026-08-22 "rename title") — the template name was read-only here, so
+          a role that got renamed (or typo'd on creation) could only be fixed by
+          deleting the template and rebuilding every KPI on it. Admin-only,
+          matching PUT /scoring/templates/:id which is adminOnly server-side. */}
+      <Modal
+        isOpen={!!tplDetail}
+        onClose={() => { setTplDetail(null); setRenamingTpl(false); }}
+        wide
+        title={
+          !tplDetail ? 'Template' : renamingTpl ? (
+            <span className="flex items-center gap-2">
+              <input
+                autoFocus
+                value={renameVal}
+                onChange={e => setRenameVal(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') saveTplName();
+                  if (e.key === 'Escape') setRenamingTpl(false);
+                }}
+                placeholder="Template name"
+                className="input text-base font-semibold py-1"
+              />
+              <button onClick={saveTplName} disabled={renameSaving || !renameVal.trim()} className="btn btn-primary text-xs py-1 whitespace-nowrap">
+                {renameSaving ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => setRenamingTpl(false)} className="btn btn-secondary text-xs py-1">Cancel</button>
+            </span>
+          ) : (
+            <span className="flex items-center gap-2">
+              {tplDetail.name}
+              {isAdmin() && (
+                <button
+                  onClick={() => { setRenameVal(tplDetail.name || ''); setRenamingTpl(true); }}
+                  title="Rename this template"
+                  className="p-1 text-gray-400 hover:text-blue-700 hover:bg-gray-100 rounded flex-shrink-0"
+                >
+                  <FiEdit2 size={14} />
+                </button>
+              )}
+            </span>
+          )
+        }
+      >
         {tplDetail && <TemplateKpiEditor templateId={tplDetail.id} onChange={() => api.get(`/scoring/templates/${tplDetail.id}`).then(r => setTplDetail(r.data))} />}
       </Modal>
     </div>
@@ -494,12 +771,14 @@ function CommitmentPanel({ viewUserId, weekStart }) {
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
+  // Mam 2026-08-17: graph range — 8 weeks (default, fast) or the last 6 months.
+  const [range, setRange] = useState(8);
 
   const load = useCallback(() => {
-    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${weekStart}&weeks=8`)
+    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${weekStart}&weeks=${range}`)
       .then(r => { setData(r.data); setDraft(r.data?.next?.committed_pct ?? ''); })
       .catch(() => setData(null));
-  }, [viewUserId, weekStart]);
+  }, [viewUserId, weekStart, range]);
   useEffect(() => { load(); }, [load]);
 
   const save = async () => {
@@ -594,6 +873,16 @@ function CommitmentPanel({ viewUserId, weekStart }) {
       {/* Graph — the emotional angle: bars (delivered) against the dashed
           promise line, red where they fall short. */}
       <div>
+        <div className="flex justify-end gap-1 mb-1">
+          <button onClick={() => setRange(8)}
+            className={`text-[11px] px-2 py-1 rounded font-semibold ${range === 8 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            8 Weeks
+          </button>
+          <button onClick={() => setRange(26)}
+            className={`text-[11px] px-2 py-1 rounded font-semibold ${range === 26 ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            Last 6 Months
+          </button>
+        </div>
         {hasData ? (
           <ResponsiveContainer width="100%" height={260}>
             <ComposedChart data={chart} margin={{ top: 10, right: 12, left: -12, bottom: 0 }}>
@@ -657,9 +946,17 @@ function RaciBreakdown({ data }) {
   const pct = (done, planned) => { if (!planned) return 0; const p = Math.round(((done - planned) / planned) * 100); return p < -100 ? -100 : p; };
   const pctClr = (p) => p >= 0 ? 'text-emerald-700' : p >= -50 ? 'text-amber-700' : 'text-red-700';
   const overall = pct(data.totals.actual, data.totals.planned);
-  // Weighted overall % when any step carries a weight: Σ(weight × stepPct)/Σ(weight).
+  // Overall %. Weighting is only applied when EVERY step carries a weight.
+  //
+  // It used to be Σ(weight × stepPct)/Σ(weight) over just the weighted rows,
+  // which silently dropped every step that had no weight set — so a step with
+  // 97 pending at −100% vanished from the headline and the person read −50%
+  // instead of −99% (mam 2026-08-22). A step must never be able to hide from
+  // the score just because nobody typed a weight on it, so when any step is
+  // unweighted we fall back to the plain all-step figure, which is exactly the
+  // planned/done totals shown next to it.
   const wRows = rows.filter(r => +r.weight > 0);
-  const hasW = wRows.length > 0;
+  const hasW = wRows.length > 0 && wRows.length === rows.length;
   const weightedOverall = hasW
     ? Math.round(wRows.reduce((s, r) => s + (+r.weight) * pct(r.actual, r.planned), 0) / wRows.reduce((s, r) => s + (+r.weight), 0))
     : overall;
@@ -668,7 +965,8 @@ function RaciBreakdown({ data }) {
       <div className="text-sm text-gray-600">
         Week {data.week_start} → {data.week_end} · <b>{data.totals.planned}</b> planned ·{' '}
         <b className="text-emerald-700">{data.totals.actual}</b> done ·{' '}
-        <b className="text-amber-700">{data.totals.pending}</b> pending ·{' '}
+        <b className="text-amber-700">{data.totals.pending}</b> pending
+        {data.totals.prev_done > 0 && <> · <b className="text-emerald-700">{data.totals.prev_done}</b> prev done</>} ·{' '}
         <b className={pctClr(weightedOverall)}>{weightedOverall}%</b>{hasW && <span className="text-[10px] text-gray-400"> (weighted)</span>}
       </div>
       {Object.entries(byMod).map(([mod, list]) => (
@@ -690,11 +988,26 @@ function RaciBreakdown({ data }) {
             <tbody>
               {list.map(r => (
                 <tr key={r.step_key} className="border-t">
-                  <td className="p-2 font-medium">{r.step_label}</td>
+                  <td className="p-2 font-medium">
+                    {r.step_label}
+                    {/* R = Responsible, A = Accountable (mam 2026-08-28:
+                        accountable steps show on the card too) */}
+                    {r.role && r.role !== 'R' && (
+                      <span className="ml-1.5 px-1 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px] font-bold align-middle"
+                        title={r.role.includes('A') ? 'On this step this person is ACCOUNTABLE (RACI)' : ''}>{r.role}</span>
+                    )}
+                  </td>
                   <td className="text-center p-2 text-indigo-700">{r.weight != null ? `${r.weight}%` : <span className="text-gray-300">—</span>}</td>
                   <td className="text-center p-2 font-semibold">{r.planned}</td>
                   <td className="text-center p-2 text-emerald-700">{r.actual}</td>
-                  <td className="text-center p-2 text-amber-700">{r.pending || ''}</td>
+                  {/* Same pair as the scorecard row's Pending column: total
+                      outstanding (week + pre-week backlog) / backlog closed
+                      this week (mam 2026-08-27 audit — no 502-vs-297 mismatch). */}
+                  <td className="text-center p-2"
+                      title={`${(r.pending || 0) + (r.pending_before || 0)} pending in total / ${r.closed_before || 0} previous completed this week`}>
+                    <span className="text-amber-700">{((r.pending || 0) + (r.pending_before || 0)) || ''}</span>
+                    {(r.closed_before || 0) > 0 && <span className="text-gray-300"> / <b className="text-emerald-700">{r.closed_before}</b></span>}
+                  </td>
                   <td className={`text-center p-2 font-bold ${pctClr(pct(r.actual, r.planned))}`}>{pct(r.actual, r.planned)}%</td>
                   <td className="text-center p-2">{r.sla_judged ? `${Math.round((r.on_time / r.sla_judged) * 100)}%` : <span className="text-gray-300">—</span>}</td>
                   <td className="p-2"><CommitmentCell row={r} /></td>
@@ -735,6 +1048,9 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
   const [pendingUp, setPendingUp] = useState(kpi.pending_uptodate ?? '');
   const [pendingWork, setPendingWork] = useState(kpi.pending_work ?? '');
   const [commitment, setCommitment] = useState(kpi.commitment ?? '');
+  // Commitment split (mam 2026-08-27): "commitment has two type — previous
+  // pending task and current commitment". Prev = promise on the backlog.
+  const [commitmentPrev, setCommitmentPrev] = useState(kpi.commitment_prev ?? '');
   const [totalUp, setTotalUp] = useState(kpi.total_uptodate ?? '');
   useEffect(() => {
     setPlanned(kpi.planned ?? 0);
@@ -742,8 +1058,9 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
     setPendingUp(kpi.pending_uptodate ?? '');
     setPendingWork(kpi.pending_work ?? '');
     setCommitment(kpi.commitment ?? '');
+    setCommitmentPrev(kpi.commitment_prev ?? '');
     setTotalUp(kpi.total_uptodate ?? '');
-  }, [kpi.kpi_id, kpi.planned, kpi.actual, kpi.pending_uptodate, kpi.pending_work, kpi.commitment, kpi.total_uptodate]);
+  }, [kpi.kpi_id, kpi.planned, kpi.actual, kpi.pending_uptodate, kpi.pending_work, kpi.commitment, kpi.commitment_prev, kpi.total_uptodate]);
 
   const flush = () => {
     if (readOnly) return;
@@ -754,6 +1071,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       pending_work: pendingWork === '' ? null : Number(pendingWork),
       total_uptodate: totalUp === '' ? null : Number(totalUp),
       commitment: commitment || null,
+      commitment_prev: commitmentPrev || null,
     });
   };
 
@@ -781,9 +1099,24 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       <td className="text-center p-2">
         {kpi.last_week_pct != null ? <span className={vsClr(kpi.last_week_pct)}>{fmtVs(kpi.last_week_pct)}</span> : <span className="text-gray-300">—</span>}
       </td>
+      {/* Planned/Actual stay this week's cohort — mam 2026-08-26: previous
+          pendency shows ONLY in the Pending column (up), not added here. */}
       <td className="text-center p-2">
-        {isAuto ? <span className="text-gray-700">{planned}</span> :
-          <input type="number" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={flush} disabled={readOnly} />}
+        {isAuto ? (
+          <span className="text-gray-700 cursor-help"
+                title={kpi.target_auto
+                  ? 'Counted live by the ERP — what was given this week'
+                  : `Target typed in the template${kpi.has_target_override ? ' (per-user override)' : ''} — the ERP records only the outcome for this source`}>
+            {planned}
+            {!kpi.target_auto && (
+              <span className={`block text-[9px] font-semibold ${+planned === 0 && +actual > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                {+planned === 0 && +actual > 0 ? 'no target set' : 'target set'}
+              </span>
+            )}
+          </span>
+        ) : (
+          <input type="number" className="input text-center text-xs w-20 mx-auto" value={planned} onChange={e => setPlanned(e.target.value)} onBlur={flush} disabled={readOnly} />
+        )}
       </td>
       <td className="text-center p-2">
         {isAuto ? <span className="text-gray-700">{actual}</span> :
@@ -794,14 +1127,41 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         <input type="number" className="input text-center text-xs w-20 mx-auto" value={totalUp} onChange={e => setTotalUp(e.target.value)} onBlur={flush} disabled={readOnly} />
       </td>
       <td className="text-center p-2">
-        <div className="flex items-center justify-center gap-1">
-          <input type="number" className="input text-center text-xs w-16" placeholder="up" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
-          <span className="text-gray-300">/</span>
-          <input type="number" className="input text-center text-xs w-16" placeholder="wk" value={pendingWork} onChange={e => setPendingWork(e.target.value)} onBlur={flush} disabled={readOnly} />
-        </div>
+        {kpi.pending_auto ? (
+          // Auto-computed pending pair (mam 2026-08-26 "19/4"):
+          // Due-date rule (2026-09-05): only open tasks due on/before week end.
+          // first = ALL tasks still pending as of the week end (backlog +
+          // this week's leftover); second = of the PREVIOUS tasks, how many
+          // were completed during this week (green — backlog being cleared).
+          <div className="flex items-center justify-center gap-1 font-semibold"
+            title={`${kpi.pending_uptodate} pending in total (open tasks due on/before week end — a task whose date was extended ahead is not counted yet) / ${kpi.pending_work} previous task(s) completed this week`}>
+            <span className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate}</span>
+            <span className="text-gray-300">/</span>
+            <span className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work}</span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-1">
+            <input type="number" className="input text-center text-xs w-16" placeholder="up" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-gray-300">/</span>
+            <input type="number" className="input text-center text-xs w-16" placeholder="wk" value={pendingWork} onChange={e => setPendingWork(e.target.value)} onBlur={flush} disabled={readOnly} />
+          </div>
+        )}
       </td>
       <td className="p-2">
-        <input type="text" className="input text-xs w-full" placeholder="…" value={commitment} onChange={e => setCommitment(e.target.value)} onBlur={flush} disabled={readOnly} />
+        {/* Two commitments (mam 2026-08-27): the promise on the PREVIOUS
+            pending tasks, and the CURRENT week's commitment. */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] font-bold text-amber-600 w-9 flex-shrink-0 uppercase" title="Commitment on the previous pending tasks — when will the backlog be cleared?">Prev</span>
+            <input type="text" className="input text-xs w-full py-1" placeholder="previous pending — by when…"
+              value={commitmentPrev} onChange={e => setCommitmentPrev(e.target.value)} onBlur={flush} disabled={readOnly} />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] font-bold text-indigo-600 w-9 flex-shrink-0 uppercase" title="Commitment for the current week's work">Now</span>
+            <input type="text" className="input text-xs w-full py-1" placeholder="current commitment…"
+              value={commitment} onChange={e => setCommitment(e.target.value)} onBlur={flush} disabled={readOnly} />
+          </div>
+        </div>
       </td>
     </tr>
   );
@@ -894,7 +1254,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
   // each data source returns real data.
   const [previewUsers, setPreviewUsers] = useState([]);   // users assigned to this template
   const [previewUserId, setPreviewUserId] = useState('');
-  const [previewKpis, setPreviewKpis] = useState({});     // { kpi_id: { planned, actual, score } }
+  const [previewKpis, setPreviewKpis] = useState({});     // { kpi_id: { planned, actual, score, target_auto } }
+  const { user: me } = useAuth();
   const [previewLoading, setPreviewLoading] = useState(false);
 
   const load = useCallback(() => {
@@ -916,9 +1277,12 @@ function TemplateKpiEditor({ templateId, onChange }) {
 
   // When user picked, fetch their scorecard and build a {kpi_id → row} lookup.
   useEffect(() => {
-    if (!previewUserId) { setPreviewKpis({}); return; }
+    // Fetched even with no preview user (falls back to the admin's own id):
+    // the engine reports target_auto per KPI — whether Planned is counted live
+    // or must be typed — and the Target cell below locks/opens on that. With
+    // template_id the server scores THIS template, assigned or not.
     setPreviewLoading(true);
-    api.get('/scoring/scorecard', { params: { user_id: previewUserId } })
+    api.get('/scoring/scorecard', { params: { user_id: previewUserId || me?.id, template_id: templateId } })
       .then(r => {
         const map = {};
         for (const k of (r.data?.kpis || [])) {
@@ -928,7 +1292,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
       })
       .catch(() => setPreviewKpis({}))
       .finally(() => setPreviewLoading(false));
-  }, [previewUserId]);
+  }, [previewUserId, templateId, me?.id]);
 
   // Per-user KPI overrides — mam (2026-06-02): "every person different
   // KPIs" (Option B).  Three things mam can override per user:
@@ -1024,6 +1388,13 @@ function TemplateKpiEditor({ templateId, onChange }) {
       <div className="flex justify-between items-center flex-wrap gap-2">
         <p className="text-xs text-gray-500">Total weight: <span className={`font-bold ${totalWeight === 100 ? 'text-emerald-600' : 'text-amber-600'}`}>{totalWeight}%</span> {totalWeight !== 100 && '(should be 100)'}</p>
         <button onClick={() => setAdding(true)} className="btn btn-primary text-xs flex items-center gap-1"><FiPlus size={12} /> Add KPI</button>
+      </div>
+      {/* Why some Targets are typed and some are not (mam 2026-09-05: "some
+          place I need to enter plan and some place automatically pick plan,
+          how I can justify"). The engine decides per source (target_auto). */}
+      <div className="text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded p-2 flex flex-wrap gap-x-4 gap-y-1">
+        <span><span className="inline-block px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 font-semibold">auto</span> target — the ERP knows what was <b>given</b> this week (tasks due, snags raised, RACI steps reached, sites managed), so Planned is counted live. Nothing to type.</span>
+        <span><span className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-300 text-emerald-700 font-semibold">you set</span> target — the ERP records only the <b>outcome</b> (candidates shortlisted, amount received, leads created). There is no "given" count to derive a target from, so the weekly target is a management goal you type here. Leave it 0 and any actual above 0 scores 0%.</span>
       </div>
       {/* Mam (2026-06-02): "from where is actual we not show".  Pick a
           user assigned to this template → the Actual column below
@@ -1146,12 +1517,25 @@ function TemplateKpiEditor({ templateId, onChange }) {
               <td className="p-2">
                 {(() => {
                   const isAuto = k.data_source && k.data_source.startsWith('auto:');
-                  const AUTO_KEEPS_MANUAL_TARGET = ['auto:dpr_profit_by_user'];
-                  const autoLocksTarget = isAuto && !AUTO_KEEPS_MANUAL_TARGET.includes(k.data_source);
+                  // The ENGINE says whether this source produces a target
+                  // (target_auto). Until the preview loads, fall back to the
+                  // source description: "You set" = typed target. Before this,
+                  // every auto source was locked as "auto" even where the
+                  // description said "You set" — 49 sources with no box.
+                  const live = previewKpis[k.id];
+                  const autoLocksTarget = isAuto && (live
+                    ? !!live.target_auto
+                    : !/^you set/i.test(sourceInfoFor(k.data_source)?.plan || ''));
+                  const youSetHint = (
+                    <div className="text-[9px] mt-0.5 text-center text-emerald-700 font-semibold cursor-help"
+                         title="The ERP records only the outcome for this source — there is no 'given' count to derive a target from. Type the weekly target (a management goal). Leaving it 0 makes any actual above 0 score 0%.">
+                      you set
+                    </div>
+                  );
                   if (autoLocksTarget) {
                     return (
                       <div className="text-center text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-1 py-1 cursor-help"
-                           title={`Target is computed live from ${k.data_source.replace('auto:', '')} — count of items given to the user in the scoring period.`}>
+                           title={`Target is counted live from ${k.data_source.replace('auto:', '')} — the ERP knows what was given to the user in the scoring period (${sourceInfoFor(k.data_source)?.plan || 'items given'}). Nothing to type.`}>
                         auto
                       </div>
                     );
@@ -1187,18 +1571,22 @@ function TemplateKpiEditor({ templateId, onChange }) {
                             ? <span className="text-emerald-700 font-semibold">user override</span>
                             : <span className="text-gray-400">default: {k.default_planned || 0}</span>}
                         </div>
+                        {isAuto && youSetHint}
                       </div>
                     );
                   }
                   // No preview user — editing the TEMPLATE default for everyone.
                   return (
-                    <input
-                      type="number" step="0.1"
-                      className="input text-xs text-center"
-                      defaultValue={k.default_planned || 0}
-                      onBlur={e => updateKpi(k, { default_planned: +e.target.value })}
-                      title="Template default — applies to every user assigned to this template (unless overridden per-user)."
-                    />
+                    <div>
+                      <input
+                        type="number" step="0.1"
+                        className="input text-xs text-center"
+                        defaultValue={k.default_planned || 0}
+                        onBlur={e => updateKpi(k, { default_planned: +e.target.value })}
+                        title="Template default — applies to every user assigned to this template (unless overridden per-user)."
+                      />
+                      {isAuto && youSetHint}
+                    </div>
                   );
                 })()}
               </td>
@@ -1231,6 +1619,15 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:raci_ontime_pct">RACI on-time % (within SLA)</option>
                   </optgroup>
                   <RaciStepOptions modules={raciModules} />
+                  <optgroup label="ERP Management (System Flow) — by developer">
+                    <option value="auto:sysflow_steps">System Flow steps (developer — due/completed)</option>
+                    <option value="auto:sysflow_ontime_pct">System Flow on-time % (developer — completed by target date)</option>
+                    <option value="auto:sysflow_blocked">System Flow steps blocked this week (developer)</option>
+                    <option value="auto:sysflow_overdue">System Flow steps overdue at week end (developer)</option>
+                    <option value="auto:sysflow_updates">System Flow work updates logged (by user)</option>
+                    <option value="auto:sysflow_all">System Flow steps — ALL (company-wide)</option>
+                    <option value="auto:sysflow_progress_pct">ERP implementation progress % (at week end)</option>
+                  </optgroup>
                   <optgroup label="DPR (Daily Project Report)">
                     <option value="auto:dpr_profit">DPR profit (planned vs actual ₹) [site]</option>
                     <option value="auto:dpr_count">DPR count (6 days/week target) [site]</option>
@@ -1243,7 +1640,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:leads_qualified">leads qualified (by user)</option>
                     <option value="auto:quotations_sent">quotations sent (by user)</option>
                     <option value="auto:meetings_planned">meetings planned (this week)</option>
-                    <option value="auto:crm_kitting">CRM full kitting — checkpoints logged (by user)</option>
+                    <option value="auto:crm_kitting">CRM full kitting — checkpoints complete (user = CRM owner)</option>
                   </optgroup>
                   <optgroup label="Business Book">
                     <option value="auto:bb_entries">BB entries created (by user)</option>
@@ -1258,6 +1655,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:indents_approved">indents approved (by user)</option>
                     <option value="auto:vendor_pos_created">vendor POs created</option>
                     <option value="auto:purchase_bills">purchase bills received</option>
+                    <option value="auto:po_bill_pending">Purchase Bill — approved POs missing a bill (by owner)</option>
+                    <option value="auto:po_bill_pending_all">Purchase Bill — approved POs missing a bill (company-wide)</option>
                     <option value="auto:dispatch_sent">dispatches sent (delivery notes)</option>
                     <option value="auto:material_received">material received (site)</option>
                   </optgroup>
@@ -1303,6 +1702,11 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   <optgroup label="System / Engagement">
                     <option value="auto:daily_active_users">Daily Active users — avg/day vs total users (all)</option>
                     <option value="auto:data_entry_all">Data Entry — records entered company-wide (weekly)</option>
+                    <option value="auto:data_completeness">Data Completeness — required fields filled (Item Master + Business Book + Employees + Users)</option>
+                    <option value="auto:data_completeness:item_master">Data Completeness — Item Master only</option>
+                    <option value="auto:data_completeness:business_book">Data Completeness — Business Book only</option>
+                    <option value="auto:data_completeness:employees">Data Completeness — Employees only</option>
+                    <option value="auto:data_completeness:users">Data Completeness — Users only</option>
                   </optgroup>
                   <optgroup label="Attendance">
                     <option value="auto:attendance_present_days">attendance present days (target 6)</option>
@@ -1396,6 +1800,19 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="auto:snags">auto: snag list</option>
             <option value="auto:raci_steps_done">auto: RACI steps (all modules)</option>
             <RaciStepOptions modules={raciModules} />
+            <optgroup label="Procurement">
+              <option value="auto:po_bill_pending">auto: Purchase Bill — approved POs missing a bill (by owner)</option>
+              <option value="auto:po_bill_pending_all">auto: Purchase Bill — approved POs missing a bill (company-wide)</option>
+            </optgroup>
+            <optgroup label="ERP Management (System Flow) — by developer">
+              <option value="auto:sysflow_steps">auto: System Flow steps (developer)</option>
+              <option value="auto:sysflow_ontime_pct">auto: System Flow on-time % (developer)</option>
+              <option value="auto:sysflow_blocked">auto: System Flow steps blocked this week (developer)</option>
+              <option value="auto:sysflow_overdue">auto: System Flow steps overdue at week end (developer)</option>
+              <option value="auto:sysflow_updates">auto: System Flow work updates logged</option>
+              <option value="auto:sysflow_all">auto: System Flow steps — ALL (company-wide)</option>
+              <option value="auto:sysflow_progress_pct">auto: ERP implementation progress %</option>
+            </optgroup>
           </select>
           <div className="col-span-2 flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="btn btn-secondary text-sm">Cancel</button>

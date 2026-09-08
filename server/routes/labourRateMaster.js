@@ -154,6 +154,26 @@ router.get('/window', canRead, (req, res) => {
   });
 });
 
+// NOTE: /reports/* MUST stay above the '/:id' + '/:id/history' routes.
+// Express matches in registration order, so with '/:id/history' first a GET
+// of /reports/history ran that handler with id='reports' and silently
+// returned [] instead of the report (export audit 2026-09-03).
+router.get('/reports/history', canRead, (req, res) => {
+  const q = req.query || {};
+  const where = [];
+  const args = [];
+  if (q.from) { where.push('DATE(h.changed_at) >= DATE(?)'); args.push(q.from); }
+  if (q.to) { where.push('DATE(h.changed_at) <= DATE(?)'); args.push(q.to); }
+  if (q.labour_category) { where.push('h.labour_category = ?'); args.push(q.labour_category); }
+  if (q.action) { where.push('h.action = ?'); args.push(q.action); }
+  res.json(getDb().prepare(`
+    SELECT h.*, r.trade, r.department, r.unit
+      FROM labour_rate_history h
+      LEFT JOIN labour_rate_master r ON r.id = h.rate_id
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY h.changed_at DESC, h.id DESC LIMIT 1000`).all(...args));
+});
+
 router.get('/:id', canRead, (req, res) => {
   const row = getDb().prepare(`SELECT ${RATE_COLS} FROM labour_rate_master WHERE id=?`).get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Rate not found' });
@@ -358,22 +378,6 @@ router.get('/reports/dashboard', canRead, (req, res) => {
              COUNT(*) AS rates, COALESCE(AVG(standard_rate),0) AS avg_rate
         FROM labour_rate_master WHERE status='active' GROUP BY name ORDER BY rates DESC`).all(),
   });
-});
-
-router.get('/reports/history', canRead, (req, res) => {
-  const q = req.query || {};
-  const where = [];
-  const args = [];
-  if (q.from) { where.push('DATE(h.changed_at) >= DATE(?)'); args.push(q.from); }
-  if (q.to) { where.push('DATE(h.changed_at) <= DATE(?)'); args.push(q.to); }
-  if (q.labour_category) { where.push('h.labour_category = ?'); args.push(q.labour_category); }
-  if (q.action) { where.push('h.action = ?'); args.push(q.action); }
-  res.json(getDb().prepare(`
-    SELECT h.*, r.trade, r.department, r.unit
-      FROM labour_rate_history h
-      LEFT JOIN labour_rate_master r ON r.id = h.rate_id
-      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-     ORDER BY h.changed_at DESC, h.id DESC LIMIT 1000`).all(...args));
 });
 
 module.exports = router;

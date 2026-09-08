@@ -241,7 +241,7 @@ function DecisionCard({ q, optA, optB, recommend, owner, deadline }) {
 export default function DashboardWarRoom() {
   const [data, setData] = useState(null);
   const [days, setDays] = useState(90);
-  const [tab, setTab] = useUrlTab('cmd');
+  const [tab, setTab] = useUrlTab(['cmd', 'approvals', 'coo', 'hide', 'hierarchy', 'performance', 'posales'], 'cmd');
   const [loading, setLoading] = useState(false);
   const [approvals, setApprovals] = useState(null);   // consolidated pending-approvals inbox
   const [apprExpanded, setApprExpanded] = useState(null);  // which card's item list is open

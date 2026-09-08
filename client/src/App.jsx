@@ -46,12 +46,13 @@ const ModuleOwners = lazy(() => import('./pages/ModuleOwners'));
 const Tools = lazy(() => import('./pages/Tools'));
 const Rentals = lazy(() => import('./pages/Rentals'));
 const Snags = lazy(() => import('./pages/Snags'));
+const TallyBills = lazy(() => import('./pages/TallyBills'));
 const ClientSnag = lazy(() => import('./pages/ClientSnag'));
 const CompanyAssets = lazy(() => import('./pages/CompanyAssets'));
 const Employees = lazy(() => import('./pages/Employees'));
 const Expenses = lazy(() => import('./pages/Expenses'));
 const Checklists = lazy(() => import('./pages/Checklists'));
-const CashFlow = lazy(() => import('./pages/CashFlow'));
+const Bank = lazy(() => import('./pages/Bank'));
 const Collections = lazy(() => import('./pages/Collections'));
 const ArApTracker = lazy(() => import('./pages/ArApTracker'));
 const SiteChat = lazy(() => import('./pages/SiteChat'));
@@ -67,8 +68,14 @@ const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const HelpTickets = lazy(() => import('./pages/HelpTickets'));
 const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
+const SystemFlow = lazy(() => import('./pages/SystemFlow'));
 const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
+const FileViewer = lazy(() => import('./pages/FileViewer'));
+const ProcurementBoard = lazy(() => import('./pages/ProcurementBoard'));
+const RatesItems = lazy(() => import('./pages/RatesItems'));
+const RatesBoard = lazy(() => import('./pages/RatesBoard'));
+const RateEnquiryPrint = lazy(() => import('./pages/RateEnquiryPrint'));
 const DebitNotePrint = lazy(() => import('./pages/DebitNotePrint'));
 const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
 const DeliveryNotePrint = lazy(() => import('./pages/DeliveryNotePrint'));
@@ -87,6 +94,7 @@ const QuotationPrint = lazy(() => import('./pages/QuotationPrint'));
 const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
 const RolesPermissions = lazy(() => import('./pages/admin/RolesPermissions'));
 const DatabaseBackups = lazy(() => import('./pages/admin/DatabaseBackups'));
+const Performance = lazy(() => import('./pages/admin/Performance'));
 const AuditLog = lazy(() => import('./pages/admin/AuditLog'));
 const WordCount = lazy(() => import('./pages/admin/WordCount'));
 const Locations = lazy(() => import('./pages/admin/Locations'));
@@ -96,6 +104,7 @@ const SubContractors = lazy(() => import('./pages/SubContractors'));
 const SubconHiring = lazy(() => import('./pages/SubconHiring'));
 const ProcurementSchedule = lazy(() => import('./pages/ProcurementSchedule'));
 const CRMFunnel = lazy(() => import('./pages/CRMFunnel'));
+const SotynLeads = lazy(() => import('./pages/SotynLeads'));
 const ChequeFMS = lazy(() => import('./pages/ChequeFMS'));
 const EmailSettings = lazy(() => import('./pages/EmailSettings'));
 const EmailTriggers = lazy(() => import('./pages/EmailTriggers'));
@@ -111,6 +120,7 @@ const OfferLetterPrint = lazy(() => import('./pages/OfferLetterPrint'));
 const NDAPrint = lazy(() => import('./pages/NDAPrint'));
 const EmploymentAgreementPrint = lazy(() => import('./pages/EmploymentAgreementPrint'));
 const PublicOffer = lazy(() => import('./pages/PublicOffer'));
+const PublicEmployeeFill = lazy(() => import('./pages/PublicEmployeeFill'));
 const Induction = lazy(() => import('./pages/Induction'));
 const Training = lazy(() => import('./pages/Training'));
 
@@ -150,6 +160,11 @@ export default function App() {
       <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
       {/* Print routes — auth-gated but rendered WITHOUT the sidebar / header
           chrome so the document fills the viewport cleanly. */}
+      {/* Online file viewer (mam 2026-08-27) — Excel/Word/CSV open in a tab
+          instead of downloading; Layout's link interceptor routes here. */}
+      <Route path="/file-view" element={<ProtectedRoute><FileViewer /></ProtectedRoute>} />
+      {/* SOP-05.2 rate-enquiry sheet — print page, no app chrome. */}
+      <Route path="/rate-enquiry/:id/print" element={<ProtectedRoute><RateEnquiryPrint /></ProtectedRoute>} />
       <Route path="/vendor-po/:id/print" element={<ProtectedRoute><VendorPOPrint /></ProtectedRoute>} />
       <Route path="/debit-note/:id/print" element={<ProtectedRoute><DebitNotePrint /></ProtectedRoute>} />
       <Route path="/payment-advice/print" element={<ProtectedRoute><PaymentAdvicePrint /></ProtectedRoute>} />
@@ -180,6 +195,9 @@ export default function App() {
           ProtectedRoute wrapper.  Candidate uses the token in the
           URL as the identity; no SEPL login required. */}
       <Route path="/offer/:token" element={<PublicOffer />} />
+      {/* Mam (2026-08-17): public employee self-fill form — employee fills
+          their own details via a shared token link, no login. */}
+      <Route path="/employee-fill/:token" element={<PublicEmployeeFill />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         {/* TOC v3 role dashboards — admin-only for now, dark-navy CMD
@@ -201,11 +219,20 @@ export default function App() {
         <Route path="induction" element={<Induction />} />
         <Route path="training" element={<Training />} />
         {/* 4 Critical Systems */}
-        <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
+        {/* Cash Flow page deleted (mam 2026-09-03) — /cashflow now lands on the
+            Cash Flow Tracker, which is where the money question is answered.
+            The cash_flow_daily ledger tables are UNTOUCHED: Bank
+            reconciliation, Collections and Business Book still write to them. */}
+        <Route path="cashflow" element={<Navigate to="/cash-flow-tracker" replace />} />
+        <Route path="bank" element={<ModuleRoute module="cashflow"><Bank /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
         <Route path="attendance" element={<ModuleRoute module="attendance"><Attendance /></ModuleRoute>} />
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
-        <Route path="ar-ap-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
+        {/* AR/AP Tracker → Cash Flow Tracker (mam 2026-09-03). New canonical
+            path; the old one redirects so War Room deep links and anyone's
+            bookmarks keep working. */}
+        <Route path="cash-flow-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
+        <Route path="ar-ap-tracker" element={<Navigate to="/cash-flow-tracker" replace />} />
         {/* WhatsApp is open to all signed-in users — access is by group
             membership, not the site_chat module permission (mam 2026-06-19).
             ModuleGate is the global on/off switch, NOT a permission check — it's
@@ -247,15 +274,25 @@ export default function App() {
         <Route path="vendors" element={<ModuleRoute module="vendors"><Vendors /></ModuleRoute>} />
         <Route path="customers" element={<ModuleRoute module="customers"><Customers /></ModuleRoute>} />
         <Route path="procurement" element={<ModuleRoute module="procurement"><Procurement /></ModuleRoute>} />
+        {/* SOP-07 flow board (mam 2026-08-28) — pipeline dashboard for
+            Indent-to-Material, in mam's reference design. */}
+        <Route path="procurement-board" element={<ModuleRoute module="procurement"><ProcurementBoard /></ModuleRoute>} />
+        {/* SOP-05 rates board (mam 2026-08-28) — vendor & rates BEFORE indent. */}
+        <Route path="rates-board" element={<ModuleRoute module="procurement"><RatesBoard /></ModuleRoute>} />
+        {/* SOP-05 item-wise register (mam 2026-08-31) */}
+        <Route path="rates-items" element={<ModuleRoute module="procurement"><RatesItems /></ModuleRoute>} />
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
+        {/* ERP Management — System Flow & Implementation Control (2026-09) */}
+        <Route path="system-flow" element={<ModuleRoute module="system_flow"><SystemFlow /></ModuleRoute>} />
         <Route path="system-requirements" element={<ModuleGate module="system_requirements"><SystemRequirements /></ModuleGate>} />
         <Route path="system-requirements/:id" element={<ModuleGate module="system_requirements"><SystemRequirementWorkspace /></ModuleGate>} />
         <Route path="installation" element={<ModuleRoute module="installation"><SalesBilling /></ModuleRoute>} />
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
         <Route path="snags" element={<ModuleRoute module="snags"><Snags /></ModuleRoute>} />
+        <Route path="tally-bills" element={<ModuleRoute module="tally_bills"><TallyBills /></ModuleRoute>} />
         <Route path="client-snag" element={<ModuleRoute module="client_snag"><ClientSnag /></ModuleRoute>} />
         <Route path="company-assets" element={<ModuleRoute module="company_assets"><CompanyAssets /></ModuleRoute>} />
         <Route path="hr" element={<ModuleRoute module="hr"><HR /></ModuleRoute>} />
@@ -275,6 +312,7 @@ export default function App() {
         <Route path="admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
         <Route path="admin/roles" element={<AdminRoute><RolesPermissions /></AdminRoute>} />
         <Route path="admin/backups" element={<AdminRoute><DatabaseBackups /></AdminRoute>} />
+        <Route path="admin/performance" element={<AdminRoute><Performance /></AdminRoute>} />
         <Route path="admin/audit" element={<AdminRoute><AuditLog /></AdminRoute>} />
         <Route path="admin/word-count" element={<AdminRoute><WordCount /></AdminRoute>} />
         <Route path="admin/locations" element={<AdminRoute><Locations /></AdminRoute>} />
@@ -286,6 +324,7 @@ export default function App() {
         <Route path="subcon-hiring" element={<ModuleRoute module="subcon_hiring"><SubconHiring /></ModuleRoute>} />
         <Route path="procurement-schedule" element={<ModuleRoute module="procurement_schedule"><ProcurementSchedule /></ModuleRoute>} />
         <Route path="crm-funnel" element={<ModuleRoute module="crm_funnel"><CRMFunnel /></ModuleRoute>} />
+        <Route path="sotyn-leads" element={<ModuleRoute module="sotyn_leads"><SotynLeads /></ModuleRoute>} />
         <Route path="cheques" element={<ModuleRoute module="cheques"><ChequeFMS /></ModuleRoute>} />
       </Route>
     </Routes>

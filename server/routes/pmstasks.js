@@ -257,6 +257,14 @@ router.post('/:id/approve', (req, res) => {
   if (t.status !== 'submitted') return res.status(400).json({ error: 'Task is not awaiting approval' });
   db.prepare(`UPDATE pms_tasks SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewer_id=? WHERE id=?`)
     .run(req.user.id, req.params.id);
+  // A task raised from a Tally bill closes Stage 3 for that bill once it is the
+  // LAST one outstanding (Director CR 2026-08-13 §4). Required lazily so this
+  // module keeps no load-time dependency on the tally route; the tally list/detail
+  // endpoints run the same check, so a failure here self-heals on next read.
+  if (t.tally_bill_id) {
+    try { require('./tallyBills').syncTaskCompletion(db, t.tally_bill_id, req.user); }
+    catch (e) { console.warn('[pms-tasks] tally stage-3 sync failed:', e.message); }
+  }
   res.json({ message: 'Approved' });
 });
 

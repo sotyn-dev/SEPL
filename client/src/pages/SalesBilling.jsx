@@ -6,6 +6,8 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiTrash2, FiCheckCircle, FiDownload, FiGrid, FiFileText, FiPackage, FiClipboard, FiPrinter, FiUsers } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import Pagination, { usePagination } from '../components/PaginationBar';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const TYPE_LABEL = { 1: 'Type 1 · Sales Order', 2: 'Type 2 · Material Delivery', 3: 'Type 3 · Installation', 4: 'Type 4 · Final' };
 const fmt = n => '₹' + Math.round(+n || 0).toLocaleString('en-IN');
@@ -20,7 +22,7 @@ const TABS = [
 
 export default function SalesBilling() {
   const { canDelete } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab(['dashboard', 'orders', 'material', 'dpr', 'responsible'], 'dashboard');
   const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState([]);
@@ -142,6 +144,14 @@ export default function SalesBilling() {
   const received = t4.reduce((s, b) => s + (+b.received_amount || 0), 0);
   const outstanding = t4.reduce((s, b) => s + ((+b.total_amount || 0) - (+b.received_amount || 0)), 0);
 
+  // Numbered pagination — one hook per major list (hooks live here, NOT in
+  // BillTable: it's re-created each render so its state would reset).
+  // Export keeps using the FULL list for the ACTIVE tab (never pageItems).
+  const billsPager = usePagination(bills);        // Dashboard — all bills
+  const t3Pager = usePagination(t3);              // DPR / installation bills
+  const ordersPager = usePagination(orders);      // Sales Order Bills tab
+  const materialPager = usePagination(material);  // Material · PO vs Bill tab
+
   const StatusCell = (b) => (
     <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 whitespace-nowrap">{b.bill_status}</span>
   );
@@ -151,7 +161,7 @@ export default function SalesBilling() {
     </button>
   );
 
-  const BillTable = ({ rows, showPayment, sentMode }) => (
+  const BillTable = ({ rows, showPayment, sentMode, pager }) => (
     <div className="card p-0 overflow-x-auto">
       <table className="text-sm w-full">
         <thead>
@@ -214,6 +224,7 @@ export default function SalesBilling() {
           ))}
         </tbody>
       </table>
+      {pager && <Pagination {...pager} />}
     </div>
   );
 
@@ -224,9 +235,23 @@ export default function SalesBilling() {
         <div className="flex gap-2">
           {tab === 'dpr' && <button onClick={genInstall} className="btn btn-secondary flex items-center gap-2" title="Create Type-3 installation bills from approved DPRs"><FiCheckCircle /> Generate Installation Bills</button>}
           {(tab === 'orders' || tab === 'dashboard') && <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> New Sales Bill</button>}
-          <button onClick={() => exportCsv('sales-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Approval'],
-            bills.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.approval_status]))}
-            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export</button>
+          {tab !== 'responsible' && <button onClick={() => {
+            // Export what the ACTIVE tab actually shows — each tab is a different
+            // dataset (all bills / orders / challans / Type-3), never the raw `bills`.
+            if (tab === 'dashboard') exportCsv('sales-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Approval'],
+              bills.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.approval_status]));
+            if (tab === 'dpr') exportCsv('installation-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Sent to Client'],
+              t3.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.sent_to_client ? 'Yes' : 'No']));
+            if (tab === 'orders') exportCsv('sales-order-bills', ['Order', 'Customer', 'Project', 'Order Value', 'SO Bill No', 'SO Total', 'SO Approval', 'Final Bill No', 'Final Total', 'Final Payment'],
+              orders.map(o => {
+                const so = bills.find(b => b.business_book_id === o.id && b.bill_type === 1);
+                const final = bills.find(b => b.business_book_id === o.id && b.bill_type === 4);
+                return [(o.status === 'planning' ? '★ ' : '') + (o.lead_no || ('BB#' + o.id)), o.customer_name, o.project_name, (+o.po_amount || +o.sale_amount_without_gst || 0),
+                  so?.bill_number || '', so?.total_amount || '', so?.approval_status || '', final?.bill_number || '', final?.total_amount || '', final?.payment_status || ''];
+              }));
+            if (tab === 'material') exportCsv('material-po-vs-bill', ['Indent', 'Challan', 'Site', 'Date', 'Source', 'Items', 'Value', 'Sales Bill', 'Sales Bill No'],
+              material.map(m => [m.indent_number, m.challan_no, m.site_name, m.date, m.source, m.item_count || 0, m.value, m.sales_bill_status, m.sales_bill_number]));
+          }} className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export</button>}
         </div>
       </div>
 
@@ -295,7 +320,7 @@ export default function SalesBilling() {
           <div className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg px-4 py-2.5">
             Flow per order: <b>Sales Order (T1)</b> → <b>Material delivery (T2, billed in Dispatch)</b> → <b>Installation (T3, auto from DPRs)</b> → <b>Final (T4)</b>. Payment is taken against the Final bill.
           </div>
-          <BillTable rows={bills.slice(0, 12)} showPayment />
+          <BillTable rows={billsPager.pageItems} pager={billsPager} showPayment />
         </div>
       )}
 
@@ -321,7 +346,7 @@ export default function SalesBilling() {
               <tbody>
                 {orders.length === 0 ? (
                   <tr><td colSpan="6" className="text-center py-8 text-gray-400">No orders found in Business Book.</td></tr>
-                ) : orders.map(o => {
+                ) : ordersPager.pageItems.map(o => {
                   const so = bills.find(b => b.business_book_id === o.id && b.bill_type === 1);
                   const final = bills.find(b => b.business_book_id === o.id && b.bill_type === 4);
                   const val = +o.po_amount || +o.sale_amount_without_gst || 0;
@@ -356,6 +381,7 @@ export default function SalesBilling() {
                 })}
               </tbody>
             </table>
+            <Pagination {...ordersPager} />
           </div>
         </div>
       )}
@@ -384,7 +410,7 @@ export default function SalesBilling() {
               <tbody>
                 {material.length === 0 ? (
                   <tr><td colSpan="8" className="text-center py-8 text-gray-400">No material dispatches yet. Challans raised in Dispatch will appear here.</td></tr>
-                ) : material.map(m => (
+                ) : materialPager.pageItems.map(m => (
                   <tr key={m.id} className="border-t border-gray-100 hover:bg-blue-50/40">
                     <td className="px-3 py-2 font-medium whitespace-nowrap">{m.indent_number || '-'}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{m.challan_no || '-'}</td>
@@ -412,6 +438,7 @@ export default function SalesBilling() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...materialPager} />
           </div>
         </div>
       )}
@@ -422,7 +449,7 @@ export default function SalesBilling() {
           <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
             Installation bills are generated from <b>submitted, approved DPRs</b> — each DPR is billed once. Click <b>Generate Installation Bills</b> to bill the latest approved DPRs (created as draft for review).
           </div>
-          <BillTable rows={t3} showPayment={false} sentMode />
+          <BillTable rows={t3Pager.pageItems} pager={t3Pager} showPayment={false} sentMode />
         </div>
       )}
 

@@ -14,6 +14,7 @@
 //  - Skips obvious non-content fields (ids, dates, urls, secrets).
 
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, adminOnly } = require('../middleware/auth');
 
@@ -165,7 +166,7 @@ router.get('/detail', (req, res) => {
   let dateFrom = req.query.date_from || date;
   let dateTo = req.query.date_to || date;
   if (!dateFrom) {
-    const iso = new Date().toISOString().slice(0, 10);
+    const iso = istToday();
     dateFrom = iso; dateTo = iso;
   }
   if (!dateTo) dateTo = dateFrom;

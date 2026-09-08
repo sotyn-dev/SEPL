@@ -22,6 +22,7 @@ export function AuthProvider({ children }) {
             approval_role: r.data.approval_role || null,
             avatar_url: r.data.avatar_url || null,
             has_recovery_code: !!r.data.has_recovery_code,
+            totp_enabled: !!r.data.totp_enabled,
           });
           setPermissions(r.data.permissions || {});
           setUserRoles(r.data.userRoles || []);
@@ -61,7 +62,12 @@ export function AuthProvider({ children }) {
         setPermissions(prev => JSON.stringify(prev) === JSON.stringify(p) ? prev : p);
         const ur = r.data.userRoles || [];
         setUserRoles(prev => JSON.stringify(prev) === JSON.stringify(ur) ? prev : ur);
-        setUser(u => (u && u.role === r.data.role && u.department === r.data.department) ? u : (u ? { ...u, role: r.data.role, department: r.data.department } : u));
+        setUser(u => {
+          if (!u) return u;
+          const totp = !!r.data.totp_enabled;
+          if (u.role === r.data.role && u.department === r.data.department && !!u.totp_enabled === totp) return u;
+          return { ...u, role: r.data.role, department: r.data.department, totp_enabled: totp };
+        });
       }).catch(() => {});
     };
     const onVis = () => { if (document.visibilityState === 'visible') refresh(); };
@@ -75,19 +81,13 @@ export function AuthProvider({ children }) {
     };
   }, [token]);
 
-  const login = async (identifier, password) => {
-    // Accept username or email — backend matches either.
-    const { data } = await api.post('/auth/login', { username: identifier, email: identifier, password });
+  const applySession = (data) => {
     persistToken(data.token);   // localStorage + in-memory fallback
     api.defaults.headers.common['Authorization'] = `Bearer ${data.token}`;
     setToken(data.token);
     setUser(data.user);
     setPermissions(data.permissions || {});
     setUserRoles(data.userRoles || []);
-    // Best-effort: re-subscribe this device for push notifications so
-    // PM2 restarts or expired endpoints don't silently lose this device.
-    // Only triggers if the user previously granted permission — never
-    // pops a fresh permission prompt (that lives in the bell-icon button).
     setTimeout(() => {
       try {
         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
@@ -96,6 +96,18 @@ export function AuthProvider({ children }) {
       } catch {}
     }, 500);
     return data;
+  };
+
+  const login = async (identifier, password) => {
+    // Accept username or email — backend matches either.
+    const { data } = await api.post('/auth/login', { username: identifier, email: identifier, password });
+    if (data.totp_required || data.totp_setup_required) return data;
+    return applySession(data);
+  };
+
+  const loginTotp = async (tempToken, code) => {
+    const { data } = await api.post('/auth/login/totp', { token: tempToken, code });
+    return applySession(data);
   };
 
   const logout = () => {
@@ -134,12 +146,14 @@ export function AuthProvider({ children }) {
   // force-set modal stops appearing without a full /auth/me refetch.
   const markRecoveryCodeSet = () => setUser(u => u ? { ...u, has_recovery_code: true } : u);
 
+  const markTotpEnabled = (on = true) => setUser(u => u ? { ...u, totp_enabled: !!on } : u);
+
   return (
     <AuthContext.Provider value={{
       user, token, permissions, userRoles,
-      login, logout, loading,
+      login, loginTotp, logout, loading,
       can, canView, canCreate, canEdit, canDelete, canApprove, canSeeAll, isAdmin,
-      markRecoveryCodeSet,
+      markRecoveryCodeSet, markTotpEnabled,
     }}>
       {children}
     </AuthContext.Provider>

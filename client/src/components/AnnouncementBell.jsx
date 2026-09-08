@@ -53,6 +53,11 @@ export default function AnnouncementBell() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [editing, setEditing] = useState(null);
+  // Bumped every time the editor opens or closes — checked before an
+  // in-flight photo upload is allowed to write into `form` (2026-08-24:
+  // "sometimes wrong upload" — starting an upload, cancelling, then editing
+  // a different announcement used to let the first upload's file land here).
+  const editorTokenRef = useRef(0);
   // Per-announcement reader drill-down (admin only). Map of id → readers data.
   const [readers, setReaders] = useState({}); // { [annId]: { read_count, unread_count, readers, non_readers } }
   const [expandedReaders, setExpandedReaders] = useState(null); // id of announcement currently expanded
@@ -127,6 +132,7 @@ export default function AnnouncementBell() {
         toast.success('Announcement posted');
       }
       setForm({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' });
+      editorTokenRef.current += 1;
       setAdding(false);
       setEditing(null);
       loadItems();
@@ -140,6 +146,7 @@ export default function AnnouncementBell() {
   };
 
   const startEdit = (a) => {
+    editorTokenRef.current += 1;
     setEditing(a);
     setForm({
       title: a.title || '',
@@ -158,14 +165,20 @@ export default function AnnouncementBell() {
   const uploadPhoto = async (file) => {
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) return toast.error('File too large (max 10 MB)');
+    const forToken = editorTokenRef.current;
     setUploadingPhoto(true);
     try {
       const fd = new FormData();
       fd.append('file', file);
       const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (editorTokenRef.current !== forToken) {
+        toast('That upload finished after you switched announcements — please attach again here.', { icon: '⚠️' });
+        return;
+      }
       setForm(f => ({ ...f, attachment_url: r.data?.url || '' }));
       toast.success('Photo attached');
     } catch (err) {
+      if (editorTokenRef.current !== forToken) return;
       toast.error(err.response?.data?.error || 'Upload failed');
     } finally {
       setUploadingPhoto(false);
@@ -223,7 +236,7 @@ export default function AnnouncementBell() {
               <h4 className="font-semibold text-sm flex items-center gap-1.5"><FiBell size={14}/> Inbox</h4>
               <div className="flex items-center gap-1">
                 {tab === 'announcements' && isAdmin() && !adding && (
-                  <button onClick={() => { setEditing(null); setForm({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' }); setAdding(true); }} className="text-[11px] font-semibold text-blue-700 hover:bg-white px-2 py-1 rounded flex items-center gap-1">
+                  <button onClick={() => { editorTokenRef.current += 1; setEditing(null); setForm({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' }); setAdding(true); }} className="text-[11px] font-semibold text-blue-700 hover:bg-white px-2 py-1 rounded flex items-center gap-1">
                     <FiPlus size={11}/> New
                   </button>
                 )}
@@ -338,7 +351,7 @@ export default function AnnouncementBell() {
                 )}
               </div>
               <div className="flex justify-end gap-2">
-                <button type="button" onClick={() => { setAdding(false); setEditing(null); }} className="text-[11px] text-gray-500 hover:text-gray-700 px-2 py-1">Cancel</button>
+                <button type="button" onClick={() => { editorTokenRef.current += 1; setAdding(false); setEditing(null); }} className="text-[11px] text-gray-500 hover:text-gray-700 px-2 py-1">Cancel</button>
                 <button type="submit" className="btn btn-primary text-[11px] py-1 px-3">{editing ? 'Update' : 'Post'}</button>
               </div>
             </form>
