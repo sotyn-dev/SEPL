@@ -372,6 +372,32 @@ router.patch('/:id/steps/:no', requirePermission(MODULE, 'edit'), (req, res) => 
   if (req.body.actual_date !== undefined) {
     const d = req.body.actual_date ? isoDate(req.body.actual_date) : null;
     if (req.body.actual_date && !d) return res.status(400).json({ error: 'Actual date must be a real date' });
+
+    // THE STEPS ARE SEQUENTIAL. Mam (2026-09-08): "create algin is when create
+    // step done, when align done after than roll out". A step cannot be completed
+    // before the one in front of it, and an earlier step cannot be un-completed
+    // while a later one is done — either would leave the planned-date chain
+    // describing an order of work that never happened (it also produced the
+    // nonsense negative delay seen in testing).
+    const siblings = db.prepare(
+      'SELECT step_no, step_name, actual_date FROM sysflow_system_steps WHERE system_id=? ORDER BY step_no'
+    ).all(step.system_id);
+
+    if (d) {
+      const prev = siblings.find((s) => s.step_no === stepNo - 1);
+      if (prev && !prev.actual_date) {
+        return res.status(409).json({
+          error: `Finish step ${prev.step_no} (${prev.step_name}) first — the steps run in order`,
+        });
+      }
+    } else {
+      const next = siblings.find((s) => s.step_no === stepNo + 1 && s.actual_date);
+      if (next) {
+        return res.status(409).json({
+          error: `Step ${next.step_no} (${next.step_name}) is already done — clear that one first`,
+        });
+      }
+    }
     put('actual_date', d);
   }
   if (req.body.owner_id !== undefined) {
@@ -436,6 +462,152 @@ router.delete('/:id', requirePermission(MODULE, 'delete'), (req, res) => {
   } catch (e) {
     console.error('[system-flow] delete failed:', e.message);
     res.status(500).json({ error: 'Could not delete the system' });
+  }
+});
+
+// ── POST /bulk — register many systems from a sheet ──────────────────
+//
+// Mam (2026-09-08): "bulk upload". Her register is a spreadsheet, so the sheet
+// itself is the input: an .xlsx or .csv with the photo-4 columns, or the same
+// pasted as text. Two-step like every other importer here — commit:false reports
+// what WOULD happen and writes nothing.
+//
+// UID and Timestamp are NOT read from the file: the ERP issues them, so a
+// re-uploaded sheet can never overwrite an existing system's identity.
+const BULK_MAX_ROWS = 500;
+
+// Header -> column. Matched loosely (case, spaces and punctuation ignored) because
+// a real sheet says "HOD'S NAME", "Hod Name" and "hod" in different weeks.
+const BULK_HEADERS = {
+  systemname: 'system_name', system: 'system_name', name: 'system_name',
+  type: 'type',
+  systemcategory: 'system_category', category: 'system_category',
+  frequency: 'frequency', freq: 'frequency',
+  hodsname: 'hod_name', hodname: 'hod_name', hod: 'hod_name',
+  remarks: 'remarks', remark: 'remarks',
+};
+const normHeader = (h) => String(h || '').toLowerCase().replace(/[^a-z]/g, '');
+
+router.post('/bulk', requirePermission(MODULE, 'create'), (req, res) => {
+  const commit = req.body?.commit === true;
+  let buf;
+  try {
+    if (typeof req.body?.file_b64 === 'string' && req.body.file_b64) {
+      buf = Buffer.from(req.body.file_b64, 'base64');
+      if (buf.length > 8 * 1024 * 1024) return res.status(413).json({ error: 'That file is larger than 8 MB' });
+    } else if (typeof req.body?.text === 'string' && req.body.text.trim()) {
+      buf = Buffer.from(req.body.text, 'utf8');
+    } else {
+      return res.status(400).json({ error: 'Choose a file, or paste the rows first' });
+    }
+  } catch {
+    return res.status(400).json({ error: 'Could not read that file' });
+  }
+
+  let rows;
+  try {
+    const XLSX = require('xlsx');
+    // Reads .xlsx, .xls AND .csv from the same buffer.
+    const wb = XLSX.read(buf, { type: 'buffer', cellDates: true, raw: false });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    if (!sheet) return res.status(400).json({ error: 'That file has no sheet in it' });
+    rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  } catch (e) {
+    console.error('[system-flow] bulk parse failed:', e.message);
+    return res.status(400).json({ error: 'Could not read that as a spreadsheet or CSV' });
+  }
+
+  // The header row is the first one that names a system column — sheets often
+  // carry a title or a blank line above the real headers.
+  let head = -1, map = null;
+  for (let r = 0; r < Math.min(rows.length, 20); r++) {
+    const m = {};
+    (rows[r] || []).forEach((h, i) => {
+      const col = BULK_HEADERS[normHeader(h)];
+      if (col && m[col] === undefined) m[col] = i;
+    });
+    if (m.system_name !== undefined) { head = r; map = m; break; }
+  }
+  if (head < 0) {
+    return res.status(400).json({
+      error: 'No "System Name" column found. The sheet needs a header row with System Name, and optionally Type, System Category, Frequency and HOD\'s Name.',
+    });
+  }
+
+  const db = getDb();
+  const existing = new Set(
+    db.prepare('SELECT LOWER(system_name) n FROM sysflow_systems WHERE active=1').all().map((r) => r.n)
+  );
+  const users = db.prepare('SELECT id, name FROM users WHERE active=1').all();
+  const userByName = new Map(users.map((u) => [u.name.toLowerCase().trim(), u.id]));
+
+  const seen = new Set();
+  const parsed = [];
+  for (let r = head + 1; r < rows.length; r++) {
+    const raw = rows[r] || [];
+    const pick = (col, max) => (map[col] === undefined ? null : str(raw[map[col]], max));
+    const name = pick('system_name', 200);
+    if (!name) continue;                       // blank line, or a spacer row
+
+    const key = name.toLowerCase();
+    const row = {
+      system_name: name,
+      type: pick('type', 120),
+      system_category: pick('system_category', 120),
+      frequency: pick('frequency', 120),
+      hod_name: pick('hod_name', 160),
+      remarks: pick('remarks', 2000),
+      duplicate: existing.has(key) ? 'already registered'
+        : seen.has(key) ? 'repeated in this file' : null,
+    };
+    // If the HOD matches an ERP user by name, link it — otherwise keep the text.
+    row.hod_id = row.hod_name ? (userByName.get(row.hod_name.toLowerCase()) || null) : null;
+    if (!row.duplicate) seen.add(key);
+    parsed.push(row);
+  }
+
+  const importable = parsed.filter((r) => !r.duplicate);
+  const summary = {
+    found: parsed.length,
+    importable: importable.length,
+    duplicates: parsed.filter((r) => r.duplicate).length,
+  };
+
+  if (!commit) return res.json({ ...summary, committed: false, rows: parsed.slice(0, 200) });
+  if (!importable.length) return res.json({ ...summary, committed: true, inserted: 0 });
+  if (importable.length > BULK_MAX_ROWS) {
+    return res.status(413).json({ error: `That sheet holds ${importable.length} new systems — upload at most ${BULK_MAX_ROWS} at a time` });
+  }
+
+  try {
+    const insSys = db.prepare(`
+      INSERT INTO sysflow_systems
+        (uid, system_name, type, system_category, frequency, hod_id, hod_name, remarks, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `);
+    const insStep = db.prepare(`
+      INSERT INTO sysflow_system_steps
+        (system_id, step_no, step_name, owner_label, method, planned_days)
+      VALUES (?,?,?,?,?,?)
+    `);
+    const run = db.transaction((list) => {
+      for (const r of list) {
+        const uid = nextSequence(db, 'sysflow_systems', 'uid', 'SYS-', { startFrom: 0, pad: 4 });
+        const out = insSys.run(uid, r.system_name, r.type, r.system_category, r.frequency,
+                               r.hod_id, r.hod_name, r.remarks, req.user?.id || null);
+        const id = out.lastInsertRowid;
+        for (const s of STEP_TEMPLATE) insStep.run(id, s.step_no, s.step_name, s.owner_label, s.method, s.planned_days);
+        recalcPlanned(db, id);
+        scoreSystem(db, id);
+        log(db, id, null, req.user?.id, 'BULK_CREATE', null, `${uid} · ${r.system_name}`);
+      }
+    });
+    run(importable);
+    console.log(`[system-flow] bulk upload by ${req.user?.name || req.user?.id}: ${importable.length} system(s)`);
+    res.json({ ...summary, committed: true, inserted: importable.length });
+  } catch (e) {
+    console.error('[system-flow] bulk insert failed:', e.message);
+    res.status(500).json({ error: 'Could not save the systems' });
   }
 });
 

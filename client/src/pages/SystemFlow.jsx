@@ -17,7 +17,7 @@ import { exportCsv } from '../utils/exportCsv';
 import Pagination, { usePagination } from '../components/PaginationBar';
 import {
   FiRefreshCw, FiDownload, FiSearch, FiPlus, FiTrash2, FiEdit2,
-  FiCheckCircle, FiClock, FiUpload, FiExternalLink,
+  FiCheckCircle, FiClock, FiUpload, FiExternalLink, FiLock, FiUploadCloud,
 } from 'react-icons/fi';
 
 const M = 'system_flow';
@@ -55,7 +55,7 @@ function Delay({ days }) {
   return <span className="text-slate-500">0d</span>;
 }
 
-function StepCell({ step, tpl, onEdit, canEdit }) {
+function StepCell({ step, tpl, onEdit, canEdit, locked, prevName }) {
   const extra = tpl?.extra;
   const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
   const overdue = !step.actual_date && step.planned_date && step.planned_date < today;
@@ -67,9 +67,13 @@ function StepCell({ step, tpl, onEdit, canEdit }) {
       <td className="px-2 py-1.5 text-xs whitespace-nowrap">
         {step.actual_date
           ? <span className="text-emerald-700">{fmtDate(step.actual_date)}</span>
-          : canEdit
-            ? <button onClick={() => onEdit(step)} className="text-blue-600 hover:underline">mark…</button>
-            : <span className="text-slate-300">—</span>}
+          : locked
+            ? <span className="text-slate-400" title={`Finish ${prevName} first — the steps run in order`}>
+                <FiLock size={10} className="inline -mt-0.5" /> after {prevName}
+              </span>
+            : canEdit
+              ? <button onClick={() => onEdit(step)} className="text-blue-600 hover:underline">mark…</button>
+              : <span className="text-slate-300">—</span>}
       </td>
       <td className="px-2 py-1.5 text-xs whitespace-nowrap"><Delay days={step.time_delay_days} /></td>
       <td className="px-2 py-1.5 text-xs whitespace-nowrap max-w-[150px] truncate">
@@ -112,6 +116,9 @@ export default function SystemFlow() {
   const [editSys, setEditSys] = useState(null);    // system header being edited
   const [editStep, setEditStep] = useState(null);  // { system, step, tpl }
   const [saving, setSaving] = useState(false);
+  // Bulk upload — mam (2026-09-08): "bulk upload". Her register IS a spreadsheet,
+  // so the sheet is the input. Preview first, write only on a second click.
+  const [bulk, setBulk] = useState(null);          // { fileName, file_b64, text, preview }
   const reqSeq = useRef(0);
 
   useEffect(() => { const t = setTimeout(() => setDebounced(search.trim()), 350); return () => clearTimeout(t); }, [search]);
@@ -167,6 +174,40 @@ export default function SystemFlow() {
     return out;
   }, [rows, steps]);
 
+  const runBulk = async (commit) => {
+    if (!bulk?.file_b64 && !bulk?.text?.trim()) { toast.error('Choose a file, or paste the rows first'); return; }
+    setSaving(true);
+    try {
+      const r = await api.post('/system-flow/bulk', {
+        file_b64: bulk.file_b64 || undefined, text: bulk.text || undefined, commit,
+      });
+      if (commit) {
+        toast.success(`${r.data.inserted} system${r.data.inserted === 1 ? '' : 's'} registered`);
+        setBulk(null);
+        load();
+      } else {
+        setBulk({ ...bulk, preview: r.data });
+        if (!r.data.found) toast('No rows with a system name were found');
+      }
+    } catch (e) { toast.error(e?.response?.data?.error || 'Could not read that file'); }
+    finally { setSaving(false); }
+  };
+
+  const readBulkFile = (file) => {
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) { toast.error('That file is larger than 8 MB'); return; }
+    const fr = new FileReader();
+    fr.onload = () => {
+      // base64 of the raw bytes — the server reads .xlsx, .xls and .csv alike.
+      const b = new Uint8Array(fr.result);
+      let bin = '';
+      for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+      setBulk({ fileName: file.name, file_b64: btoa(bin), text: '', preview: null });
+    };
+    fr.onerror = () => toast.error('Could not read that file');
+    fr.readAsArrayBuffer(file);
+  };
+
   const submitCreate = async () => {
     if (!create.system_name?.trim()) { toast.error('System name is required'); return; }
     setSaving(true);
@@ -215,6 +256,8 @@ export default function SystemFlow() {
     if (!perms.edit) return;
     setEditStep({
       system: sys, step, tpl: tplOf(step.step_no),
+      locked: (() => { const prev = sys.steps.find((x) => x.step_no === step.step_no - 1); return !!prev && !prev.actual_date; })(),
+      prevName: (sys.steps.find((x) => x.step_no === step.step_no - 1) || {}).step_name || '',
       draft: {
         system_id: sys.id, step_no: step.step_no,
         actual_date: step.actual_date || '',
@@ -287,6 +330,12 @@ export default function SystemFlow() {
           <button onClick={exportRows} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5">
             <FiDownload size={14} /> Export
           </button>
+          {perms.create && (
+            <button onClick={() => setBulk({ fileName: '', file_b64: '', text: '', preview: null })}
+                    className="px-3 py-1.5 text-sm border rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5">
+              <FiUploadCloud size={14} /> Bulk upload
+            </button>
+          )}
           {perms.create && (
             <button onClick={() => setCreate({ system_name: '', type: '', system_category: '', frequency: '', hod_id: '', hod_name: '', remarks: '' })}
                     className="px-3 py-1.5 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 inline-flex items-center gap-1.5">
@@ -400,7 +449,11 @@ export default function SystemFlow() {
                   {shownSteps.map((t) => {
                     const s = r.steps.find((x) => x.step_no === t.step_no)
                       || { step_no: t.step_no, planned_days: t.planned_days };
-                    return <StepCell key={t.step_no} step={s} tpl={t} canEdit={perms.edit} onEdit={() => openStep(r, s)} />;
+                    const prev = r.steps.find((x) => x.step_no === t.step_no - 1);
+                    return <StepCell key={t.step_no} step={s} tpl={t} canEdit={perms.edit}
+                                     locked={!!prev && !prev.actual_date}
+                                     prevName={prev ? prev.step_name : ''}
+                                     onEdit={() => openStep(r, s)} />;
                   })}
                   <td className="px-2 py-1.5 text-right whitespace-nowrap">
                     {perms.edit && (
@@ -466,6 +519,92 @@ export default function SystemFlow() {
         )}
         <Pagination {...pager} />
       </div>
+
+      {/* Bulk upload — register many systems straight from the sheet */}
+      <Modal isOpen={!!bulk} onClose={() => setBulk(null)} title="Bulk upload systems" xwide>
+        {bulk && (
+          <div className="space-y-3">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
+              Upload your register as it is — <b>.xlsx</b>, <b>.xls</b> or <b>.csv</b>.
+              The sheet needs a header row with <b>System Name</b>; <b>Type</b>,
+              <b> System Category</b>, <b>Frequency</b> and <b>HOD's Name</b> are used when present.
+              <div className="mt-1 text-blue-800">
+                UID and Timestamp are ignored — the ERP issues those, so re-uploading the same
+                sheet cannot overwrite a system that already exists. The four steps are created
+                for every row. An HOD whose name matches an ERP user is linked to them.
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input type="file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                     onChange={(e) => readBulkFile(e.target.files?.[0])}
+                     className="text-xs file:mr-2 file:px-3 file:py-1.5 file:rounded-lg file:border file:border-slate-300 file:bg-white file:text-sm" />
+              {bulk.fileName && <span className="text-xs text-slate-600">{bulk.fileName}</span>}
+            </div>
+
+            <div className="text-xs text-slate-500">…or paste rows (comma separated, first line the headers):</div>
+            <textarea rows={4} value={bulk.text}
+                      onChange={(e) => setBulk({ ...bulk, text: e.target.value, file_b64: '', fileName: '', preview: null })}
+                      placeholder={'System Name,Type,System Category,Frequency,HOD\'s Name\nDaily DPR review,Process,Projects,Daily,Ankur Kaplesh'}
+                      className="w-full border rounded-lg px-3 py-2 text-xs font-mono" />
+
+            {bulk.preview && (
+              <div className="border rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-slate-50 border-b text-xs flex flex-wrap gap-x-4">
+                  <span><b>{bulk.preview.found}</b> row{bulk.preview.found === 1 ? '' : 's'} found</span>
+                  <span className="text-emerald-700"><b>{bulk.preview.importable}</b> new</span>
+                  <span className="text-amber-700"><b>{bulk.preview.duplicates}</b> already there</span>
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-white sticky top-0">
+                      <tr className="text-left text-slate-500 border-b">
+                        <th className="px-2 py-1.5 font-semibold">System name</th>
+                        <th className="px-2 py-1.5 font-semibold">Type</th>
+                        <th className="px-2 py-1.5 font-semibold">Category</th>
+                        <th className="px-2 py-1.5 font-semibold">Frequency</th>
+                        <th className="px-2 py-1.5 font-semibold">HOD</th>
+                        <th className="px-2 py-1.5 font-semibold">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(bulk.preview.rows || []).map((r, i) => (
+                        <tr key={i} className={`border-b last:border-0 ${r.duplicate ? 'bg-slate-50 text-slate-400' : ''}`}>
+                          <td className="px-2 py-1.5 font-semibold">{r.system_name}</td>
+                          <td className="px-2 py-1.5">{r.type || '—'}</td>
+                          <td className="px-2 py-1.5">{r.system_category || '—'}</td>
+                          <td className="px-2 py-1.5">{r.frequency || '—'}</td>
+                          <td className="px-2 py-1.5">
+                            {r.hod_name || '—'}
+                            {r.hod_id && <span className="text-emerald-600" title="matched to an ERP user"> ✓</span>}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            {r.duplicate
+                              ? <span className="text-amber-700">{r.duplicate}</span>
+                              : <span className="text-emerald-700 font-semibold">will be registered</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-2 pt-1">
+              <button onClick={() => setBulk(null)} className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50">Cancel</button>
+              <button onClick={() => runBulk(false)} disabled={saving || (!bulk.file_b64 && !bulk.text.trim())}
+                      className="px-4 py-2 text-sm border rounded-lg hover:bg-slate-50 disabled:opacity-50">
+                {saving && !bulk.preview ? 'Reading…' : 'Check the sheet'}
+              </button>
+              <button onClick={() => runBulk(true)} disabled={saving || !bulk.preview || !bulk.preview.importable}
+                      className="px-4 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {bulk.preview ? `Register ${bulk.preview.importable} system${bulk.preview.importable === 1 ? '' : 's'}` : 'Register'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Create System — the sheet's photo 4 */}
       <Modal isOpen={!!create} onClose={() => setCreate(null)} title="Create System">
@@ -590,9 +729,14 @@ export default function SystemFlow() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Actual date</label>
-                <input type="date" value={editStep.draft.actual_date}
+                <input type="date" value={editStep.draft.actual_date} disabled={editStep.locked}
                        onChange={(e) => setEditStep({ ...editStep, draft: { ...editStep.draft, actual_date: e.target.value } })}
-                       className="w-full border rounded-lg px-3 py-2 text-sm" />
+                       className="w-full border rounded-lg px-3 py-2 text-sm disabled:bg-slate-100 disabled:text-slate-400" />
+                {editStep.locked && (
+                  <p className="text-[11px] text-amber-700 mt-1 inline-flex items-center gap-1">
+                    <FiLock size={10} /> Finish {editStep.prevName} first — the steps run in order.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Planned days</label>
