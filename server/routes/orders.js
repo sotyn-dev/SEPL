@@ -50,6 +50,65 @@ function nullReferencers(db, targetTable, ids) {
   return { referencers, errors };
 }
 
+// Everything currently pointing at `ids`, captured BEFORE they are nulled so the
+// links can be put back once the rows are re-inserted. Without this, saving a PO's
+// line items silently severs every DPR, indent and planning row attached to that
+// order — and installation billing then has nothing but the BOQ description text
+// to find the contracted SITC rate with (mam 2026-09-09).
+function captureReferrers(db, targetTable, ids) {
+  const out = [];
+  if (!ids || !ids.length) return out;
+  const ph = ids.map(() => '?').join(',');
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name);
+  for (const t of tables) {
+    let fks = [];
+    try { fks = db.prepare(`PRAGMA foreign_key_list(${t})`).all(); } catch (_) { continue; }
+    for (const fk of fks) {
+      if (fk.table !== targetTable) continue;
+      try {
+        const rows = db.prepare(`SELECT rowid AS rid, ${fk.from} AS ref FROM ${t} WHERE ${fk.from} IN (${ph})`).all(...ids);
+        for (const row of rows) out.push({ table: t, column: fk.from, rid: row.rid, oldId: row.ref });
+      } catch (e) { console.warn(`[captureReferrers] ${t}.${fk.from}:`, e.message); }
+    }
+  }
+  return out;
+}
+
+// Re-point the captured references at the rows that replaced them, matching on
+// the BOQ description. Identical descriptions are paired in their original order,
+// so a BOQ with repeated lines still lands one-for-one. A line whose description
+// was edited in the same save has no counterpart and is left unlinked — reported,
+// never guessed onto the wrong item.
+function restoreReferrers(db, saved, oldById, newRows) {
+  if (!saved.length) return { restored: 0, orphaned: 0 };
+  const key = (d) => String(d || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const pools = new Map();
+  for (const r of newRows) {
+    const k = key(r.description);
+    if (!pools.has(k)) pools.set(k, []);
+    pools.get(k).push(r.id);
+  }
+  const taken = new Map();
+  const mapFor = (oldId) => {
+    if (taken.has(oldId)) return taken.get(oldId);
+    const k = oldById.get(oldId);
+    const pool = k !== undefined ? pools.get(k) : null;
+    const newId = pool && pool.length ? pool.shift() : null;
+    taken.set(oldId, newId);
+    return newId;
+  };
+  let restored = 0, orphaned = 0;
+  for (const ref of saved) {
+    const newId = mapFor(ref.oldId);
+    if (!newId) { orphaned++; continue; }
+    try {
+      db.prepare(`UPDATE ${ref.table} SET ${ref.column}=? WHERE rowid=?`).run(newId, ref.rid);
+      restored++;
+    } catch (e) { console.warn(`[restoreReferrers] ${ref.table}.${ref.column}:`, e.message); }
+  }
+  return { restored, orphaned };
+}
+
 // Count how many rows still reference `ids` across the given referencers —
 // used to build a precise diagnostic when a DELETE still fails after a
 // null-out pass. Returns `{ "table.col": N, ... }` for non-zero counts only.
@@ -638,6 +697,15 @@ router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => 
      WHERE po_id = ?
         OR (po_id IS NULL AND business_book_id = ?)
   `).all(poId, bbId).map(r => r.id);
+  // What the old rows are, and what points at them — both needed to put the links
+  // back after the delete-and-reinsert below.
+  const oldById = new Map(
+    db.prepare(`SELECT id, description FROM po_items WHERE po_id = ? OR (po_id IS NULL AND business_book_id = ?)`)
+      .all(poId, bbId)
+      .map(r => [r.id, String(r.description || '').toLowerCase().replace(/\s+/g, ' ').trim()])
+  );
+  const savedRefs = captureReferrers(db, 'po_items', poItemIds);
+
   if (poItemIds.length) {
     const { referencers, errors: nullErrors } = nullReferencers(db, 'po_items', poItemIds);
     try {
@@ -708,6 +776,20 @@ router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => 
       }
     });
     runInserts();
+
+    // Put the DPR / indent / planning links back onto the rows that replaced the
+    // old ones. Until now they were simply dropped, which is why installation
+    // billing had to fall back to matching BOQ text (mam 2026-09-09).
+    try {
+      const newRows = db.prepare('SELECT id, description FROM po_items WHERE po_id = ? ORDER BY id').all(poId);
+      const { restored, orphaned } = restoreReferrers(db, savedRefs, oldById, newRows);
+      if (restored || orphaned) {
+        console.log(`[PO items save] PO ${poId}: re-linked ${restored} reference(s)`
+          + (orphaned ? ` — ${orphaned} left unlinked (their BOQ line was renamed or removed)` : ''));
+      }
+    } catch (e) {
+      console.error('[PO items save] could not restore references:', e.message);
+    }
     if (errors.length) {
       return res.status(400).json({ error: `Saved ${count} items; ${errors.length} failed`, failures: errors });
     }
