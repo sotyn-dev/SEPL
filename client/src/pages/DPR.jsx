@@ -839,7 +839,24 @@ export default function DPR() {
   };
 
   const createSite = async (e) => { e.preventDefault(); await api.post('/dpr/sites', form); toast.success('Site created'); setSiteModal(false); load(); };
-  const approveDpr = async (id, status, billingReady) => { await api.put(`/dpr/${id}/approve`, { approval_status: status, billing_ready: billingReady }); toast.success(`DPR ${status}`); load(); };
+  const approveDpr = async (id, status, billingReady) => {
+    try {
+      await api.put(`/dpr/${id}/approve`, { approval_status: status, billing_ready: billingReady });
+      toast.success(status === 'rejected' ? 'DPR rejected' : billingReady ? 'DPR approved & marked billable' : 'DPR approved (non-billable)');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to update DPR approval');
+    }
+  };
+  const toggleBillingReady = async (id, currentReady) => {
+    try {
+      await api.put(`/dpr/${id}/approve`, { approval_status: 'approved', billing_ready: !currentReady });
+      toast.success(!currentReady ? 'Marked billable' : 'Marked non-billable');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to update billing status');
+    }
+  };
   const viewDpr = async (id) => {
     setViewStaff(null);
     const { data } = await api.get(`/dpr/${id}`);
@@ -1148,12 +1165,31 @@ export default function DPR() {
                         Variance: <strong>{variance > 0 ? '+' : variance < 0 ? '−' : ''}₹{Math.abs(variance).toLocaleString()}</strong>
                       </div>
                     )}
-                    <div className="flex justify-between items-center pt-1 border-t border-gray-100">
-                      {!planned ? <StatusBadge status={d.approval_status} /> : <span className="text-[10px] text-gray-400">plan template</span>}
-                      <div className="flex gap-1">
+                    <div className="flex justify-between items-center pt-1 border-t border-gray-100 flex-wrap gap-1">
+                      {!planned ? (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <StatusBadge status={d.approval_status} />
+                          {d.approval_status === 'approved' && (
+                            d.sales_bill_id ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold">✓ Billed</span>
+                            ) : canApprove('dpr') ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleBillingReady(d.id, !!d.billing_ready)}
+                                className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${d.billing_ready ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'}`}
+                                title="Click to toggle Billable"
+                              >
+                                {d.billing_ready ? '✓ Billable' : '○ Non-Billable'}
+                              </button>
+                            ) : null
+                          )}
+                        </div>
+                      ) : <span className="text-[10px] text-gray-400">plan template</span>}
+                      <div className="flex gap-1 items-center">
                         <button onClick={() => viewDpr(d.id)} className="p-1 hover:bg-red-50 rounded text-red-600"><FiEye size={14} /></button>
                         {!planned && d.approval_status === 'pending' && canApprove('dpr') && <>
-                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5">Approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark as billable">Approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve DPR without marking as billable">Approve</button>
                           <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
                         </>}
                         {canDelete('dpr') && <button onClick={async () => {
@@ -1210,11 +1246,38 @@ export default function DPR() {
                   <td className={`font-bold text-sm ${variance === null ? '' : (variance > 0 ? 'text-red-600' : variance < 0 ? 'text-emerald-600' : 'text-gray-500')}`}>
                     {variance === null ? <span className="text-gray-300">—</span> : `${variance > 0 ? '+' : variance < 0 ? '−' : ''}Rs ${Math.abs(variance).toLocaleString()}`}
                   </td>
-                  <td>{planned ? <span className="text-gray-300">—</span> : <StatusBadge status={d.approval_status} />}</td>
-                  <td><div className="flex gap-1">
+                  <td>
+                    {planned ? <span className="text-gray-300">—</span> : (
+                      <div className="flex flex-col items-start gap-1">
+                        <StatusBadge status={d.approval_status} />
+                        {d.approval_status === 'approved' && (
+                          d.sales_bill_id ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold" title="Already billed in Installation Bill">
+                              ✓ Billed
+                            </span>
+                          ) : canApprove('dpr') ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleBillingReady(d.id, !!d.billing_ready)}
+                              className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold transition-colors ${d.billing_ready ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                              title="Click to toggle Billable / Non-Billable"
+                            >
+                              {d.billing_ready ? '✓ Billable' : '○ Non-Billable'}
+                            </button>
+                          ) : (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${d.billing_ready ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>
+                              {d.billing_ready ? 'Billable' : 'Non-Billable'}
+                            </span>
+                          )
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  <td><div className="flex gap-1 items-center">
                     <button onClick={() => viewDpr(d.id)} className="p-1 hover:bg-red-50 rounded text-red-600"><FiEye size={14} /></button>
                     {!planned && d.approval_status === 'pending' && canApprove('dpr') && <>
-                      <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5">Approve+Bill</button>
+                      <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark as billable">Approve+Bill</button>
+                      <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve DPR without marking as billable">Approve</button>
                       <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
                     </>}
                     {canDelete('dpr') && <button onClick={async () => {
