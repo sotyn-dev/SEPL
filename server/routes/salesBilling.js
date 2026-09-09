@@ -438,20 +438,66 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
     items = sitcRes.items;
   }
   // Ensure all lines have their FULL SITC rate from the order's BOQ (po_items).
+  //
+  // Matching is deliberately layered. sales_bill_items has NO po_item_id column,
+  // so an already-created bill can only be tied back to the order through its
+  // description — and a line written as "Point wiring with MS conduit (1st floor)"
+  // does not equal the BOQ's "Point wiring with MS conduit". Before this, such a
+  // line silently kept the 11% labour rate and printed on a CLIENT INVOICE at
+  // roughly a ninth of its value (mam 2026-09-09: "previous rate also correct in
+  // pdf in here"; reproduced with that exact suffix case).
   if (bill.business_book_id) {
     const poById = new Map();
     const poByDesc = new Map();
+    const poList = [];
     for (const p of db.prepare('SELECT id, description, rate, unit, hsn_code FROM po_items WHERE business_book_id=?').all(bill.business_book_id)) {
       if (+p.rate > 0) {
+        poList.push(p);
         if (p.id) poById.set(p.id, p);
         if (p.description) poByDesc.set(String(p.description).toLowerCase().trim(), p);
       }
     }
+
+    // The DPRs this bill was generated from DO carry po_item_id, which is the
+    // authoritative link. Use it to resolve lines whose text has drifted.
+    const dprRateByDesc = new Map();
+    try {
+      for (const w of db.prepare(
+        `SELECT wi.description, p.rate, p.description AS po_desc, p.unit, p.hsn_code
+           FROM dpr_work_items wi
+           JOIN dpr d ON d.id = wi.dpr_id
+           JOIN po_items p ON p.id = wi.po_item_id
+          WHERE d.sales_bill_id = ? AND p.rate > 0`
+      ).all(bill.id)) {
+        dprRateByDesc.set(String(w.description || '').toLowerCase().trim(), w);
+      }
+    } catch (_) { /* older bills may have no linked DPRs — fall through */ }
+
+    const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    // A BOQ line whose text is contained in the bill line (or vice versa), and
+    // ONLY when exactly one candidate matches — an ambiguous guess on an invoice
+    // is worse than leaving the number alone.
+    const looseMatch = (desc) => {
+      const d = norm(desc);
+      if (!d) return null;
+      const hits = poList.filter(p => {
+        const pd = norm(p.description);
+        return pd && (d.startsWith(pd) || pd.startsWith(d) || d.includes(pd));
+      });
+      return hits.length === 1 ? hits[0] : null;
+    };
+
+    const unresolved = [];
     items = items.map(it => {
-      const match = (it.po_item_id && poById.get(it.po_item_id)) || poByDesc.get(String(it.description || '').toLowerCase().trim());
+      const key = norm(it.description);
+      const match = (it.po_item_id && poById.get(it.po_item_id))
+        || poByDesc.get(key)
+        || dprRateByDesc.get(key)
+        || looseMatch(it.description);
       const boqRate = match ? +match.rate : 0;
       let r = boqRate > 0 ? boqRate : +it.rate;
       if (!r && +it.rate > 0) r = round2(+it.rate / 0.11);
+      if (!boqRate && +it.rate > 0) unresolved.push(it.description);
       const qty = +it.qty_delivered || +it.qty_ordered || 0;
       return {
         ...it,
@@ -462,6 +508,14 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
         amount: round2(qty * r)
       };
     });
+
+    // Say so loudly rather than printing a number nobody can account for. A line
+    // that never resolved keeps whatever rate it was stored with, which for an
+    // old Type 3 bill is the 11% labour rate.
+    if (unresolved.length) {
+      console.warn(`[sales-billing] bill ${bill.bill_number}: ${unresolved.length} line(s) have no matching BOQ item on order ${bill.business_book_id} `
+        + `and printed at their stored rate — ${unresolved.slice(0, 3).map(d => JSON.stringify(d)).join(', ')}`);
+    }
   }
 
   const itemsSum = round2(items.reduce((s, it) => s + (+it.amount || 0), 0));
