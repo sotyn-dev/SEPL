@@ -1738,7 +1738,28 @@ router.post('/', (req, res) => {
   // (mam, 2026-05-16: "actual per day according to that").  Otherwise
   // INSERT a fresh row.  Either way, dprId is the row we just wrote.
   let dprId;
-  const existing = db.prepare(`SELECT id, is_planned_template, site_photos FROM dpr WHERE site_id = ? AND report_date = ?`).get(site_id, report_date);
+  const existing = db.prepare(`SELECT id, is_planned_template, site_photos, approval_status, billing_ready, sales_bill_id
+                                 FROM dpr WHERE site_id = ? AND report_date = ?`).get(site_id, report_date);
+
+  // Editing an APPROVED DPR sends it back for approval (mam 2026-09-09: "admin
+  // can back edit data change and rejected also again reapprove"). Until now a
+  // resubmit silently overwrote the figures and left the row marked approved —
+  // so an approval could end up standing over numbers nobody had approved.
+  //
+  // A DPR already on a client bill is not overwritten at all without a
+  // deliberate confirmation: the invoice was raised off these figures.
+  let reopened = false;
+  if (existing && !existing.is_planned_template && existing.approval_status === 'approved') {
+    if (existing.sales_bill_id && req.body.force !== true) {
+      const bill = db.prepare('SELECT bill_number FROM sales_bills WHERE id=?').get(existing.sales_bill_id);
+      return res.status(409).json({
+        error: `This DPR is already billed on ${bill?.bill_number || 'a sales bill'}. Editing it changes what the client was invoiced — confirm to continue.`,
+        needs_force: true,
+        bill_number: bill?.bill_number || null,
+      });
+    }
+    reopened = true;
+  }
   // Multi-shift photo MERGE: evening's photos join morning's instead of
   // replacing them (union, capped at 30).
   if (existing && sitePhotosJson) {
@@ -1759,7 +1780,11 @@ router.post('/', (req, res) => {
         is_planned_template = 0,
         -- Rates sent by the app are already the labour portion (11% of SITC),
         -- so flag this DPR as converted — the labour-pct backfill skips it.
-        labour_pct_applied = 1
+        labour_pct_applied = 1,
+        -- Edited after approval? Then the approval no longer describes this
+        -- data, so it goes back in the queue (mam 2026-09-09).
+        approval_status = CASE WHEN ? = 1 THEN 'pending' ELSE approval_status END,
+        billing_ready   = CASE WHEN ? = 1 THEN 0 ELSE billing_ready END
       WHERE id = ?`)
       .run(req.user.id, weather || 'clear', overall_status || 'on_track',
         shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
@@ -1767,8 +1792,13 @@ router.post('/', (req, res) => {
         floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
         safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks,
         sitePhotosJson,
+        reopened ? 1 : 0, reopened ? 1 : 0,
         existing.id);
     dprId = existing.id;
+    if (reopened) {
+      console.log(`[dpr] ${req.user?.name || req.user?.id} edited approved DPR ${existing.id}`
+        + ` (${report_date}) — sent back to pending for re-approval`);
+    }
     // Resubmit hygiene (audit 2026-07-31) + three-shift additive (mam
     // 2026-08-03): clear only THIS SHIFT's previous rows — morning's data
     // survives the evening submit, evening's survives night's. Plan-week
@@ -2552,12 +2582,49 @@ router.get('/:id', (req, res) => {
 
 // Approve/Reject DPR — requires can_approve on the dpr module.
 // Site Engineers can only submit DPRs; admin / billing engineers approve.
+// Mam (2026-09-09): "admin can back edit data change and rejected also again
+// reapprove like something". The decision is no longer one-way — an approved DPR
+// can be rejected or reopened, and a rejected one re-approved.
+//
+// Two things this endpoint has to protect, because a DPR is money:
+//   • the status is now VALIDATED. It used to write whatever arrived, so a typo
+//     could park a DPR in a state no screen filters for.
+//   • a DPR already pulled into a client sales bill is NOT quietly unapproved.
+//     The bill was raised off these figures; changing them underneath it needs a
+//     deliberate act, so it takes force:true and is logged.
+const DPR_STATUSES = ['pending', 'approved', 'rejected'];
+
 router.put('/:id/approve', requirePermission('dpr', 'approve'), (req, res) => {
-  const { approval_status, billing_ready } = req.body;
+  const { approval_status, billing_ready, reason } = req.body;
   const db = getDb();
+
+  if (!DPR_STATUSES.includes(approval_status)) {
+    return res.status(400).json({ error: `Status must be one of: ${DPR_STATUSES.join(', ')}` });
+  }
+  const cur = db.prepare('SELECT id, approval_status, billing_ready, sales_bill_id, report_date FROM dpr WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'DPR not found' });
+
+  // Already invoiced? Then walking it back changes what a client was billed.
+  const leavingApproved = cur.approval_status === 'approved' && approval_status !== 'approved';
+  if (cur.sales_bill_id && (leavingApproved || (cur.billing_ready && !billing_ready))) {
+    if (req.body.force !== true) {
+      const bill = db.prepare('SELECT bill_number FROM sales_bills WHERE id=?').get(cur.sales_bill_id);
+      return res.status(409).json({
+        error: `This DPR is already billed on ${bill?.bill_number || 'a sales bill'}. Reopening it changes what the client was invoiced — confirm to continue.`,
+        needs_force: true,
+        bill_number: bill?.bill_number || null,
+      });
+    }
+    console.warn(`[dpr] ${req.user?.name || req.user?.id} forced a BILLED DPR ${cur.id} (${cur.report_date}) from `
+      + `${cur.approval_status} to ${approval_status}${reason ? ` — ${String(reason).slice(0, 200)}` : ''}`);
+  }
+
+  // Anything that is not an approval cannot stay billable.
+  const nextBillingReady = approval_status === 'approved' ? (billing_ready ? 1 : 0) : 0;
+
   db.prepare('UPDATE dpr SET approval_status=?, billing_ready=?, approved_by=? WHERE id=?')
-    .run(approval_status, billing_ready ? 1 : 0, req.user.id, req.params.id);
-  if (billing_ready) {
+    .run(approval_status, nextBillingReady, req.user.id, req.params.id);
+  if (nextBillingReady) {                  // the EFFECTIVE flag, not the requested one
     const dpr = db.prepare('SELECT d.*, s.client_name, s.name as site_name FROM dpr d JOIN sites s ON d.site_id=s.id WHERE d.id=?').get(req.params.id);
     if (dpr?.client_name) {
       const existing = db.prepare('SELECT id FROM receivables WHERE client_name=? AND project_name=? AND invoice_date=?').get(dpr.client_name, dpr.site_name, dpr.report_date);
