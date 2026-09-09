@@ -839,10 +839,14 @@ export default function DPR() {
   };
 
   const createSite = async (e) => { e.preventDefault(); await api.post('/dpr/sites', form); toast.success('Site created'); setSiteModal(false); load(); };
-  const approveDpr = async (id, status, billingReady) => {
+  // A DPR already on a client bill is not reopened silently: the server replies
+  // 409 needs_force, we name the bill, and only an explicit yes goes through.
+  const approveDpr = async (id, status, billingReady, force = false) => {
     try {
-      await api.put(`/dpr/${id}/approve`, { approval_status: status, billing_ready: billingReady });
-      toast.success(status === 'rejected' ? 'DPR rejected' : billingReady ? 'DPR approved & marked billable' : 'DPR approved (non-billable)');
+      await api.put(`/dpr/${id}/approve`, { approval_status: status, billing_ready: billingReady, force });
+      toast.success(status === 'rejected' ? 'DPR rejected'
+        : status === 'pending' ? 'DPR reopened — it needs approving again'
+        : billingReady ? 'DPR approved & marked billable' : 'DPR approved (non-billable)');
       load();
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed to update DPR approval');
@@ -1192,6 +1196,16 @@ export default function DPR() {
                           <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve DPR without marking as billable">Approve</button>
                           <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
                         </>}
+                        {/* An approved or rejected DPR is no longer a dead end (mam 2026-09-09:
+                            "admin can back edit data change and rejected also again reapprove"). */}
+                        {!planned && d.approval_status === 'approved' && canApprove('dpr') && <>
+                          <button onClick={() => approveDpr(d.id, 'pending', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Send back for changes — it will need approving again">Reopen</button>
+                          <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5" title="Reject this approved DPR">Reject</button>
+                        </>}
+                        {!planned && d.approval_status === 'rejected' && canApprove('dpr') && <>
+                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark billable">Re-approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve without marking billable">Re-approve</button>
+                        </>}
                         {canDelete('dpr') && <button onClick={async () => {
                           if (!confirm(`Delete DPR for "${d.site_name}" on ${d.report_date}?`)) return;
                           try { await api.delete(`/dpr/${d.id}`); toast.success('Deleted'); load(); }
@@ -1279,6 +1293,16 @@ export default function DPR() {
                       <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark as billable">Approve+Bill</button>
                       <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve DPR without marking as billable">Approve</button>
                       <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
+                    </>}
+                    {/* An approved or rejected DPR is no longer a dead end (mam 2026-09-09:
+                        "admin can back edit data change and rejected also again reapprove"). */}
+                    {!planned && d.approval_status === 'approved' && canApprove('dpr') && <>
+                      <button onClick={() => approveDpr(d.id, 'pending', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Send back for changes — it will need approving again">Reopen</button>
+                      <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5" title="Reject this approved DPR">Reject</button>
+                    </>}
+                    {!planned && d.approval_status === 'rejected' && canApprove('dpr') && <>
+                      <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark billable">Re-approve+Bill</button>
+                      <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve without marking billable">Re-approve</button>
                     </>}
                     {canDelete('dpr') && <button onClick={async () => {
                       if (!confirm(`Delete DPR for "${d.site_name}" on ${d.report_date}?`)) return;
