@@ -15,20 +15,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/Pagination';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
 
-// How many rows we ADD to the DOM each time the user scrolls near the bottom
-// of the table box. This is render-only chunking, NOT pagination: the whole
-// filtered list stays in memory (and drives the summary cards + export) — we
-// just don't mount 200+ <tr>s, each with two thumbnails, up front.
-const CHUNK = 50;
-// Start mounting the next chunk this far before the last row scrolls into
-// view, so rows are ready by the time the user gets to them.
-const PREFETCH_PX = 400;
+const PAGE_SIZE = 15;
 
 const STATUS_PILL = {
   open: 'bg-amber-100 text-amber-700',
@@ -66,11 +60,8 @@ export default function Snags() {
   const [form, setForm] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [uploading, setUploading] = useState(false);
-  // Rows currently mounted. Grows by CHUNK as the user scrolls; reset back to
-  // one chunk whenever the list itself changes (new filter/search result).
-  const [visibleCount, setVisibleCount] = useState(CHUNK);
+  const [page, setPage] = useState(1);
   const scrollBoxRef = useRef(null);   // the table's own overflow container
-  const [lastRowEl, setLastRowEl] = useState(null); // last mounted <tr>
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -93,32 +84,14 @@ export default function Snags() {
     return s;
   }, [snags]);
 
-  // ─── Scroll-in rendering ────────────────────────────────────────────
-  // Search / status / priority / site / scope all run SERVER-side (see load
-  // above), so `snags` is always the complete matching set — every filter
-  // still searches the whole list, not just what's on screen. All this does
-  // is meter how much of that set is in the DOM at once.
-  const visibleRows = useMemo(() => snags.slice(0, visibleCount), [snags, visibleCount]);
-  const hasMore = visibleCount < snags.length;
-  // A fresh result set from a FILTER change starts from the top again.
-  // Deliberately NOT keyed on `snags`: saving an edit reloads the list too,
-  // and resetting scroll there yanked the table back to row 1 — a different
-  // snag's number landed where the user was looking, which read as "editing
-  // changed the snag no" (mam 2026-08-31). Edits now keep scroll position.
-  useEffect(() => { setVisibleCount(CHUNK); scrollBoxRef.current?.scrollTo({ top: 0 }); }, [filters]);
-
-  // Watch the last mounted row; when it nears the bottom of the scroll box,
-  // mount the next chunk. Runs as an effect (not a ref callback) so
-  // scrollBoxRef is guaranteed to be attached before the observer is built.
+  // Only the table is paginated; summary cards and export use all matches.
+  const pg = usePagination(snags, PAGE_SIZE, page, setPage);
+  useEffect(() => { setPage(1); }, [filters]);
+  // Keep edits on their current page; clamp after deleting the last row.
+  useEffect(() => { setPage(pg.page); }, [pg.page]);
   useEffect(() => {
-    if (!lastRowEl || !hasMore) return;
-    const io = new IntersectionObserver(
-      entries => { if (entries[0].isIntersecting) setVisibleCount(c => Math.min(c + CHUNK, snags.length)); },
-      { root: scrollBoxRef.current, rootMargin: `0px 0px ${PREFETCH_PX}px 0px` },
-    );
-    io.observe(lastRowEl);
-    return () => io.disconnect();
-  }, [lastRowEl, hasMore, snags.length]);
+    scrollBoxRef.current?.scrollTo({ top: 0 });
+  }, [pg.page, filters]);
 
   // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
   // photos embedded. CSV can't carry images, so this hits the server which
@@ -344,8 +317,8 @@ export default function Snags() {
             {snags.length === 0 && (
               <tr><td colSpan="11" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
             )}
-            {visibleRows.map((s, i) => (
-              <tr key={s.id} ref={i === visibleRows.length - 1 ? setLastRowEl : undefined}>
+            {pg.rows.map(s => (
+              <tr key={s.id}>
                 <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
                 <td className="text-xs">
                   <div>{s.raised_at ? fmtDate(s.raised_at) : '—'}</div>
@@ -405,6 +378,7 @@ export default function Snags() {
           </tbody>
         </table>
         </div>
+        <Pagination pg={pg} />
       </div>
 
       {/* RAISE / EDIT MODAL */}
