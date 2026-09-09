@@ -56,6 +56,10 @@ function poMatches(p, q) {
   return hay.includes(needle);
 }
 
+// Units a BOQ line can carry. A unit arriving from an imported sheet that is
+// not in this list is still shown as itself rather than being replaced.
+const UNIT_OPTIONS = ['Nos', 'nos', 'mtr', 'kg', 'sqm', 'rft', 'set', 'lot', 'pair', 'pc', 'pcs', 'No'];
+
 export default function Orders() {
   const { canDelete } = useAuth();
   const [tab, setTab] = useUrlTab('po');
@@ -711,7 +715,7 @@ export default function Orders() {
                   let Planning own the labour workflow. */}
               {/* Desktop header — hidden on mobile where each row is a stacked card */}
               <div className="hidden md:grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 px-1">
-                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div>Rate (SITC)</div><div title="Purchase Price">PP</div><div>Labour</div><div className="col-span-2">Amount</div><div></div>
+                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div className="col-span-2">Unit</div><div>Rate (SITC)</div><div title="Purchase Price">PP</div><div>Labour</div><div className="col-span-2">Amount</div>
               </div>
               {poItems.map((item, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-start mb-3 md:mb-2 p-2 md:p-0 border md:border-0 border-gray-100 rounded">
@@ -765,10 +769,17 @@ export default function Orders() {
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Qty</div>
                     <input className="input text-sm" type="number" value={item.quantity} onChange={e => updateItem(i, 'quantity', +e.target.value)} />
                   </div>
-                  <div className="col-span-4 md:col-span-1">
+                  <div className="col-span-4 md:col-span-2">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Unit</div>
-                    <select className="select text-sm" value={item.unit} onChange={e => updateItem(i, 'unit', e.target.value)}>
-                      <option>Nos</option><option>nos</option><option>mtr</option><option>kg</option><option>sqm</option><option>rft</option><option>set</option><option>lot</option><option>pair</option><option>pc</option><option>pcs</option><option>No</option>
+                    {/* The BOQ's OWN unit is always offered first. A select whose value
+                        matches no option renders the FIRST one instead, so a sheet importing
+                        "Mtr" or "RMT" displayed "Nos" — and saving wrote that back, silently
+                        changing the unit on the PO (mam 2026-09-09). */}
+                    <select className="select text-sm w-full min-w-0 px-1" title={item.unit || ''}
+                            value={item.unit || ''} onChange={e => updateItem(i, 'unit', e.target.value)}>
+                      {item.unit && !UNIT_OPTIONS.includes(item.unit) && <option value={item.unit}>{item.unit}</option>}
+                      {!item.unit && <option value="">—</option>}
+                      {UNIT_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
                     </select>
                   </div>
                   <div className="col-span-4 md:col-span-1">
