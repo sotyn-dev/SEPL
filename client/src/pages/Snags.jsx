@@ -22,8 +22,6 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
 
-const PAGE_SIZE = 15;
-
 const STATUS_PILL = {
   open: 'bg-amber-100 text-amber-700',
   submitted: 'bg-blue-100 text-blue-700',
@@ -61,6 +59,7 @@ export default function Snags() {
   const [editingId, setEditingId] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(15);
   const scrollBoxRef = useRef(null);   // the table's own overflow container
 
   const load = useCallback(() => {
@@ -85,13 +84,13 @@ export default function Snags() {
   }, [snags]);
 
   // Only the table is paginated; summary cards and export use all matches.
-  const pg = usePagination(snags, PAGE_SIZE, page, setPage);
+  const pg = usePagination(snags, perPage, page, setPage);
   useEffect(() => { setPage(1); }, [filters]);
   // Keep edits on their current page; clamp after deleting the last row.
   useEffect(() => { setPage(pg.page); }, [pg.page]);
   useEffect(() => {
     scrollBoxRef.current?.scrollTo({ top: 0 });
-  }, [pg.page, filters]);
+  }, [pg.page, perPage, filters]);
 
   // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
   // photos embedded. CSV can't carry images, so this hits the server which
@@ -378,8 +377,9 @@ export default function Snags() {
           </tbody>
         </table>
         </div>
-        <Pagination pg={pg} />
       </div>
+
+      <Pagination pg={pg} setPerPage={setPerPage} className="card !px-8 !py-6" />
 
       {/* RAISE / EDIT MODAL */}
       <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); }} title={editingId ? 'Edit Snag' : 'Raise Snag'} wide>
