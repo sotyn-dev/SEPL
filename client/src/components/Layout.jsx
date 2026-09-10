@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
+import ModuleFlowGuide from './ModuleFlowGuide';
+import { flowLabel } from '../utils/moduleFlows';
 import AnnouncementBell from './AnnouncementBell';
 // Mam (2026-05-22): standalone NotificationsBell removed — its
 // functionality is now merged into AnnouncementBell as a second tab,
@@ -569,7 +571,7 @@ export default function Layout() {
   // accordion state untouched.
   const [navSearch, setNavSearch] = useState('');
   const navQuery = navSearch.trim().toLowerCase();
-  const itemMatches = (item) => !navQuery || item.label.toLowerCase().includes(navQuery);
+  const itemMatches = (item) => !navQuery || flowLabel(item.path, item.label).toLowerCase().includes(navQuery);
 
   // ─── Sidebar accordion state ───────────────────────────────────────
   // Each group is collapsible, INITIALLY CLOSED, expand independently
@@ -775,7 +777,7 @@ export default function Layout() {
             <Link to={SIDEBAR_DASHBOARD.path}
               className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === SIDEBAR_DASHBOARD.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
               <SIDEBAR_DASHBOARD.icon size={16} />
-              <span className="truncate">{SIDEBAR_DASHBOARD.label}</span>
+              <span className="truncate">{flowLabel(SIDEBAR_DASHBOARD.path, SIDEBAR_DASHBOARD.label)}</span>
             </Link>
           )}
 
@@ -794,7 +796,7 @@ export default function Layout() {
               <Link key={g.id} to={g.path}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === g.path ? 'bg-white/15 text-white font-semibold' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
                 <g.icon size={16} />
-                <span className="truncate flex-1 text-left">{g.label}</span>
+                <span className="truncate flex-1 text-left">{flowLabel(g.path, g.label)}</span>
               </Link>
             );
             const isOpen = isGroupOpen(g.id);
@@ -818,7 +820,7 @@ export default function Layout() {
                       <Link key={item.path} to={item.path}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
                         <item.icon size={14} />
-                        <span className="truncate">{item.label}</span>
+                        <span className="truncate" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
                       </Link>
                     ))}
                   </div>
@@ -851,7 +853,7 @@ export default function Layout() {
                       <Link key={item.path} to={item.path}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
                         <item.icon size={14} />
-                        <span className="truncate">{item.label}</span>
+                        <span className="truncate" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
                       </Link>
                     ))}
                   </div>
@@ -873,7 +875,7 @@ export default function Layout() {
           <Link to="/site-chat"
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <BiMessageRoundedCheck size={17} className="text-white" />
-            <span className="truncate flex-1">SOTYN Chat</span>
+            <span className="truncate flex-1">{flowLabel('/site-chat', 'SOTYN Chat')}</span>
             {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
           </Link>
           )}
@@ -883,7 +885,7 @@ export default function Layout() {
           <Link to="/sotyn-flow"
             className={`${chatOn ? 'mt-0.5 ' : ''}flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname.startsWith('/sotyn-flow') ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <FiTrello size={17} className="text-white" />
-            <span className="truncate flex-1">SOTYN Flow</span>
+            <span className="truncate flex-1">{flowLabel('/sotyn-flow', 'SOTYN Flow')}</span>
           </Link>
           )}
         </div>
@@ -1143,6 +1145,7 @@ export default function Layout() {
           className="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50"
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
         >
+          <ModuleFlowGuide />
           <Outlet />
           {/* SOTYN.AI credit — shown at the bottom of every page (mam 2026-06-19). */}
           <div className="p-footer mt-6 pt-3 border-t border-slate-200 text-center select-none">
