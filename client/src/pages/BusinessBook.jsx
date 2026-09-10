@@ -375,6 +375,41 @@ export default function BusinessBook() {
   const CAT_PILL = ['bg-blue-50 text-blue-700', 'bg-emerald-50 text-emerald-700', 'bg-purple-50 text-purple-700', 'bg-orange-50 text-orange-700', 'bg-pink-50 text-pink-700', 'bg-cyan-50 text-cyan-700', 'bg-rose-50 text-rose-700', 'bg-teal-50 text-teal-700'];
   const catColor = (c) => { let h = 0; const s = String(c || ''); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return CAT_PILL[h % CAT_PILL.length]; };
 
+  // Every file attached to a lead, as short links in the row (mam 2026-09-10:
+  // "this all files show ... with boq and from order to planning if po upload
+  // show here"). The lead's own uploads first, then the client PO / BOQ
+  // uploaded in Order to Planning. A file uploaded in both places shows once.
+  const LEAD_FILES = [
+    ['po_copy_link', 'PO', 'PO copy'],
+    ['boq_file_link', 'BOQ', 'BOQ file'],
+    ['boq_signed_link', 'BOQ ✓', 'Signed BOQ'],
+    ['tpa_material_link', 'TPA-M', 'TPA material'],
+    ['tpa_material_signed_link', 'TPA-M ✓', 'Signed TPA material'],
+    ['tpa_labour_link', 'TPA-L', 'TPA labour'],
+    ['tpa_labour_signed_link', 'TPA-L ✓', 'Signed TPA labour'],
+    ['final_drawing_link', 'Drawing', 'Final drawing'],
+    ['working_sheet_link', 'Sheet', 'Working sheet'],
+  ];
+  const fileLinksOf = (b) => {
+    const out = [];
+    const seen = new Set();
+    const add = (url, label, title) => {
+      const u = String(url || '').trim();
+      if (!u || seen.has(u)) return;
+      seen.add(u);
+      out.push({ url: u, label, title });
+    };
+    for (const [key, label, title] of LEAD_FILES) add(b[key], label, title);
+    let orderPos = [];
+    try { orderPos = JSON.parse(b.order_po_files || '[]') || []; } catch { orderPos = []; }
+    for (const po of orderPos) {
+      const ref = po.po_number ? ` ${po.po_number}` : '';
+      add(po.po_copy_link, 'Order PO', `Client PO${ref} (Order to Planning)`);
+      add(po.boq_file_link, 'Order BOQ', `PO BOQ${ref} (Order to Planning)`);
+    }
+    return out;
+  };
+
   const renderLeadRow = (b, child = false) => (
     <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-blue-50/40'}`}>
       {/* Lead No + Type */}
@@ -410,10 +445,22 @@ export default function BusinessBook() {
       <td className="px-3 py-1.5 align-top">
         <div className="flex items-center justify-center gap-0.5">
           <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="View"><FiEye size={15} /></button>
-          {b.boq_file_link && <a href={b.boq_file_link} target="_blank" rel="noreferrer" className="px-1.5 py-1 text-indigo-600 hover:bg-indigo-50 rounded-md text-[10px] font-bold transition-colors" title="View attached BOQ file">BOQ</a>}
           {canEdit('business_book') && <button onClick={() => handleEdit(b)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-md transition-colors" title="Edit"><FiEdit2 size={15} /></button>}
           {canDelete('business_book') && <button onClick={() => handleDelete(b.id, b.lead_no)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" title="Delete"><FiTrash2 size={15} /></button>}
         </div>
+        {(() => {
+          const files = fileLinksOf(b);
+          return files.length > 0 && (
+            <div className="mt-1 flex flex-wrap justify-center gap-1 max-w-[180px] mx-auto">
+              {files.map(f => (
+                <a key={f.url} href={f.url} target="_blank" rel="noreferrer" title={`View ${f.title}`}
+                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold whitespace-nowrap transition-colors ${f.label.startsWith('Order') ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100' : 'text-indigo-600 bg-indigo-50/60 hover:bg-indigo-100'}`}>
+                  {f.label}
+                </a>
+              ))}
+            </div>
+          );
+        })()}
       </td>
     </tr>
   );
