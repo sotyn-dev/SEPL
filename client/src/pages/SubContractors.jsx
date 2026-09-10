@@ -7,6 +7,7 @@ import { FiPlus, FiEdit2, FiTrash2, FiPhone, FiMapPin, FiDownload } from 'react-
 import { exportCsv } from '../utils/exportCsv';
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE, CONTRACTOR_TYPES } from '../data/indiaLocations';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 // Sub-Contractor master list. Mirrors mam's Google Form 1:1 (Name, Contact,
 // Location, Type, Experience, Manpower, Tools Y/N, GST Y/N, Rate, Days to
@@ -47,6 +48,7 @@ export default function SubContractors() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [filter.q, filter.state, filter.contractor_type, filter.active]);
+  const pager = usePagination(rows);
 
   const openAdd = () => { setEditing(null); setForm(blankForm()); setModal(true); };
   const openEdit = (row) => {
@@ -130,7 +132,9 @@ export default function SubContractors() {
         <div className="flex gap-2">
           <button onClick={() => exportCsv('sub-contractors',
             ['Name','Type','Contact','District','State','Experience','Manpower','Tools','GST','Rate','Status'],
-            rows.map(c => [c.name, c.contractor_type, c.contact_number, c.district, c.state, c.experience_years, c.manpower_strength, c.tools_owned, c.gst_number, c.rate_vs_budget, c.status]))}
+            rows.map(c => [c.name, c.contractor_type, c.phone, c.district, c.state, c.experience_years, c.manpower,
+              c.with_tools ? 'Yes' : 'No', c.has_gst ? (c.gst_number || 'Yes') : 'No', c.rate_in_budget,
+              c.active ? 'Active' : 'Inactive']))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           <button onClick={openAdd} className="btn btn-primary flex items-center gap-2">
             <FiPlus /> Add Sub-Contractor
@@ -175,7 +179,7 @@ export default function SubContractors() {
                 No sub-contractors yet. Click <b>+ Add Sub-Contractor</b> to add one.
               </td></tr>
             )}
-            {rows.map(r => (
+            {pager.pageItems.map(r => (
               <tr key={r.id}>
                 <td className="font-medium">{r.name}</td>
                 <td><span className="px-2 py-0.5 text-xs bg-gray-100 rounded">{r.contractor_type || '-'}</span></td>
@@ -207,6 +211,7 @@ export default function SubContractors() {
             ))}
           </tbody>
         </table>
+        <Pagination {...pager} />
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Sub-Contractor' : 'Add Sub-Contractor'} wide>

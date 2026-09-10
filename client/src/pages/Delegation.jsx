@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -51,6 +52,12 @@ export default function Delegation() {
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [submitModal, setSubmitModal] = useState(null); // task being submitted
+  // Which task's proof modal is actually open right now, checked before an
+  // in-flight upload is allowed to write into submitForm. Without this: open
+  // task A's modal, start uploading, cancel and open task B's modal before
+  // A's upload finishes — A's photo silently lands as B's "ready to submit"
+  // proof (mam 2026-08-24, reported as "sometimes wrong upload").
+  const submitModalIdRef = useRef(null);
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
@@ -288,6 +295,12 @@ export default function Delegation() {
 
   // Upload proof file then submit
   const uploadProof = async (file) => {
+    // The task this upload was started for. Uploads take a few seconds
+    // (compress + send) — if the user closes this modal or opens a
+    // DIFFERENT task's proof modal before it finishes, submitModalIdRef
+    // will have moved on by the time we get here, and we must NOT let this
+    // stale result land in whatever's open now.
+    const forId = submitModalIdRef.current;
     setSubmitForm(s => ({ ...s, uploading: true }));
     setProofPct(0);
     try {
@@ -302,10 +315,15 @@ export default function Delegation() {
           if (ev.total) setProofPct(Math.round((ev.loaded / ev.total) * 100));
         },
       });
+      if (submitModalIdRef.current !== forId) {
+        toast('That upload finished after you switched tasks — please upload again here.', { icon: '⚠️' });
+        return;
+      }
       setSubmitForm(s => ({ ...s, proof_url: res.data.url, uploading: false }));
       setProofPct(100);
       toast.success('File uploaded — click Submit');
     } catch {
+      if (submitModalIdRef.current !== forId) return;
       toast.error('Upload failed');
       setSubmitForm(s => ({ ...s, uploading: false }));
     } finally {
@@ -323,7 +341,7 @@ export default function Delegation() {
         proof_remarks: submitForm.proof_remarks,
       });
       toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
+      setSubmitModal(null); submitModalIdRef.current = null; setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -410,6 +428,39 @@ export default function Delegation() {
     return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${cfg[0]}`} title={cfg[1]} />;
   };
 
+  // Final visible list (free-text search + slippage filter over the already
+  // server-filtered tasks) — computed here, not inside the JSX, so the
+  // pagination hook can window it at the top level of the component.
+  // The rows carry no task_id column — the visible code is derived from the id
+  // (same as the table / mobile card render), so search and export use it too.
+  const taskCode = (t) => `TSK-${String(t.id).padStart(4, '0')}`;
+  const q = search.trim().toLowerCase();
+  let visibleTasks = q
+    ? tasks.filter(t =>
+        taskCode(t).toLowerCase().includes(q) ||
+        (t.description || '').toLowerCase().includes(q))
+    : tasks;
+  if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
+  const tasksPager = usePagination(visibleTasks);
+
+  // Pagination can put the War-Room deep-linked row (?open=<id>) on a later
+  // page where the scroll-to-row above can't find it — jump the pager to the
+  // row's page first, then scroll once it is actually rendered.
+  useEffect(() => {
+    if (!highlightId) return;
+    const i = visibleTasks.findIndex(t => String(t.id) === String(highlightId));
+    if (i < 0) return;
+    const target = Math.floor(i / tasksPager.perPage) + 1;
+    if (target !== tasksPager.page) tasksPager.setPage(target);
+    else {
+      const el = document.getElementById(`deleg-row-${highlightId}`);
+      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    // visibleTasks is recomputed inline each render — depend on the inputs
+    // that change it (tasks + filters via page), not its identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, tasks, tasksPager.page, tasksPager.perPage]);
+
   return (
     <div className="space-y-4">
       {/* Header — only admin creates new tasks. Everyone else is a user who receives them. */}
@@ -430,15 +481,28 @@ export default function Delegation() {
             </div>
           )}
           <button onClick={() => {
-            // Export respects the active search filter so admin can
-            // download exactly what's visible on screen.
-            const q = search.trim().toLowerCase();
-            const rows = q
-              ? tasks.filter(t => (t.task_id || '').toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
-              : tasks;
+            // Export the same list the table shows — visibleTasks already
+            // composes search + slippage filter over the server-filtered tasks
+            // — so admin downloads exactly what's visible on screen.
+            // Columns mirror the on-screen table. MD 2026-09-03: "when export
+            // excel remarks also field show in excel with data" — Followup
+            // Remarks (EA -> MD) was missing, and so were the other three
+            // columns the table shows to its right, which made the download
+            // useless for reviewing follow-ups away from the screen.
             exportCsv('delegations',
-              ['Task ID','Description','Project','Assigned To','Due','Status'],
-              rows.map(t => [t.task_id, t.description, t.project_name, t.assigned_to_name, t.due_date, t.status]));
+              ['Task ID','Description','Project','Assigned To','Due','Completed','Status','Extensions','Proof','Followup Remarks (EA → MD)'],
+              visibleTasks.map(t => [
+                taskCode(t),
+                cleanDesc(t.description || t.title),
+                t.project_name,
+                t.assigned_to_name,
+                t.due_date,
+                t.reviewed_at ? fmtDate(t.reviewed_at) : '',
+                t.status,
+                +t.extension_count || 0,
+                t.proof_url || '',
+                t.followup_remarks || '',
+              ]));
           }}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {isAdmin() && view === 'list' && (
@@ -614,24 +678,15 @@ export default function Delegation() {
             </tr>
           </thead>
           <tbody>
-            {(() => {
-              const q = search.trim().toLowerCase();
-              let visibleTasks = q
-                ? tasks.filter(t =>
-                    (t.task_id || '').toLowerCase().includes(q) ||
-                    (t.description || '').toLowerCase().includes(q))
-                : tasks;
-              if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
-              return (<>
-                {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
-                {visibleTasks.map((t, idx) => {
+            {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
+            {tasksPager.pageItems.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               const canEditProject = isAdmin() || isAssigner;
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} id={`deleg-row-${t.id}`} className={`align-top ${t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}${String(t.id) === String(highlightId) ? ' ring-2 ring-amber-400 ring-inset' : ''}`}>
-                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
+                  <td className="text-center text-xs text-gray-500 font-medium">{(tasksPager.page - 1) * tasksPager.perPage + idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
                   <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>
                     <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
@@ -686,7 +741,7 @@ export default function Delegation() {
                         >{t.proof_remarks}</span>
                       )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
+                        <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
                           <FiUpload size={11} className="shrink-0" /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
@@ -749,10 +804,9 @@ export default function Delegation() {
                 </tr>
               );
             })}
-              </>);
-            })()}
           </tbody>
         </table>
+        <Pagination {...tasksPager} />
       </div>
 
       {/* Mobile-only card layout REMOVED — per mam's request, the desktop
@@ -822,7 +876,7 @@ export default function Delegation() {
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -1035,7 +1089,7 @@ export default function Delegation() {
       </Modal>
 
       {/* Submit Proof Modal */}
-      <Modal isOpen={!!submitModal} onClose={() => setSubmitModal(null)} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
+      <Modal isOpen={!!submitModal} onClose={() => { setSubmitModal(null); submitModalIdRef.current = null; }} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
         <form onSubmit={submitProof} className="space-y-3">
           {submitModal?.status === 'rejected' && submitModal.reject_reason && (
             <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-700">
@@ -1095,7 +1149,7 @@ export default function Delegation() {
             </p>
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setSubmitModal(null)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => { setSubmitModal(null); submitModalIdRef.current = null; }} className="btn btn-secondary">Cancel</button>
             <button type="submit" disabled={!submitForm.proof_url || submitForm.uploading} className="btn btn-primary disabled:opacity-50">Submit for Approval</button>
           </div>
         </form>

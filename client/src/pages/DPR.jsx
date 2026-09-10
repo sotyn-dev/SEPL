@@ -38,12 +38,12 @@ const SYSTEMS = ['Electrical', 'Fire Fighting', 'Fire Alarm', 'CCTV', 'Access Co
 // classes used when that chip is selected — pure CSS, no extra
 // dependency.
 const MEPF_SYSTEMS = [
-  { key: 'Fire Fighting', icon: '🔥', sel: 'bg-red-600 text-white border-red-600',          dot: 'bg-red-500' },
-  { key: 'Electrical',    icon: '⚡', sel: 'bg-yellow-500 text-white border-yellow-500',    dot: 'bg-yellow-400' },
-  { key: 'Low Voltage',   icon: '📡', sel: 'bg-blue-600 text-white border-blue-600',        dot: 'bg-blue-500' },
-  { key: 'Plumbing',      icon: '💧', sel: 'bg-cyan-600 text-white border-cyan-600',        dot: 'bg-cyan-500' },
-  { key: 'HVAC',          icon: '❄️', sel: 'bg-indigo-600 text-white border-indigo-600',    dot: 'bg-indigo-500' },
-  { key: 'Solar',         icon: '☀️', sel: 'bg-amber-500 text-white border-amber-500',      dot: 'bg-amber-400' },
+  { key: 'Fire Fighting', icon: '🔥', sel: 'bg-red-600 text-white border-red-600', dot: 'bg-red-500' },
+  { key: 'Electrical', icon: '⚡', sel: 'bg-yellow-500 text-white border-yellow-500', dot: 'bg-yellow-400' },
+  { key: 'Low Voltage', icon: '📡', sel: 'bg-blue-600 text-white border-blue-600', dot: 'bg-blue-500' },
+  { key: 'Plumbing', icon: '💧', sel: 'bg-cyan-600 text-white border-cyan-600', dot: 'bg-cyan-500' },
+  { key: 'HVAC', icon: '❄️', sel: 'bg-indigo-600 text-white border-indigo-600', dot: 'bg-indigo-500' },
+  { key: 'Solar', icon: '☀️', sel: 'bg-amber-500 text-white border-amber-500', dot: 'bg-amber-400' },
 ];
 
 // Mam (2026-05-30): "same radio button as weather type" — Weather
@@ -51,11 +51,11 @@ const MEPF_SYSTEMS = [
 // lowercase (clear / rainy / …) for backward compat with existing
 // DPR rows; only the display label is title-case.
 const WEATHER_OPTIONS = [
-  { key: 'clear',  label: 'Clear',  icon: '☀️',  sel: 'bg-yellow-500 text-white border-yellow-500', dot: 'bg-yellow-400' },
-  { key: 'rainy',  label: 'Rainy',  icon: '🌧️', sel: 'bg-blue-600 text-white border-blue-600',     dot: 'bg-blue-500' },
-  { key: 'cloudy', label: 'Cloudy', icon: '☁️',  sel: 'bg-gray-500 text-white border-gray-500',     dot: 'bg-gray-400' },
-  { key: 'hot',    label: 'Hot',    icon: '🥵',  sel: 'bg-orange-600 text-white border-orange-600', dot: 'bg-orange-500' },
-  { key: 'windy',  label: 'Windy',  icon: '💨',  sel: 'bg-teal-600 text-white border-teal-600',     dot: 'bg-teal-500' },
+  { key: 'clear', label: 'Clear', icon: '☀️', sel: 'bg-yellow-500 text-white border-yellow-500', dot: 'bg-yellow-400' },
+  { key: 'rainy', label: 'Rainy', icon: '🌧️', sel: 'bg-blue-600 text-white border-blue-600', dot: 'bg-blue-500' },
+  { key: 'cloudy', label: 'Cloudy', icon: '☁️', sel: 'bg-gray-500 text-white border-gray-500', dot: 'bg-gray-400' },
+  { key: 'hot', label: 'Hot', icon: '🥵', sel: 'bg-orange-600 text-white border-orange-600', dot: 'bg-orange-500' },
+  { key: 'windy', label: 'Windy', icon: '💨', sel: 'bg-teal-600 text-white border-teal-600', dot: 'bg-teal-500' },
 ];
 const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Machine', 'Grinder', 'Ladder', 'Scaffolding', 'Pipe Bending Machine', 'Cable Pulling Machine', 'Multimeter', 'Megger', 'Earth Tester', 'Hydro Test Pump', 'Generator', 'Compressor'];
 
@@ -484,12 +484,12 @@ export default function DPR() {
   // fetches only what it needs, and load() refreshes only the slices
   // already in scope so submit/approve/delete actions don't re-fire
   // dormant tabs.
-  const loadSummary  = () => api.get('/dpr/summary').then(r => setSummary(r.data)).catch(() => {});
-  const loadSites    = () => api.get('/dpr/sites').then(r => setSites(r.data)).catch(() => {});
-  const loadUsers    = () => api.get('/auth/users?active_only=1').then(r => setUsers(r.data)).catch(() => {});
-  const loadDprs     = () => {
+  const loadSummary = () => api.get('/dpr/summary').then(r => setSummary(r.data)).catch(() => { });
+  const loadSites = () => api.get('/dpr/sites').then(r => setSites(r.data)).catch(() => { });
+  const loadUsers = () => api.get('/auth/users?active_only=1').then(r => setUsers(r.data)).catch(() => { });
+  const loadDprs = () => {
     const params = (reportFilter && !dateTouched) ? {} : { date: filterDate };
-    return api.get('/dpr', { params }).then(r => setDprs(r.data)).catch(() => {});
+    return api.get('/dpr', { params }).then(r => setDprs(r.data)).catch(() => { });
   };
   const loadProgress = () => api.get('/dpr/progress').then(r => setProgress(r.data)).catch(() => setProgress([]));
 
@@ -499,7 +499,7 @@ export default function DPR() {
     loadSummary();
     loadSites();              // always needed: site picker in submit modal
     loadUsers();               // always needed: engineer picker in site modal
-    if (tab === 'reports' || dprs.length)   loadDprs();
+    if (tab === 'reports' || dprs.length) loadDprs();
     if (tab === 'dashboard' || progress.length) loadProgress();
   };
   // Mount: pull only the always-needed bits (summary tiles + sites
@@ -547,7 +547,7 @@ export default function DPR() {
       setCosts(prev => prev.map(c => c.type === 'Staff Cost'
         ? { ...c, rate: per_day_cost, engineer_count, po_engineers, auto: per_day_cost > 0, diagnostic, staff, amount: (c.qty || 0) * per_day_cost }
         : c));
-    }).catch(() => {});
+    }).catch(() => { });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.site_id, form.report_date]);
 
@@ -577,7 +577,7 @@ export default function DPR() {
         setCosts(prev => prev.map(c => c.type === 'TA/DA'
           ? { ...c, qty: 1, rate: total_amount, amount: total_amount, auto: total_amount > 0, ta_da_count: count }
           : c));
-      }).catch(() => {});
+      }).catch(() => { });
       // Pre-fill "Contractors on Site" from the morning manpower punch for this
       // site + date (mam 2026-06-22). Only fills when the engineer hasn't already
       // typed contractors, so it never clobbers in-progress edits.
@@ -588,7 +588,7 @@ export default function DPR() {
           setContractors(prev => (prev.some(c => c.name && c.name.trim())
             ? prev
             : rows.map(x => ({ name: x.contractor_name, manpower: x.manpower }))));
-        }).catch(() => {});
+        }).catch(() => { });
       // SPOS: auto-load the site store so Material Consumed is pick-a-number,
       // not free-typing (keeps the stock ledger honest).
       loadStoreStock(siteId);
@@ -610,7 +610,7 @@ export default function DPR() {
     const site = form.site_id || '';
     setMmSite(site);
     setMmDate(filterDate);
-    if (subcons.length === 0) api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => {});
+    if (subcons.length === 0) api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => { });
     loadMorningManpower(site, filterDate);
     setMmModal(true);
   };
@@ -839,7 +839,28 @@ export default function DPR() {
   };
 
   const createSite = async (e) => { e.preventDefault(); await api.post('/dpr/sites', form); toast.success('Site created'); setSiteModal(false); load(); };
-  const approveDpr = async (id, status, billingReady) => { await api.put(`/dpr/${id}/approve`, { approval_status: status, billing_ready: billingReady }); toast.success(`DPR ${status}`); load(); };
+  // A DPR already on a client bill is not reopened silently: the server replies
+  // 409 needs_force, we name the bill, and only an explicit yes goes through.
+  const approveDpr = async (id, status, billingReady, force = false) => {
+    try {
+      await api.put(`/dpr/${id}/approve`, { approval_status: status, billing_ready: billingReady, force });
+      toast.success(status === 'rejected' ? 'DPR rejected'
+        : status === 'pending' ? 'DPR reopened — it needs approving again'
+          : billingReady ? 'DPR approved & marked billable' : 'DPR approved (non-billable)');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to update DPR approval');
+    }
+  };
+  const toggleBillingReady = async (id, currentReady) => {
+    try {
+      await api.put(`/dpr/${id}/approve`, { approval_status: 'approved', billing_ready: !currentReady });
+      toast.success(!currentReady ? 'Marked billable' : 'Marked non-billable');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to update billing status');
+    }
+  };
   const viewDpr = async (id) => {
     setViewStaff(null);
     const { data } = await api.get(`/dpr/${id}`);
@@ -875,11 +896,11 @@ export default function DPR() {
             <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'} flex-shrink-0 whitespace-nowrap`}>
               {t === 'dashboard' ? 'Dashboard'
                 : t === 'aaj' ? '🏗️ Aaj Ka Update'
-                : t === 'reports' ? 'Daily Reports'
-                : t === 'compliance' ? 'Engineer Compliance'
-                : t === 'sites' ? 'Sites'
-                : t === 'losses' ? 'Loss Reasons'
-                : 'Responsible'}
+                  : t === 'reports' ? 'Daily Reports'
+                    : t === 'compliance' ? 'Engineer Compliance'
+                      : t === 'sites' ? 'Sites'
+                        : t === 'losses' ? 'Loss Reasons'
+                          : 'Responsible'}
             </button>
           ))}
           {/* Always-visible morning contractor-attendance punch (mam 2026-06-22:
@@ -975,8 +996,8 @@ export default function DPR() {
                 siteRowsByName.length === 0
                   ? <div className="text-center py-6 text-gray-400 text-sm">No sites assigned yet</div>
                   : <div className="border rounded-lg overflow-hidden divide-y">
-                      {siteRowsByName.map(site => renderSiteRow(site, `site-${site.site_name}`, site.engineerNames))}
-                    </div>
+                    {siteRowsByName.map(site => renderSiteRow(site, `site-${site.site_name}`, site.engineerNames))}
+                  </div>
               )}
 
               {/* BY ENGINEER — engineer → their sites */}
@@ -987,33 +1008,33 @@ export default function DPR() {
                 const engColor = engPct >= 90 ? 'text-emerald-600' : engPct >= 50 ? 'text-red-600' : engPct >= 20 ? 'text-amber-600' : 'text-red-500';
                 const engBar = engPct >= 90 ? 'bg-emerald-500' : engPct >= 50 ? 'bg-red-500' : engPct >= 20 ? 'bg-amber-500' : 'bg-red-400';
                 return (
-                <div key={eng.engineer.id} className="border rounded-lg overflow-hidden">
-                  <div className="bg-gradient-to-r from-blue-50 to-blue-50 px-3 py-2 border-b flex justify-between items-center gap-3">
-                    <div className="min-w-0">
-                      <div className="font-bold text-sm text-gray-800">{eng.engineer.name}</div>
-                      <div className="text-[11px] text-gray-500 truncate">{eng.engineer.email} · {eng.site_count} site{eng.site_count === 1 ? '' : 's'}</div>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <div className="hidden sm:block w-36">
-                        <div className="h-2 bg-white/60 rounded-full overflow-hidden">
-                          <div className={`h-full ${engBar}`} style={{ width: `${Math.min(100, engPct)}%` }} />
+                  <div key={eng.engineer.id} className="border rounded-lg overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50 to-blue-50 px-3 py-2 border-b flex justify-between items-center gap-3">
+                      <div className="min-w-0">
+                        <div className="font-bold text-sm text-gray-800">{eng.engineer.name}</div>
+                        <div className="text-[11px] text-gray-500 truncate">{eng.engineer.email} · {eng.site_count} site{eng.site_count === 1 ? '' : 's'}</div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="hidden sm:block w-36">
+                          <div className="h-2 bg-white/60 rounded-full overflow-hidden">
+                            <div className={`h-full ${engBar}`} style={{ width: `${Math.min(100, engPct)}%` }} />
+                          </div>
+                          <div className="text-[10px] text-gray-500 text-right mt-0.5">Rs {engDone.toLocaleString()} / {engBoq.toLocaleString()}</div>
                         </div>
-                        <div className="text-[10px] text-gray-500 text-right mt-0.5">Rs {engDone.toLocaleString()} / {engBoq.toLocaleString()}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className={`text-xl font-extrabold ${engColor}`}>{engPct}%</div>
-                        <div className="text-[9px] uppercase text-gray-400 tracking-wider">completion</div>
+                        <div className="text-right">
+                          <div className={`text-xl font-extrabold ${engColor}`}>{engPct}%</div>
+                          <div className="text-[9px] uppercase text-gray-400 tracking-wider">completion</div>
+                        </div>
                       </div>
                     </div>
+                    {eng.sites.length === 0 ? (
+                      <p className="p-3 text-xs text-gray-400">No sites assigned</p>
+                    ) : (
+                      <div className="divide-y">
+                        {eng.sites.map(site => renderSiteRow(site, `${eng.engineer.id}-${site.site_id}`))}
+                      </div>
+                    )}
                   </div>
-                  {eng.sites.length === 0 ? (
-                    <p className="p-3 text-xs text-gray-400">No sites assigned</p>
-                  ) : (
-                    <div className="divide-y">
-                      {eng.sites.map(site => renderSiteRow(site, `${eng.engineer.id}-${site.site_id}`))}
-                    </div>
-                  )}
-                </div>
                 );
               })}
             </div>
@@ -1033,8 +1054,15 @@ export default function DPR() {
             <input type="date" className="input w-full sm:w-48" value={filterDate} onChange={e => { setFilterDate(e.target.value); setDateTouched(true); }} />
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               <button onClick={() => exportCsv('dpr-reports',
-                ['Site','Date','By','Status','Plan Cost (B-plan)','Actual Cost (B-actual)','Actual Total (A)','Variance (B-act − B-plan)','Approval'],
-                dprs.map(d => {
+                ['Site', 'Date', 'By', 'Status', 'Plan Cost (B-plan)', 'Actual Cost (B-actual)', 'Actual Total (A)', 'Variance (B-act − B-plan)', 'Approval'],
+                dprs.filter(d => {
+                  // Same predicate as the mobile cards / desktop table below —
+                  // export must match what the filtered view shows on screen.
+                  if (!reportFilter) return true;
+                  if (reportFilter === 'pending') return d.approval_status === 'pending';
+                  if (reportFilter === 'billing') return d.billing_ready === 1 || d.billing_ready === true;
+                  return true;
+                }).map(d => {
                   const planned = !!d.is_planned_template;
                   const planB = +d.planned_cost_b || 0;
                   const actB = planned ? '' : (+d.grand_total_b || 0);
@@ -1080,7 +1108,7 @@ export default function DPR() {
                 // Lazy-fetch the sub-contractor master so the contractor
                 // dropdown lands populated.  Cached after first open.
                 if (subcons.length === 0) {
-                  api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => {});
+                  api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => { });
                 }
                 setModal(true);
               }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-center"><FiPlus /> Submit DPR</button>
@@ -1115,22 +1143,22 @@ export default function DPR() {
                         <div className="text-[11px] text-gray-500">{d.report_date} · {d.submitted_by_name || '—'}</div>
                       </div>
                       {planned
-                        ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"><FiCalendar size={10}/> PLANNED</span>
+                        ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"><FiCalendar size={10} /> PLANNED</span>
                         : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">✓ SUBMITTED</span>}
                     </div>
                     {!planned && (
                       <div className="grid grid-cols-3 gap-1 text-center pt-1 border-t border-gray-100">
                         <div>
                           <div className="text-[9px] uppercase text-gray-400">Plan B</div>
-                          <div className="text-xs font-bold text-sky-700">{hasPlan ? `₹${Math.round(planB/1000)}K` : '—'}</div>
+                          <div className="text-xs font-bold text-sky-700">{hasPlan ? `₹${Math.round(planB / 1000)}K` : '—'}</div>
                         </div>
                         <div>
                           <div className="text-[9px] uppercase text-gray-400">Actual B</div>
-                          <div className="text-xs font-bold text-red-600">{`₹${Math.round(actB/1000)}K`}</div>
+                          <div className="text-xs font-bold text-red-600">{`₹${Math.round(actB / 1000)}K`}</div>
                         </div>
                         <div>
                           <div className="text-[9px] uppercase text-gray-400">Revenue A</div>
-                          <div className="text-xs font-bold text-emerald-600">{`₹${Math.round(actA/1000)}K`}</div>
+                          <div className="text-xs font-bold text-emerald-600">{`₹${Math.round(actA / 1000)}K`}</div>
                         </div>
                       </div>
                     )}
@@ -1139,13 +1167,42 @@ export default function DPR() {
                         Variance: <strong>{variance > 0 ? '+' : variance < 0 ? '−' : ''}₹{Math.abs(variance).toLocaleString()}</strong>
                       </div>
                     )}
-                    <div className="flex justify-between items-center pt-1 border-t border-gray-100">
-                      {!planned ? <StatusBadge status={d.approval_status} /> : <span className="text-[10px] text-gray-400">plan template</span>}
-                      <div className="flex gap-1">
+                    <div className="flex justify-between items-center pt-1 border-t border-gray-100 flex-wrap gap-1">
+                      {!planned ? (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <StatusBadge status={d.approval_status} />
+                          {d.approval_status === 'approved' && (
+                            d.sales_bill_id ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold">✓ Billed</span>
+                            ) : canApprove('dpr') ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleBillingReady(d.id, !!d.billing_ready)}
+                                className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${d.billing_ready ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'}`}
+                                title="Click to toggle Billable"
+                              >
+                                {d.billing_ready ? '✓ Billable' : '○ Non-Billable'}
+                              </button>
+                            ) : null
+                          )}
+                        </div>
+                      ) : <span className="text-[10px] text-gray-400">plan template</span>}
+                      <div className="flex gap-1 items-center">
                         <button onClick={() => viewDpr(d.id)} className="p-1 hover:bg-red-50 rounded text-red-600"><FiEye size={14} /></button>
                         {!planned && d.approval_status === 'pending' && canApprove('dpr') && <>
-                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5">Approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark as billable">Approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve DPR without marking as billable">Approve</button>
                           <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
+                        </>}
+                        {/* An approved or rejected DPR is no longer a dead end (mam 2026-09-09:
+                            "admin can back edit data change and rejected also again reapprove"). */}
+                        {!planned && d.approval_status === 'approved' && canApprove('dpr') && <>
+                          <button onClick={() => approveDpr(d.id, 'pending', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Send back for changes — it will need approving again">Reopen</button>
+                          <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5" title="Reject this approved DPR">Reject</button>
+                        </>}
+                        {!planned && d.approval_status === 'rejected' && canApprove('dpr') && <>
+                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark billable">Re-approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve without marking billable">Re-approve</button>
                         </>}
                         {canDelete('dpr') && <button onClick={async () => {
                           if (!confirm(`Delete DPR for "${d.site_name}" on ${d.report_date}?`)) return;
@@ -1186,35 +1243,72 @@ export default function DPR() {
                   const hasPlan = planB > 0;
                   const variance = (!planned && hasPlan) ? (actB - planB) : null;
                   return (
-                <tr key={d.id}>
-                  <td className="font-medium">{d.site_name}</td>
-                  <td>{d.report_date}</td>
-                  <td>{d.submitted_by_name}</td>
-                  <td>
-                    {planned
-                      ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"><FiCalendar size={10}/> PLANNED</span>
-                      : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">✓ SUBMITTED</span>}
-                  </td>
-                  <td className="font-semibold text-sky-700 text-sm">{hasPlan ? `Rs ${planB.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
-                  <td className="font-semibold text-red-600 text-sm">{planned ? <span className="text-gray-300">—</span> : `Rs ${actB.toLocaleString()}`}</td>
-                  <td className="font-semibold text-emerald-600 text-sm">{planned ? <span className="text-gray-300">—</span> : `Rs ${actA.toLocaleString()}`}</td>
-                  <td className={`font-bold text-sm ${variance === null ? '' : (variance > 0 ? 'text-red-600' : variance < 0 ? 'text-emerald-600' : 'text-gray-500')}`}>
-                    {variance === null ? <span className="text-gray-300">—</span> : `${variance > 0 ? '+' : variance < 0 ? '−' : ''}Rs ${Math.abs(variance).toLocaleString()}`}
-                  </td>
-                  <td>{planned ? <span className="text-gray-300">—</span> : <StatusBadge status={d.approval_status} />}</td>
-                  <td><div className="flex gap-1">
-                    <button onClick={() => viewDpr(d.id)} className="p-1 hover:bg-red-50 rounded text-red-600"><FiEye size={14} /></button>
-                    {!planned && d.approval_status === 'pending' && canApprove('dpr') && <>
-                      <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5">Approve+Bill</button>
-                      <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
-                    </>}
-                    {canDelete('dpr') && <button onClick={async () => {
-                      if (!confirm(`Delete DPR for "${d.site_name}" on ${d.report_date}?`)) return;
-                      try { await api.delete(`/dpr/${d.id}`); toast.success('Deleted'); load(); }
-                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                    }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
-                  </div></td>
-                </tr>
+                    <tr key={d.id}>
+                      <td className="font-medium">{d.site_name}</td>
+                      <td>{d.report_date}</td>
+                      <td>{d.submitted_by_name}</td>
+                      <td>
+                        {planned
+                          ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"><FiCalendar size={10} /> PLANNED</span>
+                          : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">✓ SUBMITTED</span>}
+                      </td>
+                      <td className="font-semibold text-sky-700 text-sm">{hasPlan ? `Rs ${planB.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
+                      <td className="font-semibold text-red-600 text-sm">{planned ? <span className="text-gray-300">—</span> : `Rs ${actB.toLocaleString()}`}</td>
+                      <td className="font-semibold text-emerald-600 text-sm">{planned ? <span className="text-gray-300">—</span> : `Rs ${actA.toLocaleString()}`}</td>
+                      <td className={`font-bold text-sm ${variance === null ? '' : (variance > 0 ? 'text-red-600' : variance < 0 ? 'text-emerald-600' : 'text-gray-500')}`}>
+                        {variance === null ? <span className="text-gray-300">—</span> : `${variance > 0 ? '+' : variance < 0 ? '−' : ''}Rs ${Math.abs(variance).toLocaleString()}`}
+                      </td>
+                      <td>
+                        {planned ? <span className="text-gray-300">—</span> : (
+                          <div className="flex flex-col items-start gap-1">
+                            <StatusBadge status={d.approval_status} />
+                            {d.approval_status === 'approved' && (
+                              d.sales_bill_id ? (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold" title="Already billed in Installation Bill">
+                                  ✓ Billed
+                                </span>
+                              ) : canApprove('dpr') ? (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleBillingReady(d.id, !!d.billing_ready)}
+                                  className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold transition-colors ${d.billing_ready ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                                  title="Click to toggle Billable / Non-Billable"
+                                >
+                                  {d.billing_ready ? '✓ Billable' : '○ Non-Billable'}
+                                </button>
+                              ) : (
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${d.billing_ready ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>
+                                  {d.billing_ready ? 'Billable' : 'Non-Billable'}
+                                </span>
+                              )
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td><div className="flex gap-1 items-center">
+                        <button onClick={() => viewDpr(d.id)} className="p-1 hover:bg-red-50 rounded text-red-600"><FiEye size={14} /></button>
+                        {!planned && d.approval_status === 'pending' && canApprove('dpr') && <>
+                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark as billable">Approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve DPR without marking as billable">Approve</button>
+                          <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
+                        </>}
+                        {/* An approved or rejected DPR is no longer a dead end (mam 2026-09-09:
+                        "admin can back edit data change and rejected also again reapprove"). */}
+                        {!planned && d.approval_status === 'approved' && canApprove('dpr') && <>
+                          <button onClick={() => approveDpr(d.id, 'pending', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Send back for changes — it will need approving again">Reopen</button>
+                          <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5" title="Reject this approved DPR">Reject</button>
+                        </>}
+                        {!planned && d.approval_status === 'rejected' && canApprove('dpr') && <>
+                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5" title="Approve and mark billable">Re-approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'approved', false)} className="btn btn-secondary text-[10px] py-0.5 px-1.5" title="Approve without marking billable">Re-approve</button>
+                        </>}
+                        {canDelete('dpr') && <button onClick={async () => {
+                          if (!confirm(`Delete DPR for "${d.site_name}" on ${d.report_date}?`)) return;
+                          try { await api.delete(`/dpr/${d.id}`); toast.success('Deleted'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                        }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                      </div></td>
+                    </tr>
                   );
                 })}
               {dprs.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No DPR for this date</td></tr>}
@@ -1379,11 +1473,10 @@ export default function DPR() {
                     return (
                       <button key={s.key} type="button"
                         onClick={() => setForm({ ...form, system_type: active ? '' : s.key })}
-                        className={`px-2 py-1 rounded-full text-xs font-medium border transition inline-flex items-center gap-1 ${
-                          active
+                        className={`px-2 py-1 rounded-full text-xs font-medium border transition inline-flex items-center gap-1 ${active
                             ? `${s.sel} shadow-sm`
                             : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                        }`}>
+                          }`}>
                         <span className="text-sm leading-none">{s.icon}</span>
                         {s.key}
                       </button>
@@ -1407,11 +1500,10 @@ export default function DPR() {
                     return (
                       <button key={w.key} type="button"
                         onClick={() => setForm({ ...form, weather: w.key })}
-                        className={`px-2 py-1 rounded-full text-xs font-medium border transition inline-flex items-center gap-1 ${
-                          active
+                        className={`px-2 py-1 rounded-full text-xs font-medium border transition inline-flex items-center gap-1 ${active
                             ? `${w.sel} shadow-sm`
                             : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                        }`}>
+                          }`}>
                         <span className="text-sm leading-none">{w.icon}</span>
                         {w.label}
                       </button>
@@ -1437,10 +1529,10 @@ export default function DPR() {
                 <div>
                   <div className="font-bold mb-0.5">
                     {poItemsDiag.reason === 'no_business_book' ? 'No Business Book linked' :
-                     poItemsDiag.reason === 'no_po_items' ? 'No BOQ items yet' :
-                     poItemsDiag.reason === 'rates_missing'
-                       ? `${poItemsDiag.total_count} item${poItemsDiag.total_count === 1 ? '' : 's'} loaded · ${poItemsDiag.total_count - (poItemsDiag.missing_sitc_count || 0)} have a rate set`
-                       : 'Heads up'}
+                      poItemsDiag.reason === 'no_po_items' ? 'No BOQ items yet' :
+                        poItemsDiag.reason === 'rates_missing'
+                          ? `${poItemsDiag.total_count} item${poItemsDiag.total_count === 1 ? '' : 's'} loaded · ${poItemsDiag.total_count - (poItemsDiag.missing_sitc_count || 0)} have a rate set`
+                          : 'Heads up'}
                   </div>
                   <div>{poItemsDiag.message}</div>
                 </div>
@@ -1708,11 +1800,11 @@ export default function DPR() {
                   <tbody>
                     {dprMaterials.map((m, i) => (
                       <tr key={m.item_master_id} className="border-b border-indigo-100">
-                        <td className="py-1 pr-2">{m.material_name} <span className="text-gray-400">({m.unit})</span></td>
-                        <td className="py-1 px-2 text-right tabular-nums">{m.stock_qty}</td>
-                        <td className="py-1 px-2 text-right tabular-nums">{m.issued_today > 0 ? m.issued_today : <span className="text-gray-300">—</span>}</td>
-                        <td className="py-1 px-2 text-right tabular-nums">{m.returned_today > 0 ? m.returned_today : <span className="text-gray-300">—</span>}</td>
-                        <td className="py-1 pl-2 text-right">
+                        <td className="py-1 pr-2 min-w-[150px] break-words">{m.material_name} <span className="text-gray-400 whitespace-nowrap">({m.unit})</span></td>
+                        <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{m.stock_qty}</td>
+                        <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{m.issued_today > 0 ? m.issued_today : <span className="text-gray-300">—</span>}</td>
+                        <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{m.returned_today > 0 ? m.returned_today : <span className="text-gray-300">—</span>}</td>
+                        <td className="py-1 pl-2 text-right min-w-[100px]">
                           {m.from_slips ? (
                             <span className="font-semibold text-indigo-800 tabular-nums" title="Auto from issue/return slips — the jr. engineer's GRN slips are the source of truth">
                               {m.consumed_today} <span className="text-[9px] font-normal text-indigo-500">auto·slips</span>
@@ -2117,7 +2209,7 @@ export default function DPR() {
             <div>
               <label className="label">Site *</label>
               <select className="select" value={planSiteId}
-                      onChange={e => { setPlanSiteId(e.target.value); openPlanWeek(e.target.value, planWeekStart); }}>
+                onChange={e => { setPlanSiteId(e.target.value); openPlanWeek(e.target.value, planWeekStart); }}>
                 <option value="">— Pick site —</option>
                 {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
@@ -2125,7 +2217,7 @@ export default function DPR() {
             <div>
               <label className="label">Week Starting (Mon) *</label>
               <input type="date" className="input" value={planWeekStart}
-                     onChange={e => { setPlanWeekStart(e.target.value); openPlanWeek(planSiteId, e.target.value); }} />
+                onChange={e => { setPlanWeekStart(e.target.value); openPlanWeek(planSiteId, e.target.value); }} />
             </div>
           </div>
 
@@ -2166,12 +2258,12 @@ export default function DPR() {
                 <div className="text-xs font-semibold text-blue-900">PM Approval — automatic stock check &amp; shortfall indent</div>
                 <div className="flex gap-2">
                   <button type="button" onClick={rejectWeeklyPlan} disabled={planActing}
-                          className="btn btn-danger text-xs py-1">Reject</button>
+                    className="btn btn-danger text-xs py-1">Reject</button>
                   {/* Approve stays disabled until the stock-check preview
                       actually loaded — no blind approvals (audit). */}
                   <button type="button" onClick={approveWeeklyPlan} disabled={planActing || !planShortfall}
-                          title={!planShortfall ? 'Wait for the stock check to load' : ''}
-                          className="btn btn-success text-xs py-1">{planActing ? 'Working…' : 'Approve & Auto-Indent'}</button>
+                    title={!planShortfall ? 'Wait for the stock check to load' : ''}
+                    className="btn btn-success text-xs py-1">{planActing ? 'Working…' : 'Approve & Auto-Indent'}</button>
                 </div>
               </div>
               {planShortfall ? (
@@ -2199,7 +2291,7 @@ export default function DPR() {
                             <td className={`py-1 pl-2 text-right font-semibold ${l.to_indent > 0 || l.capped ? 'text-red-700' : 'text-emerald-700'}`}>
                               {l.to_indent > 0 ? l.to_indent
                                 : l.capped ? 'SHORT — BOQ cap reached'
-                                : '✓ covered'}
+                                  : '✓ covered'}
                               {l.capped && l.to_indent > 0 && <span title="Clamped to remaining BOQ cap" className="ml-1 text-amber-600">⚠BOQ cap</span>}
                             </td>
                           </tr>
@@ -2218,7 +2310,7 @@ export default function DPR() {
                 <div className="text-[11px] text-red-600 flex items-center gap-2">
                   Stock check failed to load — Approve stays disabled.
                   <button type="button" className="text-blue-700 hover:underline font-medium"
-                          onClick={() => planHeader?.id && loadPlanShortfall(planHeader.id)}>↻ Retry</button>
+                    onClick={() => planHeader?.id && loadPlanShortfall(planHeader.id)}>↻ Retry</button>
                 </div>
               ) : (
                 <div className="text-[11px] text-gray-500">Loading stock check…</div>
@@ -2261,7 +2353,7 @@ export default function DPR() {
               user can add / remove / edit. */}
           <div className="space-y-3">
             {planDays.map((d, i) => {
-              const dayName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d.date).getDay()];
+              const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(d.date).getDay()];
               const isSunday = dayName === 'Sun';
               return (
                 <div key={d.date} className={`border rounded ${isSunday ? 'bg-gray-50' : 'bg-white'}`}>
@@ -2272,14 +2364,14 @@ export default function DPR() {
                     <div className="col-span-2 text-right text-gray-600">Manpower</div>
                     <div className="col-span-2">
                       <input type="number" min="0" className="input text-xs text-right w-full"
-                             value={d.planned_manpower}
-                             onChange={e => updatePlanDay(i, { planned_manpower: +e.target.value })} />
+                        value={d.planned_manpower}
+                        onChange={e => updatePlanDay(i, { planned_manpower: +e.target.value })} />
                     </div>
                     <div className="col-span-2">
                       <input type="number" min="0" step="100" className="input text-xs text-right w-full"
-                             placeholder="Cost (₹)"
-                             value={d.planned_grand_total_b}
-                             onChange={e => updatePlanDay(i, { planned_grand_total_b: +e.target.value })} />
+                        placeholder="Cost (₹)"
+                        value={d.planned_grand_total_b}
+                        onChange={e => updatePlanDay(i, { planned_grand_total_b: +e.target.value })} />
                     </div>
                   </div>
 
@@ -2304,8 +2396,8 @@ export default function DPR() {
                                 <tr key={j} className="border-t">
                                   <td className="py-1 pr-2">
                                     <select className="select text-xs w-full"
-                                            value={it.po_item_id || ''}
-                                            onChange={e => updatePlanItem(i, j, { po_item_id: e.target.value })}>
+                                      value={it.po_item_id || ''}
+                                      onChange={e => updatePlanItem(i, j, { po_item_id: e.target.value })}>
                                       <option value="">— Pick BOQ item —</option>
                                       {planBoqItems.map(b => (
                                         <option key={b.id} value={b.id}>
@@ -2316,15 +2408,15 @@ export default function DPR() {
                                   </td>
                                   <td className="py-1 text-right">
                                     <input type="number" min="0" step="0.01" className="input text-xs text-right w-full"
-                                           value={it.planned_qty || ''}
-                                           onChange={e => updatePlanItem(i, j, { planned_qty: +e.target.value })}
-                                           disabled={!it.po_item_id}
-                                           placeholder={boq?.unit || 'qty'} />
+                                      value={it.planned_qty || ''}
+                                      onChange={e => updatePlanItem(i, j, { planned_qty: +e.target.value })}
+                                      disabled={!it.po_item_id}
+                                      placeholder={boq?.unit || 'qty'} />
                                   </td>
                                   <td className="py-1 text-center">
                                     <button type="button" onClick={() => removePlanItem(i, j)}
-                                            className="text-gray-400 hover:text-red-600 text-lg leading-none px-1"
-                                            title="Remove item">×</button>
+                                      className="text-gray-400 hover:text-red-600 text-lg leading-none px-1"
+                                      title="Remove item">×</button>
                                   </td>
                                 </tr>
                               );
@@ -2332,7 +2424,7 @@ export default function DPR() {
                           </tbody>
                         </table>
                         <button type="button" onClick={() => addPlanItem(i)}
-                                className="text-[11px] text-red-600 hover:text-red-800 underline mt-1">
+                          className="text-[11px] text-red-600 hover:text-red-800 underline mt-1">
                           + Add BOQ item to this day
                         </button>
                       </>
@@ -2358,9 +2450,9 @@ export default function DPR() {
             const totalPl = totalA - totalB;
             return (
               <div className="bg-gray-50 border rounded px-3 py-2 text-xs space-y-1">
-                <div className="flex justify-between font-semibold">
+                <div className="flex flex-wrap justify-between gap-x-2 gap-y-0.5 font-semibold">
                   <span>Week Totals</span>
-                  <span>{planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days · Labour Value (A) ₹{Math.round(totalA).toLocaleString('en-IN')} · Cost (B) ₹{Math.round(totalB).toLocaleString('en-IN')}</span>
+                  <span className="text-right">{planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days · Labour (A) ₹{Math.round(totalA).toLocaleString('en-IN')} · Cost (B) ₹{Math.round(totalB).toLocaleString('en-IN')}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-gray-500">Plan P/L (labour rates se — BOQ rate nahi)</span>
@@ -2403,7 +2495,7 @@ export default function DPR() {
             <div>
               <label className="label">Site *</label>
               <select className="select" value={slipSite}
-                      onChange={e => { setSlipSite(e.target.value); loadSlipRows(e.target.value, slipType, slipDate); }}>
+                onChange={e => { setSlipSite(e.target.value); loadSlipRows(e.target.value, slipType, slipDate); }}>
                 <option value="">— Pick site —</option>
                 {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
@@ -2412,11 +2504,11 @@ export default function DPR() {
               <label className="label">Type *</label>
               <div className="flex rounded border overflow-hidden">
                 <button type="button" onClick={() => { setSlipType('issue'); loadSlipRows(slipSite, 'issue', slipDate); }}
-                        className={`flex-1 py-2 text-xs font-semibold ${slipType === 'issue' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>
+                  className={`flex-1 py-2 text-xs font-semibold ${slipType === 'issue' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>
                   🌅 Morning Issue
                 </button>
                 <button type="button" onClick={() => { setSlipType('return'); loadSlipRows(slipSite, 'return', slipDate); }}
-                        className={`flex-1 py-2 text-xs font-semibold ${slipType === 'return' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600'}`}>
+                  className={`flex-1 py-2 text-xs font-semibold ${slipType === 'return' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600'}`}>
                   🌇 Evening Return
                 </button>
               </div>
@@ -2424,7 +2516,7 @@ export default function DPR() {
             <div>
               <label className="label">Date</label>
               <input type="date" className="input" value={slipDate}
-                     onChange={e => { setSlipDate(e.target.value); loadSlipRows(slipSite, slipType, e.target.value); }} />
+                onChange={e => { setSlipDate(e.target.value); loadSlipRows(slipSite, slipType, e.target.value); }} />
             </div>
           </div>
 
@@ -2440,7 +2532,7 @@ export default function DPR() {
           <div>
             <label className="label">{slipType === 'issue' ? 'Issued To (Sr. Site Engineer / team) *' : 'Returned By *'}</label>
             <input className="input" list="slip-person-suggestions" placeholder="Type a name or pick from the team…"
-                   value={slipTo} onChange={e => setSlipTo(e.target.value)} />
+              value={slipTo} onChange={e => setSlipTo(e.target.value)} />
             <datalist id="slip-person-suggestions">
               {(users || []).map(u => <option key={u.id} value={u.name} />)}
             </datalist>
@@ -2474,20 +2566,20 @@ export default function DPR() {
                 <tbody>
                   {slipRows.map((r, i) => (
                     <tr key={r.item_master_id} className="border-b">
-                      <td className="py-1 pr-2">
-                        {r.name} <span className="text-gray-400">({r.unit})</span>
+                      <td className="py-1 pr-2 min-w-[150px] break-words">
+                        {r.name} <span className="text-gray-400 whitespace-nowrap">({r.unit})</span>
                         {r.age_status === 'orange' && <span title={`${r.age_days} din se store mein pada hai (15 allowed)`} className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300">🟠 {r.age_days}d</span>}
                         {r.age_status === 'red' && <span title={`${r.age_days} din se store mein pada hai (max 30!)`} className="ml-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-red-50 text-red-700 border-red-300">🔴 {r.age_days}d</span>}
                       </td>
-                      <td className="py-1 px-2 text-right tabular-nums">{r.cap}</td>
-                      {slipType === 'issue' && <td className="py-1 px-2 text-right tabular-nums text-blue-700">{r.planned_today > 0 ? r.planned_today : <span className="text-gray-300">—</span>}</td>}
-                      <td className="py-1 pl-2 text-right">
+                      <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{r.cap}</td>
+                      {slipType === 'issue' && <td className="py-1 px-2 text-right tabular-nums text-blue-700 whitespace-nowrap">{r.planned_today > 0 ? r.planned_today : <span className="text-gray-300">—</span>}</td>}
+                      <td className="py-1 pl-2 text-right min-w-[100px]">
                         <input type="number" min="0" max={r.cap} step="0.01"
-                               disabled={slipType === 'issue' && r.cap <= 0}
-                               title={slipType === 'issue' && r.cap <= 0 ? 'Store mein 0 hai — pehle stock lao (Opening Stock / transfer / PO receive)' : ''}
-                               className={`input text-xs text-right w-full ${slipType === 'issue' && r.cap <= 0 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''} ${+r.qty > r.cap ? '!border-red-400 bg-red-50' : ''} ${slipType === 'issue' && +r.qty > 0 && +r.qty === +r.planned_today ? 'bg-blue-50' : ''}`}
-                               value={r.qty} placeholder="0"
-                               onChange={e => setSlipRows(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} />
+                          disabled={slipType === 'issue' && r.cap <= 0}
+                          title={slipType === 'issue' && r.cap <= 0 ? 'Store mein 0 hai — pehle stock lao (Opening Stock / transfer / PO receive)' : ''}
+                          className={`input text-xs text-right w-full ${slipType === 'issue' && r.cap <= 0 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : ''} ${+r.qty > r.cap ? '!border-red-400 bg-red-50' : ''} ${slipType === 'issue' && +r.qty > 0 && +r.qty === +r.planned_today ? 'bg-blue-50' : ''}`}
+                          value={r.qty} placeholder="0"
+                          onChange={e => setSlipRows(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} />
                       </td>
                     </tr>
                   ))}
@@ -2540,7 +2632,7 @@ export default function DPR() {
                 </div>
               </div>
               <button className="btn btn-primary text-xs py-1"
-                      onClick={() => { setPendingPlansModal(false); openPlanWeek(String(p.site_id), p.week_start); }}>
+                onClick={() => { setPendingPlansModal(false); openPlanWeek(String(p.site_id), p.week_start); }}>
                 Open &amp; Review
               </button>
             </div>
@@ -2562,7 +2654,7 @@ function AgeingWidget() {
   useEffect(() => {
     const pull = () => api.get('/dpr/site-store-ageing')
       .then(r => { setData(r.data); setLastAt(new Date()); })
-      .catch(() => {});
+      .catch(() => { });
     pull();
     const t = setInterval(pull, 60000);
     return () => clearInterval(t);
@@ -2583,8 +2675,8 @@ function AgeingWidget() {
         {rows.length === 0
           ? <span className="text-xs font-semibold text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-1">Site stores khaali hain — stock aate hi ageing yahan LIVE dikhega</span>
           : flagged.length === 0
-          ? <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-300 rounded px-2 py-1">✓ Sab fresh hai ({rows.length} item, sab ≤ 15 din)</span>
-          : <span className={`text-xs font-bold rounded px-2 py-1 border ${redCount > 0 ? 'bg-red-50 text-red-700 border-red-300 animate-pulse' : 'bg-amber-50 text-amber-700 border-amber-300'}`}>
+            ? <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-300 rounded px-2 py-1">✓ Sab fresh hai ({rows.length} item, sab ≤ 15 din)</span>
+            : <span className={`text-xs font-bold rounded px-2 py-1 border ${redCount > 0 ? 'bg-red-50 text-red-700 border-red-300 animate-pulse' : 'bg-amber-50 text-amber-700 border-amber-300'}`}>
               {flagged.length} item purane {redCount > 0 ? `· ${redCount} RED (30+ din!)` : ''}
             </span>}
       </div>
@@ -2601,11 +2693,11 @@ function AgeingWidget() {
             <tbody>
               {flagged.slice(0, 15).map((r, i) => (
                 <tr key={i} className="border-b">
-                  <td className="py-1 pr-2">{r.site_name}</td>
-                  <td className="py-1 px-2">{r.engineer_name || <span className="text-red-500 font-semibold">koi assign nahi!</span>}</td>
-                  <td className="py-1 px-2">{r.material_name} <span className="text-gray-400">({r.uom || 'nos'})</span></td>
-                  <td className="py-1 px-2 text-right tabular-nums">{r.quantity}</td>
-                  <td className="py-1 pl-2 text-right">
+                  <td className="py-1 pr-2 min-w-[120px] break-words">{r.site_name}</td>
+                  <td className="py-1 px-2 min-w-[110px]">{r.engineer_name || <span className="text-red-500 font-semibold whitespace-nowrap">koi assign nahi!</span>}</td>
+                  <td className="py-1 px-2 min-w-[140px] break-words">{r.material_name} <span className="text-gray-400 whitespace-nowrap">({r.uom || 'nos'})</span></td>
+                  <td className="py-1 px-2 text-right tabular-nums whitespace-nowrap">{r.quantity}</td>
+                  <td className="py-1 pl-2 text-right whitespace-nowrap">
                     <span className={`font-bold px-1.5 py-0.5 rounded border text-[10px] ${r.status === 'red' ? 'bg-red-50 text-red-700 border-red-300' : 'bg-amber-50 text-amber-700 border-amber-300'}`}>
                       {r.age_days} din {r.status === 'red' ? '🔴' : '🟠'}
                     </span>
@@ -2651,7 +2743,7 @@ function AajKaUpdate() {
   const [busy, setBusy] = useState(false);
   const siteRef = useRef('');             // stale-response guard for async loads
 
-  useEffect(() => { api.get('/dpr/sites').then(r => setSites(r.data || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get('/dpr/sites').then(r => setSites(r.data || [])).catch(() => { }); }, []);
 
   const load = async (sid) => {
     siteRef.current = String(sid || '');
@@ -2677,7 +2769,7 @@ function AajKaUpdate() {
     // Stale-response guard: drop the reply if the site changed meanwhile.
     api.get(`/dpr/sites/${sid}/weather`)
       .then(w => { if (siteRef.current === String(sid)) setWeather(w.data?.available ? w.data : null); })
-      .catch(() => {});
+      .catch(() => { });
   };
 
   const uploadPhotos = async (files) => {
@@ -2810,19 +2902,21 @@ function AajKaUpdate() {
                   <tbody>
                     {rows.map((r, i) => (
                       <tr key={i} className="border-b">
-                        <td className="py-2 pr-2">{r.description} <span className="text-gray-400 text-xs">({r.unit})</span></td>
-                        <td className="py-2 px-2 text-right tabular-nums text-gray-600">{r.planned_qty}</td>
-                        <td className="py-2 pl-2">
+                        {/* min-widths: crush hone ki jagah table scroll kare —
+                            mobile par words kabhi na kate (mam 2026-08-03) */}
+                        <td className="py-2 pr-2 min-w-[150px] break-words">{r.description} <span className="text-gray-400 text-xs whitespace-nowrap">({r.unit})</span></td>
+                        <td className="py-2 px-2 text-right tabular-nums text-gray-600 whitespace-nowrap">{r.planned_qty}</td>
+                        <td className="py-2 pl-2 min-w-[150px]">
                           <div className="flex items-center gap-1">
                             <input type="number" min="0" step="0.01" placeholder="0"
-                              className="input text-right text-base font-semibold w-full"
+                              className="input text-right text-base font-semibold w-full min-w-[70px]"
                               value={r.done}
                               onChange={e => setRows(prev => prev.map((x, j) => j === i ? { ...x, done: e.target.value } : x))} />
                             {/* One-tap confirm: "target jitna hua" — deliberate
                                 tap, not auto-fill, so 100% days stay honest */}
                             <button type="button" title="Target jitna hua — ek tap"
                               onClick={() => setRows(prev => prev.map((x, j) => j === i ? { ...x, done: String(x.planned_qty) } : x))}
-                              className={`text-[10px] font-semibold border rounded px-1.5 py-1 whitespace-nowrap ${+r.done === +r.planned_qty && +r.done > 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'text-emerald-700 border-emerald-300 hover:bg-emerald-50'}`}>
+                              className={`text-[10px] font-semibold border rounded px-1.5 py-1 whitespace-nowrap flex-shrink-0 ${+r.done === +r.planned_qty && +r.done > 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'text-emerald-700 border-emerald-300 hover:bg-emerald-50'}`}>
                               ✓ full
                             </button>
                           </div>
@@ -2907,7 +3001,7 @@ function AajKaUpdate() {
               {plChip('Is mahine', pl?.monthly)}
             </div>
             <button onClick={submit} disabled={busy || uploading}
-              className="btn btn-primary text-base font-bold px-6 py-3">
+              className="btn btn-primary text-base font-bold px-6 py-3 w-full sm:w-auto">
               {busy ? 'Ban raha hai…' : '✅ DPR SUBMIT KARO'}
             </button>
           </div>
@@ -2918,7 +3012,9 @@ function AajKaUpdate() {
 }
 
 // SposComplianceGrid — SPOS Daily Compliance (mam 2026-07-29, SPOS PDF).
-// One row per active site, four checks from the SPOS HR checklist:
+// One row per SITE ENGINEER (mam 2026-08-21: "no need compliance eng wise
+// that ok") — sites with no engineer no longer get a row; the four checks
+// are rolled up across all of that engineer's active sites:
 // morning punch by 09:00 · DPR by evening cutoff · site photos · weekly
 // plan approved. Renders above the Engineer Compliance analytics; the
 // same data feeds the 18:30 Exception Report email to management.
@@ -2940,29 +3036,111 @@ function SposComplianceGrid() {
         .toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
     } catch { return ''; }
   };
-  const Chip = ({ tone, children }) => {
+  const Chip = ({ tone, title, children }) => {
     const cls = tone === 'ok' ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
       : tone === 'warn' ? 'bg-amber-50 text-amber-700 border-amber-300'
-      : tone === 'bad' ? 'bg-red-50 text-red-700 border-red-300'
-      : 'bg-gray-50 text-gray-400 border-gray-200';
-    return <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap ${cls}`}>{children}</span>;
+        : tone === 'bad' ? 'bg-red-50 text-red-700 border-red-300'
+          : 'bg-gray-50 text-gray-400 border-gray-200';
+    return <span title={title} className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded border whitespace-nowrap ${cls}`}>{children}</span>;
   };
+  // v === null means 0/0 — no engineer-owned site, so there is no denominator.
+  // The tiles are hidden in that state, but never let a missing number render
+  // as a red "0%" / "%" if that guard ever drifts (audit 2026-08-21).
   const Pct = ({ v, label }) => (
     <div className="text-center px-3">
-      <div className={`text-xl font-bold ${v >= 90 ? 'text-emerald-600' : v >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{v}%</div>
+      {v == null
+        ? <div className="text-xl font-bold text-gray-400" title="No engineer-owned site — nothing to measure">—</div>
+        : <div className={`text-xl font-bold ${v >= 90 ? 'text-emerald-600' : v >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{v}%</div>}
       <div className="text-[10px] text-gray-500 uppercase">{label}</div>
     </div>
   );
+
+  // Engineer-wise chips (mam 2026-08-21): a fraction across all that
+  // engineer's sites, never a boolean that hides a gap — ✓ only when every
+  // site passed. A single-site engineer keeps the old wording. Shared by the
+  // desktop table and the mobile cards so the two can't drift.
+  const tip = (...parts) => parts.filter(Boolean).join(' · ') || undefined;
+  const punchChip = (c) => {
+    const title = tip(c.missing_sites.length && `missing: ${c.missing_sites.join(', ')}`,
+      c.late_sites.length && `after 9 AM: ${c.late_sites.join(', ')}`);
+    if (c.total === 1) {
+      return !c.done ? { tone: 'bad', text: '✗ missing', title }
+        : c.on_time ? { tone: 'ok', text: `✓ ${fmtT(c.at)}`, title }
+          : { tone: 'warn', text: `⚠ after 9 · ${fmtT(c.at)}`, title };
+    }
+    const tone = c.done === 0 ? 'bad' : (c.done === c.total && c.late === 0) ? 'ok' : 'warn';
+    const mark = c.done === 0 ? '✗' : c.done === c.total ? '✓' : '⚠';
+    return { tone, text: `${mark} ${c.done}/${c.total}${c.late ? ` · ${c.late} late` : ''}`, title };
+  };
+  const dprChip = (c) => {
+    const title = tip(c.missing_sites.length && `missing: ${c.missing_sites.join(', ')}`,
+      c.late_sites.length && `after cutoff: ${c.late_sites.join(', ')}`);
+    if (c.total === 1) {
+      return !c.done ? { tone: 'bad', text: '✗ missing', title }
+        : c.on_time ? { tone: 'ok', text: `✓ ${fmtT(c.at)}`, title }
+          : { tone: 'warn', text: `⚠ late · ${fmtT(c.at)}`, title };
+    }
+    const tone = c.done === 0 ? 'bad' : (c.done === c.total && c.late === 0) ? 'ok' : 'warn';
+    const mark = c.done === 0 ? '✗' : c.done === c.total ? '✓' : '⚠';
+    return { tone, text: `${mark} ${c.done}/${c.total}${c.late ? ` · ${c.late} late` : ''}`, title };
+  };
+  const photosChip = (c) => {
+    const title = c.missing_sites.length ? `no photos: ${c.missing_sites.join(', ')}` : undefined;
+    if (c.total === 1) {
+      return c.done ? { tone: 'ok', text: '✓', title }
+        : c.missing ? { tone: 'bad', text: '✗ none', title }
+          : { tone: 'none', text: '—', title };
+    }
+    if (c.done === c.total) return { tone: 'ok', text: `✓ ${c.done}/${c.total}`, title };
+    if (c.done === 0 && c.missing === 0) return { tone: 'none', text: '—', title };
+    if (c.done === 0) return { tone: 'bad', text: `✗ 0/${c.total}`, title };
+    return { tone: 'warn', text: `⚠ ${c.done}/${c.total}`, title };
+  };
+  const planChip = (c) => {
+    const title = tip(c.missing_sites.length && `no plan: ${c.missing_sites.join(', ')}`,
+      c.pending_sites.length && `pending PM: ${c.pending_sites.join(', ')}`,
+      c.rejected_sites.length && `rejected: ${c.rejected_sites.join(', ')}`);
+    if (c.total === 1) {
+      return c.approved ? { tone: 'ok', text: `✓ approved${c.late ? ' (late)' : ''}`, title }
+        : c.submitted ? { tone: 'warn', text: '⏳ pending PM', title }
+          : c.rejected ? { tone: 'bad', text: '✗ rejected', title }
+            : { tone: 'bad', text: '✗ no plan', title };
+    }
+    if (c.approved === c.total) return { tone: 'ok', text: `✓ ${c.total}/${c.total} approved${c.late ? ` · ${c.late} late` : ''}`, title };
+    if (c.approved === 0) return { tone: 'bad', text: `✗ 0/${c.total} approved`, title };
+    return { tone: 'warn', text: `⚠ ${c.approved}/${c.total} approved`, title };
+  };
+  const Cell = ({ c }) => <Chip tone={c.tone} title={c.title}>{c.text}</Chip>;
+  // Site subtitle — capped at 3 names like the 18:30 report, so an engineer
+  // with a dozen sites can't push the status chips off a phone screen; the
+  // full list stays available as the tooltip.
+  const SiteList = ({ r, className }) => {
+    const shown = r.site_names.length <= 3
+      ? r.site_names.join(', ')
+      : `${r.site_names.slice(0, 3).join(', ')} +${r.site_names.length - 3} more`;
+    return (
+      <div className={className} title={r.site_names.join(', ')}>
+        {r.sites_count} site{r.sites_count === 1 ? '' : 's'} · {shown}
+      </div>
+    );
+  };
+  const unassigned = data && data.summary.sites_unassigned > 0 ? (
+    <div className="text-[11px] text-gray-400">
+      {data.summary.sites_unassigned} active site(s) have no engineer assigned — not counted above.
+    </div>
+  ) : null;
 
   return (
     <div className="card p-4 mb-4 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="font-semibold text-gray-800">SPOS Daily Compliance</h3>
-          <p className="text-xs text-gray-500">Per site: morning punch by 9 AM · DPR by evening cutoff · photos · weekly plan approved. Gaps go to management in the 6:30 PM Exception Report.</p>
+          <p className="text-xs text-gray-500">Per engineer (all their sites): morning punch by 9 AM · DPR by evening cutoff · photos · weekly plan approved. A ✓ means every one of that engineer's sites did it. Gaps go to management in the 6:30 PM Exception Report.</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {data && <>
+          {/* No engineer rows = no denominator: the tiles would read a flat
+              0% and brand a compliant site non-compliant. Hide them instead. */}
+          {data && data.engineers.length > 0 && <>
             <Pct v={data.summary.punch_pct} label="Punch" />
             <Pct v={data.summary.dpr_pct} label="DPR" />
             <Pct v={data.summary.photos_pct} label="Photos" />
@@ -2973,52 +3151,58 @@ function SposComplianceGrid() {
       </div>
       {loading ? <div className="text-sm text-gray-400 py-4 text-center">Loading…</div>
         : !data ? <div className="text-sm text-red-500 py-4 text-center">Could not load compliance data.</div>
-        : data.sites.length === 0 ? <div className="text-sm text-gray-400 py-4 text-center">No active sites.</div>
-        : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-gray-500 border-b text-left">
-                <th className="py-1.5 pr-2">Site</th>
-                <th className="py-1.5 px-2">Engineer</th>
-                <th className="py-1.5 px-2">Morning Punch</th>
-                <th className="py-1.5 px-2">DPR</th>
-                <th className="py-1.5 px-2">Photos</th>
-                <th className="py-1.5 pl-2">Week Plan</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.sites.map(r => (
-                <tr key={r.site_id} className="border-b hover:bg-gray-50">
-                  <td className="py-1.5 pr-2 font-medium">{r.site}</td>
-                  <td className="py-1.5 px-2 text-gray-600">{r.engineer || <span className="text-gray-300">—</span>}</td>
-                  <td className="py-1.5 px-2">
-                    {!r.punch_done ? <Chip tone="bad">✗ missing</Chip>
-                      : r.punch_by_9 ? <Chip tone="ok">✓ {fmtT(r.punch_at)}</Chip>
-                      : <Chip tone="warn">⚠ after 9 · {fmtT(r.punch_at)}</Chip>}
-                  </td>
-                  <td className="py-1.5 px-2">
-                    {!r.dpr_done ? <Chip tone="bad">✗ missing</Chip>
-                      : r.dpr_by_cutoff ? <Chip tone="ok">✓ {fmtT(r.dpr_at)}</Chip>
-                      : <Chip tone="warn">⚠ late · {fmtT(r.dpr_at)}</Chip>}
-                  </td>
-                  <td className="py-1.5 px-2">
-                    {r.photos_done ? <Chip tone="ok">✓</Chip>
-                      : r.dpr_done ? <Chip tone="bad">✗ none</Chip>
-                      : <Chip tone="none">—</Chip>}
-                  </td>
-                  <td className="py-1.5 pl-2">
-                    {r.plan_status === 'approved' ? <Chip tone="ok">✓ approved{r.plan_late ? ' (late)' : ''}</Chip>
-                      : r.plan_status === 'submitted' ? <Chip tone="warn">⏳ pending PM</Chip>
-                      : r.plan_status === 'rejected' ? <Chip tone="bad">✗ rejected</Chip>
-                      : <Chip tone="bad">✗ no plan</Chip>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+          : data.engineers.length === 0 ? <div className="text-sm text-gray-400 py-4 text-center">No engineer is assigned to any active site.</div>
+            : (
+              <>
+                {/* ─── MOBILE CARDS ─── mobile↔desktop parity rule. */}
+                <div className="md:hidden space-y-3">
+                  {data.engineers.map(r => (
+                    <div key={r.engineer_id} className="card p-3 space-y-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Engineer</div>
+                        <div className="text-base font-bold text-gray-900 truncate">{r.engineer}</div>
+                        <SiteList r={r} className="text-[11px] text-gray-500" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100">
+                        <div><div className="text-[9px] uppercase text-gray-400">Morning Punch</div><Cell c={punchChip(r.punch)} /></div>
+                        <div><div className="text-[9px] uppercase text-gray-400">DPR</div><Cell c={dprChip(r.dpr)} /></div>
+                        <div><div className="text-[9px] uppercase text-gray-400">Photos</div><Cell c={photosChip(r.photos)} /></div>
+                        <div><div className="text-[9px] uppercase text-gray-400">Week Plan</div><Cell c={planChip(r.plan)} /></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* ─── DESKTOP TABLE (md+) ─── */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-gray-500 border-b text-left">
+                        <th className="py-1.5 pr-2">Engineer</th>
+                        <th className="py-1.5 px-2">Morning Punch</th>
+                        <th className="py-1.5 px-2">DPR</th>
+                        <th className="py-1.5 px-2">Photos</th>
+                        <th className="py-1.5 pl-2">Week Plan</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.engineers.map(r => (
+                        <tr key={r.engineer_id} className="border-b hover:bg-gray-50">
+                          <td className="py-1.5 pr-2">
+                            <div className="font-medium">{r.engineer}</div>
+                            <SiteList r={r} className="text-[10px] text-gray-400" />
+                          </td>
+                          <td className="py-1.5 px-2"><Cell c={punchChip(r.punch)} /></td>
+                          <td className="py-1.5 px-2"><Cell c={dprChip(r.dpr)} /></td>
+                          <td className="py-1.5 px-2"><Cell c={photosChip(r.photos)} /></td>
+                          <td className="py-1.5 pl-2"><Cell c={planChip(r.plan)} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+      {unassigned}
     </div>
   );
 }
@@ -3162,47 +3346,47 @@ function LossReasonsTab() {
             {filtered.map(r => {
               const owner = ownerFor(r);
               return (
-              <tr key={r.id} className={(r.consecutive_loss_days || 0) >= 3 && !r.loss_addressed ? 'bg-red-50/60' : ''}>
-                <td className="font-medium">{r.site_name || `Site #${r.site_id}`}</td>
-                <td>{r.report_date}</td>
-                <td className="font-bold text-red-700">Rs {Math.abs(Math.round(+r.profit_loss || 0)).toLocaleString('en-IN')}</td>
-                <td>{r.hindrance_category || <span className="text-gray-400">-</span>}</td>
-                {/* Auto-resolved owner per category.  Mam: fixed mapping for
+                <tr key={r.id} className={(r.consecutive_loss_days || 0) >= 3 && !r.loss_addressed ? 'bg-red-50/60' : ''}>
+                  <td className="font-medium">{r.site_name || `Site #${r.site_id}`}</td>
+                  <td>{r.report_date}</td>
+                  <td className="font-bold text-red-700">Rs {Math.abs(Math.round(+r.profit_loss || 0)).toLocaleString('en-IN')}</td>
+                  <td>{r.hindrance_category || <span className="text-gray-400">-</span>}</td>
+                  {/* Auto-resolved owner per category.  Mam: fixed mapping for
                     Manpower/Material/Money/Machine; Site Clearance =
                     site's CRM. */}
-                <td>
-                  {owner === '—' ? (
-                    <span className="text-gray-400">-</span>
-                  ) : (
-                    <span className="text-xs font-semibold text-gray-800 bg-amber-100 px-2 py-0.5 rounded">{owner}</span>
-                  )}
-                </td>
-                <td className="max-w-[320px] text-xs text-gray-700 whitespace-normal break-words" title={r.hindrances}>{r.hindrances || <span className="text-gray-400">-</span>}</td>
-                <td>
-                  {(r.consecutive_loss_days || 0) >= 3
-                    ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800"><FiAlertTriangle size={10} /> {r.consecutive_loss_days} DAYS</span>
-                    : <span className="text-xs text-gray-600">{r.consecutive_loss_days || 1} day{r.consecutive_loss_days > 1 ? 's' : ''}</span>}
-                </td>
-                <td className="text-xs">{r.submitted_by_name || '-'}</td>
-                <td>
-                  {r.loss_addressed ? (
-                    <div className="space-y-0.5">
-                      <button onClick={() => unmarkAddressed(r)} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200" title={r.loss_addressed_note || ''}>
-                        <FiCheck size={10} /> Done by {r.addressed_by_name || '-'}
-                      </button>
-                      {r.loss_addressed_proof_url && (
-                        <a href={r.loss_addressed_proof_url} target="_blank" rel="noopener noreferrer"
-                           className="block text-[10px] text-blue-600 hover:text-blue-800 underline">
-                          View proof
-                        </a>
-                      )}
-                      {r.loss_addressed_note && <div className="text-[10px] text-gray-500 max-w-[180px] truncate" title={r.loss_addressed_note}>{r.loss_addressed_note}</div>}
-                    </div>
-                  ) : (
-                    <button onClick={() => openAddressModal(r)} className="text-xs btn btn-secondary py-0.5 px-2">Mark addressed</button>
-                  )}
-                </td>
-              </tr>
+                  <td>
+                    {owner === '—' ? (
+                      <span className="text-gray-400">-</span>
+                    ) : (
+                      <span className="text-xs font-semibold text-gray-800 bg-amber-100 px-2 py-0.5 rounded">{owner}</span>
+                    )}
+                  </td>
+                  <td className="max-w-[320px] text-xs text-gray-700 whitespace-normal break-words" title={r.hindrances}>{r.hindrances || <span className="text-gray-400">-</span>}</td>
+                  <td>
+                    {(r.consecutive_loss_days || 0) >= 3
+                      ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800"><FiAlertTriangle size={10} /> {r.consecutive_loss_days} DAYS</span>
+                      : <span className="text-xs text-gray-600">{r.consecutive_loss_days || 1} day{r.consecutive_loss_days > 1 ? 's' : ''}</span>}
+                  </td>
+                  <td className="text-xs">{r.submitted_by_name || '-'}</td>
+                  <td>
+                    {r.loss_addressed ? (
+                      <div className="space-y-0.5">
+                        <button onClick={() => unmarkAddressed(r)} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200" title={r.loss_addressed_note || ''}>
+                          <FiCheck size={10} /> Done by {r.addressed_by_name || '-'}
+                        </button>
+                        {r.loss_addressed_proof_url && (
+                          <a href={r.loss_addressed_proof_url} target="_blank" rel="noopener noreferrer"
+                            className="block text-[10px] text-blue-600 hover:text-blue-800 underline">
+                            View proof
+                          </a>
+                        )}
+                        {r.loss_addressed_note && <div className="text-[10px] text-gray-500 max-w-[180px] truncate" title={r.loss_addressed_note}>{r.loss_addressed_note}</div>}
+                      </div>
+                    ) : (
+                      <button onClick={() => openAddressModal(r)} className="text-xs btn btn-secondary py-0.5 px-2">Mark addressed</button>
+                    )}
+                  </td>
+                </tr>
               );
             })}
           </tbody>
@@ -3222,15 +3406,15 @@ function LossReasonsTab() {
             <div>
               <label className="label">How was it resolved?</label>
               <textarea className="input" rows="3"
-                        value={addressModal.note}
-                        onChange={e => setAddressModal(a => ({ ...a, note: e.target.value }))}
-                        placeholder="e.g. Extra 4 helpers arranged from Mohali, deployed 17 May 7 AM" />
+                value={addressModal.note}
+                onChange={e => setAddressModal(a => ({ ...a, note: e.target.value }))}
+                placeholder="e.g. Extra 4 helpers arranged from Mohali, deployed 17 May 7 AM" />
             </div>
             <div>
               <label className="label">Attach proof (photo / PDF / receipt)</label>
               <input type="file" accept="image/*,application/pdf"
-                     onChange={e => setAddressModal(a => ({ ...a, file: e.target.files?.[0] || null }))}
-                     className="text-xs" />
+                onChange={e => setAddressModal(a => ({ ...a, file: e.target.files?.[0] || null }))}
+                className="text-xs" />
               <p className="text-[10px] text-gray-500 mt-1">
                 e.g. site photo showing resolution, vendor invoice, delivery challan, signed clearance email — anything that lets management verify the problem is actually solved.
               </p>

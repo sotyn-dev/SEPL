@@ -12,6 +12,7 @@ import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import { useAuth } from '../context/AuthContext';
 import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera, FiDownload, FiCalendar } from 'react-icons/fi';
@@ -53,6 +54,12 @@ export default function Inventory() {
   // Filters
   const [stockFilter, setStockFilter] = useState({ warehouse_id: '', search: '', low_only: false });
   const [mvmtFilter, setMvmtFilter] = useState({ warehouse_id: '', type: '', date_from: '', date_to: '' });
+  // Type (PO / FOC / RGP) and Condition are StockTab's CLIENT-side filters, but
+  // they live here — not inside StockTab — so the header's Export Excel can see
+  // them. Kept out of `stockFilter` on purpose: that object drives the server
+  // refetch, and these two need no round-trip.
+  const [typeFilter, setTypeFilter] = useState('');
+  const [condFilter, setCondFilter] = useState('');
 
   const loadCommon = async () => {
     try {
@@ -103,6 +110,28 @@ export default function Inventory() {
   useEffect(() => { if (tab === 'stock') loadStock(); /* eslint-disable-next-line */ }, [tab, stockFilter]);
   useEffect(() => { if (tab === 'movements') loadMovements(); /* eslint-disable-next-line */ }, [tab, mvmtFilter]);
 
+  // The EXACT row list the Stock table renders: server-side filters
+  // (warehouse / search / low_only) already applied by loadStock, plus the two
+  // client-side ones. Defensive warehouse re-filter: even if the server
+  // response lags behind the dropdown change (network glitch, caching, race
+  // condition), rows shown will ALWAYS match the currently-selected warehouse.
+  // Without this mam was seeing CHOUDHERY rows under a CONSERN PHARMA filter
+  // when the stock state was momentarily stale between fetches.
+  const flatStock = useMemo(() => {
+    let rows = stock;
+    if (stockFilter.warehouse_id) {
+      const wid = +stockFilter.warehouse_id;
+      rows = rows.filter(r => +r.warehouse_id === wid);
+    }
+    if (typeFilter) {
+      rows = rows.filter(r => String(r.item_type || '').toUpperCase() === typeFilter);
+    }
+    if (condFilter) {
+      rows = rows.filter(r => (r.latest_condition || '') === condFilter);
+    }
+    return rows;
+  }, [stock, stockFilter.warehouse_id, typeFilter, condFilter]);
+
   // Aggregate for header cards
   const totals = useMemo(() => {
     const valueByWh = summary.reduce((s, w) => s + (+w.total_value || 0), 0);
@@ -124,14 +153,14 @@ export default function Inventory() {
         </div>
         <div className="flex flex-wrap gap-2 w-full sm:w-auto">
           <button onClick={() => {
-            // Export the currently-loaded stock rows. (Earlier this referenced
-            // `flatStock`, which only exists inside StockTab — so the click
-            // threw and nothing downloaded. Use the parent's own `stock`, with
-            // the real field names: quantity / effective_rate / value.)
-            if (!stock.length) { toast.error('No stock to export — open the Stock tab / pick a warehouse first'); return; }
+            // Export exactly what the Stock table shows — `flatStock` is the
+            // full filtered list (warehouse / search / low_only from the server
+            // PLUS the Type and Condition chips), NOT the current page: the
+            // pager inside StockTab windows rendering only.
+            if (!flatStock.length) { toast.error('No stock to export — open the Stock tab / pick a warehouse first'); return; }
             exportCsv('inventory-stock',
               ['Code','Site','Item','Size','Spec','Make','Type','UoM','Qty','Condition','Rate','Value','Reorder Level'],
-              stock.map(s => {
+              flatStock.map(s => {
                 const rate = (+s.effective_rate > 0) ? +s.effective_rate : ((+s.avg_rate > 0) ? +s.avg_rate : (+s.master_price || 0));
                 const value = (+s.value > 0) ? +s.value : rate * (+s.quantity || 0);
                 return [s.item_code, s.warehouse_name, s.item_name, s.size, s.specification, s.make, s.item_type, s.uom, s.quantity, s.latest_condition, rate, value, s.reorder_level];
@@ -189,7 +218,7 @@ export default function Inventory() {
         ))}
       </div>
 
-      {tab === 'stock' && <StockTab stock={stock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} reload={() => { loadStock(); loadSummary(); }} canEdit={canEdit('inventory') || isAdmin()} canDelete={canDelete('inventory') || isAdmin()} />}
+      {tab === 'stock' && <StockTab stock={stock} flatStock={flatStock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} typeFilter={typeFilter} setTypeFilter={setTypeFilter} condFilter={condFilter} setCondFilter={setCondFilter} reload={() => { loadStock(); loadSummary(); }} canEdit={canEdit('inventory') || isAdmin()} canDelete={canDelete('inventory') || isAdmin()} />}
       {tab === 'opening' && <OpeningStockTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'receive' && <ReceiveTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'issue' && <IssueTab warehouses={warehouses} sites={sites} items={items} reload={() => { loadStock(); loadSummary(); }} />}
@@ -202,7 +231,7 @@ export default function Inventory() {
 }
 
 // ---------- STOCK TAB ----------
-function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDelete }) {
+function StockTab({ stock, flatStock, warehouses, filter, setFilter, typeFilter, setTypeFilter, condFilter, setCondFilter, reload, canEdit, canDelete }) {
   // Inline edit: click a "Reorder" cell to set the threshold per (item × warehouse).
   // Saves on blur / Enter; Esc cancels. Optimistic UI with rollback on error.
   const [editing, setEditing] = useState(null); // { warehouse_id, item_master_id, value }
@@ -213,12 +242,11 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   const [editRow, setEditRow] = useState(null); // { id, item_name, quantity, avg_rate, notes }
   const [savingRow, setSavingRow] = useState(false);
   // Type filter (PO / FOC / RGP) — mam (2026-06-04): "if i filter rgp show
-  // all tools". Purely client-side so it's instant and needs no refetch.
-  const [typeFilter, setTypeFilter] = useState('');
-  // Condition filter (Unused / Used / Scrap / Free to use) — client-side like
-  // typeFilter. Lets mam isolate e.g. all "Free to use" spare stock, and with
-  // the warehouse picker, see what's free at a given site (mam 2026-07-15).
-  const [condFilter, setCondFilter] = useState('');
+  // all tools" — and Condition filter (Unused / Used / Scrap / Free to use),
+  // which lets mam isolate e.g. all "Free to use" spare stock at a given site
+  // (mam 2026-07-15). Both are purely client-side so they're instant and need
+  // no refetch; their state (and the `flatStock` they produce) lives in the
+  // parent so the header's Export Excel exports the same rows this table shows.
   // Ageing date picker. `agingRow` is the stock row whose calendar is open;
   // `agingDraft` holds the picked date UNSAVED until OK is pressed, which is
   // the whole point — Cancel/close must leave the DB untouched.
@@ -317,29 +345,13 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
     } finally { setAgingSaving(false); }
   };
 
-  // Flat list — mam's spec is one row per (site, item) with Site Name as
-  // its own column. The old per-warehouse cards hid the site name in a
-  // header above the table; bringing it inline makes filtering + scanning
-  // a 50-site deployment much easier.
-  // Defensive client-side filter: even if the server response lags behind
-  // the dropdown change (network glitch, caching, race condition), rows
-  // shown will ALWAYS match the currently-selected warehouse. Without this
-  // mam was seeing CHOUDHERY rows under a CONSERN PHARMA filter when the
-  // stock state was momentarily stale between fetches.
-  const flatStock = useMemo(() => {
-    let rows = stock;
-    if (filter.warehouse_id) {
-      const wid = +filter.warehouse_id;
-      rows = rows.filter(r => +r.warehouse_id === wid);
-    }
-    if (typeFilter) {
-      rows = rows.filter(r => String(r.item_type || '').toUpperCase() === typeFilter);
-    }
-    if (condFilter) {
-      rows = rows.filter(r => (r.latest_condition || '') === condFilter);
-    }
-    return rows;
-  }, [stock, filter.warehouse_id, typeFilter, condFilter]);
+  // `flatStock` (the flat one-row-per-(site, item) list mam asked for, with
+  // Site Name as its own column) is computed in the parent and passed in, so
+  // the table and the header's Export Excel can never disagree.
+  //
+  // Windows the RENDERED rows only — banner totals, row counts and the
+  // parent's CSV export all keep using the full filtered list.
+  const stockPager = usePagination(flatStock);
 
   // Total value across whatever's currently filtered. Used in the
   // summary banner — especially useful when mam picks a single site
@@ -446,7 +458,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
           interactions are too cramped on a phone. */}
       {flatStock.length > 0 && (
         <div className="md:hidden space-y-2">
-          {flatStock.map(r => {
+          {stockPager.pageItems.map(r => {
             const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
             const cond = r.latest_condition || '';
             const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -589,7 +601,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                 </tr>
               </thead>
               <tbody>
-                {flatStock.map(r => {
+                {stockPager.pageItems.map(r => {
                   const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
                   const cond = r.latest_condition || '';
                   const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -783,6 +795,12 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
             </table>
           </div>
         </div>
+      )}
+
+      {/* ONE shared pagination bar for both renders — the mobile cards and
+          the desktop table window the same pageItems (mobile↔desktop parity). */}
+      {flatStock.length > 0 && (
+        <div className="card p-0"><Pagination {...stockPager} /></div>
       )}
 
       {/* Edit qty / rate modal — records an ADJUST IN or OUT movement
@@ -1811,6 +1829,9 @@ function EquationTab({ warehouses }) {
   const [to, setTo] = useState(istToday());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  // Item-wise equation rows can run into the hundreds for a busy warehouse.
+  // Hook is unconditional (handles data === null) — required by React rules.
+  const eqPager = usePagination(data?.rows);
   const load = async (w = whId, f = from, t = to) => {
     if (!w) { setData(null); return; }
     setLoading(true);
@@ -1856,7 +1877,7 @@ function EquationTab({ warehouses }) {
               <th className="py-1.5 pl-2 text-right">Live</th>
             </tr></thead>
             <tbody>
-              {data.rows.map(r => (
+              {eqPager.pageItems.map(r => (
                 <tr key={r.item_master_id} className="border-b hover:bg-gray-50">
                   <td className="py-1.5 pr-2">{r.material_name} <span className="text-gray-400">({r.uom || 'nos'})</span></td>
                   <td className="py-1.5 px-2 text-right tabular-nums">{r.opening}</td>
@@ -1875,6 +1896,7 @@ function EquationTab({ warehouses }) {
               ))}
             </tbody>
           </table>
+          <Pagination {...eqPager} />
         </div>
       )}
     </div>
@@ -1882,6 +1904,8 @@ function EquationTab({ warehouses }) {
 }
 
 function MovementsTab({ movements, warehouses, filter, setFilter }) {
+  // The journal is append-only and grows forever — window what's rendered.
+  const mvmtPager = usePagination(movements);
   return (
     <>
       <div className="card p-4 grid grid-cols-1 sm:grid-cols-5 gap-3">
@@ -1927,7 +1951,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
           </thead>
           <tbody>
             {movements.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No movements yet</td></tr>}
-            {movements.map(m => (
+            {mvmtPager.pageItems.map(m => (
               <tr key={m.id} className="border-t hover:bg-gray-50">
                 <td className="px-3 py-1.5 text-[11px] text-gray-500 font-mono whitespace-nowrap">{fmtDateTime(m.created_at, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
                 <td className="px-3 py-1.5">
@@ -1960,6 +1984,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
             ))}
           </tbody>
         </table>
+        <Pagination {...mvmtPager} />
       </div>
     </>
   );

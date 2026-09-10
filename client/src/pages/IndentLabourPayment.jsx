@@ -7,6 +7,7 @@
 // Budget = L1 + L2 + L3 running total per project.
 
 import { useState, useEffect, useMemo } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import { Link } from 'react-router-dom';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -75,7 +76,7 @@ export default function IndentLabourPayment() {
           return (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`btn ${active ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
-              <Icon size={14} /> {t.label}
+              <Icon size={14} /> {flowStepLabel('/indent-labour-payment', t.label)}
               <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
                 active ? 'bg-white text-indigo-700' : 'bg-gray-200 text-gray-600'
               }`}>P{t.phase}</span>

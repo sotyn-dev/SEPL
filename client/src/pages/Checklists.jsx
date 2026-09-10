@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload, FiCalendar, FiCheck, FiX, FiClock } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 // Mam (2026-05-22): "department will on drop down :- Sales, Accounts,
 // Marketing, Finance, IT, MDO, Operations, Admin" + Purchase added
@@ -253,6 +254,36 @@ export default function Checklists() {
   }, {});
   const groupOrder = Object.keys(byPerson).sort((a, b) => a.localeCompare(b));
 
+  // Final filtered by-date rows — same predicate the row-count label uses.
+  // Hoisted to the top level so the pagination hook can window them.
+  const historyFiltered = historyRows.filter(r => {
+    if (deptFilter && r.department !== deptFilter) return false;
+    if (statusFilter === 'done')     return !!r.completion_id;
+    if (statusFilter === 'not_done') return !r.completion_id;
+    if (statusFilter === 'pending')  return r.approval_status === 'pending' && r.completion_id;
+    if (statusFilter === 'approved') return r.approval_status === 'approved';
+    if (statusFilter === 'rejected') return r.approval_status === 'rejected';
+    return true;
+  });
+  const historyPager = usePagination(historyFiltered);
+
+  // Follow-up "List" instances (task × applicable date), flattened at the
+  // top level for the same reason — hooks can't live inside the JSX IIFE.
+  const followupInstances = (() => {
+    if (!followup) return [];
+    const instances = [];
+    for (const t of followup.rows) {
+      for (const c of t.cells) {
+        if (c.status === 'na' || c.status === 'future') continue;
+        instances.push({ task: t, cell: c });
+      }
+    }
+    // Most-recent first so today + recent days surface at top
+    instances.sort((a, b) => b.cell.date.localeCompare(a.cell.date));
+    return instances;
+  })();
+  const followupPager = usePagination(followupInstances);
+
   const save = async (e) => {
     e.preventDefault();
     if (editing) { await api.put(`/hr/checklists/${editing.id}`, form); }
@@ -266,10 +297,26 @@ export default function Checklists() {
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <h3 className="font-semibold text-lg sm:text-xl">Checklists & Recurring Tasks</h3>
         <div className="flex flex-wrap items-center gap-2">
-          <button onClick={() => exportCsv('checklists',
-            ['Description','Frequency','Due Date','Due Time','Assigned To','Status'],
-            checklists.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.status]))}
-            className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 shrink-0"><FiDownload /> Export Excel</button>
+          {/* Export follows the view on screen (mam: the CSV must match
+              what she is looking at).  By-date / Follow-up export the
+              INSTANCE rows with their real completion + approval state;
+              only Master Templates exports the template list — and each
+              uses the filtered dataset, not the raw fetch. */}
+          <button onClick={() => {
+            if (view === 'by-date') exportCsv(`checklists-${historyDate}`,
+              ['Person','Department','Task','Frequency','Done?','Proof','Approval','Approval Note','Approved By','Submitted'],
+              historyFiltered.map(r => [r.assigned_to_name, r.department, r.description || r.title, r.frequency,
+                r.completion_id ? 'Done' : 'Not done', r.proof_url,
+                r.approval_status || (r.completion_id ? 'pending' : ''), r.approval_note, r.approved_by_name,
+                r.submitted_at ? new Date(r.submitted_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '']));
+            if (view === 'followup') exportCsv('checklists-followup',
+              ['Person','Task ID','Frequency','Task','Planned Date','Status','Department','Proof'],
+              followupInstances.map(({ task: t, cell: c }) => [t.assigned_to_name, t.id, t.frequency, t.description,
+                c.date, c.status, t.department, c.proof_url]));
+            if (view === 'current') exportCsv('checklists',
+              ['Description','Frequency','Due Date','Due Time','Assigned To','Department'],
+              visible.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.department]));
+          }} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 shrink-0"><FiDownload /> Export Excel</button>
           {canManage() && (
             <button onClick={() => {
               // Mam (2026-05-22): "by default end date is 31/12/2026"
@@ -423,15 +470,7 @@ export default function Checklists() {
                   No checklists for this date.
                 </td></tr>
               )}
-              {historyRows.filter(r => {
-                if (deptFilter && r.department !== deptFilter) return false;
-                if (statusFilter === 'done')     return !!r.completion_id;
-                if (statusFilter === 'not_done') return !r.completion_id;
-                if (statusFilter === 'pending')  return r.approval_status === 'pending' && r.completion_id;
-                if (statusFilter === 'approved') return r.approval_status === 'approved';
-                if (statusFilter === 'rejected') return r.approval_status === 'rejected';
-                return true;
-              }).map(r => {
+              {historyPager.pageItems.map(r => {
                 const done = !!r.completion_id;
                 const apStat = r.approval_status || (done ? 'pending' : '—');
                 const apBadge = apStat === 'approved' ? 'bg-emerald-100 text-emerald-700'
@@ -509,6 +548,7 @@ export default function Checklists() {
               })}
             </tbody>
           </table>
+          <Pagination {...historyPager} />
         </div>
       )}
 
@@ -587,17 +627,9 @@ export default function Checklists() {
               has an Upload Proof button that calls /complete with
               the specific date. */}
           {followup && followupSubView === 'list' && followup.rows.length > 0 && (() => {
-            // Flatten cells → instance rows (skip na = out-of-window
-            // or wrong weekday; skip future = no point uploading yet).
-            const instances = [];
-            for (const t of followup.rows) {
-              for (const c of t.cells) {
-                if (c.status === 'na' || c.status === 'future') continue;
-                instances.push({ task: t, cell: c });
-              }
-            }
-            // Most-recent first so today + recent days surface at top
-            instances.sort((a, b) => b.cell.date.localeCompare(a.cell.date));
+            // Instance rows come pre-flattened from followupInstances at the
+            // top of the component (na/future skipped, most-recent first);
+            // followupPager windows them for the table below.
             const statusBadge = {
               done_approved: { label: '✓ Approved',     css: 'bg-emerald-100 text-emerald-700' },
               done_pending:  { label: '⏳ Pending Appr', css: 'bg-amber-100 text-amber-700' },
@@ -621,7 +653,7 @@ export default function Checklists() {
                     </tr>
                   </thead>
                   <tbody>
-                    {instances.map((row, idx) => {
+                    {followupPager.pageItems.map((row, idx) => {
                       const c = row.cell;
                       const t = row.task;
                       const badge = statusBadge[c.status] || { label: c.status, css: 'bg-gray-100 text-gray-700' };
@@ -677,11 +709,12 @@ export default function Checklists() {
                         </tr>
                       );
                     })}
-                    {instances.length === 0 && (
+                    {followupInstances.length === 0 && (
                       <tr><td colSpan="8" className="text-center py-8 text-gray-400">No instances in the selected window.</td></tr>
                     )}
                   </tbody>
                 </table>
+                <Pagination {...followupPager} />
               </div>
             );
           })()}

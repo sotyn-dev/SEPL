@@ -16,6 +16,8 @@ const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.w
 import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
 import { fmtDate } from '../utils/datetime';
+import Pagination, { usePagination } from '../components/PaginationBar';
+import { MODULE_FLOWS, getFlowStep, describeFlowNumber } from '../utils/moduleFlows';
 
 export default function PMSTasks() {
   const { user, isAdmin, canCreate, canApprove } = useAuth();
@@ -55,6 +57,10 @@ export default function PMSTasks() {
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [submitModal, setSubmitModal] = useState(null);
+  // Which task's proof modal is actually open right now — checked before an
+  // in-flight upload is allowed to write into submitForm (same shape as the
+  // Delegations fix, mam 2026-08-24: "sometimes wrong upload").
+  const submitModalIdRef = useRef(null);
   const [rejectModal, setRejectModal] = useState(null);
   const [extendModal, setExtendModal] = useState(null);
   const [form, setForm] = useState({});
@@ -165,6 +171,7 @@ export default function PMSTasks() {
     if (!String(form.description || '').trim()) return toast.error('Description is required');
     if (!form.project_id) return toast.error('Pick a project');
     if (!form.assigned_to) return toast.error('Pick an assignee');
+    if (!getFlowStep(form.flow_number)) return toast.error('Enter a valid Flow Number, for example 1.1');
     setSaving(true); setSavePct(0);
     try {
       // Optional attachment — same compress + progress pipeline that
@@ -186,6 +193,7 @@ export default function PMSTasks() {
       setSavePct(100);
       await api.post('/pms-tasks', {
         description: form.description,
+        flow_number: form.flow_number.trim(),
         project_id: form.project_id,
         assigned_to: form.assigned_to,
         due_date: form.due_date,
@@ -202,13 +210,24 @@ export default function PMSTasks() {
 
   // Lifecycle handlers (same shape as Delegations)
   const uploadProof = async (file) => {
+    // See submitModalIdRef above — discard the result if the user has
+    // switched to a different task's modal (or closed it) before this
+    // resolves, instead of letting a stale file silently attach here.
+    const forId = submitModalIdRef.current;
     const fd = new FormData(); fd.append('file', file);
     setSubmitForm(s => ({ ...s, uploading: true }));
     try {
       const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (submitModalIdRef.current !== forId) {
+        toast('That upload finished after you switched tasks — please upload again here.', { icon: '⚠️' });
+        return;
+      }
       setSubmitForm({ proof_url: res.data.url, uploading: false });
       toast.success('File uploaded — click Submit');
-    } catch { toast.error('Upload failed'); setSubmitForm(s => ({ ...s, uploading: false })); }
+    } catch {
+      if (submitModalIdRef.current !== forId) return;
+      toast.error('Upload failed'); setSubmitForm(s => ({ ...s, uploading: false }));
+    }
   };
   const submitProof = async (e) => {
     e.preventDefault();
@@ -216,7 +235,7 @@ export default function PMSTasks() {
     try {
       await api.post(`/pms-tasks/${submitModal.id}/submit`, { proof_url: submitForm.proof_url });
       toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); setSubmitForm({ proof_url: '', uploading: false }); load();
+      setSubmitModal(null); submitModalIdRef.current = null; setSubmitForm({ proof_url: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
   const approve = async (task) => {
@@ -292,6 +311,10 @@ export default function PMSTasks() {
     return <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${map[s] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>{s}</span>;
   };
 
+  // Numbered pagination over the server-filtered task list (scope/status/
+  // CRM/assignee/date filters all apply before this). Export keeps `tasks`.
+  const pager = usePagination(tasks);
+
   const projectOptions = projects.map(p => ({
     ...p,
     label: `${p.project_name || '(no project name)'}${p.company_name ? ' · ' + p.company_name : ''}${p.client_name ? ' · ' + p.client_name : ''}${p.crm_name ? '  — CRM: ' + p.crm_name : ''}`,
@@ -306,8 +329,8 @@ export default function PMSTasks() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => exportCsv('pms-tasks',
-            ['Task ID','Project','Created By','Description','Assigned To','Due','Status'],
-            tasks.map(t => [t.task_id, t.project_name, t.created_by_name, t.description, t.assigned_to_name, t.due_date, t.status]))}
+            ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Flow Number'],
+            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.flow_number || '']))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {canCreate('pms_tasks') && (
             <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New PMS Task</button>
@@ -393,7 +416,7 @@ export default function PMSTasks() {
           </thead>
           <tbody>
             {tasks.length === 0 && <tr><td colSpan="11" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
-            {tasks.map((t, idx) => {
+            {pager.pageItems.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               // Mam (2026-05-21): "if in pms task site name is sushila
@@ -412,7 +435,7 @@ export default function PMSTasks() {
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
-                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
+                  <td className="text-center text-xs text-gray-500 font-medium">{(pager.page - 1) * pager.perPage + idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">PMS-{String(t.id).padStart(4, '0')}</td>
                   <td className="max-w-[220px]">
                     <div className="font-medium text-gray-800 text-xs">{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</div>
@@ -433,6 +456,7 @@ export default function PMSTasks() {
                   <td className="max-w-md min-w-[240px]">
                     {/* Wrap properly across all viewports — no more line-clamp,
                         long descriptions break onto multiple lines. */}
+                    {t.flow_number && <div className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {describeFlowNumber(t.flow_number)}</div>}
                     <div className="text-gray-800 whitespace-pre-wrap break-words text-sm">{t.description}</div>
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
@@ -457,7 +481,7 @@ export default function PMSTasks() {
                         <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
                       )}
                       {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
+                        <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
                           <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
@@ -507,7 +531,7 @@ export default function PMSTasks() {
       {/* Mobile cards */}
       <div className="md:hidden space-y-2">
         {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No PMS tasks</div>}
-        {tasks.map((t, idx) => {
+        {pager.pageItems.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
           // Mirror the desktop table so the phone doesn't lock out approvers
@@ -524,11 +548,12 @@ export default function PMSTasks() {
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
                 <span className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-400 font-semibold">#{idx + 1}</span>
+                  <span className="text-[10px] text-gray-400 font-semibold">#{(pager.page - 1) * pager.perPage + idx + 1}</span>
                   <span className="font-mono text-xs text-red-700">PMS-{String(t.id).padStart(4, '0')}</span>
                 </span>
                 {statusBadge(t.status)}
               </div>
+              {t.flow_number && <p className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {describeFlowNumber(t.flow_number)}</p>}
               <p className="text-sm text-gray-800 font-medium mb-2 whitespace-pre-wrap break-words">{t.description}</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-gray-600 mb-2">
                 <div className="col-span-2"><span className="text-gray-400">Project:</span> <b>{t.project_name_live || t.project_name_snapshot || '—'}</b></div>
@@ -547,7 +572,7 @@ export default function PMSTasks() {
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -581,9 +606,32 @@ export default function PMSTasks() {
         })}
       </div>
 
+      {/* One shared pagination bar for the desktop table AND mobile cards
+          (mobile↔desktop parity) — both render pager.pageItems above. */}
+      <Pagination {...pager} className="card p-0" />
+
       {/* Create Modal */}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="New PMS Task" wide>
         <form onSubmit={save} className="space-y-3">
+          <div>
+            <label className="label" htmlFor="pms-flow-number">Flow Number *</label>
+            <input id="pms-flow-number" className="input" type="text" required
+              list="pms-flow-steps" placeholder="Enter flow number, e.g. 1.1"
+              value={form.flow_number || ''}
+              aria-describedby="pms-flow-help"
+              aria-invalid={Boolean(form.flow_number && !getFlowStep(form.flow_number))}
+              onChange={e => setForm({ ...form, flow_number: e.target.value })} />
+            <datalist id="pms-flow-steps">
+              {MODULE_FLOWS.flatMap(flow => flow.steps.map((step, index) => (
+                <option key={`${flow.number}.${index + 1}`} value={`${flow.number}.${index + 1}`}>{getFlowStep(`${flow.number}.${index + 1}`)}</option>
+              )))}
+            </datalist>
+            <p id="pms-flow-help" aria-live="polite" className={`mt-1 text-xs ${getFlowStep(form.flow_number) ? 'text-green-700' : 'text-gray-500'}`}>
+              {getFlowStep(form.flow_number)
+                ? `Verified: ${getFlowStep(form.flow_number)}`
+                : form.flow_number ? 'Flow number not found. Enter an existing module.step number.' : 'Required. Pick from the list, or use the number in brackets beside the module or tab name — e.g. Raise Indent (4.1).'}
+            </p>
+          </div>
           <div>
             <label className="label">Project *</label>
             <SearchableSelect
@@ -733,7 +781,7 @@ export default function PMSTasks() {
       </Modal>
 
       {/* Submit Proof Modal */}
-      <Modal isOpen={!!submitModal} onClose={() => setSubmitModal(null)} title={submitModal ? `Submit proof — PMS-${String(submitModal.id).padStart(4,'0')}` : 'Submit proof'}>
+      <Modal isOpen={!!submitModal} onClose={() => { setSubmitModal(null); submitModalIdRef.current = null; }} title={submitModal ? `Submit proof — PMS-${String(submitModal.id).padStart(4,'0')}` : 'Submit proof'}>
         <form onSubmit={submitProof} className="space-y-3">
           {submitModal?.status === 'rejected' && submitModal.reject_reason && (
             <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-700">
@@ -764,7 +812,7 @@ export default function PMSTasks() {
             {submitForm.proof_url && <p className="text-xs text-emerald-600 mt-1">✓ Ready to submit</p>}
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setSubmitModal(null)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => { setSubmitModal(null); submitModalIdRef.current = null; }} className="btn btn-secondary">Cancel</button>
             <button type="submit" disabled={!submitForm.proof_url || submitForm.uploading} className="btn btn-primary disabled:opacity-50">Submit for Approval</button>
           </div>
         </form>

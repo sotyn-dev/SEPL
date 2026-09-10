@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -336,7 +337,7 @@ const resumeUpload = multer({
 //   3. Return parsed fields + the saved file URL.
 // Frontend pre-fills the form fields and stores resume_file so when
 // admin clicks Add Candidate the URL is sent along.
-router.post('/candidates/parse-resume', resumeUpload.single('file'), async (req, res) => {
+router.post('/candidates/parse-resume', requirePermission('hr', 'create'), resumeUpload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const url = `/uploads/hr-resumes/${path.basename(req.file.path)}`;
   try {
@@ -407,7 +408,7 @@ router.post('/candidates/check-duplicates', (req, res) => {
   res.json({ duplicates: findDuplicates(getDb(), { email, phone, excludeId }) });
 });
 
-router.post('/candidates', (req, res) => {
+router.post('/candidates', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { name, phone, email, source, position, notes, resume_file,
             address, linkedin_url, tags, hiring_request_id } = req.body;
@@ -450,7 +451,7 @@ router.post('/candidates', (req, res) => {
   }
 });
 
-router.put('/candidates/:id', (req, res) => {
+router.put('/candidates/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { name, phone, email, source, position, status, notes, resume_file,
           address, linkedin_url } = req.body;
   getDb().prepare(
@@ -464,7 +465,7 @@ router.put('/candidates/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/candidates/:id', (req, res) => {
+router.delete('/candidates/:id', requirePermission('hr', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM candidates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -483,7 +484,7 @@ router.delete('/candidates/:id', (req, res) => {
 //            uploaded; rejected → 'rejected'.
 //  Stage 5 — Mark accepted / onboarded as the candidate joins.
 
-router.post('/candidates/:id/schedule-interview', (req, res) => {
+router.post('/candidates/:id/schedule-interview', requirePermission('hr', 'edit'), (req, res) => {
   const { interviewer_id, interview_date, resume_file, notes } = req.body;
   if (!interviewer_id) return res.status(400).json({ error: 'Pick an interviewer (employee)' });
   if (!interview_date) return res.status(400).json({ error: 'Interview date required' });
@@ -511,6 +512,21 @@ router.post('/candidates/:id/interview-done', (req, res) => {
   if (!['shortlisted','rejected','on_hold'].includes(decision)) {
     return res.status(400).json({ error: 'decision must be shortlisted / rejected / on_hold' });
   }
+  // Audit follow-up 2026-08-17: was auth-only — ANY logged-in user could
+  // shortlist/reject candidates. Allowed: the ASSIGNED interviewer (an
+  // interviewer needn't hold hr permissions — rentalTools pattern), anyone
+  // with hr.can_edit, or admin.
+  {
+    const db0 = getDb();
+    const cand = db0.prepare('SELECT interviewer_id FROM candidates WHERE id=?').get(req.params.id);
+    if (!cand) return res.status(404).json({ error: 'Candidate not found' });
+    const myEmployeeIds = db0.prepare('SELECT id FROM employees WHERE user_id=?').all(req.user.id).map(r => r.id);
+    const isInterviewer = cand.interviewer_id != null && myEmployeeIds.includes(cand.interviewer_id);
+    const isHr = req.user.role === 'admin' || !!getUserPermissions(req.user.id)['hr']?.can_edit;
+    if (!isInterviewer && !isHr) {
+      return res.status(403).json({ error: 'Only the assigned interviewer or HR can record the interview decision' });
+    }
+  }
   // shortlisted → 'qualified' (waiting for MD round)
   // rejected    → 'rejected'
   // on_hold     → stays 'interview_done' for HR to come back later
@@ -533,7 +549,7 @@ router.post('/candidates/:id/interview-done', (req, res) => {
   res.json({ message: 'Interview decision recorded' });
 });
 
-router.post('/candidates/:id/schedule-md-interview', (req, res) => {
+router.post('/candidates/:id/schedule-md-interview', requirePermission('hr', 'edit'), (req, res) => {
   const { md_interview_date, notes } = req.body;
   if (!md_interview_date) return res.status(400).json({ error: 'MD interview date required' });
   // Status stays 'qualified' — md_interview_date being set marks the MD round.
@@ -550,7 +566,7 @@ router.post('/candidates/:id/schedule-md-interview', (req, res) => {
   res.json({ message: 'MD interview scheduled' });
 });
 
-router.post('/candidates/:id/md-decision', (req, res) => {
+router.post('/candidates/:id/md-decision', requirePermission('hr', 'approve'), (req, res) => {
   const { decision, notes, offer_letter_file,
           offered_position, offered_salary, joining_date, reporting_to,
           salary_breakup } = req.body;
@@ -615,7 +631,7 @@ router.get('/candidates/:id', (req, res) => {
   res.json(c);
 });
 
-router.post('/candidates/:id/finalize', (req, res) => {
+router.post('/candidates/:id/finalize', requirePermission('hr', 'edit'), (req, res) => {
   // Mark candidate as 'accepted' (offer accepted) or 'onboarded' (joined).
   const { final_status, notes } = req.body;
   if (!['accepted','onboarded','rejected'].includes(final_status)) {
@@ -647,7 +663,7 @@ router.get('/candidates/:id/timeline', (req, res) => {
   res.json(rows);
 });
 
-router.put('/candidates/:id/tags', (req, res) => {
+router.put('/candidates/:id/tags', requirePermission('hr', 'edit'), (req, res) => {
   const { tags } = req.body || {};
   // Normalise: split on comma, trim, drop empties, re-join.
   const csv = String(tags || '')
@@ -661,7 +677,7 @@ router.put('/candidates/:id/tags', (req, res) => {
   res.json({ ok: true, tags: csv });
 });
 
-router.post('/candidates/:id/hold', (req, res) => {
+router.post('/candidates/:id/hold', requirePermission('hr', 'edit'), (req, res) => {
   const { is_on_hold, reason } = req.body || {};
   const flag = is_on_hold ? 1 : 0;
   const db = getDb();
@@ -731,11 +747,120 @@ router.get('/roster-audit', (req, res) => {
   res.json({ backlog, guests });
 });
 
+// ── Employee master field validation (mam 2026-09-04) ────────────────
+// Enforced on the SERVER, not only in the form: the browser rules are a
+// convenience, these are the guarantee. Every field is optional — blank
+// passes — but a value that IS given has to be the right shape, otherwise
+// the column fills with junk that later reporting has to clean up.
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const GENDERS = ['Male', 'Female', 'Other'];
+const GUARDIAN_TITLES = ['Mr.', 'Mrs.', 'Sh.', 'Smt.'];
+const GUARDIAN_RELATIONS = ['Father', 'Spouse', 'Mother'];
+
+// Returns an error string, or null when the payload is acceptable.
+function validateEmployeeMaster(b) {
+  const up = (v) => String(v || '').trim().toUpperCase();
+  if (b.pan_number && !PAN_RE.test(up(b.pan_number))) {
+    return 'PAN must be 5 letters, 4 digits, then 1 letter — e.g. ABCDE1234F';
+  }
+  if (b.bank_ifsc && !IFSC_RE.test(up(b.bank_ifsc))) {
+    return 'IFSC must be 4 letters, then 0, then 6 letters/digits — e.g. PUNB0020510';
+  }
+  if (b.aadhaar_last4 && !/^\d{4}$/.test(String(b.aadhaar_last4).trim())) {
+    return 'Aadhaar must be the LAST 4 DIGITS only (4 digits). The full number is never stored.';
+  }
+  if (b.bank_account_no && !/^\d{6,20}$/.test(String(b.bank_account_no).replace(/\s/g, ''))) {
+    return 'Bank account number should be 6-20 digits';
+  }
+  // Date of birth: must be a real date, and the person must be 18+ (spec HR10).
+  // Compared against IST "today" so a birthday on the boundary isn't off by
+  // the UTC gap. A date in the future is caught by the same check.
+  if (b.date_of_birth) {
+    const dob = String(b.date_of_birth).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob) || Number.isNaN(Date.parse(dob))) return 'Date of birth must be a valid date';
+    const today = new Date(Date.now() + 5.5 * 3600 * 1000);   // IST
+    const cutoff = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
+    if (new Date(dob + 'T00:00:00Z') > cutoff) return 'Employee must be at least 18 years old';
+    if (new Date(dob + 'T00:00:00Z') < new Date('1940-01-01T00:00:00Z')) return 'Date of birth looks wrong — check the year';
+  }
+  if (b.gender && !GENDERS.includes(String(b.gender).trim())) return 'Gender must be Male, Female or Other';
+  if (b.guardian_title && !GUARDIAN_TITLES.includes(String(b.guardian_title).trim())) return 'Invalid title';
+  if (b.guardian_relation && !GUARDIAN_RELATIONS.includes(String(b.guardian_relation).trim())) return 'Relation must be Father, Spouse or Mother';
+  // An emergency contact that is the employee's own number is not an
+  // emergency contact. Cheap check, catches a real copy-paste habit.
+  const ec = String(b.emergency_contact_phone || '').replace(/\D/g, '');
+  const own = String(b.phone || '').replace(/\D/g, '');
+  if (ec && own && ec.length >= 10 && ec === own) {
+    return 'Emergency contact cannot be the employee\'s own phone number';
+  }
+  return null;
+}
+
+// Normalise the master fields into the exact shape the columns expect.
+function masterValues(b) {
+  const t = (v) => { const s = String(v ?? '').trim(); return s || null; };
+  return {
+    date_of_birth: t(b.date_of_birth),
+    gender: t(b.gender),
+    guardian_title: t(b.guardian_title),
+    guardian_relation: t(b.guardian_relation),
+    guardian_name: t(b.guardian_name),
+    pan_number: b.pan_number ? String(b.pan_number).trim().toUpperCase() : null,
+    aadhaar_last4: b.aadhaar_last4 ? String(b.aadhaar_last4).trim() : null,
+    bank_name: t(b.bank_name),
+    bank_branch: t(b.bank_branch),
+    bank_account_no: b.bank_account_no ? String(b.bank_account_no).replace(/\s/g, '') : null,
+    bank_ifsc: b.bank_ifsc ? String(b.bank_ifsc).trim().toUpperCase() : null,
+    emergency_contact_name: t(b.emergency_contact_name),
+    emergency_contact_phone: t(b.emergency_contact_phone),
+  };
+}
+
+// ── IFSC lookup (mam 2026-09-04: "Bank Branch (auto from IFSC)") ────────
+// Bank name + branch are resolved from the IFSC so nobody types them by hand
+// (and mistypes them). Source: the public IFSC directory at ifsc.razorpay.com
+// — RBI data, no key, no account. An IFSC identifies a BANK BRANCH, not a
+// person; nothing about the employee leaves the server.
+// Cached in ifsc_cache: a code is fetched from the network at most once, every
+// later employee on the same branch is answered locally, and a cached code
+// keeps working when the directory is unreachable. Any failure returns a
+// message telling the user to type the bank and branch by hand — the lookup
+// is a convenience and must never block saving.
+router.get('/ifsc/:code', async (req, res) => {
+  const code = String(req.params.code || '').trim().toUpperCase();
+  if (!IFSC_RE.test(code)) return res.status(400).json({ error: 'Not a valid IFSC format' });
+  const db = getDb();
+  try {
+    const hit = db.prepare('SELECT * FROM ifsc_cache WHERE ifsc=?').get(code);
+    if (hit) return res.json({ ifsc: code, bank: hit.bank, branch: hit.branch, city: hit.city, state: hit.state, source: 'cache' });
+  } catch (_) {}
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 6000);
+  try {
+    const r = await fetch(`https://ifsc.razorpay.com/${code}`, { signal: ctl.signal });
+    if (r.status === 404) return res.status(404).json({ error: 'IFSC not found in the bank directory — check the code, or type the bank and branch by hand' });
+    if (!r.ok) return res.status(502).json({ error: 'Bank directory is not answering right now — type the bank and branch by hand' });
+    const j = await r.json();
+    const out = { ifsc: code, bank: j.BANK || null, branch: j.BRANCH || null, city: j.CITY || null, state: j.STATE || null };
+    try {
+      db.prepare('INSERT OR REPLACE INTO ifsc_cache (ifsc, bank, branch, city, state) VALUES (?,?,?,?,?)')
+        .run(code, out.bank, out.branch, out.city, out.state);
+    } catch (_) {}
+    res.json({ ...out, source: 'live' });
+  } catch (e) {
+    res.status(502).json({ error: 'Could not reach the bank directory — type the bank and branch by hand' });
+  } finally { clearTimeout(timer); }
+});
+
 router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
   const { name, phone, email, designation, department, join_date, salary,
           aadhar_file, pan_file, qualification_file, roster } = req.body;
   let { user_id } = req.body;
   const db = getDb();
+  const bad = validateEmployeeMaster(req.body);
+  if (bad) return res.status(400).json({ error: bad });
+  const m = masterValues(req.body);
   // Auto-link by email if user_id wasn't explicitly set
   if (!user_id && email) {
     const u = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
@@ -748,10 +873,18 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   if (!qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
   const r = db.prepare(`
     INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
-                           aadhar_file, pan_file, qualification_file, roster)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                           aadhar_file, pan_file, qualification_file, roster,
+                           date_of_birth, gender, guardian_title, guardian_relation, guardian_name,
+                           pan_number, aadhaar_last4,
+                           bank_name, bank_branch, bank_account_no, bank_ifsc,
+                           emergency_contact_name, emergency_contact_phone)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
-        aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster));
+        aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
+        m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
+        m.pan_number, m.aadhaar_last4,
+        m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
+        m.emergency_contact_name, m.emergency_contact_phone);
   res.status(201).json({ id: r.lastInsertRowid, linked_user_id: user_id || null });
 });
 
@@ -790,23 +923,118 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
   res.json({ added, errors, total: employees.length });
 });
 
+// Self-fill link (2026-08-17): generate a tokenized public URL the employee
+// fills WITHOUT logging in (like the offer-accept link). Two flavours:
+//   body {}               → new-joiner link (submit CREATES an employee row)
+//   body { employee_id }  → tied link (prefills + UPDATES that employee)
+// Generating rotates: older unused links for the same target are dropped so
+// exactly one live link exists per target. Valid 7 days, single-use.
+router.post('/employees/fill-link', (req, res) => {
+  const employeeId = req.body?.employee_id || null;
+  // Dynamic permission: a tied link edits an employee, a blank link creates one.
+  const perms = getUserPermissions(req.user.id);
+  const needed = employeeId ? 'can_edit' : 'can_create';
+  if (req.user.role !== 'admin' && !perms['employees']?.[needed]) {
+    return res.status(403).json({ error: `No ${employeeId ? 'edit' : 'create'} permission for employees` });
+  }
+  const db = getDb();
+  if (employeeId) {
+    const emp = db.prepare('SELECT id, name FROM employees WHERE id=?').get(employeeId);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+  }
+  const token = require('crypto').randomBytes(24).toString('base64url');
+  if (employeeId) {
+    // Tied link: single-use, 7 days; a new one replaces older unused ones.
+    db.prepare('DELETE FROM employee_fill_links WHERE employee_id=? AND used_at IS NULL').run(employeeId);
+    db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at)
+                VALUES (?,?,?, datetime('now','+7 days'))`).run(token, employeeId, req.user.id);
+    return res.json({ token, path: `/employee-fill/${token}`, expires_in_days: 7, multi_use: false });
+  }
+  // New-joiner link (mam 2026-08-17 "if new person join he will fill data and
+  // automatically go details in employees"): a STANDING link — share it once
+  // (WhatsApp group / joining kit) and EVERY new joiner submits through it,
+  // each creating their own employee row. Valid 30 days; generating a new one
+  // rotates (kills) the previous standing link.
+  db.prepare('DELETE FROM employee_fill_links WHERE employee_id IS NULL AND COALESCE(multi_use,0)=1').run();
+  db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at, multi_use)
+              VALUES (?,NULL,?, datetime('now','+30 days'), 1)`).run(token, req.user.id);
+  res.json({ token, path: `/employee-fill/${token}`, expires_in_days: 30, multi_use: true });
+});
+
+// Can this user off-board staff? Terminating/deactivating is an APPROVE-class
+// authority, not an edit: on 2026-08-23 an account with plain employees.edit
+// set 16 staff to `terminated` in two sittings, invisible to every
+// delete-focused defence. Admin, or a role holding employees.can_approve.
+function canOffboard(db, req) {
+  if (req.user.role === 'admin') return true;
+  const ok = db.prepare(`
+    SELECT MAX(CASE WHEN rp.can_approve = 1 THEN 1 ELSE 0 END) AS ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+     WHERE ur.user_id = ? AND rp.module = 'employees'
+  `).get(req.user.id);
+  return !!ok?.ok;
+}
+
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
-          aadhar_file, pan_file, qualification_file, roster } = req.body;
+          aadhar_file, pan_file, qualification_file, roster, join_date } = req.body;
   const db = getDb();
+  const bad = validateEmployeeMaster(req.body);
+  if (bad) return res.status(400).json({ error: bad });
+  const m = masterValues(req.body);
+
+  // Status transition INTO terminated/inactive is gated separately from the
+  // ordinary edit (see canOffboard above) and scored on the breaker. A save
+  // that keeps the status unchanged — or moves it back to active/training —
+  // stays a plain edit: HR fixing a phone number must never hit this.
+  const newStatus = String(status || '').toLowerCase();
+  if (['terminated', 'inactive'].includes(newStatus)) {
+    const cur = db.prepare('SELECT status FROM employees WHERE id=?').get(req.params.id);
+    if (cur && String(cur.status || '').toLowerCase() !== newStatus) {
+      if (!canOffboard(db, req)) {
+        return res.status(403).json({
+          error: 'Setting an employee to terminated/inactive needs off-boarding authority (employees approve permission or admin). Other edits are unaffected.',
+        });
+      }
+      require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'hr_status_offboard');
+    }
+  }
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
   // upload — frontend can edit other fields without re-uploading docs.
   db.prepare(`
     UPDATE employees
        SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?,
+           -- join_date was MISSING from this UPDATE (found 2026-09-04): the Edit
+           -- modal showed a Join Date input whose value was silently discarded,
+           -- so an employee saved without one could never be corrected. COALESCE
+           -- so an edit that doesn't send it can't blank an existing date.
+           join_date = COALESCE(?, join_date),
            roster = COALESCE(?, roster),
            aadhar_file        = COALESCE(?, aadhar_file),
            pan_file           = COALESCE(?, pan_file),
-           qualification_file = COALESCE(?, qualification_file)
+           qualification_file = COALESCE(?, qualification_file),
+           date_of_birth           = COALESCE(?, date_of_birth),
+           gender                  = COALESCE(?, gender),
+           guardian_title          = COALESCE(?, guardian_title),
+           guardian_relation       = COALESCE(?, guardian_relation),
+           guardian_name           = COALESCE(?, guardian_name),
+           pan_number              = COALESCE(?, pan_number),
+           aadhaar_last4           = COALESCE(?, aadhaar_last4),
+           bank_name               = COALESCE(?, bank_name),
+           bank_branch             = COALESCE(?, bank_branch),
+           bank_account_no         = COALESCE(?, bank_account_no),
+           bank_ifsc               = COALESCE(?, bank_ifsc),
+           emergency_contact_name  = COALESCE(?, emergency_contact_name),
+           emergency_contact_phone = COALESCE(?, emergency_contact_phone)
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null,
+        join_date || null,
         roster ? normalizeRoster(roster) : null,
-        aadhar_file || null, pan_file || null, qualification_file || null, req.params.id);
+        aadhar_file || null, pan_file || null, qualification_file || null,
+        m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
+        m.pan_number, m.aadhaar_last4,
+        m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
+        m.emergency_contact_name, m.emergency_contact_phone, req.params.id);
 
   // Sync the linked login's `active` flag to the employee's on-roll status.
   // Attendance strength counts users.active, but HR only edits employees.status —
@@ -839,6 +1067,62 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   }
 
   res.json({ message: 'Updated' });
+});
+
+// The ONE legitimate mass-offboarding path (e.g. a site demobilises and 20
+// contract staff leave the same day). Design per the 2026-08-24 post-mortem:
+// a real HR batch is ONE call — ids + shared reason, capped — and after it
+// succeeds the destructive-action lock starts DELIBERATELY and the director
+// is emailed. Real HR: one batch, done, unlock/wait. An attacker: one batch,
+// then locked out — not all morning, and never silently.
+router.post('/employees/bulk-status', requirePermission('employees', 'edit'), (req, res) => {
+  const db = getDb();
+  if (!canOffboard(db, req)) {
+    return res.status(403).json({ error: 'Bulk status change needs off-boarding authority (employees approve permission or admin).' });
+  }
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Boolean))] : [];
+  const status = String(req.body.status || '').toLowerCase();
+  const reason = String(req.body.reason || '').trim();
+  if (!ids.length) return res.status(400).json({ error: 'No employees selected' });
+  if (ids.length > 30) return res.status(400).json({ error: 'Max 30 employees per batch — split larger off-boardings' });
+  if (!['terminated', 'inactive'].includes(status)) return res.status(400).json({ error: "status must be 'terminated' or 'inactive'" });
+  if (reason.length < 5) return res.status(400).json({ error: 'A reason (min 5 characters) is required for a bulk status change' });
+
+  const changed = [], skipped = [];
+  const upd = db.prepare('UPDATE employees SET status=? WHERE id=?');
+  const tx = db.transaction(() => {
+    for (const id of ids) {
+      const emp = db.prepare('SELECT id, name, status, user_id FROM employees WHERE id=?').get(id);
+      if (!emp) { skipped.push({ id, reason: 'not found' }); continue; }
+      if (String(emp.status || '').toLowerCase() === status) { skipped.push({ id, reason: 'already ' + status }); continue; }
+      upd.run(status, id);
+      // Same login active-sync as the single PUT — a terminated employee's
+      // login goes inactive so they stop inflating attendance strength.
+      if (emp.user_id) {
+        try { db.prepare('UPDATE users SET active=0 WHERE id=? AND active=1').run(emp.user_id); } catch (_) {}
+      }
+      changed.push({ id, name: emp.name, from: emp.status });
+    }
+  });
+  tx();
+
+  if (changed.length) {
+    logAuditEvent({
+      user: req.user, action: 'BULK_STATUS', entity_type: 'employees',
+      method: 'POST', path: '/api/hr/employees/bulk-status',
+      body: { status, reason, count: changed.length, names: changed.map(c => c.name).slice(0, 30) },
+    });
+    const breaker = require('../lib/destructiveBreaker');
+    breaker.addScore(req.user.id, changed.length, 'hr_bulk_status');
+    // Deliberate lock: the batch was the legitimate action; anything MORE
+    // destructive in the next 30 min from this account is suspect.
+    breaker.tripNow(db, req.user.id, req.user.name, changed.length,
+      `bulk-status: ${changed.length} employee(s) → ${status} (${reason.slice(0, 80)})`);
+  }
+  res.json({
+    message: `${changed.length} employee(s) → ${status}${skipped.length ? `, ${skipped.length} skipped` : ''}. Destructive actions are now locked for 30 minutes (admins notified) — this is expected after a bulk off-boarding.`,
+    changed, skipped,
+  });
 });
 
 // Delete an employee. Robust like the user delete (auth.js): a bare
@@ -921,21 +1205,21 @@ router.get('/sub-contractors', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM sub_contractors ORDER BY name').all());
 });
 
-router.post('/sub-contractors', (req, res) => {
+router.post('/sub-contractors', requirePermission('hr', 'create'), (req, res) => {
   const { name, phone, email, specialization, rate, rate_unit, notes } = req.body;
   const r = getDb().prepare('INSERT INTO sub_contractors (name,phone,email,specialization,rate,rate_unit,notes) VALUES (?,?,?,?,?,?,?)')
     .run(name, phone, email, specialization, rate, rate_unit, notes);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/sub-contractors/:id', (req, res) => {
+router.put('/sub-contractors/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { name, phone, email, specialization, rate, rate_unit, status, notes } = req.body;
   getDb().prepare('UPDATE sub_contractors SET name=?,phone=?,email=?,specialization=?,rate=?,rate_unit=?,status=?,notes=? WHERE id=?')
     .run(name, phone, email, specialization, rate, rate_unit, status, notes, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/sub-contractors/:id', (req, res) => {
+router.delete('/sub-contractors/:id', requirePermission('hr', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM sub_contractors WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -1001,7 +1285,7 @@ router.put('/expenses/:id', requirePermission('expenses', 'edit'), (req, res) =>
       next.approved_by = req.user.id;
       if (existing.status === 'paid') next.paid_date = null; // un-mark paid
     } else if (status === 'paid') {
-      next.paid_date = new Date().toISOString().split('T')[0];
+      next.paid_date = istToday();
     } else if (status === 'pending') {
       next.approved_by = null;
       next.paid_date = null;
@@ -1099,7 +1383,7 @@ router.get('/checklists/bulk-template.xlsx', (req, res) => {
 
 // Parse an uploaded .xlsx and return the rows as JSON.
 // (Client decides whether to commit them via /checklists/bulk.)
-router.post('/checklists/parse-excel', checklistsExcelUpload.single('file'), (req, res) => {
+router.post('/checklists/parse-excel', requirePermission('checklists', 'create'), checklistsExcelUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   let wb;
   try { wb = XLSX.readFile(req.file.path); }
@@ -1432,7 +1716,7 @@ router.delete('/checklists/:id', requirePermission('checklists', 'delete'), (req
 // whether proof has been uploaded.
 router.get('/checklists/my-today', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   const d = new Date(today + 'T00:00:00');
   const todayDow = d.getDay();            // 0..6
   const todayDom = d.getDate();           // 1..31
@@ -1450,22 +1734,10 @@ router.get('/checklists/my-today', (req, res) => {
        AND (c.status IS NULL OR c.status = 'pending' OR c.status = 'active' OR c.status = '')`
   ).all(uid, today, uid);
 
-  const out = rows.filter(c => {
-    const f = String(c.frequency || '').toLowerCase();
-    if (!c.due_date && f !== 'daily') return f === 'daily';
-    const due = c.due_date ? new Date(c.due_date + 'T00:00:00') : null;
-    if (f === 'daily') return true;
-    if (f === 'weekly') return due && due.getDay() === todayDow;
-    if (f === 'monthly') return due && due.getDate() === todayDom;
-    if (f === 'quarterly') {
-      if (!due) return false;
-      const monthDiff = (todayMonth - (due.getMonth() + 1) + 12) % 3;
-      return monthDiff === 0 && due.getDate() === todayDom;
-    }
-    if (f === 'yearly') return due && due.getMonth() + 1 === todayMonth && due.getDate() === todayDom;
-    if (f === 'once') return c.due_date === today;
-    return false;
-  });
+  // Shared frequency rule — a monthly task with no due_date now shows on
+  // the 1st (instead of NEVER here / EVERY day on the register).
+  const { appliesOn } = require('../lib/checklistFrequency');
+  const out = rows.filter(c => appliesOn(c, today));
 
   res.json(out);
 });
@@ -1492,7 +1764,7 @@ router.post('/checklists/:id/complete', (req, res) => {
   const { proof_url, notes } = req.body;
   let date = req.body.completion_date && String(req.body.completion_date).trim()
     ? String(req.body.completion_date).trim().slice(0, 10)
-    : new Date().toISOString().split('T')[0];
+    : istToday();
 
   const db = getDb();
   const c = db.prepare('SELECT * FROM checklists WHERE id=?').get(req.params.id);
@@ -1540,7 +1812,7 @@ router.post('/checklists/:id/complete', (req, res) => {
 // own assignments.
 router.get('/checklists/by-date', (req, res) => {
   const db = getDb();
-  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const date = req.query.date || istToday();
   let canManage = req.user.role === 'admin';
   if (!canManage) {
     const _cp = db.prepare("SELECT rp.can_see_all, rp.can_edit, rp.can_create FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'checklists'").get(req.user.id);
@@ -1558,7 +1830,7 @@ router.get('/checklists/by-date', (req, res) => {
   const rows = db.prepare(`
     SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
            c.department, c.recurrence_start_date, c.recurrence_end_date,
-           c.fortnight_days,
+           c.fortnight_days, c.created_at,
            c.assigned_to, u.name as assigned_to_name,
            comp.id as completion_id,
            comp.proof_url, comp.notes, comp.submitted_at,
@@ -1578,27 +1850,8 @@ router.get('/checklists/by-date', (req, res) => {
   // intended day(s).  Uses due_date as the recurrence anchor for
   // monthly / quarterly / yearly — matches the followup's applies()
   // logic so by-date + followup stay in sync.
-  const todayDate = new Date(date + 'T00:00:00');
-  const dom = todayDate.getDate();
-  const filtered = rows.filter(r => {
-    const f = String(r.frequency || '').toLowerCase();
-    if (f === 'fortnightly') {
-      const csv = r.fortnight_days && String(r.fortnight_days).trim() ? r.fortnight_days : '1,15';
-      const days = csv.split(/[,;|]/).map(s => parseInt(String(s).trim(), 10)).filter(d => d >= 1 && d <= 31);
-      return days.includes(dom);
-    }
-    if (!r.due_date) return true;                  // legacy: keep generous
-    const due = new Date(String(r.due_date).slice(0, 10) + 'T00:00:00');
-    if (f === 'monthly')   return dom === due.getDate();
-    if (f === 'quarterly') {
-      if (dom !== due.getDate()) return false;
-      const diff = ((todayDate.getMonth() - due.getMonth()) % 3 + 3) % 3;
-      return diff === 0;
-    }
-    if (f === 'yearly') return todayDate.getMonth() === due.getMonth() && dom === due.getDate();
-    if (f === 'once')   return String(r.due_date).slice(0, 10) === date;
-    return true;                                    // daily / weekly / unknown
-  });
+  const { appliesOn: _appliesOn } = require('../lib/checklistFrequency');
+  const filtered = rows.filter(r => _appliesOn(r, date));
   res.json({ date, rows: filtered });
 });
 
@@ -1633,12 +1886,12 @@ router.get('/checklists/followup', (req, res) => {
   const taskSql = isAdmin
     ? `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
               c.department, c.assigned_to, u.name AS assigned_to_name,
-              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days
+              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days, c.created_at
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        ORDER BY u.name COLLATE NOCASE, c.department, c.description`
     : `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
               c.department, c.assigned_to, u.name AS assigned_to_name,
-              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days
+              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days, c.created_at
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        WHERE c.assigned_to = ?
        ORDER BY c.department, c.description`;
@@ -1661,60 +1914,13 @@ router.get('/checklists/followup', (req, res) => {
   // also respects mam's (2026-05-22) start/end recurrence window:
   // out-of-window dates ALWAYS return false so the cell renders as
   // N/A in the grid and doesn't count as "missed".
-  function applies(task, dateStr) {
-    if (task.recurrence_start_date && dateStr < task.recurrence_start_date) return false;
-    if (task.recurrence_end_date   && dateStr > task.recurrence_end_date)   return false;
-    if (!task.frequency) return true;
-    const f = task.frequency.toLowerCase();
-    if (f === 'daily') return true;
-    if (f === 'weekly') {
-      if (!task.due_date) return true;
-      return new Date(task.due_date).getDay() === new Date(dateStr).getDay();
-    }
-    // Mam (2026-05-22): fortnightly = twice a month on the two day-of-
-    // month slots stored in fortnight_days ("5,20"; default "1,15").
-    // Cell is "applicable" only when the date's day-of-month matches.
-    if (f === 'fortnightly') {
-      const csv = task.fortnight_days && String(task.fortnight_days).trim()
-        ? task.fortnight_days : '1,15';
-      const days = csv.split(/[,;|]/).map(s => parseInt(String(s).trim(), 10)).filter(d => d >= 1 && d <= 31);
-      if (days.length === 0) return false;
-      const dom = new Date(dateStr + 'T00:00:00').getDate();
-      return days.includes(dom);
-    }
-    // Mam (2026-05-22): "if here is month then you dont think selection
-    // of month if quartly" — use due_date as the recurrence anchor:
-    //   monthly   → fires on same DAY-of-MONTH as due_date, every month
-    //   quarterly → fires on same DAY-of-MONTH AND every 3rd month
-    //               offset from the due_date month
-    //   yearly    → fires on same MONTH + DAY as due_date, every year
-    // No due_date set → legacy generous behaviour (matches any day) so
-    // existing rows don't suddenly disappear from the grid.
-    const d = new Date(dateStr + 'T00:00:00');
-    const dueIso = task.due_date ? String(task.due_date).slice(0, 10) : null;
-    if (f === 'monthly') {
-      if (!dueIso) return true;     // legacy: keep generous
-      return d.getDate() === new Date(dueIso + 'T00:00:00').getDate();
-    }
-    if (f === 'quarterly') {
-      if (!dueIso) return true;
-      const due = new Date(dueIso + 'T00:00:00');
-      if (d.getDate() !== due.getDate()) return false;
-      // Same month-of-quarter: (d.month - due.month) divisible by 3
-      const diff = ((d.getMonth() - due.getMonth()) % 3 + 3) % 3;
-      return diff === 0;
-    }
-    if (f === 'yearly') {
-      if (!dueIso) return true;
-      const due = new Date(dueIso + 'T00:00:00');
-      return d.getMonth() === due.getMonth() && d.getDate() === due.getDate();
-    }
-    if (f === 'once') {
-      if (!dueIso) return true;
-      return dueIso === dateStr;
-    }
-    return true;
-  }
+  // ONE shared frequency rule (mam 2026-08-31: "monthly mean month one
+  // time — it pick every day"). See server/lib/checklistFrequency.js —
+  // the register, my-today, by-date and the scorecard all use the same
+  // appliesOn() now, so a monthly task fires ONCE a month (its due
+  // day-of-month, else the 1st) instead of showing Missed daily.
+  const { appliesOn } = require('../lib/checklistFrequency');
+  const applies = (task, dateStr) => appliesOn(task, dateStr);
 
   const rows = tasks.map(t => {
     const cells = dates.map(d => {
@@ -1963,7 +2169,7 @@ router.get('/jd-templates', (req, res) => {
   res.json(rows.map(r => ({ ...r, template_content: safeParseJson(r.template_content) })));
 });
 
-router.post('/jd-templates', (req, res) => {
+router.post('/jd-templates', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { name, description, template_content, is_default } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Template name is required' });
@@ -1985,7 +2191,7 @@ router.post('/jd-templates', (req, res) => {
   }
 });
 
-router.put('/jd-templates/:id', (req, res) => {
+router.put('/jd-templates/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { name, description, template_content, is_default } = req.body || {};
   const db = getDb();
   if (is_default) db.prepare('UPDATE jd_templates SET is_default = 0 WHERE id != ?').run(req.params.id);
@@ -2005,7 +2211,7 @@ router.put('/jd-templates/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/jd-templates/:id', (req, res) => {
+router.delete('/jd-templates/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM jd_templates WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2042,7 +2248,7 @@ router.get('/job-descriptions/:id', (req, res) => {
   res.json(row);
 });
 
-router.post('/job-descriptions', (req, res) => {
+router.post('/job-descriptions', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { hiring_request_id, template_id, title, description, responsibilities,
             required_skills, required_experience, education_required,
@@ -2070,7 +2276,7 @@ router.post('/job-descriptions', (req, res) => {
   }
 });
 
-router.put('/job-descriptions/:id', (req, res) => {
+router.put('/job-descriptions/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { hiring_request_id, template_id, title, description, responsibilities,
           required_skills, required_experience, education_required,
           internal_jd, public_job_post, status } = req.body || {};
@@ -2100,7 +2306,7 @@ router.put('/job-descriptions/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/job-descriptions/:id', (req, res) => {
+router.delete('/job-descriptions/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM job_descriptions WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2166,7 +2372,7 @@ router.post('/candidates/:id/scorecard', (req, res) => {
   }
 });
 
-router.delete('/scorecards/:id', (req, res) => {
+router.delete('/scorecards/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM interview_scorecards WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2206,7 +2412,7 @@ router.get('/final-round-questions/pick', (req, res) => {
   res.json(getDb().prepare(sql).all(...args));
 });
 
-router.post('/final-round-questions', (req, res) => {
+router.post('/final-round-questions', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { category, question_text, for_role, difficulty, notes, is_active } = req.body || {};
     if (!category || !String(category).trim())       return res.status(400).json({ error: 'Category is required' });
@@ -2229,7 +2435,7 @@ router.post('/final-round-questions', (req, res) => {
   }
 });
 
-router.put('/final-round-questions/:id', (req, res) => {
+router.put('/final-round-questions/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { category, question_text, for_role, difficulty, notes, is_active } = req.body || {};
   getDb().prepare(`
     UPDATE final_round_questions SET
@@ -2249,7 +2455,7 @@ router.put('/final-round-questions/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/final-round-questions/:id', (req, res) => {
+router.delete('/final-round-questions/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM final_round_questions WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2270,7 +2476,7 @@ router.get('/induction', (req, res) => {
   res.json(getDb().prepare(sql).all());
 });
 
-router.post('/induction', (req, res) => {
+router.post('/induction', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { section, title, content_type, content_url, content_text, order_index } = req.body || {};
     if (!section || !title) return res.status(400).json({ error: 'Section and title required' });
@@ -2287,7 +2493,7 @@ router.post('/induction', (req, res) => {
   }
 });
 
-router.put('/induction/:id', (req, res) => {
+router.put('/induction/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { section, title, content_type, content_url, content_text, order_index, is_active } = req.body || {};
   getDb().prepare(`
     UPDATE induction_items SET
@@ -2309,7 +2515,7 @@ router.put('/induction/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/induction/:id', (req, res) => {
+router.delete('/induction/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM induction_items WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2332,7 +2538,7 @@ router.get('/training/videos', (req, res) => {
   res.json(getDb().prepare(sql).all(...args));
 });
 
-router.post('/training/videos', (req, res) => {
+router.post('/training/videos', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { title, description, video_url, training_type, duration_minutes,
             target_dept, target_role, is_mandatory } = req.body || {};
@@ -2354,7 +2560,7 @@ router.post('/training/videos', (req, res) => {
   }
 });
 
-router.put('/training/videos/:id', (req, res) => {
+router.put('/training/videos/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { title, description, video_url, training_type, duration_minutes,
           target_dept, target_role, is_mandatory, is_active } = req.body || {};
   getDb().prepare(`
@@ -2381,7 +2587,9 @@ router.put('/training/videos/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/training/videos/:id', (req, res) => {
+// Audit follow-up 2026-08-17: was auth-only — ANY logged-in user could
+// delete training videos. Same gate as its create/edit siblings.
+router.delete('/training/videos/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM training_videos WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });
@@ -2389,7 +2597,7 @@ router.delete('/training/videos/:id', (req, res) => {
 
 // Assign a video to one or more employees (bulk).
 // Body: { employee_ids: [...] }  → upserts (UNIQUE on employee_id+video_id)
-router.post('/training/videos/:id/assign', (req, res) => {
+router.post('/training/videos/:id/assign', requirePermission('hr', 'edit'), (req, res) => {
   const { employee_ids } = req.body || {};
   if (!Array.isArray(employee_ids) || employee_ids.length === 0) {
     return res.status(400).json({ error: 'employee_ids required' });
@@ -2419,7 +2627,7 @@ router.get('/training/videos/:id/assignments', (req, res) => {
   res.json(rows);
 });
 
-router.delete('/training/assignments/:id', (req, res) => {
+router.delete('/training/assignments/:id', requirePermission('hr', 'edit'), (req, res) => {
   const r = getDb().prepare('DELETE FROM training_assignments WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Unassigned' });
@@ -2441,7 +2649,25 @@ router.get('/training/mine', (req, res) => {
   res.json(rows);
 });
 
+// Audit follow-up 2026-08-17: start/complete had NO ownership check — anyone
+// could mark ANYONE's training complete (fake completions). Self-service =
+// only the assigned employee themselves; HR (hr.can_edit) and admin may act
+// on behalf (e.g. marking an offline session done).
+function canTouchAssignment(req, res, assignmentId) {
+  const db = getDb();
+  const a = db.prepare(
+    `SELECT a.id, e.user_id AS owner_user_id FROM training_assignments a
+      LEFT JOIN employees e ON e.id = a.employee_id WHERE a.id = ?`
+  ).get(assignmentId);
+  if (!a) { res.status(404).json({ error: 'Assignment not found' }); return null; }
+  const isOwner = a.owner_user_id != null && a.owner_user_id === req.user.id;
+  const isHr = req.user.role === 'admin' || !!getUserPermissions(req.user.id)['hr']?.can_edit;
+  if (!isOwner && !isHr) { res.status(403).json({ error: 'This training is not assigned to you' }); return null; }
+  return a;
+}
+
 router.post('/training/assignments/:id/start', (req, res) => {
+  if (!canTouchAssignment(req, res, req.params.id)) return;
   getDb().prepare(`UPDATE training_assignments
                      SET started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
                    WHERE id = ?`).run(req.params.id);
@@ -2449,6 +2675,7 @@ router.post('/training/assignments/:id/start', (req, res) => {
 });
 
 router.post('/training/assignments/:id/complete', (req, res) => {
+  if (!canTouchAssignment(req, res, req.params.id)) return;
   const { note } = req.body || {};
   getDb().prepare(`UPDATE training_assignments
                      SET completed_at = CURRENT_TIMESTAMP,
@@ -2522,7 +2749,7 @@ router.get('/screening-questions', (req, res) => {
   res.json(rows.map(r => ({ ...r, options: safeParseJson(r.options) })));
 });
 
-router.post('/screening-questions', (req, res) => {
+router.post('/screening-questions', requirePermission('hr', 'create'), (req, res) => {
   try {
     const { hiring_request_id, question_text, question_type, options,
             is_mandatory, auto_reject_op, auto_reject_value,
@@ -2555,7 +2782,7 @@ router.post('/screening-questions', (req, res) => {
   }
 });
 
-router.put('/screening-questions/:id', (req, res) => {
+router.put('/screening-questions/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { hiring_request_id, question_text, question_type, options,
           is_mandatory, auto_reject_op, auto_reject_value,
           auto_reject_reason, order_index, is_active } = req.body || {};
@@ -2587,7 +2814,7 @@ router.put('/screening-questions/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/screening-questions/:id', (req, res) => {
+router.delete('/screening-questions/:id', requirePermission('hr', 'delete'), (req, res) => {
   const db = getDb();
   // Cascade deletes answers via ON DELETE CASCADE.
   const r = db.prepare('DELETE FROM screening_questions WHERE id = ?').run(req.params.id);
@@ -2627,7 +2854,7 @@ function evalRule(answerRaw, op, value) {
 }
 
 // ── ANSWER SUBMIT + AUTO-EVALUATE ──
-router.post('/candidates/:id/screening-answers', (req, res) => {
+router.post('/candidates/:id/screening-answers', requirePermission('hr', 'edit'), (req, res) => {
   try {
     const candidateId = +req.params.id;
     const { answers } = req.body || {};        // [{ question_id, answer_text }]
@@ -2786,7 +3013,7 @@ router.get('/candidates/:id/docs', (req, res) => {
   res.json(rows);
 });
 
-router.post('/candidates/:id/docs', (req, res) => {
+router.post('/candidates/:id/docs', requirePermission('hr', 'edit'), (req, res) => {
   const { doc_type, doc_label, file_url, status, notes } = req.body || {};
   if (!doc_type || !String(doc_type).trim()) return res.status(400).json({ error: 'doc_type is required' });
   const st = ['pending','received','verified','rejected'].includes(status) ? status : 'pending';
@@ -2797,7 +3024,7 @@ router.post('/candidates/:id/docs', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/docs/:id', (req, res) => {
+router.put('/docs/:id', requirePermission('hr', 'edit'), (req, res) => {
   const { doc_label, file_url, status, notes } = req.body || {};
   const db = getDb();
   const cur = db.prepare('SELECT * FROM candidate_docs WHERE id=?').get(req.params.id);
@@ -2829,7 +3056,7 @@ router.put('/docs/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/docs/:id', (req, res) => {
+router.delete('/docs/:id', requirePermission('hr', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM candidate_docs WHERE id = ?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });

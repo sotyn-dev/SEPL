@@ -14,6 +14,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiSearch, FiEdit2, FiTrash2, FiDownload, FiUpload } from 'react-icons/fi';
@@ -76,6 +77,7 @@ export default function Influencers() {
     api.get(`/influencers?${params}`).then(r => setRows(r.data)).catch(() => {});
   };
   useEffect(load, [search, filterCategory, filterStage]);
+  const pager = usePagination(rows);
 
   const openAdd = () => {
     setEditing(null);
@@ -245,7 +247,7 @@ export default function Influencers() {
             {rows.length === 0 && (
               <tr><td colSpan="9" className="text-center text-gray-400 py-8">No influencers yet — click "Add Influencer" or import via Excel.</td></tr>
             )}
-            {rows.map(r => (
+            {pager.pageItems.map(r => (
               <tr key={r.id} className="border-t hover:bg-blue-50/30">
                 <td className="px-2 py-1.5 font-mono text-blue-700 font-semibold">{r.form_id}</td>
                 <td className="px-2 py-1.5">
@@ -276,6 +278,7 @@ export default function Influencers() {
             ))}
           </tbody>
         </table>
+        <Pagination {...pager} />
       </div>
 
       {/* Add / Edit modal */}

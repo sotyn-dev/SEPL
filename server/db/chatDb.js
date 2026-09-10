@@ -104,6 +104,25 @@ function getChatDb() {
     const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
     if (!mcols.includes('edited_at')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN edited_at DATETIME");
   } catch (e) { /* ignore */ }
+  // is_system: 1 for auto-inserted membership audit lines ("X added Y" /
+  // "X removed Y") — rendered as a centred grey pill, never editable (mam
+  // 2026-08-13: members were being silently removed/re-added from groups;
+  // every membership change must now be visible in-chat with the actor).
+  try {
+    const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
+    if (!mcols.includes('is_system')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN is_system INTEGER DEFAULT 0");
+  } catch (e) { /* ignore */ }
+  // Soft-delete columns (mam 2026-08-13: groups + messages were being wiped —
+  // "code so that anything dont delete"). A "deleted" message keeps its row;
+  // deleted_at drives the client tombstone, deleted_by(+name) records who.
+  // Body/attachment stay in the DB for admin recovery but are stripped from
+  // API responses.
+  try {
+    const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
+    if (!mcols.includes('deleted_at')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN deleted_at DATETIME");
+    if (!mcols.includes('deleted_by')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN deleted_by INTEGER");
+    if (!mcols.includes('deleted_by_name')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN deleted_by_name TEXT");
+  } catch (e) { /* ignore */ }
   // archived_at: soft archive — the group drops out of the sidebar and the unread
   // badge but keeps every row, so it is restorable instantly and scrolling back
   // through an ARCHIVED group still works. NULL = active. Deliberately NOT a
@@ -112,6 +131,32 @@ function getChatDb() {
     const gcols = chatDb.prepare("PRAGMA table_info(chat_groups)").all().map(c => c.name);
     if (!gcols.includes('archived_at')) chatDb.exec("ALTER TABLE chat_groups ADD COLUMN archived_at DATETIME");
   } catch (e) { /* ignore */ }
+  // DB-LEVEL membership audit (mam 2026-08-13: members still "vanishing" even
+  // after route-level auditing — option "1").  SQLite TRIGGERS record every
+  // single insert/delete on chat_group_members INSIDE the database file, so
+  // even a script or person writing to chat.db DIRECTLY (bypassing the API
+  // entirely) leaves a timestamped row here.  Rows present in this table but
+  // absent from the [chat-audit] server log prove non-API access — i.e.
+  // someone with server/file access, not an app user.
+  try {
+    chatDb.exec(`
+      CREATE TABLE IF NOT EXISTS chat_member_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER, user_id INTEGER, user_name TEXT,
+        action TEXT, at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TRIGGER IF NOT EXISTS trg_cgm_audit_del AFTER DELETE ON chat_group_members
+      BEGIN
+        INSERT INTO chat_member_audit (group_id, user_id, user_name, action)
+        VALUES (old.group_id, old.user_id, old.user_name, 'removed');
+      END;
+      CREATE TRIGGER IF NOT EXISTS trg_cgm_audit_ins AFTER INSERT ON chat_group_members
+      BEGIN
+        INSERT INTO chat_member_audit (group_id, user_id, user_name, action)
+        VALUES (new.group_id, new.user_id, new.user_name, 'added');
+      END;
+    `);
+  } catch (e) { console.warn('[chat-db] member audit triggers:', e.message); }
   return chatDb;
 }
 

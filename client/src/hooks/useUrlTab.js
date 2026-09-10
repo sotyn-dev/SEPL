@@ -48,3 +48,27 @@ export function useUrlTab(validValuesOrDefault, defaultOrParamName, paramName = 
 
   return [tab, setTab];
 }
+
+// Move TWO url-tab keys in a single navigation.
+//
+// Calling two setTab()s in one click handler does NOT work: each builds a fresh
+// URLSearchParams from the params of the CURRENT location, and neither
+// navigation has committed when the other runs — so the second call's object
+// has no trace of the first's key and silently drops it. (React Router's
+// functional setSearchParams form does not help: it resolves against the same
+// uncommitted location.) The Sales Funnel hit this — "Stage 2" set ?stage= and
+// lost ?tab=list, leaving a URL that rendered a blank body.
+//
+// Pass the pairs to move plus each key's default (defaults are omitted from the
+// URL, same rule as useUrlTab) and they land in ONE navigation.
+export function useUrlTabPair() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  return (updates) => {
+    const params = new URLSearchParams(searchParams);
+    for (const { key, value, defaultValue } of updates) {
+      if (value === defaultValue) params.delete(key);
+      else params.set(key, value);
+    }
+    setSearchParams(params, { replace: false });
+  };
+}

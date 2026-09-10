@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
@@ -52,6 +53,7 @@ export default function Complaints() {
   const [engineers, setEngineers] = useState([]);
   const [assignResult, setAssignResult] = useState(null);
   const [otpEntry, setOtpEntry] = useState('');
+  const [srUploading, setSrUploading] = useState(false);   // service-report proof upload
   const [registerAck, setRegisterAck] = useState(null);  // wa link surfaced right after Register
 
   const load = async () => {
@@ -65,10 +67,12 @@ export default function Complaints() {
   };
 
   useEffect(() => { load(); }, [q]);
-  // Best-effort load of the engineer/user list on mount so the "Assigned To"
-  // fields can suggest names (mam 2026-06-15 automation). Admins-only
-  // endpoint — silently empty for others, fields stay free-text.
-  useEffect(() => { api.get('/users').then(({ data }) => setEngineers(Array.isArray(data) ? data : (data?.users || []))).catch(() => {}); }, []);
+  // The user list behind every "Assigned To" picker. It used to call '/users',
+  // which does not exist (/api/users 404s — the real route is /auth/users), and
+  // the failure was swallowed by .catch(). That was invisible while these were
+  // free-text boxes with a suggestion list, but they are dropdowns now, so an
+  // empty list meant nobody could be assigned at all (2026-08-20).
+  useEffect(() => { api.get('/auth/users?active_only=1').then(({ data }) => setEngineers(Array.isArray(data) ? data : (data?.users || []))).catch(() => {}); }, []);
 
   const create = async (e) => {
     e.preventDefault();
@@ -92,7 +96,7 @@ export default function Complaints() {
     // Pull users for the engineer picker (only when no engineer yet)
     if (!c.assigned_engineer_id && engineers.length === 0) {
       try {
-        const { data } = await api.get('/users');
+        const { data } = await api.get('/auth/users?active_only=1');
         setEngineers(Array.isArray(data) ? data : (data?.users || []));
       } catch (_) { /* admins-only endpoint — non-fatal */ }
     }
@@ -134,9 +138,23 @@ export default function Complaints() {
   };
 
   const save = async () => {
-    await api.put(`/complaints/${viewing.id}`, viewing);
-    setViewing(null);
-    load();
+    // Remarks are required to close a complaint; the service-report upload is
+    // optional (mam 2026-08-20). Checked here so the person is told immediately
+    // instead of the save appearing to do nothing.
+    if ((viewing.status === 'resolved' || viewing.status === 'closed')
+        && !String(viewing.resolution_notes || '').trim()) {
+      toast.error('Fill Remarks — say what was done before marking it Resolved.');
+      return;
+    }
+    try {
+      await api.put(`/complaints/${viewing.id}`, viewing);
+      toast.success('Saved');
+      setViewing(null);
+      load();
+    } catch (err) {
+      // Without this the PUT rejected silently and the modal just sat there.
+      toast.error(err.response?.data?.error || 'Could not save this complaint');
+    }
   };
 
   // Open the view modal in edit mode (same modal — already has all the
@@ -162,13 +180,13 @@ export default function Complaints() {
   // Tab-based filter — subset of the full list for each tab
   const visibleList = (() => {
     if (tab === 'step1') return list.filter(c => c.status === 'open' && !c.step1_assigned_to);
-    if (tab === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to && !c.service_report);
+    if (tab === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to);
     if (tab === 'resolved') return list.filter(c => c.status === 'resolved' || c.status === 'closed');
     return list;
   })();
   const tabCount = (id) => {
     if (id === 'step1') return list.filter(c => c.status === 'open' && !c.step1_assigned_to).length;
-    if (id === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to && !c.service_report).length;
+    if (id === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to).length;
     if (id === 'resolved') return list.filter(c => c.status === 'resolved' || c.status === 'closed').length;
     if (id === 'all') return list.length;
     return null;
@@ -180,7 +198,7 @@ export default function Complaints() {
         <h1 className="text-xl font-bold text-gray-800">Complaint Register</h1>
         <button onClick={() => exportCsv('complaints',
           ['Complaint #','Client','Company','Mobile','Category','Problem','Status','Priority','Assigned To (Step1)','Created'],
-          list.map(c => [c.complaint_number, c.client_name, c.company_name, c.mobile_number, c.category, c.problem_detail, c.status, c.priority, c.step1_assigned_to, c.created_at]))}
+          visibleList.map(c => [c.complaint_number, c.client_name, c.company_name, c.mobile_number, c.category, c.problem_detail, c.status, c.priority, c.step1_assigned_to, c.created_at]))}
           className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={14} /> Export Excel</button>
       </div>
 
@@ -197,7 +215,7 @@ export default function Complaints() {
         {TABS.map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); if (t.id === 'register') setShowAdd(true); }}
             className={`px-4 py-2 rounded-lg font-semibold text-sm border transition-all ${tab === t.id && t.id !== 'register' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
-            {t.label}
+            {flowStepLabel('/complaints', t.label)}
             {tabCount(t.id) !== null && <span className={`ml-2 text-xs ${tab === t.id && t.id !== 'register' ? 'opacity-90' : 'text-gray-400'}`}>({tabCount(t.id)})</span>}
           </button>
         ))}
@@ -321,7 +339,12 @@ export default function Complaints() {
                 {STATES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </Field>
-            <Field label="EMP Name"><input list="cmpEngDL1" value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp" placeholder="Who received the complaint" /><datalist id="cmpEngDL1">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist></Field>
+            <Field label="EMP Name"><select value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp">
+              <option value="">— select person —</option>
+              {engineers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+              {form.emp_name && !engineers.some(u => u.name === form.emp_name)
+                && <option value={form.emp_name}>{form.emp_name} (existing)</option>}
+            </select></Field>
             <Field label="Complaint Type *">
               <div className="flex gap-2">
                 {COMPLAINT_TYPES.map(t => (
@@ -361,7 +384,10 @@ export default function Complaints() {
         // Until then, Step 2 stays locked — you can't resolve a complaint
         // that hasn't even been assigned to a technician yet.
         const step1Done = !!(viewing.step1_assigned_to && viewing.step1_actual_date);
-        const step2Done = !!(viewing.step2_actual_date && viewing.service_report);
+        // Resolved/closed marks Step 2 complete. It used to require the service
+        // report, which is optional now (mam 2026-08-20).
+        const step2Done = viewing.status === 'resolved' || viewing.status === 'closed'
+          || !!(viewing.step2_actual_date && (viewing.resolution_notes || viewing.service_report));
         return (
         <Modal onClose={() => setViewing(null)} title={`Complaint ${viewing.complaint_number}`}>
           <div className="space-y-5">
@@ -392,7 +418,14 @@ export default function Complaints() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Field label="Assigned To (name / team) *">
-                  <input list="cmpEngDL2" value={viewing.step1_assigned_to||''} onChange={e=>setViewing({...viewing, step1_assigned_to:e.target.value})} className="inp" placeholder="e.g. LV Team / Himank / Gagan" /><datalist id="cmpEngDL2">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist>
+                  <select value={viewing.step1_assigned_to||''} onChange={e=>setViewing({...viewing, step1_assigned_to:e.target.value})} className="inp">
+                    <option value="">— select person —</option>
+                    {engineers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                    {/* A name typed before this became a dropdown must still show,
+                        or opening an old complaint would silently blank it. */}
+                    {viewing.step1_assigned_to && !engineers.some(u => u.name === viewing.step1_assigned_to)
+                      && <option value={viewing.step1_assigned_to}>{viewing.step1_assigned_to} (existing)</option>}
+                  </select>
                 </Field>
                 <Field label="Planned Date">
                   <input type="date" value={viewing.step1_planned_date||''} onChange={e=>setViewing({...viewing, step1_planned_date:e.target.value})} className="inp" />
@@ -423,7 +456,12 @@ export default function Complaints() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <Field label="Assigned To (resolver)">
-                    <input list="cmpEngDL3" value={viewing.step2_assigned_to||''} onChange={e=>setViewing({...viewing, step2_assigned_to:e.target.value})} className="inp" placeholder="Technician / engineer name" /><datalist id="cmpEngDL3">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist>
+                    <select value={viewing.step2_assigned_to||''} onChange={e=>setViewing({...viewing, step2_assigned_to:e.target.value})} className="inp">
+                      <option value="">— select person —</option>
+                      {engineers.map(u => <option key={u.id} value={u.name}>{u.name}</option>)}
+                      {viewing.step2_assigned_to && !engineers.some(u => u.name === viewing.step2_assigned_to)
+                        && <option value={viewing.step2_assigned_to}>{viewing.step2_assigned_to} (existing)</option>}
+                    </select>
                   </Field>
                   <Field label="Planned Date">
                     <input type="date" value={viewing.step2_planned_date||''} onChange={e=>setViewing({...viewing, step2_planned_date:e.target.value})} className="inp" />
@@ -443,8 +481,40 @@ export default function Complaints() {
                     </select>
                   </Field>
                   <div className="md:col-span-2">
-                    <Field label="Service Report *">
-                      <textarea rows="3" value={viewing.service_report||''} onChange={e=>setViewing({...viewing, service_report:e.target.value})} className="inp" placeholder="What was done to resolve the complaint" />
+                    {/* mam 2026-08-20: the service report is a PROOF UPLOAD and is
+                        optional; Remarks carry what was done and are required to
+                        mark the complaint resolved. */}
+                    <Field label={`Remarks ${(viewing.status === 'resolved' || viewing.status === 'closed') ? '*' : ''}`}>
+                      <textarea rows="3" value={viewing.resolution_notes||''}
+                        onChange={e=>setViewing({...viewing, resolution_notes:e.target.value})} className="inp"
+                        placeholder="What was done to resolve the complaint (required to mark it Resolved)" />
+                    </Field>
+                  </div>
+                  <div className="md:col-span-2">
+                    <Field label="Service Report (proof upload · optional)">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input type="file" className="inp text-xs" disabled={srUploading}
+                          onChange={async e => {
+                            const f = e.target.files?.[0]; if (!f) return;
+                            setSrUploading(true);
+                            try {
+                              const fd = new FormData(); fd.append('file', f);
+                              const up = await api.post('/upload', fd);
+                              setViewing(v => ({ ...v, service_report_url: up.data.url }));
+                              toast.success('Service report attached');
+                            } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
+                            setSrUploading(false);
+                          }} />
+                        {srUploading && <span className="text-[11px] text-gray-400">Uploading…</span>}
+                        {viewing.service_report_url && (
+                          <>
+                            <a href={viewing.service_report_url} target="_blank" rel="noreferrer"
+                               className="text-[11px] text-blue-700 hover:underline">View attached report</a>
+                            <button type="button" className="text-[11px] text-red-600 hover:underline"
+                              onClick={() => setViewing(v => ({ ...v, service_report_url: '' }))}>remove</button>
+                          </>
+                        )}
+                      </div>
                     </Field>
                   </div>
                 </div>

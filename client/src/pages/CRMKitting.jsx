@@ -21,6 +21,7 @@
 // columns.
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
@@ -68,7 +69,7 @@ const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 const CRM_OWNERS = ['Sushila', 'Lovely'];
 
 export default function CRMKitting() {
-  const { user, isAdmin, canEdit } = useAuth();
+  const { user, isAdmin, canEdit, canCreate, canDelete } = useAuth();
 
   const [matrix, setMatrix] = useState({ projects: [], checkpoints: [], meta: {}, entries: {} });
   const [loading, setLoading] = useState(false);
@@ -103,6 +104,15 @@ export default function CRMKitting() {
   const [metaDraft, setMetaDraft] = useState({});
 
   const editAllowed = canEdit ? canEdit('crm_kitting') : true;
+  // Manage Checkpoints follows the ROLE MATRIX, not the admin role: mam grants
+  // CRM Full Kitting create/edit/delete to a role and expects that role to be
+  // able to manage checkpoints (2026-08-19). Admin still passes because can()
+  // returns true for admins on every module. Each individual action stays
+  // gated server-side by its own permission.
+  const canManageCps = (isAdmin && isAdmin())
+    || (canCreate && canCreate('crm_kitting'))
+    || (canEdit && canEdit('crm_kitting'))
+    || (canDelete && canDelete('crm_kitting'));
 
   // ── Fetch matrix ───────────────────────────────────────────────
   const loadMatrix = useCallback(() => {
@@ -168,7 +178,9 @@ export default function CRMKitting() {
     if (!modalCp || !modalProject) return;
     if (modalObsDate > todayISO()) { toast.error('Observation date cannot be in the future'); return; }
     if (modalObsDate < minObsISO()) { toast.error('Observation date cannot be more than 5 days in the past'); return; }
-    if (!modalPhoto) { toast.error('Please upload a file (photo or PDF) as evidence'); return; }
+    // Evidence file is OPTIONAL (mam 2026-08-22). A checkpoint can be recorded
+    // from a phone call or a site confirmation with nothing to attach; blocking
+    // the save on a file just stopped the status being logged at all.
     setSaving(true);
     // Snapshot the projectKey + cpId BEFORE the modal closes so the
     // optimistic update below can still address the right cell.
@@ -347,7 +359,7 @@ export default function CRMKitting() {
             >
               <FiRefreshCw /> Refresh
             </button>
-            {isAdmin && isAdmin() && (
+            {canManageCps && (
               <button
                 onClick={openManage}
                 className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs flex items-center gap-1.5"
@@ -373,7 +385,7 @@ export default function CRMKitting() {
               className={`btn ${active ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
               title={`Stage ${sn} — ${STAGE_META[sn].title}`}
             >
-              Stage {sn} — {STAGE_META[sn].title}
+              {flowStepLabel('/crm-kitting', `Stage ${sn} — ${STAGE_META[sn].title}`)}
               <span
                 className={`px-1.5 rounded-full text-[10px] font-bold min-w-[22px] text-center ${
                   active ? 'bg-white/30 text-white' : `text-white ${STAGE_META[sn].tabBadge}`
@@ -606,16 +618,15 @@ export default function CRMKitting() {
                 <p className="text-[10px] text-gray-500 mt-0.5">Today or up to 5 days back</p>
               </div>
               <div>
-                <label className="text-xs font-semibold text-gray-700">Upload File <span className="text-red-600">*</span></label>
+                <label className="text-xs font-semibold text-gray-700">Upload File (optional)</label>
                 <input
                   type="file"
                   accept="image/*,application/pdf"
                   capture="environment"
-                  required
                   onChange={e => setModalPhoto(e.target.files?.[0] || null)}
                   className="w-full mt-1 text-xs"
                 />
-                <p className="text-[10px] text-gray-500 mt-0.5">Photo or PDF — required as evidence</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Photo or PDF — attach evidence if you have it</p>
               </div>
             </div>
 

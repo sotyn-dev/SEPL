@@ -6,9 +6,11 @@ import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiSearch, FiUsers, FiLink, FiLink2 } from 'react-icons/fi';
+import Pagination, { usePagination } from '../components/PaginationBar';
+import DataCompletion from '../components/DataCompletion';
 
 export default function Employees() {
-  const { canDelete, isAdmin, canView } = useAuth();
+  const { canDelete, canCreate, canEdit, isAdmin, canView } = useAuth();
   // Salary is confidential — only admins and holders of employee_salary.can_view see it
   const canSeeSalary = isAdmin() || canView('employee_salary');
   const [employees, setEmployees] = useState([]);
@@ -17,6 +19,21 @@ export default function Employees() {
   const [bulkModal, setBulkModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});
+  // IFSC → bank + branch (mam 2026-09-04). Fires once the code is a complete
+  // 11-character IFSC. The functional setForm means a slow reply for a code the
+  // user has since changed is ignored, rather than overwriting the newer one.
+  const [ifscLookup, setIfscLookup] = useState({ status: 'idle' });
+  const lookupIfsc = async (code) => {
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(code)) { setIfscLookup({ status: 'idle' }); return; }
+    setIfscLookup({ status: 'loading' });
+    try {
+      const r = (await api.get(`/hr/ifsc/${code}`)).data;
+      setForm(f => f.bank_ifsc === code ? { ...f, bank_name: r.bank || f.bank_name, bank_branch: r.branch || f.bank_branch } : f);
+      setIfscLookup({ status: 'ok', bank: r.bank, branch: r.branch });
+    } catch (e) {
+      setIfscLookup({ status: 'error', message: e.response?.data?.error || 'Lookup failed — type the bank and branch by hand' });
+    }
+  };
   const [search, setSearch] = useState('');
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
@@ -26,8 +43,8 @@ export default function Employees() {
 
   const load = () => {
     api.get('/hr/employees').then(r => setEmployees(r.data));
-    api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
-    api.get('/hr/roster-audit').then(r => setRosterAudit(r.data || { backlog: [], guests: [] })).catch(() => {});
+    api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => { });
+    api.get('/hr/roster-audit').then(r => setRosterAudit(r.data || { backlog: [], guests: [] })).catch(() => { });
   };
   useEffect(() => { load(); }, []);
 
@@ -64,6 +81,28 @@ export default function Employees() {
       }
       // 400 payroll guard (or anything else) → show the server's reason verbatim
       toast.error(err.response?.data?.error || 'Delete failed');
+    }
+  };
+
+  // Self-fill link (mam 2026-08-17): tokenized public URL the employee opens
+  // WITHOUT logging in to submit their own details + documents. No arg =
+  // new-joiner link (creates a row on submit); with an employee = tied link
+  // (prefills + updates that row). Copies to clipboard for WhatsApp/email.
+  const shareFillLink = async (emp) => {
+    try {
+      const r = await api.post('/hr/employees/fill-link', emp ? { employee_id: emp.id } : {});
+      const url = `${window.location.origin}${r.data.path}`;
+      try { await navigator.clipboard.writeText(url); } catch { /* http or old browser */ }
+      toast.success(
+        emp
+          ? `Self-fill link for ${emp.name} copied — paste into WhatsApp / email (one-time, valid 7 days)`
+          : 'New-joiner form link copied — REUSABLE: share once with all new joiners, every submission lands in this page (valid 30 days)',
+        { duration: 8000 }
+      );
+      // Clipboard can silently fail on http — always show the link too
+      window.prompt('Share this link with the employee:', url);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not create link');
     }
   };
 
@@ -118,8 +157,8 @@ export default function Employees() {
     // Required-on-create — backend will also reject, but checking here lets
     // mam see the error before the upload spinner spins.
     if (!editing) {
-      if (!payload.aadhar_file)        return toast.error('Upload Aadhar card');
-      if (!payload.pan_file)           return toast.error('Upload PAN card');
+      if (!payload.aadhar_file) return toast.error('Upload Aadhar card');
+      if (!payload.pan_file) return toast.error('Upload PAN card');
       if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
     }
     try {
@@ -223,6 +262,7 @@ export default function Employees() {
   const filtered = employees.filter(e =>
     !search || [e.name, e.phone, e.email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase()))
   );
+  const pager = usePagination(filtered);
 
   return (
     <div className="space-y-4">
@@ -236,9 +276,19 @@ export default function Employees() {
           <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export CSV</button>
           <button onClick={autoLink} className="btn btn-secondary flex items-center gap-2 text-sm" title="Link unlinked employees to users by matching email"><FiLink2 size={15} /> Auto-Link by Email</button>
           <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>
+          {canCreate('employees') && (
+            <button onClick={() => shareFillLink(null)} className="btn btn-secondary flex items-center gap-2 text-sm"
+              title="Create a public form link a new joiner fills themselves — their details land here">
+              <FiLink size={15} /> Self-Fill Link
+            </button>
+          )}
           <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
         </div>
       </div>
+
+      {/* Data Completion (mam 2026-09-03) — same bar as Item Master;
+          the field list and the Data Entry KPI share one definition. */}
+      <DataCompletion module="employees" />
 
       {/* Tabs — keep the roster-reconciliation flags off the main directory
           (in production the flag lists can be long and clutter the table).
@@ -260,105 +310,119 @@ export default function Employees() {
       </div>
 
       {view === 'directory' && (
-      <>
-      {/* Search */}
-      <div className="relative">
-        <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-        <input className="input pl-10" placeholder="Search by name, phone, email, designation, department..." value={search} onChange={e => setSearch(e.target.value)} />
-      </div>
-
-      {/* Table */}
-      <div className="card p-0 hidden md:block table-responsive"><table className="freeze-head w-full min-w-[900px]">
-        <thead><tr>
-          <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
-          <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
-          {canSeeSalary && <th>Salary</th>}
-          <th>Status</th><th>Actions</th>
-        </tr></thead>
-        <tbody>
-          {filtered.map(e => (
-            <tr key={e.id}>
-              <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email}</td>
-              <td>{e.designation}</td><td>{e.department}</td><td>{e.join_date}</td>
-              <td>
-                {e.linked_user_name
-                  ? <span className="badge badge-green text-[10px] flex items-center gap-1 w-fit"><FiLink size={10} /> {e.linked_user_name}</span>
-                  : <span className="badge badge-red text-[10px]">Not linked</span>}
-              </td>
-              {canSeeSalary && <td className="font-medium">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
-              <td><StatusBadge status={e.status} /></td>
-              <td><div className="flex gap-1">
-                <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
-                {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
-              </div></td>
-            </tr>
-          ))}
-          {filtered.length === 0 && <tr><td colSpan={canSeeSalary ? 10 : 9} className="text-center py-8 text-gray-400">No employees found</td></tr>}
-        </tbody>
-      </table></div>
-
-      {/* Mobile cards (mam 2026-06-02) — polished employee card list */}
-      <div className="md:hidden space-y-3">
-        {filtered.length === 0 && (
-          <div className="card p-6 text-center text-gray-400 text-sm">No employees found</div>
-        )}
-        {filtered.map(e => (
-          <div key={e.id} className="card p-3 space-y-2">
-            <div className="flex justify-between items-start gap-2">
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
-                <div className="text-lg font-bold text-gray-900 truncate">{e.name}</div>
-                {e.designation && <div className="text-[11px] text-gray-600">{e.designation}</div>}
-                {e.department && <div className="text-[10px] text-gray-400">{e.department}</div>}
-              </div>
-              <StatusBadge status={e.status} />
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
-              {e.phone && (
-                <a href={`tel:${e.phone}`} className="text-blue-600 hover:underline">
-                  <div className="text-[9px] uppercase text-gray-400">Phone</div>
-                  <div className="font-semibold">📞 {e.phone}</div>
-                </a>
-              )}
-              {e.email && (
-                <a href={`mailto:${e.email}`} className="text-blue-600 hover:underline truncate" title={e.email}>
-                  <div className="text-[9px] uppercase text-gray-400">Email</div>
-                  <div className="font-semibold truncate">✉ {e.email}</div>
-                </a>
-              )}
-              {e.join_date && (
-                <div>
-                  <div className="text-[9px] uppercase text-gray-400">Join Date</div>
-                  <div className="font-semibold text-gray-700">{e.join_date}</div>
-                </div>
-              )}
-              {canSeeSalary && (
-                <div>
-                  <div className="text-[9px] uppercase text-gray-400">Salary</div>
-                  <div className="font-semibold text-emerald-700">Rs {(e.salary || 0).toLocaleString('en-IN')}</div>
-                </div>
-              )}
-            </div>
-            <div className="pt-1 border-t border-gray-100">
-              <div className="text-[9px] uppercase text-gray-400">Linked User</div>
-              {e.linked_user_name
-                ? <span className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1"><FiLink size={10} /> {e.linked_user_name}</span>
-                : <span className="text-[11px] font-semibold text-red-600">Not linked — DPR Staff Cost won't include this employee</span>}
-            </div>
-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-              <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
-                <FiEdit2 size={11} /> Edit
-              </button>
-              {canDelete('employees') && (
-                <button onClick={() => deleteEmployee(e)} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                  <FiTrash2 size={11} /> Delete
-                </button>
-              )}
-            </div>
+        <>
+          {/* Search */}
+          <div className="relative">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input className="input pl-10" placeholder="Search by name, phone, email, designation, department..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-        ))}
-      </div>
-      </>
+
+          {/* Table */}
+          <div className="card p-0 hidden md:block table-responsive"><table className="freeze-head w-full min-w-[900px]">
+            <thead><tr>
+              <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
+              <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
+              {canSeeSalary && <th>Salary</th>}
+              <th>Status</th><th>Actions</th>
+            </tr></thead>
+            <tbody>
+              {pager.pageItems.map(e => (
+                <tr key={e.id}>
+                  <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email}</td>
+                  <td>{e.designation}</td><td>{e.department}</td><td>{e.join_date}</td>
+                  <td>
+                    {e.linked_user_name
+                      ? <span className="badge badge-green text-[10px] flex items-center gap-1 w-fit"><FiLink size={10} /> {e.linked_user_name}</span>
+                      : <span className="badge badge-red text-[10px]">Not linked</span>}
+                  </td>
+                  {canSeeSalary && <td className="font-medium">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
+                  <td><StatusBadge status={e.status} /></td>
+                  <td><div className="flex gap-1">
+                    <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
+                    {canEdit('employees') && (
+                      <button onClick={() => shareFillLink(e)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600"
+                        title={`Share a self-fill link with ${e.name} — they update their own details, no login`}>
+                        <FiLink size={15} />
+                      </button>
+                    )}
+                    {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                  </div></td>
+                </tr>
+              ))}
+              {filtered.length === 0 && <tr><td colSpan={canSeeSalary ? 10 : 9} className="text-center py-8 text-gray-400">No employees found</td></tr>}
+            </tbody>
+          </table></div>
+
+          {/* Mobile cards (mam 2026-06-02) — polished employee card list */}
+          <div className="md:hidden space-y-3">
+            {filtered.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">No employees found</div>
+            )}
+            {pager.pageItems.map(e => (
+              <div key={e.id} className="card p-3 space-y-2">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{e.name}</div>
+                    {e.designation && <div className="text-[11px] text-gray-600">{e.designation}</div>}
+                    {e.department && <div className="text-[10px] text-gray-400">{e.department}</div>}
+                  </div>
+                  <StatusBadge status={e.status} />
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  {e.phone && (
+                    <a href={`tel:${e.phone}`} className="text-blue-600 hover:underline">
+                      <div className="text-[9px] uppercase text-gray-400">Phone</div>
+                      <div className="font-semibold">📞 {e.phone}</div>
+                    </a>
+                  )}
+                  {e.email && (
+                    <a href={`mailto:${e.email}`} className="text-blue-600 hover:underline truncate" title={e.email}>
+                      <div className="text-[9px] uppercase text-gray-400">Email</div>
+                      <div className="font-semibold truncate">✉ {e.email}</div>
+                    </a>
+                  )}
+                  {e.join_date && (
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Join Date</div>
+                      <div className="font-semibold text-gray-700">{e.join_date}</div>
+                    </div>
+                  )}
+                  {canSeeSalary && (
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Salary</div>
+                      <div className="font-semibold text-emerald-700">Rs {(e.salary || 0).toLocaleString('en-IN')}</div>
+                    </div>
+                  )}
+                </div>
+                <div className="pt-1 border-t border-gray-100">
+                  <div className="text-[9px] uppercase text-gray-400">Linked User</div>
+                  {e.linked_user_name
+                    ? <span className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1"><FiLink size={10} /> {e.linked_user_name}</span>
+                    : <span className="text-[11px] font-semibold text-red-600">Not linked — DPR Staff Cost won't include this employee</span>}
+                </div>
+                <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
+                  <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                    <FiEdit2 size={11} /> Edit
+                  </button>
+                  {canEdit('employees') && (
+                    <button onClick={() => shareFillLink(e)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiLink size={11} /> Fill Link
+                    </button>
+                  )}
+                  {canDelete('employees') && (
+                    <button onClick={() => deleteEmployee(e)} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiTrash2 size={11} /> Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* One pagination bar shared by the desktop table and mobile cards */}
+          <Pagination {...pager} />
+        </>
       )}
 
       {view === 'review' && (
@@ -416,23 +480,65 @@ export default function Employees() {
       )}
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Employee' : 'Add Employee'}>
+      <Modal isOpen={modal} onClose={() => { setModal(false); setIfscLookup({ status: 'idle' }); }} title={editing ? 'Edit Employee' : 'Add Employee'}>
         <form onSubmit={save} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
-            <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
-            <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /></div>
-            <div><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({...form, designation: e.target.value})} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
-            <div><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({...form, department: e.target.value})} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
-            <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({...form, join_date: e.target.value})} /></div>
-            {canSeeSalary && <div><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /></div>}
-            {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['active','training','inactive','terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
+            <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({ ...form, name: e.target.value })} required /></div>
+            <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+            <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
+            <div><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({ ...form, designation: e.target.value })} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
+            <div><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({ ...form, department: e.target.value })} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
+            <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({ ...form, join_date: e.target.value })} /></div>
+            {canSeeSalary && <div><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({ ...form, salary: +e.target.value })} /></div>}
+            {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({ ...form, status: e.target.value })}>{['active', 'training', 'inactive', 'terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
             <div>
               <label className="label">Roster / Shift</label>
               <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
                 <option value="general">General — 9:30 AM to 6:30 PM</option>
                 <option value="early">Early — 9:00 AM to 6:00 PM</option>
               </select>
+            </div>
+            {/* Personal details (mam 2026-09-04). Guardian is title + relation
+                + name, because "Sh. Ram Kumar (Father)" is how it has to read
+                on statutory paperwork. */}
+            <div>
+              <label className="label">Date of Birth</label>
+              <input className="input" type="date" value={form.date_of_birth || ''}
+                max={new Date(Date.now() - 18 * 365.25 * 86400000).toISOString().slice(0, 10)}
+                onChange={e => setForm({ ...form, date_of_birth: e.target.value })} />
+              <p className="text-[10px] text-gray-500 mt-0.5">Must be 18 or over.</p>
+            </div>
+            <div>
+              <label className="label">Gender</label>
+              <select className="select" value={form.gender || ''} onChange={e => setForm({ ...form, gender: e.target.value })}>
+                <option value="">— Select —</option>
+                {['Male', 'Female', 'Other'].map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Emergency Contact Number</label>
+              <input className="input" value={form.emergency_contact_phone || ''} placeholder="10-digit mobile"
+                onChange={e => setForm({ ...form, emergency_contact_phone: e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className="label">Father / Spouse / Mother Name</label>
+              <div className="flex gap-2">
+                <select className="select w-24" value={form.guardian_title || ''} onChange={e => setForm({ ...form, guardian_title: e.target.value })}>
+                  <option value="">Title</option>
+                  {['Mr.', 'Mrs.', 'Sh.', 'Smt.'].map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <select className="select w-32" value={form.guardian_relation || ''} onChange={e => setForm({ ...form, guardian_relation: e.target.value })}>
+                  <option value="">Relation</option>
+                  {['Father', 'Spouse', 'Mother'].map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <input className="input flex-1" value={form.guardian_name || ''} placeholder="Full name as per ID"
+                  onChange={e => setForm({ ...form, guardian_name: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <label className="label">Emergency Contact Name</label>
+              <input className="input" value={form.emergency_contact_name || ''} placeholder="Who to call"
+                onChange={e => setForm({ ...form, emergency_contact_name: e.target.value })} />
             </div>
             <div className="sm:col-span-2">
               <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
@@ -454,12 +560,39 @@ export default function Employees() {
               Highest qualification certificate. */}
           <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400 space-y-3">
             <div className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Mandatory documents{editing ? '' : ' *'}</div>
+            {/* Each document can carry its NUMBER directly above the upload
+                (mam 2026-09-04) — the number is what reports and validation
+                need; the scan is only the proof behind it.
+                Aadhaar is LAST 4 DIGITS ONLY, deliberately: payroll runs off
+                UAN / PF number, so holding the full number is risk without
+                use. The card image on file covers the rare exception. */}
             {[
-              { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card *' },
-              { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card *' },
+              {
+                key: 'aadhar_file', slot: '_aadhar_file', label: 'Aadhar Card *',
+                num: {
+                  k: 'aadhaar_last4', label: 'Aadhaar Number — last 4 digits only', ph: 'e.g. 4355', max: 4,
+                  hint: 'Only the last 4 digits are stored. The full number is never saved in the ERP.'
+                }
+              },
+              {
+                key: 'pan_file', slot: '_pan_file', label: 'PAN Card *',
+                num: {
+                  k: 'pan_number', label: 'PAN Number', ph: 'ABCDE1234F', max: 10,
+                  hint: '5 letters, 4 digits, 1 letter.', upper: true
+                }
+              },
               { key: 'qualification_file', slot: '_qualification_file', label: 'Highest Qualification Certificate *' },
-            ].map(({ key, slot, label }) => (
+            ].map(({ key, slot, label, num }) => (
               <div key={key}>
+                {num && (
+                  <div className="mb-2">
+                    <label className="label">{num.label}</label>
+                    <input
+                      className="input" value={form[num.k] || ''} placeholder={num.ph} maxLength={num.max}
+                      onChange={e => setForm({ ...form, [num.k]: num.upper ? e.target.value.toUpperCase() : e.target.value })} />
+                    <p className="text-[10px] text-gray-500 mt-0.5">{num.hint}</p>
+                  </div>
+                )}
                 <label className="label">{label} <span className="text-gray-400 font-normal text-[10px]">(PDF / JPG / PNG, max 10 MB)</span></label>
                 <input
                   className="input"
@@ -477,6 +610,46 @@ export default function Employees() {
                 {form[slot] && <p className="text-[10px] text-blue-600 mt-0.5">Selected: {form[slot].name}</p>}
               </div>
             ))}
+          </div>
+
+          {/* Salary bank account (mam 2026-09-04). The columns bank_account_no
+              and bank_ifsc have existed since 17 Aug but had no field anywhere
+              in the ERP — this is the first time they can actually be filled. */}
+          <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-400 space-y-3">
+            <div className="text-xs font-semibold text-blue-800 uppercase tracking-wide">Salary bank account</div>
+            <div className="grid grid-cols-2 gap-4">
+              {/* IFSC goes first because it drives the two fields after it. */}
+              <div>
+                <label className="label">IFSC Code</label>
+                <input className="input" value={form.bank_ifsc || ''} placeholder="PUNB0020510" maxLength={11}
+                  onChange={e => {
+                    const v = e.target.value.toUpperCase().replace(/\s/g, '');
+                    setForm({ ...form, bank_ifsc: v });
+                    lookupIfsc(v);
+                  }} />
+                <p className={`text-[10px] mt-0.5 ${ifscLookup.status === 'ok' ? 'text-emerald-600' : ifscLookup.status === 'error' ? 'text-amber-700' : 'text-gray-500'}`}>
+                  {ifscLookup.status === 'loading' ? 'Looking up bank & branch…'
+                    : ifscLookup.status === 'ok' ? `✓ ${ifscLookup.bank} — ${ifscLookup.branch}`
+                      : ifscLookup.status === 'error' ? ifscLookup.message
+                        : 'Bank name and branch fill in automatically from the IFSC.'}
+                </p>
+              </div>
+              <div>
+                <label className="label">Bank Name</label>
+                <input className="input" value={form.bank_name || ''} placeholder="Fills from IFSC"
+                  onChange={e => setForm({ ...form, bank_name: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Bank Branch</label>
+                <input className="input" value={form.bank_branch || ''} placeholder="Fills from IFSC"
+                  onChange={e => setForm({ ...form, bank_branch: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Bank Account Number</label>
+                <input className="input" value={form.bank_account_no || ''} placeholder="Account number as printed on the passbook / cheque"
+                  onChange={e => setForm({ ...form, bank_account_no: e.target.value.replace(/\s/g, '') })} />
+              </div>
+            </div>
           </div>
 
           <div className="flex justify-end gap-3">

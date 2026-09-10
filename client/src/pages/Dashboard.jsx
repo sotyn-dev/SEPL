@@ -7,13 +7,13 @@ import { useAuth } from '../context/AuthContext';
 import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare, FiUpload, FiClock, FiAlertTriangle, FiExternalLink, FiCalendar, FiHelpCircle, FiTrendingUp } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import ErpMantraBanner from '../components/ErpMantraBanner';
+import DashHero3D from '../components/DashHero3D';
 import { fmtDate } from '../utils/datetime';
 
 export default function Dashboard() {
   const { isAdmin, user } = useAuth();
   const [stats, setStats] = useState(null);
   const [perf, setPerf] = useState(null);
-  const [teams, setTeams] = useState(null);   // team weekly performance (admin)
   const [myTasks, setMyTasks] = useState([]);
   const [todayChecklists, setTodayChecklists] = useState([]);
   const [myTickets, setMyTickets] = useState({ active: 0, recent: [] });
@@ -40,8 +40,19 @@ export default function Dashboard() {
     // Team performance this week — auto-scored live from SOTYN.AI activity. Admin-only
     // (endpoint is scoring-gated); non-admins just don't see the panel.
     if (isAdmin()) {
-      api.get('/scoring/weekly').then(r => setPerf(r.data)).catch(() => setPerf(null));
-      api.get('/gamification/teams').then(r => setTeams(r.data)).catch(() => setTeams(null));
+      // Mam 2026-08-17: "gamification will do as per last week scoring average"
+      // — the widget now reads the CHAMPIONS engine (real scorecard scores,
+      // same numbers as /champions and each person's Scorecard page) for the
+      // last COMPLETED Mon-Sat week, instead of the old ad-hoc activity
+      // counter that showed 0% for everyone.
+      const prevMonday = (() => {
+        const d = new Date(Date.now() + 5.5 * 3600 * 1000);   // IST
+        const dow = d.getUTCDay();
+        d.setUTCDate(d.getUTCDate() + (dow === 0 ? -6 : 1 - dow) - 7);
+        return d.toISOString().slice(0, 10);
+      })();
+      api.get(`/gamification/leaderboard?period=week&date=${prevMonday}`)
+        .then(r => setPerf(r.data)).catch(() => setPerf(null));
     }
   }, []);
 
@@ -94,64 +105,58 @@ export default function Dashboard() {
   const greeting = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
 
   return (
-    <div className="space-y-6">
-      {/* Greeting + today's date — a warm personal header (mam 2026-07-01:
-          "make dashboard attractive"). */}
-      <div className="flex items-end justify-between flex-wrap gap-2">
-        <div>
-          <h2 className="text-2xl font-extrabold text-gray-800 tracking-tight">
-            {greeting}, {(user?.name || 'there').split(' ')[0]} <span className="align-middle">👋</span>
-          </h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-          </p>
-        </div>
-      </div>
+    <div className="dash3d space-y-6">
+      {/* 3D hero banner — greeting + date on a navy drafting sheet with a
+          floating iso tower (mam 2026-08-12: "dashboard look like 3d type").
+          Also injects the .dash3d card-depth styles used page-wide. */}
+      <DashHero3D greeting={greeting} name={(user?.name || 'there').split(' ')[0]} />
 
       {/* Daily SOTYN.AI-culture mantra — rotates by day-of-year so the whole
           team sees the same quote in their morning standup. */}
       <ErpMantraBanner />
 
-      {/* Team Performance — This Week. Auto-scored live from SOTYN.AI activity
-          (mam 2026-07-01: "show performance current week also automatic").
+      {/* Team Performance — LAST completed week, straight from the Champions
+          engine (mam 2026-08-17: "gamification will do as per last week
+          scoring average") — the same real scorecard scores as /champions and
+          each person's Scorecard page, not the old ad-hoc activity counter.
           Admin-only, hidden when there's no data. */}
-      {isAdmin() && perf?.users?.length > 0 && (() => {
-        const ranked = perf.users;
+      {isAdmin() && (perf?.individuals?.length > 0 || perf?.not_qualified?.length > 0 || perf?.teams?.length > 0) && (() => {
+        // Every ASSIGNED person shows their score (mam 2026-08-17): qualified
+        // players first (engine-ranked), then below-activity players by score.
+        const ranked = [
+          ...(perf.individuals || []),
+          ...(perf.not_qualified || []).filter(u => u.score != null).sort((a, b) => b.score - a.score),
+        ];
         const top = ranked.slice(0, 8);
         const medal = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
         const bar = (s) => (s >= 80 ? 'from-emerald-400 to-emerald-600' : s >= 50 ? 'from-amber-400 to-amber-500' : 'from-rose-400 to-rose-500');
         const av = ['bg-indigo-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-sky-500', 'bg-violet-500', 'bg-teal-500', 'bg-orange-500'];
-        const scoreByUser = {};
-        // Keep the raw achievement % UNCAPPED so beating plan shows a positive
-        // variance (e.g. 132 → +32%), matching the Scorecard page; only the bar
-        // WIDTH is clamped to 100 further down.
-        ranked.forEach(u => { scoreByUser[u.user_id] = Math.max(0, Math.round(u.score || 0)); });
         // Display scores as VARIANCE vs plan (achievement − 100): on plan reads 0%,
         // behind reads negative, ahead reads +ve (mam 2026-07-04: "performance in
         // negative"). Bars, medals, sort + the Champions engine stay on the raw
         // achievement % — this only rewrites the number shown.
-        const vsPlan = (n) => { const v = n - 100; return `${v > 0 ? '+' : ''}${v}%`; };
-        const teamRows = (teams?.teams || []).map(t => {
-          const members = (t.members || [])
-            .map(m => ({ user_id: m.user_id, name: m.name, score: scoreByUser[m.user_id] ?? null }))
-            .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || String(a.name || '').localeCompare(String(b.name || '')));
-          const scored = members.filter(m => m.score != null);
-          const avg = scored.length ? Math.round(scored.reduce((s, m) => s + m.score, 0) / scored.length) : null;
-          return { id: t.id, name: t.name, motto: t.motto, members, avg };
-        }).sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+        const vsPlan = (n) => { const v = Math.round(n) - 100; return `${v > 0 ? '+' : ''}${v}%`; };
+        // Teams come pre-averaged + pre-ranked from the leaderboard (average of
+        // qualified members' engine scores; members sorted by rank, unscored last).
+        const teamRows = (perf.teams || []).map(t => ({
+          id: t.team_id, name: t.name, motto: t.motto,
+          // score_all = average of every assigned member (qualified or not)
+          avg: (t.score_all ?? t.score) != null ? Math.round(t.score_all ?? t.score) : null,
+          members: t.members || [],
+        })).sort((a, b) => (b.avg ?? -1e9) - (a.avg ?? -1e9));
         const hasTeams = teamRows.some(t => t.members.length > 0);
-        const teamAvgVals = teamRows.flatMap(t => t.members.map(m => m.score || 0)); // TEAM AVG = average of all individual scores, blanks as 0
-        const headerAvg = hasTeams
-          ? (teamAvgVals.length ? Math.round(teamAvgVals.reduce((a, b) => a + b, 0) / teamAvgVals.length) : 0)
-          : Math.round(ranked.reduce((a, u) => a + (u.score || 0), 0) / ranked.length);
+        // Header = last week's scoring average across all qualified players.
+        const headerAvg = ranked.length
+          ? Math.round(ranked.reduce((a, u) => a + (u.score || 0), 0) / ranked.length)
+          : 0;
         return (
-          <div className="rounded-2xl shadow-sm border border-gray-100 overflow-hidden bg-white">
+          <div className="d3-card rounded-2xl shadow-sm border border-gray-100 overflow-hidden bg-white">
             <div className="bg-gradient-to-r from-indigo-600 via-indigo-500 to-red-500 px-5 py-4 flex items-center justify-between">
               <div className="flex items-center gap-2.5 text-white">
                 <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center"><FiTrendingUp size={20} /></div>
                 <div>
-                  <h3 className="font-bold text-lg leading-tight">Performance — This Week</h3>
-                  <p className="text-[11px] text-white/80">Auto-scored from SOTYN.AI · {fmtDate(perf.week_start)} – {fmtDate(perf.week_end)}{hasTeams ? ` · ${teamRows.length} teams` : ''}</p>
+                  <h3 className="font-bold text-lg leading-tight">Performance — Last Week</h3>
+                  <p className="text-[11px] text-white/80">Scorecard average · {fmtDate(perf.start)} – {fmtDate(perf.end)}{hasTeams ? ` · ${teamRows.length} teams` : ''}</p>
                 </div>
               </div>
               <div className="text-right text-white">

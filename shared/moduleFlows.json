@@ -1,0 +1,747 @@
+[
+  {
+    "path": "/orders",
+    "title": "Order to Planning",
+    "number": 1,
+    "steps": [
+      "Purchase Orders",
+      "Order Planning"
+    ]
+  },
+  {
+    "path": "/dpr",
+    "title": "Daily Reports",
+    "number": 2,
+    "steps": [
+      "Daily Reports"
+    ]
+  },
+  {
+    "path": "/installation",
+    "title": "Sales Billing",
+    "number": 3,
+    "steps": [
+      "Sales Billing"
+    ]
+  },
+  {
+    "path": "/procurement",
+    "title": "Indent to Dispatch",
+    "number": 4,
+    "steps": [
+      "Raise Indent",
+      "Vendor Rates",
+      "Vendor PO",
+      "Payment",
+      "Purchase Bills",
+      "Dispatch & Receiving",
+      "Debit Notes",
+      "PO Pipeline",
+      "Responsible"
+    ]
+  },
+  {
+    "path": "/influencers",
+    "title": "Partners",
+    "number": 5,
+    "steps": [
+      "Partners"
+    ]
+  },
+  {
+    "path": "/crm-funnel",
+    "title": "CRM Sales Funnel",
+    "number": 6,
+    "steps": [
+      "Step 1 — Quotation",
+      "Step 2 — Negotiation",
+      "Step 3 — Win / Loss",
+      "Responsible"
+    ]
+  },
+  {
+    "path": "/leads",
+    "title": "Sales Funnel",
+    "number": 7,
+    "steps": [
+      "Stage 1 — Lead/Tender Capture",
+      "Stage 2 — Qualified or Not",
+      "Stage 3 — Site Survey + Feasibility",
+      "Stage 4 — Concept Design / Drawings",
+      "Stage 5 — BOQ + Vendor Costing",
+      "Stage 6 — Internal Pricing Review",
+      "Stage 7 — Quote / Bid Submission",
+      "Stage 8 — Technical Clarification",
+      "Stage 9 — Commercial Negotiation",
+      "Stage 10 — Contract + LOI / PO",
+      "Stage 11 — Project Kickoff",
+      "Lost",
+      "Responsible"
+    ]
+  },
+  {
+    "path": "/sotyn-leads",
+    "title": "Sotyn Leads",
+    "number": 8,
+    "steps": [
+      "Sotyn Leads"
+    ]
+  },
+  {
+    "path": "/business-book",
+    "title": "Business Book",
+    "number": 9,
+    "steps": [
+      "Business Book"
+    ]
+  },
+  {
+    "path": "/customers",
+    "title": "Customers",
+    "number": 10,
+    "steps": [
+      "Customers"
+    ]
+  },
+  {
+    "path": "/crm-kitting",
+    "title": "Full Kitting",
+    "number": 11,
+    "steps": [
+      "Stage 1 — PRE-START",
+      "Stage 2 — EXECUTION",
+      "Stage 3 — HANDOVER"
+    ]
+  },
+  {
+    "path": "/labour-management",
+    "title": "Quotations & Rates",
+    "number": 12,
+    "steps": [
+      "Quotations & Rates"
+    ]
+  },
+  {
+    "path": "/indent-labour-payment",
+    "title": "Projects & Work Orders",
+    "number": 13,
+    "steps": [
+      "Projects",
+      "Work Orders",
+      "MB / CDPR",
+      "RA Bills"
+    ]
+  },
+  {
+    "path": "/labour-master",
+    "title": "Labour Master",
+    "number": 14,
+    "steps": [
+      "Labour Master"
+    ]
+  },
+  {
+    "path": "/bill-verification",
+    "title": "Bill Verification",
+    "number": 15,
+    "steps": [
+      "Bill Verification"
+    ]
+  },
+  {
+    "path": "/solar-funnel",
+    "title": "Solar Sales Funnel",
+    "number": 16,
+    "steps": [
+      "Solar Sales Funnel"
+    ]
+  },
+  {
+    "path": "/solar-site-design",
+    "title": "3D Shadow Analysis",
+    "number": 17,
+    "steps": [
+      "3D Shadow Analysis"
+    ]
+  },
+  {
+    "path": "/solar-quotation",
+    "title": "Solar Quotation",
+    "number": 18,
+    "steps": [
+      "Solar Quotation"
+    ]
+  },
+  {
+    "path": "/solar-projects",
+    "title": "Solar Projects",
+    "number": 19,
+    "steps": [
+      "Solar Projects"
+    ]
+  },
+  {
+    "path": "/solar-material-master",
+    "title": "Solar Material Master",
+    "number": 20,
+    "steps": [
+      "Solar Material Master"
+    ]
+  },
+  {
+    "path": "/solar-labour-master",
+    "title": "Solar Labour Master",
+    "number": 21,
+    "steps": [
+      "Solar Labour Master"
+    ]
+  },
+  {
+    "path": "/solar-rate-master",
+    "title": "Solar Settings",
+    "number": 22,
+    "steps": [
+      "Solar Settings"
+    ]
+  },
+  {
+    "path": "/quotations",
+    "title": "Quotations",
+    "number": 23,
+    "steps": [
+      "BOQ / Drawings",
+      "Quotations",
+      "Responsible"
+    ]
+  },
+  {
+    "path": "/estimator",
+    "title": "AI Auto-Quotation",
+    "number": 24,
+    "steps": [
+      "AI Auto-Quotation"
+    ]
+  },
+  {
+    "path": "/po-foc-stripped",
+    "title": "Price Breakup Master",
+    "number": 25,
+    "steps": [
+      "Price Breakup Master"
+    ]
+  },
+  {
+    "path": "/labour-rate",
+    "title": "Labour Rate",
+    "number": 26,
+    "steps": [
+      "Labour Rate"
+    ]
+  },
+  {
+    "path": "/item-master",
+    "title": "Items",
+    "number": 27,
+    "steps": [
+      "Items"
+    ]
+  },
+  {
+    "path": "/price-required",
+    "title": "RFQ Queue",
+    "number": 28,
+    "steps": [
+      "RFQ Queue"
+    ]
+  },
+  {
+    "path": "/vendors",
+    "title": "Vendors",
+    "number": 29,
+    "steps": [
+      "Vendors"
+    ]
+  },
+  {
+    "path": "/procurement-schedule",
+    "title": "Schedule (Gantt)",
+    "number": 30,
+    "steps": [
+      "Schedule (Gantt)"
+    ]
+  },
+  {
+    "path": "/snags",
+    "title": "Snags",
+    "number": 31,
+    "steps": [
+      "Snags"
+    ]
+  },
+  {
+    "path": "/fire-noc",
+    "title": "Fire NOC Renewal",
+    "number": 32,
+    "steps": [
+      "Fire NOC Renewal"
+    ]
+  },
+  {
+    "path": "/tally-bills",
+    "title": "Tally Bills",
+    "number": 33,
+    "steps": [
+      "Tally Bills"
+    ]
+  },
+  {
+    "path": "/drawing-tracker",
+    "title": "Drawings",
+    "number": 34,
+    "steps": [
+      "Drawings"
+    ]
+  },
+  {
+    "path": "/drawing-tracker?tab=reports",
+    "title": "Drawing Reports",
+    "number": 35,
+    "steps": [
+      "Drawing Reports"
+    ]
+  },
+  {
+    "path": "/cheques",
+    "title": "Cheques",
+    "number": 36,
+    "steps": [
+      "Cheques"
+    ]
+  },
+  {
+    "path": "/payment-required",
+    "title": "Payables",
+    "number": 37,
+    "steps": [
+      "Payables"
+    ]
+  },
+  {
+    "path": "/collections",
+    "title": "Collections",
+    "number": 38,
+    "steps": [
+      "Collections"
+    ]
+  },
+  {
+    "path": "/cash-flow-tracker",
+    "title": "Cash Flow Tracker",
+    "number": 39,
+    "steps": [
+      "Cash Flow Tracker"
+    ]
+  },
+  {
+    "path": "/billing",
+    "title": "Invoices",
+    "number": 40,
+    "steps": [
+      "Invoices"
+    ]
+  },
+  {
+    "path": "/client-snag",
+    "title": "Client Snag",
+    "number": 41,
+    "steps": [
+      "Client Snag"
+    ]
+  },
+  {
+    "path": "/bank",
+    "title": "Bank",
+    "number": 42,
+    "steps": [
+      "Bank"
+    ]
+  },
+  {
+    "path": "/hr",
+    "title": "Hiring",
+    "number": 43,
+    "steps": [
+      "Hiring"
+    ]
+  },
+  {
+    "path": "/subcon-hiring",
+    "title": "Sub-contractor Hiring",
+    "number": 44,
+    "steps": [
+      "Sub-contractor Hiring"
+    ]
+  },
+  {
+    "path": "/induction",
+    "title": "Onboarding",
+    "number": 45,
+    "steps": [
+      "Onboarding"
+    ]
+  },
+  {
+    "path": "/training",
+    "title": "Training",
+    "number": 46,
+    "steps": [
+      "Training"
+    ]
+  },
+  {
+    "path": "/attendance",
+    "title": "Attendance",
+    "number": 47,
+    "steps": [
+      "Attendance"
+    ]
+  },
+  {
+    "path": "/payroll",
+    "title": "Payroll",
+    "number": 48,
+    "steps": [
+      "Payroll"
+    ]
+  },
+  {
+    "path": "/employees",
+    "title": "Employees",
+    "number": 49,
+    "steps": [
+      "Employees"
+    ]
+  },
+  {
+    "path": "/scorecard",
+    "title": "Performance",
+    "number": 50,
+    "steps": [
+      "Performance"
+    ]
+  },
+  {
+    "path": "/champions",
+    "title": "Champions League",
+    "number": 51,
+    "steps": [
+      "Champions League"
+    ]
+  },
+  {
+    "path": "/module-owners",
+    "title": "Module Owners",
+    "number": 52,
+    "steps": [
+      "Module Owners"
+    ]
+  },
+  {
+    "path": "/sub-contractors",
+    "title": "Sub-contractor Master Detail",
+    "number": 53,
+    "steps": [
+      "Sub-contractor Master Detail"
+    ]
+  },
+  {
+    "path": "/rental-tools",
+    "title": "Tool Rentals",
+    "number": 54,
+    "steps": [
+      "Stage 1 — Enquiry Raised",
+      "Stage 2 — Rate Finalised",
+      "Stage 3 — Material at Site",
+      "Stage 4 — Returned · Closed",
+      "Cancelled",
+      "Settings"
+    ]
+  },
+  {
+    "path": "/company-assets",
+    "title": "Assets",
+    "number": 55,
+    "steps": [
+      "Assets"
+    ]
+  },
+  {
+    "path": "/inventory",
+    "title": "Inventory",
+    "number": 56,
+    "steps": [
+      "Inventory"
+    ]
+  },
+  {
+    "path": "/tools",
+    "title": "Tools",
+    "number": 57,
+    "steps": [
+      "Tools"
+    ]
+  },
+  {
+    "path": "/rentals",
+    "title": "Room Rentals",
+    "number": 58,
+    "steps": [
+      "Room Rentals"
+    ]
+  },
+  {
+    "path": "/delegations",
+    "title": "Delegations",
+    "number": 59,
+    "steps": [
+      "Delegations"
+    ]
+  },
+  {
+    "path": "/pms-tasks",
+    "title": "PMS Tasks",
+    "number": 60,
+    "steps": [
+      "PMS Tasks"
+    ]
+  },
+  {
+    "path": "/checklists",
+    "title": "Checklists",
+    "number": 61,
+    "steps": [
+      "Checklists"
+    ]
+  },
+  {
+    "path": "/complaints",
+    "title": "Complaints",
+    "number": 62,
+    "steps": [
+      "Step 1 — Assign",
+      "Step 2 — Resolve",
+      "Resolved"
+    ]
+  },
+  {
+    "path": "/help-tickets",
+    "title": "Help Tickets",
+    "number": 63,
+    "steps": [
+      "Help Tickets"
+    ]
+  },
+  {
+    "path": "/system-requirements",
+    "title": "System Requirements",
+    "number": 64,
+    "steps": [
+      "System Requirements"
+    ]
+  },
+  {
+    "path": "/system-flow",
+    "title": "ERP Management",
+    "number": 65,
+    "steps": [
+      "CREATE",
+      "ALIGN",
+      "ROLL-OUT",
+      "ALIGNMENT"
+    ]
+  },
+  {
+    "path": "/dashboard/war-room",
+    "title": "War Room",
+    "number": 66,
+    "steps": [
+      "War Room"
+    ]
+  },
+  {
+    "path": "/dashboard/cmd",
+    "title": "Operating Console",
+    "number": 67,
+    "steps": [
+      "Operating Console"
+    ]
+  },
+  {
+    "path": "/dashboard/cmd-toc",
+    "title": "TOC View",
+    "number": 68,
+    "steps": [
+      "TOC View"
+    ]
+  },
+  {
+    "path": "/admin/word-count",
+    "title": "Activity Log",
+    "number": 69,
+    "steps": [
+      "Activity Log"
+    ]
+  },
+  {
+    "path": "/admin/locations",
+    "title": "Location",
+    "number": 70,
+    "steps": [
+      "Location"
+    ]
+  },
+  {
+    "path": "/admin/backups",
+    "title": "Backups",
+    "number": 71,
+    "steps": [
+      "Backups"
+    ]
+  },
+  {
+    "path": "/admin/ai-settings",
+    "title": "AI",
+    "number": 72,
+    "steps": [
+      "AI"
+    ]
+  },
+  {
+    "path": "/admin/email-settings",
+    "title": "Email",
+    "number": 73,
+    "steps": [
+      "Email"
+    ]
+  },
+  {
+    "path": "/admin/email-triggers",
+    "title": "Email Triggers",
+    "number": 74,
+    "steps": [
+      "Email Triggers"
+    ]
+  },
+  {
+    "path": "/admin/users",
+    "title": "Users",
+    "number": 75,
+    "steps": [
+      "Users"
+    ]
+  },
+  {
+    "path": "/admin/roles",
+    "title": "Roles & Permissions",
+    "number": 76,
+    "steps": [
+      "Roles & Permissions"
+    ]
+  },
+  {
+    "path": "/admin/audit",
+    "title": "Audit Log",
+    "number": 77,
+    "steps": [
+      "Audit Log"
+    ]
+  },
+  {
+    "path": "/admin/performance",
+    "title": "System Performance",
+    "number": 78,
+    "steps": [
+      "System Performance"
+    ]
+  },
+  {
+    "path": "/",
+    "title": "Dashboard",
+    "number": 79,
+    "steps": [
+      "Dashboard"
+    ]
+  },
+  {
+    "path": "/sotyn-flow",
+    "title": "SOTYN Flow",
+    "number": 80,
+    "steps": [
+      "SOTYN Flow"
+    ]
+  },
+  {
+    "path": "/expenses",
+    "title": "Expenses",
+    "number": 81,
+    "steps": [
+      "Expenses"
+    ]
+  },
+  {
+    "path": "/procurement-board",
+    "title": "Procurement Board",
+    "number": 82,
+    "steps": [
+      "Procurement Board"
+    ]
+  },
+  {
+    "path": "/rates-board",
+    "title": "Rates Board",
+    "number": 83,
+    "steps": [
+      "Rates Board"
+    ]
+  },
+  {
+    "path": "/rates-items",
+    "title": "Item-wise Rates",
+    "number": 84,
+    "steps": [
+      "Item-wise Rates"
+    ]
+  },
+  {
+    "path": "/site-chat",
+    "title": "SOTYN Chat",
+    "number": 85,
+    "steps": [
+      "SOTYN Chat"
+    ]
+  },
+  {
+    "path": "/indent-fms",
+    "title": "Indent FMS",
+    "number": 86,
+    "steps": [
+      "Indent FMS"
+    ]
+  },
+  {
+    "path": "/admin/collections-md",
+    "title": "Collections Review",
+    "number": 87,
+    "steps": [
+      "Collections Review"
+    ]
+  },
+  {
+    "path": "/dispatch-receiving",
+    "title": "Dispatch Receiving",
+    "number": 88,
+    "steps": [
+      "Dispatch Receiving"
+    ]
+  }
+]

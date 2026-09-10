@@ -53,7 +53,39 @@ getDb().exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_arap_cl_entry ON arap_changelog(entry_id);
   CREATE INDEX IF NOT EXISTS idx_arap_cl_date  ON arap_changelog(changed_at DESC);
+
+  -- A synced row that Finance deleted must STAY deleted — otherwise the next
+  -- sync resurrects it and the delete looks broken. We remember the source key
+  -- rather than the row id, because the row itself is gone.
+  CREATE TABLE IF NOT EXISTS arap_sync_excluded (
+    source TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    excluded_by INTEGER,
+    excluded_by_name TEXT,
+    remark TEXT,
+    excluded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source, source_id)
+  );
 `);
+
+// Auto-feed columns (mam 2026-09-03) — added by ALTER so existing installs keep
+// their data. `source`/`source_id` say which Collections receivable or Payables
+// request a row mirrors; manual_planned / manual_date are the PINS that stop the
+// sync overwriting a figure Finance corrected by hand.
+for (const sql of [
+  "ALTER TABLE arap_entries ADD COLUMN source TEXT DEFAULT 'manual'",
+  'ALTER TABLE arap_entries ADD COLUMN source_id INTEGER',
+  'ALTER TABLE arap_entries ADD COLUMN source_amount REAL',
+  'ALTER TABLE arap_entries ADD COLUMN source_date DATE',
+  'ALTER TABLE arap_entries ADD COLUMN manual_planned INTEGER DEFAULT 0',
+  'ALTER TABLE arap_entries ADD COLUMN manual_date INTEGER DEFAULT 0',
+  'ALTER TABLE arap_entries ADD COLUMN synced_at DATETIME',
+]) { try { getDb().exec(sql); } catch (_) {} }
+try {
+  getDb().exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_arap_source ON arap_entries(source, source_id) WHERE source_id IS NOT NULL');
+} catch (_) {}
+
+const { syncArap } = require('../lib/arapSync');
 
 // The figure that actually moves cash: the realised actual once it exists,
 // else the planned forecast.
@@ -66,8 +98,36 @@ const logChange = (db, entry, field, oldV, newV, remark, user) =>
          oldV == null ? '' : String(oldV), newV == null ? '' : String(newV),
          remark, user.id, user.name || '');
 
+// Auto-feed from Collections + Payables. better-sqlite3 is synchronous, so a
+// full pass on every page load would make this endpoint the whole ERP's
+// bottleneck — it runs at most once a minute, and the explicit "Sync now"
+// button below bypasses the throttle when Finance wants it immediately.
+let lastSyncAt = 0;
+const SYNC_EVERY_MS = 60 * 1000;
+function autoSync(user) {
+  if (Date.now() - lastSyncAt < SYNC_EVERY_MS) return null;
+  lastSyncAt = Date.now();
+  try { return syncArap(getDb(), logChange, user); }
+  catch (e) { console.error('[cash-flow-tracker] auto-sync failed:', e.message); return null; }
+}
+
+// POST /sync — pull Collections + Payables in right now. 'view' is enough: the
+// sync writes only what the source modules already say, and every row it
+// touches is written to the change log as "Auto-sync".
+router.post('/sync', requirePermission('ar_ap_tracker', 'view'), (req, res) => {
+  try {
+    const report = syncArap(getDb(), logChange, req.user);
+    lastSyncAt = Date.now();
+    res.json({ ok: true, ...report, synced_at: new Date().toISOString() });
+  } catch (e) {
+    console.error('[cash-flow-tracker] sync failed:', e.message);
+    res.status(500).json({ error: 'Sync failed: ' + e.message });
+  }
+});
+
 // GET list — filter by kind (AR/AP), date range, party, free-text search.
 router.get('/', requirePermission('ar_ap_tracker', 'view'), (req, res) => {
+  autoSync(req.user);
   const db = getDb();
   const { kind, from, to, party, search } = req.query;
   const where = [], args = [];
@@ -82,8 +142,13 @@ router.get('/', requirePermission('ar_ap_tracker', 'view'), (req, res) => {
 
 // GET summary — per-date AR total, AP total, net, running balance (Lakhs).
 router.get('/summary', requirePermission('ar_ap_tracker', 'view'), (req, res) => {
+  autoSync(req.user);
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM arap_entries').all();
+  // Cancelled money never moves — a rejected payable or a written-off receipt
+  // must not sit in the running balance. (Before the Collections/Payables feed
+  // this was harmless because nothing auto-cancelled; now it would skew every
+  // week the moment a payment request is rejected.)
+  const rows = db.prepare("SELECT * FROM arap_entries WHERE status <> 'cancelled'").all();
   const byDate = {};
   for (const r of rows) {
     const d = (byDate[r.due_date] || (byDate[r.due_date] = { date: r.due_date, ar: 0, ap: 0 }));
@@ -170,8 +235,15 @@ router.put('/:id', requirePermission('ar_ap_tracker', 'edit'), (req, res) => {
     return res.status(400).json({ error: 'A remark (min 3 chars) is required to change an amount or date.' });
   }
 
-  db.prepare(`UPDATE arap_entries SET party=?, due_date=?, planned=?, actual=?, status=?, note=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-    .run(next.party, next.due_date, next.planned, next.actual, next.status, next.note, cur.id);
+  // PIN the fields Finance corrected by hand. A row fed from Collections /
+  // Payables keeps tracking its source for everything else, but once mam's team
+  // has overridden an amount or a date, the auto-sync must never take it back —
+  // that is the whole meaning of "auto-fed but still editable".
+  const pinPlanned = cur.manual_planned || changes.some(c => c[0] === 'planned') ? 1 : 0;
+  const pinDate = cur.manual_date || changes.some(c => c[0] === 'due_date') ? 1 : 0;
+
+  db.prepare(`UPDATE arap_entries SET party=?, due_date=?, planned=?, actual=?, status=?, note=?, manual_planned=?, manual_date=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(next.party, next.due_date, next.planned, next.actual, next.status, next.note, pinPlanned, pinDate, cur.id);
   const why = (remark && String(remark).trim()) || 'Edited';
   for (const [field, oldV, newV] of changes) logChange(db, cur, field, oldV, newV, why, req.user);
   res.json(db.prepare('SELECT * FROM arap_entries WHERE id=?').get(cur.id));
@@ -185,6 +257,13 @@ router.delete('/:id', requirePermission('ar_ap_tracker', 'delete'), (req, res) =
   const remark = req.body?.remark || req.query?.remark;
   if (!remark || String(remark).trim().length < 3) return res.status(400).json({ error: 'A remark (min 3 chars) is required to delete an entry.' });
   logChange(db, cur, 'deleted', `${cur.kind} · ${cur.party} · ${cur.due_date} · ₹${effective(cur)}L`, '', String(remark).trim(), req.user);
+  // A deleted AUTO-FED row must not come back on the next sync, or the delete
+  // silently undoes itself. Remember the source key so the feed skips it for good.
+  if (cur.source && cur.source !== 'manual' && cur.source_id != null) {
+    db.prepare(`INSERT OR REPLACE INTO arap_sync_excluded (source, source_id, excluded_by, excluded_by_name, remark)
+                VALUES (?,?,?,?,?)`)
+      .run(cur.source, cur.source_id, req.user.id, req.user.name || '', String(remark).trim());
+  }
   db.prepare('DELETE FROM arap_entries WHERE id=?').run(cur.id);
   res.json({ ok: true });
 });
@@ -250,20 +329,37 @@ function importEntries(db, entries, user, sourceLabel, replace) {
   const clients = db.prepare('SELECT client_name, company_name FROM business_book').all().flatMap(r => [r.client_name, r.company_name]);
   const vendors = db.prepare('SELECT name FROM vendors').all().map(r => r.name);
   const match = buildMatcher([...clients, ...vendors]);
+  // An import that lands on an AUTO-FED row (same kind + party + date) is
+  // treated exactly like a Finance edit: the figure is taken, the row is PINNED
+  // so the next Collections/Payables sync doesn't take it back, and the
+  // override is written to the change log. Without the pin the sheet's number
+  // would win silently and invisibly — no lock badge, no drift line, no trail.
   const upd = db.prepare('UPDATE arap_entries SET planned=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
+  const updPinned = db.prepare('UPDATE arap_entries SET planned=?, manual_planned=1, updated_at=CURRENT_TIMESTAMP WHERE id=?');
   const ins = db.prepare(`INSERT INTO arap_entries (kind, party, due_date, planned, status, note, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?)`);
-  const findExisting = db.prepare('SELECT id FROM arap_entries WHERE kind=? AND party=? AND due_date=?');
+  const findExisting = db.prepare('SELECT id, source, source_id, planned FROM arap_entries WHERE kind=? AND party=? AND due_date=?');
   let imported = 0, updated = 0, matched = 0;
   const unmatched = new Set();
   const tx = db.transaction(() => {
-    if (replace) db.prepare('DELETE FROM arap_entries').run();
+    // "Replace" clears what the SHEET owns — the hand-keyed rows. Auto-fed rows
+    // belong to Collections / Payables: wiping them would throw away every pin
+    // and correction on them, and the next sync would just rebuild them anyway.
+    if (replace) db.prepare("DELETE FROM arap_entries WHERE source IS NULL OR source='manual'").run();
     for (const e of entries) {
       const canonical = match(e.party);
       const party = canonical || e.party;
       if (canonical) matched++; else unmatched.add(`${e.kind}: ${e.party}`);
       const note = canonical && canonical.toLowerCase() !== e.party.toLowerCase() ? `sheet: ${e.party}` : null;
       const ex = findExisting.get(e.kind, party, e.due_date);
-      if (ex) { upd.run(e.planned, ex.id); updated++; }
+      if (ex) {
+        const auto = ex.source && ex.source !== 'manual';
+        if (auto) {
+          updPinned.run(e.planned, ex.id);
+          logChange(db, { id: ex.id, kind: e.kind, party }, 'planned', ex.planned, e.planned,
+            `Overridden by import (${sourceLabel}) — this row no longer follows ${ex.source === 'collections' ? 'Collections' : 'Payables'}`, user);
+        } else { upd.run(e.planned, ex.id); }
+        updated++;
+      }
       else { ins.run(e.kind, party, e.due_date, e.planned, 'planned', note, user.id, user.name || ''); imported++; }
     }
     db.prepare(`INSERT INTO arap_changelog (entry_id, kind, party, field, old_value, new_value, remark, changed_by, changed_by_name) VALUES (NULL,?,?,?,?,?,?,?,?)`)

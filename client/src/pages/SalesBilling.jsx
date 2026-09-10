@@ -4,8 +4,10 @@ import Modal from '../components/Modal';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiCheckCircle, FiDownload, FiGrid, FiFileText, FiPackage, FiClipboard, FiPrinter, FiUsers } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiCheckCircle, FiDownload, FiGrid, FiFileText, FiPackage, FiClipboard, FiPrinter, FiUsers, FiChevronDown, FiChevronRight, FiCalendar } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import Pagination, { usePagination } from '../components/PaginationBar';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const TYPE_LABEL = { 1: 'Type 1 · Sales Order', 2: 'Type 2 · Material Delivery', 3: 'Type 3 · Installation', 4: 'Type 4 · Final' };
 const fmt = n => '₹' + Math.round(+n || 0).toLocaleString('en-IN');
@@ -20,7 +22,7 @@ const TABS = [
 
 export default function SalesBilling() {
   const { canDelete } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab(['dashboard', 'orders', 'material', 'dpr', 'responsible'], 'dashboard');
   const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState([]);
@@ -34,6 +36,15 @@ export default function SalesBilling() {
   const [saving, setSaving] = useState(false);
   const [payModal, setPayModal] = useState(null);
   const [payForm, setPayForm] = useState({ amount: '', payment_date: new Date().toISOString().split('T')[0], payment_mode: 'Bank', transaction_ref: '' });
+
+  // DPR Installation Billing Selection Modal
+  const [installModal, setInstallModal] = useState(false);
+  const [unbilledOrders, setUnbilledOrders] = useState([]);
+  const [loadingUnbilled, setLoadingUnbilled] = useState(false);
+  const [selectedDprIds, setSelectedDprIds] = useState(new Set());
+  const [expandedOrders, setExpandedOrders] = useState(new Set());
+  const [installBillDate, setInstallBillDate] = useState(new Date().toISOString().split('T')[0]);
+  const [generatingInstall, setGeneratingInstall] = useState(false);
 
   const load = () => {
     api.get('/sales-billing').then(r => setBills(r.data || [])).catch(() => setBills([])).finally(() => setLoading(false));
@@ -114,11 +125,90 @@ export default function SalesBilling() {
     try { await api.delete(`/sales-billing/${b.id}`); toast.success('Deleted'); load(); }
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
-  const genInstall = async () => {
-    if (!confirm('Generate installation (Type 3) bills from approved, billing-ready DPRs not yet billed? Amount = the BOQ items × qty recorded in the DPR. Review, then mark Sent to Client.')) return;
-    try { const r = await api.post('/sales-billing/generate-installation', {}); toast.success(r.data.message || 'Done'); load(); }
-    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  const openInstallModal = async () => {
+    setInstallBillDate(new Date().toISOString().split('T')[0]);
+    setInstallModal(true);
+    setLoadingUnbilled(true);
+    try {
+      const r = await api.get('/sales-billing/unbilled-dprs');
+      const data = r.data || [];
+      setUnbilledOrders(data);
+      const allIds = [];
+      const allBbs = [];
+      data.forEach(o => {
+        allBbs.push(o.business_book_id);
+        (o.dprs || []).forEach(d => allIds.push(d.dpr_id));
+      });
+      setSelectedDprIds(new Set(allIds));
+      setExpandedOrders(new Set(allBbs));
+    } catch (e) {
+      toast.error('Could not load unbilled DPRs');
+      setUnbilledOrders([]);
+    } finally {
+      setLoadingUnbilled(false);
+    }
   };
+
+  const toggleDpr = (id) => {
+    setSelectedDprIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleOrderDprs = (order) => {
+    const orderDprIds = (order.dprs || []).map(d => d.dpr_id);
+    const allSelected = orderDprIds.length > 0 && orderDprIds.every(id => selectedDprIds.has(id));
+    setSelectedDprIds(prev => {
+      const next = new Set(prev);
+      if (allSelected) {
+        orderDprIds.forEach(id => next.delete(id));
+      } else {
+        orderDprIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const toggleExpandOrder = (bbId) => {
+    setExpandedOrders(prev => {
+      const next = new Set(prev);
+      if (next.has(bbId)) next.delete(bbId);
+      else next.add(bbId);
+      return next;
+    });
+  };
+
+  const selectAllDprs = () => {
+    const allIds = [];
+    unbilledOrders.forEach(o => (o.dprs || []).forEach(d => allIds.push(d.dpr_id)));
+    setSelectedDprIds(new Set(allIds));
+  };
+
+  const deselectAllDprs = () => {
+    setSelectedDprIds(new Set());
+  };
+
+  const submitInstallBills = async () => {
+    if (selectedDprIds.size === 0) return toast.error('Select at least one DPR to generate installation bills');
+    setGeneratingInstall(true);
+    try {
+      const r = await api.post('/sales-billing/generate-installation', {
+        dpr_ids: Array.from(selectedDprIds),
+        bill_date: installBillDate
+      });
+      toast.success(r.data.message || 'Installation bills generated');
+      setInstallModal(false);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to generate installation bills');
+    } finally {
+      setGeneratingInstall(false);
+    }
+  };
+
   const sendToClient = async (b) => {
     try { const r = await api.put(`/sales-billing/${b.id}/sent`, {}); toast.success(r.data.message || 'Updated'); load(); }
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
@@ -142,6 +232,39 @@ export default function SalesBilling() {
   const received = t4.reduce((s, b) => s + (+b.received_amount || 0), 0);
   const outstanding = t4.reduce((s, b) => s + ((+b.total_amount || 0) - (+b.received_amount || 0)), 0);
 
+  // Numbered pagination — one hook per major list (hooks live here, NOT in
+  // BillTable: it's re-created each render so its state would reset).
+  // Export keeps using the FULL list for the ACTIVE tab (never pageItems).
+  const billsPager = usePagination(bills);        // Dashboard — all bills
+  const t3Pager = usePagination(t3);              // DPR / installation bills
+  const ordersPager = usePagination(orders);      // Sales Order Bills tab
+  const materialPager = usePagination(material);  // Material · PO vs Bill tab
+
+  // Selected statistics for the Install Modal
+  const selectedStats = (() => {
+    let orderCount = 0;
+    let totalTaxable = 0;
+    for (const o of unbilledOrders) {
+      const selectedInOrder = (o.dprs || []).filter(d => selectedDprIds.has(d.dpr_id));
+      if (selectedInOrder.length > 0) {
+        orderCount++;
+        const workVal = selectedInOrder.reduce((s, d) => s + (+d.work_value || 0), 0);
+        const pct = o.inst_pct > 0 ? o.inst_pct : 100;
+        const billAmt = Math.round((workVal * pct) / 100 * 100) / 100;
+        totalTaxable += billAmt;
+      }
+    }
+    const gst = Math.round(totalTaxable * 18) / 100;
+    const total = Math.round((totalTaxable + gst) * 100) / 100;
+    return {
+      dprCount: selectedDprIds.size,
+      orderCount,
+      totalTaxable,
+      gst,
+      total
+    };
+  })();
+
   const StatusCell = (b) => (
     <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 whitespace-nowrap">{b.bill_status}</span>
   );
@@ -151,7 +274,7 @@ export default function SalesBilling() {
     </button>
   );
 
-  const BillTable = ({ rows, showPayment, sentMode }) => (
+  const BillTable = ({ rows, showPayment, sentMode, pager }) => (
     <div className="card p-0 overflow-x-auto">
       <table className="text-sm w-full min-w-[850px]">
         <thead>
@@ -214,6 +337,7 @@ export default function SalesBilling() {
           ))}
         </tbody>
       </table>
+      {pager && <Pagination {...pager} />}
     </div>
   );
 
@@ -222,11 +346,25 @@ export default function SalesBilling() {
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h3 className="font-semibold text-lg">Sales Billing</h3>
         <div className="flex gap-2">
-          {tab === 'dpr' && <button onClick={genInstall} className="btn btn-secondary flex items-center gap-2" title="Create Type-3 installation bills from approved DPRs"><FiCheckCircle /> Generate Installation Bills</button>}
+          {tab === 'dpr' && <button onClick={openInstallModal} className="btn btn-secondary flex items-center gap-2" title="Select and create Type-3 installation bills from approved DPRs"><FiCheckCircle /> Generate Installation Bills</button>}
           {(tab === 'orders' || tab === 'dashboard') && <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> New Sales Bill</button>}
-          <button onClick={() => exportCsv('sales-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Approval'],
-            bills.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.approval_status]))}
-            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export</button>
+          {tab !== 'responsible' && <button onClick={() => {
+            // Export what the ACTIVE tab actually shows — each tab is a different
+            // dataset (all bills / orders / challans / Type-3), never the raw `bills`.
+            if (tab === 'dashboard') exportCsv('sales-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Approval'],
+              bills.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.approval_status]));
+            if (tab === 'dpr') exportCsv('installation-bills', ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Sent to Client'],
+              t3.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.sent_to_client ? 'Yes' : 'No']));
+            if (tab === 'orders') exportCsv('sales-order-bills', ['Order', 'Customer', 'Project', 'Order Value', 'SO Bill No', 'SO Total', 'SO Approval', 'Final Bill No', 'Final Total', 'Final Payment'],
+              orders.map(o => {
+                const so = bills.find(b => b.business_book_id === o.id && b.bill_type === 1);
+                const final = bills.find(b => b.business_book_id === o.id && b.bill_type === 4);
+                return [(o.status === 'planning' ? '★ ' : '') + (o.lead_no || ('BB#' + o.id)), o.customer_name, o.project_name, (+o.po_amount || +o.sale_amount_without_gst || 0),
+                  so?.bill_number || '', so?.total_amount || '', so?.approval_status || '', final?.bill_number || '', final?.total_amount || '', final?.payment_status || ''];
+              }));
+            if (tab === 'material') exportCsv('material-po-vs-bill', ['Indent', 'Challan', 'Site', 'Date', 'Source', 'Items', 'Value', 'Sales Bill', 'Sales Bill No'],
+              material.map(m => [m.indent_number, m.challan_no, m.site_name, m.date, m.source, m.item_count || 0, m.value, m.sales_bill_status, m.sales_bill_number]));
+          }} className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export</button>}
         </div>
       </div>
 
@@ -270,7 +408,7 @@ export default function SalesBilling() {
               {pending.dpr_ready.count > 0 && (
                 <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex items-center justify-between flex-wrap gap-2">
                   <span className="text-sm font-semibold text-indigo-800">⚠ {pending.dpr_ready.count} approved DPR(s) ready to bill (≈ {fmt(pending.dpr_ready.value)}) — not billed yet</span>
-                  <button onClick={genInstall} className="btn btn-primary text-xs">Generate Installation Bills</button>
+                  <button onClick={openInstallModal} className="btn btn-primary text-xs">Generate Installation Bills</button>
                 </div>
               )}
             </div>
@@ -295,7 +433,7 @@ export default function SalesBilling() {
           <div className="text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg px-4 py-2.5">
             Flow per order: <b>Sales Order (T1)</b> → <b>Material delivery (T2, billed in Dispatch)</b> → <b>Installation (T3, auto from DPRs)</b> → <b>Final (T4)</b>. Payment is taken against the Final bill.
           </div>
-          <BillTable rows={bills.slice(0, 12)} showPayment />
+          <BillTable rows={billsPager.pageItems} pager={billsPager} showPayment />
         </div>
       )}
 
@@ -321,7 +459,7 @@ export default function SalesBilling() {
               <tbody>
                 {orders.length === 0 ? (
                   <tr><td colSpan="6" className="text-center py-8 text-gray-400">No orders found in Business Book.</td></tr>
-                ) : orders.map(o => {
+                ) : ordersPager.pageItems.map(o => {
                   const so = bills.find(b => b.business_book_id === o.id && b.bill_type === 1);
                   const final = bills.find(b => b.business_book_id === o.id && b.bill_type === 4);
                   const val = +o.po_amount || +o.sale_amount_without_gst || 0;
@@ -356,6 +494,7 @@ export default function SalesBilling() {
                 })}
               </tbody>
             </table>
+            <Pagination {...ordersPager} />
           </div>
         </div>
       )}
@@ -384,7 +523,7 @@ export default function SalesBilling() {
               <tbody>
                 {material.length === 0 ? (
                   <tr><td colSpan="8" className="text-center py-8 text-gray-400">No material dispatches yet. Challans raised in Dispatch will appear here.</td></tr>
-                ) : material.map(m => (
+                ) : materialPager.pageItems.map(m => (
                   <tr key={m.id} className="border-t border-gray-100 hover:bg-blue-50/40">
                     <td className="px-3 py-2 font-medium whitespace-nowrap">{m.indent_number || '-'}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{m.challan_no || '-'}</td>
@@ -412,6 +551,7 @@ export default function SalesBilling() {
                 ))}
               </tbody>
             </table>
+            <Pagination {...materialPager} />
           </div>
         </div>
       )}
@@ -420,13 +560,203 @@ export default function SalesBilling() {
       {tab === 'dpr' && (
         <div className="space-y-2">
           <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
-            Installation bills are generated from <b>submitted, approved DPRs</b> — each DPR is billed once. Click <b>Generate Installation Bills</b> to bill the latest approved DPRs (created as draft for review).
+            Installation bills are generated from <b>submitted, approved DPRs</b> — each DPR is billed once. Click <b>Generate Installation Bills</b> to select and bill approved DPRs.
           </div>
-          <BillTable rows={t3} showPayment={false} sentMode />
+          <BillTable rows={t3Pager.pageItems} pager={t3Pager} showPayment={false} sentMode />
         </div>
       )}
 
       {tab === 'responsible' && <ResponsibilityTab module="sales_billing" title="Sales Billing" />}
+
+      {/* Selective Installation Bills Modal */}
+      <Modal isOpen={installModal} onClose={() => setInstallModal(false)} title="Generate Installation Bills from DPRs" xwide>
+        <div className="space-y-4">
+          <div className="text-xs text-gray-600 bg-blue-50/70 border border-blue-200 rounded-lg p-3 leading-relaxed">
+            Select which orders and approved DPRs to bill. Bills will <b>only</b> be created for the items you select below. DPRs not selected remain unbilled for future billing.
+          </div>
+
+          {/* Controls toolbar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 border border-gray-200 rounded-xl p-3">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-gray-700 flex items-center gap-1">
+                <FiCalendar className="text-gray-500" /> Bill Date:
+              </label>
+              <input
+                type="date"
+                className="input text-xs py-1 px-2 border-gray-300 rounded"
+                value={installBillDate}
+                onChange={e => setInstallBillDate(e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={selectAllDprs}
+                className="text-xs bg-white border border-gray-300 hover:bg-gray-100 rounded px-2.5 py-1 font-medium text-gray-700"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                onClick={deselectAllDprs}
+                className="text-xs bg-white border border-gray-300 hover:bg-gray-100 rounded px-2.5 py-1 font-medium text-gray-700"
+              >
+                Deselect All
+              </button>
+            </div>
+          </div>
+
+          {/* List of unbilled orders & DPRs */}
+          {loadingUnbilled ? (
+            <div className="py-12 text-center text-gray-400 text-sm">Loading approved unbilled DPRs…</div>
+          ) : unbilledOrders.length === 0 ? (
+            <div className="py-12 text-center text-gray-500 bg-gray-50 rounded-xl border border-gray-200 text-sm">
+              ✓ No approved, unbilled DPRs pending billing right now.
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
+              {unbilledOrders.map(order => {
+                const orderDprs = order.dprs || [];
+                const selectedInOrder = orderDprs.filter(d => selectedDprIds.has(d.dpr_id));
+                const allSelected = orderDprs.length > 0 && selectedInOrder.length === orderDprs.length;
+                const someSelected = selectedInOrder.length > 0 && !allSelected;
+                const isExpanded = expandedOrders.has(order.business_book_id);
+
+                const selectedWorkVal = selectedInOrder.reduce((s, d) => s + (+d.work_value || 0), 0);
+                const selectedBillAmt = Math.round((selectedWorkVal * (order.inst_pct || 0)) / 100 * 100) / 100;
+
+                return (
+                  <div key={order.business_book_id} className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                    {/* Order header row */}
+                    <div className="flex items-center justify-between p-3 bg-gray-50/80 hover:bg-gray-100/80 border-b border-gray-200 gap-2">
+                      <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          ref={el => { if (el) el.indeterminate = someSelected; }}
+                          onChange={() => toggleOrderDprs(order)}
+                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                        <div className="truncate">
+                          <div className="text-sm font-bold text-gray-900 truncate">
+                            {order.customer_name} <span className="text-gray-400 font-normal">· {order.project_name}</span>
+                          </div>
+                          <div className="text-[11px] text-gray-500 flex flex-wrap gap-x-2">
+                            <span>Order: <b>{order.lead_no || ('BB#' + order.business_book_id)}</b></span>
+                            <span>Installation %: <b>{order.inst_pct}%</b></span>
+                            <span>{orderDprs.length} DPR(s) available</span>
+                            {order.inst_pct === 0 && (
+                              <span className="text-amber-600 font-semibold">(No install % configured in Business Book)</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <div className="text-xs font-bold text-emerald-700">
+                            {fmt(selectedBillAmt)}
+                          </div>
+                          <div className="text-[10px] text-gray-400">
+                            {selectedInOrder.length}/{orderDprs.length} DPRs selected
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => toggleExpandOrder(order.business_book_id)}
+                          className="p-1 text-gray-400 hover:text-gray-700 rounded"
+                          title={isExpanded ? 'Collapse' : 'Expand'}
+                        >
+                          {isExpanded ? <FiChevronDown size={18} /> : <FiChevronRight size={18} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* DPR list table when expanded */}
+                    {isExpanded && (
+                      <div className="p-0 overflow-x-auto">
+                        <table className="text-xs w-full">
+                          <thead>
+                            <tr className="bg-gray-100/50 text-[10px] uppercase tracking-wide text-gray-500 border-b border-gray-100">
+                              <th className="w-8 px-3 py-2 text-center">Pick</th>
+                              <th className="px-3 py-2 text-left">Date</th>
+                              <th className="px-3 py-2 text-left">Site</th>
+                              <th className="px-3 py-2 text-left">Shift / By</th>
+                              <th className="px-3 py-2 text-right">Work Value (BOQ)</th>
+                              <th className="px-3 py-2 text-right">Est. Bill ({order.inst_pct}%)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {orderDprs.map(dpr => {
+                              const isChecked = selectedDprIds.has(dpr.dpr_id);
+                              return (
+                                <tr
+                                  key={dpr.dpr_id}
+                                  onClick={() => toggleDpr(dpr.dpr_id)}
+                                  className={`border-b border-gray-50 cursor-pointer transition-colors ${isChecked ? 'bg-blue-50/40 hover:bg-blue-50/70' : 'hover:bg-gray-50 text-gray-500'}`}
+                                >
+                                  <td className="px-3 py-2 text-center" onClick={e => e.stopPropagation()}>
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => toggleDpr(dpr.dpr_id)}
+                                      className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2 font-medium whitespace-nowrap">{dpr.report_date}</td>
+                                  <td className="px-3 py-2">{dpr.site_name || '-'}</td>
+                                  <td className="px-3 py-2 text-gray-400 whitespace-nowrap">{dpr.shift || 'day'} · {dpr.submitted_by_name || '-'}</td>
+                                  <td className="px-3 py-2 text-right font-medium">{fmt(dpr.work_value)}</td>
+                                  <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmt(dpr.estimated_bill)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Bottom Summary & Actions */}
+          <div className="border-t border-gray-200 pt-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs">
+              <span className="font-semibold text-gray-700">Selected: </span>
+              <span className="text-blue-700 font-bold">{selectedStats.orderCount} Order(s)</span>,{' '}
+              <span className="text-blue-700 font-bold">{selectedStats.dprCount} DPR(s)</span>
+              <span className="mx-2 text-gray-300">|</span>
+              <span className="text-gray-600">Taxable: <b>{fmt(selectedStats.totalTaxable)}</b></span>
+              <span className="mx-1 text-gray-400">+ GST 18%: {fmt(selectedStats.gst)}</span>
+              <span className="mx-1 text-gray-300">→</span>
+              <span className="text-emerald-700 font-bold text-sm">Total: {fmt(selectedStats.total)}</span>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setInstallModal(false)}
+                className="btn btn-secondary text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitInstallBills}
+                disabled={generatingInstall || selectedStats.dprCount === 0}
+                className="btn btn-primary text-xs flex items-center gap-1.5"
+              >
+                <FiCheckCircle size={14} />
+                {generatingInstall
+                  ? 'Generating…'
+                  : `Generate Bills for Selected (${selectedStats.orderCount} bill${selectedStats.orderCount === 1 ? '' : 's'})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       {/* Create modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title="New Sales Bill">

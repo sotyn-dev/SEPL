@@ -15,20 +15,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/Pagination';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
-
-// How many rows we ADD to the DOM each time the user scrolls near the bottom
-// of the table box. This is render-only chunking, NOT pagination: the whole
-// filtered list stays in memory (and drives the summary cards + export) — we
-// just don't mount 200+ <tr>s, each with two thumbnails, up front.
-const CHUNK = 50;
-// Start mounting the next chunk this far before the last row scrolls into
-// view, so rows are ready by the time the user gets to them.
-const PREFETCH_PX = 400;
 
 const STATUS_PILL = {
   open: 'bg-amber-100 text-amber-700',
@@ -57,15 +49,18 @@ export default function Snags() {
   const [filters, setFilters] = useState({ status: '', priority: '', search: '', scope: '', site_id: '' });
   const [modal, setModal] = useState(false);          // raise/edit
   const [proofModal, setProofModal] = useState(null); // snag obj being submitted
+  // Which snag's proof modal is actually open right now — checked before an
+  // in-flight upload is allowed to write into proofForm (mam 2026-08-24:
+  // "sometimes wrong upload" — switching snags mid-upload used to let a
+  // stale file land on whatever snag is open when the upload finishes).
+  const proofModalIdRef = useRef(null);
   const [proofForm, setProofForm] = useState({});
   const [form, setForm] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [uploading, setUploading] = useState(false);
-  // Rows currently mounted. Grows by CHUNK as the user scrolls; reset back to
-  // one chunk whenever the list itself changes (new filter/search result).
-  const [visibleCount, setVisibleCount] = useState(CHUNK);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(15);
   const scrollBoxRef = useRef(null);   // the table's own overflow container
-  const [lastRowEl, setLastRowEl] = useState(null); // last mounted <tr>
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -88,44 +83,54 @@ export default function Snags() {
     return s;
   }, [snags]);
 
-  // ─── Scroll-in rendering ────────────────────────────────────────────
-  // Search / status / priority / site / scope all run SERVER-side (see load
-  // above), so `snags` is always the complete matching set — every filter
-  // still searches the whole list, not just what's on screen. All this does
-  // is meter how much of that set is in the DOM at once.
-  const visibleRows = useMemo(() => snags.slice(0, visibleCount), [snags, visibleCount]);
-  const hasMore = visibleCount < snags.length;
-  // A fresh result set (any filter change) starts from the top again.
-  useEffect(() => { setVisibleCount(CHUNK); scrollBoxRef.current?.scrollTo({ top: 0 }); }, [snags]);
-
-  // Watch the last mounted row; when it nears the bottom of the scroll box,
-  // mount the next chunk. Runs as an effect (not a ref callback) so
-  // scrollBoxRef is guaranteed to be attached before the observer is built.
+  // Only the table is paginated; summary cards and export use all matches.
+  const pg = usePagination(snags, perPage, page, setPage);
+  useEffect(() => { setPage(1); }, [filters]);
+  // Keep edits on their current page; clamp after deleting the last row.
+  useEffect(() => { setPage(pg.page); }, [pg.page]);
   useEffect(() => {
-    if (!lastRowEl || !hasMore) return;
-    const io = new IntersectionObserver(
-      entries => { if (entries[0].isIntersecting) setVisibleCount(c => Math.min(c + CHUNK, snags.length)); },
-      { root: scrollBoxRef.current, rootMargin: `0px 0px ${PREFETCH_PX}px 0px` },
-    );
-    io.observe(lastRowEl);
-    return () => io.disconnect();
-  }, [lastRowEl, hasMore, snags.length]);
+    scrollBoxRef.current?.scrollTo({ top: 0 });
+  }, [pg.page, perPage, filters]);
 
   // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
   // photos embedded. CSV can't carry images, so this hits the server which
   // builds the workbook; filters mirror the on-screen list.
-  const exportXlsx = async () => {
+  // `snags` is the COMPLETE filtered set (all filters run server-side), so an
+  // empty list here means the export would be a header-only workbook. Bail the
+  // same way exportCsv does rather than "downloading" nothing.
+  // `photos=false` asks the server to skip embedding images. The full export
+  // can be heavy on a long list, so a failure offers this as a fallback
+  // rather than leaving the user with a dead button.
+  const exportXlsx = async (photos = true) => {
+    if (snags.length === 0) { toast.error('No data to export'); return; }
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
+      if (!photos) params.set('photos', '0');
       const resp = await api.get(`/snags/export.xlsx?${params}`, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([resp.data]));
       const a = document.createElement('a');
       a.href = url; a.download = `snags-${new Date().toISOString().slice(0, 10)}.xlsx`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast.success('Downloaded snags with photos');
-    } catch (e) { toast.error('Export failed'); }
+      const skipped = Number(resp.headers?.['x-photos-skipped'] || 0);
+      if (skipped) toast.success(`Downloaded — ${skipped} photo(s) too large to embed, link in the cell instead`);
+      else toast.success(photos ? 'Downloaded snags with photos' : 'Downloaded snags (no photos)');
+    } catch (e) {
+      // responseType 'blob' means an error body arrives as a Blob, not JSON —
+      // reading it is the only way to see what the server actually said.
+      // Without this the user just got "Export failed" with no clue why.
+      let msg = '';
+      try {
+        if (e.response?.data instanceof Blob) msg = JSON.parse(await e.response.data.text())?.error || '';
+        else msg = e.response?.data?.error || '';
+      } catch { /* not JSON — fall through to the generic message */ }
+      if (photos) {
+        toast.error(msg ? `Export failed: ${msg} — retrying without photos` : 'Export failed — retrying without photos');
+        return exportXlsx(false);
+      }
+      toast.error(msg ? `Export failed: ${msg}` : 'Export failed');
+    }
   };
 
   useEffect(() => {
@@ -164,7 +169,8 @@ export default function Snags() {
       priority: s.priority || 'medium',
       assigned_to: s.assigned_to || '',
       assigned_to_name: s.assigned_to_name || '',
-      target_date: s.target_date || '',
+      // Date input needs bare YYYY-MM-DD — imported rows may carry a timestamp.
+      target_date: (s.target_date || '').slice(0, 10),
     });
     setModal(true);
   };
@@ -174,7 +180,9 @@ export default function Snags() {
     if (!form.description?.trim()) return toast.error('Description is required');
     try {
       if (editingId) {
-        await api.put(`/snags/${editingId}`, form);
+        // Clearing the date stores NULL, not '' — and the snag number is
+        // never sent, so editing can never change it (server allowlist too).
+        await api.put(`/snags/${editingId}`, { ...form, target_date: form.target_date || null });
         toast.success('Snag updated');
       } else {
         const r = await api.post('/snags', form);
@@ -190,7 +198,7 @@ export default function Snags() {
     try {
       await api.post(`/snags/${proofModal.id}/submit`, proofForm);
       toast.success('Proof submitted — awaiting approval');
-      setProofModal(null); setProofForm({}); load();
+      setProofModal(null); proofModalIdRef.current = null; setProofForm({}); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -216,6 +224,11 @@ export default function Snags() {
   const isAssignee = (s) => s.assigned_to === user?.id;
   const canActAsApprover = (s) => isMine(s) || canApprove('snags') || isAdmin();
 
+  // Target-date overdue check on the India calendar (target dates are stored
+  // as bare YYYY-MM-DD strings from the date picker).
+  const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const isOverdue = (s) => s.target_date && s.status !== 'approved' && String(s.target_date).slice(0, 10) < todayIST;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -224,7 +237,7 @@ export default function Snags() {
           <p className="text-sm text-gray-500">Management raises site snags · assignee uploads proof · raiser approves to close.</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={exportXlsx}
+          <button onClick={() => exportXlsx(true)}
             className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('snags') && (
             <button onClick={openRaise} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Snag</button>
@@ -295,16 +308,16 @@ export default function Snags() {
           <thead>
             <tr>
               <th>Snag No</th><th>Raised</th><th>Site / Location</th><th>Description</th>
-              <th>Snag Photo</th><th>Assigned To</th><th>Proof</th>
+              <th>Snag Photo</th><th>Assigned To</th><th>Target Date</th><th>Proof</th>
               <th>Priority</th><th>Status</th><th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {snags.length === 0 && (
-              <tr><td colSpan="10" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
+              <tr><td colSpan="11" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
             )}
-            {visibleRows.map((s, i) => (
-              <tr key={s.id} ref={i === visibleRows.length - 1 ? setLastRowEl : undefined}>
+            {pg.rows.map(s => (
+              <tr key={s.id}>
                 <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
                 <td className="text-xs">
                   <div>{s.raised_at ? fmtDate(s.raised_at) : '—'}</div>
@@ -326,6 +339,11 @@ export default function Snags() {
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
+                <td className="text-xs whitespace-nowrap">
+                  {s.target_date
+                    ? <span className={isOverdue(s) ? 'text-red-600 font-bold' : ''}>{fmtDate(s.target_date)}{isOverdue(s) && <span className="block text-[9px] font-semibold">OVERDUE</span>}</span>
+                    : <span className="text-gray-300">—</span>}
+                </td>
                 <td>
                   {s.proof_url
                     ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
@@ -339,7 +357,7 @@ export default function Snags() {
                 </td>
                 <td className="whitespace-nowrap">
                   {(isAssignee(s) || canApprove('snags') || isAdmin()) && (s.status === 'open' || s.status === 'rejected') && (
-                    <button onClick={() => { setProofModal(s); setProofForm({}); }} className="btn btn-primary text-[10px] px-2 py-1 mr-1" title="Upload proof"><FiUploadCloud size={11} className="inline" /> {s.status === 'rejected' ? 'Resubmit' : 'Submit Proof'}</button>
+                    <button onClick={() => { setProofModal(s); proofModalIdRef.current = s.id; setProofForm({}); }} className="btn btn-primary text-[10px] px-2 py-1 mr-1" title="Upload proof"><FiUploadCloud size={11} className="inline" /> {s.status === 'rejected' ? 'Resubmit' : 'Submit Proof'}</button>
                   )}
                   {s.status === 'submitted' && canActAsApprover(s) && (
                     <>
@@ -360,6 +378,8 @@ export default function Snags() {
         </table>
         </div>
       </div>
+
+      <Pagination pg={pg} setPerPage={setPerPage} className="card !px-8 !py-6" />
 
       {/* RAISE / EDIT MODAL */}
       <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); }} title={editingId ? 'Edit Snag' : 'Raise Snag'} wide>
@@ -443,7 +463,7 @@ export default function Snags() {
       </Modal>
 
       {/* SUBMIT PROOF MODAL */}
-      <Modal isOpen={!!proofModal} onClose={() => { setProofModal(null); setProofForm({}); }} title={proofModal ? `Submit Proof — ${proofModal.snag_no}` : ''}>
+      <Modal isOpen={!!proofModal} onClose={() => { setProofModal(null); proofModalIdRef.current = null; setProofForm({}); }} title={proofModal ? `Submit Proof — ${proofModal.snag_no}` : ''}>
         {proofModal && (
           <form onSubmit={submitProof} className="space-y-3">
             <div className="bg-gray-50 p-3 rounded text-sm">
@@ -463,14 +483,20 @@ export default function Snags() {
                   <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
                     <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
                     <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => {
-                      const url = await upload(e.target.files?.[0]); if (url) setProofForm(f => ({ ...f, proof_url: url }));
+                      const forId = proofModalIdRef.current;
+                      const url = await upload(e.target.files?.[0]);
+                      if (url && proofModalIdRef.current === forId) setProofForm(f => ({ ...f, proof_url: url }));
+                      else if (url) toast('That upload finished after you switched snags — please upload again here.', { icon: '⚠️' });
                       e.target.value = '';
                     }} />
                   </label>
                   <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
                     <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
                     <input type="file" accept="image/*,.pdf" className="hidden" onChange={async e => {
-                      const url = await upload(e.target.files?.[0]); if (url) setProofForm(f => ({ ...f, proof_url: url }));
+                      const forId = proofModalIdRef.current;
+                      const url = await upload(e.target.files?.[0]);
+                      if (url && proofModalIdRef.current === forId) setProofForm(f => ({ ...f, proof_url: url }));
+                      else if (url) toast('That upload finished after you switched snags — please upload again here.', { icon: '⚠️' });
                       e.target.value = '';
                     }} />
                   </label>
@@ -482,7 +508,7 @@ export default function Snags() {
               <textarea className="input" rows="2" value={proofForm.proof_notes || ''} onChange={e => setProofForm(f => ({ ...f, proof_notes: e.target.value }))} placeholder="What was done?" />
             </div>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => { setProofModal(null); setProofForm({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={() => { setProofModal(null); proofModalIdRef.current = null; setProofForm({}); }} className="btn btn-secondary">Cancel</button>
               <button type="submit" disabled={uploading || !proofForm.proof_url} className="btn btn-primary">{uploading ? 'Uploading…' : 'Submit Proof'}</button>
             </div>
           </form>

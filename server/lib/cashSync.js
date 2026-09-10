@@ -4,6 +4,8 @@
 // Mam's audit ask 2026-05-16: every payment must update every
 // downstream table without manual reconciliation.
 
+const { istToday } = require('./istDate');
+
 function calculateAgeing(dueDate) {
   if (!dueDate) return { days: 0, bucket: '0-30' };
   const now = new Date();
@@ -64,7 +66,7 @@ function syncSalesBillPaymentStatus(db, receivableId) {
 //   - the on-demand /collect path (already creates the row but using
 //     the same code keeps both branches in sync)
 function ensureTodayCashFlowDaily(db, dateIso) {
-  const today = dateIso || new Date().toISOString().slice(0, 10);
+  const today = dateIso || istToday();
   const existing = db.prepare(
     'SELECT id FROM cash_flow_daily WHERE date=?'
   ).get(today);

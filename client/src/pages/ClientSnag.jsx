@@ -10,7 +10,7 @@
 // Workflow: awaiting_document → pending_approval → approved (locked)
 //                                                 → rejected → resubmit
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -46,6 +46,17 @@ export default function ClientSnag() {
   const [createModal, setCreateModal] = useState(false);
   const [form, setForm] = useState({});
   const [detail, setDetail] = useState(null);        // full detail of the open snag
+  // Which snag id openDetail() was last called for — checked before its
+  // fetch is allowed to overwrite `detail` (mam 2026-08-24: "sometimes
+  // wrong upload"). Without this, uploading a photo on snag A, then opening
+  // snag B before A's post-upload refresh completes, snaps the panel back
+  // to snag A's stale data right after B was opened — and a subsequent
+  // action (submit/approve) would then silently apply to A, not B.
+  const detailIdRef = useRef(null);
+  // Same idea for the "New Client Snag" create form: bumped each time the
+  // create modal opens, so a photo upload started before a Cancel+reopen
+  // can't land in the fresh blank form.
+  const createAttemptRef = useRef(0);
   const [uploading, setUploading] = useState(false);
   const [rejectFor, setRejectFor] = useState(null);   // snag id being rejected
   const [rejectReason, setRejectReason] = useState('');
@@ -82,6 +93,7 @@ export default function ClientSnag() {
   };
 
   const openCreate = () => {
+    createAttemptRef.current += 1;
     setForm({ priority: 'medium' });
     setCreateModal(true);
   };
@@ -89,8 +101,14 @@ export default function ClientSnag() {
   // 'photo_url' (the After Photo — convenience upload, Ajmer-only; the
   // backend independently re-checks who's allowed to attach it).
   const uploadForCreate = async (field, file) => {
+    const attempt = createAttemptRef.current;
     const url = await upload(file);
-    if (url) setForm(f => ({ ...f, [field]: url, [`${field}_at_preview`]: new Date().toISOString() }));
+    if (!url) return;
+    if (createAttemptRef.current !== attempt) {
+      toast('That upload finished after you restarted this form — please upload again.', { icon: '⚠️' });
+      return;
+    }
+    setForm(f => ({ ...f, [field]: url, [`${field}_at_preview`]: new Date().toISOString() }));
   };
   const create = async (e) => {
     e.preventDefault();
@@ -109,18 +127,29 @@ export default function ClientSnag() {
         catch (err) { toast.error(err.response?.data?.error || 'Photo could not be attached'); }
       }
       toast.success(`Created ${r.data.snag_no}`);
-      setCreateModal(false); setForm({}); load(); loadCounters();
+      createAttemptRef.current += 1; setCreateModal(false); setForm({}); load(); loadCounters();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   const openDetail = (id) => {
-    api.get(`/client-snag/${id}`).then(r => setDetail(r.data)).catch(() => toast.error('Failed to load'));
+    detailIdRef.current = id;
+    api.get(`/client-snag/${id}`).then(r => {
+      // The user may have opened a DIFFERENT snag (or closed this panel)
+      // while this fetch was in flight — don't let a stale response snap
+      // the panel back to the wrong record.
+      if (detailIdRef.current !== id) return;
+      setDetail(r.data);
+    }).catch(() => toast.error('Failed to load'));
   };
   const refreshDetail = () => { if (detail) openDetail(detail.id); };
 
   const uploadDocument = async (file) => {
+    const forId = detailIdRef.current;
     const url = await upload(file);
-    if (!url || !detail) return;
+    if (!url || !detail || detailIdRef.current !== forId) {
+      if (url && detailIdRef.current !== forId) toast('That upload finished after you switched snags — please upload again here.', { icon: '⚠️' });
+      return;
+    }
     try {
       await api.post(`/client-snag/${detail.id}/document`, { photo_url: url });
       toast.success('Photo uploaded');
@@ -301,7 +330,7 @@ export default function ClientSnag() {
       </div>
 
       {/* CREATE MODAL */}
-      <Modal isOpen={createModal} onClose={() => { setCreateModal(false); setForm({}); }} title="New Client Snag" wide>
+      <Modal isOpen={createModal} onClose={() => { createAttemptRef.current += 1; setCreateModal(false); setForm({}); }} title="New Client Snag" wide>
         <form onSubmit={create} className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -399,14 +428,14 @@ export default function ClientSnag() {
           )}
 
           <div className="flex justify-end gap-2 pt-2 border-t">
-            <button type="button" onClick={() => { setCreateModal(false); setForm({}); }} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => { createAttemptRef.current += 1; setCreateModal(false); setForm({}); }} className="btn btn-secondary">Cancel</button>
             <button type="submit" disabled={uploading} className="btn btn-primary">{uploading ? 'Uploading…' : 'Create'}</button>
           </div>
         </form>
       </Modal>
 
       {/* DETAIL MODAL */}
-      <Modal isOpen={!!detail} onClose={() => setDetail(null)} title={detail ? `${detail.snag_no}` : ''} wide>
+      <Modal isOpen={!!detail} onClose={() => { setDetail(null); detailIdRef.current = null; }} title={detail ? `${detail.snag_no}` : ''} wide>
         {detail && (
           <div className="space-y-4">
             <div className="bg-gray-50 p-3 rounded text-sm grid grid-cols-1 sm:grid-cols-2 gap-2">

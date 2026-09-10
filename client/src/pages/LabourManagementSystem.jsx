@@ -8,7 +8,7 @@
 // that data (CRM customers, Procurement sub-contractors, Projects) — nothing
 // is re-keyed here. Work Orders themselves live on the existing Projects &
 // Work Orders page; this page links across rather than duplicating them.
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api';
 import toast from 'react-hot-toast';
@@ -223,6 +223,11 @@ function QuotationsTab() {
   const [ref, setRef] = useState(null);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);   // null | 'new' | row
+  // Bumped every time the modal opens or closes — checked before an
+  // in-flight attachment upload is allowed to write into `form` (mam
+  // 2026-08-24: "sometimes wrong upload"). Covers both "opened a different
+  // quotation's edit form" and "cancelled and reopened New Quotation" mid-upload.
+  const modalTokenRef = useRef(0);
   const [form, setForm] = useState({ ...emptyQuote });
   const [saving, setSaving] = useState(false);
   const [rejecting, setRejecting] = useState(null);
@@ -236,14 +241,20 @@ function QuotationsTab() {
   const uploadAttachment = async (file) => {
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) return toast.error('File too large (max 10 MB)');
+    const forToken = modalTokenRef.current;
     setUploadingFile(true);
     try {
       const fd = new FormData();
       fd.append('file', file);
       const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (modalTokenRef.current !== forToken) {
+        toast('That upload finished after you switched forms — please attach again here.', { icon: '⚠️' });
+        return;
+      }
       setForm(f => ({ ...f, attachment_url: r.data?.url || '' }));
       toast.success('File attached');
     } catch (err) {
+      if (modalTokenRef.current !== forToken) return;
       toast.error(err.response?.data?.error || 'Upload failed');
     } finally {
       setUploadingFile(false);
@@ -286,7 +297,7 @@ function QuotationsTab() {
         await api.put(`/labour-quotations/${modal.id}`, form);
         toast.success('Quotation updated');
       }
-      setModal(null); load();
+      modalTokenRef.current += 1; setModal(null); load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Could not save');
     }
@@ -355,7 +366,7 @@ function QuotationsTab() {
         </button>
         {(admin || canCreate('labour_quotation')) && (
           <button className="btn btn-primary flex items-center gap-1"
-            onClick={() => { setForm({ ...emptyQuote }); setModal('new'); }}>
+            onClick={() => { setForm({ ...emptyQuote }); modalTokenRef.current += 1; setModal('new'); }}>
             <FiPlus size={14} /> New Quotation
           </button>
         )}
@@ -430,7 +441,7 @@ function QuotationsTab() {
                       </>
                     )}
                     {!['wo_generated', 'approved'].includes(r.status) && (admin || canEdit('labour_quotation')) && (
-                      <button onClick={() => { setForm({ ...emptyQuote, ...r }); setModal(r); }} title="Edit"
+                      <button onClick={() => { setForm({ ...emptyQuote, ...r }); modalTokenRef.current += 1; setModal(r); }} title="Edit"
                         className="p-1.5 rounded hover:bg-amber-50 text-amber-600"><FiEdit2 size={14} /></button>
                     )}
                     {(admin || canDelete('labour_quotation')) && !r.work_order_id && (
@@ -454,7 +465,7 @@ function QuotationsTab() {
       )}
 
       {/* New / edit quotation */}
-      <Modal isOpen={!!modal} onClose={() => setModal(null)} wide
+      <Modal isOpen={!!modal} onClose={() => { modalTokenRef.current += 1; setModal(null); }} wide
         title={modal === 'new' ? 'New Labour Quotation' : `Edit ${modal?.quotation_number || ''}`}>
         <form onSubmit={save} className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -567,7 +578,7 @@ function QuotationsTab() {
           </div>
 
           <div className="flex justify-end gap-2 pt-1">
-            <button type="button" className="btn" onClick={() => setModal(null)}>Cancel</button>
+            <button type="button" className="btn" onClick={() => { modalTokenRef.current += 1; setModal(null); }}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? 'Saving…' : modal === 'new' ? 'Raise Quotation' : 'Save Changes'}
             </button>

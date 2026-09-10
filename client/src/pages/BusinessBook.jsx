@@ -12,6 +12,7 @@ import {
 import { LuIndianRupee } from 'react-icons/lu';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, DISTRICTS_BY_STATE, gstStateCode } from '../data/indiaLocations';
+import DataCompletion from '../components/DataCompletion';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell,
   PieChart, Pie, Legend
@@ -481,6 +482,10 @@ export default function BusinessBook() {
           )}
         </div>
       </div>
+
+      {/* Data Completion (mam 2026-09-03) — same bar as Item Master;
+          the field list and the Data Entry KPI share one definition. */}
+      <DataCompletion module="business_book" />
 
       {/* Stats */}
       {stats && (

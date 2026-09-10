@@ -47,7 +47,7 @@ export default function Vendors() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [vendors, setVendors] = useState([]);
   const [rates, setRates] = useState([]);
-  const [tab, setTab] = useUrlTab('vendors');
+  const [tab, setTab] = useUrlTab(['vendors', 'rates', 'scorecard'], 'vendors');
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});
@@ -234,7 +234,10 @@ export default function Vendors() {
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setTab('vendors')} className={`btn ${tab === 'vendors' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Vendors ({vendors.length})</button>
         <button onClick={() => setTab('rates')} className={`btn ${tab === 'rates' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Rate Comparison</button>
+        <button onClick={() => setTab('scorecard')} className={`btn ${tab === 'scorecard' ? 'btn-primary' : 'btn-secondary'} text-sm`}>🏆 Scorecard</button>
       </div>
+
+      {tab === 'scorecard' && <VendorScorecard />}
 
       {tab === 'vendors' && (
         <>
@@ -660,6 +663,93 @@ export default function Vendors() {
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+// ── 🏆 Vendor Scorecard / gamification (mam 2026-08-31, her template) ──────
+// SOP-05.4 vendor score card · SOP-07 S11 report card. The ERP measures on
+// its own: Credit 40 · Price 28 · Delivery 20 · Quote Speed 12 → tiered
+// leaderboard so management picks vendors on data, not memory.
+function VendorScorecard() {
+  const [d, setD] = useState(null);
+  const [months, setMonths] = useState(3);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api.get('/procurement/vendor-scorecard', { params: { months } })
+      .then(r => setD(r.data)).catch(e => setErr(e.response?.data?.error || 'Failed to load'));
+  }, [months]);
+  const TIER_STYLE = {
+    Platinum: 'bg-violet-100 text-violet-800 border-violet-300',
+    Gold: 'bg-amber-100 text-amber-800 border-amber-300',
+    Silver: 'bg-gray-100 text-gray-700 border-gray-300',
+    Bronze: 'bg-orange-100 text-orange-800 border-orange-300',
+  };
+  const medal = (r) => (r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : r);
+  if (err) return <p className="text-red-600 text-sm">{err}</p>;
+  if (!d) return <p className="text-gray-400 text-sm p-6 text-center">Calculating vendor scores…</p>;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-gray-500">
+          Auto-measured from your data — Credit <b>{d.weights.credit}</b> · Price <b>{d.weights.price}</b> · Delivery <b>{d.weights.delivery}</b> · Quote Speed <b>{d.weights.speed}</b>. Quarterly reset so no one coasts on old glory.
+        </p>
+        <div className="flex gap-1">
+          {[[3, 'This Quarter'], [12, 'This Year'], [0, 'All Time']].map(([m, l]) => (
+            <button key={m} onClick={() => setMonths(m)}
+              className={`text-xs px-3 py-1.5 rounded font-semibold ${months === m ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card p-0 overflow-x-auto">
+        <table className="w-full text-xs min-w-[1050px]">
+          <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
+            <tr>
+              <th className="p-2 w-12">Rank</th>
+              <th className="text-left p-2">Vendor</th>
+              <th className="p-2 w-24">Tier</th>
+              <th className="p-2 w-24">Score /100</th>
+              <th className="p-2 w-24">Credit<br />(days · /10)</th>
+              <th className="p-2 w-24">Price<br />(vs lowest · /10)</th>
+              <th className="p-2 w-24">Delivery<br />(on-time % · /10)</th>
+              <th className="p-2 w-24">Quote Speed<br />(hrs · /10)</th>
+              <th className="p-2 w-32">Measured From</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.rows.map(v => (
+              <tr key={v.vendor_id} className={`border-t ${v.rank <= 3 ? 'bg-amber-50/40' : ''}`}>
+                <td className="text-center p-2 text-lg">{medal(v.rank)}</td>
+                <td className="p-2 font-semibold">{v.vendor}</td>
+                <td className="text-center p-2">
+                  <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${TIER_STYLE[v.tier]}`}
+                    title={(d.tiers.find(t => t.tier === v.tier) || {}).reward}>{v.tier}</span>
+                </td>
+                <td className="text-center p-2"><span className="text-lg font-extrabold">{v.weighted}</span></td>
+                <td className="text-center p-2">{v.credit_days != null ? <>{v.credit_days}d <span className="text-gray-400">·</span> <b>{v.scores.credit}</b></> : <span className="text-gray-300">—</span>}</td>
+                <td className="text-center p-2">{v.scores.price != null ? <b>{v.scores.price}</b> : <span className="text-gray-300">—</span>}</td>
+                <td className="text-center p-2">{v.ontime_pct != null ? <>{v.ontime_pct}% <span className="text-gray-400">·</span> <b>{v.scores.delivery}</b></> : <span className="text-gray-300">—</span>}</td>
+                <td className="text-center p-2">{v.avg_quote_hrs != null ? <>{v.avg_quote_hrs}h <span className="text-gray-400">·</span> <b>{v.scores.speed}</b></> : <span className="text-gray-300">—</span>}</td>
+                <td className="text-center p-2 text-[10px] text-gray-500">{v.measured.quotes} quotes · {v.measured.pos} POs · {v.measured.deliveries} delivered · {v.measured.bills} bills</td>
+              </tr>
+            ))}
+            {d.rows.length === 0 && <tr><td colSpan={9} className="text-center py-10 text-gray-400">No vendor activity in this period — quotes and POs feed the scorecard automatically</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+        {d.tiers.map(t => (
+          <div key={t.tier} className={`rounded-lg border p-3 ${TIER_STYLE[t.tier]}`}>
+            <div className="font-bold text-sm">{t.tier} <span className="font-normal text-xs">({t.range})</span></div>
+            <div className="text-[11px] mt-0.5">{t.reward}</div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-gray-400">
+        A metric with no data yet shows — and the score fairly re-weights over what IS measured. More quotes, POs and GRNs = more accurate ranks.
+      </p>
     </div>
   );
 }

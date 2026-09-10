@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -13,9 +14,104 @@ import { fmtDate } from '../utils/datetime';
 
 const blankRow = () => ({ description: '', quantity: 1, unit: 'nos', rate: 0, item_id: null, suggestion: null });
 
+// Where a listed BOQ came from — the export must say the same thing the
+// table's badges say now that CRM Sales Funnel BOQs list here (mam 2026-09-07).
+const boqSourceLabel = (s) => s === 'funnel' ? 'Sales Funnel'
+  : s === 'funnel_extra' ? 'Sales Funnel (Extra)'
+  : s === 'crm' ? 'CRM Sales Funnel'
+  : s === 'crm_extra' ? 'CRM Sales Funnel (Extra)'
+  : 'ERP';
+
+// ── Margin Chart editor (SOP-02 S5/S6, mam 2026-08-27) ──────────────────
+// Fixed margin % per category (the chart) + the approval floor. Admin-only
+// server-side; the Quote modal's category dropdown reads from here.
+function MarginChartEditor({ chart, reload }) {
+  const [floor, setFloor] = useState(chart.floor);
+  // SOP-03 S3 discount chart: within auto → done; above → Sales Head; above md → MD sir.
+  const [discAuto, setDiscAuto] = useState(chart.discount_auto);
+  const [discMd, setDiscMd] = useState(chart.discount_md);
+  const [cat, setCat] = useState('');
+  const [pct, setPct] = useState('');
+  useEffect(() => { setFloor(chart.floor); setDiscAuto(chart.discount_auto); setDiscMd(chart.discount_md); }, [chart.floor, chart.discount_auto, chart.discount_md]);
+  const saveFloor = async () => {
+    try {
+      await api.post('/quotations/margin-chart', { floor: +floor || 0, discount_auto: +discAuto || 0, discount_md: +discMd || 0 });
+      toast.success('Rules saved'); reload();
+    }
+    catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
+  };
+  const addRow = async (e) => {
+    e.preventDefault();
+    if (!cat.trim()) return;
+    try {
+      await api.post('/quotations/margin-chart', { category: cat.trim(), margin_pct: +pct || 0 });
+      toast.success('Saved'); setCat(''); setPct(''); reload();
+    } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
+  };
+  const updateRow = async (r, newPct) => {
+    try { await api.post('/quotations/margin-chart', { category: r.category, margin_pct: +newPct || 0 }); reload(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
+  };
+  const delRow = async (r) => {
+    if (!confirm(`Remove "${r.category}" from the margin chart?`)) return;
+    try { await api.delete(`/quotations/margin-chart/${r.id}`); reload(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+  };
+  return (
+    <div className="space-y-4">
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded space-y-2">
+        <div className="flex items-end gap-3 flex-wrap">
+          <div>
+            <label className="label">Margin Floor %</label>
+            <input type="number" className="input w-24" step="0.5" value={floor} onChange={e => setFloor(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Discount OK up to %</label>
+            <input type="number" className="input w-24" step="0.5" value={discAuto} onChange={e => setDiscAuto(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">MD sir above %</label>
+            <input type="number" className="input w-24" step="0.5" value={discMd} onChange={e => setDiscMd(e.target.value)} />
+          </div>
+          <button onClick={saveFloor} className="btn btn-primary text-sm">Save Rules</button>
+        </div>
+        <p className="text-[11px] text-amber-800">
+          Margin: at/above the floor a quote approves on its own; below it the Sales Head decides (SOP-02.6).
+          Discount: within "OK up to" — done; above it — Sales Head; above the MD line — MD sir (SOP-03.3).
+        </p>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="text-[10px] text-gray-500 uppercase bg-gray-50">
+          <tr><th className="text-left p-2">Category</th><th className="text-center p-2 w-32">Margin %</th><th className="w-10"></th></tr>
+        </thead>
+        <tbody>
+          {chart.rows.map(r => (
+            <tr key={r.id} className="border-t">
+              <td className="p-2 font-medium">{r.category}</td>
+              <td className="text-center p-2">
+                <input type="number" step="0.5" defaultValue={r.margin_pct} onBlur={e => +e.target.value !== r.margin_pct && updateRow(r, e.target.value)}
+                  className="input text-center text-xs w-24 mx-auto" />
+              </td>
+              <td className="p-2"><button onClick={() => delRow(r)} className="text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button></td>
+            </tr>
+          ))}
+          {chart.rows.length === 0 && <tr><td colSpan="3" className="text-center py-6 text-gray-400 text-xs">No categories yet — add the fixed margins below</td></tr>}
+        </tbody>
+      </table>
+      <form onSubmit={addRow} className="flex items-end gap-2 border-t pt-3">
+        <div className="flex-1"><label className="label">Category</label>
+          <input className="input" placeholder="e.g. Fire Fighting / Electrical / Solar…" value={cat} onChange={e => setCat(e.target.value)} /></div>
+        <div><label className="label">Margin %</label>
+          <input type="number" step="0.5" className="input w-28" value={pct} onChange={e => setPct(e.target.value)} /></div>
+        <button type="submit" className="btn btn-primary">Add</button>
+      </form>
+    </div>
+  );
+}
+
 export default function Quotations() {
-  const { canDelete } = useAuth();
-  const [tab, setTab] = useUrlTab('boq');
+  const { canDelete, canEdit, isAdmin } = useAuth();
+  const [tab, setTab] = useUrlTab(['boq', 'quotations', 'responsible'], 'boq');
   const [boqs, setBoqs] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [leads, setLeads] = useState([]);
@@ -94,18 +190,88 @@ export default function Quotations() {
 
   const updateQuotation = async (id, status) => {
     const q = quotations.find(x => x.id === id);
-    await api.put(`/quotations/${id}`, { ...q, status });
-    toast.success('Status updated');
-    reload();
+    try {
+      const r = await api.put(`/quotations/${id}`, { ...q, status });
+      // SOP-03 S4/S5: booking the order creates the ONE project record and
+      // informs PM / Purchase / Accounts together.
+      if (r.data.project) toast.success(`Order booked! Project record ${r.data.project.lead_no} created in Business Book — PM, Purchase & Accounts informed`, { duration: 7000 });
+      else toast.success('Status updated');
+      reload();
+    } catch (err) { toast.error(err.response?.data?.error || 'Update failed'); }
+  };
+
+  // SOP-03 S1: one tap per negotiation event — flips whose court the ball is in.
+  const logNegotiation = async (id, side) => {
+    try {
+      await api.post(`/quotations/${id}/negotiation-log`, { side });
+      toast.success(side === 'client' ? 'Client reply logged — ball is with US now' : 'Our reply logged — ball is with the CLIENT now');
+      reload();
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not log'); }
+  };
+  const decideDiscount = async (id, action) => {
+    const reason = action === 'reject' ? (prompt('Reject reason (optional):') || '') : '';
+    try {
+      await api.post(`/quotations/${id}/discount-decision`, { action, reason });
+      toast.success(action === 'approve' ? 'Discount approved' : 'Discount rejected');
+      reload();
+    } catch (err) { toast.error(err.response?.data?.error || 'Decision failed'); }
+  };
+
+  // Quote-with-margin on a funnel BOQ row (mam 2026-08-27, SOP-02 F5-F7):
+  // base = BOQ cost, margin % on top, optional quotation file upload.
+  const [quoteFor, setQuoteFor] = useState(null);   // the funnel BOQ row being quoted
+  const [quoteForm, setQuoteForm] = useState({ base_amount: 0, margin_pct: 10, category: '', quotation_file_link: '', valid_until: '' });
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  // SOP-02 S5/S6: the fixed Margin Chart + floor — "margin chart, not guesswork".
+  const [marginChart, setMarginChart] = useState({ rows: [], floor: 10 });
+  const [chartOpen, setChartOpen] = useState(false);
+  const loadChart = () => api.get('/quotations/margin-chart').then(r => setMarginChart(r.data)).catch(() => {});
+  useEffect(() => { loadChart(); }, []);
+  const openQuote = (b) => {
+    setQuoteFor(b);
+    setQuoteForm({ base_amount: +b.total_amount || 0, margin_pct: marginChart.floor ?? 10, category: '', quotation_file_link: '', valid_until: '' });
+  };
+  const pickCategory = (cat) => {
+    const row = marginChart.rows.find(r => r.category === cat);
+    setQuoteForm(f => ({ ...f, category: cat, margin_pct: row ? row.margin_pct : f.margin_pct }));
+  };
+  const uploadQuoteFile = async (file) => {
+    if (!file) return;
+    setQuoteBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setQuoteForm(f => ({ ...f, quotation_file_link: r.data.url }));
+      toast.success('Quotation file uploaded');
+    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
+    finally { setQuoteBusy(false); }
+  };
+  const saveQuote = async (e) => {
+    e.preventDefault();
+    setQuoteBusy(true);
+    try {
+      // ONE of the two ids, never both (mam 2026-09-07): funnel_id means a
+      // sales_funnel lead and crm_id a CRM one, and the id spaces overlap.
+      const r = await api.post('/quotations/funnel-quote', {
+        ...(quoteFor.crm_id ? { crm_id: quoteFor.crm_id } : { funnel_id: quoteFor.funnel_id }),
+        ...quoteForm,
+      });
+      if (r.data.message) toast(r.data.message, { icon: '⏳', duration: 6000 });   // below-floor → Sales Head
+      else toast.success(`${r.data.quotation_number} created — Rs ${r.data.final_amount.toLocaleString()}`);
+      setQuoteFor(null);
+      reload();
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not create the quotation'); }
+    finally { setQuoteBusy(false); }
   };
 
   return (
     <div className="space-y-4">
       <div className="sticky-toolbar">
         <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
-          <button onClick={() => setTab('boq')} className={`btn text-sm whitespace-nowrap ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>BOQ / Drawings</button>
-          <button onClick={() => setTab('quotations')} className={`btn text-sm whitespace-nowrap ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>Quotations</button>
-          <button onClick={() => setTab('responsible')} className={`btn text-sm whitespace-nowrap ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
+          <button onClick={() => setTab('boq')} className={`btn text-sm whitespace-nowrap ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', 'BOQ / Drawings')}</button>
+          <button onClick={() => setTab('quotations')} className={`btn text-sm whitespace-nowrap ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', 'Quotations')}</button>
+          <button onClick={() => setTab('responsible')} className={`btn text-sm whitespace-nowrap ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', '⚙ Responsible')}</button>
         </div>
       </div>
 
@@ -117,8 +283,8 @@ export default function Quotations() {
             <h3 className="font-semibold text-gray-800">Bill of Quantities</h3>
             <div className="flex flex-wrap items-center gap-2">
               <button onClick={() => exportCsv('boqs',
-                ['Title','Client','Drawing','Total','Status','Date'],
-                boqs.map(b => [b.title, b.client_name, b.drawing_required ? 'Yes' : 'No', b.total_amount, b.status, b.created_at]))}
+                ['Title','Client','Source','Drawing','Total','Status','Date'],
+                boqs.map(b => [b.title, b.company_name, boqSourceLabel(b.source), b.drawing_required ? 'Yes' : 'No', b.total_amount, b.status, b.created_at]))}
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-2"><FiDownload /> Export Excel</button>
               <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-2"><FiPlus /> Create BOQ</button>
             </div>
@@ -129,18 +295,48 @@ export default function Quotations() {
               <tbody>
                 {boqs.map(b => (
                   <tr key={b.id}>
-                    <td className="font-medium">{b.title}</td>
+                    <td className="font-medium">
+                      {b.title}
+                      {/* Sales-funnel BOQs listed alongside (mam 2026-08-27) —
+                          first BOQ on a lead = FUNNEL, later additions = EXTRA. */}
+                      {b.source === 'funnel' && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold align-middle">FUNNEL</span>}
+                      {/* CRM Sales Funnel BOQs list here too (mam 2026-09-07) —
+                          violet so a CRM BOQ is never taken for a sales-funnel one. */}
+                      {(b.source === 'crm' || b.source === 'crm_extra') && <span className="ml-2 px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-[9px] font-bold align-middle">CRM</span>}
+                      {(b.source === 'funnel_extra' || b.source === 'crm_extra') && <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px] font-bold align-middle">EXTRA</span>}
+                      {b.boq_file_link && (
+                        <a href={b.boq_file_link} target="_blank" rel="noreferrer"
+                           className="ml-2 text-blue-600 hover:underline text-[11px]">view file</a>
+                      )}
+                    </td>
                     <td>{b.company_name}</td>
                     <td>{b.drawing_required ? 'Yes' : 'No'}</td>
-                    <td>Rs {b.total_amount?.toLocaleString()}</td>
+                    {/* A CRM lead carries no BOQ amount — "Rs 0" would read as
+                        a priced BOQ worth nothing (mam 2026-09-07). */}
+                    <td>{(b.source === 'crm' || b.source === 'crm_extra') ? <span className="text-gray-400">—</span> : <>Rs {b.total_amount?.toLocaleString()}</>}</td>
                     <td><StatusBadge status={b.status} /></td>
                     <td className="text-gray-500">{fmtDate(b.created_at)}</td>
                     <td>
-                      {canDelete('quotations') && <button onClick={async () => {
-                        if (!confirm(`Delete BOQ "${b.title}"?`)) return;
-                        try { await api.delete(`/quotations/boq/${b.id}`); toast.success('Deleted'); reload(); }
-                        catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                      }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                      <div className="flex items-center gap-1">
+                        {/* Quote this funnel BOQ with margin (SOP-02 F5-F7) —
+                            crm_id covers the CRM funnel rows (mam 2026-09-07). */}
+                        {/* Quoting a CRM BOQ writes to the CRM lead, so the server requires
+                            crm_funnel edit rights. Without the same gate here the
+                            button shows for everyone and 403s for all but admins —
+                            the "granted permission does nothing" shape. */}
+                        {(b.funnel_id || (b.crm_id && canEdit('crm_funnel'))) && (
+                          <button onClick={() => openQuote(b)}
+                            className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 font-semibold"
+                            title="Create a quotation from this BOQ — base amount + margin %">
+                            ₹ Quote
+                          </button>
+                        )}
+                        {(!b.source || b.source === 'boq') && canDelete('quotations') && <button onClick={async () => {
+                          if (!confirm(`Delete BOQ "${b.title}"?`)) return;
+                          try { await api.delete(`/quotations/boq/${b.id}`); toast.success('Deleted'); reload(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                        }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -156,9 +352,15 @@ export default function Quotations() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className="font-semibold text-gray-800">Quotations</h3>
             <div className="flex flex-wrap items-center gap-2">
+              {isAdmin() && (
+                <button onClick={() => setChartOpen(true)} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-2"
+                  title="Fixed margin % per category + the approval floor (SOP-02)">
+                  ⚙ Margin Chart
+                </button>
+              )}
               <button onClick={() => exportCsv('quotations',
                 ['Number','Client','Total','Discount','Final','Status','Valid Until'],
-                quotations.map(q => [q.quotation_number, q.client_name, q.total_amount, q.discount, q.final_amount, q.status, q.valid_until]))}
+                quotations.map(q => [q.quotation_number, q.company_name, q.total_amount, q.discount, q.final_amount, q.status, q.valid_until]))}
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-2"><FiDownload /> Export Excel</button>
               <button onClick={() => { setForm({ lead_id: '', boq_id: '', total_amount: 0, discount: 0, final_amount: 0, valid_until: '', notes: '' }); setModal('quotation'); }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-2"><FiPlus /> Create Quotation</button>
             </div>
@@ -169,23 +371,86 @@ export default function Quotations() {
               <tbody>
                 {quotations.map(q => (
                   <tr key={q.id}>
-                    <td className="font-medium">{q.quotation_number}</td>
+                    <td className="font-medium">
+                      {q.quotation_number}
+                      {/* Funnel-uploaded quotations listed alongside (mam 2026-08-27) */}
+                      {q.source === 'funnel' && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold align-middle">FUNNEL</span>}
+                      {/* CRM-funnel quotations listed alongside (mam 2026-09-07) */}
+                      {q.source === 'crm' && <span className="ml-2 px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-[9px] font-bold align-middle">CRM</span>}
+                      {q.margin_pct != null && q.margin_pct !== 0 && (
+                        <div className="text-[10px] text-indigo-600">margin {q.margin_pct}%</div>
+                      )}
+                      {q.quotation_file_link && (
+                        <a href={q.quotation_file_link} target="_blank" rel="noreferrer"
+                           className="ml-2 text-blue-600 hover:underline text-[11px]">view file</a>
+                      )}
+                      {/* SOP-03 S1 two clocks: days waited on each side, and
+                          one-tap logging of who just replied. */}
+                      {q.source !== 'funnel' && q.source !== 'crm' && q.clock_client_days != null && (
+                        <div className="flex items-center gap-1 mt-1 text-[10px]">
+                          <span className={`px-1.5 py-0.5 rounded font-semibold ${q.clock_ball === 'client' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}
+                            title="Days the ball has been in the CLIENT's court">client {q.clock_client_days}d</span>
+                          <span className={`px-1.5 py-0.5 rounded font-semibold ${q.clock_ball === 'us' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'}`}
+                            title="Days the ball has been in OUR court">us {q.clock_us_days}d</span>
+                          {!['accepted', 'rejected'].includes(q.status) && (
+                            <>
+                              <button onClick={() => logNegotiation(q.id, 'client')} className="text-blue-600 hover:underline" title="Log: the client just replied — ball comes to us">client replied</button>
+                              <span className="text-gray-300">·</span>
+                              <button onClick={() => logNegotiation(q.id, 'us')} className="text-blue-600 hover:underline" title="Log: we just replied / re-quoted — ball goes to the client">we replied</button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td>{q.company_name}</td>
                     <td>Rs {q.total_amount?.toLocaleString()}</td>
                     <td>Rs {q.discount?.toLocaleString()}</td>
                     <td className="font-semibold">Rs {q.final_amount?.toLocaleString()}</td>
-                    <td><StatusBadge status={q.status} /></td>
                     <td>
-                      <div className="flex gap-2 items-center">
-                        <select className="select w-32" value={q.status} onChange={e => updateQuotation(q.id, e.target.value)}>
-                          {['draft','sent','negotiation','accepted','rejected'].map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                        {canDelete('quotations') && <button onClick={async () => {
-                          if (!confirm(`Delete quotation "${q.quotation_number}"?`)) return;
-                          try { await api.delete(`/quotations/${q.id}`); toast.success('Deleted'); reload(); }
-                          catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                        }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
-                      </div>
+                      <StatusBadge status={q.margin_approval === 'pending' ? 'pending_approval' : q.status} />
+                      {/* SOP-03 S3 discount gate chip */}
+                      {q.discount_approval === 'pending_sh' && <div className="text-[9px] font-bold text-amber-700 mt-0.5">DISC → SALES HEAD</div>}
+                      {q.discount_approval === 'pending_md' && <div className="text-[9px] font-bold text-red-700 mt-0.5">DISC → MD SIR</div>}
+                      {q.discount_approval === 'rejected' && <div className="text-[9px] font-bold text-red-700 mt-0.5">DISC REJECTED</div>}
+                    </td>
+                    <td>
+                      {/* Read-only merged rows carry a synthetic string id —
+                          no status dropdown, no delete (mam 2026-09-07: the
+                          CRM rows are guarded exactly like the funnel ones). */}
+                      {(q.source === 'funnel' || q.source === 'crm') ? (
+                        <span className="text-[11px] text-gray-400">from {q.source === 'crm' ? 'CRM Sales Funnel' : 'Sales Funnel'}</span>
+                      ) : q.margin_approval === 'pending' ? (
+                        // SOP-02 S6: below-floor margin — Sales Head decides.
+                        <div className="flex gap-1 items-center">
+                          <button onClick={async () => {
+                            try { await api.post(`/quotations/${q.id}/margin-decision`, { action: 'approve' }); toast.success('Margin approved — quotation released'); reload(); }
+                            catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
+                          }} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 font-semibold">✓ Approve</button>
+                          <button onClick={async () => {
+                            const reason = prompt('Reject reason (optional):') || '';
+                            try { await api.post(`/quotations/${q.id}/margin-decision`, { action: 'reject', reason }); toast.success('Rejected'); reload(); }
+                            catch (err) { toast.error(err.response?.data?.error || 'Reject failed'); }
+                          }} className="text-[11px] px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-semibold">✕ Reject</button>
+                        </div>
+                      ) : (q.discount_approval === 'pending_sh' || q.discount_approval === 'pending_md') ? (
+                        // SOP-03 S3: above-chart discount — Sales Head / MD decides.
+                        <div className="flex gap-1 items-center">
+                          <span className="text-[10px] text-gray-500 mr-1">{q.discount_approval === 'pending_md' ? 'MD sir:' : 'Sales Head:'}</span>
+                          <button onClick={() => decideDiscount(q.id, 'approve')} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 font-semibold">✓ Approve</button>
+                          <button onClick={() => decideDiscount(q.id, 'reject')} className="text-[11px] px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-semibold">✕ Reject</button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2 items-center">
+                          <select className="select w-32" value={q.status} onChange={e => updateQuotation(q.id, e.target.value)}>
+                            {['draft','sent','negotiation','accepted','rejected'].map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                          {canDelete('quotations') && <button onClick={async () => {
+                            if (!confirm(`Delete quotation "${q.quotation_number}"?`)) return;
+                            try { await api.delete(`/quotations/${q.id}`); toast.success('Deleted'); reload(); }
+                            catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                          }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -195,6 +460,70 @@ export default function Quotations() {
           </div>
         </>
       )}
+
+      {/* Margin Chart master (SOP-02 S5/S6): fixed margin % per category + floor */}
+      <Modal isOpen={chartOpen} onClose={() => setChartOpen(false)} title="Margin Chart — fixed margins & floor">
+        <MarginChartEditor chart={marginChart} reload={loadChart} />
+      </Modal>
+
+      {/* Quote-with-margin modal (mam 2026-08-27): base BOQ cost × (1 + margin%) */}
+      <Modal isOpen={!!quoteFor} onClose={() => setQuoteFor(null)} title={`Quotation with Margin — ${quoteFor?.company_name || ''}`}>
+        {quoteFor && (
+          <form onSubmit={saveQuote} className="space-y-3">
+            <p className="text-xs text-gray-500">
+              From <b>{quoteFor.title}</b>{quoteFor.boq_file_link && <> · <a className="text-blue-600 underline" href={quoteFor.boq_file_link} target="_blank" rel="noreferrer">open BOQ file</a></>}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">BOQ Base Amount (Rs) *</label>
+                <input type="number" className="input" required min="1" value={quoteForm.base_amount}
+                  onChange={e => setQuoteForm(f => ({ ...f, base_amount: +e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Category <span className="text-gray-400 font-normal">(margin chart)</span></label>
+                <select className="select" value={quoteForm.category} onChange={e => pickCategory(e.target.value)}>
+                  <option value="">— manual margin —</option>
+                  {marginChart.rows.map(r => <option key={r.id} value={r.category}>{r.category} · {r.margin_pct}%</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Margin %</label>
+                <input type="number" className="input" step="0.5" value={quoteForm.margin_pct}
+                  onChange={e => setQuoteForm(f => ({ ...f, margin_pct: +e.target.value, category: '' }))} />
+                {quoteForm.margin_pct < (marginChart.floor ?? 0)
+                  ? <p className="text-[11px] text-amber-700 mt-1 font-semibold">⏳ Below the {marginChart.floor}% floor — will go to the Sales Head for approval</p>
+                  : <p className="text-[11px] text-emerald-700 mt-1">✓ At/above the {marginChart.floor}% floor — approves on its own</p>}
+              </div>
+              <div>
+                <label className="label">Quote Amount</label>
+                <div className="input bg-gray-50 font-bold text-emerald-700">
+                  Rs {Math.round((quoteForm.base_amount || 0) * (1 + (quoteForm.margin_pct || 0) / 100)).toLocaleString()}
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Quotation File (optional)</label>
+                <input type="file" className="input text-xs" onChange={e => uploadQuoteFile(e.target.files?.[0])} />
+                {quoteForm.quotation_file_link && <p className="text-[11px] text-emerald-700 mt-1">✓ file attached</p>}
+              </div>
+              <div>
+                <label className="label">Valid Until (optional)</label>
+                <input type="date" className="input" value={quoteForm.valid_until}
+                  onChange={e => setQuoteForm(f => ({ ...f, valid_until: e.target.value }))} />
+              </div>
+            </div>
+            {/* CRM leads have no quotation-number column — don't promise one. */}
+            <p className="text-[11px] text-gray-400">{quoteFor.crm_id
+              ? "Saves a quotation here AND stamps the CRM Sales Funnel lead's quotation stage (amount, file, date)."
+              : "Saves a quotation here AND stamps the Sales Funnel lead's quotation stage (number, amount, file, date)."}</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setQuoteFor(null)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={quoteBusy} className="btn btn-primary">{quoteBusy ? 'Saving…' : 'Create Quotation'}</button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       {/* BOQ Modal */}
       <Modal isOpen={modal === 'boq'} onClose={() => setModal(false)} title="Create BOQ" wide>
@@ -286,7 +615,8 @@ export default function Quotations() {
             <label className="label">BOQ Reference</label>
             <select className="select" value={form.boq_id} onChange={e => setForm({...form, boq_id: e.target.value})}>
               <option value="">Select</option>
-              {boqs.map(b => <option key={b.id} value={b.id}>{b.title} - Rs {b.total_amount?.toLocaleString()}</option>)}
+              {/* Native BOQs only — funnel reference rows can't back a quotation. */}
+              {boqs.filter(b => !b.source || b.source === 'boq').map(b => <option key={b.id} value={b.id}>{b.title} - Rs {b.total_amount?.toLocaleString()}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">

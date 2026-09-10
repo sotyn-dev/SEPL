@@ -17,6 +17,7 @@
 // Disable in dev via ERP_DISABLE_CASH_CRON=1.
 
 const { getDb } = require('../db/schema');
+const { istToday } = require('../lib/istDate');
 const { ensureTodayCashFlowDaily, refreshAllAgeing } = require('../lib/cashSync');
 
 function rollOverCashFlowDaily() {
@@ -25,7 +26,7 @@ function rollOverCashFlowDaily() {
     const db = getDb();
     const r = ensureTodayCashFlowDaily(db);
     if (r.created) {
-      console.log(`[cash-fidelity] rolled over cash_flow_daily: new row for ${new Date().toISOString().slice(0,10)} opening=${r.opening_balance}`);
+      console.log(`[cash-fidelity] rolled over cash_flow_daily: new row for ${istToday()} opening=${r.opening_balance}`);
     }
   } catch (e) {
     console.error('[cash-fidelity] rollover failed:', e.message);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown, FiSearch, FiLayers } from 'react-icons/fi';
+import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin, FiChevronDown, FiSearch, FiLayers, FiEdit2 } from 'react-icons/fi';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -10,6 +10,52 @@ import { PROJECT_TYPES } from '../lib/solar/engine';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import QualificationChat from './QualificationChat';
 import { QUAL_SECTIONS } from '../lib/solar/qualification';
+
+// One line of the deal's remark history, editable in place (mam 2026-09-04:
+// "all stages remarks ... will be editable"). Only human-typed notes get the
+// pencil — a 'remark' or the note on a stage move — never system events like
+// creation. Used by both the per-step list and the Activity feed, so a remark
+// from an EARLIER stage is editable too, from Activity.
+function RemarkLine({ e, dealId, onSaved, prefix = null, className = 'text-[11px] text-gray-600' }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(e.note || '');
+  const [busy, setBusy] = useState(false);
+  const editable = (e.type === 'remark' || e.type === 'stage') && !!e.note;
+  const save = async () => {
+    const note = text.trim();
+    if (!note) return toast.error('Remark cannot be empty');
+    setBusy(true);
+    try {
+      await api.put(`/solar/deals/${dealId}/events/${e.id}`, { note });
+      setEditing(false); toast.success('Remark updated'); await onSaved();
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not update remark'); }
+    setBusy(false);
+  };
+  if (editing) {
+    return (
+      <li className={className}>
+        <div className="flex items-start gap-1 mt-0.5">
+          <textarea className="input-compact w-full text-[11px]" rows={2} value={text} onChange={ev => setText(ev.target.value)} autoFocus />
+          <button type="button" onClick={save} disabled={busy} className="btn btn-primary text-[10px] px-2 py-0.5">{busy ? '…' : 'Save'}</button>
+          <button type="button" onClick={() => { setEditing(false); setText(e.note || ''); }} className="btn btn-secondary text-[10px] px-2 py-0.5">Cancel</button>
+        </div>
+      </li>
+    );
+  }
+  return (
+    <li className={className}>
+      {prefix}{e.note}
+      <span className="text-gray-400"> — {(e.created_at || '').slice(0, 16)} {e.by_name || ''}
+        {e.edited_at ? ` · edited ${String(e.edited_at).slice(0, 16)}${e.edited_by_name ? ' by ' + e.edited_by_name : ''}` : ''}
+      </span>
+      {editable && (
+        <button type="button" onClick={() => setEditing(true)} title="Edit remark"
+          className="ml-1 text-gray-400 hover:text-blue-600 align-middle"><FiEdit2 size={10} /></button>
+      )}
+    </li>
+  );
+}
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const cr = (v) => `₹${fmt((v || 0) / 1e7, 2)} Cr`;
 
@@ -44,7 +90,7 @@ export default function SolarFunnel() {
   const [deals, setDeals] = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [leads, setLeads] = useState([]);
-  const [tab, setTab] = useState('pipeline');
+  const [tab, setTab] = useUrlTab(['pipeline', 'analytics', 'responsible'], 'pipeline');
   const [modal, setModal] = useState(null); // null | {} (new) | deal (edit)
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -360,6 +406,7 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
   const [showQual, setShowQual] = useState(false);
   const [qualOpen, setQualOpen] = useState(false);
   const [aForm, setAForm] = useState({});
+  const [remark, setRemark] = useState('');   // optional per-step remark
   const isNew = !deal.id;
   const set = (k, v) => setD((p) => ({ ...p, [k]: v }));
   const F = (k, label, props = {}) => (
@@ -426,12 +473,32 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
     try { await api.put(`/solar/deals/${d.id}`, { stage_data: { [action.group]: patch } }); toast.success('Action saved'); await refresh(); }
     catch { toast.error('Save failed'); }
   };
+  // Optional remark on the current step (mam 2026-09-04). Carried along when
+  // the deal advances or moves back, and can also be saved on its own so a
+  // note doesn't require changing stage.
   const advance = async () => {
     if (!nextStage) return;
-    try { await api.post(`/solar/deals/${d.id}/move`, { stage: nextStage.key }); toast.success(`Moved to ${nextStage.label}`); await refresh(); }
+    try {
+      await api.post(`/solar/deals/${d.id}/move`, { stage: nextStage.key, note: remark.trim() || null });
+      setRemark('');
+      toast.success(`Moved to ${nextStage.label}`); await refresh();
+    }
     catch (e) { toast.error(e.response?.data?.requirement || e.response?.data?.error || 'Cannot advance'); }
   };
-  const moveBack = async () => { if (!prevStage) return; try { await api.post(`/solar/deals/${d.id}/move`, { stage: prevStage.key, force: true }); await refresh(); } catch { toast.error('Failed'); } };
+  const moveBack = async () => {
+    if (!prevStage) return;
+    try {
+      await api.post(`/solar/deals/${d.id}/move`, { stage: prevStage.key, force: true, note: remark.trim() || null });
+      setRemark('');
+      await refresh();
+    } catch { toast.error('Failed'); }
+  };
+  const saveRemark = async () => {
+    const note = remark.trim();
+    if (!note) return;
+    try { await api.post(`/solar/deals/${d.id}/remark`, { note }); setRemark(''); toast.success('Remark added'); await refresh(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Could not save remark'); }
+  };
   const markSent = async () => { try { await api.put(`/solar/deals/${d.id}`, { stage_data: { quotation: { sent: true, sent_on: new Date().toISOString().slice(0, 10) } } }); toast.success('Quotation marked sent'); await refresh(); } catch { toast.error('Failed'); } };
 
   return (
@@ -538,6 +605,36 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
                 {action.kind === 'done' && <p className="text-sm text-emerald-700">✓ {action.label}</p>}
               </div>
 
+              {/* Optional remark on THIS step (mam 2026-09-04: "at every step
+                  add remarks option which is optional"). Never required — it
+                  does not gate advancing. Typing one and hitting Advance
+                  attaches it to the stage change; "Add remark" saves it
+                  against the current step without moving the deal. */}
+              <div className="mt-3 border-t pt-2">
+                <span className="label">Remarks <span className="text-gray-400 font-normal">(optional)</span></span>
+                <div className="flex items-start gap-2 mt-1">
+                  <textarea
+                    className="input-compact w-full text-sm" rows={2}
+                    placeholder={`Note on "${action.label || stages[curIdx]?.label || 'this step'}" — e.g. client asked to call back Monday`}
+                    value={remark} onChange={(e) => setRemark(e.target.value)} />
+                  <button onClick={saveRemark} disabled={!remark.trim()}
+                    className={`btn text-xs whitespace-nowrap ${remark.trim() ? 'btn-secondary' : 'btn-secondary opacity-50 cursor-not-allowed'}`}>
+                    Add remark
+                  </button>
+                </div>
+                {(() => {
+                  // What has already been said on this step.
+                  const mine = (d.events || []).filter(e => (e.from_stage === d.stage || e.to_stage === d.stage) && e.note);
+                  if (!mine.length) return null;
+                  return (
+                    <ul className="mt-1 space-y-0.5">
+                      {mine.slice(0, 4).map(e => <RemarkLine key={e.id} e={e} dealId={d.id} onSaved={refresh} prefix="• " />)}
+                      {mine.length > 4 && <li className="text-[11px] text-gray-400">+{mine.length - 4} more in Activity below</li>}
+                    </ul>
+                  );
+                })()}
+              </div>
+
               {nextStage && (
                 <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2 border-t pt-2">
                   <button onClick={advance} disabled={!gateMet} className={`btn text-sm w-full sm:w-auto ${gateMet ? 'btn-primary' : 'btn-secondary opacity-50 cursor-not-allowed'}`}>Advance to {nextStage.label} →</button>
@@ -612,10 +709,15 @@ function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) 
                 </tbody></table>)}
             </div>)}
 
-          {!isNew && deal.events?.length > 0 && (
-            <details className="text-xs"><summary className="cursor-pointer text-gray-500">Activity ({deal.events.length})</summary>
+          {/* Reads `d`, not the `deal` prop: `d` is what refresh() updates, so a
+              remark or stage move shows up here immediately instead of only
+              after the modal is closed and reopened. */}
+          {!isNew && d.events?.length > 0 && (
+            <details className="text-xs"><summary className="cursor-pointer text-gray-500">Activity ({d.events.length})</summary>
               <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
-                {deal.events.map((e) => <li key={e.id} className="text-gray-600">• <b>{e.type}</b> {e.from_stage ? `${e.from_stage}→${e.to_stage}` : (e.to_stage || '')} {e.note ? `· ${e.note}` : ''} <span className="text-gray-400">— {(e.created_at || '').slice(0, 16)} {e.by_name || ''}</span></li>)}
+                {d.events.map((e) => (
+                  <RemarkLine key={e.id} e={e} dealId={d.id} onSaved={refresh} className="text-gray-600"
+                    prefix={<>• <b>{e.type}</b> {e.from_stage ? `${e.from_stage}→${e.to_stage}` : (e.to_stage || '')}{e.note ? ' · ' : ''}</>} />))}
               </ul></details>)}
         </div>
         <div className="px-3 py-2.5 sm:px-5 sm:py-3 border-t flex items-center justify-between gap-2 flex-wrap">

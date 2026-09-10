@@ -66,6 +66,33 @@ function ChatImage({ url, name }) {
 // message list and the composer's reply bar.
 const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
 
+// Pasted URLs render as real clickable links (mam 2026-08-31: "if we share
+// link … show that link" — they were plain text). WhatsApp-style: trailing
+// punctuation stays text so "see https://x.com." links to x.com, not x.com.
+// Rendered as React elements (never innerHTML), so message text can't inject
+// markup — only the matched URL itself becomes an <a>.
+const URL_RE = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
+function linkify(text, keyBase = 'u') {
+  if (!text || (!text.includes('http') && !text.includes('www.'))) return [text];
+  const re = new RegExp(URL_RE.source, 'g');
+  const out = []; let last = 0; let mm;
+  while ((mm = re.exec(text))) {
+    if (mm.index > last) out.push(text.slice(last, mm.index));
+    let url = mm[0];
+    const trail = (url.match(/[.,;:!?)\]]+$/) || [''])[0];
+    if (trail) url = url.slice(0, -trail.length);
+    out.push(
+      <a key={`${keyBase}-${mm.index}`} href={url.startsWith('www.') ? `https://${url}` : url}
+        target="_blank" rel="noreferrer" className="text-blue-600 underline break-all"
+        onClick={(e) => e.stopPropagation()}>{url}</a>
+    );
+    if (trail) out.push(trail);
+    last = mm.index + mm[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
 // Memoised message list — the heavy part of the thread. Its own React.memo
 // component with stable props, so composer keystrokes, context refreshes, and
 // Layout re-renders DON'T redraw the whole conversation (perf pass). The @mention
@@ -115,16 +142,19 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
     const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return `@(${names.map(esc).join('|')})`;
   }, [members]);
+  // Mentions highlighted + URLs linkified — the plain-text stretches between
+  // mentions go through linkify() so a pasted link is clickable either way.
   const renderBody = (body) => {
-    if (!body || !mentionPattern) return body;
+    if (!body) return body;
+    if (!mentionPattern) return linkify(body);
     const re = new RegExp(mentionPattern, 'g');
     const out = []; let last = 0; let mm;
     while ((mm = re.exec(body))) {
-      if (mm.index > last) out.push(body.slice(last, mm.index));
-      out.push(<span key={mm.index} className="text-blue-400 font-semibold">@{mm[1]}</span>);
+      if (mm.index > last) out.push(...linkify(body.slice(last, mm.index), `t${last}`));
+      out.push(<span key={`m${mm.index}`} className="text-blue-400 font-semibold">@{mm[1]}</span>);
       last = mm.index + mm[0].length;
     }
-    if (last < body.length) out.push(body.slice(last));
+    if (last < body.length) out.push(...linkify(body.slice(last), `t${last}`));
     return out;
   };
   // Group consecutive messages by calendar day so each day's label can be a
@@ -151,7 +181,32 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
             <span className="text-[10px] font-medium bg-white/90 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(group.ts)}</span>
           </div>
           {group.items.map(m => {
+            // Membership audit line ("X added Y" / "X removed Y") — centred
+            // grey pill like the day label: no bubble, avatar or receipts
+            // (mam 2026-08-13: every member add/remove must be visible
+            // in-chat with the actor's name).
+            if (m.is_system) {
+              return (
+                <div key={m.id} id={`msg-${m.id}`} className="flex justify-center">
+                  <span className="text-[10px] bg-gray-100 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">
+                    {m.body} · {fmtTime(m.created_at)}
+                  </span>
+                </div>
+              );
+            }
             const own = m.sender_id === userId;
+            // Soft-deleted message → WhatsApp-style tombstone. The server has
+            // already stripped body/attachment; deleted_by_name says who
+            // (mam 2026-08-13: nothing hard-deletes, everything stays visible).
+            if (m.deleted_at) {
+              return (
+                <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 ${own ? 'justify-end' : 'justify-start'}`}>
+                  <div className="max-w-[78%] rounded-lg px-2.5 py-1.5 text-[11px] italic text-gray-400 bg-gray-50 border border-gray-100 shadow-sm">
+                    🚫 Message deleted{m.deleted_by_name ? ` by ${m.deleted_by_name}` : ''}
+                  </div>
+                </div>
+              );
+            }
             // Read-receipt state (the ✓✓ + "Read by…" tooltip) renders ONLY on your own
             // messages, so compute it only then — skips an O(members) scan on every other row.
             const readers = own ? others.filter(o => (reads[o.user_id] || 0) >= m.id) : null;
@@ -381,7 +436,7 @@ export default function SiteChat() {
       else setGroups(incoming);
       setGroupsHasMore(incomingHasMore);
       groupsCursorRef.current = nextCursor;
-    }).catch(() => {}).finally(() => {
+    }).catch(() => { }).finally(() => {
       groupsLoadingRef.current = false; setLoadingGroups(false);
       // Scope changed WHILE this request was in flight, so two things already went
       // wrong: the response above was discarded as superseded, AND the toggle's own
@@ -399,7 +454,7 @@ export default function SiteChat() {
   // Self-reference for the re-run above, kept in a ref so the useCallback stays
   // dependency-free (a direct call would make loadGroups depend on itself).
   loadGroupsRef.current = loadGroups;
-  const reloadUsers = useCallback(() => api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}), []);
+  const reloadUsers = useCallback(() => api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => { }), []);
   // Cursor pagination (perf pass — S2-B). Default: fetch the most-recent PAGE and
   // REPLACE (thread open / reconnect). { before }: fetch the PAGE older than that
   // id and PREPEND, anchoring scroll so the view doesn't jump. { reconcile }: a
@@ -433,7 +488,7 @@ export default function SiteChat() {
         // list's own 12s timer + socket 'changed' still refresh names/last-message.
         setGroups(gs => gs.map(g => (g.id === id ? { ...g, unread: 0 } : g)));
       }
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   // Cap the live in-memory window so a long session can't grow msgs (and the DOM)
@@ -666,7 +721,7 @@ export default function SiteChat() {
   const stopRec = (sendIt) => {
     const mr = mediaRef.current; if (!mr) return;
     mr._send = !!sendIt; clearInterval(recTimerRef.current); setRecording(false);
-    try { mr.stop(); } catch (_) {}
+    try { mr.stop(); } catch (_) { }
   };
   const onDrop = (e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer?.files?.[0]; if (f) attach(f); };
 
@@ -1002,8 +1057,7 @@ export default function SiteChat() {
               on — the list you're looking at is NOT your normal one, and that has to
               be unmissable. */}
           <button type="button" role="switch" aria-checked={showArchived} onClick={() => setShowArchived(v => !v)}
-            className={`flex-shrink-0 border-t px-3 py-2.5 flex items-center justify-center gap-2 text-xs font-semibold transition-colors ${
-              showArchived ? 'bg-amber-100 text-amber-900 hover:bg-amber-200' : 'text-gray-500 hover:bg-gray-50'}`}>
+            className={`flex-shrink-0 border-t px-3 py-2.5 flex items-center justify-center gap-2 text-xs font-semibold transition-colors ${showArchived ? 'bg-amber-100 text-amber-900 hover:bg-amber-200' : 'text-gray-500 hover:bg-gray-50'}`}>
             <FiArchive size={14} /> <span>Show archived</span>
             <span className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${showArchived ? 'bg-amber-500' : 'bg-gray-300'}`}>
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${showArchived ? 'translate-x-4' : ''}`} />
@@ -1032,12 +1086,14 @@ export default function SiteChat() {
                       <div className="font-semibold text-sm truncate">{sel.name}</div>
                       <div className="text-[11px] text-white/80 truncate">Direct message</div>
                     </div>
-                    {(() => { const oid = members.find(m => m.user_id !== user?.id)?.user_id; return oid ? (
-                      <>
-                        <button onClick={() => startCall(oid, sel.name, false)} className="p-1.5 rounded hover:bg-white/15" title="Voice call"><FiPhone size={18} /></button>
-                        <button onClick={() => startCall(oid, sel.name, true)} className="p-1.5 rounded hover:bg-white/15" title="Video call"><FiVideo size={18} /></button>
-                      </>
-                    ) : null; })()}
+                    {(() => {
+                      const oid = members.find(m => m.user_id !== user?.id)?.user_id; return oid ? (
+                        <>
+                          <button onClick={() => startCall(oid, sel.name, false)} className="p-1.5 rounded hover:bg-white/15" title="Voice call"><FiPhone size={18} /></button>
+                          <button onClick={() => startCall(oid, sel.name, true)} className="p-1.5 rounded hover:bg-white/15" title="Video call"><FiVideo size={18} /></button>
+                        </>
+                      ) : null;
+                    })()}
                   </>
                 ) : (
                   <>
@@ -1141,59 +1197,59 @@ export default function SiteChat() {
                   409, so the composer is replaced rather than left to fail. The
                   thread above stays fully scrollable and searchable. */}
               {sel?.archived_at ? (
-              <div className="border-t px-3 py-3 bg-amber-50 text-center text-xs text-amber-800 flex items-center justify-center gap-2">
-                <FiArchive size={14} /> This group is archived — read-only. Restore it to send messages.
-              </div>
+                <div className="border-t px-3 py-3 bg-amber-50 text-center text-xs text-amber-800 flex items-center justify-center gap-2">
+                  <FiArchive size={14} /> This group is archived — read-only. Restore it to send messages.
+                </div>
               ) : (
-              <div className="border-t p-2 flex items-end gap-2 bg-gray-50 relative">
-                {/* @-mention picker — floats above the composer */}
-                {mention && mentionList.length > 0 && (
-                  <div className="absolute bottom-full left-2 right-2 mb-1 bg-white border rounded-lg shadow-lg max-h-52 overflow-y-auto z-20">
-                    <div className="px-3 py-1 text-[10px] text-gray-400 uppercase font-semibold border-b">Tag someone</div>
-                    {mentionList.map(mu => (
-                      <button key={mu.user_id} type="button" onMouseDown={e => { e.preventDefault(); pickMention(mu.name); }}
-                        className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-blue-50 text-sm">
-                        <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0">{initials(mu.name)}</span>
-                        <span className="truncate">{mu.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {recording ? (
-                  <>
-                    <button onClick={() => stopRec(false)} className="flex-shrink-0 p-2 text-red-500" title="Cancel"><FiTrash2 size={18} /></button>
-                    <div className="flex-1 min-w-0 flex items-center gap-2 text-red-500 text-sm px-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" /> Recording… {mmss(recTime)}</div>
-                    <button onClick={() => stopRec(true)} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#2563eb' }} title="Send voice"><FiSend size={16} /></button>
-                  </>
-                ) : (
-                  <>
-                    <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
-                    <button onClick={() => fileRef.current?.click()} disabled={busy} className="flex-shrink-0 p-2 text-gray-500 hover:text-blue-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
-                    {/* Wrap the textarea in a flex-1 min-w-0 div (NOT on the
+                <div className="border-t p-2 flex items-end gap-2 bg-gray-50 relative">
+                  {/* @-mention picker — floats above the composer */}
+                  {mention && mentionList.length > 0 && (
+                    <div className="absolute bottom-full left-2 right-2 mb-1 bg-white border rounded-lg shadow-lg max-h-52 overflow-y-auto z-20">
+                      <div className="px-3 py-1 text-[10px] text-gray-400 uppercase font-semibold border-b">Tag someone</div>
+                      {mentionList.map(mu => (
+                        <button key={mu.user_id} type="button" onMouseDown={e => { e.preventDefault(); pickMention(mu.name); }}
+                          className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-blue-50 text-sm">
+                          <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0">{initials(mu.name)}</span>
+                          <span className="truncate">{mu.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {recording ? (
+                    <>
+                      <button onClick={() => stopRec(false)} className="flex-shrink-0 p-2 text-red-500" title="Cancel"><FiTrash2 size={18} /></button>
+                      <div className="flex-1 min-w-0 flex items-center gap-2 text-red-500 text-sm px-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" /> Recording… {mmss(recTime)}</div>
+                      <button onClick={() => stopRec(true)} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#2563eb' }} title="Send voice"><FiSend size={16} /></button>
+                    </>
+                  ) : (
+                    <>
+                      <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
+                      <button onClick={() => fileRef.current?.click()} disabled={busy} className="flex-shrink-0 p-2 text-gray-500 hover:text-blue-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
+                      {/* Wrap the textarea in a flex-1 min-w-0 div (NOT on the
                         textarea itself) — a textarea's intrinsic width isn't
                         reliably collapsed by min-width:0 on mobile, which pushed
                         the send button off the right edge so it never showed
                         (mam 2026-06-25). The reply bar uses this same wrapper. */}
-                    <div className="flex-1 min-w-0">
-                      <textarea ref={taRef} className="input resize-none block" rows="1" placeholder="Type a message… (@ to tag)" value={text}
-                        onChange={onTextChange}
-                        onKeyDown={e => {
-                          if (mention && mentionList.length) {
-                            if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
-                            if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
-                          }
-                          if (e.key === 'Escape' && editingId) { e.preventDefault(); cancelEdit(); return; }
-                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editingId ? saveEdit() : send(); }
-                        }} />
-                    </div>
-                    {editingId
-                      ? <button onClick={saveEdit} disabled={busy || !text.trim()} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }} title="Save edit"><FiSend size={16} /></button>
-                      : text.trim()
-                        ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }}><FiSend size={16} /></button>
-                        : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#2563eb' }} title="Record voice message"><FiMic size={16} /></button>}
-                  </>
-                )}
-              </div>
+                      <div className="flex-1 min-w-0">
+                        <textarea ref={taRef} className="input resize-none block" rows="1" placeholder="Type a message… (@ to tag)" value={text}
+                          onChange={onTextChange}
+                          onKeyDown={e => {
+                            if (mention && mentionList.length) {
+                              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
+                              if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+                            }
+                            if (e.key === 'Escape' && editingId) { e.preventDefault(); cancelEdit(); return; }
+                            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editingId ? saveEdit() : send(); }
+                          }} />
+                      </div>
+                      {editingId
+                        ? <button onClick={saveEdit} disabled={busy || !text.trim()} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }} title="Save edit"><FiSend size={16} /></button>
+                        : text.trim()
+                          ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }}><FiSend size={16} /></button>
+                          : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#2563eb' }} title="Record voice message"><FiMic size={16} /></button>}
+                    </>
+                  )}
+                </div>
               )}
             </>
           )}
@@ -1445,7 +1501,7 @@ export default function SiteChat() {
             <div className="space-y-3 text-sm">
               <div className="rounded-lg bg-[#e6ecf7] px-3 py-2">
                 {m.attachment_name && <div className="text-xs text-gray-600 mb-0.5">📎 {m.attachment_name}</div>}
-                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{m.body}</div>}
+                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{linkify(m.body, 'info')}</div>}
                 <div className="text-[10px] text-gray-500 mt-1">{m.sender_name} · {fmtDateTime(m.created_at)}</div>
               </div>
               <div>

@@ -3,6 +3,7 @@
 // engineering factors + settings, and saved solar quotations. Gated by the
 // `solar_quotation` module permission. Tables created/seeded by db/seedSolar.js.
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
@@ -188,7 +189,7 @@ router.post('/quotations/export', requirePermission('solar_quotation', 'view'), 
     q.push(['Secured Engineers India']);
     q.push([`QUOTATION FOR ${sysTitle}`]);
     q.push([]);
-    q.push(['NAME', b.client_name || '', '', 'Date', new Date().toISOString().slice(0, 10)]);
+    q.push(['NAME', b.client_name || '', '', 'Date', istToday()]);
     q.push(['ADDRESS', b.address || '', '', 'Quotation No', b.quote_no || '']);
     q.push([]);
     q.push(['S No.', 'Description', 'Amount (In Rupees)']);
@@ -362,6 +363,43 @@ router.post('/deals/:id/move', requirePermission('solar_quotation', 'edit'), (re
   // Goldratt hand-off: a Won deal immediately becomes an execution project.
   if (to === 'won') { try { ensureProjectFromDeal(db, d.id, req.user); } catch (e) { console.warn('[solar] project create:', e.message); } }
   res.json({ message: 'Moved' });
+});
+
+// Remark on the CURRENT stage, without moving the deal (mam 2026-09-04: "at
+// every step add remarks option which is optional"). Advancing already carries
+// a note, but a step often needs a note while it is still in progress — a
+// callback promised, why the survey slipped — and forcing a stage change just
+// to record that would corrupt the funnel timing the SLA tiles are built on.
+// Lands in the same solar_deal_events feed, so the Activity list is one
+// chronological story per deal.
+router.post('/deals/:id/remark', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const db = getDb();
+  const d = db.prepare('SELECT id, stage FROM solar_deals WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  const note = String(req.body?.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Remark is empty' });
+  logDealEvent(db, d.id, 'remark', d.stage, d.stage, note.slice(0, 1000), req.user);
+  db.prepare('UPDATE solar_deals SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(d.id);
+  res.json({ message: 'Remark added' });
+});
+
+// Edit a remark in place (mam 2026-09-04: "all stages remarks ... will be
+// editable"). Only human-typed notes — a 'remark', or the note carried on a
+// stage move — never system events like creation, and not the lost reason.
+// The text is replaced, but edited_at / edited_by_name are stamped so the
+// Activity feed shows the line was changed, by whom, and when. The event
+// must belong to the deal in the URL — an id from another deal is a 404.
+router.put('/deals/:id/events/:eventId', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const db = getDb();
+  const ev = db.prepare('SELECT id, type FROM solar_deal_events WHERE id=? AND deal_id=?').get(req.params.eventId, req.params.id);
+  if (!ev) return res.status(404).json({ error: 'Remark not found on this deal' });
+  if (!['remark', 'stage'].includes(ev.type)) return res.status(400).json({ error: 'Only remarks can be edited' });
+  const note = String(req.body?.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'Remark cannot be empty' });
+  db.prepare('UPDATE solar_deal_events SET note=?, edited_at=CURRENT_TIMESTAMP, edited_by_name=? WHERE id=?')
+    .run(note.slice(0, 1000), req.user?.name || null, ev.id);
+  db.prepare('UPDATE solar_deals SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(req.params.id);
+  res.json({ message: 'Remark updated' });
 });
 
 router.post('/deals/:id/lose', requirePermission('solar_quotation', 'edit'), (req, res) => {

@@ -10,6 +10,7 @@
 //   - Stage 3 target = material_received + days_required (biz days)
 
 import { useState, useEffect, useRef } from 'react';
+import { flowStepLabel, flowStepNumber } from '../utils/moduleFlows';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -58,7 +59,7 @@ const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 
 export default function RentalTools() {
   const { user, canCreate, canEdit, canApprove } = useAuth();
-  const [tab, setTab] = useUrlTab('dashboard');
+  const [tab, setTab] = useUrlTab(['dashboard', 'enquiries', 'settings'], 'dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [enquiries, setEnquiries] = useState([]);
   const [filters, setFilters] = useState({ stage: '', status: 'open', q: '' });
@@ -75,6 +76,17 @@ export default function RentalTools() {
     days_required: 1, site_engineer_id: '', site_engineer_name: '',
   });
   const [drawerEnq, setDrawerEnq] = useState(null);
+  // Which enquiry's drawer is actually open right now — checked before a
+  // fetch inside openDrawer() is allowed to write drawerEnq/rateForm (mam
+  // 2026-08-24: "sometimes wrong upload"). Real risk here: onPhotoPicked
+  // waits on a geolocation permission prompt before uploading — if the user
+  // closes this drawer and opens a DIFFERENT enquiry while that prompt is
+  // still pending, the eventual `openDrawer(drawerEnq.id)` refresh used to
+  // silently overwrite the vendor/rate fields the user is now looking at
+  // (or actively editing) with the OLD enquiry's data — and a subsequent
+  // Finalise Rate click would then post those stale numbers against
+  // whichever enquiry id ended up in drawerEnq.
+  const drawerIdRef = useRef(null);
   const [rateForm, setRateForm] = useState({
     vendor_id: '', vendor_name: '', vendor_rate: '', vendor_rate_unit: 'per_day',
     po_number: '', po_date: new Date().toISOString().slice(0, 10),
@@ -134,6 +146,12 @@ export default function RentalTools() {
   // hard-coded English defaults while the dashboard request is in
   // flight or if the override hasn't been saved.
   const STAGE_LABEL = dashboard?.stage_labels || DEFAULT_STAGE_LABEL;
+  // Flow number by the DEFAULT label, so an admin renaming a stage in Settings
+  // doesn't make its number disappear.
+  const stageFlowNo = (key) => {
+    const n = flowStepNumber('/rental-tools', DEFAULT_STAGE_LABEL[key]);
+    return n ? ` (${n})` : '';
+  };
   const STAGE_LABEL_SHORT = Object.fromEntries(
     Object.entries(STAGE_LABEL).map(([k, v]) => [k, shortify(v)])
   );
@@ -154,8 +172,13 @@ export default function RentalTools() {
 
   // === Drawer ===
   const openDrawer = async (id) => {
+    drawerIdRef.current = id;
     try {
       const r = await api.get(`/rental-tools/enquiries/${id}`);
+      // The user may have opened a DIFFERENT enquiry (or closed the drawer)
+      // while this was in flight — a stale response must not overwrite
+      // what's currently on screen.
+      if (drawerIdRef.current !== id) return;
       setDrawerEnq(r.data);
       // Pre-fill rate form with sensible defaults
       setRateForm({
@@ -169,9 +192,9 @@ export default function RentalTools() {
         advance_amount: '',
         crm_name: r.data.created_by_name || '',
       });
-    } catch { toast.error('Could not load enquiry'); }
+    } catch { if (drawerIdRef.current === id) toast.error('Could not load enquiry'); }
   };
-  const closeDrawer = () => { setDrawerEnq(null); setReturnNotes(''); };
+  const closeDrawer = () => { setDrawerEnq(null); setReturnNotes(''); drawerIdRef.current = null; };
 
   const finaliseRate = async () => {
     try {
@@ -297,7 +320,7 @@ export default function RentalTools() {
               onClick={() => { setTab('enquiries'); setFilters({ ...filters, stage: s, status: '' }); }}
               className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}
               title={STAGE_LABEL[s]}>
-              {STAGE_LABEL[s]}
+              {STAGE_LABEL[s]}{stageFlowNo(s)}
               <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${isActive ? 'bg-white/30 text-white' : `${STAGE_CHIP_BG[s]} text-white`}`}>
                 {dashboard?.counts?.[s] ?? 0}
               </span>
@@ -307,7 +330,7 @@ export default function RentalTools() {
         <button
           onClick={() => { setTab('enquiries'); setFilters({ ...filters, stage: 'cancelled', status: '' }); }}
           className={`btn ${tab === 'enquiries' && filters.stage === 'cancelled' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
-          {STAGE_LABEL.cancelled}
+          {STAGE_LABEL.cancelled}{stageFlowNo('cancelled')}
           <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${tab === 'enquiries' && filters.stage === 'cancelled' ? 'bg-white/30 text-white' : 'bg-red-500 text-white'}`}>
             {dashboard?.counts?.cancelled ?? 0}
           </span>
@@ -315,7 +338,7 @@ export default function RentalTools() {
         {user?.role === 'admin' && (
           <button onClick={() => setTab('settings')}
             className={`btn ${tab === 'settings' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
-            <FiSettings size={12} /> Settings
+            <FiSettings size={12} /> {flowStepLabel('/rental-tools', 'Settings')}
           </button>
         )}
       </div>
