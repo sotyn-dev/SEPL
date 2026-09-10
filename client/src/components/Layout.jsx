@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import ModuleFlowGuide from './ModuleFlowGuide';
+import { FiArrowDownCircle } from 'react-icons/fi';
 import { flowLabel } from '../utils/moduleFlows';
 import AnnouncementBell from './AnnouncementBell';
 // Mam (2026-05-22): standalone NotificationsBell removed — its
@@ -143,6 +144,7 @@ const SIDEBAR_GROUPS = [
     { path: '/vendors',              label: 'Vendors',            icon: FiTag,          module: 'vendors' },
     { path: '/procurement',          label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
     { path: '/orders',               label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
+    { path: '/dispatch-receiving', label: 'Dispatch Receiving', icon: FiArrowDownCircle, module: 'procurement' },
     // Mam (2026-05-28): backward-pass Gantt per project — surfaces
     // 'must raise indent by' date for every BOQ item.
     { path: '/procurement-schedule', label: 'Schedule (Gantt)',   icon: FiGitBranch,    module: 'procurement_schedule' },

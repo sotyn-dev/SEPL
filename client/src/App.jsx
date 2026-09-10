@@ -25,6 +25,7 @@ const PoFocStripped = lazy(() => import('./pages/PoFocStripped'));
 const PoFocPrint = lazy(() => import('./pages/PoFocPrint'));
 const LabourRate = lazy(() => import('./pages/LabourRate'));
 const Orders = lazy(() => import('./pages/Orders'));
+const DispatchReceiving = lazy(() => import('./pages/DispatchReceiving'));
 const BusinessBook = lazy(() => import('./pages/BusinessBook'));
 const ItemMaster = lazy(() => import('./pages/ItemMaster'));
 const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
@@ -271,6 +272,7 @@ export default function App() {
         <Route path="business-book" element={<ModuleRoute module="business_book"><BusinessBook /></ModuleRoute>} />
         <Route path="item-master" element={<ModuleRoute module="item_master"><ItemMaster /></ModuleRoute>} />
         <Route path="orders" element={<ModuleRoute module="orders"><Orders /></ModuleRoute>} />
+        <Route path="dispatch-receiving" element={<ModuleRoute module="procurement"><DispatchReceiving /></ModuleRoute>} />
         <Route path="vendors" element={<ModuleRoute module="vendors"><Vendors /></ModuleRoute>} />
         <Route path="customers" element={<ModuleRoute module="customers"><Customers /></ModuleRoute>} />
         <Route path="procurement" element={<ModuleRoute module="procurement"><Procurement /></ModuleRoute>} />

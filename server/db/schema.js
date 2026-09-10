@@ -7340,6 +7340,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   } catch (e) { console.error('[schema] installation unit sync failed:', e.message); }
 
   require('./userTotp').initialize(db);
+  require('../lib/dispatchReceiving').initialize(db);
 
   console.log('Database initialized successfully');
   return db;

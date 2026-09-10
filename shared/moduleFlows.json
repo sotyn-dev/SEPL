@@ -973,5 +973,17 @@
       "Review outstanding amounts",
       "Review follow-ups"
     ]
+  },
+  {
+    "path": "/dispatch-receiving",
+    "title": "Dispatch Receiving",
+    "number": 88,
+    "steps": [
+      "Select Business Book site",
+      "Select site indent",
+      "Enter bill number",
+      "Upload receiving proof",
+      "Save receiving"
+    ]
   }
 ]
