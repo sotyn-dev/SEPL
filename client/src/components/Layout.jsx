@@ -1002,7 +1002,7 @@ export default function Layout() {
             CSS min() keeps a sane minimum 10px on devices without an
             inset. */}
         <header
-          className="relative z-20 bg-white shadow-sm border-b border-gray-200 px-3 md:px-6 pb-2.5 flex items-center gap-2"
+          className="relative z-20 bg-white shadow-sm border-b border-gray-200 px-2.5 sm:px-4 md:px-6 pb-2.5 flex items-center gap-1.5 sm:gap-2"
           style={{ paddingTop: 'max(0.625rem, env(safe-area-inset-top))' }}
         >
           <button

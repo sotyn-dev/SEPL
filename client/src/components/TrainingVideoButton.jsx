@@ -66,11 +66,15 @@ export default function TrainingVideoButton({ module, label = 'Training' }) {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="btn btn-secondary text-sm flex items-center gap-1.5"
+        className="btn btn-secondary text-xs sm:text-sm px-2 sm:px-3 py-1.5 flex items-center gap-1.5 shrink-0"
         title={videos.length ? `${videos.length} training video${videos.length === 1 ? '' : 's'} for this page` : 'No training video yet — add one'}
+        aria-label="Training videos"
       >
-        <FiPlayCircle size={15} className="text-red-600" />
-        {label}{videos.length ? ` (${videos.length})` : ''}
+        <FiPlayCircle size={16} className="text-red-600 shrink-0" />
+        <span className="hidden sm:inline">{label}</span>
+        {videos.length > 0 && (
+          <span className="text-[11px] font-semibold text-gray-500">({videos.length})</span>
+        )}
       </button>
 
       <Modal isOpen={open} onClose={() => { setOpen(false); setPlaying(null); }} title={`▶ ${label}`} wide>
