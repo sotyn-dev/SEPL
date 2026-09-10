@@ -1,15 +1,37 @@
 const normalize = value => String(value || '').trim().toLowerCase();
 
-function initialize(db) {
-  db.exec(`CREATE TABLE IF NOT EXISTS dispatch_receiving (
+// Indent No. is typed by hand (mam 2026-09-10: "indent number manuall fill"), so
+// the typed text is what's stored. indent_id is only a best-effort link, set when
+// the text matches one of the site's indents.
+const TABLE_SQL = name => `CREATE TABLE IF NOT EXISTS ${name} (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     site_name TEXT NOT NULL,
-    indent_id INTEGER NOT NULL REFERENCES indents(id),
+    indent_id INTEGER REFERENCES indents(id),
+    indent_number TEXT NOT NULL,
     bill_number TEXT NOT NULL,
     receiving_url TEXT NOT NULL,
     created_by INTEGER NOT NULL REFERENCES users(id),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )`);
+  )`;
+
+function initialize(db) {
+  db.exec(TABLE_SQL('dispatch_receiving'));
+  // First version required a picked indent (indent_id NOT NULL, no text column).
+  // SQLite can't relax NOT NULL in place, so rebuild once, carrying every row
+  // and its indent number across.
+  const cols = db.prepare('PRAGMA table_info(dispatch_receiving)').all();
+  if (!cols.some(c => c.name === 'indent_number')) {
+    db.transaction(() => {
+      db.exec('DROP TABLE IF EXISTS dispatch_receiving_v2');
+      db.exec(TABLE_SQL('dispatch_receiving_v2'));
+      db.exec(`INSERT INTO dispatch_receiving_v2
+        (id, site_name, indent_id, indent_number, bill_number, receiving_url, created_by, created_at)
+        SELECT r.id, r.site_name, r.indent_id, COALESCE(i.indent_number, ''), r.bill_number, r.receiving_url, r.created_by, r.created_at
+        FROM dispatch_receiving r LEFT JOIN indents i ON i.id = r.indent_id`);
+      db.exec('DROP TABLE dispatch_receiving');
+      db.exec('ALTER TABLE dispatch_receiving_v2 RENAME TO dispatch_receiving');
+    })();
+  }
 }
 
 function sites(db) {

@@ -24,21 +24,26 @@ app.use('/receiving', require('../../routes/dispatchReceiving'));
 const server = app.listen(0, '127.0.0.1', async () => {
   try {
     const url = `http://127.0.0.1:${server.address().port}/receiving`;
-    const good = { site: 'site a', indent_id: 1, bill_number: ' BILL-1 ', receiving_url: '/uploads/proof.pdf' };
+    const good = { site: 'site a', indent_number: ' ind-1 ', bill_number: ' BILL-1 ', receiving_url: '/uploads/proof.pdf' };
     const post = body => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     for (const field of Object.keys(good)) {
       const missing = { ...good }; delete missing[field];
       assert.equal((await post(missing)).status, 400, field);
     }
-    assert.equal((await post({ ...good, indent_id: 2 })).status, 400);
+    assert.equal((await post({ ...good, indent_number: ' ' })).status, 400);
+    assert.equal((await post({ ...good, indent_number: 'X'.repeat(101) })).status, 400);
     assert.equal((await post({ ...good, bill_number: ' ' })).status, 400);
     assert.equal((await post({ ...good, receiving_url: '/uploads/missing.pdf' })).status, 400);
     assert.equal((await post({ ...good, receiving_url: '/uploads/../proof.pdf' })).status, 400);
     assert.equal((await post(good)).status, 201);
+    // Typed by hand: a number that isn't one of this site's indents still saves, just unlinked.
+    assert.equal((await post({ ...good, indent_number: 'IND-2', bill_number: 'BILL-2' })).status, 201);
     const entries = await (await fetch(url)).json();
-    assert.equal(entries.length, 1); assert.equal(entries[0].bill_number, 'BILL-1');
-    assert.equal(entries[0].indent_number, 'IND-1');
-    console.log('Receiving API checks passed: all mandatory fields, site mismatch, proof validation, save and read');
+    assert.equal(entries.length, 2);
+    const [typed, matched] = entries;                       // newest first
+    assert.equal(matched.bill_number, 'BILL-1'); assert.equal(matched.indent_number, 'ind-1'); assert.equal(matched.indent_id, 1);
+    assert.equal(typed.indent_number, 'IND-2'); assert.equal(typed.indent_id, null);
+    console.log('Receiving API checks passed: mandatory fields, typed indent no. (linked when it matches), proof validation, save and read');
   } catch (error) { console.error(error); process.exitCode = 1; }
   finally { server.close(); db.close(); }
 });

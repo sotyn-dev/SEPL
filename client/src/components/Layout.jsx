@@ -1049,7 +1049,11 @@ export default function Layout() {
               </div>
             )}
             <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate leading-tight">
-              {crumb.label}
+              {/* Same flow number as the sidebar, on the page itself — "Dashboard (79.1)"
+                  (mam 2026-09-10: "dashboard has no flow number"). Pathname only, so the
+                  number always belongs to the page named here; the unmatched
+                  'SOTYN.AI' fallback never gets one. */}
+              {crumb.label === 'SOTYN.AI' ? crumb.label : flowLabel(location.pathname, crumb.label)}
             </h2>
           </div>
           {/* Per-page training video (mam 2026-08-26: "every where") —
