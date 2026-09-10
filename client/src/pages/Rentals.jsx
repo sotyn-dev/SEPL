@@ -227,8 +227,9 @@ export default function Rentals() {
               </select>
             </div>
           </div>
-          <div className="card p-0">
-            <table className="freeze-head">
+          <div className="card p-0 overflow-hidden">
+            <div className="table-responsive">
+            <table className="freeze-head min-w-[850px]">
               <thead>
                 <tr>
                   <th>Req No</th><th>Month / Due By</th><th>Site</th><th>Arrange For</th>
@@ -370,6 +371,7 @@ export default function Rentals() {
                 );})}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}
@@ -457,8 +459,9 @@ export default function Rentals() {
 
       {/* BOOKINGS */}
       {tab === 'bookings' && (
-        <div className="card p-0">
-          <table className="freeze-head">
+        <div className="card p-0 overflow-hidden">
+          <div className="table-responsive">
+          <table className="freeze-head min-w-[800px]">
             <thead><tr><th>Status</th><th>Occupant</th><th>Property / Room</th><th>City</th><th>Site</th><th>Check-in</th><th>Check-out</th><th>Rent Share</th><th>Actions</th></tr></thead>
             <tbody>
               {bookings.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bookings yet</td></tr>}
@@ -481,6 +484,7 @@ export default function Rentals() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -612,7 +616,7 @@ export default function Rentals() {
       {/* PROPERTY DETAIL MODAL */}
       <Modal isOpen={!!propDetail} onClose={() => setPropDetail(null)} title={propDetail?.name || 'Property'} wide>
         {propDetail && (
-          <div className="space-y-4 max-h-[75vh] overflow-y-auto">
+          <div className="space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
               <div className="card p-2"><p className="text-[10px] text-gray-500">Monthly Rent</p><p className="font-bold text-red-700">{fmtRs(propDetail.monthly_rent)}</p></div>
               <div className="card p-2"><p className="text-[10px] text-gray-500">Deposit</p><p className="font-bold">{fmtRs(propDetail.deposit_paid)}</p></div>
@@ -689,9 +693,9 @@ export default function Rentals() {
       {/* PROPERTY ADD/EDIT MODAL */}
       <Modal isOpen={!!propModal} onClose={() => { setPropModal(null); setPropForm({}); }} title={propForm.id ? 'Edit Property' : 'Add Property'} wide>
         <form onSubmit={saveProp} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2"><label className="label">Name *</label><input className="input" required value={propForm.name || ''} onChange={e => setPropForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Andheri Mumbai 3BHK Flat" /></div>
-            <div className="col-span-2"><label className="label">Address</label><input className="input" value={propForm.address || ''} onChange={e => setPropForm(f => ({ ...f, address: e.target.value }))} /></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="col-span-1 sm:col-span-2"><label className="label">Name *</label><input className="input" required value={propForm.name || ''} onChange={e => setPropForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Andheri Mumbai 3BHK Flat" /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Address</label><input className="input" value={propForm.address || ''} onChange={e => setPropForm(f => ({ ...f, address: e.target.value }))} /></div>
             <div><label className="label">City</label><input className="input" value={propForm.city || ''} onChange={e => setPropForm(f => ({ ...f, city: e.target.value }))} /></div>
             <div><label className="label">State</label>
               <select className="select" value={propForm.state || ''} onChange={e => setPropForm(f => ({ ...f, state: e.target.value }))}>
@@ -750,9 +754,9 @@ export default function Rentals() {
       {/* BOOKING MODAL */}
       <Modal isOpen={bookingModal} onClose={() => { setBookingModal(false); setBookingForm({}); }} title="New Booking" wide>
         <form onSubmit={saveBooking} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {!bookingForm.room_id && (
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Pick Room *</label>
                 <select className="select" required value={bookingForm.room_id || ''} onChange={e => setBookingForm(f => ({ ...f, room_id: +e.target.value }))}>
                   <option value="">— pick a room —</option>

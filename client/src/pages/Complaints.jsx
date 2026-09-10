@@ -193,7 +193,7 @@ export default function Complaints() {
 
       {/* Tabs — same design as Indent to Dispatch. Each tab is a workflow
           stage; count badge shows how many rows that tab contains. */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
         {TABS.map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); if (t.id === 'register') setShowAdd(true); }}
             className={`px-4 py-2 rounded-lg font-semibold text-sm border transition-all ${tab === t.id && t.id !== 'register' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
@@ -247,8 +247,8 @@ export default function Complaints() {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border">
-        <table className="w-full text-sm freeze-head">
+      <div className="bg-white rounded-xl border table-responsive">
+        <table className="w-full text-sm freeze-head min-w-[850px]">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
             <tr>
               <th className="text-left px-3 py-2">Complaint #</th>

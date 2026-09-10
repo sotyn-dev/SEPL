@@ -171,7 +171,7 @@ export default function Inventory() {
           (mam 2026-06-25), not as one global date here. */}
 
       {/* Tabs */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
         {[
           ['stock', 'Stock'],
           ['opening', 'Opening Stock (item-wise)', canCreate('inventory')],
@@ -570,12 +570,8 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
       {/* ─── DESKTOP TABLE (md+) ───────────────────────────────────── */}
       {flatStock.length > 0 && (
         <div className="hidden md:block card p-0">
-          {/* No overflow-hidden on the card above — it would create an
-              intervening scroll container that breaks the sticky
-              `freeze-head` thead. mam (2026-06-04): "freeze like excel
-              headers". Header sticks to the app's main scroll area. */}
-          <div>
-            <table className="text-sm w-full freeze-head">
+          <div className="table-responsive">
+            <table className="text-sm w-full freeze-head min-w-[850px]">
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Code</th>
@@ -1372,8 +1368,8 @@ function OpeningItemwiseEntry({ warehouses, items, reload }) {
               <h4 className="font-semibold text-gray-700 text-sm">Quantity per warehouse</h4>
               <span className="text-[11px] text-gray-500">{filledCount} warehouse(s) · total {fmtNum(totalQty)} {selectedItem.uom || 'units'}</span>
             </div>
-            <div className="overflow-x-auto">
-              <table className="text-sm w-full">
+            <div className="table-responsive">
+              <table className="text-sm w-full min-w-[550px]">
                 <thead className="bg-gray-50/60">
                   <tr>
                     <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -1785,8 +1781,8 @@ function EquationTab({ warehouses }) {
         : !data ? <div className="text-sm text-gray-400 py-6 text-center">Warehouse chuno — equation live dikhega.</div>
         : data.rows.length === 0 ? <div className="text-sm text-gray-400 py-6 text-center">Is warehouse mein koi movement nahi hai.</div>
         : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+        <div className="table-responsive">
+          <table className="w-full text-xs min-w-[750px]">
             <thead><tr className="text-gray-500 border-b text-left">
               <th className="py-1.5 pr-2">Material</th>
               <th className="py-1.5 px-2 text-right">Opening</th>
@@ -1854,8 +1850,8 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
         <div className="self-end text-xs text-gray-500">{movements.length} movements</div>
       </div>
 
-      <div className="card p-0">
-        <table className="text-sm w-full freeze-head">
+      <div className="card p-0 table-responsive">
+        <table className="text-sm w-full freeze-head min-w-[850px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
@@ -1947,8 +1943,8 @@ function ReportsTab({ summary, warehouses }) {
         <div className="px-4 py-3 border-b bg-gray-50">
           <h4 className="font-semibold text-gray-700 flex items-center gap-2"><FiBarChart2 size={14} className="text-red-600" /> Stock Value by Warehouse</h4>
         </div>
-        <div className="overflow-x-auto">
-          <table className="text-sm w-full">
+        <div className="table-responsive">
+          <table className="text-sm w-full min-w-[650px]">
             <thead className="bg-gray-50/60">
               <tr>
                 <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -1993,8 +1989,8 @@ function ReportsTab({ summary, warehouses }) {
           </h4>
           <span className="text-[11px] text-amber-700">items at or below their reorder level</span>
         </div>
-        <div className="overflow-x-auto">
-          <table className="text-sm w-full">
+        <div className="table-responsive">
+          <table className="text-sm w-full min-w-[600px]">
             <thead className="bg-gray-50/60">
               <tr>
                 <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -2057,8 +2053,8 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
       <div className="flex justify-end">
         {canCreate && <button onClick={() => open()} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Add Warehouse</button>}
       </div>
-      <div className="card p-0">
-        <table className="text-sm w-full freeze-head">
+      <div className="card p-0 table-responsive">
+        <table className="text-sm w-full freeze-head min-w-[800px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Name</th>
@@ -2109,7 +2105,7 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
         {modal && (
           <form onSubmit={save} className="space-y-3">
             <div><label className="label">Name *</label><input className="input" required value={modal.name} onChange={e => setModal({ ...modal, name: e.target.value })} /></div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Type</label>
                 <select className="select" value={modal.type} onChange={e => setModal({ ...modal, type: e.target.value })} disabled={!!modal.id}>

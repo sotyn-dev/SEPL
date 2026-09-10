@@ -268,7 +268,7 @@ export default function Employees() {
       </div>
 
       {/* Table */}
-      <div className="card p-0 hidden md:block"><table className="freeze-head">
+      <div className="card p-0 hidden md:block table-responsive"><table className="freeze-head w-full min-w-[900px]">
         <thead><tr>
           <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
           <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
@@ -370,12 +370,12 @@ export default function Employees() {
           {/* Backlog: past employees whose login is still active — still counted
               in attendance strength until HR deactivates them. */}
           {rosterAudit.backlog.length > 0 && (
-            <div className="card p-0 overflow-hidden">
+            <div className="card p-0 overflow-hidden table-responsive">
               <div className="p-3 bg-red-50 border-b border-red-200">
                 <h4 className="font-bold text-red-700 text-sm">Terminated / inactive — login still active ({rosterAudit.backlog.length})</h4>
                 <p className="text-[11px] text-red-700/80 italic mt-0.5">Past employees still counted in attendance. Deactivate their login in User Management to clear them. Nothing here is changed automatically.</p>
               </div>
-              <table className="text-sm w-full">
+              <table className="text-sm w-full min-w-[600px]">
                 <thead><tr className="text-left text-gray-500 border-b"><th className="px-3 py-2">Name</th><th className="px-3 py-2">Department</th><th className="px-3 py-2">Role</th><th className="px-3 py-2">Employee status</th></tr></thead>
                 <tbody>
                   {rosterAudit.backlog.map(u => (
@@ -393,12 +393,12 @@ export default function Employees() {
 
           {/* Guests: active logins never onboarded into the employee roster. */}
           {rosterAudit.guests.length > 0 && (
-            <div className="card p-0 overflow-hidden">
+            <div className="card p-0 overflow-hidden table-responsive">
               <div className="p-3 bg-amber-50 border-b border-amber-200">
                 <h4 className="font-bold text-amber-700 text-sm">Active logins not on the employee roster ({rosterAudit.guests.length})</h4>
                 <p className="text-[11px] text-amber-700/80 italic mt-0.5">Guest / never-onboarded accounts. Onboard them via “Add Employee” if they belong, or leave as-is. Not changed automatically.</p>
               </div>
-              <table className="text-sm w-full">
+              <table className="text-sm w-full min-w-[500px]">
                 <thead><tr className="text-left text-gray-500 border-b"><th className="px-3 py-2">Name</th><th className="px-3 py-2">Department</th><th className="px-3 py-2">Role</th></tr></thead>
                 <tbody>
                   {rosterAudit.guests.map(u => (
@@ -418,7 +418,7 @@ export default function Employees() {
       {/* Add/Edit Modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Employee' : 'Add Employee'}>
         <form onSubmit={save} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
             <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
             <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /></div>
@@ -434,7 +434,7 @@ export default function Employees() {
                 <option value="early">Early — 9:00 AM to 6:00 PM</option>
               </select>
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
               <SearchableSelect
                 options={users.map(u => ({ ...u, label: `${u.name} (${u.username || u.email})` }))}
@@ -519,8 +519,8 @@ export default function Employees() {
           {bulkPreview.length > 0 && (
             <div>
               <p className="text-sm font-semibold text-gray-700 mb-2">Preview: {bulkPreview.length} employees to import</p>
-              <div className="max-h-60 overflow-y-auto border rounded-lg">
-                <table className="min-w-full text-xs">
+              <div className="max-h-60 overflow-y-auto border rounded-lg table-responsive">
+                <table className="min-w-full text-xs min-w-[550px]">
                   <thead><tr className="bg-gray-50"><th className="px-2 py-1.5">Name</th><th className="px-2 py-1.5">Phone</th><th className="px-2 py-1.5">Email</th><th className="px-2 py-1.5">Designation</th><th className="px-2 py-1.5">Department</th><th className="px-2 py-1.5">Join Date</th><th className="px-2 py-1.5">Salary</th></tr></thead>
                   <tbody>
                     {bulkPreview.map((e, i) => (

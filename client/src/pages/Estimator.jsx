@@ -698,7 +698,7 @@ export default function Estimator() {
       ) : (<>
 
       {/* Header inputs */}
-      <div className="card p-4 grid grid-cols-1 sm:grid-cols-4 gap-4">
+      <div className="card p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label className="label">Client / Lead</label>
           <select className="select" value={leadId} onChange={e => onPickClient(e.target.value)}>
@@ -781,7 +781,7 @@ export default function Estimator() {
       {/* Completeness (mam #8) — % of lines that are priced; pending lines are
           highlighted yellow in the table so nothing ships half-priced. */}
       {completeness.total > 0 && (
-        <div className={`flex items-center gap-3 text-xs px-1 ${completeness.pending ? 'text-amber-700' : 'text-emerald-700'}`}>
+        <div className={`flex items-center gap-3 text-xs px-1 flex-wrap ${completeness.pending ? 'text-amber-700' : 'text-emerald-700'}`}>
           <span className="font-semibold whitespace-nowrap">{completeness.pct}% priced</span>
           <div className="h-1.5 bg-gray-100 rounded overflow-hidden w-full max-w-[240px]">
             <div className="h-full bg-emerald-400 transition-all" style={{ width: `${completeness.pct}%` }}></div>
@@ -792,27 +792,26 @@ export default function Estimator() {
         </div>
       )}
 
-      {/* Items table — frozen header (sticky) + fits the width (no horizontal
-          drag): table is w-full so columns compress to the container. */}
-      <div className="card p-0 overflow-auto max-h-[60vh]">
-        <table className="w-full text-sm table-fixed">
-          <thead className="sticky top-0 z-10 bg-gray-50">
+      {/* Items table — scrollable responsive table with sticky header */}
+      <div className="card p-0 table-responsive max-h-[70vh]">
+        <table className="w-full text-sm min-w-[1300px]">
+          <thead className="sticky top-0 z-10 bg-gray-50 shadow-sm">
             <tr className="bg-gray-50 text-left text-[11px] uppercase text-gray-500">
-              <th className="p-1.5 w-7">#</th>
-              <th className="p-1.5">BOQ item</th>
-              <th className="p-1.5">Match item (PO → FOC)</th>
-              <th className="p-1.5 w-20">Category</th>
-              <th className="p-1.5 text-center w-16">Qty</th>
-              <th className="p-1.5 text-right w-16" title="Extra cost for this line — added to the line cost (TPA), then margin applies">Extra ₹</th>
-              <th className="p-1.5 text-right w-16" title="Material price (auto from Item Master)">PP ₹</th>
-              <th className="p-1.5 text-right w-14" title="Accessories = PP × Acc%">ACC ₹</th>
-              <th className="p-1.5 text-right w-16" title="Labour (enter manually / from labour sheet)">LAB ₹</th>
-              <th className="p-1.5 text-right w-14" title="TP = PP + ACC + LAB">TP ₹</th>
-              <th className="p-1.5 text-right w-16" title="TPA = TP × Qty (total cost)">TPA ₹</th>
-              <th className="p-1.5 text-right w-12">Margin</th>
-              <th className="p-1.5 text-right w-16" title="SP = TPA × (1 + margin%)">SP ₹</th>
-              <th className="p-1.5 text-right w-14" title="Sale rate per unit = SP ÷ Qty">Rate ₹</th>
-              <th className="p-1.5 w-8"></th>
+              <th className="p-2 w-8 text-center">#</th>
+              <th className="p-2 min-w-[200px] w-60">BOQ item</th>
+              <th className="p-2 min-w-[320px]">Match item (PO → FOC)</th>
+              <th className="p-2 min-w-[120px] w-28">Category</th>
+              <th className="p-2 text-center min-w-[65px] w-16">Qty</th>
+              <th className="p-2 text-right min-w-[75px] w-20" title="Extra cost for this line — added to the line cost (TPA), then margin applies">Extra ₹</th>
+              <th className="p-2 text-right min-w-[80px] w-22" title="Material price (auto from Item Master)">PP ₹</th>
+              <th className="p-2 text-right min-w-[65px] w-18" title="Accessories = PP × Acc%">ACC ₹</th>
+              <th className="p-2 text-right min-w-[75px] w-20" title="Labour (enter manually / from labour sheet)">LAB ₹</th>
+              <th className="p-2 text-right min-w-[65px] w-18" title="TP = PP + ACC + LAB">TP ₹</th>
+              <th className="p-2 text-right min-w-[80px] w-22" title="TPA = TP × Qty (total cost)">TPA ₹</th>
+              <th className="p-2 text-right min-w-[70px] w-18">Margin</th>
+              <th className="p-2 text-right min-w-[85px] w-24" title="SP = TPA × (1 + margin%)">SP ₹</th>
+              <th className="p-2 text-right min-w-[75px] w-20" title="Sale rate per unit = SP ÷ Qty">Rate ₹</th>
+              <th className="p-2 w-10 text-center"></th>
             </tr>
           </thead>
           <tbody>
@@ -1036,7 +1035,7 @@ export default function Estimator() {
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
-              <td className="p-2" colSpan={9}></td>
+              <td className="p-2" colSpan={10}></td>
               <td className="p-2 text-right" title="Total cost">{fmt(totals.cost)}</td>
               <td className="p-2 text-right text-emerald-700" title="Margin amount">+{fmt(marginAmt)}</td>
               <td className="p-2 text-right text-emerald-700 text-base">{fmt(totals.sp)}</td>
@@ -1063,8 +1062,8 @@ export default function Estimator() {
             ? <span className="text-emerald-700 font-semibold">= {projMonths} month(s) — applied to all rows below</span>
             : <span className="text-[11px] text-gray-400">pick dates to auto-set the months</span>}
         </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
+        <div className="table-responsive">
+          <table className="min-w-[650px] w-full text-sm">
             <thead><tr className="text-[10px] uppercase text-gray-400 text-left">
               <th className="p-1 min-w-[180px]">Item</th><th className="p-1 text-right">Qty</th><th className="p-1 text-right">Monthly Cost ₹</th><th className="p-1 text-right">Months</th><th className="p-1 text-right">Amount ₹</th><th></th>
             </tr></thead>
@@ -1145,7 +1144,7 @@ export default function Estimator() {
         <button type="button" onClick={exportXlsx} className="btn btn-primary text-sm flex items-center gap-1">
           <FiDownload size={14} /> Export Quotation (Excel)
         </button>
-        <div className="ml-auto text-sm text-gray-600">
+        <div className="w-full sm:w-auto sm:ml-auto text-sm text-gray-600 pt-2 sm:pt-0 border-t sm:border-t-0 border-gray-100">
           Cost <b>₹{fmt(totals.cost)}</b> &nbsp;·&nbsp; Margin <b className="text-emerald-700">₹{fmt(marginAmt)}</b> &nbsp;·&nbsp; Sale Price <b className="text-emerald-700 text-base">₹{fmt(totals.sp)}</b>
         </div>
       </div>

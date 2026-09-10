@@ -145,12 +145,12 @@ export default function AuditLog() {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex justify-between items-center text-xs text-gray-500">
-          <span>Showing {(page - 1) * limit + 1}-{Math.min(page * limit, total)} of {total.toLocaleString()}</span>
-          <div className="flex gap-1">
-            <button disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))} className="btn btn-secondary text-xs disabled:opacity-40">‹ Prev</button>
-            <span className="px-3 py-1.5">Page {page} / {totalPages}</span>
-            <button disabled={page === totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="btn btn-secondary text-xs disabled:opacity-40">Next ›</button>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 text-xs text-gray-500 mt-2 px-1">
+          <span className="text-center sm:text-left whitespace-nowrap">Showing <b className="text-gray-800">{(page - 1) * limit + 1}</b>–<b className="text-gray-800">{Math.min(page * limit, total)}</b> of <b className="text-gray-800">{total.toLocaleString()}</b></span>
+          <div className="flex items-center justify-center sm:justify-end gap-2">
+            <button type="button" disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))} className="btn btn-secondary text-xs py-1.5 px-3 disabled:opacity-40 shadow-2xs">‹ Prev</button>
+            <span className="px-2.5 py-1 bg-white border border-gray-200 rounded-md font-medium text-xs whitespace-nowrap shadow-2xs">Page <b className="text-gray-900">{page}</b> of <b className="text-gray-900">{totalPages}</b></span>
+            <button type="button" disabled={page === totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="btn btn-secondary text-xs py-1.5 px-3 disabled:opacity-40 shadow-2xs">Next ›</button>
           </div>
         </div>
       )}

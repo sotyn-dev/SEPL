@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import {
   FiBell, FiPlus, FiX, FiTrash2, FiBookmark, FiEdit2, FiEye,
   FiChevronDown, FiImage, FiCamera, FiPaperclip,
-  FiAlertCircle, FiCalendar, FiClock, FiAward, FiCheck,
+  FiAlertCircle, FiCalendar, FiClock, FiAward, FiCheck, FiTarget,
 } from 'react-icons/fi';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import { useAppSocket } from '../context/SocketProvider';
 import { fmtDate, fmtTime } from '../utils/datetime';
 
 // HR notification type → icon + colour (used in the Notifications tab)
@@ -17,6 +18,7 @@ const NOTIF_TYPE_ICON = {
   approval_pending:   FiAlertCircle,
   training_assigned:  FiAward,
   scorecard_added:    FiAward,
+  new_lead:           FiTarget,
   generic:            FiBell,
 };
 const NOTIF_TYPE_COLOR = {
@@ -25,6 +27,7 @@ const NOTIF_TYPE_COLOR = {
   approval_pending:   'text-rose-600',
   training_assigned:  'text-emerald-600',
   scorecard_added:    'text-purple-600',
+  new_lead:           'text-blue-600',
   generic:            'text-gray-600',
 };
 
@@ -34,6 +37,7 @@ const NOTIF_TYPE_COLOR = {
 // Admins also see a small "+ New" button inside the panel to post directly.
 export default function AnnouncementBell() {
   const { isAdmin } = useAuth();
+  const { subscribe } = useAppSocket();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   // Mam (2026-05-22): merged inbox — single bell shows both
@@ -71,6 +75,43 @@ export default function AnnouncementBell() {
     api.get('/hr/my-notifications').then(r => setNotifications(r.data || [])).catch(() => setNotifications([]));
   };
 
+  // Real-time notification arrival over Socket.IO (e.g. website leads, interview reminders)
+  useEffect(() => {
+    const unsub = subscribe('notification:new', (notif) => {
+      setUnreadNotif(n => n + 1);
+      loadCount();
+      loadNotifications();
+
+      // Play soft 2-tone notification chime
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.35);
+      } catch (_) {}
+
+      // Interactive toast alert with direct lead navigation
+      toast((t) => (
+        <div onClick={() => { toast.dismiss(t.id); if (notif?.link_url) navigate(notif.link_url); }} className="cursor-pointer">
+          <div className="font-bold text-sm text-blue-900 flex items-center gap-1.5">
+            <span>🎯</span> {notif?.title || 'New Notification'}
+          </div>
+          {notif?.body && <div className="text-xs text-gray-600 mt-0.5">{notif.body}</div>}
+          <div className="text-[10px] text-blue-600 font-semibold mt-1">Click to open lead in Sales Funnel →</div>
+        </div>
+      ), { duration: 8000 });
+    });
+    return unsub;
+  }, [subscribe, navigate]);
+
   // Poll both unread counts every 60s so the bell badge stays current even
   // when the user keeps the same tab open all day.
   useEffect(() => {
@@ -83,7 +124,11 @@ export default function AnnouncementBell() {
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler, { passive: true });
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
   }, []);
 
   const onOpen = async () => {
@@ -198,10 +243,10 @@ export default function AnnouncementBell() {
   };
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="sm:relative">
       <button
         onClick={() => open ? setOpen(false) : onOpen()}
-        className="relative p-2 hover:bg-gray-100 rounded-lg flex-shrink-0 text-gray-600"
+        className="relative z-50 p-2 hover:bg-gray-100 rounded-lg flex-shrink-0 text-gray-600"
         title="Notifications & Announcements"
         aria-label={`Notifications and announcements${(unread + unreadNotif) > 0 ? ` — ${unread + unreadNotif} unread` : ''}`}
       >
@@ -214,7 +259,14 @@ export default function AnnouncementBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1 w-[92vw] sm:w-[420px] max-h-[80vh] bg-white border border-gray-200 rounded-lg shadow-xl z-50 flex flex-col">
+        <>
+          {/* Mobile backdrop to close when tapping outside */}
+          <div
+            className="fixed inset-0 z-40 bg-black/20 sm:hidden"
+            onClick={() => setOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="absolute left-2 right-2 top-full mt-1.5 sm:left-auto sm:right-0 sm:top-full sm:mt-1 sm:w-[420px] max-w-[calc(100vw-16px)] sm:max-w-none max-h-[82vh] sm:max-h-[80vh] bg-white border border-gray-200 rounded-xl shadow-2xl z-50 flex flex-col overflow-hidden">
           {/* Mam (2026-05-22): unified header with tabs.  Title +
               close button on row 1, two-tab strip on row 2 with
               per-tab unread badges. */}
@@ -245,14 +297,14 @@ export default function AnnouncementBell() {
                   <button
                     key={t.id}
                     onClick={() => setTab(t.id)}
-                    className={`flex-1 px-3 py-1.5 text-[12px] font-semibold border-b-2 flex items-center justify-center gap-1.5
+                    className={`flex-1 px-3 py-1.5 text-[12px] font-semibold border-b-2 flex items-center justify-center gap-1.5 min-w-0
                       ${active
                         ? 'border-blue-600 text-blue-700 bg-white/60'
                         : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                   >
-                    {t.label}
+                    <span className="truncate">{t.label}</span>
                     {t.count > 0 && (
-                      <span className="bg-red-600 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">
+                      <span className="bg-red-600 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1 flex-shrink-0">
                         {t.count > 9 ? '9+' : t.count}
                       </span>
                     )}
@@ -278,7 +330,7 @@ export default function AnnouncementBell() {
                 value={form.body}
                 onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
               />
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <label className="flex items-center gap-1.5 text-[11px] text-gray-600">
                   <input type="checkbox" checked={!!form.pinned} onChange={e => setForm(f => ({ ...f, pinned: e.target.checked }))} />
                   Pin to top
@@ -362,7 +414,7 @@ export default function AnnouncementBell() {
                     key={n.id}
                     onClick={() => clickNotification(n)}
                     className={`w-full text-left px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 flex items-start gap-2.5 ${!n.read_at ? 'bg-blue-50/40' : ''}`}>
-                    <Icon size={16} className={`mt-0.5 ${colorCls}`}/>
+                    <Icon size={16} className={`mt-0.5 ${colorCls} flex-shrink-0`}/>
                     <div className="flex-1 min-w-0">
                       <div className={`text-[12.5px] ${!n.read_at ? 'font-semibold' : 'text-gray-700'} truncate`}>{n.title}</div>
                       {n.body && <div className="text-[11px] text-gray-500 line-clamp-2">{n.body}</div>}
@@ -478,6 +530,7 @@ export default function AnnouncementBell() {
           </div>
           )}
         </div>
+        </>
       )}
 
       {/* Mam (2026-05-22): full-screen photo viewer.  Renders outside

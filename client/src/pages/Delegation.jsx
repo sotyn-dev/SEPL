@@ -418,7 +418,7 @@ export default function Delegation() {
           <h3 className="text-xl font-bold text-gray-800">Delegations</h3>
           <p className="text-sm text-gray-500">{isAdmin() ? 'Assign tasks, upload proof, approve or reject' : 'Upload proof for tasks assigned to you'}</p>
         </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           {/* View toggle — Dashboard is only meaningful for admin / EA who
               manages the team's workload. Regular users only see "List". */}
           {isEA && (
@@ -456,8 +456,8 @@ export default function Delegation() {
           <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-500 text-xs text-gray-700">
             <b>Workload Dashboard</b> — one row per person with active tasks. WIP limit is <b>3 tasks/day</b>. <span className="text-red-600 font-semibold">Overloaded</span> = exceeding that limit. <span className="text-amber-700 font-semibold">Constraint</span> = ≥25% delayed or avg delay &gt; 5 days.
           </div>
-          <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full">
+          <div className="card p-0 table-responsive">
+            <table className="text-sm w-full min-w-[750px]">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Person</th>
@@ -594,8 +594,8 @@ export default function Delegation() {
           the parent scrolls horizontally so every column stays accessible. */}
       {/* Reverted to the original 10-column table per mam
           (2026-05-21: "not change delegation like previous"). */}
-      <div className="card p-0 overflow-auto max-h-[70vh]">
-        <table className="text-sm min-w-[1100px] lg:min-w-0 lg:w-full">
+      <div className="card p-0 table-responsive max-h-[70vh]">
+        <table className="text-sm min-w-[1050px]">
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
               <th className="w-12 text-center">S.No.</th>
@@ -998,7 +998,7 @@ export default function Delegation() {
                 {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` (${u.department})` : ''}</option>)}
               </select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Due Date</label>
                 <input type="date" className="input" value={editForm.due_date || ''} onChange={e => setEditForm(f => ({ ...f, due_date: e.target.value }))} />

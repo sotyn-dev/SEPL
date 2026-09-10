@@ -205,7 +205,7 @@ export default function CashFlow() {
             )}
             {/* CRM Filter — admin only. Non-admin CRM users see just their own projects (backend-scoped). */}
             {isAdmin() && (
-              <div className="flex gap-2 flex-wrap items-center">
+              <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap items-center">
                 <button onClick={() => setCrmFilter('')} className={`btn ${!crmFilter ? 'btn-primary' : 'btn-secondary'} text-xs`}>All ({projects.length})</button>
                 {crmPersons.map(c => (
                   <button key={c} onClick={() => setCrmFilter(c)} className={`btn ${crmFilter === c ? 'btn-primary' : 'btn-secondary'} text-xs`}>{c} ({projects.filter(p => (p.crm_person || '').toLowerCase() === c.toLowerCase()).length})</button>
@@ -464,7 +464,7 @@ export default function CashFlow() {
             <div className="flex items-center gap-2"><FiCalendar className="text-gray-400" /><input type="date" className="input w-48" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} /></div>
             <button onClick={() => { setForm({ date: selectedDate, type: 'inflow', category: '', description: '', amount: 0, payment_mode: '', party_name: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus /> Add Entry</button>
           </div>
-          <div className="card p-0"><table className="text-sm freeze-head"><thead><tr><th>Date</th><th>Opening</th><th className="text-emerald-600">Inflows</th><th className="text-red-600">Outflows</th><th className="text-purple-600">Closing</th></tr></thead>
+          <div className="card p-0 table-responsive"><table className="text-sm freeze-head min-w-[600px]"><thead><tr><th>Date</th><th>Opening</th><th className="text-emerald-600">Inflows</th><th className="text-red-600">Outflows</th><th className="text-purple-600">Closing</th></tr></thead>
             <tbody>{dailySummary.last7Days.map(d => (
               <tr key={d.id} className={d.date === selectedDate ? 'bg-red-50' : ''} onClick={() => setSelectedDate(d.date)} style={{ cursor: 'pointer' }}>
                 <td className="font-medium">{d.date}</td><td>{fmt(d.opening_balance)}</td>
@@ -473,7 +473,7 @@ export default function CashFlow() {
               </tr>
             ))}</tbody>
           </table></div>
-          <div className="card p-0"><div className="p-3 border-b"><h4 className="font-semibold text-sm">Entries - {selectedDate}</h4></div><table className="text-sm freeze-head"><thead><tr><th>Type</th><th>Category</th><th>Description</th><th>Party</th><th>Amount</th><th></th></tr></thead>
+          <div className="card p-0 table-responsive"><div className="p-3 border-b"><h4 className="font-semibold text-sm">Entries - {selectedDate}</h4></div><table className="text-sm freeze-head min-w-[600px]"><thead><tr><th>Type</th><th>Category</th><th>Description</th><th>Party</th><th>Amount</th><th></th></tr></thead>
             <tbody>{entries.map(e => (
               <tr key={e.id}><td><span className={`badge ${e.type === 'inflow' ? 'badge-green' : 'badge-red'}`}>{e.type}</span></td>
                 <td>{e.category}</td><td>{e.description}</td><td>{e.party_name}</td>
@@ -487,14 +487,14 @@ export default function CashFlow() {
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title="Add Cash Flow Entry">
         <form onSubmit={saveEntry} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Date</label><input className="input" type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
             <div><label className="label">Type</label><select className="select" value={form.type} onChange={e => setForm({ ...form, type: e.target.value, category: '' })}><option value="inflow">Inflow</option><option value="outflow">Outflow</option></select></div>
             <div><label className="label">Category *</label><select className="select" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} required><option value="">Select</option>{(form.type === 'inflow' ? inflowCategories : outflowCategories).map(c => <option key={c}>{c}</option>)}</select></div>
             <div><label className="label">Amount *</label><input className="input" type="number" value={form.amount} onChange={e => setForm({ ...form, amount: +e.target.value })} required /></div>
           </div>
           <div><label className="label">Description *</label><input className="input" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} required /></div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Party Name — dropdown sourced from Business Book project /
                 client names so every cash entry links back to a known
                 project. Mam (2026-05-16): "so that last last we can
@@ -565,7 +565,7 @@ export default function CashFlow() {
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-xs border">
+                <table className="w-full text-xs border min-w-[500px]">
                   <thead className="bg-gray-100 text-gray-600">
                     <tr>
                       <th className="px-2 py-1.5 text-left">Lead</th>

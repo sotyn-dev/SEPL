@@ -202,8 +202,9 @@ export default function Tools() {
             </select>
           </div>
 
-          <div className="card p-0 overflow-x-auto">
-            <table>
+          <div className="card p-0 overflow-hidden">
+            <div className="table-responsive">
+            <table className="min-w-[800px]">
               <thead>
                 <tr>
                   <th>Code</th>
@@ -259,6 +260,7 @@ export default function Tools() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}
@@ -297,7 +299,7 @@ export default function Tools() {
       {/* Add / Edit Tool Modal */}
       <Modal isOpen={modal === 'add'} onClose={() => { setModal(null); setForm({}); }} title={form.id ? `Edit ${form.tool_code}` : 'Add Tool'} wide>
         <form onSubmit={save} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Name *</label><input className="input" required value={form.name || ''} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Bosch GBM 350 drill" /></div>
             <div>
               <label className="label">Category</label>
@@ -349,7 +351,7 @@ export default function Tools() {
                 onChange={(u) => setForm(f => ({ ...f, current_user_id: u?.id || '' }))}
               />
             </div>
-            <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t">
             <button type="button" onClick={() => { setModal(null); setForm({}); }} className="btn btn-secondary">Cancel</button>

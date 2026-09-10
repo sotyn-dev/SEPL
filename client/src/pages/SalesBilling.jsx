@@ -153,7 +153,7 @@ export default function SalesBilling() {
 
   const BillTable = ({ rows, showPayment, sentMode }) => (
     <div className="card p-0 overflow-x-auto">
-      <table className="text-sm w-full">
+      <table className="text-sm w-full min-w-[850px]">
         <thead>
           <tr className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
             <th className="px-3 py-2 text-left">Bill No</th>
@@ -231,7 +231,7 @@ export default function SalesBilling() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
         {TABS.map(t => {
           const Icon = t.icon;
           return (
@@ -368,7 +368,7 @@ export default function SalesBilling() {
             {material.length > 0 && <span className="ml-1 text-rose-600 font-semibold">{material.filter(m => m.sales_bill_status === 'pending').length} pending</span>}
           </div>
           <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full">
+            <table className="text-sm w-full min-w-[700px]">
               <thead>
                 <tr className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
                   <th className="px-3 py-2 text-left">Indent</th>
@@ -469,12 +469,12 @@ export default function SalesBilling() {
                 </div>
               )}
               {nextType && (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div><label className="label">Bill date</label><input type="date" className="input w-full" value={form.bill_date} onChange={e => setForm({ ...form, bill_date: e.target.value })} /></div>
                   <div><label className="label">Reference doc no. (optional)</label><input className="input w-full" placeholder="SO / DC / DPR no." value={form.reference_doc_no} onChange={e => setForm({ ...form, reference_doc_no: e.target.value })} /></div>
                   <div><label className="label">Amount (without GST)</label><input type="number" min="0" className="input w-full text-right" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="0" /></div>
                   <div><label className="label">GST %</label><input type="number" min="0" max="100" className="input w-full text-right" value={form.gst_rate} onChange={e => setForm({ ...form, gst_rate: e.target.value })} /></div>
-                  <div className="col-span-2 flex justify-between text-sm border-t border-gray-100 pt-2">
+                  <div className="col-span-1 sm:col-span-2 flex justify-between text-sm border-t border-gray-100 pt-2">
                     <span className="text-gray-500">GST {gstRate}% = {fmt(gstAmount)}</span>
                     <span className="font-bold text-emerald-700">Total {fmt(total)}</span>
                   </div>
@@ -498,7 +498,7 @@ export default function SalesBilling() {
               <div><b>Final bill total:</b> {fmt(payModal.total_amount)}</div>
               <div><b>Received so far:</b> {fmt(payModal.received_amount)} · <b>Outstanding:</b> {fmt((payModal.total_amount || 0) - (payModal.received_amount || 0))}</div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label className="label">Amount received</label><input type="number" min="0" className="input w-full text-right" value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} placeholder="0" /></div>
               <div><label className="label">Date</label><input type="date" className="input w-full" value={payForm.payment_date} onChange={e => setPayForm({ ...payForm, payment_date: e.target.value })} /></div>
               <div><label className="label">Mode</label><select className="select w-full" value={payForm.payment_mode} onChange={e => setPayForm({ ...payForm, payment_mode: e.target.value })}>{['Bank', 'Cash', 'UPI', 'Cheque', 'NEFT/RTGS'].map(m => <option key={m} value={m}>{m}</option>)}</select></div>

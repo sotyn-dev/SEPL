@@ -318,7 +318,7 @@ export default function PMSTasks() {
       {/* Mam wants PMS scoped to the logged-in user (like Delegations) —
           users land on their own queue, can expand to team-wide via
           'Followup'. Admin gets the full archive too. */}
-      <div className="flex flex-wrap gap-2 text-sm">
+      <div className="flex gap-2 text-sm overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
         {[
           { id: 'mine', label: 'My Tasks' },
           { id: 'given', label: 'Given by me' },
@@ -374,8 +374,8 @@ export default function PMSTasks() {
 
       {/* Desktop table — bounded scroll + sticky thead so columns stay
           pinned while scrolling.  Mam, 2026-05-13. */}
-      <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block">
-        <table className="text-sm">
+      <div className="card p-0 table-responsive max-h-[70vh] hidden md:block">
+        <table className="text-sm w-full min-w-[950px]">
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
               <th className="w-12 text-center">S.No.</th>

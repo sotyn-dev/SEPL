@@ -826,7 +826,7 @@ export default function Layout() {
             CSS min() keeps a sane minimum 10px on devices without an
             inset. */}
         <header
-          className="bg-white shadow-sm border-b border-gray-200 px-3 md:px-6 pb-2.5 flex items-center gap-2"
+          className="relative z-20 bg-white shadow-sm border-b border-gray-200 px-3 md:px-6 pb-2.5 flex items-center gap-2"
           style={{ paddingTop: 'max(0.625rem, env(safe-area-inset-top))' }}
         >
           <button
@@ -910,7 +910,7 @@ export default function Layout() {
             {userMenu && (
               <>
                 <div className="fixed inset-0 z-30" onClick={() => setUserMenu(false)} />
-                <div className="absolute right-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg z-40 overflow-hidden">
+                <div className="absolute right-0 mt-1 w-60 max-w-[calc(100vw-1rem)] bg-white border border-gray-200 rounded-lg shadow-lg z-40 overflow-hidden">
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="text-sm font-semibold text-gray-800 truncate">{user?.name}</div>
                     {user?.username && <div className="text-[11px] text-gray-500 font-mono truncate">@{user.username}</div>}
@@ -949,7 +949,7 @@ export default function Layout() {
         {/* iOS home-indicator padding so content doesn't hide behind the
             bottom safe-area on iPhone X+ (mam 2026-06-02). */}
         <main
-          className="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50"
+          className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 p-2 md:p-6 bg-slate-50"
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
         >
           <Outlet />

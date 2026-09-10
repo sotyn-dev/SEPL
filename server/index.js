@@ -479,6 +479,9 @@ app.use('/api/hr', require('./routes/hr'));
 // candidates can accept / decline via /offer/:token without
 // logging in to the ERP.
 app.use('/api/public', require('./routes/publicHr'));
+// Public webhooks (securedengineers.com website leads) — secured via x-webhook-secret
+app.use('/api/webhooks', require('./routes/webhooks'));
+app.use('/api/public/leads', require('./routes/webhooks'));
 app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
 app.use('/api/gamification', require('./routes/champions'));

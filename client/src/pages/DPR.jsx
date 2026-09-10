@@ -860,7 +860,7 @@ export default function DPR() {
   return (
     <div className="space-y-6">
       <div className="sticky-toolbar">
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
           {/* SPOS: PM's pending-approvals badge lives beside the tabs so it's
               visible on EVERY tab — the page defaults to Dashboard and a
               reports-tab-only badge went unseen (audit 2026-07-31). */}
@@ -1282,7 +1282,7 @@ export default function DPR() {
 
       {/* ===== SUBMIT DPR MODAL - Matches SEPL DPR Format ===== */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title="DAILY PROGRESS SHEET - SECURED ENGINEERS PVT LTD" wide>
-        <form onSubmit={submitDpr} className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+        <form onSubmit={submitDpr} className="space-y-4">
 
           {/* Header */}
           <div className="border rounded-lg p-3 bg-gray-50">
@@ -2113,7 +2113,7 @@ export default function DPR() {
 
       <Modal isOpen={planModal} onClose={() => setPlanModal(false)} title="Plan This Week — 7-Day DPR Plan" wide>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Site *</label>
               <select className="select" value={planSiteId}
@@ -2179,7 +2179,7 @@ export default function DPR() {
                   <div className="text-[11px] text-gray-600">No BOQ items with planned quantities in this week — approving will not raise any indent.</div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-[11px]">
+                    <table className="w-full min-w-[480px] text-[11px]">
                       <thead>
                         <tr className="text-gray-500 border-b">
                           <th className="text-left py-1 pr-2">BOQ Item</th>

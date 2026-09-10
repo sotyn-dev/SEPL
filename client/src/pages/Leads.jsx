@@ -8,6 +8,7 @@ import TimePicker from '../components/TimePicker';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import { useAppSocket } from '../context/SocketProvider';
 import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
@@ -120,6 +121,7 @@ const isValidEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').tr
 
 export default function Leads() {
   const { canCreate, canEdit, canDelete, user } = useAuth();
+  const { subscribe } = useAppSocket();
   const [tab, setTab] = useUrlTab('dashboard');
   const [stageTab, setStageTab] = useState('all');
   const [leads, setLeads] = useState([]);
@@ -164,6 +166,21 @@ export default function Leads() {
   }, [search, stageTab]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Real-time updates: when a new lead arrives via website or ERP, immediately
+  // reload the funnel so the user never needs to press browser refresh!
+  useEffect(() => {
+    const unsub = subscribe('lead:new', () => {
+      load();
+    });
+    return unsub;
+  }, [subscribe, load]);
+
+  // Fallback auto-poll every 20s to ensure funnel stays 100% synchronized
+  useEffect(() => {
+    const t = setInterval(load, 20000);
+    return () => clearInterval(t);
+  }, [load]);
 
   // Load active employees once for the Assign Meeting dropdown.
   // Filter to active so dropped employees don't show in the picker.
@@ -386,7 +403,7 @@ export default function Leads() {
           shown (even when count=0) so mam can see the full pipeline at
           a glance. The count chip on each tab makes it obvious where
           the leads are sitting today. */}
-      <div className="flex gap-2 flex-wrap items-center">
+      <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap items-center">
         <button
           onClick={() => { setTab('dashboard'); setStageTab('dashboard'); }}
           className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
@@ -538,7 +555,7 @@ export default function Leads() {
         {groupLeads && (
           <div className="text-xs text-gray-500">{leadGroups.length} project{leadGroups.length!==1?'s':''} ({leads.length} lead{leads.length!==1?'s':''}{leadsMergedCount>0?`, ${leadsMergedCount} merged`:''}) · tap a project to expand</div>
         )}
-        <div className="card p-0"><table className="text-xs freeze-head">
+        <div className="card p-0 overflow-hidden"><div className="table-responsive"><table className="text-xs freeze-head min-w-[720px] sm:min-w-full">
           <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2 text-right">Tentative Amt</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">SLA</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
           <tbody>
             {/* Flat list, or merged-by-project when grouping is on. */}
@@ -570,12 +587,12 @@ export default function Leads() {
             })}
             {leads.length===0&&<tr><td colSpan="11" className="text-center py-8 text-gray-400">No leads</td></tr>}
           </tbody>
-        </table></div>
+        </table></div></div>
       </>)}
 
       {/* View + Stage Actions */}
       <Modal isOpen={modal==='view'} onClose={()=>{setModal(null);setViewData(null);setViewStage(null);}} title={`${viewData?.lead_no} - ${viewData?.client_name}`} wide>
-        {viewData && (<div className="space-y-4 max-h-[70vh] overflow-y-auto">
+        {viewData && (<div className="space-y-4">
           {/* Pipeline pills — all clickable. Clicking one sets `viewStage`
               so the "Next Action" form for that stage is shown. Admin can
               use this to jump back (correct a past step) or skip forward
@@ -950,7 +967,7 @@ export default function Leads() {
           Lead Kind toggle: Private vs Government. Govt-specific fields
           (Tender ID, bid deadline, EMD, PBG) appear only when needed. */}
       <Modal isOpen={modal==='add'||modal==='edit'} onClose={()=>setModal(null)} title={modal==='edit'?'Edit Lead':'Stage 1 — Lead / Tender Capture'} wide>
-        <form onSubmit={saveLead} className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+        <form onSubmit={saveLead} className="space-y-4 pr-1">
           {/* Lead Kind selector — drives the rest of the form */}
           <div>
             <label className="label">Lead Kind *</label>

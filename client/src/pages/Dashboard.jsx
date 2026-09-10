@@ -281,7 +281,7 @@ export default function Dashboard() {
               {leadingBlanks}
               {days.map(d => (
                 <div key={d.date} title={`${d.date} · ${d.status.replace('_', ' ')}`}
-                  className={`text-[11px] font-semibold rounded py-1.5 ${cellStyle(d.status)}`}>
+                  className={`text-[11px] font-semibold rounded py-2 min-h-[32px] flex items-center justify-center ${cellStyle(d.status)}`}>
                   {d.day}
                 </div>
               ))}

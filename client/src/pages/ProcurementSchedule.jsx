@@ -172,8 +172,8 @@ export default function ProcurementSchedule() {
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div className="flex gap-1 border-b border-gray-200">
+      {/* Tab bar — scrollable on mobile without cutting off tabs */}
+      <div className="flex items-center gap-1 border-b border-gray-200 overflow-x-auto scrollbar-none pb-0.5 sm:flex-wrap">
         {[
           { id: 'gantt',    label: 'Schedule (Gantt)', icon: FiCalendar },
           { id: 'records',  label: 'Records (saved)',  icon: FiArchive },
@@ -182,7 +182,7 @@ export default function ProcurementSchedule() {
           const active = tab === t.id;
           return (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-2 px-4 py-2 text-sm border-b-2 -mb-px transition ${
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs sm:text-sm border-b-2 -mb-px transition whitespace-nowrap shrink-0 ${
                 active ? 'border-red-600 text-red-700 font-semibold' : 'border-transparent text-gray-600 hover:text-red-700'
               }`}>
               <t.icon size={14} /> {t.label}
@@ -395,8 +395,8 @@ function AiDraftReview({ draft, onApprove, onCancel, approving, canEdit }) {
           </button>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+      <div className="table-responsive">
+        <table className="w-full text-xs min-w-[600px]">
           <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
             <tr>
               <th className="text-left p-2">Item</th>
@@ -782,8 +782,8 @@ function RecordsTab({ projects, canDelete }) {
       )}
 
       {pickedProjectId && !loading && list.length > 0 && (
-        <div className="card p-0 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="card p-0 table-responsive">
+          <table className="w-full text-sm min-w-[650px]">
             <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
               <tr>
                 <th className="text-left p-2">When generated</th>

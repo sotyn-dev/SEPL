@@ -557,7 +557,7 @@ export default function Attendance() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
         <button onClick={() => setTab('punch')} className={`btn ${tab === 'punch' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Punch In/Out</button>
         <button onClick={() => setTab('myhistory')} className={`btn ${tab === 'myhistory' ? 'btn-primary' : 'btn-secondary'} text-sm`}>My History</button>
         {seeAll && <>
@@ -1438,7 +1438,7 @@ export default function Attendance() {
             <button onClick={() => { setForm({ site_name: '', latitude: '', longitude: '', radius_meters: 200 }); setModal('geofence'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={14} /> Add Geofence</button>
           </div>
           <p className="text-xs text-gray-500">Employees can only punch in/out when inside these areas. If no geofence set, punch from anywhere.</p>
-          <div className="card p-0 overflow-x-auto"><table className="text-sm">
+          <div className="card p-0 overflow-x-auto"><table className="text-sm min-w-[650px]">
             <thead><tr><th>Site</th><th>Latitude</th><th>Longitude</th><th>Radius</th><th>Active</th><th>Actions</th></tr></thead>
             <tbody>{geofences.map(g => (
               <tr key={g.id}>
@@ -1681,7 +1681,7 @@ export default function Attendance() {
           catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
           <div><label className="label">Leave Type</label><select className="select" value={form.leave_type} onChange={e => setForm({ ...form, leave_type: e.target.value })}><option value="casual">Casual Leave</option><option value="sick">Sick Leave</option><option value="earned">Earned Leave</option><option value="half_day">Half Day</option><option value="short_leave">Short Leave (max 4hrs/month)</option><option value="comp_off">Comp Off</option></select></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">From Date *</label>
               <input
@@ -1719,10 +1719,10 @@ export default function Attendance() {
             )}
           </div>
           {form.leave_type === 'short_leave' && (
-            <div className="grid grid-cols-2 gap-3 bg-amber-50 p-3 rounded">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-amber-50 p-3 rounded">
               <div><label className="label">From Time *</label><TimePicker value={form.from_time || ''} onChange={v => setForm({ ...form, from_time: v })} required /></div>
               <div><label className="label">To Time *</label><TimePicker value={form.to_time || ''} onChange={v => setForm({ ...form, to_time: v })} required /></div>
-              <p className="col-span-2 text-xs text-amber-600">Monthly limit: 4 hours. Exceeding will be rejected.</p>
+              <p className="col-span-1 sm:col-span-2 text-xs text-amber-600">Monthly limit: 4 hours. Exceeding will be rejected.</p>
             </div>
           )}
           <div><label className="label">Reason</label><textarea className="input" rows="2" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} /></div>
@@ -1734,11 +1734,11 @@ export default function Attendance() {
       <Modal isOpen={modal === 'edit-geofence'} onClose={() => setModal(null)} title="Edit Geofence">
         <form onSubmit={async (e) => { e.preventDefault(); try { await api.put(`/attendance/geofence/${form.id}`, form); toast.success('Updated'); setModal(null); load(); } catch { toast.error('Failed'); } }} className="space-y-4">
           <div><label className="label">Site Name *</label><input className="input" value={form.site_name || ''} onChange={e => setForm({ ...form, site_name: e.target.value })} required /></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Latitude</label><input className="input" type="number" step="any" value={form.latitude || ''} onChange={e => setForm({ ...form, latitude: e.target.value })} /></div>
             <div><label className="label">Longitude</label><input className="input" type="number" step="any" value={form.longitude || ''} onChange={e => setForm({ ...form, longitude: e.target.value })} /></div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Radius (m)</label><input className="input" type="number" value={form.radius_meters || 200} onChange={e => setForm({ ...form, radius_meters: +e.target.value })} /></div>
             <div><label className="label">Active</label><select className="select" value={form.active ? '1' : '0'} onChange={e => setForm({ ...form, active: e.target.value === '1' })}><option value="1">Yes</option><option value="0">No</option></select></div>
           </div>
@@ -1784,7 +1784,7 @@ export default function Attendance() {
               {allUsers.map(u => { const d = hrDeptText(u); return <option key={u.id} value={u.id}>{u.name}{d ? ` · ${d}` : ''}</option>; })}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Date *</label>
               <input className="input" type="date" max={today} value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} required />
@@ -1859,7 +1859,7 @@ export default function Attendance() {
       <Modal isOpen={modal === 'geofence'} onClose={() => setModal(null)} title="Add Geofence Area">
         <form onSubmit={async (e) => { e.preventDefault(); try { await api.post('/attendance/geofence', form); toast.success('Geofence added'); setModal(null); load(); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } }} className="space-y-4">
           <div><label className="label">Site Name *</label><input className="input" value={form.site_name} onChange={e => setForm({ ...form, site_name: e.target.value })} required /></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Latitude *</label><input className="input" type="number" step="any" value={form.latitude} onChange={e => setForm({ ...form, latitude: e.target.value })} required /></div>
             <div><label className="label">Longitude *</label><input className="input" type="number" step="any" value={form.longitude} onChange={e => setForm({ ...form, longitude: e.target.value })} required /></div>
           </div>

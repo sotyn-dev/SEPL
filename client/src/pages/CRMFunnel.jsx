@@ -285,8 +285,9 @@ export default function CRMFunnel() {
         </select>
       </div>
 
-      <div className="card p-0">
-        <table className="freeze-head">
+      <div className="card p-0 overflow-hidden">
+        <div className="table-responsive">
+        <table className="freeze-head min-w-[900px] sm:min-w-full">
           <thead>
             <tr>
               <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
@@ -353,6 +354,7 @@ export default function CRMFunnel() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
       </>)}
 
@@ -575,7 +577,7 @@ export default function CRMFunnel() {
 
                 {/* STEP 1 → STEP 2 · submit quotation */}
                 {currentStep(viewRow) === 'step1' && (
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <div className="space-y-1">
                       <label className="text-gray-600">Quotation Amount (₹)</label>
                       <input type="number" className="input w-full" value={stageForm.quotation_amount || ''}
@@ -598,7 +600,7 @@ export default function CRMFunnel() {
 
                 {/* STEP 2 · negotiation */}
                 {currentStep(viewRow) === 'step2' && (
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <div className="space-y-1">
                       <label className="text-gray-600">Negotiation status</label>
                       <select className="select w-full" value={stageForm.negotiation_status || ''}
@@ -646,7 +648,7 @@ export default function CRMFunnel() {
                         ? `Won — Rs ${(+viewRow.negotiation_amount || +viewRow.quotation_amount || 0).toLocaleString('en-IN')}`
                         : `Lost — ${viewRow.loss_reason || 'no reason given'}`}
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <select className="select" value={stageForm.final_status || ''}
                         onChange={e => setStageForm({ ...stageForm, final_status: e.target.value })}>
                         <option value="">Re-open (move back to Step 2)</option>

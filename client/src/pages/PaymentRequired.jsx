@@ -468,7 +468,7 @@ export default function PaymentRequired() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><LuIndianRupee className="text-orange-600" /> Payment Required</h1>
           <p className="text-sm text-gray-500">Request payments with multi-level approval workflow</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button onClick={() => exportCsv('payment-requests',
             ['Req No','Employee','Site','Category','Amount','Purpose','Step','Status','Required By','Created'],
             requests.map(r => [r.request_no, r.employee_name, r.site_name, r.category, r.amount, r.purpose, r.current_step, r.status, r.required_by_date, r.created_at]))}
@@ -497,7 +497,7 @@ export default function PaymentRequired() {
           (no migration needed) — they're just no longer surfaced
           here.  If anyone lands on ?tab=inbox via bookmark, the
           redirect effect just below kicks them to Dashboard. */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
         {['dashboard', 'all', 'pending', 'approved', 'rejected', 'responsible'].map(t => {
           const label = t === 'all' ? 'All Requests'
                       : t === 'responsible' ? '⚙ Responsible'
@@ -515,12 +515,12 @@ export default function PaymentRequired() {
       {/* Dashboard */}
       {tab === 'dashboard' && stats && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div className="card p-4 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Requests</p><p className="text-2xl font-bold">{stats.total}</p></div>
-            <div className="card p-4 border-l-4 border-orange-500"><p className="text-xs text-gray-500">Total Amount</p><p className="text-2xl font-bold text-orange-600">{fmt(stats.totalAmount)}</p></div>
-            <div className="card p-4 border-l-4 border-amber-500"><p className="text-xs text-gray-500">Pending</p><p className="text-2xl font-bold text-amber-600">{stats.pending}</p></div>
-            <div className="card p-4 border-l-4 border-emerald-500"><p className="text-xs text-gray-500">Approved</p><p className="text-2xl font-bold text-emerald-600">{stats.approved}</p></div>
-            <div className="card p-4 border-l-4 border-red-500"><p className="text-xs text-gray-500">Rejected</p><p className="text-2xl font-bold text-red-600">{stats.rejected}</p></div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
+            <div className="card p-3 sm:p-4 border-l-4 border-red-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Total Requests</p><p className="text-lg sm:text-2xl font-bold break-words">{stats.total}</p></div>
+            <div className="card p-3 sm:p-4 border-l-4 border-orange-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Total Amount</p><p className="text-lg sm:text-2xl font-bold text-orange-600 break-words">{fmt(stats.totalAmount)}</p></div>
+            <div className="card p-3 sm:p-4 border-l-4 border-amber-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Pending</p><p className="text-lg sm:text-2xl font-bold text-amber-600 break-words">{stats.pending}</p></div>
+            <div className="card p-3 sm:p-4 border-l-4 border-emerald-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Approved</p><p className="text-lg sm:text-2xl font-bold text-emerald-600 break-words">{stats.approved}</p></div>
+            <div className="card p-3 sm:p-4 border-l-4 border-red-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Rejected</p><p className="text-lg sm:text-2xl font-bold text-red-600 break-words">{stats.rejected}</p></div>
           </div>
 
           {/* Category breakdown */}
@@ -1292,7 +1292,7 @@ export default function PaymentRequired() {
 
       {/* New Request Modal */}
       <Modal isOpen={modal === 'add'} onClose={() => setModal(null)} title="New Payment Request" wide>
-        <form onSubmit={handleSave} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+        <form onSubmit={handleSave} className="space-y-4 pr-1">
 
           {/* Common fields */}
           {/* Shared suggestion lists — pick from the master OR keep typing
@@ -1301,7 +1301,7 @@ export default function PaymentRequired() {
           <datalist id="prEmployeesDL">{employees.map(e => <option key={e.id} value={e.name} />)}</datalist>
           <div className="border rounded-lg p-3 bg-gray-50">
             <h4 className="font-semibold text-sm text-gray-700 mb-3">Request Details</h4>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <div>
                 <label className="label">Employee Name *</label>
                 <SearchableSelect
@@ -1334,7 +1334,7 @@ export default function PaymentRequired() {
               </div>
               {/* `|| ''` lets backspace clear field (mam 2026-05-25). */}
               <div><label className="label">Amount Required (Rs) *</label><input className="input" type="number" value={form.amount || ''} onChange={e => F('amount', +e.target.value)} required /></div>
-              <div className="col-span-2"><label className="label">Purpose / Description *</label><input className="input" value={form.purpose} onChange={e => F('purpose', e.target.value)} required /></div>
+              <div className="col-span-1 sm:col-span-2"><label className="label">Purpose / Description *</label><input className="input" value={form.purpose} onChange={e => F('purpose', e.target.value)} required /></div>
               <div><label className="label">Payment Mode</label>
                 <select className="select" value={form.payment_mode} onChange={e => F('payment_mode', e.target.value)}>
                   <option>Cash</option><option>Bank</option><option>UPI</option>
@@ -1354,7 +1354,7 @@ export default function PaymentRequired() {
           {form.category === 'TA/DA' && (
             <div className="border rounded-lg p-3 bg-purple-50">
               <h4 className="font-semibold text-sm text-purple-700 mb-3">TA/DA Details</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="label">Travel From-To *</label><input className="input" value={form.travel_from_to} onChange={e => F('travel_from_to', e.target.value)} required /></div>
                 <div><label className="label">Travel Dates *</label>
                   <input className="input" type="date" value={form.travel_dates}
@@ -1389,7 +1389,7 @@ export default function PaymentRequired() {
               {/* Car/Bike → KM + 2 Separate Photos */}
               {['Car','Bike'].includes(form.mode_of_travel) && (
                 <div className="mt-3 p-3 bg-white rounded border border-purple-200 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-2 p-2 bg-red-50 rounded">
                       <label className="label">Start KM *</label>
                       <input className="input" type="number" value={form.start_km || ''} onChange={e => F('start_km', +e.target.value)} required />
@@ -1434,10 +1434,10 @@ export default function PaymentRequired() {
           {form.category === 'Purchase' && (
             <div className="border rounded-lg p-3 bg-red-50">
               <h4 className="font-semibold text-sm text-red-700 mb-3">Purchase Details</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="label">Indent Number *</label><input className="input" value={form.indent_number} onChange={e => F('indent_number', e.target.value)} required /></div>
                 <div><label className="label">Vendor Name *</label><input className="input" list="prVendorsDL" value={form.vendor_name} onChange={e => F('vendor_name', e.target.value)} placeholder="Pick or type" required /></div>
-                <div className="col-span-2"><label className="label">Item Description</label><textarea className="input" rows="2" value={form.item_description} onChange={e => F('item_description', e.target.value)} /></div>
+                <div className="col-span-1 sm:col-span-2"><label className="label">Item Description</label><textarea className="input" rows="2" value={form.item_description} onChange={e => F('item_description', e.target.value)} /></div>
                 <div><label className="label">Purchase Order Upload *</label>
                   {form.quotation_link ? (
                     <div className="flex items-center gap-2"><a href={form.quotation_link} className="text-red-600 text-sm underline">Quotation uploaded</a><button type="button" onClick={() => F('quotation_link', '')} className="text-red-500 text-xs">Remove</button></div>
@@ -1457,7 +1457,7 @@ export default function PaymentRequired() {
           {form.category === 'Labour' && (
             <div className="border rounded-lg p-3 bg-green-50">
               <h4 className="font-semibold text-sm text-green-700 mb-3">Labour Details</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="label">Labour Type *</label><select className="select" value={form.labour_type} onChange={e => F('labour_type', e.target.value)} required><option value="">Select</option><option>Skilled</option><option>Unskilled</option><option>Semi-skilled</option><option>Contractor</option></select></div>
                 <div><label className="label">Number of Workers *</label><input className="input" type="number" value={form.number_of_workers || ''} onChange={e => F('number_of_workers', +e.target.value)} required /></div>
                 <div><label className="label">Work Duration</label><input className="input" value={form.work_duration} onChange={e => F('work_duration', e.target.value)} placeholder="e.g. 5 days, 2 weeks" /></div>
@@ -1470,7 +1470,7 @@ export default function PaymentRequired() {
           {form.category === 'Transport' && (
             <div className="border rounded-lg p-3 bg-gray-50">
               <h4 className="font-semibold text-sm text-gray-700 mb-3">Transport Details</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="label">Vehicle Type *</label><select className="select" value={form.vehicle_type} onChange={e => F('vehicle_type', e.target.value)} required><option value="">Select</option><option>Truck</option><option>Pickup</option><option>Tempo</option><option>Car</option><option>Auto</option><option>Crane</option></select></div>
                 <div><label className="label">From-To Location *</label><input className="input" value={form.from_to_location} onChange={e => F('from_to_location', e.target.value)} required /></div>
                 <div><label className="label">Material Description</label><input className="input" value={form.material_description} onChange={e => F('material_description', e.target.value)} /></div>

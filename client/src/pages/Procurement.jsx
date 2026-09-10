@@ -2257,8 +2257,8 @@ export default function Procurement() {
   return (
     <div className="space-y-3">
       <div className="sticky-toolbar">
-        <div className="flex gap-2 flex-wrap items-center justify-start">
-          <div className="flex gap-2 flex-wrap">{tabs.map(t => {
+        <div className="flex gap-2 flex-wrap items-center justify-between">
+          <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap w-full sm:w-auto flex-1">{tabs.map(t => {
             // Urgent-payment badge on the Payment tab — Accounts can see
             // at a glance whether anything needs clearing without clicking
             // (mam 2026-05-27 workflow gate).
@@ -2266,7 +2266,7 @@ export default function Procurement() {
               ? (vendorPos || []).filter(po => !po.cancelled && po.payment_block_status === 'pending').length
               : 0;
             return (
-              <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative !px-3 !py-1.5 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
+              <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative whitespace-nowrap !px-3 !py-1.5 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
                 {t.label}
                 {urgentCount > 0 && (
                   <span className="ml-2 inline-flex items-center justify-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-600 text-white border border-red-700"
@@ -2277,6 +2277,7 @@ export default function Procurement() {
               </button>
             );
           })}</div>
+          <div className="flex gap-2 items-center flex-wrap">
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
             if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
@@ -2284,18 +2285,19 @@ export default function Procurement() {
             if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
             if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
             if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
-          }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
+          }} className="btn btn-secondary flex items-center gap-2 text-sm whitespace-nowrap"><FiDownload /> Export Excel</button>
           {/* Approval flow control — who may act at each gate (L1 / L2 / CRM /
               PO L1 / PO L2 / Revoke) and which optional gates are on. Separate
               from ⚙ Responsible: that tab is per-record RACI reporting, this is
               the real approval gate config. Admin only. */}
           {isAdmin() && (
             <button onClick={() => setApprovalSettingsOpen(true)}
-              className="btn btn-secondary flex items-center gap-2 text-sm"
+              className="btn btn-secondary flex items-center gap-2 text-sm whitespace-nowrap"
               title="Approval workflow for Indent → Dispatch — who may act at each gate">
               ⚙ Workflow Settings
             </button>
           )}
+          </div>
         </div>
       </div>
 

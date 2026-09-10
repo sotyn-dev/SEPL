@@ -483,7 +483,7 @@ export default function HR() {
           Requests | JDs | Screening Qs | Final-Round Qs.  Mam
           (2026-05-22 Phase 1 spec) wants all HR modules under the
           single /hr page (no separate sidebar entries). */}
-      <div className="flex gap-2 border-b border-gray-200 overflow-x-auto">
+      <div className="flex gap-2 border-b border-gray-200 overflow-x-auto pb-1 scrollbar-none">
         {[
           { id: 'dashboard',       label: 'Dashboard',          icon: FiBarChart2 },
           { id: 'manpower',        label: 'Manpower Plan',      icon: FiUsers },
@@ -573,7 +573,7 @@ export default function HR() {
           {/* Stage pill tabs — same Sales-Funnel / CRM-Kitting pattern
               with coloured count badges.  Click a pill to filter the
               table.  Mam (2026-05-22). */}
-          <div className="flex gap-2 flex-wrap items-center">
+          <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap items-center">
             <button
               onClick={() => setStageFilter('all')}
               className={`btn ${stageFilter === 'all' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
@@ -602,7 +602,7 @@ export default function HR() {
           </div>
 
           <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full">
+            <table className="text-sm w-full min-w-[800px]">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Candidate</th>
@@ -916,7 +916,7 @@ export default function HR() {
           {stageRow?.interview_date && <div className="text-[12px] text-gray-600">Interview held: <b>{fmtDt(stageRow.interview_date)}</b>{stageRow.interviewer_name ? ` · by ${stageRow.interviewer_name}` : ''}</div>}
           <div>
             <label className="label">Decision *</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {['shortlisted','on_hold','rejected'].map(d => (
                 <button type="button" key={d} onClick={() => setStageForm(f => ({ ...f, decision: d }))}
                   className={`px-3 py-2 rounded-lg border text-xs font-bold uppercase ${stageForm.decision === d
@@ -1027,7 +1027,7 @@ export default function HR() {
           {stageRow?.md_interview_date && <div className="text-[12px] text-gray-600">MD round: <b>{fmtDt(stageRow.md_interview_date)}</b></div>}
           <div>
             <label className="label">MD's Decision *</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {['shortlisted','rejected'].map(d => (
                 <button type="button" key={d} onClick={() => setStageForm(f => ({ ...f, decision: d }))}
                   className={`px-3 py-2 rounded-lg border text-xs font-bold uppercase ${stageForm.decision === d
