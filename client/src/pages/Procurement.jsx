@@ -2307,31 +2307,37 @@ export default function Procurement() {
   return (
     <div className="space-y-3">
       <div className="sticky-toolbar">
-        <div className="flex gap-2 flex-wrap items-center justify-between">
-          <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap w-full sm:w-auto flex-1">{tabs.map(t => {
-            // Urgent-payment badge on the Payment tab — Accounts can see
-            // at a glance whether anything needs clearing without clicking
-            // (mam 2026-05-27 workflow gate).
-            const urgentCount = t.id === 'payment'
-              ? (vendorPos || []).filter(po => !po.cancelled && po.payment_block_status === 'pending').length
-              : 0;
-            return (
-              <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative !px-3 !py-1.5 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
-                {/* Sub-number from the Indent to Dispatch flow, in tab order — mam 2026-09-10:
-                    "Raise indent (4.1), vendor rates (4.2), Vendor PO (4.3) so on". Looked up by
-                    label against the full step list, so it stays the same for a user who can
-                    only see some of these tabs. */}
-                {flowStepLabel('/procurement', t.label)}
-                {urgentCount > 0 && (
-                  <span className="ml-2 inline-flex items-center justify-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-600 text-white border border-red-700"
-                    title={`${urgentCount} PO${urgentCount === 1 ? '' : 's'} blocked on payment`}>
-                    🚨 {urgentCount}
-                  </span>
-                )}
-              </button>
-            );
-          })}</div>
-          <div className="flex gap-2 items-center flex-wrap">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+          <div className="flex gap-2 overflow-x-auto pb-2 w-full md:w-auto md:flex-1 items-center">
+            {tabs.map(t => {
+              // Urgent-payment badge on the Payment tab — Accounts can see
+              // at a glance whether anything needs clearing without clicking
+              // (mam 2026-05-27 workflow gate).
+              const urgentCount = t.id === 'payment'
+                ? (vendorPos || []).filter(po => !po.cancelled && po.payment_block_status === 'pending').length
+                : 0;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className={`btn relative whitespace-nowrap shrink-0 text-xs sm:text-sm !px-3 !py-1.5 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
+                >
+                  {/* Sub-number from the Indent to Dispatch flow, in tab order — mam 2026-09-10:
+                      "Raise indent (4.1), vendor rates (4.2), Vendor PO (4.3) so on". Looked up by
+                      label against the full step list, so it stays the same for a user who can
+                      only see some of these tabs. */}
+                  {flowStepLabel('/procurement', t.label)}
+                  {urgentCount > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-600 text-white border border-red-700"
+                      title={`${urgentCount} PO${urgentCount === 1 ? '' : 's'} blocked on payment`}>
+                      🚨 {urgentCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex gap-2 items-center flex-wrap shrink-0">
             {/* One Export button — exports current tab's data */}
             <button onClick={() => {
               if (tab === 'indents') {
@@ -2437,9 +2443,9 @@ export default function Procurement() {
                 exportCsv('vendor-rates', ['Item', 'Make', 'Qty', 'Unit', 'Vendor 1', 'Rate 1', 'Vendor 2', 'Rate 2', 'Vendor 3', 'Rate 3', 'Final'],
                   rows.map(r => [r.description || r.master_name || '', r.make || '', r.qty ?? '', r.unit || '', r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
               }
-            }} className="btn btn-secondary flex items-center gap-2 text-sm md:ml-auto"><FiDownload /> Export Excel</button>
+            }} className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm py-1.5 px-3 shrink-0"><FiDownload size={14} /> Export Excel</button>
             {/* SOP-07 flow board (mam 2026-08-28) — the pipeline dashboard */}
-            <a href="/procurement-board" className="btn btn-secondary flex items-center gap-2 text-sm"
+            <a href="/procurement-board" className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm py-1.5 px-3 shrink-0"
               title="Live SOP-07 pipeline: indent → PO → dispatch → GRN → bill">
               📊 Flow Board
             </a>
@@ -2452,7 +2458,7 @@ export default function Procurement() {
               the real approval gate config. Admin only. */}
             {isAdmin() && (
               <button onClick={() => setApprovalSettingsOpen(true)}
-                className="btn btn-secondary flex items-center gap-2 text-sm whitespace-nowrap"
+                className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm py-1.5 px-3 whitespace-nowrap shrink-0"
                 title="Approval workflow for Indent → Dispatch — who may act at each gate">
                 ⚙ Workflow Settings
               </button>
