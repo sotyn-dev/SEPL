@@ -793,7 +793,7 @@ export default function Estimator() {
       )}
 
       {/* Items table — scrollable responsive table with sticky header */}
-      <div className="card p-0 table-responsive max-h-[70vh]">
+      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto">
         <table className="w-full text-sm min-w-[1300px]">
           <thead className="sticky top-0 z-10 bg-gray-50 shadow-sm">
             <tr className="bg-gray-50 text-left text-[11px] uppercase text-gray-500">

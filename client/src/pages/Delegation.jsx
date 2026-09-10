@@ -662,7 +662,7 @@ export default function Delegation() {
           the parent scrolls horizontally so every column stays accessible. */}
       {/* Reverted to the original 10-column table per mam
           (2026-05-21: "not change delegation like previous"). */}
-      <div className="card p-0 table-responsive max-h-[70vh]">
+      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto">
         <table className="text-sm min-w-[1050px]">
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>

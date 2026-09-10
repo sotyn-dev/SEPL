@@ -398,7 +398,7 @@ export default function PMSTasks() {
 
       {/* Desktop table — bounded scroll + sticky thead so columns stay
           pinned while scrolling.  Mam, 2026-05-13. */}
-      <div className="card p-0 table-responsive max-h-[70vh] hidden md:block">
+      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto hidden md:block">
         <table className="text-sm w-full min-w-[950px]">
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>

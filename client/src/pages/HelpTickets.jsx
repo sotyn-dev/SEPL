@@ -336,7 +336,7 @@ export default function HelpTickets() {
       </div>
 
       {/* Tickets list — bounded scroll + sticky thead.  Mam, 2026-05-13. */}
-      <div className="card p-0 table-responsive max-h-[70vh]">
+      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto">
         <table className="text-sm w-full min-w-[900px]">
           <thead className="sticky top-0 z-10 bg-gray-50">
             <tr>
