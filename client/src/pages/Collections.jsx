@@ -47,7 +47,7 @@ export default function Collections() {
   // Numbered pagination over the (status-filtered) receivables list.
   // Must sit above the `if (!summary)` early return (hook order).
   // Export keeps using the FULL `receivables` array.
-  const pager = usePagination(receivables);
+  const pager = usePagination(receivables, { resetKey: [filter] });
 
   const createReceivable = async (e) => {
     e.preventDefault();

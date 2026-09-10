@@ -61,7 +61,7 @@ export default function LabourRate() {
     if (q) { const toks = q.split(/\s+/).filter(Boolean); list = list.filter(r => toks.every(t => (r.item_name || '').toLowerCase().includes(t))); }
     return list;
   }, [rows, catFilter, search]);
-  const pager = usePagination(filtered);
+  const pager = usePagination(filtered, { resetKey: [catFilter, search] });
 
   const setF = (patch) => setForm(f => ({ ...f, ...patch }));
   const openAdd = () => { setForm(blank()); setModal(true); };
@@ -197,8 +197,8 @@ export default function LabourRate() {
             {filtered.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-gray-400 text-sm">No labour rates. Click “Add Labour Item”.</td></tr>}
           </tbody>
         </table>
-        <Pagination {...pager} />
       </div>
+      <Pagination {...pager} />
       <div className="text-xs text-gray-400">{filtered.length} item(s){catFilter ? ` in ${catFilter}` : ''}.</div>
 
       {/* Add / Edit modal */}

@@ -26,7 +26,7 @@ export default function DispatchReceiving() {
   };
   useEffect(() => { load(); }, []);
   const filtered = rows.filter(r => `${r.site_name} ${r.indent_number} ${r.bill_number}`.toLowerCase().includes(search.trim().toLowerCase()));
-  const pagination = usePagination(filtered);
+  const pagination = usePagination(filtered, { resetKey: [search] });
   const save = async e => {
     e.preventDefault();
     if (saving) return;

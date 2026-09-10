@@ -211,8 +211,8 @@ export default function SotynLeads() {
 
   // Switching tab or searching swaps the list under the user: the 'N new leads'
   // baseline is a max(id) over the PREVIOUS filter, so keeping it would fire a
-  // false alert (or swallow a real one) on the next poll. Reset both it and the
-  // page number, so you land on page 1 of the list you just asked for.
+  // false alert (or swallow a real one) on the next poll. Reset it here; the
+  // pager's resetKey (below) puts you on page 1 of the list you just asked for.
   useEffect(() => { seenTop.current = null; }, [tab, debounced]);
 
   // Auto-fetch: every 30 s while the tab is visible, and immediately when the
@@ -379,7 +379,7 @@ export default function SotynLeads() {
     convert: canCreate(M) && canCreate('leads'), // convert: writes a funnel lead too
   }), [canEdit, canDelete, canCreate]);
 
-  const pager = usePagination(rows, { initialPerPage: 15 });
+  const pager = usePagination(rows, { initialPerPage: 15, resetKey: [tab, debounced] });
   const tiles = useMemo(() => ([
     { label: 'Total enquiries', value: stats?.total ?? '—', tone: 'text-slate-800' },
     { label: 'New / unworked', value: stats?.new_count ?? '—', tone: 'text-blue-700' },

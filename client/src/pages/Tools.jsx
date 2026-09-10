@@ -59,7 +59,7 @@ export default function Tools() {
   const [submitForm, setSubmitForm] = useState({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' });
   // Windows the catalog table only — `tools` itself stays the full filtered
   // list (the weekly-submission modal's picker needs every tool).
-  const toolsPager = usePagination(tools);
+  const toolsPager = usePagination(tools, { resetKey: [filters.search, filters.category, filters.status] });
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -264,8 +264,8 @@ export default function Tools() {
                   ))}
                 </tbody>
               </table>
-              <Pagination {...toolsPager} />
             </div>
+            <Pagination {...toolsPager} />
           </div>
         </>
       )}

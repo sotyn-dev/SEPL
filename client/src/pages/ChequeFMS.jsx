@@ -173,7 +173,7 @@ export default function ChequeFMS() {
 
   // Numbered pagination over the final filtered list (all status tabs share
   // this one table). Export keeps using the FULL `visible` array.
-  const pager = usePagination(visible);
+  const pager = usePagination(visible, { resetKey: [tab, search, dateFrom, dateTo] });
 
   const counts = useMemo(() => {
     const m = { pending: 0, clear: 0, hold: 0, bounce: 0, stopped: 0, cancel: 0 };
@@ -343,8 +343,8 @@ export default function ChequeFMS() {
                 })}
               </tbody>
             </table>
-            <Pagination {...pager} />
           </div>
+          <Pagination {...pager} />
         </div>
       )}
 

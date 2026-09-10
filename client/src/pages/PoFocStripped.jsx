@@ -231,9 +231,10 @@ export default function PoFocStripped() {
   const dToks = dq.split(/\s+/).filter(Boolean);
   const shownFiltered = dq ? shown.filter(e => dToks.every(t => (e.po_name || '').toLowerCase().includes(t))) : shown;
   // Numbered pagination replaces the old hard render caps — one pager per list.
-  const kitPager = usePagination(shownFiltered);     // pending kits (drafts) on the Non-Approved tab
-  const pendPager = usePagination(pendingItems);     // PO items still needing a FOC kit
-  const shownPager = usePagination(shown);           // Approved / Re-Approved entry cards
+  const kitPager = usePagination(shownFiltered, { resetKey: [tab, catFilter, draftSearch] });     // pending kits (drafts) on the Non-Approved tab
+  const pendPager = usePagination(pendingItems, { resetKey: [catFilter, pendSearch] });          // PO items still needing a FOC kit
+  // Tab is in the key: Approved and Re-Approved share this one pager.
+  const shownPager = usePagination(shown, { resetKey: [tab, catFilter] });                       // Approved / Re-Approved entry cards
 
   const entryCard = (e) => (
     <div key={e.id} className="card p-3">
@@ -313,7 +314,7 @@ export default function PoFocStripped() {
                 <input className="input max-w-xs" placeholder="Search pending kits…" value={draftSearch} onChange={e => setDraftSearch(e.target.value)} />
               </div>
               {kitPager.pageItems.map(e => entryCard(e))}
-              <div className="card p-0"><Pagination {...kitPager} /></div>
+              {kitPager.total > 0 && <div className="card p-0"><Pagination {...kitPager} /></div>}
               {shownFiltered.length === 0 && <div className="text-xs text-gray-400 text-center py-2">No pending kit matches “{draftSearch}”.</div>}
             </div>
           )}
@@ -343,7 +344,7 @@ export default function PoFocStripped() {
             </div>
           )}
           <div className="space-y-3">{shownPager.pageItems.map(e => entryCard(e))}</div>
-          <div className="card p-0"><Pagination {...shownPager} /></div>
+          {shownPager.total > 0 && <div className="card p-0"><Pagination {...shownPager} /></div>}
         </>
       )}
 

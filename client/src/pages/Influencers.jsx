@@ -77,7 +77,7 @@ export default function Influencers() {
     api.get(`/influencers?${params}`).then(r => setRows(r.data)).catch(() => {});
   };
   useEffect(load, [search, filterCategory, filterStage]);
-  const pager = usePagination(rows);
+  const pager = usePagination(rows, { resetKey: [search, filterCategory, filterStage] });
 
   const openAdd = () => {
     setEditing(null);
@@ -278,8 +278,8 @@ export default function Influencers() {
             ))}
           </tbody>
         </table>
-        <Pagination {...pager} />
       </div>
+      <Pagination {...pager} />
 
       {/* Add / Edit modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? `Edit ${editing.form_id} — ${editing.full_name}` : 'Add Influencer'} wide>

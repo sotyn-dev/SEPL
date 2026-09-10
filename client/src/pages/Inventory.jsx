@@ -351,7 +351,7 @@ function StockTab({ stock, flatStock, warehouses, filter, setFilter, typeFilter,
   //
   // Windows the RENDERED rows only — banner totals, row counts and the
   // parent's CSV export all keep using the full filtered list.
-  const stockPager = usePagination(flatStock);
+  const stockPager = usePagination(flatStock, { resetKey: [filter.warehouse_id, filter.search, filter.low_only, typeFilter, condFilter] });
 
   // Total value across whatever's currently filtered. Used in the
   // summary banner — especially useful when mam picks a single site
@@ -1831,7 +1831,7 @@ function EquationTab({ warehouses }) {
   const [loading, setLoading] = useState(false);
   // Item-wise equation rows can run into the hundreds for a busy warehouse.
   // Hook is unconditional (handles data === null) — required by React rules.
-  const eqPager = usePagination(data?.rows);
+  const eqPager = usePagination(data?.rows, { resetKey: [whId, from, to] });
   const load = async (w = whId, f = from, t = to) => {
     if (!w) { setData(null); return; }
     setLoading(true);
@@ -1862,7 +1862,7 @@ function EquationTab({ warehouses }) {
       {loading ? <div className="text-sm text-gray-400 py-6 text-center">Loading…</div>
         : !data ? <div className="text-sm text-gray-400 py-6 text-center">Warehouse chuno — equation live dikhega.</div>
         : data.rows.length === 0 ? <div className="text-sm text-gray-400 py-6 text-center">Is warehouse mein koi movement nahi hai.</div>
-        : (
+        : (<>
         <div className="table-responsive">
           <table className="w-full text-xs min-w-[750px]">
             <thead><tr className="text-gray-500 border-b text-left">
@@ -1896,16 +1896,16 @@ function EquationTab({ warehouses }) {
               ))}
             </tbody>
           </table>
-          <Pagination {...eqPager} />
         </div>
-      )}
+        <Pagination {...eqPager} />
+      </>)}
     </div>
   );
 }
 
 function MovementsTab({ movements, warehouses, filter, setFilter }) {
   // The journal is append-only and grows forever — window what's rendered.
-  const mvmtPager = usePagination(movements);
+  const mvmtPager = usePagination(movements, { resetKey: [filter.warehouse_id, filter.type, filter.date_from, filter.date_to] });
   return (
     <>
       <div className="card p-4 grid grid-cols-1 sm:grid-cols-5 gap-3">
@@ -1984,8 +1984,8 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
             ))}
           </tbody>
         </table>
-        <Pagination {...mvmtPager} />
       </div>
+      <Pagination {...mvmtPager} />
     </>
   );
 }

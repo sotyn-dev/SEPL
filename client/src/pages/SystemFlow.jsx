@@ -295,7 +295,7 @@ export default function SystemFlow() {
     ].map(csvSafe))
   );
 
-  const pager = usePagination(rows, { initialPerPage: 15 });
+  const pager = usePagination(rows, { initialPerPage: 15, resetKey: [status, debounced] });
   const tiles = [
     { label: 'Total systems', value: stats?.total ?? '—', tone: 'text-slate-800' },
     { label: 'Completed', value: stats?.completed ?? '—', tone: 'text-emerald-700' },

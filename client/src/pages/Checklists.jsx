@@ -265,7 +265,7 @@ export default function Checklists() {
     if (statusFilter === 'rejected') return r.approval_status === 'rejected';
     return true;
   });
-  const historyPager = usePagination(historyFiltered);
+  const historyPager = usePagination(historyFiltered, { resetKey: [historyDate, deptFilter, statusFilter] });
 
   // Follow-up "List" instances (task × applicable date), flattened at the
   // top level for the same reason — hooks can't live inside the JSX IIFE.
@@ -282,7 +282,7 @@ export default function Checklists() {
     instances.sort((a, b) => b.cell.date.localeCompare(a.cell.date));
     return instances;
   })();
-  const followupPager = usePagination(followupInstances);
+  const followupPager = usePagination(followupInstances, { resetKey: [followupBack, followupForward] });
 
   const save = async (e) => {
     e.preventDefault();
@@ -448,7 +448,7 @@ export default function Checklists() {
       )}
 
       {/* ─── BY-DATE / APPROVAL view ─────────────────────────────── */}
-      {view === 'by-date' && (
+      {view === 'by-date' && (<>
         <div className="card p-0 table-responsive">
           <table className="freeze-head w-full text-xs min-w-[800px]">
             <thead className="whitespace-nowrap">
@@ -548,9 +548,9 @@ export default function Checklists() {
               })}
             </tbody>
           </table>
-          <Pagination {...historyPager} />
         </div>
-      )}
+        <Pagination {...historyPager} />
+      </>)}
 
 
       {/* Admin-only filter by assignee (regular users only see their own anyway).
@@ -637,7 +637,7 @@ export default function Checklists() {
               missed:        { label: '✗ Missed',       css: 'bg-red-100 text-red-700' },
               today:         { label: '○ Today',        css: 'bg-blue-100 text-blue-700' },
             };
-            return (
+            return (<>
               <div className="card p-0 table-responsive">
                 <table className="w-full text-xs min-w-[780px]">
                   <thead className="bg-amber-50 text-gray-700 text-[10px] uppercase whitespace-nowrap">
@@ -714,9 +714,9 @@ export default function Checklists() {
                     )}
                   </tbody>
                 </table>
-                <Pagination {...followupPager} />
               </div>
-            );
+              <Pagination {...followupPager} />
+            </>);
           })()}
 
           {/* ─── TIMELINE GRID view (toggle) ──────────────────────── */}

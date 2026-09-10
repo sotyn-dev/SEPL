@@ -418,7 +418,7 @@ export default function Leads() {
   const leadsMergedCount = leadGroups.filter(g => g.leads.length > 1).length;
   // Numbered pagination over whichever list the table renders (flat leads or
   // project groups). Export / counts keep using the FULL arrays.
-  const listPager = usePagination(groupLeads ? leadGroups : leads);
+  const listPager = usePagination(groupLeads ? leadGroups : leads, { resetKey: [search, stageTab, groupLeads] });
   const toggleLeadGroup = (key) => setLeadsExpanded(p => ({ ...p, [key]: !p[key] }));
   const leadClientList = (set) => { const a = [...set]; if (!a.length) return '-'; return a.length <= 2 ? a.join(', ') : `${a.slice(0, 2).join(', ')} +${a.length - 2} more`; };
 
@@ -639,7 +639,7 @@ export default function Leads() {
             })}
             {leads.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No leads</td></tr>}
           </tbody>
-        </table><Pagination {...listPager} /></div></div>
+        </table></div><Pagination {...listPager} /></div>
       </>)}
 
       {/* View + Stage Actions */}

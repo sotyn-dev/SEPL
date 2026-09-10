@@ -262,7 +262,7 @@ export default function HelpTickets() {
 
   // Numbered pagination over the final filtered list (scope + status are
   // server-side; name + search compose above). Export keeps `filtered`.
-  const pager = usePagination(filtered);
+  const pager = usePagination(filtered, { resetKey: [scope, statusFilter, nameFilter, search] });
 
   return (
     <div className="space-y-4">
@@ -411,8 +411,8 @@ export default function HelpTickets() {
             })}
           </tbody>
         </table>
-        <Pagination {...pager} />
       </div>
+      <Pagination {...pager} />
 
       {/* Create Ticket Modal */}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Raise New Ticket">

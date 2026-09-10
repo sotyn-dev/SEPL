@@ -262,7 +262,7 @@ export default function Employees() {
   const filtered = employees.filter(e =>
     !search || [e.name, e.phone, e.email, e.designation, e.department].some(f => (f || '').toLowerCase().includes(search.toLowerCase()))
   );
-  const pager = usePagination(filtered);
+  const pager = usePagination(filtered, { resetKey: [search] });
 
   return (
     <div className="space-y-4">

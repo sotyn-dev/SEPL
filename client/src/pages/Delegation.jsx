@@ -134,10 +134,13 @@ export default function Delegation() {
   // Deep-link from the War Room "Open ↗" button — highlight + scroll to a
   // specific delegation so the approver can verify its proof (mam 2026-06-24).
   const [highlightId] = useState(() => new URLSearchParams(window.location.search).get('open'));
+  // The deep link acts ONCE: after the row has been scrolled into view, later
+  // page changes / task reloads must not keep dragging the pager back to it.
+  const deepLinkDone = useRef(false);
   useEffect(() => {
-    if (!highlightId || !tasks.length) return;
+    if (deepLinkDone.current || !highlightId || !tasks.length) return;
     const el = document.getElementById(`deleg-row-${highlightId}`);
-    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); deepLinkDone.current = true; }
   }, [highlightId, tasks]);
 
   // Voice → description. Appends to existing text so user can combine typing + voice.
@@ -441,20 +444,21 @@ export default function Delegation() {
         (t.description || '').toLowerCase().includes(q))
     : tasks;
   if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
-  const tasksPager = usePagination(visibleTasks);
+  const tasksPager = usePagination(visibleTasks, { resetKey: [scope, statusFilter, healthFilter, search, assigneeFilter, dateFrom, dateTo] });
 
   // Pagination can put the War-Room deep-linked row (?open=<id>) on a later
   // page where the scroll-to-row above can't find it — jump the pager to the
-  // row's page first, then scroll once it is actually rendered.
+  // row's page first, then scroll once it is actually rendered. Only on first
+  // arrival (deepLinkDone above) — afterwards the user pages freely.
   useEffect(() => {
-    if (!highlightId) return;
+    if (deepLinkDone.current || !highlightId) return;
     const i = visibleTasks.findIndex(t => String(t.id) === String(highlightId));
     if (i < 0) return;
     const target = Math.floor(i / tasksPager.perPage) + 1;
     if (target !== tasksPager.page) tasksPager.setPage(target);
     else {
       const el = document.getElementById(`deleg-row-${highlightId}`);
-      if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); deepLinkDone.current = true; }
     }
     // visibleTasks is recomputed inline each render — depend on the inputs
     // that change it (tasks + filters via page), not its identity.
@@ -806,8 +810,8 @@ export default function Delegation() {
             })}
           </tbody>
         </table>
-        <Pagination {...tasksPager} />
       </div>
+      <Pagination {...tasksPager} />
 
       {/* Mobile-only card layout REMOVED — per mam's request, the desktop
           table is used on all screens now (horizontal scroll on phones).

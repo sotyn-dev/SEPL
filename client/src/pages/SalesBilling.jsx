@@ -274,7 +274,7 @@ export default function SalesBilling() {
     </button>
   );
 
-  const BillTable = ({ rows, showPayment, sentMode, pager }) => (
+  const BillTable = ({ rows, showPayment, sentMode, pager }) => (<>
     <div className="card p-0 overflow-x-auto">
       <table className="text-sm w-full min-w-[850px]">
         <thead>
@@ -337,9 +337,9 @@ export default function SalesBilling() {
           ))}
         </tbody>
       </table>
-      {pager && <Pagination {...pager} />}
     </div>
-  );
+    {pager && <Pagination {...pager} />}
+  </>);
 
   return (
     <div className="space-y-4">
@@ -494,8 +494,8 @@ export default function SalesBilling() {
                 })}
               </tbody>
             </table>
-            <Pagination {...ordersPager} />
           </div>
+          <Pagination {...ordersPager} />
         </div>
       )}
 
@@ -551,8 +551,8 @@ export default function SalesBilling() {
                 ))}
               </tbody>
             </table>
-            <Pagination {...materialPager} />
           </div>
+          <Pagination {...materialPager} />
         </div>
       )}
 

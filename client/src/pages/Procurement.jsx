@@ -2350,7 +2350,8 @@ export default function Procurement() {
                   if (indFilterFrom && d && d < indFilterFrom) return false;
                   if (indFilterTo && d && d > indFilterTo) return false;
                   if (!q) return true;
-                  return `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''}`.toLowerCase().includes(q);
+                  // Same search text as the tab's table and KPI tiles (category words included).
+                  return `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''} ${(i.indent_category || 'material').replace(/_/g, ' ')}`.toLowerCase().includes(q);
                 });
                 exportCsv('indents', ['Indent No', 'Date', 'Site', 'Raised By', 'Status', 'Items', 'Budget', 'Delivery Bill', 'Delivery %'],
                   rows.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items || []).length, Math.round(i.budget_amount || 0), Math.round(i.delivery_bill_amount || 0), i.delivery_pct || 0]));
@@ -2479,7 +2480,14 @@ export default function Procurement() {
         // Mam (2026-05-25 follow-up): "data filter also from to according
         // to that amounts count change" — tiles now respect from/to + search.
         const q = indSearch.trim().toLowerCase();
+        // ONE match for the KPI tiles, the table and the CSV export (audit
+        // 2026-09-10): the tiles used to ignore the Category filter and also
+        // matched category words in search, so "Total Indents" disagreed with
+        // "Showing X of Y" under the same filters. Category applies here too;
+        // only the status bucket is left to the table (the tiles ARE the
+        // per-status breakdown).
         const matchesDateAndSearch = (i) => {
+          if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
           if (indFilterFrom) {
             const d = (i.created_at || i.indent_date || '').slice(0, 10);
             if (d && d < indFilterFrom) return false;
@@ -2495,7 +2503,7 @@ export default function Procurement() {
           return true;
         };
         const kpiScope = indents.filter(matchesDateAndSearch);
-        const filteredIndents = indents.filter(i => {
+        const filteredIndents = kpiScope.filter(i => {
           // 'submitted' (Pending L1) ALSO matches crm_approved — after the CRM
           // step an EXTRA-NON indent still awaits L1, so it belongs in the same
           // bucket (server treats crm_approved like submitted for L1). It was
@@ -2504,19 +2512,6 @@ export default function Procurement() {
             const inBucket = i.status === indFilterStatus
               || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
             if (!inBucket) return false;
-          }
-          if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
-          if (indFilterFrom) {
-            const d = (i.created_at || i.indent_date || '').slice(0, 10);
-            if (d && d < indFilterFrom) return false;
-          }
-          if (indFilterTo) {
-            const d = (i.created_at || i.indent_date || '').slice(0, 10);
-            if (d && d > indFilterTo) return false;
-          }
-          if (q) {
-            const hay = `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''}`.toLowerCase();
-            if (!hay.includes(q)) return false;
           }
           return true;
         });
@@ -2597,7 +2592,7 @@ export default function Procurement() {
               const approved = byStatus('approved');
               const rejected = byStatus('rejected');
               const poSent = byStatus('po_sent');
-              const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim());
+              const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim() || indFilterCategory !== 'all');
               // Billable booked once an indent clears approval (mam 2026-06-16):
               // total BOQ sale value of every indent that has PASSED approval —
               // approved or anything beyond it (PO sent / dispatched / received).
@@ -3555,8 +3550,11 @@ export default function Procurement() {
                 {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
               </tbody>
             </table>
-              <Pagination pg={indPg} setPerPage={setIndPerPage} className="border-t border-gray-100" />
             </div>
+            {/* Pager OUTSIDE the 70vh scroll box — inside it, Prev/Next only
+                appeared after scrolling the box to its very bottom, so users
+                saw "only 15 indents" (pagination audit 2026-09-10). */}
+            <div className="hidden md:block card p-0"><Pagination pg={indPg} setPerPage={setIndPerPage} /></div>
           </>
         );
       })()}
@@ -4317,8 +4315,9 @@ export default function Procurement() {
                     {vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
                     {vendorPos.length > 0 && filteredList.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No POs match the current filters.</td></tr>}
                   </tbody>
-                  <tfoot><tr><td colSpan="8" className="border-t border-gray-100"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></td></tr></tfoot>
                 </table></div>
+                {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
+                <div className="hidden md:block card p-0"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></div>
 
                 {/* Mobile cards — polished pattern matching Indents card. */}
                 <div className="md:hidden space-y-3">
@@ -5077,8 +5076,9 @@ export default function Procurement() {
                     {purchaseBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
                     {purchaseBills.length > 0 && filteredBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills match the current filters.</td></tr>}
                   </tbody>
-                  <tfoot><tr><td colSpan="10" className="border-t border-gray-100"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></td></tr></tfoot>
                 </table></div>
+                {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
+                <div className="hidden md:block card p-0"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></div>
 
                 {/* Mobile cards — polished pattern matching Indents (mam). */}
                 <div className="md:hidden space-y-3">
@@ -5811,8 +5811,9 @@ export default function Procurement() {
                     {deliveryNotes.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
                     {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
                   </tbody>
-                  <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
                 </table></div>
+                {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
+                <div className="hidden md:block card p-0"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></div>
 
                 {/* Mobile cards.  Each card leads with the DN number (mam
               2026-06-02: "delivery note number and against it we will

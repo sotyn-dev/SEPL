@@ -48,7 +48,7 @@ export default function SubContractors() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [filter.q, filter.state, filter.contractor_type, filter.active]);
-  const pager = usePagination(rows);
+  const pager = usePagination(rows, { resetKey: [filter.q, filter.state, filter.contractor_type, filter.active] });
 
   const openAdd = () => { setEditing(null); setForm(blankForm()); setModal(true); };
   const openEdit = (row) => {
@@ -211,8 +211,8 @@ export default function SubContractors() {
             ))}
           </tbody>
         </table>
-        <Pagination {...pager} />
       </div>
+      <Pagination {...pager} />
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Sub-Contractor' : 'Add Sub-Contractor'} wide>
         <form onSubmit={save} className="space-y-3">

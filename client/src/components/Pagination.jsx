@@ -1,3 +1,6 @@
+import { useRef } from 'react';
+import { scrollListTop } from '../utils/scrollListTop';
+
 // usePagination — slice an array into a page, plus page-nav state.
 //
 // CRITICAL: this is a PLAIN UTILITY FUNCTION, not a React hook (despite
@@ -25,16 +28,23 @@
 // useState lets you reset to page 1 when filters change without ceremony.
 export function usePagination(rows, perPage, page, setPage) {
   const total = rows.length;
-  const pages = Math.max(1, Math.ceil(total / perPage));
+  // perPage may be 'all': every row on one page, sized from TODAY's total.
+  // It used to be frozen as the row count at the moment All was picked, so a
+  // list that grew or was un-filtered split into odd pages while the dropdown
+  // read "15" (pagination audit 2026-09-10).
+  const isAll = perPage === 'all';
+  const size = isAll ? Math.max(total, 1) : perPage;
+  const pages = Math.max(1, Math.ceil(total / size));
   // Clamp the requested page to the valid range — protects against the
   // user being on page 5 of a filtered set that just shrank to 2 pages.
   const cur = Math.min(Math.max(1, page), pages);
-  const from = (cur - 1) * perPage;
-  const to = Math.min(from + perPage, total);
+  const from = (cur - 1) * size;
+  const to = Math.min(from + size, total);
   return {
     page: cur,
     pages,
-    perPage,
+    perPage: size,
+    isAll,
     total,
     from,
     to,
@@ -52,13 +62,22 @@ export function usePagination(rows, perPage, page, setPage) {
 // Per-page selector (mam 2026-05-25: "show here all data remove page
 // wise as per user requirement") — when `setPerPage` is provided,
 // renders a dropdown letting the user pick 15 / 50 / 100 / All.  "All"
-// is implemented as perPage = total (the whole array) so the existing
-// slice math doesn't need special cases.  Hidden if setPerPage missing
+// is stored in the parent's perPage state as the string 'all' and sized by
+// usePagination from the current total.  Hidden if setPerPage missing
 // (backwards compat for any callers that don't want it).
 const DEFAULT_PER_PAGE_OPTIONS = [15, 50, 100, 'all'];
 export default function Pagination({ pg, className = '', setPerPage, perPageOptions = DEFAULT_PER_PAGE_OPTIONS }) {
+  const barRef = useRef(null);
   if (!pg || pg.total === 0) return null;
-  const { page, pages, total, perPage, from, to, setPage, hasPrev, hasNext } = pg;
+  const { page, pages, total, perPage, from, to, setPage, hasPrev, hasNext, isAll } = pg;
+  // Page change also brings the top of the list back into view — the bar sits
+  // under the list, so the user was left at the bottom of the new page.
+  const go = (p) => {
+    const next = Math.min(Math.max(1, p), pages);
+    if (next === page) return;
+    setPage(next);
+    scrollListTop(barRef.current);
+  };
 
   // Build a compact page-number list with ellipses for long ranges.
   // For ≤ 7 pages we show them all; beyond that, we collapse the middle.
@@ -68,12 +87,17 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
     return [...out].filter(p => p >= 1 && p <= pages).sort((a, b) => a - b);
   })();
 
-  // Detect "All" mode — when perPage is >= total, every row is on one
-  // page.  Selector shows "all" highlighted in that case.
-  const isAllMode = perPage >= total && total > 0;
+  // "All" is highlighted only when the user CHOSE it — not whenever the list
+  // happens to be shorter than the page size (it used to read "All (12)" at
+  // the default 15).  A size outside the option list still shows as selected.
+  const isAllMode = !!isAll;
+  const options = isAllMode || perPageOptions.includes(perPage)
+    ? perPageOptions
+    : [...perPageOptions.filter(o => o !== 'all'), perPage].sort((a, b) => a - b)
+        .concat(perPageOptions.includes('all') ? ['all'] : []);
 
   return (
-    <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 text-xs text-gray-600 px-3 py-2.5 ${className}`}>
+    <div ref={barRef} className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 text-xs text-gray-600 px-3 py-2.5 ${className}`}>
       <div className="flex items-center justify-between sm:justify-start gap-3 flex-wrap">
         <div className="whitespace-nowrap">
           Showing <span className="font-semibold">{from + 1}</span>–<span className="font-semibold">{to}</span> of <span className="font-semibold">{total}</span>
@@ -84,12 +108,11 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
             <select
               value={isAllMode ? 'all' : perPage}
               onChange={(e) => {
-                const v = e.target.value === 'all' ? Math.max(total, 1) : parseInt(e.target.value, 10);
-                setPerPage(v);
+                setPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value, 10));
                 setPage(1); // jump to page 1 so we don't land on an empty page
               }}
               className="border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-white">
-              {perPageOptions.map(opt => (
+              {options.map(opt => (
                 <option key={opt} value={opt}>
                   {opt === 'all' ? `All (${total})` : opt}
                 </option>
@@ -104,7 +127,7 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
           <div className="flex sm:hidden items-center justify-center gap-1.5 w-full">
             <button
               type="button"
-              onClick={() => setPage(page - 1)}
+              onClick={() => go(page - 1)}
               disabled={!hasPrev}
               aria-label="Previous page"
               className="px-3 py-1.5 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium shadow-2xs">
@@ -115,7 +138,7 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
             </span>
             <button
               type="button"
-              onClick={() => setPage(page + 1)}
+              onClick={() => go(page + 1)}
               disabled={!hasNext}
               aria-label="Next page"
               className="px-3 py-1.5 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium shadow-2xs">
@@ -127,7 +150,7 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
           <div className="hidden sm:flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setPage(page - 1)}
+              onClick={() => go(page - 1)}
               disabled={!hasPrev}
               className="px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
               ‹ Prev
@@ -140,7 +163,7 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
                   {gap && <span className="text-gray-400 px-1">…</span>}
                   <button
                     type="button"
-                    onClick={() => setPage(n)}
+                    onClick={() => go(n)}
                     className={`min-w-[28px] px-2 py-1 rounded border ${n === page ? 'bg-red-600 text-white border-red-600 font-semibold' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
                     {n}
                   </button>
@@ -149,7 +172,7 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
             })}
             <button
               type="button"
-              onClick={() => setPage(page + 1)}
+              onClick={() => go(page + 1)}
               disabled={!hasNext}
               className="px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
               Next ›

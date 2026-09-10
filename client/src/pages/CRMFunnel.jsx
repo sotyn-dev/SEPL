@@ -138,7 +138,7 @@ export default function CRMFunnel() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [filter.q, filter.step, filter.state, filter.type]);
-  const pager = usePagination(rows);
+  const pager = usePagination(rows, { resetKey: [filter.q, filter.step, filter.state, filter.type] });
 
   // Every BOQ attached to the lead being edited (mam 2026-09-07: "more upload
   // files ... which attached previous also"). Loaded from the history endpoint
@@ -441,8 +441,8 @@ export default function CRMFunnel() {
                 ))}
               </tbody>
             </table>
-            <Pagination {...pager} />
           </div>
+          <Pagination {...pager} />
         </div>
       </>)}
 

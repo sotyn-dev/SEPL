@@ -53,7 +53,7 @@ export default function CompanyAssets() {
   const [actionForm, setActionForm] = useState({});
   const [history, setHistory] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const pager = usePagination(assets);
+  const pager = usePagination(assets, { resetKey: [filters.search, filters.category, filters.status] });
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -258,8 +258,8 @@ export default function CompanyAssets() {
             ))}
           </tbody>
         </table>
-        <Pagination {...pager} />
       </div>
+      <Pagination {...pager} />
 
       {/* ADD / EDIT MODAL */}
       <Modal isOpen={modal === 'edit'} onClose={() => { setModal(null); setForm({}); }} title={form.id ? `Edit ${form.asset_no}` : 'Add Asset'} wide>

@@ -312,8 +312,9 @@ export default function PMSTasks() {
   };
 
   // Numbered pagination over the server-filtered task list (scope/status/
-  // CRM/assignee/date filters all apply before this). Export keeps `tasks`.
-  const pager = usePagination(tasks);
+  // CRM/assignee/date filters all apply before this, and changing any of them
+  // resets to page 1). Export keeps `tasks`.
+  const pager = usePagination(tasks, { resetKey: [scope, statusFilter, crmFilter, assigneeFilter, dateFrom, dateTo] });
 
   const projectOptions = projects.map(p => ({
     ...p,

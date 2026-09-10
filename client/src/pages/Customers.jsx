@@ -81,7 +81,7 @@ export default function Customers() {
     }
     return true;
   });
-  const pager = usePagination(filtered);
+  const pager = usePagination(filtered, { resetKey: [search, filterCat] });
 
   const catCounts = {};
   customers.forEach(c => { if (c.category) catCounts[c.category] = (catCounts[c.category] || 0) + 1; });
@@ -183,8 +183,8 @@ export default function Customers() {
             </tbody>
           </table>
         </div>
-        <Pagination {...pager} />
       </div>
+      <Pagination {...pager} />
 
       {/* View Modal */}
       <Modal isOpen={modal === 'view'} onClose={() => { setModal(false); setViewData(null); }} title={viewData?.company_name} wide>

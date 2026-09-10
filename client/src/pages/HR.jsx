@@ -147,7 +147,7 @@ export default function HR() {
   const visibleCandidates = stageFilter === 'all'
     ? candidates
     : candidates.filter(c => bucketFor(c) === stageFilter);
-  const candPager = usePagination(visibleCandidates);
+  const candPager = usePagination(visibleCandidates, { resetKey: [stageFilter] });
 
   // Generic file upload helper — reuses /upload, returns the served URL.
   const uploadFile = async (file) => {
@@ -759,8 +759,8 @@ export default function HR() {
                 )}
               </tbody>
             </table>
-            <Pagination {...candPager} />
           </div>
+          <Pagination {...candPager} />
         </>);
       })()}
 
