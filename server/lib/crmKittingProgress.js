@@ -76,12 +76,17 @@ function resolveOwnerUserId(name, users) {
 // business_book grouping expression (the same one /matrix, /projects and
 // /project use), so a meta row left behind by a deleted Business Book entry
 // is not on the screen and must not sit in anyone's denominator either.
+// Same rule for a project REMOVED from the tracker (handed over — mam
+// 2026-09-10): it has left the screen, so it leaves the owner's denominator.
+// Column checked first because the routes file adds it at boot.
 function kittingOwnerProjects(db) {
   const users = db.prepare(`SELECT id, name FROM users WHERE COALESCE(archived,0)=0`).all();
+  const hasRemoved = db.prepare(`PRAGMA table_info(crm_kitting_project_meta)`).all().some(c => c.name === 'removed_at');
   const rows = db.prepare(`
     SELECT m.project_key, m.crm_owner
       FROM crm_kitting_project_meta m
      WHERE COALESCE(TRIM(m.crm_owner),'') <> ''
+       ${hasRemoved ? 'AND m.removed_at IS NULL' : ''}
        AND EXISTS (SELECT 1 FROM business_book bb
                     WHERE COALESCE(NULLIF(TRIM(bb.company_name),''), bb.client_name) = m.project_key)
   `).all();

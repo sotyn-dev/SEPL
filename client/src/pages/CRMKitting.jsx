@@ -75,6 +75,8 @@ export default function CRMKitting() {
   const [loading, setLoading] = useState(false);
   const [activeStage, setActiveStage] = useState(1);
   const [filter, setFilter] = useState('');
+  // Projects removed from the tracker (handed over etc.) — shown only on demand.
+  const [showRemoved, setShowRemoved] = useState(false);
 
   // Update modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -147,20 +149,47 @@ export default function CRMKitting() {
   }), [stageColumns]);
 
   // ── Filtered project rows ──────────────────────────────────────
+  const removedCount = useMemo(
+    () => matrix.projects.filter(p => matrix.meta[p.project_key]?.removed_at).length,
+    [matrix.projects, matrix.meta]
+  );
   const filteredProjects = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return matrix.projects;
-    return matrix.projects.filter(p =>
+    // Active grid by default; the "Removed" toggle swaps in removed projects.
+    const base = matrix.projects.filter(p => !!matrix.meta[p.project_key]?.removed_at === showRemoved);
+    if (!q) return base;
+    return base.filter(p =>
       (p.project_name || '').toLowerCase().includes(q) ||
       (p.client_name || '').toLowerCase().includes(q) ||
       (p.lead_no || '').toLowerCase().includes(q) ||
       (matrix.meta[p.project_key]?.pm_owner || '').toLowerCase().includes(q) ||
       (matrix.meta[p.project_key]?.crm_owner || '').toLowerCase().includes(q)
     );
-  }, [matrix.projects, matrix.meta, filter]);
+  }, [matrix.projects, matrix.meta, filter, showRemoved]);
 
   // ── Cell helpers ───────────────────────────────────────────────
   const getEntry = (projectKey, cpId) => matrix.entries[`${projectKey}::${cpId}`];
+
+  // ── Remove / restore a project (mam 2026-09-10: "projects can delete bcs
+  // like some are handover"). Takes it off this tracker only — Business Book,
+  // checkpoint history and photos stay, and Restore brings the row back as-is.
+  const canRemoveProjects = (isAdmin && isAdmin()) || (canDelete && canDelete('crm_kitting'));
+  const removeProject = async (p) => {
+    if (!window.confirm(`Remove "${p.project_name}" from Full Kitting?\n\nIts checkpoints and photos are kept, and you can bring it back from "Removed".`)) return;
+    try {
+      await api.post('/crm-kitting/project-remove', { project_key: p.project_key });
+      toast.success('Project removed from Full Kitting');
+      loadMatrix();
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not remove the project'); }
+  };
+  const restoreProject = async (p) => {
+    try {
+      await api.post('/crm-kitting/project-restore', { project_key: p.project_key });
+      toast.success('Project restored to Full Kitting');
+      if (removedCount <= 1) setShowRemoved(false);   // last one back — don't leave an empty list
+      loadMatrix();
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not restore the project'); }
+  };
 
   const openCell = (project, cp) => {
     if (!editAllowed) return;
@@ -396,7 +425,16 @@ export default function CRMKitting() {
             </button>
           );
         })}
-        <div className="relative ml-auto">
+        {(removedCount > 0 || showRemoved) && (
+          <button
+            onClick={() => setShowRemoved(v => !v)}
+            className={`btn ${showRemoved ? 'btn-primary' : 'btn-secondary'} ml-auto flex items-center gap-1.5 text-sm`}
+            title="Projects removed from the tracker (handed over etc.)"
+          >
+            <FiTrash2 size={13} /> {showRemoved ? 'Back to active projects' : `Removed (${removedCount})`}
+          </button>
+        )}
+        <div className={`relative ${(removedCount > 0 || showRemoved) ? '' : 'ml-auto'}`}>
           <FiSearch className="absolute left-2.5 top-2 text-gray-400" size={14} />
           <input
             value={filter}
@@ -413,7 +451,7 @@ export default function CRMKitting() {
       <div className="text-[11px] text-gray-500 mb-1.5 px-1">
         {loading
           ? 'Loading…'
-          : `${matrix.projects.length} projects · ${matrix.checkpoints.length} checkpoints loaded · showing ${filteredProjects.length} on Stage ${activeStage}`}
+          : `${matrix.projects.length - removedCount} projects${removedCount ? ` · ${removedCount} removed` : ''} · ${matrix.checkpoints.length} checkpoints loaded · showing ${filteredProjects.length}${showRemoved ? ' removed' : ''} on Stage ${activeStage}`}
       </div>
 
       {/* Matrix — single table with `table-layout: fixed` + explicit
@@ -513,7 +551,18 @@ export default function CRMKitting() {
                     <tr key={p.project_key} className="hover:bg-blue-50/40" style={{ height: 44 }}>
                       <td className="sticky z-10 bg-white border-r border-b text-center text-gray-500 text-[10px]" style={{ left: L.sr, position: 'sticky' }}>{idx + 1}</td>
                       <td className="sticky z-10 bg-white border-r border-b px-2 overflow-hidden" style={{ left: L.name, position: 'sticky' }}>
-                        <div className="font-medium text-gray-900 text-[11px] truncate" title={p.project_name}>{p.project_name}</div>
+                        <div className="flex items-center gap-1">
+                          <div className="font-medium text-gray-900 text-[11px] truncate flex-1 min-w-0" title={p.project_name}>{p.project_name}</div>
+                          {canRemoveProjects && (showRemoved ? (
+                            <button type="button" onClick={() => restoreProject(p)} className="shrink-0 text-emerald-600 hover:text-emerald-800" title="Restore to Full Kitting" aria-label={`Restore ${p.project_name}`}>
+                              <FiRefreshCw size={11} />
+                            </button>
+                          ) : (
+                            <button type="button" onClick={() => removeProject(p)} className="shrink-0 text-gray-300 hover:text-rose-600" title="Remove from Full Kitting (handed over etc.)" aria-label={`Remove ${p.project_name}`}>
+                              <FiTrash2 size={11} />
+                            </button>
+                          ))}
+                        </div>
                         <div className="text-[9px] text-gray-500 flex items-center gap-1 truncate">
                           {p.lead_no && <span className="font-mono">{p.lead_no}</span>}
                           {p.bb_entry_count > 1 && <span className="text-amber-700">· {p.bb_entry_count} BB</span>}

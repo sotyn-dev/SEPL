@@ -140,6 +140,17 @@ try {
       updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  // Remove-from-tracker (mam 2026-09-10: "projects can delete bcs like some
+  // are handover"). A soft flag on the tracker's own row — Business Book and
+  // every kitting entry/photo are untouched, so Restore is exact.
+  try {
+    const metaCols = db.prepare(`PRAGMA table_info(crm_kitting_project_meta)`).all().map(c => c.name);
+    if (!metaCols.includes('removed_at'))     db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN removed_at DATETIME`);
+    if (!metaCols.includes('removed_by'))     db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN removed_by INTEGER REFERENCES users(id)`);
+    if (!metaCols.includes('removed_reason')) db.exec(`ALTER TABLE crm_kitting_project_meta ADD COLUMN removed_reason TEXT`);
+  } catch (e) {
+    console.warn('[crm_kitting] removed_* column migration skipped:', e.message);
+  }
 
   // Stage-name override (admin-editable like rental_tools stage labels)
   db.exec(`CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)`);
@@ -738,6 +749,71 @@ router.put('/project-meta', requirePermission('crm_kitting', 'edit'), (req, res)
       entity_id: project_key, entity_label: project_key,
       method: 'PUT', path: '/api/crm-kitting/project-meta',
       body: { crm_owner, phase_zone, pm_owner, target_start },
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/crm-kitting/project-remove  { project_key, reason? } ──
+// ── POST /api/crm-kitting/project-restore { project_key } ───────────
+// Takes a project off (or back onto) the Full Kitting grid — handed-over
+// projects, mostly. Only the tracker's own flag changes: the Business Book
+// rows, checkpoint entries and photos all stay, so a restore is exact.
+// Gated on crm_kitting DELETE, the permission mam already assigns per role.
+const projectExistsInBB = (db, key) => !!db.prepare(`
+  SELECT 1 FROM business_book
+  WHERE COALESCE(NULLIF(TRIM(company_name),''), client_name) = ?
+  LIMIT 1
+`).get(key);
+
+router.post('/project-remove', requirePermission('crm_kitting', 'delete'), (req, res) => {
+  const db = getDb();
+  const projectKey = String(req.body?.project_key || '').trim();
+  const reason = String(req.body?.reason || '').trim().slice(0, 300) || null;
+  if (!projectKey) return res.status(400).json({ error: 'project_key required' });
+  try {
+    if (!projectExistsInBB(db, projectKey)) return res.status(404).json({ error: 'project not found in business book' });
+    db.prepare(`
+      INSERT INTO crm_kitting_project_meta (project_key, removed_at, removed_by, removed_reason, updated_by, updated_at)
+      VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(project_key) DO UPDATE SET
+        removed_at     = CURRENT_TIMESTAMP,
+        removed_by     = excluded.removed_by,
+        removed_reason = excluded.removed_reason,
+        updated_by     = excluded.updated_by,
+        updated_at     = CURRENT_TIMESTAMP
+    `).run(projectKey, req.user?.id || null, reason, req.user?.id || null);
+    logAuditEvent({
+      user: req.user, action: 'REMOVE', entity_type: 'crm_kitting_project',
+      entity_id: projectKey, entity_label: projectKey,
+      method: 'POST', path: '/api/crm-kitting/project-remove',
+      body: { project_key: projectKey, reason },
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/project-restore', requirePermission('crm_kitting', 'delete'), (req, res) => {
+  const db = getDb();
+  const projectKey = String(req.body?.project_key || '').trim();
+  if (!projectKey) return res.status(400).json({ error: 'project_key required' });
+  try {
+    const r = db.prepare(`
+      UPDATE crm_kitting_project_meta
+      SET removed_at = NULL, removed_by = NULL, removed_reason = NULL,
+          updated_by = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE project_key = ? AND removed_at IS NOT NULL
+    `).run(req.user?.id || null, projectKey);
+    if (!r.changes) return res.status(404).json({ error: 'project is not removed' });
+    logAuditEvent({
+      user: req.user, action: 'RESTORE', entity_type: 'crm_kitting_project',
+      entity_id: projectKey, entity_label: projectKey,
+      method: 'POST', path: '/api/crm-kitting/project-restore',
+      body: { project_key: projectKey },
     });
     res.json({ ok: true });
   } catch (e) {
