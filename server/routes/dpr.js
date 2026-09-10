@@ -1851,16 +1851,17 @@ router.post('/', (req, res) => {
     const rate = w.rate || 0;
     const amount = qty * rate;
     // Verify po_item_id exists, set null if not.
-    const validPoItemId = w.po_item_id
-      ? (db.prepare('SELECT id FROM po_items WHERE id=?').get(w.po_item_id) ? w.po_item_id : null)
+    const selectedPoItem = w.po_item_id
+      ? db.prepare('SELECT id, unit FROM po_items WHERE id=?').get(w.po_item_id)
       : null;
+    const validPoItemId = selectedPoItem?.id || null;
     // Same FK guard for work_order_id — silently drop the link if the
     // referenced WO no longer exists (mam may have deleted it).
     const validWoId = w.work_order_id
       ? (db.prepare('SELECT id FROM proj_work_orders WHERE id=?').get(+w.work_order_id) ? +w.work_order_id : null)
       : null;
     insertWork.run(
-      dprId, validPoItemId, validWoId, w.description, w.unit, w.location || w.floor_zone,
+      dprId, validPoItemId, validWoId, w.description, selectedPoItem?.unit || w.unit, w.location || w.floor_zone,
       w.boq_qty || 0, rate, amount, qty, qty, w.cumulative_qty || 0, 0, w.remarks, shiftVal,
     );
   }

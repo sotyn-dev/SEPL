@@ -4,6 +4,7 @@
 // per bill; numbering SEPL/SB/<FY>/NNN; Admin + Accounts (installation perm).
 const express = require('express');
 const { istToday } = require('../lib/istDate');
+const { resolveInstallationBillUnits } = require('../lib/installationBillUnits');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
@@ -71,6 +72,7 @@ function getDprSitcWorkItems(db, { salesBillId = null, dprIds = null, businessBo
   }
 
   let totalSitcVal = 0;
+  const poUnitById = db.prepare('SELECT unit FROM po_items WHERE id = ?');
   const items = wiRows.map(x => {
     const descKey = String(x.description || '').trim().toLowerCase();
     const match = (x.po_item_id && poById.get(x.po_item_id)) || poByDesc.get(descKey);
@@ -87,7 +89,7 @@ function getDprSitcWorkItems(db, { salesBillId = null, dprIds = null, businessBo
       description: match?.description || x.description || '',
       qty_ordered: qty,
       qty_delivered: qty,
-      unit: match?.unit || x.unit || 'nos',
+      unit: (x.po_item_id && poUnitById.get(x.po_item_id)?.unit) || match?.unit || x.unit || 'nos',
       hsn_code: match?.hsn_code || '',
       rate: fullRate,
       amount,
@@ -396,6 +398,7 @@ router.get('/:id', requirePermission('installation', 'view'), (req, res) => {
   const bill = db.prepare('SELECT * FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
   bill.items = db.prepare('SELECT * FROM sales_bill_items WHERE sales_bill_id=? ORDER BY id').all(bill.id);
+  bill.items = resolveInstallationBillUnits(db, bill, bill.items);
   bill.log = db.prepare(
     `SELECT l.*, u.name AS by_name FROM sales_bill_status_log l LEFT JOIN users u ON u.id=l.changed_by
       WHERE l.sales_bill_id=? ORDER BY l.id`
@@ -437,6 +440,8 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
     const sitcRes = getDprSitcWorkItems(db, { salesBillId: bill.id, businessBookId: bill.business_book_id });
     items = sitcRes.items;
   }
+  const unitItems = resolveInstallationBillUnits(db, bill, items);
+  items = unitItems;
   // Ensure all lines have their FULL SITC rate from the order's BOQ (po_items).
   //
   // Matching is deliberately layered. sales_bill_items has NO po_item_id column,
@@ -488,7 +493,7 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
     };
 
     const unresolved = [];
-    items = items.map(it => {
+    items = items.map((it, index) => {
       const key = norm(it.description);
       const match = (it.po_item_id && poById.get(it.po_item_id))
         || poByDesc.get(key)
@@ -502,7 +507,7 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
       return {
         ...it,
         description: it.description || match?.description || '',
-        unit: match?.unit || it.unit || 'nos',
+        unit: bill.bill_type === 3 ? (unitItems[index].unit || 'nos') : (match?.unit || it.unit || 'nos'),
         hsn_code: it.hsn_code || match?.hsn_code || '',
         rate: r,
         amount: round2(qty * r)
