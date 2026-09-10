@@ -122,7 +122,7 @@ export default function Inventory() {
             Stock per warehouse · receive material in · issue to site or transfer between stores · full movement history.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 w-full sm:w-auto">
           <button onClick={() => {
             // Export the currently-loaded stock rows. (Earlier this referenced
             // `flatStock`, which only exists inside StockTab — so the click
@@ -137,9 +137,9 @@ export default function Inventory() {
                 return [s.item_code, s.warehouse_name, s.item_name, s.size, s.specification, s.make, s.item_type, s.uom, s.quantity, s.latest_condition, rate, value, s.reorder_level];
               }));
           }}
-            className="btn btn-secondary flex items-center gap-2"><FiDownload size={14} /> Export Excel</button>
+            className="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-initial justify-center flex items-center gap-1.5 sm:gap-2"><FiDownload size={14} /> Export Excel</button>
           <button onClick={() => { loadSummary(); if (tab === 'stock') loadStock(); if (tab === 'movements') loadMovements(); }}
-            className="btn btn-secondary flex items-center gap-2"><FiRefreshCw size={14} /> Refresh</button>
+            className="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-initial justify-center flex items-center gap-1.5 sm:gap-2"><FiRefreshCw size={14} /> Refresh</button>
         </div>
       </div>
 
@@ -1553,8 +1553,40 @@ function ReceiveTab({ warehouses, items, reload }) {
         </div>
         <div className="space-y-3">
           {lines.map((l, i) => (
-            <div key={i} className="border rounded-lg p-2 space-y-2 bg-gray-50/40">
-              <div className="grid grid-cols-12 gap-2 items-start">
+            <div key={i} className="border rounded-lg p-2.5 sm:p-3 space-y-2 bg-gray-50/40">
+              {/* Mobile layout (< sm) */}
+              <div className="flex sm:hidden flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <SearchableSelect
+                      options={items}
+                      value={l.item_master_id || null}
+                      valueKey="id" displayKey="label"
+                      placeholder="Search item by name / code…"
+                      onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                    />
+                  </div>
+                  <button type="button" onClick={() => setScanFor(i)} className="btn btn-secondary text-xs px-2.5 py-2 flex items-center justify-center shrink-0" title="Scan barcode to pick item">
+                    <FiCamera size={14} />
+                  </button>
+                  <button type="button" onClick={() => rmLine(i)} className="p-1.5 text-gray-400 hover:text-red-600 shrink-0" title="Remove">
+                    <FiTrash2 size={16} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-medium text-gray-500 block mb-0.5">Quantity *</label>
+                    <input className="input w-full" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-gray-500 block mb-0.5">Rate ₹ (optional)</label>
+                    <input className="input w-full" type="number" step="any" min="0" placeholder="Rate ₹" value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Desktop layout (sm+) */}
+              <div className="hidden sm:grid sm:grid-cols-12 gap-2 items-start">
                 <div className="col-span-5">
                   <SearchableSelect
                     options={items}
@@ -1571,23 +1603,24 @@ function ReceiveTab({ warehouses, items, reload }) {
                 <input className="input col-span-3" type="number" step="any" min="0" placeholder="Rate ₹ (optional)" value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} />
                 <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
               </div>
-              {/* Optional photo per line — useful for opening balance proof */}
-              <div className="grid grid-cols-12 gap-2 items-center pl-1">
-                <label className="col-span-3 text-[11px] text-gray-500 flex items-center gap-1">
+
+              {/* Photo attachment per line */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2 pt-1 border-t border-gray-100 text-xs">
+                <label className="text-[11px] text-gray-500 flex items-center gap-1 shrink-0">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
                   Photo (optional)
                 </label>
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                                    disabled={l.uploading}
-                  onChange={e => uploadPhoto(i, e.target.files?.[0])}
-                  className="col-span-7 text-[11px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100"
-                />
-                <div className="col-span-2">
-                  {l.uploading && <span className="text-[10px] text-amber-600">uploading…</span>}
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <input
+                    type="file"
+                    accept="image/*,.pdf"
+                    disabled={l.uploading}
+                    onChange={e => uploadPhoto(i, e.target.files?.[0])}
+                    className="text-[11px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100 min-w-0 flex-1"
+                  />
+                  {l.uploading && <span className="text-[10px] text-amber-600 shrink-0">uploading…</span>}
                   {l.photo_url && !l.uploading && (
-                    <a href={l.photo_url} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline">✓ photo attached</a>
+                    <a href={l.photo_url} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline shrink-0">✓ photo attached</a>
                   )}
                 </div>
               </div>
@@ -1602,7 +1635,7 @@ function ReceiveTab({ warehouses, items, reload }) {
       </div>
 
       <div className="flex justify-end">
-        <button type="submit" disabled={saving} className="btn btn-primary flex items-center gap-2">
+        <button type="submit" disabled={saving} className="btn btn-primary w-full sm:w-auto flex items-center justify-center gap-2">
           <FiArrowDown size={14} /> {saving ? 'Saving…' : 'Receive Stock'}
         </button>
       </div>
@@ -1696,21 +1729,49 @@ function IssueTab({ warehouses, sites, items, reload }) {
         </div>
         <div className="space-y-2">
           {lines.map((l, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 items-start">
-              <div className="col-span-8">
-                <SearchableSelect
-                  options={items}
-                  value={l.item_master_id || null}
-                  valueKey="id" displayKey="label"
-                  placeholder="Search item by name / code…"
-                  onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
-                />
+            <div key={i} className="border sm:border-0 rounded-lg sm:rounded-none p-2 sm:p-0 bg-gray-50/40 sm:bg-transparent space-y-2 sm:space-y-0">
+              {/* Mobile (< sm) */}
+              <div className="flex sm:hidden flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <SearchableSelect
+                      options={items}
+                      value={l.item_master_id || null}
+                      valueKey="id" displayKey="label"
+                      placeholder="Search item by name / code…"
+                      onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                    />
+                  </div>
+                  <button type="button" onClick={() => setScanFor(i)} className="btn btn-secondary text-xs px-2.5 py-2 flex items-center justify-center shrink-0" title="Scan barcode">
+                    <FiCamera size={14} />
+                  </button>
+                  <button type="button" onClick={() => rmLine(i)} className="p-1.5 text-gray-400 hover:text-red-600 shrink-0" title="Remove">
+                    <FiTrash2 size={16} />
+                  </button>
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-gray-500 block mb-0.5">Quantity *</label>
+                  <input className="input w-full" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+                </div>
               </div>
-              <button type="button" onClick={() => setScanFor(i)} className="col-span-1 btn btn-secondary text-xs flex items-center justify-center" title="Scan barcode">
-                <FiCamera size={14} />
-              </button>
-              <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
-              <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
+
+              {/* Desktop (sm+) */}
+              <div className="hidden sm:grid sm:grid-cols-12 gap-2 items-start">
+                <div className="col-span-8">
+                  <SearchableSelect
+                    options={items}
+                    value={l.item_master_id || null}
+                    valueKey="id" displayKey="label"
+                    placeholder="Search item by name / code…"
+                    onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                  />
+                </div>
+                <button type="button" onClick={() => setScanFor(i)} className="col-span-1 btn btn-secondary text-xs flex items-center justify-center" title="Scan barcode">
+                  <FiCamera size={14} />
+                </button>
+                <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+                <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
+              </div>
             </div>
           ))}
         </div>
@@ -1723,12 +1784,12 @@ function IssueTab({ warehouses, sites, items, reload }) {
         </div>
         <div>
           <label className="label">Notes</label>
-          <input className="input" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Issued by / received by / purpose" />
+          <input className="input" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="e.g. For Phase 1 civil works" />
         </div>
       </div>
 
       <div className="flex justify-end">
-        <button type="submit" disabled={saving} className="btn btn-primary flex items-center gap-2">
+        <button type="submit" disabled={saving} className="btn btn-primary w-full sm:w-auto flex items-center justify-center gap-2">
           <FiArrowUp size={14} /> {saving ? 'Saving…' : (form.destination_type === 'warehouse' ? 'Transfer Stock' : 'Issue to Site')}
         </button>
       </div>

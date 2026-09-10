@@ -708,26 +708,26 @@ export default function Rentals() {
               <label className="label">Linked Site (optional)</label>
               <SearchableSelect options={sites} value={propForm.site_id || null} valueKey="id" displayKey="name" placeholder="Pick site…" onChange={(s) => setPropForm(f => ({ ...f, site_id: s?.id || '' }))} />
             </div>
-            <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Landlord</h5></div>
+            <div className="col-span-1 sm:col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Landlord</h5></div>
             <div><label className="label">Name</label><input className="input" value={propForm.landlord_name || ''} onChange={e => setPropForm(f => ({ ...f, landlord_name: e.target.value }))} /></div>
             <div><label className="label">Phone</label><input className="input" value={propForm.landlord_phone || ''} onChange={e => setPropForm(f => ({ ...f, landlord_phone: e.target.value }))} /></div>
-            <div className="col-span-2"><label className="label">Email</label><input className="input" type="email" value={propForm.landlord_email || ''} onChange={e => setPropForm(f => ({ ...f, landlord_email: e.target.value }))} /></div>
-            <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Agreement</h5></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Email</label><input className="input" type="email" value={propForm.landlord_email || ''} onChange={e => setPropForm(f => ({ ...f, landlord_email: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Agreement</h5></div>
             <div><label className="label">Monthly Rent (Rs)</label><input type="number" className="input" value={propForm.monthly_rent || 0} onChange={e => setPropForm(f => ({ ...f, monthly_rent: +e.target.value }))} /></div>
             <div><label className="label">Deposit Paid (Rs)</label><input type="number" className="input" value={propForm.deposit_paid || 0} onChange={e => setPropForm(f => ({ ...f, deposit_paid: +e.target.value }))} /></div>
             <div><label className="label">Start Date</label><input type="date" className="input" value={propForm.agreement_start_date || ''} onChange={e => setPropForm(f => ({ ...f, agreement_start_date: e.target.value }))} /></div>
             <div><label className="label">End Date</label><input type="date" className="input" value={propForm.agreement_end_date || ''} onChange={e => setPropForm(f => ({ ...f, agreement_end_date: e.target.value }))} /></div>
             <div><label className="label">Bedrooms</label><input type="number" className="input" value={propForm.bedrooms || 1} onChange={e => setPropForm(f => ({ ...f, bedrooms: +e.target.value }))} /></div>
             <div><label className="label">Total Capacity (beds)</label><input type="number" className="input" value={propForm.total_capacity || 1} onChange={e => setPropForm(f => ({ ...f, total_capacity: +e.target.value }))} /></div>
-            <div className="col-span-2"><label className="label">Amenities</label><input className="input" value={propForm.amenities || ''} onChange={e => setPropForm(f => ({ ...f, amenities: e.target.value }))} placeholder="AC, Wifi, Geyser, Furnished…" /></div>
-            <div className="col-span-2"><label className="label">Agreement file URL</label><input className="input" value={propForm.agreement_file_url || ''} onChange={e => setPropForm(f => ({ ...f, agreement_file_url: e.target.value }))} placeholder="https://… (upload separately and paste link)" /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Amenities</label><input className="input" value={propForm.amenities || ''} onChange={e => setPropForm(f => ({ ...f, amenities: e.target.value }))} placeholder="AC, Wifi, Geyser, Furnished…" /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Agreement file URL</label><input className="input" value={propForm.agreement_file_url || ''} onChange={e => setPropForm(f => ({ ...f, agreement_file_url: e.target.value }))} placeholder="https://… (upload separately and paste link)" /></div>
             <div>
               <label className="label">Status</label>
               <select className="select" value={propForm.status || 'active'} onChange={e => setPropForm(f => ({ ...f, status: e.target.value }))}>
                 <option>active</option><option>expired</option><option>terminated</option>
               </select>
             </div>
-            <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={propForm.notes || ''} onChange={e => setPropForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={propForm.notes || ''} onChange={e => setPropForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2 pt-3 border-t">
             <button type="button" onClick={() => { setPropModal(null); setPropForm({}); }} className="btn btn-secondary">Cancel</button>
@@ -786,7 +786,7 @@ export default function Rentals() {
             <div><label className="label">Planned Check-out</label><input type="date" className="input" value={bookingForm.check_out_date || ''} onChange={e => setBookingForm(f => ({ ...f, check_out_date: e.target.value }))} /></div>
             <div><label className="label">Rent Share (Rs)</label><input type="number" className="input" value={bookingForm.rent_share || 0} onChange={e => setBookingForm(f => ({ ...f, rent_share: +e.target.value }))} /></div>
             <div><label className="label">Deposit Collected</label><input type="number" className="input" value={bookingForm.deposit_collected || 0} onChange={e => setBookingForm(f => ({ ...f, deposit_collected: +e.target.value }))} /></div>
-            <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={bookingForm.notes || ''} onChange={e => setBookingForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={bookingForm.notes || ''} onChange={e => setBookingForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2"><button type="button" onClick={() => setBookingModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Book</button></div>
         </form>
@@ -799,7 +799,7 @@ export default function Rentals() {
             <label className="label">Property *</label>
             <SearchableSelect options={properties.filter(p => p.status === 'active').map(p => ({ ...p, label: `${p.name} — ${fmtRs(p.monthly_rent)}/mo` }))} value={paymentForm.property_id || null} valueKey="id" displayKey="label" placeholder="Pick property…" onChange={(p) => setPaymentForm(f => ({ ...f, property_id: p?.id || '', amount_paid: f.amount_paid || p?.monthly_rent || 0 }))} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Period (YYYY-MM) *</label><input className="input" required value={paymentForm.period_month} onChange={e => setPaymentForm(f => ({ ...f, period_month: e.target.value }))} placeholder="2026-05" /></div>
             <div><label className="label">Amount Paid *</label><input type="number" required className="input" value={paymentForm.amount_paid || 0} onChange={e => setPaymentForm(f => ({ ...f, amount_paid: +e.target.value }))} /></div>
             <div><label className="label">Paid Date</label><input type="date" className="input" value={paymentForm.paid_date || ''} onChange={e => setPaymentForm(f => ({ ...f, paid_date: e.target.value }))} /></div>
@@ -809,9 +809,9 @@ export default function Rentals() {
                 <option>Bank</option><option>UPI</option><option>Cash</option><option>Cheque</option>
               </select>
             </div>
-            <div className="col-span-2"><label className="label">Transaction Ref</label><input className="input" value={paymentForm.transaction_ref || ''} onChange={e => setPaymentForm(f => ({ ...f, transaction_ref: e.target.value }))} /></div>
-            <div className="col-span-2"><label className="label">Receipt URL</label><input className="input" value={paymentForm.receipt_url || ''} onChange={e => setPaymentForm(f => ({ ...f, receipt_url: e.target.value }))} placeholder="https://… (upload separately and paste link)" /></div>
-            <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={paymentForm.notes || ''} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Transaction Ref</label><input className="input" value={paymentForm.transaction_ref || ''} onChange={e => setPaymentForm(f => ({ ...f, transaction_ref: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Receipt URL</label><input className="input" value={paymentForm.receipt_url || ''} onChange={e => setPaymentForm(f => ({ ...f, receipt_url: e.target.value }))} placeholder="https://… (upload separately and paste link)" /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={paymentForm.notes || ''} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2"><button type="button" onClick={() => setPaymentModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>

@@ -866,13 +866,13 @@ export default function DPR() {
               reports-tab-only badge went unseen (audit 2026-07-31). */}
           {canApprove('dpr') && pendingPlans.length > 0 && (
             <button onClick={() => setPendingPlansModal(true)}
-              className="btn btn-secondary flex items-center gap-2 !border-amber-400 !text-amber-700 order-last">
+              className="btn btn-secondary flex items-center gap-2 !border-amber-400 !text-amber-700 order-last flex-shrink-0 whitespace-nowrap">
               <FiCalendar /> Plan Approvals
               <span className="bg-amber-500 text-white rounded-full px-1.5 text-[10px] font-bold">{pendingPlans.length}</span>
             </button>
           )}
           {['dashboard', 'aaj', 'reports', 'compliance', 'sites', 'losses', 'responsible'].map(t => (
-            <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
+            <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'} flex-shrink-0 whitespace-nowrap`}>
               {t === 'dashboard' ? 'Dashboard'
                 : t === 'aaj' ? '🏗️ Aaj Ka Update'
                 : t === 'reports' ? 'Daily Reports'
@@ -885,7 +885,7 @@ export default function DPR() {
           {/* Always-visible morning contractor-attendance punch (mam 2026-06-22:
               "where is attendance of contractor" — was hidden on the Reports tab). */}
           <button onClick={openMorningManpower}
-            className="btn btn-secondary flex items-center gap-2 ml-auto"
+            className="btn btn-secondary flex items-center gap-2 ml-auto flex-shrink-0 whitespace-nowrap"
             title="Record contractor manpower attendance (morning punch)">
             <FiUsers /> Contractor Attendance
           </button>
@@ -1029,9 +1029,9 @@ export default function DPR() {
               <button type="button" onClick={() => setReportFilter('')} className="text-red-600 hover:underline">Clear filter</button>
             </div>
           )}
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <input type="date" className="input w-48" value={filterDate} onChange={e => { setFilterDate(e.target.value); setDateTouched(true); }} />
-            <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <input type="date" className="input w-full sm:w-48" value={filterDate} onChange={e => { setFilterDate(e.target.value); setDateTouched(true); }} />
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               <button onClick={() => exportCsv('dpr-reports',
                 ['Site','Date','By','Status','Plan Cost (B-plan)','Actual Cost (B-actual)','Actual Total (A)','Variance (B-act − B-plan)','Approval'],
                 dprs.map(d => {
@@ -1047,23 +1047,23 @@ export default function DPR() {
                     planned ? '' : d.approval_status,
                   ];
                 }))}
-                className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiDownload /> Export Excel</button>
               {/* Weekly planning entry-point (mam, 2026-05-16). Pre-fills
                   default site = the one in the daily form's site_id if
                   picked, else empty.  Default week-start = next Monday
                   so site eng files NEXT week's plan, not the current
                   one in flight. */}
               <button onClick={() => openPlanWeek(form.site_id || '', planWeekStart)}
-                className="btn btn-secondary flex items-center gap-2"><FiCalendar /> Plan Week</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiCalendar /> Plan Week</button>
               {/* Morning Manpower — contractor attendance punch (mam 2026-06-22) */}
               <button onClick={openMorningManpower}
-                className="btn btn-secondary flex items-center gap-2"><FiUsers /> Morning Manpower</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiUsers /> Morning Manpower</button>
               {/* Site-store Issue/Return slips — the jr. engineer's GRN counter (mam 2026-07-31) */}
               <button onClick={() => openSlipModal(form.site_id || '')}
-                className="btn btn-secondary flex items-center gap-2"><FiPackage /> Store Issue/Return</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiPackage /> Store Issue/Return</button>
               {/* Attendance Records — register of all saved morning manpower (mam 2026-06-24) */}
               <button onClick={openAttendanceRecords}
-                className="btn btn-secondary flex items-center gap-2"><FiList /> Attendance Records</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiList /> Attendance Records</button>
               <button onClick={() => {
                 setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
                 setWorkItems([]); setPoItemsForSite([]);
@@ -1083,7 +1083,7 @@ export default function DPR() {
                   api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => {});
                 }
                 setModal(true);
-              }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
+              }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-center"><FiPlus /> Submit DPR</button>
             </div>
           </div>
           {/* ─── MOBILE CARDS ───────────────────────────────────────
@@ -1971,7 +1971,7 @@ export default function DPR() {
       <Modal isOpen={mmModal} onClose={() => setMmModal(false)} title="Morning Manpower — Contractor Attendance">
         <div className="space-y-3">
           <p className="text-xs text-gray-500">Record which contractors are on site this morning and how many manpower each brought. This pre-fills the DPR’s “Contractors on Site” when you submit it.</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
             <div>
               <label className="label">Site *</label>
               <select className="select" value={mmSite}
@@ -2046,7 +2046,7 @@ export default function DPR() {
       <Modal isOpen={mmRecModal} onClose={() => setMmRecModal(false)} title="Contractor Attendance — Records" wide>
         <div className="space-y-3">
           <p className="text-xs text-gray-500">All saved morning-manpower attendance. Filter by site and date range.</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 items-end">
             <div>
               <label className="label">Site</label>
               <select className="select" value={mmRecSite} onChange={e => { setMmRecSite(e.target.value); loadAttendanceRecords({ site: e.target.value }); }}>
@@ -2057,7 +2057,7 @@ export default function DPR() {
             <div><label className="label">From</label><input type="date" className="input" value={mmRecFrom} onChange={e => { setMmRecFrom(e.target.value); loadAttendanceRecords({ from: e.target.value }); }} /></div>
             <div><label className="label">To</label><input type="date" className="input" value={mmRecTo} onChange={e => { setMmRecTo(e.target.value); loadAttendanceRecords({ to: e.target.value }); }} /></div>
             {(mmRecSite || mmRecFrom || mmRecTo) && (
-              <button type="button" onClick={() => { setMmRecSite(''); setMmRecFrom(''); setMmRecTo(''); loadAttendanceRecords({ site: '', from: '', to: '' }); }} className="btn btn-secondary text-red-500">Clear</button>
+              <button type="button" onClick={() => { setMmRecSite(''); setMmRecFrom(''); setMmRecTo(''); loadAttendanceRecords({ site: '', from: '', to: '' }); }} className="btn btn-secondary text-red-500 w-full sm:w-auto">Clear</button>
             )}
           </div>
 

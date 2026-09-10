@@ -445,7 +445,7 @@ export default function Orders() {
               <div><label className="label">PO Number *</label><input className="input" value={form.po_number || ''} onChange={e => setForm({ ...form, po_number: e.target.value })} required /></div>
               <div><label className="label">PO Date *</label><input className="input" type="date" value={form.po_date || ''} onChange={e => setForm({ ...form, po_date: e.target.value })} required /></div>
               <div><label className="label">Total Amount (Rs)</label><input className="input" type="number" value={form.total_amount || 0} onChange={e => setForm({ ...form, total_amount: +e.target.value })} /></div>
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Site Engineer(s) * <span className="text-gray-400 font-normal">(select one or more)</span></label>
                 <div className="border rounded-lg p-2 bg-white flex flex-wrap gap-1.5 min-h-[42px]">
                   {siteEngineers.map(u => {
@@ -477,7 +477,7 @@ export default function Orders() {
                 { key: 'welder_ids', label: 'Welder(s)' },
                 { key: 'helper_ids', label: 'Helper(s)' },
               ].map(role => (
-                <div className="col-span-2" key={role.key}>
+                <div className="col-span-1 sm:col-span-2" key={role.key}>
                   <label className="label">{role.label} <span className="text-gray-400 font-normal">(optional)</span></label>
                   <MultiUserSelect
                     options={allUsers.map(u => ({ id: u.id, name: u.name }))}
@@ -699,9 +699,9 @@ export default function Orders() {
             </div>
           </div>
 
-          <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => { setModal(false); setEditingPO(null); }} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">{editingPO ? 'Update Purchase Order' : 'Create Purchase Order'}</button>
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
+            <button type="button" onClick={() => { setModal(false); setEditingPO(null); }} className="btn btn-secondary w-full sm:w-auto">Cancel</button>
+            <button type="submit" className="btn btn-primary w-full sm:w-auto">{editingPO ? 'Update Purchase Order' : 'Create Purchase Order'}</button>
           </div>
         </form>
       </Modal>
@@ -715,7 +715,7 @@ export default function Orders() {
             <div><label className="label">Planned End</label><input className="input" type="date" value={form.planned_end || ''} onChange={e => setForm({ ...form, planned_end: e.target.value })} /></div>
           </div>
           <div><label className="label">Notes</label><textarea className="input" rows="3" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Create</button></div>
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary w-full sm:w-auto">Cancel</button><button type="submit" className="btn btn-primary w-full sm:w-auto">Create</button></div>
         </form>
       </Modal>
     </div>

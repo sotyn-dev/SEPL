@@ -448,7 +448,7 @@ export default function RentalTools() {
       {/* ============ RAISE ENQUIRY MODAL ============ */}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Raise Rental Tool Enquiry">
         <form onSubmit={createEnquiry} className="space-y-3 text-sm">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Site Name — dropdown from Business Book master (mam,
                 2026-05-16: "site name from business book").  Combobox
                 so user can type to filter and still type a free-text
@@ -472,7 +472,7 @@ export default function RentalTools() {
             <div><label className="label">Tool / Machine</label><input className="input" value={form.tool_description} onChange={e => setForm({ ...form, tool_description: e.target.value })} placeholder="Scissor lift 12m" /></div>
             <div><label className="label">Date of Requirement *</label><input className="input" type="date" required value={form.date_of_requirement} onChange={e => setForm({ ...form, date_of_requirement: e.target.value })} /></div>
             <div><label className="label">Days Required *</label><input className="input" type="number" min="1" required value={form.days_required} onChange={e => setForm({ ...form, days_required: +e.target.value })} /></div>
-            <div className="col-span-2">
+            <div className="col-span-1 sm:col-span-2">
               <label className="label">Site Engineer *</label>
               <select className="select" required value={form.site_engineer_id} onChange={e => {
                 const u = usersList.find(x => x.id === +e.target.value);

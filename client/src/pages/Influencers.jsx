@@ -175,8 +175,8 @@ export default function Influencers() {
   };
 
   const F = (k, v) => setForm({ ...form, [k]: v });
-  const Field = ({ label, k, type = 'text', children, full }) => (
-    <div className={full ? 'col-span-2' : ''}>
+  const Field = ({ label, k, type = 'text', children, full, colSpan = '' }) => (
+    <div className={colSpan || (full ? 'col-span-1 sm:col-span-2' : '')}>
       <label className="label">{label}</label>
       {children ?? (
         <input className="input" type={type} value={form[k] ?? ''} onChange={e => F(k, type === 'number' ? +e.target.value : e.target.value)} />
@@ -209,16 +209,16 @@ export default function Influencers() {
 
       {/* Filters */}
       <div className="card p-3 flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[240px]">
+        <div className="relative flex-1 min-w-[200px]">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
           <input className="input pl-9 text-sm" placeholder="Search name / company / mobile / form ID / email…"
                  value={search} onChange={e => setSearch(e.target.value)} />
         </div>
-        <select className="select text-sm w-44" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+        <select className="select text-sm w-full sm:w-44" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
           <option value="">All categories</option>
           {CATEGORIES.map(c => <option key={c}>{c}</option>)}
         </select>
-        <select className="select text-sm w-44" value={filterStage} onChange={e => setFilterStage(e.target.value)}>
+        <select className="select text-sm w-full sm:w-44" value={filterStage} onChange={e => setFilterStage(e.target.value)}>
           <option value="">All stages</option>
           {STAGES.map(s => <option key={s}>{s}</option>)}
         </select>
@@ -227,7 +227,7 @@ export default function Influencers() {
 
       {/* Table */}
       <div className="card p-0 overflow-x-auto">
-        <table className="text-xs w-full">
+        <table className="text-xs w-full min-w-[720px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="px-2 py-2 text-left">Form ID</th>
@@ -280,7 +280,7 @@ export default function Influencers() {
 
       {/* Add / Edit modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? `Edit ${editing.form_id} — ${editing.full_name}` : 'Add Influencer'} wide>
-        <form onSubmit={save} className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+        <form onSubmit={save} className="space-y-4">
           {/* SECTION 1 · Basic Identity */}
           <div className="card p-3">
             <h5 className="text-xs font-bold text-blue-800 uppercase mb-2">1 · Basic Identity</h5>
@@ -292,7 +292,7 @@ export default function Influencers() {
                   {SALUTATIONS.map(s => <option key={s}>{s}</option>)}
                 </select>
               </div>
-              <div className="sm:col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Full Name <span className="text-red-500">*</span></label>
                 <input className="input" required value={form.full_name || ''} onChange={e => F('full_name', e.target.value)} />
               </div>
@@ -305,7 +305,7 @@ export default function Influencers() {
                   {GENDERS.map(g => <option key={g}>{g}</option>)}
                 </select>
               </div>
-              <Field label="Hometown / Native Place" k="hometown" full />
+              <Field label="Hometown / Native Place" k="hometown" colSpan="col-span-1 sm:col-span-3" />
             </div>
           </div>
 
@@ -321,7 +321,7 @@ export default function Influencers() {
                 </select>
               </div>
               {form.primary_category === 'Others' && (
-                <Field label="If 'Others' — Specify" k="primary_category_other" />
+                <Field label="If 'Others' — Specify" k="primary_category_other" colSpan="col-span-1 sm:col-span-2" />
               )}
               {/* Years in Industry — text input with numeric inputMode
                   (number type was unreliable: mam saw values capped at
@@ -368,7 +368,7 @@ export default function Influencers() {
                        value={form.year_established || ''}
                        onChange={e => F('year_established', e.target.value.replace(/\D/g, '').slice(0, 4))} />
               </div>
-              <Field label="Office Address" k="office_address" full />
+              <Field label="Office Address" k="office_address" colSpan="col-span-1 sm:col-span-2" />
               <Field label="City" k="city" />
               {/* Pincode — 6-digit numeric only */}
               <div>
@@ -446,7 +446,7 @@ export default function Influencers() {
               <Field label="Twitter / X Handle" k="twitter_handle" />
               <Field label="YouTube Channel" k="youtube_channel" />
               <Field label="Google Business Profile" k="google_business_profile" />
-              <Field label="IndiaMART / Justdial / Other Listings" k="other_listings" full />
+              <Field label="IndiaMART / Justdial / Other Listings" k="other_listings" colSpan="col-span-1 sm:col-span-2" />
             </div>
           </div>
 
@@ -511,11 +511,11 @@ export default function Influencers() {
                   {PAYMENT_BEHAVIOR.map(p => <option key={p}>{p}</option>)}
                 </select>
               </div>
-              <div className="sm:col-span-3">
+              <div className="col-span-1 sm:col-span-3">
                 <label className="label">Commission / Referral Terms <span className="text-[10px] text-gray-400 normal-case">(confidential)</span></label>
                 <textarea className="input" rows="2" value={form.commission_terms || ''} onChange={e => F('commission_terms', e.target.value)} />
               </div>
-              <div className="sm:col-span-3">
+              <div className="col-span-1 sm:col-span-3">
                 <label className="label">Competitors They Also Work With</label>
                 <textarea className="input" rows="2" value={form.competitors || ''} onChange={e => F('competitors', e.target.value)} placeholder="Comma-separated list" />
               </div>
@@ -531,9 +531,9 @@ export default function Influencers() {
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-2 border-t">
-            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Add Influencer'}</button>
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 pt-2 border-t">
+            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary w-full sm:w-auto">Cancel</button>
+            <button type="submit" className="btn btn-primary w-full sm:w-auto">{editing ? 'Update' : 'Add Influencer'}</button>
           </div>
         </form>
       </Modal>
@@ -542,7 +542,7 @@ export default function Influencers() {
       {importResult && (
         <Modal isOpen={true} onClose={() => setImportResult(null)} title="Import result" wide>
           <div className="space-y-3 text-sm">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="bg-gray-50 border rounded p-3 text-center">
                 <div className="text-2xl font-bold text-gray-700">{importResult.total_rows}</div>
                 <div className="text-[10px] uppercase text-gray-500 mt-1">Total rows</div>
