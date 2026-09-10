@@ -793,7 +793,8 @@ router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => 
     if (errors.length) {
       return res.status(400).json({ error: `Saved ${count} items; ${errors.length} failed`, failures: errors });
     }
-    res.json({ message: 'Items saved', count });
+    const unitSync = require('../lib/installationBillUnits').syncInstallationUnits(db, bbId);
+    res.json({ message: 'Items saved', count, unit_sync: unitSync });
   } catch (err) {
     console.error('[PO items save] transaction failed:', err.message);
     res.status(500).json({ error: 'Items save failed: ' + err.message });

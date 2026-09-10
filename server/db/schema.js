@@ -7325,6 +7325,19 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   } catch (e) { console.error('[schema] security_destructive_strip_v1 failed:', e.message); }
 
+  // Repair historical DPR/bill UOM snapshots once; future PO edits synchronize
+  // them immediately through the PO items save route.
+  try {
+    const unitSyncKey = 'installation_po_unit_sync_v1';
+    if (!db.prepare('SELECT 1 FROM app_settings WHERE key=?').get(unitSyncKey)) {
+      db.transaction(() => {
+        const result = require('../lib/installationBillUnits').syncInstallationUnits(db);
+        db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?)').run(unitSyncKey, JSON.stringify(result));
+        console.log('[schema] installation units synchronized:', result);
+      })();
+    }
+  } catch (e) { console.error('[schema] installation unit sync failed:', e.message); }
+
   require('./userTotp').initialize(db);
 
   console.log('Database initialized successfully');
