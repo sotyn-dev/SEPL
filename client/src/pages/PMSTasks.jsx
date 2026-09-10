@@ -17,6 +17,7 @@ import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
 import { fmtDate } from '../utils/datetime';
 import Pagination, { usePagination } from '../components/PaginationBar';
+import { MODULE_FLOWS, getFlowStep } from '../utils/moduleFlows';
 
 export default function PMSTasks() {
   const { user, isAdmin, canCreate, canApprove } = useAuth();
@@ -170,6 +171,7 @@ export default function PMSTasks() {
     if (!String(form.description || '').trim()) return toast.error('Description is required');
     if (!form.project_id) return toast.error('Pick a project');
     if (!form.assigned_to) return toast.error('Pick an assignee');
+    if (!getFlowStep(form.flow_number)) return toast.error('Enter a valid Flow Number, for example 1.1');
     setSaving(true); setSavePct(0);
     try {
       // Optional attachment — same compress + progress pipeline that
@@ -191,6 +193,7 @@ export default function PMSTasks() {
       setSavePct(100);
       await api.post('/pms-tasks', {
         description: form.description,
+        flow_number: form.flow_number.trim(),
         project_id: form.project_id,
         assigned_to: form.assigned_to,
         due_date: form.due_date,
@@ -326,8 +329,8 @@ export default function PMSTasks() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => exportCsv('pms-tasks',
-            ['Task ID','Project','Created By','Description','Assigned To','Due','Status'],
-            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status]))}
+            ['Task ID','Project','Created By','Description','Assigned To','Due','Status','Flow Number'],
+            tasks.map(t => [`PMS-${String(t.id).padStart(4, '0')}`, t.project_name_live || t.project_name_snapshot, t.assigned_by_name, t.description, t.assigned_to_name, t.due_date, t.status, t.flow_number || '']))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {canCreate('pms_tasks') && (
             <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New PMS Task</button>
@@ -453,6 +456,7 @@ export default function PMSTasks() {
                   <td className="max-w-md min-w-[240px]">
                     {/* Wrap properly across all viewports — no more line-clamp,
                         long descriptions break onto multiple lines. */}
+                    {t.flow_number && <div className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {getFlowStep(t.flow_number)}</div>}
                     <div className="text-gray-800 whitespace-pre-wrap break-words text-sm">{t.description}</div>
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
@@ -549,6 +553,7 @@ export default function PMSTasks() {
                 </span>
                 {statusBadge(t.status)}
               </div>
+              {t.flow_number && <p className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {getFlowStep(t.flow_number)}</p>}
               <p className="text-sm text-gray-800 font-medium mb-2 whitespace-pre-wrap break-words">{t.description}</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-gray-600 mb-2">
                 <div className="col-span-2"><span className="text-gray-400">Project:</span> <b>{t.project_name_live || t.project_name_snapshot || '—'}</b></div>
@@ -608,6 +613,25 @@ export default function PMSTasks() {
       {/* Create Modal */}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="New PMS Task" wide>
         <form onSubmit={save} className="space-y-3">
+          <div>
+            <label className="label" htmlFor="pms-flow-number">Flow Number *</label>
+            <input id="pms-flow-number" className="input" type="text" required
+              list="pms-flow-steps" placeholder="Enter flow number, e.g. 1.1"
+              value={form.flow_number || ''}
+              aria-describedby="pms-flow-help"
+              aria-invalid={Boolean(form.flow_number && !getFlowStep(form.flow_number))}
+              onChange={e => setForm({ ...form, flow_number: e.target.value })} />
+            <datalist id="pms-flow-steps">
+              {MODULE_FLOWS.flatMap(flow => flow.steps.map((step, index) => (
+                <option key={`${flow.number}.${index + 1}`} value={`${flow.number}.${index + 1}`}>{flow.title} — {step}</option>
+              )))}
+            </datalist>
+            <p id="pms-flow-help" aria-live="polite" className={`mt-1 text-xs ${getFlowStep(form.flow_number) ? 'text-green-700' : 'text-gray-500'}`}>
+              {getFlowStep(form.flow_number)
+                ? `Verified: ${getFlowStep(form.flow_number)}`
+                : form.flow_number ? 'Flow number not found. Enter an existing module.step number.' : 'Required. Enter the step number shown in the ERP flow guide.'}
+            </p>
+          </div>
           <div>
             <label className="label">Project *</label>
             <SearchableSelect

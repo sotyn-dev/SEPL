@@ -3806,6 +3806,7 @@ function initializeDatabase() {
     // Mam (2026-05-22): same upload affordance on the New PMS Task
     // modal — pick a brief / drawing / photo when raising.
     ['pms_tasks', 'attachment_url TEXT'],
+    ['pms_tasks', 'flow_number TEXT'],
     // Mam (2026-05-22): Checklists module needs a department tag so
     // admin can filter / route checklists by team.  Auto-populated
     // from the assignee's users.department when picked, editable in
