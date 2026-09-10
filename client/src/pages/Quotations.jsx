@@ -268,10 +268,10 @@ export default function Quotations() {
   return (
     <div className="space-y-4">
       <div className="sticky-toolbar">
-        <div className="flex gap-2">
-          <button onClick={() => setTab('boq')} className={`btn ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', 'BOQ / Drawings')}</button>
-          <button onClick={() => setTab('quotations')} className={`btn ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', 'Quotations')}</button>
-          <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', '⚙ Responsible')}</button>
+        <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
+          <button onClick={() => setTab('boq')} className={`btn text-sm whitespace-nowrap ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', 'BOQ / Drawings')}</button>
+          <button onClick={() => setTab('quotations')} className={`btn text-sm whitespace-nowrap ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', 'Quotations')}</button>
+          <button onClick={() => setTab('responsible')} className={`btn text-sm whitespace-nowrap ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', '⚙ Responsible')}</button>
         </div>
       </div>
 
@@ -279,18 +279,18 @@ export default function Quotations() {
 
       {tab === 'boq' && (
         <>
-          <div className="flex justify-between items-center">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className="font-semibold text-gray-800">Bill of Quantities</h3>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button onClick={() => exportCsv('boqs',
                 ['Title','Client','Source','Drawing','Total','Status','Date'],
                 boqs.map(b => [b.title, b.company_name, boqSourceLabel(b.source), b.drawing_required ? 'Yes' : 'No', b.total_amount, b.status, b.created_at]))}
-                className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
-              <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create BOQ</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-2"><FiDownload /> Export Excel</button>
+              <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-2"><FiPlus /> Create BOQ</button>
             </div>
           </div>
-          <div className="card p-0">
-            <table className="freeze-head">
+          <div className="card p-0 table-responsive">
+            <table className="freeze-head min-w-[750px]">
               <thead><tr><th>Title</th><th>Client</th><th>Drawing</th><th>Total</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
               <tbody>
                 {boqs.map(b => (
@@ -349,11 +349,11 @@ export default function Quotations() {
 
       {tab === 'quotations' && (
         <>
-          <div className="flex justify-between items-center">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className="font-semibold text-gray-800">Quotations</h3>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {isAdmin() && (
-                <button onClick={() => setChartOpen(true)} className="btn btn-secondary flex items-center gap-2"
+                <button onClick={() => setChartOpen(true)} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-2"
                   title="Fixed margin % per category + the approval floor (SOP-02)">
                   ⚙ Margin Chart
                 </button>
@@ -361,12 +361,12 @@ export default function Quotations() {
               <button onClick={() => exportCsv('quotations',
                 ['Number','Client','Total','Discount','Final','Status','Valid Until'],
                 quotations.map(q => [q.quotation_number, q.company_name, q.total_amount, q.discount, q.final_amount, q.status, q.valid_until]))}
-                className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
-              <button onClick={() => { setForm({ lead_id: '', boq_id: '', total_amount: 0, discount: 0, final_amount: 0, valid_until: '', notes: '' }); setModal('quotation'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Quotation</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-2"><FiDownload /> Export Excel</button>
+              <button onClick={() => { setForm({ lead_id: '', boq_id: '', total_amount: 0, discount: 0, final_amount: 0, valid_until: '', notes: '' }); setModal('quotation'); }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-2"><FiPlus /> Create Quotation</button>
             </div>
           </div>
-          <div className="card p-0">
-            <table className="freeze-head">
+          <div className="card p-0 table-responsive">
+            <table className="freeze-head min-w-[850px]">
               <thead><tr><th>Number</th><th>Client</th><th>Total</th><th>Discount</th><th>Final</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>
                 {quotations.map(q => (

@@ -304,7 +304,7 @@ export default function Snags() {
             keeps the Snag-No column fixed during horizontal scroll.
             mam (2026-07-28): "freeze like excel". */}
         <div ref={scrollBoxRef} className="overflow-auto max-h-[70vh]">
-        <table className="freeze-head freeze-col w-full">
+        <table className="freeze-head freeze-col min-w-[850px]">
           <thead>
             <tr>
               <th>Snag No</th><th>Raised</th><th>Site / Location</th><th>Description</th>
@@ -384,7 +384,7 @@ export default function Snags() {
       {/* RAISE / EDIT MODAL */}
       <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); }} title={editingId ? 'Edit Snag' : 'Raise Snag'} wide>
         <form onSubmit={save} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Site Name</label>
               <SearchableSelect
@@ -400,11 +400,11 @@ export default function Snags() {
               <label className="label">Location <span className="text-gray-400 font-normal text-[10px]">(within site)</span></label>
               <input className="input" value={form.location || ''} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. 2nd floor pump room" />
             </div>
-            <div className="col-span-2">
+            <div className="col-span-1 sm:col-span-2">
               <label className="label">Description *</label>
               <textarea className="input" rows="3" required value={form.description || ''} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What's wrong / needs fixing?" />
             </div>
-            <div className="col-span-2">
+            <div className="col-span-1 sm:col-span-2">
               <label className="label">Snag Photo</label>
               {form.photo_url ? (
                 <div className="flex items-start gap-3">

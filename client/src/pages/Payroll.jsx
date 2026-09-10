@@ -472,7 +472,7 @@ export default function Payroll() {
           </div>
         </div>
 
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
           <button onClick={() => setTab('monthly')} className={`btn ${tab === 'monthly' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1`}>
             <FiDollarSign size={14} /> Monthly Payroll
           </button>
@@ -915,7 +915,8 @@ export default function Payroll() {
           </div>
 
           <div className="card p-0">
-            <table className="freeze-head">
+            <div className="table-responsive">
+              <table className="freeze-head min-w-[800px]">
               <thead>
                 <tr>
                   <th>Employee</th>
@@ -972,6 +973,7 @@ export default function Payroll() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}

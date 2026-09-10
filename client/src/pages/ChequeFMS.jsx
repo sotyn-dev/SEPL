@@ -65,11 +65,11 @@ export default function ChequeFMS() {
     if (tab === 'action_due') params.set('action_due', '1');
     else if (tab !== 'all') params.set('status', tab);
     api.get(`/cheques?${params}`).then(r => setCheques(r.data || [])).catch(() => setCheques([]));
-    api.get('/cheques/stats/summary').then(r => setStats(r.data || { by_status: [], action_due_count: 0 })).catch(() => {});
+    api.get('/cheques/stats/summary').then(r => setStats(r.data || { by_status: [], action_due_count: 0 })).catch(() => { });
   };
   useEffect(load, [tab, search]);
   // Vendor suggestions for the Payee field (mam 2026-06-15 automation).
-  useEffect(() => { api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => { }); }, []);
 
   // STAGE 1 — open the issue modal with sensible defaults.
   const openIssue = () => {
@@ -195,11 +195,11 @@ export default function ChequeFMS() {
   const tabTotalValue = (() => {
     switch (tab) {
       case 'action_due': return +stats.action_due_total_amount || 0;
-      case 'pending':    return counts.amt.pending;
-      case 'hold':       return counts.amt.hold;
-      case 'clear':      return counts.amt.clear;
-      case 'bounce':     return counts.amt.bounce;
-      default:           return counts.totalAmount;  // 'all'
+      case 'pending': return counts.amt.pending;
+      case 'hold': return counts.amt.hold;
+      case 'clear': return counts.amt.clear;
+      case 'bounce': return counts.amt.bounce;
+      default: return counts.totalAmount;  // 'all'
     }
   })();
 
@@ -223,65 +223,67 @@ export default function ChequeFMS() {
               Issue a cheque, then log its outcome (clear / hold / bounce / stopped) once the cheque date arrives. Hold cheques get a follow-up action on the next date.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button onClick={() => exportCsv('cheques',
-              ['Cheque #','Payee','Bank','Date','Amount','Status','Hold Until','Raised By'],
-              visible.map(c => [c.cheque_number, c.payee_to, c.bank_name === 'Other' ? c.bank_other : c.bank_name, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
-              className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+              ['Cheque #', 'Payee', 'Bank', 'Date', 'Amount', 'Status', 'Hold Until', 'Raised By'],
+              visible.map(c => [c.cheque_number, c.payee_to, c.bank_name || c.bank_other, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
+              className="btn btn-secondary flex items-center gap-1.5 text-xs sm:text-sm"><FiDownload /> Export Excel</button>
             {canCreate('cheques') && (
-              <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 justify-center">
+              <button onClick={openIssue} className="btn btn-primary flex items-center gap-1.5 justify-center text-xs sm:text-sm">
                 <FiPlus /> Issue Cheque
               </button>
             )}
           </div>
         </div>
 
-        {/* Tabs / counts — royal-blue active state (mam, 2026-05-21:
-            "actual due also why red ???").  Red previously, swept to
-            brand blue. */}
-        <div className="flex gap-2 flex-wrap">
+        {/* Tabs / counts — royal-blue active state */}
+        <div className="flex gap-1.5 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${tab === t.id
-                ? `bg-blue-800 text-white border-blue-800`
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border whitespace-nowrap shrink-0 transition ${tab === t.id
+                ? `bg-blue-800 text-white border-blue-800 shadow-2xs`
                 : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-700'}`}>
               {t.label}{t.count != null ? ` (${t.count})` : ''}
             </button>
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           <input
             className="input text-sm flex-1 min-w-[200px]"
             placeholder="Search cheque no, payee, bank…"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
-          {/* Cheque-date range filter (mam 2026-06-22: "need date filter from to") */}
-          <div className="flex items-center gap-1.5">
-            <label className="text-[11px] font-semibold text-gray-500 uppercase">From</label>
-            <input type="date" className="input text-sm w-[150px]" value={dateFrom} max={dateTo || undefined} onChange={e => setDateFrom(e.target.value)} />
-            <label className="text-[11px] font-semibold text-gray-500 uppercase">To</label>
-            <input type="date" className="input text-sm w-[150px]" value={dateTo} min={dateFrom || undefined} onChange={e => setDateTo(e.target.value)} />
+          {/* Cheque-date range filter — stacked in column on mobile, inline row on tablet/desktop */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] font-semibold text-gray-500 uppercase w-10 sm:w-auto shrink-0">From</label>
+              <input type="date" className="input text-xs sm:text-sm py-1.5 flex-1 sm:w-[140px]" value={dateFrom} max={dateTo || undefined} onChange={e => setDateFrom(e.target.value)} />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] font-semibold text-gray-500 uppercase w-10 sm:w-auto shrink-0">To</label>
+              <input type="date" className="input text-xs sm:text-sm py-1.5 flex-1 sm:w-[140px]" value={dateTo} min={dateFrom || undefined} onChange={e => setDateTo(e.target.value)} />
+            </div>
             {(dateFrom || dateTo) && (
-              <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Clear</button>
+              <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs px-2.5 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0 self-end sm:self-auto">Clear</button>
             )}
           </div>
         </div>
 
         {/* Stats cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Action Due</div><div className="text-xl font-bold text-blue-800">{stats.action_due_count}</div></div>
-          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">On Hold</div><div className="text-xl font-bold text-amber-700">{counts.m.hold}</div></div>
-          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Cleared</div><div className="text-xl font-bold text-emerald-700">{counts.m.clear}</div></div>
-          <div className="card p-3">
-            <div className="text-[10px] uppercase text-gray-500">
+          <div className="card p-3 overflow-hidden"><div className="text-[10px] uppercase text-gray-500">Action Due</div><div className="text-xl font-bold text-blue-800">{stats.action_due_count}</div></div>
+          <div className="card p-3 overflow-hidden"><div className="text-[10px] uppercase text-gray-500">On Hold</div><div className="text-xl font-bold text-amber-700">{counts.m.hold}</div></div>
+          <div className="card p-3 overflow-hidden"><div className="text-[10px] uppercase text-gray-500">Cleared</div><div className="text-xl font-bold text-emerald-700">{counts.m.clear}</div></div>
+          <div className="card p-3 overflow-hidden">
+            <div className="text-[10px] uppercase text-gray-500 truncate">
               Total Value
               <span className="ml-1 text-gray-400 font-normal normal-case text-[10px]">
                 ({tabs.find(t => t.id === tab)?.label || 'All'})
               </span>
             </div>
-            <div className="text-base font-bold text-blue-800">Rs {tabTotalValue.toLocaleString('en-IN')}</div>
+            <div className="text-base font-bold text-blue-800 truncate">Rs {tabTotalValue.toLocaleString('en-IN')}</div>
           </div>
         </div>
       </div>
@@ -290,58 +292,60 @@ export default function ChequeFMS() {
 
       {/* List */}
       {tab !== 'responsible' && (
-      <div className="card p-0">
-        <table className="w-full text-xs freeze-head">
-          <thead className="bg-gray-50 text-gray-600 uppercase">
-            <tr>
-              <th className="px-2 py-2 text-left">Cheque #</th>
-              <th className="px-2 py-2 text-left">Payee</th>
-              <th className="px-2 py-2 text-left">Bank</th>
-              <th className="px-2 py-2 text-right">Date</th>
-              <th className="px-2 py-2 text-right">Amount</th>
-              <th className="px-2 py-2 text-center">Status</th>
-              <th className="px-2 py-2 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">{(dateFrom || dateTo) ? 'No cheques in this date range' : 'No cheques in this tab'}</td></tr>}
-            {pager.pageItems.map(c => {
-              const due = c.action_due === 1;
-              return (
-                <tr key={c.id} className={`border-b ${due ? 'bg-red-50/40' : ''}`}>
-                  <td className="px-2 py-1.5 font-mono">{c.cheque_number}</td>
-                  <td className="px-2 py-1.5">{c.payee_to}</td>
-                  <td className="px-2 py-1.5">{c.bank_name === 'Other' ? c.bank_other : c.bank_name}</td>
-                  <td className="px-2 py-1.5 text-right">{c.cheque_date}</td>
-                  <td className="px-2 py-1.5 text-right font-semibold">Rs {(+c.amount || 0).toLocaleString('en-IN')}</td>
-                  <td className="px-2 py-1.5 text-center">
-                    <StatusBadge status={c.current_status} dueDate={c.current_status === 'hold' ? c.hold_until : null} />
-                    {due && <div className="text-[9px] text-red-600 font-bold mt-0.5 flex items-center justify-center gap-0.5"><FiAlertTriangle size={9} /> ACTION DUE</div>}
-                  </td>
-                  <td className="px-2 py-1.5 text-right">
-                    <div className="inline-flex gap-1">
-                      <button onClick={() => openView(c)} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50" title="View history"><FiEye size={11} /></button>
-                      {c.photo_url && <a href={c.photo_url} target="_blank" rel="noreferrer" className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50" title="Open cheque photo"><FiPaperclip size={11} /></a>}
-                      {canEdit('cheques') && c.action_count === 0 && (
-                        <button onClick={() => openEdit(c)} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50" title="Edit details"><FiEdit2 size={11} /></button>
-                      )}
-                      {canEdit('cheques') && !['clear', 'bounce', 'stopped', 'cancel'].includes(c.current_status) && (
-                        <button onClick={() => openAction(c)} className="text-[10px] px-2 py-0.5 rounded bg-blue-800 text-white hover:bg-blue-900 inline-flex items-center gap-1">
-                          {c.current_status === 'hold' ? <><FiClock size={10} />Hold Action</> : <><FiCheck size={10} />Take Action</>}
-                        </button>
-                      )}
-                      {canDelete('cheques') && c.action_count === 0 && (
-                        <button onClick={() => remove(c)} className="text-xs px-2 py-0.5 rounded border border-red-300 text-red-700 hover:bg-red-50" title="Delete"><FiTrash2 size={11} /></button>
-                      )}
-                    </div>
-                  </td>
+        <div className="card p-0">
+          <div className="table-responsive">
+            <table className="w-full text-xs freeze-head min-w-[700px]">
+              <thead className="bg-gray-50 text-gray-600 uppercase">
+                <tr>
+                  <th className="px-2 py-2 text-left">Cheque #</th>
+                  <th className="px-2 py-2 text-left">Payee</th>
+                  <th className="px-2 py-2 text-left">Bank</th>
+                  <th className="px-2 py-2 text-right">Date</th>
+                  <th className="px-2 py-2 text-right">Amount</th>
+                  <th className="px-2 py-2 text-center">Status</th>
+                  <th className="px-2 py-2 text-right">Actions</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        <Pagination {...pager} />
-      </div>
+              </thead>
+              <tbody>
+                {visible.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">{(dateFrom || dateTo) ? 'No cheques in this date range' : 'No cheques in this tab'}</td></tr>}
+                {pager.pageItems.map(c => {
+                  const due = c.action_due === 1;
+                  return (
+                    <tr key={c.id} className={`border-b ${due ? 'bg-red-50/40' : ''}`}>
+                      <td className="px-2 py-1.5 font-mono">{c.cheque_number}</td>
+                      <td className="px-2 py-1.5">{c.payee_to}</td>
+                      <td className="px-2 py-1.5">{c.bank_name === 'Other' ? c.bank_other : c.bank_name}</td>
+                      <td className="px-2 py-1.5 text-right">{c.cheque_date}</td>
+                      <td className="px-2 py-1.5 text-right font-semibold">Rs {(+c.amount || 0).toLocaleString('en-IN')}</td>
+                      <td className="px-2 py-1.5 text-center">
+                        <StatusBadge status={c.current_status} dueDate={c.current_status === 'hold' ? c.hold_until : null} />
+                        {due && <div className="text-[9px] text-red-600 font-bold mt-0.5 flex items-center justify-center gap-0.5"><FiAlertTriangle size={9} /> ACTION DUE</div>}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        <div className="inline-flex gap-1">
+                          <button onClick={() => openView(c)} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50" title="View history"><FiEye size={11} /></button>
+                          {c.photo_url && <a href={c.photo_url} target="_blank" rel="noreferrer" className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50" title="Open cheque photo"><FiPaperclip size={11} /></a>}
+                          {canEdit('cheques') && c.action_count === 0 && (
+                            <button onClick={() => openEdit(c)} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50" title="Edit details"><FiEdit2 size={11} /></button>
+                          )}
+                          {canEdit('cheques') && !['clear', 'bounce', 'stopped', 'cancel'].includes(c.current_status) && (
+                            <button onClick={() => openAction(c)} className="text-[10px] px-2 py-0.5 rounded bg-blue-800 text-white hover:bg-blue-900 inline-flex items-center gap-1">
+                              {c.current_status === 'hold' ? <><FiClock size={10} />Hold Action</> : <><FiCheck size={10} />Take Action</>}
+                            </button>
+                          )}
+                          {canDelete('cheques') && c.action_count === 0 && (
+                            <button onClick={() => remove(c)} className="text-xs px-2 py-0.5 rounded border border-red-300 text-red-700 hover:bg-red-50" title="Delete"><FiTrash2 size={11} /></button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <Pagination {...pager} />
+          </div>
+        </div>
       )}
 
       {/* STAGE 1 — Issue / Edit modal */}
@@ -424,30 +428,32 @@ export default function ChequeFMS() {
       <Modal isOpen={modal === 'view'} onClose={() => setModal(null)} title={selected ? `Cheque ${selected.cheque_number} — Action History` : 'History'}>
         {selected && (
           <div className="space-y-3">
-            <div className="bg-gray-50 border border-gray-200 rounded p-2.5 text-xs grid grid-cols-2 gap-1">
+            <div className="bg-gray-50 border border-gray-200 rounded p-2.5 text-xs grid grid-cols-1 sm:grid-cols-2 gap-1">
               <div><b>Payee:</b> {selected.payee_to}</div>
               <div><b>Bank:</b> {selected.bank_name === 'Other' ? selected.bank_other : selected.bank_name}</div>
               <div><b>Cheque Date:</b> {selected.cheque_date}</div>
               <div><b>Amount:</b> Rs {(+selected.amount || 0).toLocaleString('en-IN')}</div>
-              <div className="col-span-2"><b>Current:</b> <StatusBadge status={selected.current_status} dueDate={selected.current_status === 'hold' ? selected.hold_until : null} /></div>
+              <div className="col-span-1 sm:col-span-2"><b>Current:</b> <StatusBadge status={selected.current_status} dueDate={selected.current_status === 'hold' ? selected.hold_until : null} /></div>
             </div>
             <h5 className="font-semibold text-sm text-gray-700">Action Trail</h5>
             {history.length === 0 ? (
               <p className="text-xs text-gray-400 italic">No actions logged yet.</p>
             ) : (
-              <table className="w-full text-xs">
-                <thead className="bg-gray-50"><tr><th className="px-2 py-1 text-left">Date</th><th className="px-2 py-1 text-left">Action</th><th className="px-2 py-1 text-left">Remarks</th><th className="px-2 py-1 text-left">By</th></tr></thead>
-                <tbody>
-                  {history.map(h => (
-                    <tr key={h.id} className="border-b">
-                      <td className="px-2 py-1 whitespace-nowrap">{fmtDateTime(h.action_at)}</td>
-                      <td className="px-2 py-1"><StatusBadge status={h.action === 're_issue' ? 'pending' : h.action} dueDate={h.next_date} /></td>
-                      <td className="px-2 py-1">{h.remarks}</td>
-                      <td className="px-2 py-1 text-gray-500">{h.action_by_name || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs min-w-[400px]">
+                  <thead className="bg-gray-50"><tr><th className="px-2 py-1 text-left">Date</th><th className="px-2 py-1 text-left">Action</th><th className="px-2 py-1 text-left">Remarks</th><th className="px-2 py-1 text-left">By</th></tr></thead>
+                  <tbody>
+                    {history.map(h => (
+                      <tr key={h.id} className="border-b">
+                        <td className="px-2 py-1 whitespace-nowrap">{fmtDateTime(h.action_at)}</td>
+                        <td className="px-2 py-1"><StatusBadge status={h.action === 're_issue' ? 'pending' : h.action} dueDate={h.next_date} /></td>
+                        <td className="px-2 py-1">{h.remarks}</td>
+                        <td className="px-2 py-1 text-gray-500">{h.action_by_name || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
             <div className="flex justify-end"><button onClick={() => setModal(null)} className="btn btn-secondary">Close</button></div>
           </div>

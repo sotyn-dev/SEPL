@@ -372,8 +372,9 @@ function QuotationsTab() {
         )}
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full">
+      <div className="card p-0 overflow-hidden">
+        <div className="table-responsive">
+        <table className="min-w-[850px]">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-3 text-left font-semibold">Quotation</th>
             <th className="px-3 py-3 text-left font-semibold">Project / Site</th>
@@ -453,6 +454,7 @@ function QuotationsTab() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {rows.length > 0 && (
@@ -770,8 +772,9 @@ function RatesTab() {
         )}
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full">
+      <div className="card p-0 overflow-hidden">
+        <div className="table-responsive">
+        <table className="min-w-[850px]">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             <th className="px-3 py-3 text-left font-semibold">Labour Category</th>
             <th className="px-3 py-3 text-left font-semibold">Type / Skill</th>
@@ -835,6 +838,7 @@ function RatesTab() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Add / edit rate */}

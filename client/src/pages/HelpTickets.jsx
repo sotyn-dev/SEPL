@@ -271,7 +271,7 @@ export default function HelpTickets() {
           <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FiHelpCircle className="text-red-600" /> Help Tickets</h3>
           <p className="text-sm text-gray-500">Raise a ticket, follow up on what you've raised, or work on what's been assigned to you.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={() => exportCsv('help-tickets',
             ['Ticket #','Subject','Raised By','Assigned To','Priority','Status','Deadline','When'],
             filtered.map(t => [t.ticket_no, t.subject, t.user_name, t.assigned_to_name, t.priority, t.status, t.deadline_date || '', t.created_at]))}
@@ -300,7 +300,7 @@ export default function HelpTickets() {
       )}
 
       {/* Tabs */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
         {[
           { id: 'mine',  label: 'Assigned to me',  count: counts.mine },
           { id: 'given', label: 'Raised by me',    count: counts.given },
@@ -336,8 +336,8 @@ export default function HelpTickets() {
       </div>
 
       {/* Tickets list — bounded scroll + sticky thead.  Mam, 2026-05-13. */}
-      <div className="card p-0 overflow-auto max-h-[70vh]">
-        <table className="text-sm w-full">
+      <div className="card p-0 table-responsive max-h-[70vh]">
+        <table className="text-sm w-full min-w-[900px]">
           <thead className="sticky top-0 z-10 bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Ticket</th>
@@ -425,7 +425,7 @@ export default function HelpTickets() {
             <label className="label">Description *</label>
             <textarea className="input" rows="4" required value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What happened, what you expected, what module you were on" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Category</label>
               <select className="select" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
@@ -438,16 +438,16 @@ export default function HelpTickets() {
                 {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Deadline <span className="text-gray-400 font-normal text-[10px]">(optional · target date)</span></label>
               <input type="date" className="input" value={form.deadline_date}
                 onChange={e => setForm({ ...form, deadline_date: e.target.value })} />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Module (optional)</label>
               <input className="input" value={form.module} onChange={e => setForm({ ...form, module: e.target.value })} placeholder="e.g. Procurement, Delegations, Inventory" />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Assign To (optional)</label>
               <SearchableSelect
                 options={employees.map(e => ({ ...e, label: e.name + (e.department ? ' (' + e.department + ')' : '') }))}
@@ -457,7 +457,7 @@ export default function HelpTickets() {
                 onChange={(emp) => setForm(f => ({ ...f, assigned_to: emp?.id || '' }))}
               />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Attachment <span className="text-gray-400 font-normal text-[10px]">(optional · screenshot, log, PDF)</span></label>
               <input
                 className="input"
@@ -493,7 +493,7 @@ export default function HelpTickets() {
           const isWorking = !isSubmitted && !isClosedState;    // open / in_progress / rejected
           return (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                 <div><span className="text-gray-400 text-xs">Raised by:</span> <b>{viewModal.user_name}</b></div>
                 <div><span className="text-gray-400 text-xs">Assigned to:</span> <b>{viewModal.assigned_to_name || '—'}</b></div>
                 <div><span className="text-gray-400 text-xs">Category:</span> {viewModal.category?.replace('_', ' ')}</div>

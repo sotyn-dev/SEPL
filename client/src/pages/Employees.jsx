@@ -43,8 +43,8 @@ export default function Employees() {
 
   const load = () => {
     api.get('/hr/employees').then(r => setEmployees(r.data));
-    api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
-    api.get('/hr/roster-audit').then(r => setRosterAudit(r.data || { backlog: [], guests: [] })).catch(() => {});
+    api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => { });
+    api.get('/hr/roster-audit').then(r => setRosterAudit(r.data || { backlog: [], guests: [] })).catch(() => { });
   };
   useEffect(() => { load(); }, []);
 
@@ -157,8 +157,8 @@ export default function Employees() {
     // Required-on-create — backend will also reject, but checking here lets
     // mam see the error before the upload spinner spins.
     if (!editing) {
-      if (!payload.aadhar_file)        return toast.error('Upload Aadhar card');
-      if (!payload.pan_file)           return toast.error('Upload PAN card');
+      if (!payload.aadhar_file) return toast.error('Upload Aadhar card');
+      if (!payload.pan_file) return toast.error('Upload PAN card');
       if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
     }
     try {
@@ -310,119 +310,119 @@ export default function Employees() {
       </div>
 
       {view === 'directory' && (
-      <>
-      {/* Search */}
-      <div className="relative">
-        <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-        <input className="input pl-10" placeholder="Search by name, phone, email, designation, department..." value={search} onChange={e => setSearch(e.target.value)} />
-      </div>
-
-      {/* Table */}
-      <div className="card p-0 hidden md:block"><table className="freeze-head">
-        <thead><tr>
-          <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
-          <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
-          {canSeeSalary && <th>Salary</th>}
-          <th>Status</th><th>Actions</th>
-        </tr></thead>
-        <tbody>
-          {pager.pageItems.map(e => (
-            <tr key={e.id}>
-              <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email}</td>
-              <td>{e.designation}</td><td>{e.department}</td><td>{e.join_date}</td>
-              <td>
-                {e.linked_user_name
-                  ? <span className="badge badge-green text-[10px] flex items-center gap-1 w-fit"><FiLink size={10} /> {e.linked_user_name}</span>
-                  : <span className="badge badge-red text-[10px]">Not linked</span>}
-              </td>
-              {canSeeSalary && <td className="font-medium">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
-              <td><StatusBadge status={e.status} /></td>
-              <td><div className="flex gap-1">
-                <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
-                {canEdit('employees') && (
-                  <button onClick={() => shareFillLink(e)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600"
-                    title={`Share a self-fill link with ${e.name} — they update their own details, no login`}>
-                    <FiLink size={15} />
-                  </button>
-                )}
-                {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
-              </div></td>
-            </tr>
-          ))}
-          {filtered.length === 0 && <tr><td colSpan={canSeeSalary ? 10 : 9} className="text-center py-8 text-gray-400">No employees found</td></tr>}
-        </tbody>
-      </table></div>
-
-      {/* Mobile cards (mam 2026-06-02) — polished employee card list */}
-      <div className="md:hidden space-y-3">
-        {filtered.length === 0 && (
-          <div className="card p-6 text-center text-gray-400 text-sm">No employees found</div>
-        )}
-        {pager.pageItems.map(e => (
-          <div key={e.id} className="card p-3 space-y-2">
-            <div className="flex justify-between items-start gap-2">
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
-                <div className="text-lg font-bold text-gray-900 truncate">{e.name}</div>
-                {e.designation && <div className="text-[11px] text-gray-600">{e.designation}</div>}
-                {e.department && <div className="text-[10px] text-gray-400">{e.department}</div>}
-              </div>
-              <StatusBadge status={e.status} />
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
-              {e.phone && (
-                <a href={`tel:${e.phone}`} className="text-blue-600 hover:underline">
-                  <div className="text-[9px] uppercase text-gray-400">Phone</div>
-                  <div className="font-semibold">📞 {e.phone}</div>
-                </a>
-              )}
-              {e.email && (
-                <a href={`mailto:${e.email}`} className="text-blue-600 hover:underline truncate" title={e.email}>
-                  <div className="text-[9px] uppercase text-gray-400">Email</div>
-                  <div className="font-semibold truncate">✉ {e.email}</div>
-                </a>
-              )}
-              {e.join_date && (
-                <div>
-                  <div className="text-[9px] uppercase text-gray-400">Join Date</div>
-                  <div className="font-semibold text-gray-700">{e.join_date}</div>
-                </div>
-              )}
-              {canSeeSalary && (
-                <div>
-                  <div className="text-[9px] uppercase text-gray-400">Salary</div>
-                  <div className="font-semibold text-emerald-700">Rs {(e.salary || 0).toLocaleString('en-IN')}</div>
-                </div>
-              )}
-            </div>
-            <div className="pt-1 border-t border-gray-100">
-              <div className="text-[9px] uppercase text-gray-400">Linked User</div>
-              {e.linked_user_name
-                ? <span className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1"><FiLink size={10} /> {e.linked_user_name}</span>
-                : <span className="text-[11px] font-semibold text-red-600">Not linked — DPR Staff Cost won't include this employee</span>}
-            </div>
-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-              <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
-                <FiEdit2 size={11} /> Edit
-              </button>
-              {canEdit('employees') && (
-                <button onClick={() => shareFillLink(e)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
-                  <FiLink size={11} /> Fill Link
-                </button>
-              )}
-              {canDelete('employees') && (
-                <button onClick={() => deleteEmployee(e)} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                  <FiTrash2 size={11} /> Delete
-                </button>
-              )}
-            </div>
+        <>
+          {/* Search */}
+          <div className="relative">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input className="input pl-10" placeholder="Search by name, phone, email, designation, department..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-        ))}
-      </div>
 
-      {/* One pagination bar shared by the desktop table and mobile cards */}
-      <Pagination {...pager} />
-      </>
+          {/* Table */}
+          <div className="card p-0 hidden md:block table-responsive"><table className="freeze-head w-full min-w-[900px]">
+            <thead><tr>
+              <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
+              <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
+              {canSeeSalary && <th>Salary</th>}
+              <th>Status</th><th>Actions</th>
+            </tr></thead>
+            <tbody>
+              {pager.pageItems.map(e => (
+                <tr key={e.id}>
+                  <td className="font-medium">{e.name}</td><td>{e.phone}</td><td>{e.email}</td>
+                  <td>{e.designation}</td><td>{e.department}</td><td>{e.join_date}</td>
+                  <td>
+                    {e.linked_user_name
+                      ? <span className="badge badge-green text-[10px] flex items-center gap-1 w-fit"><FiLink size={10} /> {e.linked_user_name}</span>
+                      : <span className="badge badge-red text-[10px]">Not linked</span>}
+                  </td>
+                  {canSeeSalary && <td className="font-medium">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
+                  <td><StatusBadge status={e.status} /></td>
+                  <td><div className="flex gap-1">
+                    <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
+                    {canEdit('employees') && (
+                      <button onClick={() => shareFillLink(e)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600"
+                        title={`Share a self-fill link with ${e.name} — they update their own details, no login`}>
+                        <FiLink size={15} />
+                      </button>
+                    )}
+                    {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                  </div></td>
+                </tr>
+              ))}
+              {filtered.length === 0 && <tr><td colSpan={canSeeSalary ? 10 : 9} className="text-center py-8 text-gray-400">No employees found</td></tr>}
+            </tbody>
+          </table></div>
+
+          {/* Mobile cards (mam 2026-06-02) — polished employee card list */}
+          <div className="md:hidden space-y-3">
+            {filtered.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">No employees found</div>
+            )}
+            {pager.pageItems.map(e => (
+              <div key={e.id} className="card p-3 space-y-2">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{e.name}</div>
+                    {e.designation && <div className="text-[11px] text-gray-600">{e.designation}</div>}
+                    {e.department && <div className="text-[10px] text-gray-400">{e.department}</div>}
+                  </div>
+                  <StatusBadge status={e.status} />
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  {e.phone && (
+                    <a href={`tel:${e.phone}`} className="text-blue-600 hover:underline">
+                      <div className="text-[9px] uppercase text-gray-400">Phone</div>
+                      <div className="font-semibold">📞 {e.phone}</div>
+                    </a>
+                  )}
+                  {e.email && (
+                    <a href={`mailto:${e.email}`} className="text-blue-600 hover:underline truncate" title={e.email}>
+                      <div className="text-[9px] uppercase text-gray-400">Email</div>
+                      <div className="font-semibold truncate">✉ {e.email}</div>
+                    </a>
+                  )}
+                  {e.join_date && (
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Join Date</div>
+                      <div className="font-semibold text-gray-700">{e.join_date}</div>
+                    </div>
+                  )}
+                  {canSeeSalary && (
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Salary</div>
+                      <div className="font-semibold text-emerald-700">Rs {(e.salary || 0).toLocaleString('en-IN')}</div>
+                    </div>
+                  )}
+                </div>
+                <div className="pt-1 border-t border-gray-100">
+                  <div className="text-[9px] uppercase text-gray-400">Linked User</div>
+                  {e.linked_user_name
+                    ? <span className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1"><FiLink size={10} /> {e.linked_user_name}</span>
+                    : <span className="text-[11px] font-semibold text-red-600">Not linked — DPR Staff Cost won't include this employee</span>}
+                </div>
+                <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
+                  <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                    <FiEdit2 size={11} /> Edit
+                  </button>
+                  {canEdit('employees') && (
+                    <button onClick={() => shareFillLink(e)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiLink size={11} /> Fill Link
+                    </button>
+                  )}
+                  {canDelete('employees') && (
+                    <button onClick={() => deleteEmployee(e)} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiTrash2 size={11} /> Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* One pagination bar shared by the desktop table and mobile cards */}
+          <Pagination {...pager} />
+        </>
       )}
 
       {view === 'review' && (
@@ -434,12 +434,12 @@ export default function Employees() {
           {/* Backlog: past employees whose login is still active — still counted
               in attendance strength until HR deactivates them. */}
           {rosterAudit.backlog.length > 0 && (
-            <div className="card p-0 overflow-hidden">
+            <div className="card p-0 overflow-hidden table-responsive">
               <div className="p-3 bg-red-50 border-b border-red-200">
                 <h4 className="font-bold text-red-700 text-sm">Terminated / inactive — login still active ({rosterAudit.backlog.length})</h4>
                 <p className="text-[11px] text-red-700/80 italic mt-0.5">Past employees still counted in attendance. Deactivate their login in User Management to clear them. Nothing here is changed automatically.</p>
               </div>
-              <table className="text-sm w-full">
+              <table className="text-sm w-full min-w-[600px]">
                 <thead><tr className="text-left text-gray-500 border-b"><th className="px-3 py-2">Name</th><th className="px-3 py-2">Department</th><th className="px-3 py-2">Role</th><th className="px-3 py-2">Employee status</th></tr></thead>
                 <tbody>
                   {rosterAudit.backlog.map(u => (
@@ -457,12 +457,12 @@ export default function Employees() {
 
           {/* Guests: active logins never onboarded into the employee roster. */}
           {rosterAudit.guests.length > 0 && (
-            <div className="card p-0 overflow-hidden">
+            <div className="card p-0 overflow-hidden table-responsive">
               <div className="p-3 bg-amber-50 border-b border-amber-200">
                 <h4 className="font-bold text-amber-700 text-sm">Active logins not on the employee roster ({rosterAudit.guests.length})</h4>
                 <p className="text-[11px] text-amber-700/80 italic mt-0.5">Guest / never-onboarded accounts. Onboard them via “Add Employee” if they belong, or leave as-is. Not changed automatically.</p>
               </div>
-              <table className="text-sm w-full">
+              <table className="text-sm w-full min-w-[500px]">
                 <thead><tr className="text-left text-gray-500 border-b"><th className="px-3 py-2">Name</th><th className="px-3 py-2">Department</th><th className="px-3 py-2">Role</th></tr></thead>
                 <tbody>
                   {rosterAudit.guests.map(u => (
@@ -482,15 +482,15 @@ export default function Employees() {
       {/* Add/Edit Modal */}
       <Modal isOpen={modal} onClose={() => { setModal(false); setIfscLookup({ status: 'idle' }); }} title={editing ? 'Edit Employee' : 'Add Employee'}>
         <form onSubmit={save} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
-            <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
-            <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /></div>
-            <div><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({...form, designation: e.target.value})} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
-            <div><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({...form, department: e.target.value})} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
-            <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({...form, join_date: e.target.value})} /></div>
-            {canSeeSalary && <div><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({...form, salary: +e.target.value})} /></div>}
-            {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['active','training','inactive','terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({ ...form, name: e.target.value })} required /></div>
+            <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+            <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
+            <div><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({ ...form, designation: e.target.value })} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
+            <div><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({ ...form, department: e.target.value })} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
+            <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({ ...form, join_date: e.target.value })} /></div>
+            {canSeeSalary && <div><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({ ...form, salary: +e.target.value })} /></div>}
+            {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({ ...form, status: e.target.value })}>{['active', 'training', 'inactive', 'terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
             <div>
               <label className="label">Roster / Shift</label>
               <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
@@ -540,7 +540,7 @@ export default function Employees() {
               <input className="input" value={form.emergency_contact_name || ''} placeholder="Who to call"
                 onChange={e => setForm({ ...form, emergency_contact_name: e.target.value })} />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
               <SearchableSelect
                 options={users.map(u => ({ ...u, label: `${u.name} (${u.username || u.email})` }))}
@@ -567,12 +567,20 @@ export default function Employees() {
                 UAN / PF number, so holding the full number is risk without
                 use. The card image on file covers the rare exception. */}
             {[
-              { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card *',
-                num: { k: 'aadhaar_last4', label: 'Aadhaar Number — last 4 digits only', ph: 'e.g. 4355', max: 4,
-                       hint: 'Only the last 4 digits are stored. The full number is never saved in the ERP.' } },
-              { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card *',
-                num: { k: 'pan_number', label: 'PAN Number', ph: 'ABCDE1234F', max: 10,
-                       hint: '5 letters, 4 digits, 1 letter.', upper: true } },
+              {
+                key: 'aadhar_file', slot: '_aadhar_file', label: 'Aadhar Card *',
+                num: {
+                  k: 'aadhaar_last4', label: 'Aadhaar Number — last 4 digits only', ph: 'e.g. 4355', max: 4,
+                  hint: 'Only the last 4 digits are stored. The full number is never saved in the ERP.'
+                }
+              },
+              {
+                key: 'pan_file', slot: '_pan_file', label: 'PAN Card *',
+                num: {
+                  k: 'pan_number', label: 'PAN Number', ph: 'ABCDE1234F', max: 10,
+                  hint: '5 letters, 4 digits, 1 letter.', upper: true
+                }
+              },
               { key: 'qualification_file', slot: '_qualification_file', label: 'Highest Qualification Certificate *' },
             ].map(({ key, slot, label, num }) => (
               <div key={key}>
@@ -622,8 +630,8 @@ export default function Employees() {
                 <p className={`text-[10px] mt-0.5 ${ifscLookup.status === 'ok' ? 'text-emerald-600' : ifscLookup.status === 'error' ? 'text-amber-700' : 'text-gray-500'}`}>
                   {ifscLookup.status === 'loading' ? 'Looking up bank & branch…'
                     : ifscLookup.status === 'ok' ? `✓ ${ifscLookup.bank} — ${ifscLookup.branch}`
-                    : ifscLookup.status === 'error' ? ifscLookup.message
-                    : 'Bank name and branch fill in automatically from the IFSC.'}
+                      : ifscLookup.status === 'error' ? ifscLookup.message
+                        : 'Bank name and branch fill in automatically from the IFSC.'}
                 </p>
               </div>
               <div>
@@ -684,8 +692,8 @@ export default function Employees() {
           {bulkPreview.length > 0 && (
             <div>
               <p className="text-sm font-semibold text-gray-700 mb-2">Preview: {bulkPreview.length} employees to import</p>
-              <div className="max-h-60 overflow-y-auto border rounded-lg">
-                <table className="min-w-full text-xs">
+              <div className="max-h-60 overflow-y-auto border rounded-lg table-responsive">
+                <table className="min-w-full text-xs min-w-[550px]">
                   <thead><tr className="bg-gray-50"><th className="px-2 py-1.5">Name</th><th className="px-2 py-1.5">Phone</th><th className="px-2 py-1.5">Email</th><th className="px-2 py-1.5">Designation</th><th className="px-2 py-1.5">Department</th><th className="px-2 py-1.5">Join Date</th><th className="px-2 py-1.5">Salary</th></tr></thead>
                   <tbody>
                     {bulkPreview.map((e, i) => (

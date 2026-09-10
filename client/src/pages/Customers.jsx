@@ -108,7 +108,7 @@ export default function Customers() {
       </div>
 
       {/* Category filter chips */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
         <button onClick={() => setFilterCat('')} className={`px-3 py-1 rounded-full text-xs font-semibold border ${!filterCat ? 'bg-red-600 text-white' : 'bg-white text-gray-600 border-gray-200'}`}>All ({customers.length})</button>
         {Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
           <button key={cat} onClick={() => setFilterCat(filterCat === cat ? '' : cat)} className={`px-3 py-1 rounded-full text-xs font-semibold border ${filterCat === cat ? 'bg-red-600 text-white' : 'bg-white text-gray-600 border-gray-200'}`}>{cat} ({count})</button>
@@ -141,7 +141,7 @@ export default function Customers() {
 
       <p className="text-sm text-gray-500">Showing {filtered.length} customer{filtered.length === 1 ? '' : 's'}</p>
 
-      <div className="card p-0">
+      <div className="card p-0 table-responsive">
         <div>
           <table className="min-w-[1100px] text-xs w-full freeze-head">
             <thead>
@@ -209,7 +209,7 @@ export default function Customers() {
 
       {/* Add/Edit Modal */}
       <Modal isOpen={modal === 'form'} onClose={() => { setModal(false); setEditing(null); }} title={editing ? 'Edit Customer' : 'New Customer'} wide>
-        <form onSubmit={save} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+        <form onSubmit={save} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {editing && (
               <div>
@@ -224,15 +224,15 @@ export default function Customers() {
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            <div className={editing ? '' : 'col-span-2'}>
+            <div className={editing ? '' : 'sm:col-span-2'}>
               <label className="label">Company Name *</label>
               <input className="input" value={form.company_name || ''} onChange={e => setForm({ ...form, company_name: e.target.value })} required />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Sub Company Name</label>
               <input className="input" value={form.sub_company_name || ''} onChange={e => setForm({ ...form, sub_company_name: e.target.value })} />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Company Registration Address</label>
               <textarea className="input" rows="2" value={form.company_registration_address || ''} onChange={e => setForm({ ...form, company_registration_address: e.target.value })} />
             </div>
@@ -252,7 +252,7 @@ export default function Customers() {
               <label className="label">Concern Person Email</label>
               <input className="input" type="email" value={form.concern_person_email || ''} onChange={e => setForm({ ...form, concern_person_email: e.target.value })} />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Concern Person Address</label>
               <textarea className="input" rows="2" value={form.concern_person_address || ''} onChange={e => setForm({ ...form, concern_person_address: e.target.value })} />
             </div>

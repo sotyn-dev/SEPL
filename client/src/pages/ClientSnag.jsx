@@ -277,7 +277,7 @@ export default function ClientSnag() {
 
       <div className="card p-0">
         <div className="overflow-auto max-h-[70vh]">
-        <table className="freeze-head freeze-col w-full">
+        <table className="freeze-head freeze-col min-w-[850px]">
           <thead>
             <tr>
               <th>Snag ID</th><th>Client</th><th>Assign To</th><th>Before Photo</th><th>Raised Date</th>
@@ -332,7 +332,7 @@ export default function ClientSnag() {
       {/* CREATE MODAL */}
       <Modal isOpen={createModal} onClose={() => { createAttemptRef.current += 1; setCreateModal(false); setForm({}); }} title="New Client Snag" wide>
         <form onSubmit={create} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Client *</label>
               <input className="input" required value={form.client_name || ''} onChange={e => setForm(f => ({ ...f, client_name: e.target.value }))} placeholder="Client name" />
@@ -356,7 +356,7 @@ export default function ClientSnag() {
               <label className="label">Location *</label>
               <input className="input" required value={form.location || ''} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. 2nd floor accounts desk" />
             </div>
-            <div className="col-span-2">
+            <div className="col-span-1 sm:col-span-2">
               <label className="label">Description *</label>
               <textarea className="input" rows="3" required value={form.description || ''} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What's the snag?" />
             </div>
@@ -438,12 +438,12 @@ export default function ClientSnag() {
       <Modal isOpen={!!detail} onClose={() => { setDetail(null); detailIdRef.current = null; }} title={detail ? `${detail.snag_no}` : ''} wide>
         {detail && (
           <div className="space-y-4">
-            <div className="bg-gray-50 p-3 rounded text-sm grid grid-cols-2 gap-2">
+            <div className="bg-gray-50 p-3 rounded text-sm grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div><span className="text-gray-500">Client:</span> {detail.client_name || '—'}</div>
               <div><span className="text-gray-500">Assign To:</span> {detail.assigned_to_user_name || detail.assigned_to_name || '—'}</div>
               <div><span className="text-gray-500">Site / Location:</span> {detail.site_name || '—'}{detail.location ? ` · ${detail.location}` : ''}</div>
               <div><span className="text-gray-500">Priority:</span> <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${PRIORITY_PILL[detail.priority] || ''}`}>{detail.priority}</span></div>
-              <div className="col-span-2"><span className="text-gray-500">Description:</span> {detail.description}</div>
+              <div className="col-span-1 sm:col-span-2"><span className="text-gray-500">Description:</span> {detail.description}</div>
               <div><span className="text-gray-500">Status:</span> <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[detail.status] || ''}`}>{STATUS_LABEL[detail.status] || detail.status}</span></div>
               <div><span className="text-gray-500">Raised:</span> {detail.raised_at ? fmtDateTime(detail.raised_at) : '—'} {detail.raised_by_name ? `· by ${detail.raised_by_name}` : ''}</div>
             </div>

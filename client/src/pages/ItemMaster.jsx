@@ -571,24 +571,32 @@ export default function ItemMaster() {
             {items.length === 0 && <tr><td colSpan="12" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
           </tbody>
         </table>
-        {/* Paginator — keeps the page snappy even on 2,000+ item masters. */}
+        {/* Paginator — responsive mobile layout + desktop layout */}
         {total > PAGE_SIZE && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50 text-xs">
-            <div className="text-gray-600">
-              Showing <span className="font-semibold">{page * PAGE_SIZE + 1}</span>–<span className="font-semibold">{Math.min(total, (page + 1) * PAGE_SIZE)}</span> of <span className="font-semibold">{total.toLocaleString('en-IN')}</span>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 px-4 py-3 border-t border-gray-100 bg-gray-50 text-xs">
+            <div className="text-gray-600 text-center sm:text-left whitespace-nowrap">
+              Showing <span className="font-semibold text-gray-800">{page * PAGE_SIZE + 1}</span>–<span className="font-semibold text-gray-800">{Math.min(total, (page + 1) * PAGE_SIZE)}</span> of <span className="font-semibold text-gray-800">{total.toLocaleString('en-IN')}</span> items
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-center sm:justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setPage(p => Math.max(0, p - 1))}
                 disabled={page === 0 || loading}
-                className="btn btn-secondary text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-              ><FiChevronLeft size={14} /> Prev</button>
-              <span className="text-gray-500">Page <b>{page + 1}</b> of <b>{Math.max(1, Math.ceil(total / PAGE_SIZE))}</b></span>
+                className="btn btn-secondary text-xs flex items-center gap-1 py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs"
+              >
+                <FiChevronLeft size={14} /> Prev
+              </button>
+              <span className="text-gray-600 px-2.5 py-1 bg-white border border-gray-200 rounded-md font-medium text-xs whitespace-nowrap shadow-2xs">
+                Page <b className="text-gray-900">{page + 1}</b> of <b className="text-gray-900">{Math.max(1, Math.ceil(total / PAGE_SIZE))}</b>
+              </span>
               <button
+                type="button"
                 onClick={() => setPage(p => ((p + 1) * PAGE_SIZE < total ? p + 1 : p))}
                 disabled={(page + 1) * PAGE_SIZE >= total || loading}
-                className="btn btn-secondary text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-              >Next <FiChevronRight size={14} /></button>
+                className="btn btn-secondary text-xs flex items-center gap-1 py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs"
+              >
+                Next <FiChevronRight size={14} />
+              </button>
             </div>
           </div>
         )}

@@ -520,6 +520,9 @@ app.use('/api/hr', require('./routes/hr'));
 // candidates can accept / decline via /offer/:token without
 // logging in to the ERP.
 app.use('/api/public', require('./routes/publicHr'));
+// Public webhooks (securedengineers.com website leads) — secured via x-webhook-secret
+app.use('/api/webhooks', require('./routes/webhooks'));
+app.use('/api/public/leads', require('./routes/webhooks'));
 app.use('/api/sotyn-leads', require('./routes/sotynLeads'));
 app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
@@ -650,7 +653,7 @@ app.post('/api/public/employee-upload/:token',
   async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     if (!FILL_UPLOAD_TYPES.has(req.file.mimetype)) {
-      try { require('fs').unlinkSync(req.file.path); } catch (_) {}
+      try { require('fs').unlinkSync(req.file.path); } catch (_) { }
       return res.status(400).json({ error: 'Only JPG / PNG / WEBP images or PDF files are allowed' });
     }
     const key = uploadKey(req, req.file);

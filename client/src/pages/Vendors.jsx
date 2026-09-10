@@ -242,14 +242,14 @@ export default function Vendors() {
       {tab === 'vendors' && (
         <>
           {/* Category filter chips */}
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
             <button onClick={() => setFilterCat('')} className={`px-3 py-1 rounded-full text-xs font-semibold border ${!filterCat ? 'bg-red-600 text-white' : 'bg-white text-gray-600 border-gray-200'}`}>All ({vendors.length})</button>
             {Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
               <button key={cat} onClick={() => setFilterCat(filterCat === cat ? '' : cat)} className={`px-3 py-1 rounded-full text-xs font-semibold border ${filterCat === cat ? 'bg-red-600 text-white' : 'bg-white text-gray-600 border-gray-200'}`}>{cat} ({count})</button>
             ))}
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <div className="relative flex-1"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search vendor name, firm name, deals in, code, district, phone..." value={search} onChange={e => setSearch(e.target.value)} /></div>
             <button onClick={() => exportCsv('vendors',
               ['Code','Name','Firm','Category','Deals In','Type','Phone','Email','District','State','Authorized Dealer','Turnover'],
@@ -321,13 +321,13 @@ export default function Vendors() {
 
           {/* Paginator — only when there's more than one page */}
           {pageCount > 1 && (
-            <div className="flex items-center justify-between text-xs text-gray-600 mt-1">
-              <span>Page <b>{safePage + 1}</b> of <b>{pageCount}</b></span>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0}
-                  className="btn btn-secondary text-xs disabled:opacity-40 disabled:cursor-not-allowed">‹ Prev</button>
-                <button onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={safePage >= pageCount - 1}
-                  className="btn btn-secondary text-xs disabled:opacity-40 disabled:cursor-not-allowed">Next ›</button>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 text-xs text-gray-600 mt-2 px-1">
+              <span className="text-center sm:text-left whitespace-nowrap">Page <b className="text-gray-900">{safePage + 1}</b> of <b className="text-gray-900">{pageCount}</b></span>
+              <div className="flex items-center justify-center sm:justify-end gap-2">
+                <button type="button" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0}
+                  className="btn btn-secondary text-xs py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs">‹ Prev</button>
+                <button type="button" onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={safePage >= pageCount - 1}
+                  className="btn btn-secondary text-xs py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs">Next ›</button>
               </div>
             </div>
           )}
@@ -340,7 +340,7 @@ export default function Vendors() {
             <h3 className="font-semibold text-sm">3 Vendor Rate Comparison</h3>
             <button onClick={() => { setForm({ item_description: '', vendor1_id: '', vendor1_rate: 0, vendor2_id: '', vendor2_rate: 0, vendor3_id: '', vendor3_rate: 0, final_rate: 0, selected_vendor_id: '' }); setModal('rate'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> Add Comparison</button>
           </div>
-          <div className="card p-0"><table className="text-xs freeze-head">
+          <div className="card p-0 table-responsive"><table className="text-xs freeze-head min-w-[950px]">
             <thead><tr><th>Item</th><th>Vendor 1</th><th>Rate 1</th><th>Vendor 2</th><th>Rate 2</th><th>Vendor 3</th><th>Rate 3</th><th>Final</th><th>Selected</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{rates.map(r => (
               <tr key={r.id}>
@@ -402,7 +402,7 @@ export default function Vendors() {
 
       {/* Add/Edit Vendor Modal */}
       <Modal isOpen={modal === 'vendor'} onClose={() => { setModal(false); setEditing(null); }} title={editing ? 'Edit Vendor' : 'Add Vendor'} wide>
-        <form onSubmit={saveVendor} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+        <form onSubmit={saveVendor} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div><label className="label">Vendor Code</label><input className="input" value={form.vendor_code || ''} onChange={e => setForm({...form, vendor_code: e.target.value})} placeholder="Auto if empty" /></div>
             <div><label className="label">Vendor Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
@@ -589,8 +589,8 @@ export default function Vendors() {
           {bulkPreview.length > 0 && (
             <div>
               <p className="text-sm font-semibold mb-2">{bulkPreview.length} vendor{bulkPreview.length === 1 ? '' : 's'} ready to import</p>
-              <div className="max-h-52 overflow-auto border rounded text-xs">
-                <table className="w-full">
+              <div className="max-h-52 overflow-auto border rounded text-xs table-responsive">
+                <table className="w-full min-w-[500px]">
                   <thead><tr className="bg-gray-50">
                     <th className="px-2 py-1 text-left">Name</th><th className="px-2 py-1 text-left">Firm</th>
                     <th className="px-2 py-1">Category</th><th className="px-2 py-1">Phone</th>

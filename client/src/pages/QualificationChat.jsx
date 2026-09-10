@@ -27,15 +27,15 @@ export default function QualificationChat({ deal, onClose, onDone }) {
   const showSectionHead = i === 0 || flat[i - 1]?.section !== q?.section;
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center overflow-y-auto p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-xl my-8">
-        <div className="px-5 py-3 border-b flex items-center justify-between bg-blue-900 text-white rounded-t-xl">
-          <h3 className="font-bold flex items-center gap-2"><FiPhoneCall /> Qualify on call — {deal?.client_name || 'Lead'}</h3>
-          <button onClick={onClose}><FiX /></button>
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center overflow-y-auto p-2 sm:p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-xl my-2 sm:my-8 overflow-hidden min-w-0">
+        <div className="px-4 py-3 sm:px-5 sm:py-3 border-b flex items-center justify-between bg-blue-900 text-white rounded-t-xl">
+          <h3 className="font-bold flex items-center gap-2 text-sm sm:text-base truncate pr-2"><FiPhoneCall /> Qualify on call — {deal?.client_name || 'Lead'}</h3>
+          <button onClick={onClose} className="p-1"><FiX size={18} /></button>
         </div>
         <div className="h-1.5 bg-gray-100"><div className="h-1.5 bg-emerald-500 transition-all" style={{ width: `${prog.pct}%` }} /></div>
 
-        <div className="p-5 min-h-[280px]">
+        <div className="p-3 sm:p-5 min-h-[280px]">
           {!atEnd ? (
             <div>
               {showSectionHead && <p className="text-[11px] font-bold uppercase tracking-wide text-blue-700 mb-3">{q.section}</p>}

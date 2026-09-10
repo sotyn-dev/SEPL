@@ -265,12 +265,12 @@ export default function UserManagement() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
         <div>
           <h3 className="text-xl font-bold text-gray-800">User Management</h3>
           <p className="text-sm text-gray-500">Create users and assign roles to control access</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <button onClick={async () => {
             try {
               const r = await api.get('/auth/users/export.xlsx', { responseType: 'blob' });
@@ -279,9 +279,9 @@ export default function UserManagement() {
               a.href = url; a.download = `active-users-${new Date().toISOString().slice(0, 10)}.xlsx`;
               document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
             } catch { toast.error('Export failed'); }
-          }} className="btn btn-secondary flex items-center gap-2" title="Active users + salary (from Employees)"><FiDownload size={15} /> Export Excel</button>
-          <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2"><FiUpload size={15} /> Bulk Import</button>
-          <button onClick={openCreate} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add User</button>
+          }} className="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-initial justify-center flex items-center gap-1.5 sm:gap-2" title="Active users + salary (from Employees)"><FiDownload size={15} /> Export Excel</button>
+          <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-initial justify-center flex items-center gap-1.5 sm:gap-2"><FiUpload size={15} /> Bulk Import</button>
+          <button onClick={openCreate} className="btn btn-primary text-xs sm:text-sm w-full sm:w-auto justify-center flex items-center gap-1.5 sm:gap-2"><FiPlus /> Add User</button>
         </div>
       </div>
 
@@ -291,7 +291,7 @@ export default function UserManagement() {
 
       {/* Info Cards — click one to filter the list (mam 2026-07-02: a tab to
           see just the Inactive users, which were buried among the Active ones). */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-4">
         {[
           { key: 'all',      label: 'Total Users', count: users.filter(u => !u.archived).length,                       color: 'text-red-600' },
           { key: 'active',   label: 'Active',      count: users.filter(u => u.active && !u.archived).length,           color: 'text-emerald-600' },
@@ -300,16 +300,16 @@ export default function UserManagement() {
           { key: 'archived', label: 'Archived',    count: users.filter(u => u.archived).length,                        color: 'text-gray-500' },
         ].map(c => (
           <button key={c.key} type="button" onClick={() => { setFilter(c.key); setPage(1); }}
-            className={`card text-center transition ${filter === c.key ? 'ring-2 ring-red-500 ring-offset-1' : 'hover:bg-gray-50 opacity-90 hover:opacity-100'}`}>
-            <div className={`text-3xl font-bold ${c.color}`}>{c.count}</div>
-            <div className="text-sm text-gray-500">{c.label}</div>
+            className={`card p-3 sm:p-4 text-center transition ${filter === c.key ? 'ring-2 ring-red-500 ring-offset-1' : 'hover:bg-gray-50 opacity-90 hover:opacity-100'} ${c.key === 'archived' ? 'col-span-2 sm:col-span-1 md:col-span-1' : ''}`}>
+            <div className={`text-2xl sm:text-3xl font-bold ${c.color}`}>{c.count}</div>
+            <div className="text-xs sm:text-sm text-gray-500">{c.label}</div>
           </button>
         ))}
       </div>
 
-      <div className="card p-0 overflow-x-auto">
+      <div className="card p-0 overflow-hidden">
         <div className="px-4 py-3 border-b bg-gray-50/60">
-          <div className="relative w-full max-w-xs">
+          <div className="relative w-full sm:max-w-xs">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
             <input className={`input pl-10 ${search ? 'pr-9' : ''}`} placeholder="Search username or email…"
               value={search}
@@ -329,98 +329,185 @@ export default function UserManagement() {
             <button type="button" onClick={() => { setFilter('all'); setPage(1); }} className="text-red-600 hover:underline font-medium">Show all users</button>
           </div>
         )}
-        <table>
-          <thead>
-            <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th>Actions</th></tr>
-          </thead>
-          <tbody>
-            {pg.rows.map(u => (
-              <tr key={u.id}>
-                <td className="font-medium">
-                  <div className="flex items-center gap-2">
-                    {u.avatar_url
-                      ? <img src={u.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover border shrink-0" />
-                      : <span className="w-8 h-8 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center text-xs font-bold shrink-0">{(u.name || '?').slice(0, 1).toUpperCase()}</span>}
-                    <span>{u.name}</span>
+
+        {/* Mobile cards view (< md) */}
+        <div className="md:hidden divide-y divide-gray-100">
+          {pg.rows.map(u => (
+            <div key={u.id} className="p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {u.avatar_url
+                    ? <img src={u.avatar_url} alt="" className="w-9 h-9 rounded-full object-cover border shrink-0" />
+                    : <span className="w-9 h-9 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-xs font-bold shrink-0">{(u.name || '?').slice(0, 1).toUpperCase()}</span>}
+                  <div className="min-w-0">
+                    <div className="font-bold text-gray-900 text-sm truncate">{u.name}</div>
+                    <div className="font-mono text-[11px] text-red-700 truncate">{u.username || u.email}</div>
                   </div>
-                </td>
-                <td className="font-mono text-xs text-red-700">{u.username || <span className="text-gray-300">—</span>}</td>
-                <td className="text-gray-600">{u.email}</td>
-                <td>{u.phone}</td>
-                <td>
-                  <span className={`badge ${u.role === 'admin' ? 'badge-red' : u.role === 'manager' ? 'badge-purple' : 'badge-blue'}`}>{u.role}</span>
-                  {u.approval_role === 'l1' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title="L1 Indent Approver">L1</span>}
-                  {u.approval_role === 'l2' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300" title="L2 Indent Approver">L2</span>}
-                  {u.approval_role === 'hr' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 border border-teal-300" title="HR Indent Approver (RGP)">HR</span>}
-                </td>
-                <td>
-                  <div className="flex flex-wrap gap-1">
-                    {u.role_names ? u.role_names.split(',').map((r, i) => (
-                      <span key={i} className="badge badge-green text-[10px]">{r}</span>
-                    )) : <span className="text-xs text-gray-400">No roles</span>}
+                </div>
+                <div className="shrink-0">
+                  {u.active ? <span className="badge badge-green text-[10px]">Active</span> : <span className="badge badge-red text-[10px]">Inactive</span>}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 pt-1">
+                <div>
+                  <span className="text-[9px] uppercase text-gray-400 block">Role</span>
+                  <span className={`badge ${u.role === 'admin' ? 'badge-red' : u.role === 'manager' ? 'badge-purple' : 'badge-blue'} text-[10px]`}>{u.role}</span>
+                  {u.approval_role && <span className="ml-1 text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300">{u.approval_role.toUpperCase()}</span>}
+                </div>
+                <div>
+                  <span className="text-[9px] uppercase text-gray-400 block">Department</span>
+                  <span className="font-medium truncate block">{u.department || '—'}</span>
+                </div>
+                {u.phone && (
+                  <div className="col-span-2">
+                    <span className="text-[9px] uppercase text-gray-400 block">Phone</span>
+                    <a href={`tel:${u.phone}`} className="text-blue-600 hover:underline">📞 {u.phone}</a>
                   </div>
-                </td>
-                <td>{u.department}</td>
-                <td><HrIdentity rec={u} variant="stacked" /></td>
-                <td>{u.active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Inactive</span>}</td>
-                <td>
-                  <div className="flex gap-1">
-                    <button onClick={() => openEdit(u)} className="p-1.5 hover:bg-red-50 rounded text-red-600" title="Edit"><FiEdit2 size={15} /></button>
-                    <button onClick={() => { setResetUser(u); setResetInput('123'); }} className="p-1.5 hover:bg-amber-50 rounded text-amber-600" title="Reset password">
-                      <FiKey size={15} />
-                    </button>
-                    <button onClick={() => setSecurityUser(u)}
-                      className={`p-1.5 rounded ${u.totp_required ? 'hover:bg-violet-50 text-violet-600' : 'hover:bg-gray-50 text-gray-500'}`}
-                      title="Login security — 2FA and sign out everywhere">
-                      <FiSmartphone size={15} />
-                    </button>
-                    {/* Activate/Deactivate + Track — only for non-archived users
-                        (mam 2026-07-02: the labelled toggle replaced an icon-only one). */}
-                    {!u.archived && (<>
-                    <button onClick={() => toggleActive(u)}
-                      className={`px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 border whitespace-nowrap ${u.active ? 'text-red-600 border-red-200 hover:bg-red-50' : 'text-green-700 border-green-300 bg-green-50 hover:bg-green-100'}`}
-                      title={u.active ? 'Deactivate this user — blocks login, keeps all data' : 'Activate this user'}>
-                      {u.active ? <FiUserX size={13} /> : <FiUserCheck size={13} />}
-                      {u.active ? 'Deactivate' : 'Activate'}
-                    </button>
-                    <button onClick={() => toggleTrackLocation(u)}
-                      className={`p-1.5 rounded ${u.track_location ? 'hover:bg-amber-50 text-amber-600' : 'hover:bg-emerald-50 text-emerald-600'}`}
-                      title={u.track_location ? 'Hide from Location Tracking' : 'Show in Location Tracking'}>
-                      {u.track_location ? <FiMapPin size={15} /> : <FiEyeOff size={15} />}
-                    </button>
-                    </>)}
-                    {/* Archive (hide from all lists, keep every record) / Restore —
-                        mam 2026-07-02: the safe way to "remove" a user with salary data. */}
-                    <button onClick={() => archiveUser(u, !u.archived)}
-                      className={`px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 border whitespace-nowrap ${u.archived ? 'text-emerald-700 border-emerald-300 bg-emerald-50 hover:bg-emerald-100' : 'text-gray-600 border-gray-300 hover:bg-gray-50'}`}
-                      title={u.archived ? 'Restore this user to the Inactive list' : 'Archive — hide from all lists but keep every record (attendance, salary)'}>
-                      {u.archived ? <FiRotateCcw size={13} /> : <FiArchive size={13} />}
-                      {u.archived ? 'Restore' : 'Archive'}
-                    </button>
-                    {/* Hard delete — admin's escape hatch when a user really
-                        needs to be removed (typo, wrong invite, employee left).
-                        Two-step confirmation prompts inside deleteUser to
-                        guard against accidental clicks. */}
-                    <button onClick={() => deleteUser(u)} className="p-1.5 hover:bg-red-100 rounded text-red-700" title="Delete user (permanent)">
-                      <FiTrash2 size={15} />
-                    </button>
+                )}
+                {u.email && u.email !== u.username && (
+                  <div className="col-span-2 truncate">
+                    <span className="text-[9px] uppercase text-gray-400 block">Email</span>
+                    <a href={`mailto:${u.email}`} className="text-blue-600 hover:underline truncate">✉ {u.email}</a>
                   </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                )}
+              </div>
+
+              {u.role_names && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {u.role_names.split(',').map((r, i) => (
+                    <span key={i} className="badge badge-green text-[9px]">{r}</span>
+                  ))}
+                </div>
+              )}
+
+              {/* Action buttons on mobile */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-gray-100">
+                <button onClick={() => openEdit(u)} className="btn btn-secondary text-xs py-1 px-2 flex items-center gap-1"><FiEdit2 size={12} /> Edit</button>
+                <button onClick={() => { setResetUser(u); setResetInput('123'); }} className="btn btn-secondary text-xs py-1 px-2 text-amber-600 flex items-center gap-1" title="Reset password"><FiKey size={12} /> Key</button>
+                <button onClick={() => setSecurityUser(u)}
+                  className={`btn btn-secondary text-xs py-1 px-2 flex items-center gap-1 ${u.totp_required ? 'text-violet-600' : 'text-gray-600'}`}
+                  title="Login security — 2FA and sign out everywhere">
+                  <FiSmartphone size={12} /> Security
+                </button>
+                {!u.archived && (
+                  <button onClick={() => toggleActive(u)}
+                    className={`btn text-xs py-1 px-2 flex items-center gap-1 ${u.active ? 'btn-secondary text-red-600' : 'btn-secondary text-emerald-700'}`}>
+                    {u.active ? <FiUserX size={12} /> : <FiUserCheck size={12} />}
+                    {u.active ? 'Deactivate' : 'Activate'}
+                  </button>
+                )}
+                <button onClick={() => archiveUser(u, !u.archived)}
+                  className="btn btn-secondary text-xs py-1 px-2 flex items-center gap-1">
+                  {u.archived ? <FiRotateCcw size={12} /> : <FiArchive size={12} />}
+                  {u.archived ? 'Restore' : 'Archive'}
+                </button>
+                <button onClick={() => deleteUser(u)} className="p-1.5 text-gray-400 hover:text-red-700 ml-auto" title="Delete user">
+                  <FiTrash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+          {pg.rows.length === 0 && (
+            <div className="p-6 text-center text-gray-400 text-sm">No users found</div>
+          )}
+        </div>
+
+        {/* Desktop Table (md+) */}
+        <div className="hidden md:block overflow-x-auto">
+          <table>
+            <thead>
+              <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th title="Department & designation from the linked HR employee record — for reconciliation against the free-text Department">HR (records)</th><th>Status</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {pg.rows.map(u => (
+                <tr key={u.id}>
+                  <td className="font-medium">
+                    <div className="flex items-center gap-2">
+                      {u.avatar_url
+                        ? <img src={u.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover border shrink-0" />
+                        : <span className="w-8 h-8 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center text-xs font-bold shrink-0">{(u.name || '?').slice(0, 1).toUpperCase()}</span>}
+                      <span>{u.name}</span>
+                    </div>
+                  </td>
+                  <td className="font-mono text-xs text-red-700">{u.username || <span className="text-gray-300">—</span>}</td>
+                  <td className="text-gray-600">{u.email}</td>
+                  <td>{u.phone}</td>
+                  <td>
+                    <span className={`badge ${u.role === 'admin' ? 'badge-red' : u.role === 'manager' ? 'badge-purple' : 'badge-blue'}`}>{u.role}</span>
+                    {u.approval_role === 'l1' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title="L1 Indent Approver">L1</span>}
+                    {u.approval_role === 'l2' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300" title="L2 Indent Approver">L2</span>}
+                    {u.approval_role === 'hr' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 border border-teal-300" title="HR Indent Approver (RGP)">HR</span>}
+                  </td>
+                  <td>
+                    <div className="flex flex-wrap gap-1">
+                      {u.role_names ? u.role_names.split(',').map((r, i) => (
+                        <span key={i} className="badge badge-green text-[10px]">{r}</span>
+                      )) : <span className="text-xs text-gray-400">No roles</span>}
+                    </div>
+                  </td>
+                  <td>{u.department}</td>
+                  <td><HrIdentity rec={u} variant="stacked" /></td>
+                  <td>{u.active ? <span className="badge badge-green">Active</span> : <span className="badge badge-red">Inactive</span>}</td>
+                  <td>
+                    <div className="flex gap-1">
+                      <button onClick={() => openEdit(u)} className="p-1.5 hover:bg-red-50 rounded text-red-600" title="Edit"><FiEdit2 size={15} /></button>
+                      <button onClick={() => { setResetUser(u); setResetInput('123'); }} className="p-1.5 hover:bg-amber-50 rounded text-amber-600" title="Reset password">
+                        <FiKey size={15} />
+                      </button>
+                      <button onClick={() => setSecurityUser(u)}
+                        className={`p-1.5 rounded ${u.totp_required ? 'hover:bg-violet-50 text-violet-600' : 'hover:bg-gray-50 text-gray-500'}`}
+                        title="Login security — 2FA and sign out everywhere">
+                        <FiSmartphone size={15} />
+                      </button>
+                      {/* Activate/Deactivate + Track — only for non-archived users
+                          (mam 2026-07-02: the labelled toggle replaced an icon-only one). */}
+                      {!u.archived && (<>
+                      <button onClick={() => toggleActive(u)}
+                        className={`px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 border whitespace-nowrap ${u.active ? 'text-red-600 border-red-200 hover:bg-red-50' : 'text-green-700 border-green-300 bg-green-50 hover:bg-green-100'}`}
+                        title={u.active ? 'Deactivate this user — blocks login, keeps all data' : 'Activate this user'}>
+                        {u.active ? <FiUserX size={13} /> : <FiUserCheck size={13} />}
+                        {u.active ? 'Deactivate' : 'Activate'}
+                      </button>
+                      <button onClick={() => toggleTrackLocation(u)}
+                        className={`p-1.5 rounded ${u.track_location ? 'hover:bg-amber-50 text-amber-600' : 'hover:bg-emerald-50 text-emerald-600'}`}
+                        title={u.track_location ? 'Hide from Location Tracking' : 'Show in Location Tracking'}>
+                        {u.track_location ? <FiMapPin size={15} /> : <FiEyeOff size={15} />}
+                      </button>
+                      </>)}
+                      {/* Archive (hide from all lists, keep every record) / Restore —
+                          mam 2026-07-02: the safe way to "remove" a user with salary data. */}
+                      <button onClick={() => archiveUser(u, !u.archived)}
+                        className={`px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 border whitespace-nowrap ${u.archived ? 'text-emerald-700 border-emerald-300 bg-emerald-50 hover:bg-emerald-100' : 'text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                        title={u.archived ? 'Restore this user to the Inactive list' : 'Archive — hide from all lists but keep every record (attendance, salary)'}>
+                        {u.archived ? <FiRotateCcw size={13} /> : <FiArchive size={13} />}
+                        {u.archived ? 'Restore' : 'Archive'}
+                      </button>
+                      {/* Hard delete — admin's escape hatch when a user really
+                          needs to be removed (typo, wrong invite, employee left).
+                          Two-step confirmation prompts inside deleteUser to
+                          guard against accidental clicks. */}
+                      <button onClick={() => deleteUser(u)} className="p-1.5 hover:bg-red-100 rounded text-red-700" title="Delete user (permanent)">
+                        <FiTrash2 size={15} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <Pagination pg={pg} setPerPage={setPerPage} className="border-t border-gray-100" />
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit User' : 'Create New User'} wide>
         <form onSubmit={save} className="space-y-5">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             {/* Employee photo (mam 2026-06-23) — upload via /api/upload, stored as avatar_url */}
-            <div className="col-span-2 flex items-center gap-3">
+            <div className="col-span-1 sm:col-span-2 flex items-center gap-3">
               {form.avatar_url
-                ? <img src={form.avatar_url} alt="" className="w-16 h-16 rounded-full object-cover border" />
-                : <span className="w-16 h-16 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center text-xl font-bold border">{(form.name || '?').slice(0, 1).toUpperCase()}</span>}
+                ? <img src={form.avatar_url} alt="" className="w-16 h-16 rounded-full object-cover border shrink-0" />
+                : <span className="w-16 h-16 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center text-xl font-bold border shrink-0">{(form.name || '?').slice(0, 1).toUpperCase()}</span>}
               <div>
                 <label className="label">Employee Photo</label>
                 {form.avatar_url ? (
@@ -467,14 +554,14 @@ export default function UserManagement() {
           <div>
             <label className="label flex items-center gap-2"><FiKey size={14} /> Assign Permission Roles</label>
             <p className="text-xs text-gray-500 mb-3">Select which roles this user should have. Each role grants specific permissions to modules.</p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {roles.map(r => (
                 <label key={r.id} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${selectedRoles.includes(r.id) ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'}`}>
                   <input
                     type="checkbox"
                     checked={selectedRoles.includes(r.id)}
                     onChange={() => toggleRole(r.id)}
-                    className="w-4 h-4 text-red-600"
+                    className="w-4 h-4 text-red-600 shrink-0"
                   />
                   <div>
                     <div className="text-sm font-medium">{r.name}</div>
@@ -492,9 +579,9 @@ export default function UserManagement() {
             </label>
           )}
 
-          <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">{editing ? 'Update User' : 'Create User'}</button>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3">
+            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary w-full sm:w-auto">Cancel</button>
+            <button type="submit" className="btn btn-primary w-full sm:w-auto">{editing ? 'Update User' : 'Create User'}</button>
           </div>
         </form>
       </Modal>
@@ -631,8 +718,8 @@ export default function UserManagement() {
                 <tbody>{bulkPreview.map((u, i) => <tr key={i}><td className="px-2 py-1 font-medium">{u.name}</td><td className="px-2 py-1">{u.email}</td><td className="px-2 py-1">{u.phone}</td><td className="px-2 py-1">{u.department}</td><td className="px-2 py-1">{u.role_name}</td></tr>)}</tbody></table></div>
             </div>
           )}
-          <div className="flex justify-end gap-3">
-            <button onClick={() => setBulkModal(false)} className="btn btn-secondary">Cancel</button>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3">
+            <button onClick={() => setBulkModal(false)} className="btn btn-secondary w-full sm:w-auto">Cancel</button>
             <button disabled={bulkPreview.length === 0} onClick={async () => {
               try {
                 const res = await api.post('/auth/bulk-import', { users: bulkPreview });
@@ -640,7 +727,7 @@ export default function UserManagement() {
                 if (res.data.errors.length > 0) toast.error(res.data.errors[0]);
                 setBulkModal(false); load();
               } catch { toast.error('Import failed'); }
-            }} className="btn btn-primary flex items-center gap-2 disabled:opacity-50"><FiUpload size={14} /> Import {bulkPreview.length} Users</button>
+            }} className="btn btn-primary flex items-center justify-center gap-2 disabled:opacity-50 w-full sm:w-auto"><FiUpload size={14} /> Import {bulkPreview.length} Users</button>
           </div>
         </div>
       </Modal>

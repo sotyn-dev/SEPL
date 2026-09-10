@@ -278,8 +278,8 @@ export default function CRMFunnel() {
   const winRate = rows.length > 0 ? Math.round((won.length / rows.length) * 100) : 0;
   const stepCount = (key) => key === 'all' ? rows.length :
     key === '1' ? rows.filter(r => !r.quotation_submitted).length :
-    key === '2' ? rows.filter(r => r.quotation_submitted && !r.final_status).length :
-    rows.filter(r => r.final_status === 'win' || r.final_status === 'loss').length;
+      key === '2' ? rows.filter(r => r.quotation_submitted && !r.final_status).length :
+        rows.filter(r => r.final_status === 'win' || r.final_status === 'loss').length;
 
   return (
     <div className="space-y-4">
@@ -290,7 +290,7 @@ export default function CRMFunnel() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => exportCsv('crm-funnel',
-            ['Lead #','Client','Company','Mobile','Source','Type','Category','State','Stage','Quote Amount','Neg Status','Neg Amount','Final Status'],
+            ['Lead #', 'Client', 'Company', 'Mobile', 'Source', 'Type', 'Category', 'State', 'Stage', 'Quote Amount', 'Neg Status', 'Neg Amount', 'Final Status'],
             rows.map(r => [r.lead_no, r.client_name, r.company_name, r.mobile, r.source, r.type, r.category, r.state, r.final_status || (r.quotation_submitted ? 'Negotiation' : 'Quote'), r.quotation_amount, r.negotiation_status, r.negotiation_amount, r.final_status]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {canDelete('crm_funnel') && (
@@ -339,109 +339,111 @@ export default function CRMFunnel() {
       {view === 'responsible' ? (
         <ResponsibilityTab module="crm_funnel" title="CRM Sales Funnel" />
       ) : (<>
-      {/* Metric cards — match the existing Sales Funnel dashboard 5-card
+        {/* Metric cards — match the existing Sales Funnel dashboard 5-card
           layout (Total / This Month / Won / Lost / Win Rate). */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Total Leads</p><p className="text-3xl font-extrabold text-red-600">{rows.length}</p></div>
-        <div className="card p-4 border-l-4 border-purple-500"><p className="text-[10px] text-gray-500 font-bold uppercase">This Month</p><p className="text-3xl font-extrabold text-purple-600">{thisMonth}</p></div>
-        <div className="card p-4 border-l-4 border-emerald-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Won Deals</p><p className="text-3xl font-extrabold text-emerald-600">{won.length}</p>{winAmount > 0 && <p className="text-xs text-emerald-500">{fmt(winAmount)}</p>}</div>
-        <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Lost</p><p className="text-3xl font-extrabold text-red-600">{lost.length}</p></div>
-        <div className="card p-4 border-l-4 border-amber-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Win Rate</p><p className="text-3xl font-extrabold text-amber-600">{winRate}%</p></div>
-      </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Total Leads</p><p className="text-3xl font-extrabold text-red-600">{rows.length}</p></div>
+          <div className="card p-4 border-l-4 border-purple-500"><p className="text-[10px] text-gray-500 font-bold uppercase">This Month</p><p className="text-3xl font-extrabold text-purple-600">{thisMonth}</p></div>
+          <div className="card p-4 border-l-4 border-emerald-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Won Deals</p><p className="text-3xl font-extrabold text-emerald-600">{won.length}</p>{winAmount > 0 && <p className="text-xs text-emerald-500">{fmt(winAmount)}</p>}</div>
+          <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Lost</p><p className="text-3xl font-extrabold text-red-600">{lost.length}</p></div>
+          <div className="card p-4 border-l-4 border-amber-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Win Rate</p><p className="text-3xl font-extrabold text-amber-600">{winRate}%</p></div>
+        </div>
 
-      <div className="card p-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
-        <input className="input text-sm" placeholder="Search client / company / mobile / lead#"
-          value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value }))} />
-        <select className="select text-sm" value={filter.state} onChange={e => setFilter(f => ({ ...f, state: e.target.value }))}>
-          <option value="">All states</option>
-          {STATES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="select text-sm" value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
-          <option value="">All types</option>
-          {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <select className="select text-sm" value={filter.step} onChange={e => setFilter(f => ({ ...f, step: e.target.value }))}>
-          <option value="all">All steps</option>
-          <option value="1">Step 1 — Quotation</option>
-          <option value="2">Step 2 — Negotiation</option>
-          <option value="3">Step 3 — Win/Loss</option>
-        </select>
-      </div>
+        <div className="card p-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <input className="input text-sm" placeholder="Search client / company / mobile / lead#"
+            value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value }))} />
+          <select className="select text-sm" value={filter.state} onChange={e => setFilter(f => ({ ...f, state: e.target.value }))}>
+            <option value="">All states</option>
+            {STATES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select className="select text-sm" value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
+            <option value="">All types</option>
+            {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select className="select text-sm" value={filter.step} onChange={e => setFilter(f => ({ ...f, step: e.target.value }))}>
+            <option value="all">All steps</option>
+            <option value="1">Step 1 — Quotation</option>
+            <option value="2">Step 2 — Negotiation</option>
+            <option value="3">Step 3 — Win/Loss</option>
+          </select>
+        </div>
 
-      <div className="card p-0">
-        <table className="freeze-head">
-          <thead>
-            <tr>
-              <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
-              <th>Type</th><th>Category</th><th>State</th>
-              <th>BOQ</th><th>Quote</th><th>Qty Amount</th>
-              <th>Neg Status</th><th>Neg Amount</th>
-              <th>Stage</th><th>Loss Reason</th><th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && <tr><td colSpan="16" className="text-center py-8 text-gray-400">Loading…</td></tr>}
-            {!loading && rows.length === 0 && (
-              <tr><td colSpan="16" className="text-center py-8 text-gray-400">
-                No leads yet. Click <b>+ Add Lead</b>.
-              </td></tr>
-            )}
-            {pager.pageItems.map(r => (
-              <tr key={r.id}>
-                <td className="font-mono text-xs">{r.lead_no}</td>
-                <td className="font-medium">
-                  {r.client_name}
-                  {r.requirement_items && (
-                    <div className="text-[10px] text-gray-500 font-normal max-w-[220px] truncate" title={r.requirement_items}>🧾 {r.requirement_items}</div>
-                  )}
-                </td>
-                <td>{r.company_name || '-'}</td>
-                <td>{r.mobile || '-'}</td>
-                <td>{r.source || '-'}</td>
-                <td>{r.type || '-'}</td>
-                <td>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
-                <td>{r.state || '-'}</td>
-                <td>
-                  {/* The uploaded "Customer BOQ File" counts as the BOQ too —
+        <div className="card p-0 overflow-hidden">
+          <div className="table-responsive">
+            <table className="freeze-head min-w-[900px] sm:min-w-full">
+              <thead>
+                <tr>
+                  <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
+                  <th>Type</th><th>Category</th><th>State</th>
+                  <th>BOQ</th><th>Quote</th><th>Qty Amount</th>
+                  <th>Neg Status</th><th>Neg Amount</th>
+                  <th>Stage</th><th>Loss Reason</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && <tr><td colSpan="16" className="text-center py-8 text-gray-400">Loading…</td></tr>}
+                {!loading && rows.length === 0 && (
+                  <tr><td colSpan="16" className="text-center py-8 text-gray-400">
+                    No leads yet. Click <b>+ Add Lead</b>.
+                  </td></tr>
+                )}
+                {pager.pageItems.map(r => (
+                  <tr key={r.id}>
+                    <td className="font-mono text-xs">{r.lead_no}</td>
+                    <td className="font-medium">
+                      {r.client_name}
+                      {r.requirement_items && (
+                        <div className="text-[10px] text-gray-500 font-normal max-w-[220px] truncate" title={r.requirement_items}>🧾 {r.requirement_items}</div>
+                      )}
+                    </td>
+                    <td>{r.company_name || '-'}</td>
+                    <td>{r.mobile || '-'}</td>
+                    <td>{r.source || '-'}</td>
+                    <td>{r.type || '-'}</td>
+                    <td>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
+                    <td>{r.state || '-'}</td>
+                    <td>
+                      {/* The uploaded "Customer BOQ File" counts as the BOQ too —
                       this cell used to read only cust_boq_link, so a lead whose
                       BOQ was UPLOADED showed "-" on the very page it was
                       uploaded from (mam 2026-09-07). */}
-                  {(r.cust_boq_link || r.boq_file_link) ? (
-                    <a className="text-red-600 hover:underline" href={r.cust_boq_link || r.boq_file_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
-                  ) : r.source_indent_id ? (
-                    <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
-                  ) : '-'}
-                </td>
-                <td>
-                  {r.quotation_link ? (
-                    <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
-                  ) : (r.source_indent_id && r.category === 'extra_schedule') ? (
-                    <a href={`/quotation/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap font-semibold" title="Auto-priced quotation from previous BOQ rates"><FiExternalLink size={11} /> Make quotation</a>
-                  ) : '-'}
-                </td>
-                <td>{r.quotation_amount ? `Rs ${(+r.quotation_amount).toLocaleString('en-IN')}` : '-'}</td>
-                <td>{NEG_STATUSES.find(s => s.v === r.negotiation_status)?.l || '-'}</td>
-                <td>{r.negotiation_amount ? `Rs ${(+r.negotiation_amount).toLocaleString('en-IN')}` : '-'}</td>
-                <td>{stepBadge(r)}</td>
-                <td className="text-xs text-gray-600 max-w-[180px] truncate" title={r.loss_reason}>{r.loss_reason || '-'}</td>
-                <td>
-                  <div className="flex gap-1">
-                    {/* View (eye) — works for everyone with view
+                      {(r.cust_boq_link || r.boq_file_link) ? (
+                        <a className="text-red-600 hover:underline" href={r.cust_boq_link || r.boq_file_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                      ) : r.source_indent_id ? (
+                        <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
+                      ) : '-'}
+                    </td>
+                    <td>
+                      {r.quotation_link ? (
+                        <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                      ) : (r.source_indent_id && r.category === 'extra_schedule') ? (
+                        <a href={`/quotation/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap font-semibold" title="Auto-priced quotation from previous BOQ rates"><FiExternalLink size={11} /> Make quotation</a>
+                      ) : '-'}
+                    </td>
+                    <td>{r.quotation_amount ? `Rs ${(+r.quotation_amount).toLocaleString('en-IN')}` : '-'}</td>
+                    <td>{NEG_STATUSES.find(s => s.v === r.negotiation_status)?.l || '-'}</td>
+                    <td>{r.negotiation_amount ? `Rs ${(+r.negotiation_amount).toLocaleString('en-IN')}` : '-'}</td>
+                    <td>{stepBadge(r)}</td>
+                    <td className="text-xs text-gray-600 max-w-[180px] truncate" title={r.loss_reason}>{r.loss_reason || '-'}</td>
+                    <td>
+                      <div className="flex gap-1">
+                        {/* View (eye) — works for everyone with view
                         access, including roles that can't edit.
                         Mam wanted a consistent eye-button shape
                         across CRM Funnel, Sales Funnel, BB,
                         Rental, etc. */}
-                    <button onClick={() => setViewRow(r)} className="p-1 text-gray-400 hover:text-red-600" title="View lead"><FiEye size={14} /></button>
-                    {canEdit('crm_funnel') && <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}
-                    {canDelete('crm_funnel') && <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <Pagination {...pager} />
-      </div>
+                        <button onClick={() => setViewRow(r)} className="p-1 text-gray-400 hover:text-red-600" title="View lead"><FiEye size={14} /></button>
+                        {canEdit('crm_funnel') && <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}
+                        {canDelete('crm_funnel') && <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Pagination {...pager} />
+          </div>
+        </div>
       </>)}
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? `Edit Lead — ${editing.lead_no}` : 'Add CRM Lead'} wide>
@@ -699,7 +701,7 @@ export default function CRMFunnel() {
 
                 {/* STEP 1 → STEP 2 · submit quotation */}
                 {currentStep(viewRow) === 'step1' && (
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <div className="space-y-1">
                       <label className="text-gray-600">Quotation Amount (₹)</label>
                       <input type="number" className="input w-full" value={stageForm.quotation_amount || ''}
@@ -722,7 +724,7 @@ export default function CRMFunnel() {
 
                 {/* STEP 2 · negotiation */}
                 {currentStep(viewRow) === 'step2' && (
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <div className="space-y-1">
                       <label className="text-gray-600">Negotiation status</label>
                       <select className="select w-full" value={stageForm.negotiation_status || ''}
@@ -770,7 +772,7 @@ export default function CRMFunnel() {
                         ? `Won — Rs ${(+viewRow.negotiation_amount || +viewRow.quotation_amount || 0).toLocaleString('en-IN')}`
                         : `Lost — ${viewRow.loss_reason || 'no reason given'}`}
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <select className="select" value={stageForm.final_status || ''}
                         onChange={e => setStageForm({ ...stageForm, final_status: e.target.value })}>
                         <option value="">Re-open (move back to Step 2)</option>

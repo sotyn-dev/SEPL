@@ -12,18 +12,18 @@ router.use(authMiddleware);
 // `sla_hours = null` means no fixed SLA on that stage (T-X in spec).
 // `who` is the role that owns the stage.
 const STAGES = [
-  { key: 'lead_capture',            label: 'Lead/Tender Capture',          color: 'blue',    who: 'BD',           sla_hours: 1,        gate: false },
-  { key: 'qualification',           label: 'Qualified or Not',             color: 'indigo',  who: 'Sales Head',   sla_hours: 24,       gate: false },
-  { key: 'site_survey',             label: 'Site Survey + Feasibility',    color: 'purple',  who: 'Site Eng',     sla_hours: 72,       gate: false },
-  { key: 'concept_design',          label: 'Concept Design / Drawings',    color: 'violet',  who: 'Designer',     sla_hours: 168,      gate: false },
-  { key: 'boq_costing',             label: 'BOQ + Vendor Costing',         color: 'amber',   who: 'Estimation',   sla_hours: 168,      gate: false },
-  { key: 'pricing_review',          label: 'Internal Pricing Review',      color: 'orange',  who: 'CFO',          sla_hours: 24,       gate: true  },
-  { key: 'quote_submitted',         label: 'Quote / Bid Submission',       color: 'cyan',    who: 'Sales',        sla_hours: null,     gate: false },
-  { key: 'technical_clarification', label: 'Technical Clarification',      color: 'sky',     who: 'Sales + Tech', sla_hours: 24,       gate: false },
-  { key: 'commercial_negotiation',  label: 'Commercial Negotiation',       color: 'teal',    who: 'Sales Head',   sla_hours: null,     gate: false },
-  { key: 'contract_signed',         label: 'Contract + LOI / PO',          color: 'emerald', who: 'Legal + CFO',  sla_hours: null,     gate: true  },
-  { key: 'project_kickoff',         label: 'Project Kickoff',              color: 'lime',    who: 'PM',           sla_hours: null,     gate: false },
-  { key: 'lost',                    label: 'Lost',                         color: 'red',     who: '-',            sla_hours: null,     gate: false },
+  { key: 'lead_capture', label: 'Lead/Tender Capture', color: 'blue', who: 'BD', sla_hours: 1, gate: false },
+  { key: 'qualification', label: 'Qualified or Not', color: 'indigo', who: 'Sales Head', sla_hours: 24, gate: false },
+  { key: 'site_survey', label: 'Site Survey + Feasibility', color: 'purple', who: 'Site Eng', sla_hours: 72, gate: false },
+  { key: 'concept_design', label: 'Concept Design / Drawings', color: 'violet', who: 'Designer', sla_hours: 168, gate: false },
+  { key: 'boq_costing', label: 'BOQ + Vendor Costing', color: 'amber', who: 'Estimation', sla_hours: 168, gate: false },
+  { key: 'pricing_review', label: 'Internal Pricing Review', color: 'orange', who: 'CFO', sla_hours: 24, gate: true },
+  { key: 'quote_submitted', label: 'Quote / Bid Submission', color: 'cyan', who: 'Sales', sla_hours: null, gate: false },
+  { key: 'technical_clarification', label: 'Technical Clarification', color: 'sky', who: 'Sales + Tech', sla_hours: 24, gate: false },
+  { key: 'commercial_negotiation', label: 'Commercial Negotiation', color: 'teal', who: 'Sales Head', sla_hours: null, gate: false },
+  { key: 'contract_signed', label: 'Contract + LOI / PO', color: 'emerald', who: 'Legal + CFO', sla_hours: null, gate: true },
+  { key: 'project_kickoff', label: 'Project Kickoff', color: 'lime', who: 'PM', sla_hours: null, gate: false },
+  { key: 'lost', label: 'Lost', color: 'red', who: '-', sla_hours: null, gate: false },
 ];
 
 // Backward-compat: old single-letter / legacy stage keys map to new ones.
@@ -83,9 +83,9 @@ router.get('/stages', (req, res) => res.json(STAGES));
 
 // Spec-defined sources / categories / sub-trades.
 // MUST be declared before `/:id` so Express doesn't treat 'meta' as a lead id.
-const SOURCES = ['Website','Referral','Cold','IPC','GeM','CPPP','State Portal','Repeat'];
-const CATEGORIES_SPEC = ['MEPF Project','Solar EPC'];
-const SUB_TRADES = ['M','E','P','F','BMS','ELV','Solar'];
+const SOURCES = ['Website', 'Referral', 'Cold', 'IPC', 'GeM', 'CPPP', 'State Portal', 'Repeat'];
+const CATEGORIES_SPEC = ['MEPF Project', 'Solar EPC'];
+const SUB_TRADES = ['M', 'E', 'P', 'F', 'BMS', 'ELV', 'Solar'];
 router.get('/meta', (req, res) => res.json({
   sources: SOURCES, categories: CATEGORIES_SPEC, sub_trades: SUB_TRADES, stages: STAGES,
 }));
@@ -111,7 +111,7 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
   try {
     todayFollowups = db.prepare("SELECT COUNT(*) as c FROM lead_followups WHERE done=0 AND followup_date=?").get(today)?.c || 0;
     overdueFollowups = db.prepare("SELECT COUNT(*) as c FROM lead_followups WHERE done=0 AND followup_date<?").get(today)?.c || 0;
-  } catch(e) {}
+  } catch (e) { }
 
   // Fortnightly expected-closing forecast (mam 2026-06-25): qualified leads
   // that have a closing date, bucketed into 14-day periods from today, summing
@@ -125,8 +125,8 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
     const DAY = 86400000, FN = 14 * DAY, N = 6;
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const fmtD = (ts) => { const d = new Date(ts); return `${String(d.getDate()).padStart(2,'0')} ${MON[d.getMonth()]}`; };
+    const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const fmtD = (ts) => { const d = new Date(ts); return `${String(d.getDate()).padStart(2, '0')} ${MON[d.getMonth()]}`; };
     const buckets = [{ key: 'overdue', label: 'Overdue', count: 0, amount: 0 }];
     for (let i = 0; i < N; i++) {
       const start = todayStart + i * FN;
@@ -143,7 +143,7 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
       b.count += 1; b.amount += +r.amt || 0;
     }
     closingByFortnight = buckets;
-  } catch (e) {}
+  } catch (e) { }
 
   res.json({ total: total.c, byStage: bystage, won, lost, thisMonth: thisMonth.c, byCategory, bySC, recent, stages: STAGES, todayFollowups, overdueFollowups, closingByFortnight });
 });
@@ -172,7 +172,7 @@ function validateStage1(b, isCreate) {
   const errors = [];
   if (!b.client_name) errors.push('Customer name is required');
   if (!b.project_name && isCreate) errors.push('Project name is required');
-  if (b.lead_kind && !['private','government'].includes(b.lead_kind)) errors.push('Invalid lead_kind');
+  if (b.lead_kind && !['private', 'government'].includes(b.lead_kind)) errors.push('Invalid lead_kind');
   // GST format: 2-digit state code + 10-char PAN + 1Z + 1 check char
   if (b.gst_number && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(String(b.gst_number).toUpperCase())) {
     errors.push('GST number is invalid');
@@ -188,7 +188,7 @@ function validateStage1(b, isCreate) {
   if (b.lead_kind === 'government') {
     if (!b.tender_id && isCreate) errors.push('Tender ID is required for Government leads');
     if (b.bid_deadline) {
-      const today = new Date(); today.setHours(0,0,0,0);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
       const deadline = new Date(b.bid_deadline);
       if (!isNaN(deadline) && deadline < today) errors.push('Bid deadline must be today or later');
     }
@@ -203,7 +203,7 @@ function audit(db, lead_id, stage, action, user, opts = {}) {
       INSERT INTO sales_funnel_audit (lead_id, stage, action, actor_id, actor_name, evidence_url, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(lead_id, stage || null, action, user?.id || null, user?.name || null, opts.evidence_url || null, opts.notes || null);
-  } catch {}
+  } catch { }
 }
 
 // POST create — Stage 1 Lead / Tender Capture. Auto-stamps stage_entered_at
@@ -265,6 +265,19 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
   audit(db, r.lastInsertRowid, 'lead_capture', 'create', req.user, {
     notes: `Captured as ${leadKind === 'government' ? 'Government tender' : 'Private quote'}` + (b.tender_id ? ` · Tender ${b.tender_id}` : '')
   });
+  try {
+    const { getIO } = require('../lib/chatSocket');
+    const io = getIO();
+    if (io) {
+      io.emit('lead:new', {
+        lead_id: r.lastInsertRowid,
+        lead_no: leadNo,
+        client_name: b.client_name,
+        company_name: b.company_name,
+        current_stage: 'lead_capture',
+      });
+    }
+  } catch (_) { }
   res.status(201).json({ id: r.lastInsertRowid, lead_no: leadNo });
 });
 
@@ -400,10 +413,10 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         first_call_remarks=?, tentative_amount=?, closing_date=?, stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.qualified_by || req.user.name, b.qualified_remarks || null,
-        b.first_call_status || 'interested', b.first_call_remarks || b.qualified_remarks || null,
-        (b.tentative_amount === '' || b.tentative_amount == null) ? null : (+b.tentative_amount || null),
-        b.closing_date || null,
-        req.params.id];
+      b.first_call_status || 'interested', b.first_call_remarks || b.qualified_remarks || null,
+      (b.tentative_amount === '' || b.tentative_amount == null) ? null : (+b.tentative_amount || null),
+      b.closing_date || null,
+      req.params.id];
       break;
 
     // First Call NOT Interested → drops the lead with reason. Maps to terminal 'lost'.
@@ -414,7 +427,7 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         first_call_remarks=?, stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.qualified_by || req.user.name, b.qualified_remarks || 'Not qualified',
-        b.first_call_remarks || b.qualified_remarks || null, req.params.id];
+      b.first_call_remarks || b.qualified_remarks || null, req.params.id];
       break;
 
     // ─── STAGE 3 — SITE SURVEY + FEASIBILITY ───────────────────────────
@@ -431,11 +444,11 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         meeting_location_lat=?, meeting_location_lng=?,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.meeting_date || null, b.meeting_location || null,
-        b.meeting_assigned_to || null, b.meeting_assigned_to_id || null,
-        b.meeting_date ? 'scheduled' : 'pending',
-        b.meeting_recording_url || null,
-        b.meeting_location_lat || null, b.meeting_location_lng || null,
-        req.params.id];
+      b.meeting_assigned_to || null, b.meeting_assigned_to_id || null,
+      b.meeting_date ? 'scheduled' : 'pending',
+      b.meeting_recording_url || null,
+      b.meeting_location_lat || null, b.meeting_location_lng || null,
+      req.params.id];
       break;
 
     // Face-to-Face outcome — intermediate step within site_survey
@@ -465,13 +478,13 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         action_planned=?, meeting_format=?, meeting_scheduled_by=?, meeting_time_spent_min=?,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.mom_notes, b.mom_file_link, b.mom_filled_by || req.user.name,
-        b.category || null, b.lead_type || null, b.meeting_location || null,
-        b.meeting_purpose || null, b.meeting_timestamp_photo_url || null,
-        b.pain_points || null, b.requirements || null,
-        b.action_planned || null, b.meeting_format || null,
-        b.meeting_scheduled_by || null,
-        b.meeting_time_spent_min ? +b.meeting_time_spent_min : null,
-        req.params.id];
+      b.category || null, b.lead_type || null, b.meeting_location || null,
+      b.meeting_purpose || null, b.meeting_timestamp_photo_url || null,
+      b.pain_points || null, b.requirements || null,
+      b.action_planned || null, b.meeting_format || null,
+      b.meeting_scheduled_by || null,
+      b.meeting_time_spent_min ? +b.meeting_time_spent_min : null,
+      req.params.id];
       break;
 
     // ─── STAGE 4 — CONCEPT DESIGN / DRAWINGS ───────────────────────────
@@ -484,7 +497,7 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         drawing_date=CURRENT_TIMESTAMP, stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.drawing_file1, b.drawing_file2, b.drawing_file3,
-        b.drawing_uploaded_by || req.user.name, req.params.id];
+      b.drawing_uploaded_by || req.user.name, req.params.id];
       break;
 
     // ─── STAGE 5 — BOQ + VENDOR COSTING ────────────────────────────────
@@ -497,7 +510,7 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         boq_created_by=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.boq_file_link, b.revised_boq_file_link || null,
-        b.boq_created_by || req.user.name, b.boq_amount || 0, req.params.id];
+      b.boq_created_by || req.user.name, b.boq_amount || 0, req.params.id];
       break;
 
     // ─── STAGE 6 — INTERNAL PRICING REVIEW (GATE) — stub ───────────────
@@ -521,7 +534,7 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.quotation_number, b.quotation_file_link, b.quotation_amount || 0,
-        b.quotation_sent_by || req.user.name, req.params.id];
+      b.quotation_sent_by || req.user.name, req.params.id];
       break;
 
     // ─── STAGE 8 — TECHNICAL CLARIFICATION — stub ──────────────────────
@@ -621,7 +634,7 @@ router.post('/:id/boq', requirePermission('leads', 'edit'), (req, res) => {
       .run(req.params.id, b.boq_file_link || null, +b.boq_amount || 0, req.user.name, b.boq_notes || null);
     db.prepare(`UPDATE sales_funnel SET boq_file_link=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
       .run(b.boq_file_link || null, +b.boq_amount || 0, req.params.id);
-    try { audit(db, req.params.id, 'boq_costing', 'add_boq', req.user, { notes: b.boq_notes || null }); } catch (_) {}
+    try { audit(db, req.params.id, 'boq_costing', 'add_boq', req.user, { notes: b.boq_notes || null }); } catch (_) { }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

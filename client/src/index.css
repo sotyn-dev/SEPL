@@ -187,14 +187,19 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
   .card:has(> div > div > table) {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-    padding: 0;
   }
   /* Keep the inner card padding for the head area when present (e.g. a
      filter row + table inside the same card). The table itself stays
      full-width and scrollable. */
   .card:has(> table) > *:not(table),
   .card:has(> div > table) > *:not(div):not(table) {
-    padding: 1rem;
+    padding: 0.75rem;
+  }
+
+  .table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* 2. Bump icon-only padding-1 buttons to a 32px tap target. Pages

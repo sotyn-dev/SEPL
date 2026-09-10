@@ -73,9 +73,9 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
   const isAllMode = perPage >= total && total > 0;
 
   return (
-    <div className={`flex items-center justify-between gap-2 flex-wrap text-xs text-gray-600 px-2 py-2 ${className}`}>
-      <div className="flex items-center gap-3 flex-wrap">
-        <div>
+    <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 text-xs text-gray-600 px-3 py-2.5 ${className}`}>
+      <div className="flex items-center justify-between sm:justify-start gap-3 flex-wrap">
+        <div className="whitespace-nowrap">
           Showing <span className="font-semibold">{from + 1}</span>–<span className="font-semibold">{to}</span> of <span className="font-semibold">{total}</span>
         </div>
         {setPerPage && (
@@ -99,36 +99,62 @@ export default function Pagination({ pg, className = '', setPerPage, perPageOpti
         )}
       </div>
       {pages > 1 && (
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setPage(page - 1)}
-            disabled={!hasPrev}
-            className="px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
-            ‹ Prev
-          </button>
-          {pageNumbers.map((n, idx) => {
-            const prev = pageNumbers[idx - 1];
-            const gap = prev != null && n - prev > 1;
-            return (
-              <span key={n} className="flex items-center gap-1">
-                {gap && <span className="text-gray-400 px-1">…</span>}
-                <button
-                  type="button"
-                  onClick={() => setPage(n)}
-                  className={`min-w-[28px] px-2 py-1 rounded border ${n === page ? 'bg-red-600 text-white border-red-600 font-semibold' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
-                  {n}
-                </button>
-              </span>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => setPage(page + 1)}
-            disabled={!hasNext}
-            className="px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
-            Next ›
-          </button>
+        <div className="flex items-center justify-center sm:justify-end gap-1 w-full sm:w-auto">
+          {/* Mobile compact: Prev + Page X of Y + Next */}
+          <div className="flex sm:hidden items-center justify-center gap-1.5 w-full">
+            <button
+              type="button"
+              onClick={() => setPage(page - 1)}
+              disabled={!hasPrev}
+              aria-label="Previous page"
+              className="px-3 py-1.5 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium shadow-2xs">
+              ‹ Prev
+            </button>
+            <span className="px-2.5 py-1 font-semibold text-gray-700 bg-white rounded border border-gray-200 text-xs whitespace-nowrap shadow-2xs">
+              Page {page} of {pages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage(page + 1)}
+              disabled={!hasNext}
+              aria-label="Next page"
+              className="px-3 py-1.5 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium shadow-2xs">
+              Next ›
+            </button>
+          </div>
+
+          {/* Desktop full: Prev + numbered pill buttons + Next */}
+          <div className="hidden sm:flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setPage(page - 1)}
+              disabled={!hasPrev}
+              className="px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+              ‹ Prev
+            </button>
+            {pageNumbers.map((n, idx) => {
+              const prev = pageNumbers[idx - 1];
+              const gap = prev != null && n - prev > 1;
+              return (
+                <span key={n} className="flex items-center gap-1">
+                  {gap && <span className="text-gray-400 px-1">…</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPage(n)}
+                    className={`min-w-[28px] px-2 py-1 rounded border ${n === page ? 'bg-red-600 text-white border-red-600 font-semibold' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
+                    {n}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPage(page + 1)}
+              disabled={!hasNext}
+              className="px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+              Next ›
+            </button>
+          </div>
         </div>
       )}
     </div>

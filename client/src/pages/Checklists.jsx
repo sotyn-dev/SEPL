@@ -294,9 +294,9 @@ export default function Checklists() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h3 className="font-semibold">Checklists & Recurring Tasks</h3>
-        <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+        <h3 className="font-semibold text-lg sm:text-xl">Checklists & Recurring Tasks</h3>
+        <div className="flex flex-wrap items-center gap-2">
           {/* Export follows the view on screen (mam: the CSV must match
               what she is looking at).  By-date / Follow-up export the
               INSTANCE rows with their real completion + approval state;
@@ -316,7 +316,7 @@ export default function Checklists() {
             if (view === 'current') exportCsv('checklists',
               ['Description','Frequency','Due Date','Due Time','Assigned To','Department'],
               visible.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.department]));
-          }} className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          }} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 shrink-0"><FiDownload /> Export Excel</button>
           {canManage() && (
             <button onClick={() => {
               // Mam (2026-05-22): "by default end date is 31/12/2026"
@@ -332,7 +332,7 @@ export default function Checklists() {
                 proof_type: 'photo',
               });
               setModal(true);
-            }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Checklist</button>
+            }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-1.5 shrink-0"><FiPlus /> Add Checklist</button>
           )}
           {/* Mam (2026-05-22): bulk add — paste many task lines that
               share the same frequency / assignee / dates / proof type. */}
@@ -348,7 +348,7 @@ export default function Checklists() {
                 proof_type: 'photo',
               });
               setBulkModal(true);
-            }} className="btn btn-secondary flex items-center gap-2"><FiPlus /> Bulk Add</button>
+            }} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 shrink-0"><FiPlus /> Bulk Add</button>
           )}
         </div>
       </div>
@@ -361,31 +361,33 @@ export default function Checklists() {
       {/* Tab toggle — match mam's mental model from her Sheet:
           "By Date" = today's instance grid (default; her Sheet 2 view),
           "Master" = recurring-template editor (her Sheet 1 view). */}
-      <div className="flex gap-2 flex-wrap items-center">
-        <button onClick={() => { setView('by-date'); loadHistory(historyDate); }}
-                className={`btn ${view === 'by-date' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-          <FiCalendar size={13} /> Today / By Date
-        </button>
-        <button onClick={() => setView('current')}
-                className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-          Master Templates
-        </button>
-        {/* Mam (2026-05-22): "i need followup checklist where all
-            record mention previous, present, future" — per-task
-            timeline grid with past / today / upcoming cells. */}
-        <button onClick={() => { setView('followup'); if (!followup) loadFollowup(); }}
-                className={`btn ${view === 'followup' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-          <FiClock size={13} /> Follow-up Timeline
-        </button>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+        <div className="flex gap-1.5 sm:gap-2 flex-wrap items-center">
+          <button onClick={() => { setView('by-date'); loadHistory(historyDate); }}
+                  className={`btn ${view === 'by-date' ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
+            <FiCalendar size={13} /> Today / By Date
+          </button>
+          <button onClick={() => setView('current')}
+                  className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
+            Master Templates
+          </button>
+          {/* Mam (2026-05-22): "i need followup checklist where all
+              record mention previous, present, future" — per-task
+              timeline grid with past / today / upcoming cells. */}
+          <button onClick={() => { setView('followup'); if (!followup) loadFollowup(); }}
+                  className={`btn ${view === 'followup' ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
+            <FiClock size={13} /> Follow-up Timeline
+          </button>
+        </div>
         {view === 'by-date' && (
-          <>
-            <input type="date" className="input text-sm w-44" value={historyDate}
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+            <input type="date" className="input text-xs sm:text-sm py-1.5 px-2.5 w-36 sm:w-44" value={historyDate}
                    onChange={e => { setHistoryDate(e.target.value); loadHistory(e.target.value); }} />
             <button onClick={() => { const y = new Date(); y.setDate(y.getDate() - 1); const iso = y.toISOString().slice(0, 10); setHistoryDate(iso); loadHistory(iso); }}
-                    className="btn btn-secondary text-xs">Yesterday</button>
+                    className="btn btn-secondary text-xs px-2.5 py-1.5">Yesterday</button>
             <button onClick={() => { const iso = new Date().toISOString().slice(0, 10); setHistoryDate(iso); loadHistory(iso); }}
-                    className="btn btn-secondary text-xs">Today</button>
-          </>
+                    className="btn btn-secondary text-xs px-2.5 py-1.5">Today</button>
+          </div>
         )}
       </div>
 
@@ -447,9 +449,9 @@ export default function Checklists() {
 
       {/* ─── BY-DATE / APPROVAL view ─────────────────────────────── */}
       {view === 'by-date' && (
-        <div className="card p-0 overflow-x-auto">
-          <table className="freeze-head">
-            <thead>
+        <div className="card p-0 table-responsive">
+          <table className="freeze-head w-full text-xs min-w-[800px]">
+            <thead className="whitespace-nowrap">
               <tr>
                 <th>Person</th>
                 <th>Department</th>
@@ -604,7 +606,7 @@ export default function Checklists() {
             </select>
             {/* Legend — only shown on the timeline grid */}
             {followupSubView === 'timeline' && (
-              <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-600">
+              <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2 text-[10px] text-gray-600 flex-wrap">
                 <Cell s="done_approved" /> Approved
                 <Cell s="done_pending" /> Pending
                 <Cell s="done_rejected" /> Rejected
@@ -636,9 +638,9 @@ export default function Checklists() {
               today:         { label: '○ Today',        css: 'bg-blue-100 text-blue-700' },
             };
             return (
-              <div className="card p-0 overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-amber-50 text-gray-700 text-[10px] uppercase">
+              <div className="card p-0 table-responsive">
+                <table className="w-full text-xs min-w-[780px]">
+                  <thead className="bg-amber-50 text-gray-700 text-[10px] uppercase whitespace-nowrap">
                     <tr>
                       <th className="px-2 py-2 text-left">Name</th>
                       <th className="px-2 py-2 text-left">Task ID</th>
@@ -719,12 +721,12 @@ export default function Checklists() {
 
           {/* ─── TIMELINE GRID view (toggle) ──────────────────────── */}
           {followup && followupSubView === 'timeline' && followup.rows.length > 0 && (
-            <div className="card p-0 overflow-x-auto">
-              <table className="text-xs border-collapse">
+            <div className="card p-0 table-responsive">
+              <table className="text-xs border-collapse min-w-[650px]">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="text-left px-2 py-2 sticky left-0 bg-gray-50 z-10 min-w-[200px]">Task</th>
-                    <th className="text-left px-2 py-2 sticky left-[200px] bg-gray-50 z-10">Person</th>
+                    <th className="text-left px-2 py-2 md:sticky md:left-0 bg-gray-50 z-10 min-w-[160px] sm:min-w-[200px]">Task</th>
+                    <th className="text-left px-2 py-2 md:sticky md:left-[200px] bg-gray-50 z-10">Person</th>
                     <th className="text-left px-2 py-2">Dept</th>
                     {followup.dates.map((d, i) => {
                       const dt = new Date(d);
@@ -741,11 +743,11 @@ export default function Checklists() {
                 <tbody>
                   {followup.rows.map(r => (
                     <tr key={r.id} className="border-t hover:bg-blue-50/30">
-                      <td className="px-2 py-1.5 sticky left-0 bg-white z-10 min-w-[200px]">
+                      <td className="px-2 py-1.5 md:sticky md:left-0 bg-white z-10 min-w-[160px] sm:min-w-[200px]">
                         <div className="font-medium text-gray-800 text-[12px] line-clamp-2" title={r.description}>{r.description}</div>
                         <div className="text-[9px] text-gray-500 capitalize">{r.frequency}</div>
                       </td>
-                      <td className="px-2 py-1.5 sticky left-[200px] bg-white z-10 text-[11px]">{r.assigned_to_name || '—'}</td>
+                      <td className="px-2 py-1.5 md:sticky md:left-[200px] bg-white z-10 text-[11px]">{r.assigned_to_name || '—'}</td>
                       <td className="px-2 py-1.5">
                         {r.department ? <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{r.department}</span> : <span className="text-gray-300 text-[10px]">—</span>}
                       </td>
@@ -769,7 +771,7 @@ export default function Checklists() {
         <div className="card text-center py-8 text-gray-400">No checklists yet</div>
       )}
       {view === 'current' && groupOrder.map(personName => (
-        <div key={personName} className="card p-0 overflow-x-auto">
+        <div key={personName} className="card p-0 table-responsive">
           <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
             <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2">
               <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-700 text-[10px] font-extrabold">{personName.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase()}</span>
@@ -777,8 +779,8 @@ export default function Checklists() {
               <span className="text-xs font-normal text-gray-400">({byPerson[personName].length})</span>
             </h4>
           </div>
-          <table className="freeze-head">
-            <thead><tr><th>Task</th><th>Department</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
+          <table className="freeze-head w-full text-xs min-w-[720px]">
+            <thead className="whitespace-nowrap"><tr><th>Task</th><th>Department</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {byPerson[personName].map(c => (
                 <tr key={c.id}>
