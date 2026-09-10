@@ -91,7 +91,16 @@ const ALL_FIELDS = [
 // GET all with filters
 router.get('/', requirePermission('business_book', 'view'), (req, res) => {
   const { status, category, order_type, lead_type, search, date_from, date_to } = req.query;
-  let sql = `SELECT bb.*, u.name as emp_name FROM business_book bb
+  // order_po_files: the client PO copy / BOQ uploaded against this lead in
+  // Order to Planning, so the list row can link them next to the lead's own
+  // files (mam 2026-09-10: "if po upload show here"). One lead can have
+  // several POs; indexed on purchase_orders.business_book_id (idx_po_bb).
+  let sql = `SELECT bb.*, u.name as emp_name,
+    (SELECT json_group_array(json_object('po_number', po.po_number, 'po_copy_link', po.po_copy_link, 'boq_file_link', po.boq_file_link))
+       FROM purchase_orders po
+      WHERE po.business_book_id = bb.id
+        AND (COALESCE(po.po_copy_link,'') <> '' OR COALESCE(po.boq_file_link,'') <> '')) AS order_po_files
+    FROM business_book bb
     LEFT JOIN users u ON bb.employee_id=u.id WHERE 1=1`;
   const params = [];
   if (status) { sql += ' AND bb.status=?'; params.push(status); }
