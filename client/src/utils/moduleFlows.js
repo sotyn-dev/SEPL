@@ -21,5 +21,5 @@ export function getModuleFlow(pathname, search = '') {
 export function flowLabel(path, label) {
   const [pathname, search] = path.split('?');
   const flow = getModuleFlow(pathname, search);
-  return flow ? `${flow.number} · ${label}` : label;
+  return flow ? `${label} (Flow ${flow.number})` : label;
 }

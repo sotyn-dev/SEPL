@@ -822,7 +822,7 @@ export default function Layout() {
                       <Link key={item.path} to={item.path}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
                         <item.icon size={14} />
-                        <span className="truncate" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
+                        <span className="min-w-0 whitespace-normal leading-5" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
                       </Link>
                     ))}
                   </div>
@@ -855,7 +855,7 @@ export default function Layout() {
                       <Link key={item.path} to={item.path}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
                         <item.icon size={14} />
-                        <span className="truncate" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
+                        <span className="min-w-0 whitespace-normal leading-5" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
                       </Link>
                     ))}
                   </div>

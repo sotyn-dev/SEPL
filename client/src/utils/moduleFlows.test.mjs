@@ -10,7 +10,7 @@ assert.equal(getModuleFlow('/installation').number, 3);
 assert.equal(getModuleFlow('/drawing-tracker', '?other=1&tab=reports').title, 'Drawing Reports');
 assert.equal(getModuleFlow('/system-requirements/123').path, '/system-requirements');
 assert.equal(getModuleFlow('/orders-other'), undefined);
-assert.equal(flowLabel('/orders', 'Order to Planning'), '1 · Order to Planning');
+assert.equal(flowLabel('/orders', 'Order to Planning'), 'Order to Planning (Flow 1)');
 const layout = readFileSync(new URL('../components/Layout.jsx', import.meta.url), 'utf8');
 const nav = layout.slice(layout.indexOf('const SIDEBAR_DASHBOARD'), layout.indexOf('export default function Layout'));
 for (const [, path] of nav.matchAll(/path:\s*'([^']+)'/g)) {
