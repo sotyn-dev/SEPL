@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import Modal from '../components/Modal';
 import Pagination, { usePagination } from '../components/PaginationBar';
@@ -319,7 +320,7 @@ export default function CRMFunnel() {
               onClick={() => { setView('funnel'); setFilter(f => ({ ...f, step: s.key })); }}
               className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
             >
-              {s.label}
+              {flowStepLabel('/crm-funnel', s.label)}
               <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center text-white ${isActive ? 'bg-white/30' : s.chipCls}`}>
                 {stepCount(s.key)}
               </span>
@@ -331,7 +332,7 @@ export default function CRMFunnel() {
           onClick={() => setView('responsible')}
           className={`btn ${view === 'responsible' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
         >
-          ⚙ Responsible
+          {flowStepLabel('/crm-funnel', '⚙ Responsible')}
         </button>
       </div>
 

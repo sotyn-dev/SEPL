@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -2316,7 +2317,11 @@ export default function Procurement() {
               : 0;
             return (
               <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative !px-3 !py-1.5 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
-                {t.label}
+                {/* Sub-number from the Indent to Dispatch flow, in tab order — mam 2026-09-10:
+                    "Raise indent (4.1), vendor rates (4.2), Vendor PO (4.3) so on". Looked up by
+                    label against the full step list, so it stays the same for a user who can
+                    only see some of these tabs. */}
+                {flowStepLabel('/procurement', t.label)}
                 {urgentCount > 0 && (
                   <span className="ml-2 inline-flex items-center justify-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-600 text-white border border-red-700"
                         title={`${urgentCount} PO${urgentCount === 1 ? '' : 's'} blocked on payment`}>

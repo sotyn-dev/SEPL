@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab, useUrlTabPair } from '../hooks/useUrlTab';
@@ -450,7 +451,7 @@ export default function Leads() {
               className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
               title={STAGE_LABELS[s]}
             >
-              {STAGE_LABELS[s]}
+              {flowStepLabel('/leads', STAGE_LABELS[s])}
               <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${isActive ? 'bg-white/30 text-white' : 'text-white ' + (TAB_STYLES[s] || 'bg-gray-400')}`}>
                 {count}
               </span>
@@ -461,7 +462,7 @@ export default function Leads() {
           onClick={() => setTab('responsible')}
           className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
         >
-          ⚙ Responsible
+          {flowStepLabel('/leads', '⚙ Responsible')}
         </button>
       </div>
 

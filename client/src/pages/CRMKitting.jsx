@@ -21,6 +21,7 @@
 // columns.
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
@@ -384,7 +385,7 @@ export default function CRMKitting() {
               className={`btn ${active ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
               title={`Stage ${sn} — ${STAGE_META[sn].title}`}
             >
-              Stage {sn} — {STAGE_META[sn].title}
+              {flowStepLabel('/crm-kitting', `Stage ${sn} — ${STAGE_META[sn].title}`)}
               <span
                 className={`px-1.5 rounded-full text-[10px] font-bold min-w-[22px] text-center ${
                   active ? 'bg-white/30 text-white' : `text-white ${STAGE_META[sn].tabBadge}`

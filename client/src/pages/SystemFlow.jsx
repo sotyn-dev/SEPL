@@ -8,6 +8,7 @@
 // Every desktop control is mirrored in the md:hidden mobile card (parity rule).
 
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
+import { flowStepLabel, flowStepNumber } from '../utils/moduleFlows';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
@@ -371,7 +372,8 @@ export default function SystemFlow() {
             <button key={t.step_no} onClick={() => setStepTab(t.step_no)}
                     title={`${t.owner_label} · ${t.method} · planned ${t.planned_days} day(s)`}
                     className={`px-3 py-1.5 text-sm rounded-full border inline-flex items-center gap-2 ${on ? 'bg-slate-800 text-white border-slate-800' : `${STEP_TONE[i % 4]} hover:brightness-95`}`}>
-              <span className="font-semibold">{t.step_no}. {t.step_name}</span>
+              {/* "CREATE (65.1)"; a step added on the server later keeps its "5. NAME" form */}
+              <span className="font-semibold">{flowStepNumber('/system-flow', t.step_name) ? flowStepLabel('/system-flow', t.step_name) : `${t.step_no}. ${t.step_name}`}</span>
               {c.pending > 0 && (
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${c.overdue > 0 ? 'bg-red-600 text-white' : on ? 'bg-white/20' : 'bg-white/70 text-slate-700'}`}>
                   {c.pending} left{c.overdue > 0 ? ` · ${c.overdue} late` : ''}

@@ -4,12 +4,8 @@
     "title": "Order to Planning",
     "number": 1,
     "steps": [
-      "Select project and PO",
-      "Open or upload PO items",
-      "Check descriptions, quantities, units and rates",
-      "Save PO items",
-      "Open Order Planning",
-      "Review item-wise planning and need dates"
+      "Purchase Orders",
+      "Order Planning"
     ]
   },
   {
@@ -17,12 +13,7 @@
     "title": "Daily Reports",
     "number": 2,
     "steps": [
-      "Select site and report date",
-      "Select PO work items",
-      "Enter planned and actual quantities",
-      "Record labour and material usage",
-      "Review and save report",
-      "Review approval and billing readiness"
+      "Daily Reports"
     ]
   },
   {
@@ -30,12 +21,7 @@
     "title": "Sales Billing",
     "number": 3,
     "steps": [
-      "Select order or approved DPRs",
-      "Review bill type and source",
-      "Review quantities, units and rates",
-      "Generate bill",
-      "Review approval and payments",
-      "Open Print / Save PDF"
+      "Sales Billing"
     ]
   },
   {
@@ -43,12 +29,15 @@
     "title": "Indent to Dispatch",
     "number": 4,
     "steps": [
-      "Select project",
-      "Review indent items and quantities",
-      "Review required rates",
-      "Review vendor PO",
-      "Track dispatch and delivery",
-      "Review receipt and billing"
+      "Raise Indent",
+      "Vendor Rates",
+      "Vendor PO",
+      "Payment",
+      "Purchase Bills",
+      "Dispatch & Receiving",
+      "Debit Notes",
+      "PO Pipeline",
+      "Responsible"
     ]
   },
   {
@@ -56,10 +45,7 @@
     "title": "Partners",
     "number": 5,
     "steps": [
-      "Find partner",
-      "Open partner details",
-      "Review contacts and follow-ups",
-      "Save changes"
+      "Partners"
     ]
   },
   {
@@ -67,11 +53,10 @@
     "title": "CRM Sales Funnel",
     "number": 6,
     "steps": [
-      "Find enquiry",
-      "Review customer and requirement",
-      "Review current stage",
-      "Record follow-up",
-      "Update outcome"
+      "Step 1 — Quotation",
+      "Step 2 — Negotiation",
+      "Step 3 — Win / Loss",
+      "Responsible"
     ]
   },
   {
@@ -79,11 +64,19 @@
     "title": "Sales Funnel",
     "number": 7,
     "steps": [
-      "Find lead",
-      "Review requirement",
-      "Record follow-up",
-      "Update lead stage",
-      "Review outcome"
+      "Stage 1 — Lead/Tender Capture",
+      "Stage 2 — Qualified or Not",
+      "Stage 3 — Site Survey + Feasibility",
+      "Stage 4 — Concept Design / Drawings",
+      "Stage 5 — BOQ + Vendor Costing",
+      "Stage 6 — Internal Pricing Review",
+      "Stage 7 — Quote / Bid Submission",
+      "Stage 8 — Technical Clarification",
+      "Stage 9 — Commercial Negotiation",
+      "Stage 10 — Contract + LOI / PO",
+      "Stage 11 — Project Kickoff",
+      "Lost",
+      "Responsible"
     ]
   },
   {
@@ -91,10 +84,7 @@
     "title": "Sotyn Leads",
     "number": 8,
     "steps": [
-      "Review incoming enquiries",
-      "Open enquiry",
-      "Check contact and requirement",
-      "Convert to Sales Funnel"
+      "Sotyn Leads"
     ]
   },
   {
@@ -102,11 +92,7 @@
     "title": "Business Book",
     "number": 9,
     "steps": [
-      "Find business order",
-      "Review client and project",
-      "Review PO and order values",
-      "Update order details",
-      "Save changes"
+      "Business Book"
     ]
   },
   {
@@ -114,10 +100,7 @@
     "title": "Customers",
     "number": 10,
     "steps": [
-      "Find customer",
-      "Review contact details",
-      "Review billing and tax details",
-      "Save changes"
+      "Customers"
     ]
   },
   {
@@ -125,10 +108,9 @@
     "title": "Full Kitting",
     "number": 11,
     "steps": [
-      "Select project",
-      "Review kitting requirements",
-      "Update pending items",
-      "Review readiness"
+      "Stage 1 — PRE-START",
+      "Stage 2 — EXECUTION",
+      "Stage 3 — HANDOVER"
     ]
   },
   {
@@ -136,11 +118,7 @@
     "title": "Quotations & Rates",
     "number": 12,
     "steps": [
-      "Select project",
-      "Review labour quotation",
-      "Review item rates",
-      "Submit for approval",
-      "Review approval outcome"
+      "Quotations & Rates"
     ]
   },
   {
@@ -148,11 +126,10 @@
     "title": "Projects & Work Orders",
     "number": 13,
     "steps": [
-      "Select project",
-      "Review work orders",
-      "Review contractor and scope",
-      "Track work progress",
-      "Review labour payments"
+      "Projects",
+      "Work Orders",
+      "MB / CDPR",
+      "RA Bills"
     ]
   },
   {
@@ -160,10 +137,7 @@
     "title": "Labour Master",
     "number": 14,
     "steps": [
-      "Find labour item",
-      "Review description and unit",
-      "Review rate",
-      "Save changes"
+      "Labour Master"
     ]
   },
   {
@@ -171,10 +145,7 @@
     "title": "Bill Verification",
     "number": 15,
     "steps": [
-      "Select bill",
-      "Review supporting work details",
-      "Check quantities and rates",
-      "Record verification outcome"
+      "Bill Verification"
     ]
   },
   {
@@ -182,10 +153,7 @@
     "title": "Solar Sales Funnel",
     "number": 16,
     "steps": [
-      "Find enquiry",
-      "Review site requirement",
-      "Record follow-up",
-      "Update stage"
+      "Solar Sales Funnel"
     ]
   },
   {
@@ -193,10 +161,7 @@
     "title": "3D Shadow Analysis",
     "number": 17,
     "steps": [
-      "Select site",
-      "Review roof layout",
-      "Configure obstacles and panels",
-      "Review shadow analysis"
+      "3D Shadow Analysis"
     ]
   },
   {
@@ -204,11 +169,7 @@
     "title": "Solar Quotation",
     "number": 18,
     "steps": [
-      "Select customer and site",
-      "Review system requirements",
-      "Review materials and pricing",
-      "Save quotation",
-      "Review quotation output"
+      "Solar Quotation"
     ]
   },
   {
@@ -216,10 +177,7 @@
     "title": "Solar Projects",
     "number": 19,
     "steps": [
-      "Select project",
-      "Review project details",
-      "Track execution",
-      "Review net metering progress"
+      "Solar Projects"
     ]
   },
   {
@@ -227,10 +185,7 @@
     "title": "Solar Material Master",
     "number": 20,
     "steps": [
-      "Find material",
-      "Review specifications",
-      "Review pricing",
-      "Save changes"
+      "Solar Material Master"
     ]
   },
   {
@@ -238,10 +193,7 @@
     "title": "Solar Labour Master",
     "number": 21,
     "steps": [
-      "Find labour entry",
-      "Review work description",
-      "Review rate",
-      "Save changes"
+      "Solar Labour Master"
     ]
   },
   {
@@ -249,10 +201,7 @@
     "title": "Solar Settings",
     "number": 22,
     "steps": [
-      "Open rate settings",
-      "Review current values",
-      "Edit required values",
-      "Save changes"
+      "Solar Settings"
     ]
   },
   {
@@ -260,12 +209,9 @@
     "title": "Quotations",
     "number": 23,
     "steps": [
-      "Select client and project",
-      "Add quotation items",
-      "Review quantities, units and prices",
-      "Review totals and terms",
-      "Save quotation",
-      "Review approval and print"
+      "BOQ / Drawings",
+      "Quotations",
+      "Responsible"
     ]
   },
   {
@@ -273,11 +219,7 @@
     "title": "AI Auto-Quotation",
     "number": 24,
     "steps": [
-      "Enter project requirements",
-      "Generate estimate",
-      "Review suggested items and quantities",
-      "Review pricing",
-      "Review quotation output"
+      "AI Auto-Quotation"
     ]
   },
   {
@@ -285,10 +227,7 @@
     "title": "Price Breakup Master",
     "number": 25,
     "steps": [
-      "Select order",
-      "Review item price breakup",
-      "Edit required values",
-      "Save changes"
+      "Price Breakup Master"
     ]
   },
   {
@@ -296,10 +235,7 @@
     "title": "Labour Rate",
     "number": 26,
     "steps": [
-      "Find work item",
-      "Review unit and labour rate",
-      "Edit required rate",
-      "Save changes"
+      "Labour Rate"
     ]
   },
   {
@@ -307,10 +243,7 @@
     "title": "Items",
     "number": 27,
     "steps": [
-      "Find item",
-      "Review name and specification",
-      "Review unit and classification",
-      "Save changes"
+      "Items"
     ]
   },
   {
@@ -318,10 +251,7 @@
     "title": "RFQ Queue",
     "number": 28,
     "steps": [
-      "Review items requiring prices",
-      "Open item request",
-      "Review pricing details",
-      "Update price response"
+      "RFQ Queue"
     ]
   },
   {
@@ -329,10 +259,7 @@
     "title": "Vendors",
     "number": 29,
     "steps": [
-      "Find vendor",
-      "Review contacts",
-      "Review tax and payment details",
-      "Save changes"
+      "Vendors"
     ]
   },
   {
@@ -340,11 +267,7 @@
     "title": "Schedule (Gantt)",
     "number": 30,
     "steps": [
-      "Select project",
-      "Review need dates",
-      "Review procurement timeline",
-      "Update schedule",
-      "Review overdue items"
+      "Schedule (Gantt)"
     ]
   },
   {
@@ -352,11 +275,7 @@
     "title": "Snags",
     "number": 31,
     "steps": [
-      "Select site",
-      "Review or record snag",
-      "Assign responsibility",
-      "Update correction and proof",
-      "Review closure"
+      "Snags"
     ]
   },
   {
@@ -364,10 +283,7 @@
     "title": "Fire NOC Renewal",
     "number": 32,
     "steps": [
-      "Select renewal record",
-      "Review expiry and requirements",
-      "Track renewal steps",
-      "Review documents and completion"
+      "Fire NOC Renewal"
     ]
   },
   {
@@ -375,10 +291,7 @@
     "title": "Tally Bills",
     "number": 33,
     "steps": [
-      "Review imported bills",
-      "Open bill details",
-      "Review linked PMS task",
-      "Track approval"
+      "Tally Bills"
     ]
   },
   {
@@ -386,10 +299,7 @@
     "title": "Drawings",
     "number": 34,
     "steps": [
-      "Select project",
-      "Review drawing register",
-      "Open drawing and revision",
-      "Update drawing progress"
+      "Drawings"
     ]
   },
   {
@@ -397,9 +307,7 @@
     "title": "Drawing Reports",
     "number": 35,
     "steps": [
-      "Select report filters",
-      "Review drawing progress",
-      "Review delays and pending work"
+      "Drawing Reports"
     ]
   },
   {
@@ -407,10 +315,7 @@
     "title": "Cheques",
     "number": 36,
     "steps": [
-      "Find cheque",
-      "Review cheque details",
-      "Review due date",
-      "Update cheque status"
+      "Cheques"
     ]
   },
   {
@@ -418,11 +323,7 @@
     "title": "Payables",
     "number": 37,
     "steps": [
-      "Review pending payments",
-      "Open payable",
-      "Review amount and due date",
-      "Review approval",
-      "Record payment progress"
+      "Payables"
     ]
   },
   {
@@ -430,11 +331,7 @@
     "title": "Collections",
     "number": 38,
     "steps": [
-      "Review receivables",
-      "Select client or invoice",
-      "Review amount due",
-      "Record follow-up",
-      "Update collection progress"
+      "Collections"
     ]
   },
   {
@@ -442,10 +339,7 @@
     "title": "Cash Flow Tracker",
     "number": 39,
     "steps": [
-      "Select period",
-      "Review expected collections",
-      "Review planned payments",
-      "Review projected balance"
+      "Cash Flow Tracker"
     ]
   },
   {
@@ -453,11 +347,7 @@
     "title": "Invoices",
     "number": 40,
     "steps": [
-      "Select invoice",
-      "Review line items",
-      "Review tax and totals",
-      "Review invoice status",
-      "Open invoice output"
+      "Invoices"
     ]
   },
   {
@@ -465,10 +355,7 @@
     "title": "Client Snag",
     "number": 41,
     "steps": [
-      "Select bill or site",
-      "Review missing client signature",
-      "Review supporting proof",
-      "Update completion"
+      "Client Snag"
     ]
   },
   {
@@ -476,11 +363,7 @@
     "title": "Bank",
     "number": 42,
     "steps": [
-      "Select bank account",
-      "Import statement",
-      "Review transactions",
-      "Match receipts and payments",
-      "Review unmatched entries"
+      "Bank"
     ]
   },
   {
@@ -488,13 +371,7 @@
     "title": "Hiring",
     "number": 43,
     "steps": [
-      "Review manpower requirement",
-      "Review candidates",
-      "Schedule interview",
-      "Record interview decision",
-      "Review MD round",
-      "Track offer",
-      "Finalize onboarding"
+      "Hiring"
     ]
   },
   {
@@ -502,11 +379,7 @@
     "title": "Sub-contractor Hiring",
     "number": 44,
     "steps": [
-      "Review hiring requirement",
-      "Review contractor candidates",
-      "Review current hiring stage",
-      "Record stage outcome",
-      "Review onboarding progress"
+      "Sub-contractor Hiring"
     ]
   },
   {
@@ -514,10 +387,7 @@
     "title": "Onboarding",
     "number": 45,
     "steps": [
-      "Select employee",
-      "Review onboarding requirements",
-      "Complete pending activities",
-      "Review completion"
+      "Onboarding"
     ]
   },
   {
@@ -525,10 +395,7 @@
     "title": "Training",
     "number": 46,
     "steps": [
-      "Review assigned training",
-      "Open training material",
-      "Complete required activities",
-      "Review progress"
+      "Training"
     ]
   },
   {
@@ -536,10 +403,7 @@
     "title": "Attendance",
     "number": 47,
     "steps": [
-      "Select date and site",
-      "Review attendance entries",
-      "Review missing or incorrect entries",
-      "Save permitted corrections"
+      "Attendance"
     ]
   },
   {
@@ -547,11 +411,7 @@
     "title": "Payroll",
     "number": 48,
     "steps": [
-      "Select payroll period",
-      "Review employees and attendance",
-      "Review earnings and deductions",
-      "Review payroll totals",
-      "Review payment status"
+      "Payroll"
     ]
   },
   {
@@ -559,10 +419,7 @@
     "title": "Employees",
     "number": 49,
     "steps": [
-      "Find employee",
-      "Review employment details",
-      "Review documents and contacts",
-      "Save changes"
+      "Employees"
     ]
   },
   {
@@ -570,10 +427,7 @@
     "title": "Performance",
     "number": 50,
     "steps": [
-      "Select period",
-      "Review targets",
-      "Review actual results",
-      "Review score and pending actions"
+      "Performance"
     ]
   },
   {
@@ -581,9 +435,7 @@
     "title": "Champions League",
     "number": 51,
     "steps": [
-      "Select ranking period",
-      "Review leaderboard",
-      "Review individual results"
+      "Champions League"
     ]
   },
   {
@@ -591,10 +443,7 @@
     "title": "Module Owners",
     "number": 52,
     "steps": [
-      "Find module",
-      "Review assigned owner",
-      "Update responsibility",
-      "Save changes"
+      "Module Owners"
     ]
   },
   {
@@ -602,10 +451,7 @@
     "title": "Sub-contractor Master Detail",
     "number": 53,
     "steps": [
-      "Find contractor",
-      "Review trade and contacts",
-      "Review supporting details",
-      "Save changes"
+      "Sub-contractor Master Detail"
     ]
   },
   {
@@ -613,10 +459,12 @@
     "title": "Tool Rentals",
     "number": 54,
     "steps": [
-      "Review rental requirements",
-      "Select tool rental",
-      "Review issue and return dates",
-      "Review rental charges"
+      "Stage 1 — Enquiry Raised",
+      "Stage 2 — Rate Finalised",
+      "Stage 3 — Material at Site",
+      "Stage 4 — Returned · Closed",
+      "Cancelled",
+      "Settings"
     ]
   },
   {
@@ -624,10 +472,7 @@
     "title": "Assets",
     "number": 55,
     "steps": [
-      "Find asset",
-      "Review assignment",
-      "Review asset condition",
-      "Update asset record"
+      "Assets"
     ]
   },
   {
@@ -635,10 +480,7 @@
     "title": "Inventory",
     "number": 56,
     "steps": [
-      "Select store or site",
-      "Find item",
-      "Review stock and movements",
-      "Review available balance"
+      "Inventory"
     ]
   },
   {
@@ -646,10 +488,7 @@
     "title": "Tools",
     "number": 57,
     "steps": [
-      "Find tool",
-      "Review tool details",
-      "Review allocation and availability",
-      "Update tool record"
+      "Tools"
     ]
   },
   {
@@ -657,10 +496,7 @@
     "title": "Room Rentals",
     "number": 58,
     "steps": [
-      "Find rental",
-      "Review location and agreement",
-      "Review rent and due dates",
-      "Update rental record"
+      "Room Rentals"
     ]
   },
   {
@@ -668,10 +504,7 @@
     "title": "Delegations",
     "number": 59,
     "steps": [
-      "Review or create delegation",
-      "Assign person and due date",
-      "Track progress",
-      "Review completion"
+      "Delegations"
     ]
   },
   {
@@ -679,11 +512,7 @@
     "title": "PMS Tasks",
     "number": 60,
     "steps": [
-      "Select project",
-      "Review assigned tasks",
-      "Update task progress",
-      "Attach required proof",
-      "Review completion"
+      "PMS Tasks"
     ]
   },
   {
@@ -691,10 +520,7 @@
     "title": "Checklists",
     "number": 61,
     "steps": [
-      "Review due checklist",
-      "Open checklist items",
-      "Complete required checks",
-      "Review pending checks"
+      "Checklists"
     ]
   },
   {
@@ -702,11 +528,9 @@
     "title": "Complaints",
     "number": 62,
     "steps": [
-      "Open or register complaint",
-      "Review issue",
-      "Assign responsibility",
-      "Record resolution",
-      "Review closure"
+      "Step 1 — Assign",
+      "Step 2 — Resolve",
+      "Resolved"
     ]
   },
   {
@@ -714,10 +538,7 @@
     "title": "Help Tickets",
     "number": 63,
     "steps": [
-      "Open or create ticket",
-      "Describe issue",
-      "Track replies",
-      "Review resolution"
+      "Help Tickets"
     ]
   },
   {
@@ -725,11 +546,7 @@
     "title": "System Requirements",
     "number": 64,
     "steps": [
-      "Create or select requirement",
-      "Review details and attachments",
-      "Review discussion",
-      "Track implementation",
-      "Review outcome"
+      "System Requirements"
     ]
   },
   {
@@ -737,10 +554,10 @@
     "title": "ERP Management",
     "number": 65,
     "steps": [
-      "Create system",
-      "Align with responsible people",
-      "Roll out system",
-      "Review alignment and score"
+      "CREATE",
+      "ALIGN",
+      "ROLL-OUT",
+      "ALIGNMENT"
     ]
   },
   {
@@ -748,9 +565,7 @@
     "title": "War Room",
     "number": 66,
     "steps": [
-      "Review current indicators",
-      "Identify exceptions",
-      "Review required actions"
+      "War Room"
     ]
   },
   {
@@ -758,9 +573,7 @@
     "title": "Operating Console",
     "number": 67,
     "steps": [
-      "Review business indicators",
-      "Inspect priority issues",
-      "Review actions and owners"
+      "Operating Console"
     ]
   },
   {
@@ -768,9 +581,7 @@
     "title": "TOC View",
     "number": 68,
     "steps": [
-      "Review constraints",
-      "Review priorities",
-      "Review required actions"
+      "TOC View"
     ]
   },
   {
@@ -778,9 +589,7 @@
     "title": "Activity Log",
     "number": 69,
     "steps": [
-      "Select filters",
-      "Review user activity",
-      "Inspect activity details"
+      "Activity Log"
     ]
   },
   {
@@ -788,9 +597,7 @@
     "title": "Location",
     "number": 70,
     "steps": [
-      "Select person and period",
-      "Review recorded locations",
-      "Inspect location details"
+      "Location"
     ]
   },
   {
@@ -798,9 +605,7 @@
     "title": "Backups",
     "number": 71,
     "steps": [
-      "Review available backups",
-      "Review backup date",
-      "Select required backup action"
+      "Backups"
     ]
   },
   {
@@ -808,9 +613,7 @@
     "title": "AI",
     "number": 72,
     "steps": [
-      "Review AI settings",
-      "Edit required configuration",
-      "Save changes"
+      "AI"
     ]
   },
   {
@@ -818,9 +621,7 @@
     "title": "Email",
     "number": 73,
     "steps": [
-      "Review email configuration",
-      "Edit required settings",
-      "Save changes"
+      "Email"
     ]
   },
   {
@@ -828,10 +629,7 @@
     "title": "Email Triggers",
     "number": 74,
     "steps": [
-      "Review trigger rules",
-      "Select trigger",
-      "Review recipients and conditions",
-      "Save changes"
+      "Email Triggers"
     ]
   },
   {
@@ -839,10 +637,7 @@
     "title": "Users",
     "number": 75,
     "steps": [
-      "Find user",
-      "Review account details",
-      "Review assigned role",
-      "Save changes"
+      "Users"
     ]
   },
   {
@@ -850,10 +645,7 @@
     "title": "Roles & Permissions",
     "number": 76,
     "steps": [
-      "Select role",
-      "Review module access",
-      "Edit required permissions",
-      "Save changes"
+      "Roles & Permissions"
     ]
   },
   {
@@ -861,9 +653,7 @@
     "title": "Audit Log",
     "number": 77,
     "steps": [
-      "Select filters",
-      "Review audit entries",
-      "Inspect change details"
+      "Audit Log"
     ]
   },
   {
@@ -871,9 +661,7 @@
     "title": "System Performance",
     "number": 78,
     "steps": [
-      "Review performance indicators",
-      "Inspect slow requests",
-      "Review errors"
+      "System Performance"
     ]
   },
   {
@@ -881,9 +669,7 @@
     "title": "Dashboard",
     "number": 79,
     "steps": [
-      "Review summary",
-      "Identify pending work",
-      "Open relevant module"
+      "Dashboard"
     ]
   },
   {
@@ -891,10 +677,7 @@
     "title": "SOTYN Flow",
     "number": 80,
     "steps": [
-      "Select board",
-      "Review tasks",
-      "Open task details",
-      "Update progress"
+      "SOTYN Flow"
     ]
   },
   {
@@ -902,10 +685,7 @@
     "title": "Expenses",
     "number": 81,
     "steps": [
-      "Select or create expense",
-      "Review amount and category",
-      "Review supporting receipt",
-      "Review approval"
+      "Expenses"
     ]
   },
   {
@@ -913,10 +693,7 @@
     "title": "Procurement Board",
     "number": 82,
     "steps": [
-      "Select project",
-      "Review pipeline stages",
-      "Open pending item",
-      "Update stage progress"
+      "Procurement Board"
     ]
   },
   {
@@ -924,10 +701,7 @@
     "title": "Rates Board",
     "number": 83,
     "steps": [
-      "Review pending rates",
-      "Select item",
-      "Review vendor pricing",
-      "Update pricing progress"
+      "Rates Board"
     ]
   },
   {
@@ -935,10 +709,7 @@
     "title": "Item-wise Rates",
     "number": 84,
     "steps": [
-      "Select project",
-      "Review item requirements",
-      "Review need dates and rates",
-      "Save changes"
+      "Item-wise Rates"
     ]
   },
   {
@@ -946,10 +717,7 @@
     "title": "SOTYN Chat",
     "number": 85,
     "steps": [
-      "Select conversation",
-      "Review messages",
-      "Write message or attach file",
-      "Send message"
+      "SOTYN Chat"
     ]
   },
   {
@@ -957,10 +725,7 @@
     "title": "Indent FMS",
     "number": 86,
     "steps": [
-      "Select indent",
-      "Review current stage",
-      "Review pending actions",
-      "Update progress"
+      "Indent FMS"
     ]
   },
   {
@@ -968,10 +733,7 @@
     "title": "Collections Review",
     "number": 87,
     "steps": [
-      "Review collection targets",
-      "Review receipts",
-      "Review outstanding amounts",
-      "Review follow-ups"
+      "Collections Review"
     ]
   },
   {
@@ -979,11 +741,7 @@
     "title": "Dispatch Receiving",
     "number": 88,
     "steps": [
-      "Select Business Book site",
-      "Select site indent",
-      "Enter bill number",
-      "Upload receiving proof",
-      "Save receiving"
+      "Dispatch Receiving"
     ]
   }
 ]

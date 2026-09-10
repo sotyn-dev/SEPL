@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
-import ModuleFlowGuide from './ModuleFlowGuide';
 import { FiArrowDownCircle } from 'react-icons/fi';
 import { flowLabel } from '../utils/moduleFlows';
 import AnnouncementBell from './AnnouncementBell';
@@ -1147,7 +1146,6 @@ export default function Layout() {
           className="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50"
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
         >
-          <ModuleFlowGuide />
           <Outlet />
           {/* SOTYN.AI credit — shown at the bottom of every page (mam 2026-06-19). */}
           <div className="p-footer mt-6 pt-3 border-t border-slate-200 text-center select-none">

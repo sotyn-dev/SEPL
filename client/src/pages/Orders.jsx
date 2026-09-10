@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, Fragment } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -383,7 +384,7 @@ export default function Orders() {
     <div className="space-y-4">
       <div className="sticky-toolbar">
         <div className="flex gap-2">{tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
+          <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/orders', t.label)}</button>
         ))}</div>
       </div>
 

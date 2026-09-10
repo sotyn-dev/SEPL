@@ -10,6 +10,7 @@
 //   - Stage 3 target = material_received + days_required (biz days)
 
 import { useState, useEffect, useRef } from 'react';
+import { flowStepLabel, flowStepNumber } from '../utils/moduleFlows';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -145,6 +146,12 @@ export default function RentalTools() {
   // hard-coded English defaults while the dashboard request is in
   // flight or if the override hasn't been saved.
   const STAGE_LABEL = dashboard?.stage_labels || DEFAULT_STAGE_LABEL;
+  // Flow number by the DEFAULT label, so an admin renaming a stage in Settings
+  // doesn't make its number disappear.
+  const stageFlowNo = (key) => {
+    const n = flowStepNumber('/rental-tools', DEFAULT_STAGE_LABEL[key]);
+    return n ? ` (${n})` : '';
+  };
   const STAGE_LABEL_SHORT = Object.fromEntries(
     Object.entries(STAGE_LABEL).map(([k, v]) => [k, shortify(v)])
   );
@@ -313,7 +320,7 @@ export default function RentalTools() {
               onClick={() => { setTab('enquiries'); setFilters({ ...filters, stage: s, status: '' }); }}
               className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}
               title={STAGE_LABEL[s]}>
-              {STAGE_LABEL[s]}
+              {STAGE_LABEL[s]}{stageFlowNo(s)}
               <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${isActive ? 'bg-white/30 text-white' : `${STAGE_CHIP_BG[s]} text-white`}`}>
                 {dashboard?.counts?.[s] ?? 0}
               </span>
@@ -323,7 +330,7 @@ export default function RentalTools() {
         <button
           onClick={() => { setTab('enquiries'); setFilters({ ...filters, stage: 'cancelled', status: '' }); }}
           className={`btn ${tab === 'enquiries' && filters.stage === 'cancelled' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
-          {STAGE_LABEL.cancelled}
+          {STAGE_LABEL.cancelled}{stageFlowNo('cancelled')}
           <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${tab === 'enquiries' && filters.stage === 'cancelled' ? 'bg-white/30 text-white' : 'bg-red-500 text-white'}`}>
             {dashboard?.counts?.cancelled ?? 0}
           </span>
@@ -331,7 +338,7 @@ export default function RentalTools() {
         {user?.role === 'admin' && (
           <button onClick={() => setTab('settings')}
             className={`btn ${tab === 'settings' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
-            <FiSettings size={12} /> Settings
+            <FiSettings size={12} /> {flowStepLabel('/rental-tools', 'Settings')}
           </button>
         )}
       </div>

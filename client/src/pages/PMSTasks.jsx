@@ -17,7 +17,7 @@ import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
 import { fmtDate } from '../utils/datetime';
 import Pagination, { usePagination } from '../components/PaginationBar';
-import { MODULE_FLOWS, getFlowStep } from '../utils/moduleFlows';
+import { MODULE_FLOWS, getFlowStep, describeFlowNumber } from '../utils/moduleFlows';
 
 export default function PMSTasks() {
   const { user, isAdmin, canCreate, canApprove } = useAuth();
@@ -456,7 +456,7 @@ export default function PMSTasks() {
                   <td className="max-w-md min-w-[240px]">
                     {/* Wrap properly across all viewports — no more line-clamp,
                         long descriptions break onto multiple lines. */}
-                    {t.flow_number && <div className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {getFlowStep(t.flow_number)}</div>}
+                    {t.flow_number && <div className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {describeFlowNumber(t.flow_number)}</div>}
                     <div className="text-gray-800 whitespace-pre-wrap break-words text-sm">{t.description}</div>
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
@@ -553,7 +553,7 @@ export default function PMSTasks() {
                 </span>
                 {statusBadge(t.status)}
               </div>
-              {t.flow_number && <p className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {getFlowStep(t.flow_number)}</p>}
+              {t.flow_number && <p className="text-xs font-semibold text-blue-700 mb-1">Flow {t.flow_number} · {describeFlowNumber(t.flow_number)}</p>}
               <p className="text-sm text-gray-800 font-medium mb-2 whitespace-pre-wrap break-words">{t.description}</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-gray-600 mb-2">
                 <div className="col-span-2"><span className="text-gray-400">Project:</span> <b>{t.project_name_live || t.project_name_snapshot || '—'}</b></div>
@@ -623,13 +623,13 @@ export default function PMSTasks() {
               onChange={e => setForm({ ...form, flow_number: e.target.value })} />
             <datalist id="pms-flow-steps">
               {MODULE_FLOWS.flatMap(flow => flow.steps.map((step, index) => (
-                <option key={`${flow.number}.${index + 1}`} value={`${flow.number}.${index + 1}`}>{flow.title} — {step}</option>
+                <option key={`${flow.number}.${index + 1}`} value={`${flow.number}.${index + 1}`}>{getFlowStep(`${flow.number}.${index + 1}`)}</option>
               )))}
             </datalist>
             <p id="pms-flow-help" aria-live="polite" className={`mt-1 text-xs ${getFlowStep(form.flow_number) ? 'text-green-700' : 'text-gray-500'}`}>
               {getFlowStep(form.flow_number)
                 ? `Verified: ${getFlowStep(form.flow_number)}`
-                : form.flow_number ? 'Flow number not found. Enter an existing module.step number.' : 'Required. Enter the step number shown in the ERP flow guide.'}
+                : form.flow_number ? 'Flow number not found. Enter an existing module.step number.' : 'Required. Pick from the list, or use the number in brackets beside the module or tab name — e.g. Raise Indent (4.1).'}
             </p>
           </div>
           <div>

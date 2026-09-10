@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -268,9 +269,9 @@ export default function Quotations() {
     <div className="space-y-4">
       <div className="sticky-toolbar">
         <div className="flex gap-2">
-          <button onClick={() => setTab('boq')} className={`btn ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>BOQ / Drawings</button>
-          <button onClick={() => setTab('quotations')} className={`btn ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>Quotations</button>
-          <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
+          <button onClick={() => setTab('boq')} className={`btn ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', 'BOQ / Drawings')}</button>
+          <button onClick={() => setTab('quotations')} className={`btn ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', 'Quotations')}</button>
+          <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>{flowStepLabel('/quotations', '⚙ Responsible')}</button>
         </div>
       </div>
 

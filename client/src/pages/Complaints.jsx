@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
@@ -214,7 +215,7 @@ export default function Complaints() {
         {TABS.map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); if (t.id === 'register') setShowAdd(true); }}
             className={`px-4 py-2 rounded-lg font-semibold text-sm border transition-all ${tab === t.id && t.id !== 'register' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
-            {t.label}
+            {flowStepLabel('/complaints', t.label)}
             {tabCount(t.id) !== null && <span className={`ml-2 text-xs ${tab === t.id && t.id !== 'register' ? 'opacity-90' : 'text-gray-400'}`}>({tabCount(t.id)})</span>}
           </button>
         ))}
