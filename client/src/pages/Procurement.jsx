@@ -819,6 +819,10 @@ export default function Procurement() {
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
       api.get('/procurement/pending-po-items').then(r => setPendingPoItems(r.data || [])).catch(() => setPendingPoItems([])),
     ]),
+    // Payment tab reads vendorPos only. It had NO fetcher, so opening or
+    // refreshing on ?tab=payment showed 0 / 0 and "Mark cleared" never
+    // reloaded (mam 2026-09-11: "i refresh data not showing").
+    payment: () => api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
     bills: () => Promise.all([
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
       api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
@@ -863,10 +867,11 @@ export default function Procurement() {
       // somehow, so safest to evict the dependent tabs alongside the
       // current one.  Indents tab is self-contained.
       next.delete(tab);
-      if (tab === 'vendorpo' || tab === 'bills' || tab === 'delivery') {
+      if (tab === 'vendorpo' || tab === 'bills' || tab === 'delivery' || tab === 'payment') {
         next.delete('vendorpo');
         next.delete('bills');
         next.delete('delivery');
+        next.delete('payment');
       }
       return next;
     });
@@ -2320,8 +2325,8 @@ export default function Procurement() {
   return (
     <div className="space-y-3">
       <div className="sticky-toolbar">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
-          <div className="flex gap-2 overflow-x-auto pb-2 w-full md:w-auto md:flex-1 items-center">
+        <div className="flex min-w-0 flex-col gap-3">
+          <nav aria-label="Procurement stages" className="flex w-full min-w-0 flex-wrap items-center gap-2">
             {tabs.map(t => {
               // Urgent-payment badge on the Payment tab — Accounts can see
               // at a glance whether anything needs clearing without clicking
@@ -2333,6 +2338,7 @@ export default function Procurement() {
                 <button
                   key={t.id}
                   onClick={() => setTab(t.id)}
+                  aria-current={tab === t.id ? 'page' : undefined}
                   className={`btn relative whitespace-nowrap shrink-0 text-xs sm:text-sm !px-3 !py-1.5 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}
                 >
                   {/* Sub-number from the Indent to Dispatch flow, in tab order — mam 2026-09-10:
@@ -2349,8 +2355,8 @@ export default function Procurement() {
                 </button>
               );
             })}
-          </div>
-          <div className="flex gap-2 items-center flex-wrap shrink-0">
+          </nav>
+          <div role="group" aria-label="Procurement tools" className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3 sm:justify-end">
             {/* One Export button — exports current tab's data */}
             <button onClick={() => {
               if (tab === 'indents') {
