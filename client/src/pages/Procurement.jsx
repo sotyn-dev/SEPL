@@ -1176,6 +1176,11 @@ export default function Procurement() {
     if (offDay && !editingIndentId && form.is_emergency && !(form.emergency_reason || '').trim()) {
       return toast.error('Emergency indent needs a reason — why can\'t this wait for Wednesday/Saturday?');
     }
+    // Admin opened today (off-day) → the indent is EMERGENCY; reason box is in the form.
+    const openedOffDay = !!raiseWindow && raiseWindow.allowed && !raiseWindow.isIndentDay;
+    if (openedOffDay && !editingIndentId && !(form.emergency_reason || '').trim()) {
+      return toast.error('Write the emergency reason — why can\'t this wait for Wednesday/Saturday?');
+    }
     const payload = {
       site_name: form.site_name,
       raised_by_name: form.raised_by_name,
@@ -6312,6 +6317,19 @@ export default function Procurement() {
                 🔒 Indents are raised on <b>Wednesday &amp; Saturday</b> only. If today's material can't wait, ask an admin to open emergency raising for the day.
               </div>
             )
+          )}
+          {/* Admin opened today (off-day): every indent raised is EMERGENCY, so
+              ask for the reason here — the box above only shows while the day
+              is closed, and the server refused the admin's indent with
+              "Emergency indent needs a reason" with nowhere to type it. */}
+          {!editingIndentId && raiseWindow && raiseWindow.allowed && !raiseWindow.isIndentDay && (
+            <div className="border border-red-300 bg-red-50 rounded p-3 space-y-2">
+              <div className="text-xs font-semibold text-red-700">⚡ Emergency indent — admin opened today (not Wednesday/Saturday)</div>
+              <textarea className="input" rows="2" required
+                placeholder="Why can't this wait for Wednesday/Saturday? (mandatory)"
+                value={form.emergency_reason || ''}
+                onChange={e => setForm({ ...form, emergency_reason: e.target.value })} />
+            </div>
           )}
           {/* Header — Site from Business Book, Raised By from Employees. Stacks on mobile. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
