@@ -166,6 +166,14 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
       codeColumn: 'lead_no',
     });
     if (sendDuplicate(res, dup, `BB entry with PO ${b.po_number}`)) return;
+    // Same PO under another spelling ("… L7", spacing/case) or already in
+    // Order to Planning → use that lead, don't create a second one
+    // (mam 2026-09-11). The exact-match check above missed line-tagged copies.
+    const { findOrderPoConflict, conflictMessage } = require('../lib/orderPoMatch');
+    const poConflict = findOrderPoConflict(db, b.po_number);
+    if (poConflict) {
+      return res.status(409).json({ error: conflictMessage(poConflict), duplicate: true, existing_code: poConflict.lead_no, existing_id: poConflict.lead_id });
+    }
   }
   const dup = findDuplicate(db, {
     table: 'business_book',
@@ -317,6 +325,15 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
   if (raw.po_number !== undefined && raw.po_number !== null && String(raw.po_number).trim() !== '') {
     const poErr = validatePoNumber(raw.po_number);
     if (poErr) return res.status(400).json({ error: poErr });
+    // Moving this lead onto a PO that another lead (or Order to Planning, for
+    // another lead) already owns is the same duplicate as creating one.
+    const { basePo, findOrderPoConflict, conflictMessage } = require('../lib/orderPoMatch');
+    if (basePo(raw.po_number) !== basePo(existing.po_number)) {
+      const poConflict = findOrderPoConflict(db, raw.po_number, { leadId: existing.id });
+      if (poConflict) {
+        return res.status(409).json({ error: conflictMessage(poConflict), duplicate: true, existing_code: poConflict.lead_no, existing_id: poConflict.lead_id });
+      }
+    }
   }
   // Force PO = NET Sale × 1.18 (mam, 2026-05-21 + discount 2026-06-16).
   // Override any value the client sent so edits can't drift from the rule.
