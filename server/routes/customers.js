@@ -44,6 +44,13 @@ router.post('/', requirePermission('customers', 'create'), (req, res) => {
   const b = req.body || {};
   if (!b.company_name || !b.company_name.trim()) return res.status(400).json({ error: 'Company name required' });
   const db = getDb();
+  // Email ID and CC Email each take several addresses separated by commas
+  // (mam 2026-09-11); stored as "a@x.com, b@y.com".
+  const { cleanEmailList } = require('../lib/emailList');
+  const emailId = cleanEmailList(b.email);
+  if (emailId.invalid.length) return res.status(400).json({ error: `Email ID: "${emailId.invalid[0]}" is not a valid email address` });
+  const ccEmail = cleanEmailList(b.concern_person_email);
+  if (ccEmail.invalid.length) return res.status(400).json({ error: `CC Email: "${ccEmail.invalid[0]}" is not a valid email address` });
 
   // Mam (2026-05-21): block duplicate customers — same company name
   // = same customer.  Phone / email are additional flags caught if
@@ -65,7 +72,7 @@ router.post('/', requirePermission('customers', 'create'), (req, res) => {
   const code = generateCustomerCode(db);
   const r = db.prepare(
     'INSERT INTO customers (customer_code, category, company_name, sub_company_name, company_registration_address, contact_no, email, concern_person_name, concern_person_email, concern_person_address) VALUES (?,?,?,?,?,?,?,?,?,?)'
-  ).run(code, b.category || '', b.company_name.trim(), b.sub_company_name || '', b.company_registration_address || '', b.contact_no || '', b.email || '', b.concern_person_name || '', b.concern_person_email || '', b.concern_person_address || '');
+  ).run(code, b.category || '', b.company_name.trim(), b.sub_company_name || '', b.company_registration_address || '', b.contact_no || '', emailId.value, b.concern_person_name || '', ccEmail.value, b.concern_person_address || '');
   res.status(201).json({ id: r.lastInsertRowid, customer_code: code });
 });
 
@@ -84,6 +91,16 @@ router.put('/:id', requirePermission('customers', 'edit'), (req, res) => {
   }
   const b = { ...existing };
   for (const k of Object.keys(raw)) { if (raw[k] !== undefined) b[k] = raw[k]; }
+  // Email ID / CC Email: several addresses separated by commas. Only a field
+  // that was actually sent is checked, so an old stored value can't block an
+  // unrelated edit.
+  const { cleanEmailList } = require('../lib/emailList');
+  for (const [field, label] of [['email', 'Email ID'], ['concern_person_email', 'CC Email']]) {
+    if (raw[field] === undefined) continue;
+    const list = cleanEmailList(raw[field]);
+    if (list.invalid.length) return res.status(400).json({ error: `${label}: "${list.invalid[0]}" is not a valid email address` });
+    b[field] = list.value;
+  }
   db.prepare(
     'UPDATE customers SET category=?, company_name=?, sub_company_name=?, company_registration_address=?, contact_no=?, email=?, concern_person_name=?, concern_person_email=?, concern_person_address=?, updated_at=CURRENT_TIMESTAMP WHERE id=?'
   ).run(b.category || '', b.company_name || '', b.sub_company_name || '', b.company_registration_address || '', b.contact_no || '', b.email || '', b.concern_person_name || '', b.concern_person_email || '', b.concern_person_address || '', req.params.id);
@@ -119,9 +136,11 @@ router.post('/bulk-import', requirePermission('customers', 'create'), upload.sin
       if (h.includes('category')) colMap.category = i;
       if (h.includes('registration') || (h.includes('company') && h.includes('address'))) colMap.company_registration_address = i;
       if (!colMap.contact_no && (h === 'contact no' || h === 'contact' || h === 'phone' || h === 'mobile' || h.includes('contact no'))) colMap.contact_no = i;
-      if (!colMap.email && h === 'email') colMap.email = i;
+      // "Email ID" / "CC Email" are the renamed columns (mam 2026-09-11); the
+      // old "Email" / "Concern Person Email" headings still import.
+      if (!colMap.email && (h === 'email' || h === 'email id' || h === 'email-id')) colMap.email = i;
       if (h.includes('concern') && h.includes('name')) colMap.concern_person_name = i;
-      if (h.includes('concern') && h.includes('email')) colMap.concern_person_email = i;
+      if ((h.includes('concern') && h.includes('email')) || h === 'cc email' || h === 'cc email id' || h === 'cc') colMap.concern_person_email = i;
       if (h.includes('concern') && h.includes('address')) colMap.concern_person_address = i;
     });
 
@@ -131,6 +150,7 @@ router.post('/bulk-import', requirePermission('customers', 'create'), upload.sin
     }
 
     const db = getDb();
+    const { cleanEmailList } = require('../lib/emailList');
     const insert = db.prepare(
       'INSERT INTO customers (customer_code, category, company_name, sub_company_name, company_registration_address, contact_no, email, concern_person_name, concern_person_email, concern_person_address) VALUES (?,?,?,?,?,?,?,?,?,?)'
     );
@@ -150,9 +170,9 @@ router.post('/bulk-import', requirePermission('customers', 'create'), upload.sin
           colMap.sub_company_name !== undefined ? String(row[colMap.sub_company_name] || '').trim() : '',
           colMap.company_registration_address !== undefined ? String(row[colMap.company_registration_address] || '').trim() : '',
           colMap.contact_no !== undefined ? String(row[colMap.contact_no] || '').trim() : '',
-          colMap.email !== undefined ? String(row[colMap.email] || '').trim() : '',
+          colMap.email !== undefined ? cleanEmailList(row[colMap.email]).value : '',
           colMap.concern_person_name !== undefined ? String(row[colMap.concern_person_name] || '').trim() : '',
-          colMap.concern_person_email !== undefined ? String(row[colMap.concern_person_email] || '').trim() : '',
+          colMap.concern_person_email !== undefined ? cleanEmailList(row[colMap.concern_person_email]).value : '',
           colMap.concern_person_address !== undefined ? String(row[colMap.concern_person_address] || '').trim() : ''
         );
         added++;

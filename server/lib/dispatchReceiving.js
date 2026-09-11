@@ -32,15 +32,35 @@ function initialize(db) {
       db.exec('ALTER TABLE dispatch_receiving_v2 RENAME TO dispatch_receiving');
     })();
   }
+  // Approval + edit trail (mam 2026-09-11: "give here edit option and Lovely will
+  // approve this receiving"). Receivings already saved start as pending.
+  const have = new Set(db.prepare('PRAGMA table_info(dispatch_receiving)').all().map(c => c.name));
+  const addColumn = (name, ddl) => { if (!have.has(name)) db.exec(`ALTER TABLE dispatch_receiving ADD COLUMN ${ddl}`); };
+  addColumn('status', "status TEXT NOT NULL DEFAULT 'pending'");
+  addColumn('approved_by', 'approved_by INTEGER REFERENCES users(id)');   // who approved OR rejected
+  addColumn('approved_at', 'approved_at TEXT');
+  addColumn('rejected_reason', 'rejected_reason TEXT');
+  addColumn('updated_by', 'updated_by INTEGER REFERENCES users(id)');
+  addColumn('updated_at', 'updated_at TEXT');
 }
 
+// A Business Book lead's site name: its project, else its company, else its
+// client. Only project names were listed before, so leads with just a company
+// name — most of them — never appeared (mam 2026-09-11: "all sites not fetch").
+const bbSiteName = alias => `COALESCE(NULLIF(TRIM(${alias}.project_name),''), NULLIF(TRIM(${alias}.company_name),''), NULLIF(TRIM(${alias}.client_name),''))`;
+
+// Every site: each Business Book lead plus every DPR site, one entry per name.
 function sites(db) {
   const unique = new Map();
-  for (const row of db.prepare("SELECT project_name FROM business_book WHERE TRIM(COALESCE(project_name,'')) != '' ORDER BY project_name").all()) {
-    const key = normalize(row.project_name);
-    if (!unique.has(key)) unique.set(key, { value: key, label: row.project_name.trim() });
-  }
-  return [...unique.values()];
+  const add = (name) => {
+    const label = String(name || '').trim();
+    if (!label) return;
+    const key = normalize(label);
+    if (!unique.has(key)) unique.set(key, { value: key, label });
+  };
+  for (const row of db.prepare(`SELECT ${bbSiteName('bb')} AS name FROM business_book bb`).all()) add(row.name);
+  for (const row of db.prepare('SELECT name FROM sites').all()) add(row.name);
+  return [...unique.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
 function indentsForSite(db, site) {
@@ -48,9 +68,21 @@ function indentsForSite(db, site) {
     LEFT JOIN order_planning op ON op.id=i.planning_id
     LEFT JOIN business_book bb ON bb.id=op.business_book_id
     WHERE TRIM(COALESCE(i.indent_number,'')) != '' AND (
-      LOWER(TRIM(bb.project_name))=? OR
+      LOWER(${bbSiteName('bb')})=? OR
       (op.business_book_id IS NULL AND LOWER(TRIM(i.site_name))=?)
     ) ORDER BY i.id DESC`).all(normalize(site), normalize(site));
 }
 
-module.exports = { initialize, sites, indentsForSite, normalize };
+// Who approves a receiving (mam 2026-09-11: "Lovely will approve this
+// receiving"): the active user(s) named Lovely. Admin can stand in.
+function receivingApprovers(db) {
+  return db.prepare("SELECT id, name FROM users WHERE LOWER(TRIM(COALESCE(name,''))) LIKE 'lovely%' AND COALESCE(active,1)=1 ORDER BY id").all();
+}
+
+function canApproveReceiving(db, user) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  return receivingApprovers(db).some(u => u.id === user.id);
+}
+
+module.exports = { initialize, sites, indentsForSite, normalize, receivingApprovers, canApproveReceiving };

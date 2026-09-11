@@ -75,7 +75,7 @@ export default function Customers() {
     if (filterCat && c.category !== filterCat) return false;
     if (search) {
       const q = search.toLowerCase();
-      const hit = [c.company_name, c.sub_company_name, c.customer_code, c.contact_no, c.email, c.concern_person_name]
+      const hit = [c.company_name, c.sub_company_name, c.customer_code, c.contact_no, c.email, c.concern_person_name, c.concern_person_email]
         .some(v => String(v || '').toLowerCase().includes(q));
       if (!hit) return false;
     }
@@ -131,7 +131,7 @@ export default function Customers() {
               <FiUpload size={15} /> {uploading ? 'Importing...' : 'Excel Import'}
             </button>
             <button onClick={() => exportCsv('customers',
-              ['Code','Category','Company','Sub Company','Address','Contact','Email','Concern Person','Concern Email'],
+              ['Code','Category','Company','Sub Company','Address','Contact','Email ID','Concern Person','CC Email'],
               filtered.map(c => [c.customer_code, c.category, c.company_name, c.sub_company_name, c.company_registration_address, c.contact_no, c.email, c.concern_person_name, c.concern_person_email]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export Excel</button>
             <button onClick={openAdd} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> New Customer</button>
@@ -151,7 +151,7 @@ export default function Customers() {
                 <th className="px-2 py-2 text-left">Sub Company</th>
                 <th className="px-2 py-2">Category</th>
                 <th className="px-2 py-2">Contact No</th>
-                <th className="px-2 py-2 text-left">Email</th>
+                <th className="px-2 py-2 text-left">Email ID</th>
                 <th className="px-2 py-2 text-left">Concern Person</th>
                 <th className="px-2 py-2">Actions</th>
               </tr>
@@ -197,9 +197,9 @@ export default function Customers() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><span className="text-gray-400 text-xs">Sub Company:</span><br/><span className="font-medium">{viewData.sub_company_name || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Contact No:</span><br/><span className="font-medium">{viewData.contact_no || '-'}</span></div>
-              <div><span className="text-gray-400 text-xs">Email:</span><br/><span className="font-medium">{viewData.email || '-'}</span></div>
+              <div><span className="text-gray-400 text-xs">Email ID:</span><br/><span className="font-medium break-words">{viewData.email || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Concern Person:</span><br/><span className="font-medium">{viewData.concern_person_name || '-'}</span></div>
-              <div><span className="text-gray-400 text-xs">Concern Person Email:</span><br/><span className="font-medium">{viewData.concern_person_email || '-'}</span></div>
+              <div><span className="text-gray-400 text-xs">CC Email:</span><br/><span className="font-medium break-words">{viewData.concern_person_email || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Concern Person Address:</span><br/><span className="font-medium">{viewData.concern_person_address || '-'}</span></div>
               <div className="col-span-2"><span className="text-gray-400 text-xs">Company Registration Address:</span><br/><span className="font-medium">{viewData.company_registration_address || '-'}</span></div>
             </div>
@@ -241,16 +241,21 @@ export default function Customers() {
               <input className="input" value={form.contact_no || ''} onChange={e => setForm({ ...form, contact_no: e.target.value })} />
             </div>
             <div>
-              <label className="label">Email</label>
-              <input className="input" type="email" value={form.email || ''} onChange={e => setForm({ ...form, email: e.target.value })} />
+              {/* Several addresses allowed, comma separated (mam 2026-09-11) — a
+                  plain text box, because type="email" rejects a comma list. The
+                  server checks each address. */}
+              <label className="label">Email ID</label>
+              <input className="input" type="text" inputMode="email" autoComplete="off" placeholder="name@company.com, other@company.com" value={form.email || ''} onChange={e => setForm({ ...form, email: e.target.value })} />
+              <p className="mt-1 text-[11px] text-gray-400">Separate multiple emails with a comma</p>
             </div>
             <div>
               <label className="label">Concern Person Name</label>
               <input className="input" value={form.concern_person_name || ''} onChange={e => setForm({ ...form, concern_person_name: e.target.value })} />
             </div>
             <div>
-              <label className="label">Concern Person Email</label>
-              <input className="input" type="email" value={form.concern_person_email || ''} onChange={e => setForm({ ...form, concern_person_email: e.target.value })} />
+              <label className="label">CC Email</label>
+              <input className="input" type="text" inputMode="email" autoComplete="off" placeholder="name@company.com, other@company.com" value={form.concern_person_email || ''} onChange={e => setForm({ ...form, concern_person_email: e.target.value })} />
+              <p className="mt-1 text-[11px] text-gray-400">Separate multiple emails with a comma</p>
             </div>
             <div className="sm:col-span-2">
               <label className="label">Concern Person Address</label>
