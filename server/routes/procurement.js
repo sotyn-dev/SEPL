@@ -2546,14 +2546,25 @@ router.put('/indents/:id', (req, res) => {
         return res.status(403).json({ error: 'Only the indent creator or procurement can edit this indent' });
       }
     }
-    if (cur.status === 'approved') {
-      return res.status(400).json({ error: 'Cannot edit an approved indent' });
+    // Approved indents: admin may still edit BOQ + items until a Vendor PO is
+    // made (mam 2026-09-11: "if admin can edit he can edit boq and items also").
+    if (cur.status === 'approved' && req.user.role !== 'admin') {
+      return res.status(400).json({ error: 'Cannot edit an approved indent — only an admin can' });
     }
     const vpoCount = db.prepare(
       'SELECT COUNT(*) as c FROM vendor_pos WHERE indent_id=? AND COALESCE(cancelled, 0) = 0'
     ).get(id).c;
     if (vpoCount > 0) {
       return res.status(400).json({ error: `Cannot edit — ${vpoCount} active Vendor PO(s) reference this indent` });
+    }
+    // Store-issued lines carry stock movements + an SI note; editing them here
+    // would leave stock wrong. Re-approve resets the store issue first.
+    const storeLines = db.prepare(
+      `SELECT COUNT(*) AS c FROM indent_items
+        WHERE indent_id=? AND (source='store' OR parent_item_id IS NOT NULL OR stock_issue_note_id IS NOT NULL)`
+    ).get(id).c;
+    if (storeLines > 0) {
+      return res.status(400).json({ error: 'Some items were issued from store. Use Re-approve to reset the store issue first, then edit.' });
     }
 
     // Category lock removed on the edit path too (mam 2026-08-26, 3rd
@@ -2657,7 +2668,14 @@ router.put('/indents/:id', (req, res) => {
          WHERE id=?`
       ).run(site_name || '', raised_by_name || '', site_name || '', notes || '', department || null, id);
 
-      db.prepare('DELETE FROM indent_items WHERE indent_id=?').run(id);
+      // Save lines IN PLACE (mam 2026-09-11: admin edits approved indents too).
+      // A line that comes back with its id keeps that id, so its Vendor Rates
+      // stay; only a changed sub-item loses its rates. Lines left out are
+      // deleted. Delete-all + re-insert used to wipe every vendor rate.
+      const existing = new Map(
+        db.prepare('SELECT id, item_master_id, description FROM indent_items WHERE indent_id=?').all(id).map(r => [r.id, r])
+      );
+      const kept = new Set();
 
       const getPoItem = db.prepare('SELECT description, unit, quantity as boq_qty, item_master_id FROM po_items WHERE id=?');
       const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
@@ -2666,6 +2684,13 @@ router.put('/indents/:id', (req, res) => {
           (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date, remarks)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
+      const updateItem = db.prepare(
+        `UPDATE indent_items
+            SET po_item_id=?, item_master_id=?, description=?, make=?, quantity=?, unit=?,
+                item_type=?, is_foc=?, is_tool=?, required_date=?, remarks=?
+          WHERE id=? AND indent_id=?`
+      );
+      const dropRates = db.prepare('DELETE FROM indent_item_rates WHERE indent_item_id=?');
       for (const i of items) {
         let desc = i.description || '';
         let unit = i.unit || 'nos';
@@ -2701,15 +2726,35 @@ router.put('/indents/:id', (req, res) => {
         const qty = +i.quantity || 0;
         const foc = String(itemType || '').toUpperCase() === 'FOC' ? 1 : 0;
         const tool = String(itemType || '').toUpperCase() === 'RGP' ? 1 : 0;
-        insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null,
-          String(i.remarks || '').trim().slice(0, 500) || null);
+        const remarks = String(i.remarks || '').trim().slice(0, 500) || null;
+        const lineId = +i.id;
+        const old = existing.get(lineId);
+        if (old && !kept.has(lineId)) {
+          kept.add(lineId);
+          updateItem.run(poItemId, masterId, desc, make, qty, unit, itemType, foc, tool, i.required_date || null, remarks, lineId, id);
+          if ((+old.item_master_id || 0) !== (+masterId || 0)) dropRates.run(lineId);   // different sub-item → its old rates don't apply
+        } else {
+          insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null, remarks);
+        }
+      }
+
+      // Lines removed in the edit. One that sits on a (cancelled) Vendor PO
+      // stays — that PO's print reads its description from this line.
+      const onVendorPo = db.prepare('SELECT COUNT(*) AS c FROM vendor_po_items WHERE indent_item_id=?');
+      const deleteItem = db.prepare('DELETE FROM indent_items WHERE id=?');
+      for (const [lineId, old] of existing) {
+        if (kept.has(lineId)) continue;
+        if (onVendorPo.get(lineId).c > 0) {
+          throw Object.assign(new Error(`"${String(old.description || 'Item').slice(0, 60)}" is on a cancelled Vendor PO, so it can't be removed. Keep it and change its quantity instead.`), { status: 400 });
+        }
+        deleteItem.run(lineId);   // its vendor rates go with it (ON DELETE CASCADE)
       }
     });
     try {
       tx();
       return res.json({ message: 'Indent updated' });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(err.status || 500).json({ error: err.message });
     }
   }
 

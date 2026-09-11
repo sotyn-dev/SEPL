@@ -1218,9 +1218,9 @@ export default function Procurement() {
   };
 
   // Pre-fill the Raise Indent modal with an existing indent's data so a
-  // wrongly filled indent can be corrected in place. Indents that are
-  // already approved or have an active Vendor PO against them are
-  // blocked server-side anyway — we just hide the button for those.
+  // wrongly filled indent can be corrected in place. Approved indents are
+  // admin-only (BOQ + items, mam 2026-09-11); any indent with an active
+  // Vendor PO or store-issued lines is blocked server-side.
   const openEditIndent = async (indent) => {
     try {
       const r = await api.get(`/procurement/indents/${indent.id}`);
@@ -1318,6 +1318,8 @@ export default function Procurement() {
           finalPoId = siblingByDesc.get(descKey(it.description)) || '';
         }
         return {
+          // Line id — the server saves this line in place, so its vendor rates stay.
+          id: it.id,
           po_item_id: finalPoId,
           item_master_id: it.item_master_id || '',
           description: it.description || '',
@@ -3051,7 +3053,7 @@ export default function Procurement() {
                     {/* Edit + delete row */}
                     {((canEdit('procurement') || isAdmin()) || canDelete('procurement')) && (
                       <div className="flex justify-end gap-2 pt-1 text-[11px]">
-                        {(canEdit('procurement') || isAdmin()) && i.status !== 'approved' && (
+                        {(canEdit('procurement') || isAdmin()) && (i.status !== 'approved' || isAdmin()) && (
                           <button onClick={() => openEditIndent(i)} className="text-blue-600 hover:underline flex items-center gap-1">
                             <FiEdit2 size={11} /> Edit
                           </button>
@@ -3437,7 +3439,7 @@ export default function Procurement() {
                                 {/* Edit — site engineers in training need to fix wrong
                             indents. Allowed for submitted / draft / rejected;
                             approved indents are frozen (server enforces too). */}
-                                {(canEdit('procurement') || isAdmin()) && i.status !== 'approved' && (
+                                {(canEdit('procurement') || isAdmin()) && (i.status !== 'approved' || isAdmin()) && (
                                   <button onClick={() => openEditIndent(i)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit indent"><FiEdit2 size={14} /></button>
                                 )}
                                 {canDelete('procurement') && <button onClick={async () => {
@@ -6744,6 +6746,30 @@ export default function Procurement() {
                                 <div className="text-sm font-semibold text-gray-800 truncate" title={group.sample.description}>
                                   {group.sample.description || '(no description)'}
                                 </div>
+                                {/* Admin editing: swap this block's BOQ row; its sub-items,
+                                    type and qty stay (mam 2026-09-11). */}
+                                {editingIndentId && isAdmin() && (
+                                  <div className="mt-1.5 max-w-xl">
+                                    <SearchableSelect
+                                      options={filteredBoqItems
+                                        .filter(b => +b.id !== +group.boq_id)
+                                        .map(b => ({
+                                          id: b.id,
+                                          label: `${b.description || '(no desc)'}${b.boq_qty ? ' · Qty ' + b.boq_qty : ''}${b.item_type ? ' · ' + b.item_type : ''}`,
+                                          ...b,
+                                        }))}
+                                      value={null} valueKey="id" displayKey="label"
+                                      placeholder="Change BOQ item…"
+                                      onChange={(b) => {
+                                        if (!b) return;
+                                        const ids = new Set(group.rows.map(r => r.idx));
+                                        setIndentItems(prev => prev.map((it, x) => ids.has(x)
+                                          ? { ...it, po_item_id: b.id, description: b.description || '', boq_qty: b.boq_qty || 0, remaining_qty: b.remaining_qty }
+                                          : it));
+                                      }}
+                                    />
+                                  </div>
+                                )}
                                 {(group.sample.boq_qty || group.sample.remaining_qty != null) ? (
                                   <div className="text-[11px] text-gray-600 mt-0.5">
                                     {group.sample.boq_qty ? <>BOQ Qty: <span className="font-semibold">{group.sample.boq_qty}</span></> : null}
