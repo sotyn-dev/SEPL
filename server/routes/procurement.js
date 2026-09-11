@@ -7042,6 +7042,34 @@ router.post('/item-rates', needsApprove, (req, res) => {
   }
 });
 
+// Read a vendor's quotation for the ticked Vendor Rates items (mam 2026-09-11:
+// "select items and vendor upload pdf/imag anything else pick rate by item
+// match"). PROPOSES a rate per item (lib/quoteRateMatch.js) — nothing is saved
+// here; the page shows the proposals for review and saves the accepted ones
+// through POST /item-rates exactly like a typed rate.
+const quoteUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+router.post('/item-rates/read-quotation', needsApprove, quoteUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Upload the vendor quotation file' });
+  let items = null;
+  try { items = JSON.parse(req.body?.items || '[]'); } catch (_) { items = null; }
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Tick the items to price first' });
+  if (items.length > 200) return res.status(400).json({ error: 'Read at most 200 items at a time' });
+  const clean = items.map((it) => ({
+    name: String(it?.name || '').slice(0, 300),
+    specification: String(it?.specification || '').slice(0, 200),
+    size: String(it?.size || '').slice(0, 100),
+    make: String(it?.make || '').slice(0, 100),
+    qty: Number(it?.qty) || 0,
+    unit: String(it?.unit || '').slice(0, 20),
+  }));
+  try {
+    const { matchQuotationRates } = require('../lib/quoteRateMatch');
+    res.json(await matchQuotationRates(getDb(), clean, req.file.buffer, req.file.originalname));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'Could not read the quotation' });
+  }
+});
+
 // AI "marketing rate" suggestion (mam 2026-06-19) — on-demand per item. Asks
 // the configured AI model to estimate the current market PURCHASE rate for the
 // item. Suggestion ONLY: saved to indent_item_rates.marketing_rate, never the

@@ -412,6 +412,12 @@ export default function Procurement() {
   const [bulkTerms, setBulkTerms] = useState('');
   const [bulkCreditDays, setBulkCreditDays] = useState('');
   const [bulkApplying, setBulkApplying] = useState(false);
+  // Vendor quotation → rates (mam 2026-09-11): the uploaded file, a key to
+  // clear the file input, the read in progress, and the rates under review.
+  const [quoteFile, setQuoteFile] = useState(null);
+  const [quoteInputKey, setQuoteInputKey] = useState(0);
+  const [quoteReading, setQuoteReading] = useState(false);
+  const [quoteReview, setQuoteReview] = useState(null);
   const [finalModal, setFinalModal] = useState(null); // { row } being finalized
   const [finalForm, setFinalForm] = useState({});
   const [masterItems, setMasterItems] = useState([]); // Item Master dropdown source
@@ -3633,6 +3639,56 @@ export default function Procurement() {
             toast.error('Some rows failed to save — please check');
           } finally { setBulkApplying(false); }
         };
+        // Read rates from the vendor's quotation (mam 2026-09-11: "select items
+        // and vendor upload pdf/imag anything else pick rate by item match").
+        // The server PROPOSES a rate per ticked item; nothing is saved until the
+        // purchase team confirms it in the review popup.
+        const readQuoteRates = async () => {
+          if (!selectedRows.length) return toast.error('Tick the items first');
+          if (!bulkVendorName) return toast.error('Pick the vendor whose quotation this is');
+          if (!quoteFile) return toast.error('Choose the quotation file (PDF, photo, Excel…)');
+          const rows = selectedRows;
+          const fd = new FormData();
+          fd.append('file', quoteFile);
+          fd.append('items', JSON.stringify(rows.map(r => ({
+            name: r.master_name || r.description, specification: r.specification, size: r.size,
+            make: r.make, qty: r.qty, unit: cleanUnit(r.unit || r.uom),
+          }))));
+          setQuoteReading(true);
+          try {
+            const { data } = await api.post('/procurement/item-rates/read-quotation', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 });
+            const matches = data.matches || [];
+            setQuoteReview({
+              slot: bulkSlot, vendor: bulkVendorName, terms: bulkTerms, creditDays: bulkCreditDays,
+              source: data.source, fileName: quoteFile.name,
+              rows: rows.map((row, i) => {
+                const m = matches.find(x => x.index === i) || {};
+                return { row, rate: m.rate > 0 ? m.rate : '', quoted: m.quoted_text || '', unit: m.unit || '', confidence: m.confidence || 0, include: m.rate > 0 };
+              }),
+            });
+          } catch (err) {
+            toast.error(err.response?.data?.error || 'Could not read the quotation');
+          } finally { setQuoteReading(false); }
+        };
+        const applyQuoteRates = async () => {
+          const review = quoteReview;
+          const picked = review.rows.filter(x => x.include && +x.rate > 0);
+          if (!picked.length) return toast.error('Tick at least one rate to apply');
+          const n = review.slot;
+          setBulkApplying(true);
+          try {
+            for (const x of picked) {
+              const patch = { [`vendor${n}_name`]: review.vendor, [`vendor${n}_rate`]: +x.rate };
+              if (review.terms) {
+                patch[`vendor${n}_terms`] = review.terms;
+                patch[`vendor${n}_credit_days`] = review.terms === 'Credit' ? (+review.creditDays || 0) : 0;
+              }
+              await updateMergedRate(x.row, patch);
+            }
+            toast.success(`Vendor ${n} rates filled for ${picked.length} item(s) from ${review.fileName}`);
+            setQuoteReview(null); setQuoteFile(null); setQuoteInputKey(k => k + 1); setRateSel({});
+          } finally { setBulkApplying(false); }
+        };
         // Edit one row; if that row is TICKED, copy the vendor NAME / TERMS
         // pick to every other ticked row too — so changing one ticked row
         // fills all of them (mam 2026-06-12: "i selected but not impact
@@ -3730,6 +3786,18 @@ export default function Procurement() {
                     value={bulkCreditDays} onChange={e => setBulkCreditDays(e.target.value)} />
                 </div>
               )}
+              {/* Vendor quotation → rates by item match (mam 2026-09-11) */}
+              <div className="min-w-[210px]">
+                <label className="label text-[10px] mb-0.5">Vendor quotation</label>
+                <input key={quoteInputKey} type="file" className="text-[11px] w-full"
+                  accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.xlsx,.xls,.csv,.docx"
+                  onChange={e => setQuoteFile(e.target.files?.[0] || null)} />
+              </div>
+              <button type="button" disabled={quoteReading || !selectedRows.length || !quoteFile || !bulkVendorName} onClick={readQuoteRates}
+                className="btn text-xs py-1 px-3 bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40"
+                title={!bulkVendorName ? 'Pick the vendor first' : !quoteFile ? 'Choose the quotation file' : 'Read the rates for the ticked items from this quotation'}>
+                {quoteReading ? 'Reading quotation…' : `Read rates for ${selectedRows.length} ticked`}
+              </button>
               <button type="button" disabled={bulkApplying || !selectedRows.length} onClick={applyBulkVendor}
                 className="btn btn-primary text-xs py-1 px-3 disabled:opacity-40">
                 {bulkApplying ? 'Applying…' : `Apply to ${selectedRows.length} ticked`}
@@ -3740,6 +3808,65 @@ export default function Procurement() {
                 </button>
               )}
             </div>
+
+            {/* Review the rates read from a quotation before anything is saved. */}
+            <Modal isOpen={!!quoteReview} onClose={() => { if (!bulkApplying) setQuoteReview(null); }} title="Rates read from the quotation" wide>
+              {quoteReview && (
+                <div className="space-y-3 text-xs">
+                  <div className="text-gray-600">
+                    <b>{quoteReview.fileName}</b> · Vendor {quoteReview.slot}: <b>{quoteReview.vendor}</b>
+                    {quoteReview.terms ? ` · ${quoteReview.terms}${quoteReview.terms === 'Credit' && quoteReview.creditDays ? ` ${quoteReview.creditDays} days` : ''}` : ''}
+                    <span className="ml-2 text-gray-400">{quoteReview.source === 'ai' ? 'read by AI' : 'matched by item name'}</span>
+                  </div>
+                  <p className="text-[11px] text-amber-700">Check each rate against the quotation. Only ticked rows with a rate are saved; you can correct any rate first.</p>
+                  <div className="overflow-x-auto border rounded">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 text-left">
+                          <th className="p-2 w-8"></th><th className="p-2">Item</th><th className="p-2">Qty</th>
+                          <th className="p-2">Quotation line</th><th className="p-2">Match</th><th className="p-2 text-right">Rate (Rs)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {quoteReview.rows.map((x, i) => {
+                          const setRow = (patch) => setQuoteReview(q => ({ ...q, rows: q.rows.map((y, j) => (j === i ? { ...y, ...patch } : y)) }));
+                          const pct = Math.round((x.confidence || 0) * 100);
+                          return (
+                            <tr key={rowKey(x.row)} className={`border-t align-top ${x.quoted ? '' : 'bg-red-50/40'}`}>
+                              <td className="p-2"><input type="checkbox" checked={x.include} onChange={e => setRow({ include: e.target.checked })} /></td>
+                              <td className="p-2">
+                                <div className="font-medium">{[x.row.master_name || x.row.description, x.row.specification, x.row.size].filter(Boolean).join(' / ')}</div>
+                                <div className="text-[10px] text-gray-400">{x.row.indent_number}{x.row.make ? ` · Make: ${x.row.make}` : ''}</div>
+                              </td>
+                              <td className="p-2 whitespace-nowrap">{x.row.qty} {cleanUnit(x.row.unit || x.row.uom)}</td>
+                              <td className="p-2 text-gray-600">
+                                {x.quoted || <span className="text-red-600">Not found in the quotation</span>}
+                                {x.unit && <span className="text-gray-400"> · {x.unit}</span>}
+                              </td>
+                              <td className="p-2 whitespace-nowrap">
+                                {x.quoted
+                                  ? <span className={`px-1.5 py-0.5 rounded font-semibold ${pct >= 70 ? 'bg-emerald-100 text-emerald-700' : pct >= 40 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{pct}%</span>
+                                  : '—'}
+                              </td>
+                              <td className="p-2 text-right">
+                                <input type="number" min="0" className="input text-xs text-right" style={{ width: '100px' }}
+                                  value={x.rate} onChange={e => setRow({ rate: e.target.value, include: +e.target.value > 0 })} />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button type="button" className="btn btn-secondary text-xs" disabled={bulkApplying} onClick={() => setQuoteReview(null)}>Cancel</button>
+                    <button type="button" className="btn btn-primary text-xs" disabled={bulkApplying} onClick={applyQuoteRates}>
+                      {bulkApplying ? 'Saving…' : `Apply ${quoteReview.rows.filter(x => x.include && +x.rate > 0).length} rate(s) to Vendor ${quoteReview.slot}`}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </Modal>
 
             {/* Desktop table — BOQ Item column intentionally removed:
               mam's spec is purchase team enters a vendor rate ONCE per
