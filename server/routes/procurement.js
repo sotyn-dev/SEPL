@@ -15,6 +15,7 @@ const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJso
 // disagree (mam 2026-09-07).
 const { poMissingBillWhere } = require('../lib/poBill');
 const router = express.Router();
+const { makeDeliveryBillResolver } = require('../lib/indentDeliveryBill');
 router.use(authMiddleware);
 
 // Build the merge context for an indent email event (mam 2026-06-03 email
@@ -788,12 +789,10 @@ router.get('/boq-items', (req, res) => {
 // List indents with a BOQ file link derived from the site's Client PO.
 // The mapping is: indent.site_name → sites.business_book_id → purchase_orders.
 // boq_file_link (pick the most recent PO for that business_book).
-router.get('/indents', (req, res) => {
-  const db = getDb();
-  // Scope filter: anyone with 'approve' permission on procurement (or admin)
-  // sees ALL indents. Plain users (site engineers with only view + create)
-  // see only the ones they raised. Mam toggles this by checking / unchecking
-  // 'approve' on the role's procurement permissions.
+// Who may see EVERY indent (everyone else sees only the ones they raised).
+// Shared by GET /indents and the delivery-bill audit print so the two can
+// never apply different rules.
+function canSeeAllIndents(db, req) {
   const isAdmin = req.user.role === 'admin';
   // ANYONE named on an indent approval gate must be able to SEE every indent,
   // even if their role lacks procurement.approve — otherwise naming an approver
@@ -825,6 +824,16 @@ router.get('/indents', (req, res) => {
     `).get(req.user.id);
     return !!r?.ok;
   })();
+  return canSeeAll;
+}
+
+router.get('/indents', (req, res) => {
+  const db = getDb();
+  // Scope filter: anyone with 'approve' permission on procurement (or admin)
+  // sees ALL indents. Plain users (site engineers with only view + create)
+  // see only the ones they raised. Mam toggles this by checking / unchecking
+  // 'approve' on the role's procurement permissions.
+  const canSeeAll = canSeeAllIndents(db, req);
   // Mam (2026-06-02): "gurcharan fill indent when i open his id he
   // is not showing his own filled indent please dont do this type
   // blunder".  The old filter only checked created_by — so any indent
@@ -967,113 +976,23 @@ router.get('/indents', (req, res) => {
   }
 
   // ── Billable + Delivery-Bill preview (mam 2026-06-16) ───────────────
-  // Billable = Σ (BOQ item rate × indent qty). The BOQ rate is the CLIENT
-  // SALE rate from the priced BOQ (po_items), resolved EXACTLY like the
-  // Sales Bill: the line's po_item link first, then a description match
-  // within the same order's BOQ. We deliberately DON'T require the indent
-  // to have a planning→Business Book link — in practice most indents reach
-  // their BOQ purely through indent_items.po_item_id (planning_id is often
-  // unset), so keying off that link directly is what makes the numbers
-  // appear. Delivery Bill = Billable × the order's Against-Delivery %.
-  // Both fall back to 0 → UI shows "—" when the BOQ rate or % is missing.
-
-  // Global po_item lookup: id → { rate, business_book }. One pass, reused
-  // for every indent so we never query per line.
-  const poItemById = new Map();
-  for (const p of db.prepare('SELECT id, business_book_id, rate FROM po_items').all()) {
-    poItemById.set(p.id, { rate: +p.rate || 0, bb: p.business_book_id });
-  }
-  // Lazy per-Business-Book description→rate map (the fallback the Sales
-  // Bill uses when a line has no usable po_item rate) — only priced rows.
-  const bbDescCache = new Map();
-  const bbDescMap = (bbId) => {
-    if (bbDescCache.has(bbId)) return bbDescCache.get(bbId);
-    const m = new Map();
-    for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
-      if (p.description && +p.rate > 0) m.set(String(p.description).toLowerCase().trim(), +p.rate || 0);
-    }
-    bbDescCache.set(bbId, m);
-    return m;
-  };
-  // Lazy Business-Book against-delivery % (used when the planning join
-  // didn't carry the term — e.g. the bb was inferred from a po_item).
-  const bbPctCache = new Map();
-  const bbPct = (bbId) => {
-    if (bbPctCache.has(bbId)) return bbPctCache.get(bbId);
-    const row = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
-    const pct = parseFloat(String((row && row.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
-    bbPctCache.set(bbId, pct);
-    return pct;
-  };
-  // Planning-derived Business Book + % per indent (primary, from the join).
-  const planBbByIndent = new Map();
-  const planPctByIndent = new Map();
-  for (const i of indents) {
-    if (i.business_book_id) planBbByIndent.set(i.id, i.business_book_id);
-    planPctByIndent.set(i.id, parseFloat(String(i.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0);
-  }
-  // Indent site (name) — the most reliable bridge to the Order-to-Planning
-  // order when neither a planning link nor a po_item link is present.
-  const siteByIndent = new Map();
-  for (const i of indents) siteByIndent.set(i.id, i.site_name || i.client_name || '');
-  // site/project name → business_book_id, resolved the same way findBoq
-  // links a site to its order (sites.business_book_id, else a project /
-  // company name match on business_book). Cached per name.
-  const bbIdBySiteCache = new Map();
-  const bbIdForSite = (siteName) => {
-    if (!siteName) return null;
-    if (bbIdBySiteCache.has(siteName)) return bbIdBySiteCache.get(siteName);
-    const row = db.prepare(
-      `SELECT id FROM business_book
-        WHERE id IN (SELECT DISTINCT business_book_id FROM sites
-                      WHERE name = ? AND business_book_id IS NOT NULL)
-           OR project_name = ? OR company_name = ?
-        ORDER BY id DESC LIMIT 1`
-    ).get(siteName, siteName, siteName);
-    const id = row?.id || null;
-    bbIdBySiteCache.set(siteName, id);
-    return id;
-  };
+  // Billable = Σ (client SALE rate × indent qty); Delivery Bill = Billable ×
+  // the order's Against-Delivery %. Which order, which rate and whose % are
+  // resolved in lib/indentDeliveryBill.js — shared with the per-indent audit
+  // print (GET /indents/:id/delivery-bill) so the PDF shows exactly these
+  // numbers. Both fall back to 0 → UI shows "—" when the BOQ rate or % is
+  // missing.
+  const resolveDeliveryBill = makeDeliveryBillResolver(db);
   const billableByIndent = new Map();
   const deliveryByIndent = new Map();
   const pctByIndent = new Map();
-  for (const [indentId, its] of itemsByIndent) {
-    // Resolve the order's Business Book (the Order-to-Planning order the
-    // BOQ rate is picked from): planning link first, else the first line's
-    // po_item link, else the indent's site → order mapping.
-    let bbId = planBbByIndent.get(indentId) || null;
-    if (!bbId) {
-      for (const it of its) {
-        const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
-        if (po && po.bb) { bbId = po.bb; break; }
-      }
-    }
-    if (!bbId) bbId = bbIdForSite(siteByIndent.get(indentId));
-    const descMap = bbId ? bbDescMap(bbId) : null;
-    let billable = 0;
-    for (const it of its) {
-      let rate = 0;
-      // FOC = Free Of Cost, RGP = returnable — NOT billed to the client, so
-      // their sale rate is 0 (mam 2026-06-24: "sale bill is wrong" — FOC lines
-      // were wrongly inheriting the parent BOQ rate). Only PO lines bill.
-      const t = String(it.item_type || '').toUpperCase();
-      if (t !== 'FOC' && t !== 'RGP') {
-        const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
-        if (po && po.rate > 0) rate = po.rate;
-        if (!rate && descMap) rate = descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
-      }
-      // Attach the BOQ SALE rate + billable per line so the expanded indent
-      // can show "indent vs sales bill per BOQ" for estimation (mam 2026-06-24).
-      it.boq_sale_rate = +rate.toFixed(2);
-      it.billable_line = +(rate * (+it.quantity || 0)).toFixed(2);
-      billable += rate * (+it.quantity || 0);
-    }
-    // Against-delivery %: planning value first, else the resolved bb's.
-    let pct = planPctByIndent.get(indentId) || 0;
-    if (!pct && bbId) pct = bbPct(bbId);
-    billableByIndent.set(indentId, billable);
-    pctByIndent.set(indentId, pct);
-    deliveryByIndent.set(indentId, pct > 0 ? billable * pct / 100 : 0);
+  for (const i of indents) {
+    const its = itemsByIndent.get(i.id);
+    if (!its || !its.length) continue;          // no lines → no billable, no %
+    const bill = resolveDeliveryBill(i, its);
+    billableByIndent.set(i.id, bill.billable);
+    pctByIndent.set(i.id, bill.pct);
+    deliveryByIndent.set(i.id, bill.delivery);
   }
 
   // One BOQ-link lookup per unique site_name — cached in the loop so we
@@ -2946,6 +2865,71 @@ router.delete('/indents/:id', requirePermission('procurement', 'delete'), (req, 
 // indent page expanded view (BoQ description + sub-item from item
 // master + make + qty + unit + type), plus site + raised-by info
 // for the page header. Mam: 'where 19 items show able to download pdf'.
+// Delivery Bill working for ONE indent — the audit print behind the list's
+// Delivery Bill amount (mam 2026-09-11: "show here delivery bill pdf so that i
+// can audit"). Same resolver and same who-can-see rule as GET /indents.
+router.get('/indents/:id/delivery-bill', (req, res) => {
+  try {
+    const db = getDb();
+    const indent = db.prepare(`
+      SELECT i.*, u.name AS created_by_name,
+             op.business_book_id AS business_book_id,
+             opb.payment_against_delivery AS bb_delivery_terms
+        FROM indents i
+        LEFT JOIN users u ON u.id = i.created_by
+        LEFT JOIN order_planning op ON op.id = i.planning_id
+        LEFT JOIN business_book opb ON opb.id = op.business_book_id
+       WHERE i.id = ?`).get(req.params.id);
+    const raisedBy = String((indent && indent.raised_by_name) || '').trim().toLowerCase();
+    const own = !!indent && (indent.created_by === req.user.id
+      || (raisedBy !== '' && raisedBy === String(req.user.name || '').trim().toLowerCase()));
+    if (!indent || !(own || canSeeAllIndents(db, req))) return res.status(404).json({ error: 'Indent not found' });
+
+    const items = db.prepare(`
+      SELECT ii.id, ii.description, ii.quantity, ii.item_type, ii.po_item_id,
+             CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
+                    THEN ii.unit ELSE COALESCE(NULLIF(im.uom, ''), ii.unit) END AS unit,
+             im.item_code, im.item_name AS master_name,
+             poi.description AS boq_description, poi.unit AS boq_unit
+        FROM indent_items ii
+        LEFT JOIN item_master im ON im.id = ii.item_master_id
+        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+       WHERE ii.indent_id = ?
+       ORDER BY ii.id`).all(indent.id);
+
+    const bill = makeDeliveryBillResolver(db)(indent, items);
+    const lineById = new Map(bill.lines.map((l) => [l.id, l]));
+    const order = bill.business_book_id
+      ? db.prepare('SELECT id, lead_no, project_name, company_name, client_name, payment_against_delivery FROM business_book WHERE id=?').get(bill.business_book_id)
+      : null;
+
+    res.json({
+      indent: {
+        id: indent.id, indent_number: indent.indent_number, indent_date: indent.indent_date,
+        created_at: indent.created_at, site_name: indent.site_name, client_name: indent.client_name,
+        status: indent.status, raised_by_name: indent.raised_by_name, created_by_name: indent.created_by_name,
+      },
+      order: order || null,
+      bb_source: bill.bb_source,
+      pct: bill.pct,
+      pct_source: bill.pct_source,
+      billable: +bill.billable.toFixed(2),
+      delivery: +bill.delivery.toFixed(2),
+      lines: items.map((it) => {
+        const l = lineById.get(it.id);
+        return {
+          id: it.id, description: it.description, boq_description: it.boq_description,
+          item_code: it.item_code, master_name: it.master_name, item_type: it.item_type,
+          quantity: it.quantity, unit: it.unit, boq_unit: it.boq_unit,
+          rate: l.rate, rate_source: l.rate_source, billable: l.billable,
+        };
+      }),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/indents/:id/print', (req, res) => {
   const db = getDb();
   const indent = db.prepare(`

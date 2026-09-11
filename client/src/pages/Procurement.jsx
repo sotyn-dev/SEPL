@@ -2938,6 +2938,13 @@ export default function Procurement() {
                         <div className="font-semibold text-emerald-700">
                           {i.delivery_bill_amount > 0 ? `₹${Math.round(i.delivery_bill_amount).toLocaleString('en-IN')}` : '—'}
                         </div>
+                        {(i.items || []).length > 0 && (
+                          <a href={`/indent/${i.id}/delivery-bill`} target="_blank" rel="noreferrer"
+                            className="text-[10px] text-blue-600 hover:underline"
+                            title="Delivery bill working — Save as PDF to audit">
+                            📄 PDF
+                          </a>
+                        )}
                       </div>
                     </div>
 
@@ -3160,6 +3167,15 @@ export default function Procurement() {
                             </span>
                           ) : (
                             <span className="text-gray-300 text-xs" title="No against-delivery % or no billable value">—</span>
+                          )}
+                          {/* Audit working (mam 2026-09-11): every line's sale rate and
+                              where it came from, qty/unit, whose %, totals — even for "—". */}
+                          {items.length > 0 && (
+                            <a href={`/indent/${i.id}/delivery-bill`} target="_blank" rel="noreferrer"
+                              className="block text-[10px] font-normal text-blue-600 hover:underline mt-0.5"
+                              title="Open the delivery bill working — sale rate per line, its source, qty and the delivery % — Save as PDF to audit">
+                              📄 PDF
+                            </a>
                           )}
                         </td>
                         <td><StatusBadge status={i.status} /></td>

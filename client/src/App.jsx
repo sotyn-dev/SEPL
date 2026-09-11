@@ -82,6 +82,7 @@ const PaymentAdvicePrint = lazy(() => import('./pages/PaymentAdvicePrint'));
 const DeliveryNotePrint = lazy(() => import('./pages/DeliveryNotePrint'));
 const RentalPOPrint = lazy(() => import('./pages/RentalPOPrint'));
 const IndentPrint = lazy(() => import('./pages/IndentPrint'));
+const DeliveryBillPrint = lazy(() => import('./pages/DeliveryBillPrint'));
 const DrawingTracker = lazy(() => import('./pages/DrawingTracker'));
 const DrawingDetail = lazy(() => import('./pages/DrawingDetail'));
 const DrawingRegisterPrint = lazy(() => import('./pages/DrawingRegisterPrint'));
@@ -176,6 +177,8 @@ export default function App() {
       <Route path="/vendor-po/:id/delivery-note" element={<ProtectedRoute><DeliveryNotePrint /></ProtectedRoute>} />
       <Route path="/rental-po/:id/print" element={<ProtectedRoute><RentalPOPrint /></ProtectedRoute>} />
       <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
+      {/* Delivery Bill working per indent, for audit (mam 2026-09-11). */}
+      <Route path="/indent/:id/delivery-bill" element={<ProtectedRoute><DeliveryBillPrint /></ProtectedRoute>} />
       <Route path="/drawing-register-print" element={<ProtectedRoute><DrawingRegisterPrint /></ProtectedRoute>} />
       {/* Full-page revision viewer — outside the Layout shell so the drawing
           gets the whole window when opened in its own tab. */}
