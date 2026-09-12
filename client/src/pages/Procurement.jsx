@@ -1380,16 +1380,25 @@ export default function Procurement() {
     } catch (err) { toast.error(err.response?.data?.error || 'Wipe failed'); }
   };
 
-  // Tally bill against an indent's delivery bill — upload only (mam 2026-09-12).
-  const uploadIndentTallyBill = async (id, file) => {
-    if (!file) return;
+  // Tally bill against an indent's delivery bill — the file plus a remark
+  // (mam 2026-09-12: "upload tally bill with remarks"). The small modal below
+  // collects both; nothing else about the indent changes.
+  const [tallyUp, setTallyUp] = useState(null);   // { id, indent_number, file, remarks, saving }
+  const uploadIndentTallyBill = async () => {
+    if (!tallyUp?.file) return toast.error('Choose the tally bill file');
+    setTallyUp(u => ({ ...u, saving: true }));
     try {
       const fd = new FormData();
-      fd.append('file', file);
-      await api.post(`/procurement/indents/${id}/tally-bill`, fd);
+      fd.append('file', tallyUp.file);
+      fd.append('remarks', (tallyUp.remarks || '').trim());
+      await api.post(`/procurement/indents/${tallyUp.id}/tally-bill`, fd);
       toast.success('Tally bill uploaded');
+      setTallyUp(null);
       load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
+    } catch (err) {
+      setTallyUp(u => (u ? { ...u, saving: false } : u));
+      toast.error(err.response?.data?.error || 'Upload failed');
+    }
   };
 
   const approveIndent = async (id, status) => {
@@ -2526,12 +2535,12 @@ export default function Procurement() {
         const filed = rows.filter(i => i.tally_bill_file_path).length;
         const pg = usePagination(rows, tallyPerPage, tallyPage, setTallyPage);
         const canUpload = canEdit('procurement') || isAdmin();
-        const fileInput = (i) => (
-          <label className="text-[11px] text-blue-600 hover:underline cursor-pointer">
+        const uploadBtn = (i) => (
+          <button type="button"
+            onClick={() => setTallyUp({ id: i.id, indent_number: i.indent_number, file: null, remarks: i.tally_bill_remarks || '', saving: false })}
+            className="text-[11px] text-blue-600 hover:underline">
             {i.tally_bill_file_path ? 'Replace' : 'Upload tally bill'}
-            <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx,.doc,.docx"
-              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; uploadIndentTallyBill(i.id, f); }} />
-          </label>
+          </button>
         );
         return (
           <div className="space-y-3">
@@ -2578,12 +2587,19 @@ export default function Procurement() {
                         <a href={`/indent/${i.id}/delivery-bill`} target="_blank" rel="noreferrer"
                           className="text-[11px] text-blue-600 hover:underline" title="Delivery bill working — Save as PDF to audit">📄 PDF</a>
                       </td>
-                      <td className="whitespace-nowrap">
-                        {i.tally_bill_file_path && (
-                          <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer"
-                            className="text-[11px] font-semibold text-emerald-700 hover:underline mr-2">🧾 Bill ✓</a>
+                      <td>
+                        <div className="flex items-center gap-2 whitespace-nowrap">
+                          {i.tally_bill_file_path && (
+                            <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer"
+                              className="text-[11px] font-semibold text-emerald-700 hover:underline">🧾 Bill ✓</a>
+                          )}
+                          {canUpload ? uploadBtn(i) : (!i.tally_bill_file_path && <span className="text-gray-300 text-xs">—</span>)}
+                        </div>
+                        {i.tally_bill_remarks && (
+                          <div className="text-[10px] text-gray-500 max-w-[220px] whitespace-normal" title={i.tally_bill_remarks}>
+                            📝 {i.tally_bill_remarks}
+                          </div>
                         )}
-                        {canUpload ? fileInput(i) : (!i.tally_bill_file_path && <span className="text-gray-300 text-xs">—</span>)}
                       </td>
                       <td><StatusBadge status={i.status} /></td>
                     </tr>
@@ -2614,14 +2630,38 @@ export default function Procurement() {
                   <div className="flex items-center gap-3 text-xs flex-wrap pt-1 border-t border-gray-100">
                     <a href={`/indent/${i.id}/delivery-bill`} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-semibold">📄 Bill PDF</a>
                     {i.tally_bill_file_path && <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer" className="text-emerald-700 hover:underline font-semibold">🧾 Tally bill ✓</a>}
-                    {canUpload && fileInput(i)}
+                    {canUpload && uploadBtn(i)}
                   </div>
+                  {i.tally_bill_remarks && <div className="text-[11px] text-gray-500">📝 {i.tally_bill_remarks}</div>}
                 </div>
               ))}
               {rows.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No indent carries a delivery bill yet.</div>}
             </div>
 
             <Pagination pg={pg} setPerPage={setTallyPerPage} />
+
+            {/* File + remark together (mam 2026-09-12) */}
+            <Modal isOpen={!!tallyUp} onClose={() => setTallyUp(null)} title={`Upload Tally Bill${tallyUp?.indent_number ? ' · ' + tallyUp.indent_number : ''}`}>
+              <form onSubmit={e => { e.preventDefault(); uploadIndentTallyBill(); }} className="space-y-4">
+                <div>
+                  <label className="label">Tally bill file *</label>
+                  <input type="file" className="input" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx,.doc,.docx"
+                    onChange={e => { const f = e.target.files?.[0] || null; setTallyUp(u => ({ ...u, file: f })); }} />
+                  {tallyUp?.file && <p className="text-[11px] text-emerald-600 mt-1">Attached: {tallyUp.file.name}</p>}
+                </div>
+                <div>
+                  <label className="label">Remarks</label>
+                  <textarea className="input" rows="3" maxLength={500}
+                    placeholder="e.g. booked in Tally on 12/09, bill no. 1245, GST 18%"
+                    value={tallyUp?.remarks || ''}
+                    onChange={e => setTallyUp(u => ({ ...u, remarks: e.target.value }))} />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button type="button" onClick={() => setTallyUp(null)} className="btn btn-secondary">Cancel</button>
+                  <button type="submit" disabled={tallyUp?.saving} className="btn btn-primary">{tallyUp?.saving ? 'Uploading…' : 'Upload'}</button>
+                </div>
+              </form>
+            </Modal>
           </div>
         );
       })()}

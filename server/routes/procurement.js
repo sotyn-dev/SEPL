@@ -5365,9 +5365,17 @@ router.post('/indents/:id/tally-bill', requirePermission('procurement', 'edit'),
   } catch (e) {
     filePath = `/uploads/${req.file.filename}`;
   }
-  db.prepare('UPDATE indents SET tally_bill_file_path = ?, tally_bill_uploaded_at = CURRENT_TIMESTAMP WHERE id = ?')
-    .run(filePath, req.params.id);
-  res.json({ ok: true, tally_bill_file_path: filePath });
+  // Remarks ride along with the file (mam 2026-09-12: "upload tally bill with
+  // remarks") — kept as typed, trimmed, and only overwritten when something new
+  // is typed, so re-uploading a file doesn't wipe the earlier note.
+  const remarks = String((req.body && req.body.remarks) || '').trim().slice(0, 500);
+  db.prepare(
+    `UPDATE indents
+        SET tally_bill_file_path = ?, tally_bill_uploaded_at = CURRENT_TIMESTAMP,
+            tally_bill_remarks = COALESCE(NULLIF(?, ''), tally_bill_remarks)
+      WHERE id = ?`
+  ).run(filePath, remarks, req.params.id);
+  res.json({ ok: true, tally_bill_file_path: filePath, tally_bill_remarks: remarks || null });
 });
 
 // GENERATE a Sales Bill (invoice) from a challan — mam (2026-06-04):

@@ -3717,6 +3717,7 @@ function initializeDatabase() {
     // Tally bill filed against an indent's delivery bill (mam 2026-09-12).
     ['indents', 'tally_bill_file_path TEXT'],
     ['indents', 'tally_bill_uploaded_at DATETIME'],
+    ['indents', 'tally_bill_remarks TEXT'],           // note typed with the upload (mam 2026-09-12)
     // Support tickets — who is the ticket assigned to? When set, that user
     // sees the ticket on their dashboard and can respond / work on it.
     ['support_tickets', 'assigned_to INTEGER REFERENCES users(id)'],
