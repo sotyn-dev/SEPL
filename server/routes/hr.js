@@ -1699,9 +1699,53 @@ router.put('/checklists/:id', requirePermission('checklists', 'edit'), (req, res
   res.json({ message: 'Updated' });
 });
 
+// Deleting a MASTER checklist (mam 2026-09-12: "if i want delete some checklist
+// from master not delete why?" — the screen showed a raw "FOREIGN KEY
+// constraint failed"). checklist_completions.checklist_id references this row
+// with NO ACTION, so any checklist that somebody has ever uploaded proof
+// against refused to delete, and the SQLite message was shown as-is.
+//
+// Now:
+//   • no proof against it        → plain delete, as before;
+//   • proof exists, no force     → 409 saying HOW MANY, so the UI can ask;
+//   • ?force=1                   → delete the master row but KEEP the proof
+//                                  records: the title is snapshotted onto them
+//                                  and checklist_id is set to NULL.
+// That last part is the same rule the ERP already uses for deleting a user with
+// attendance (name snapshot + null FK) — the master row goes, the evidence of
+// who filed what, and when, does not.
 router.delete('/checklists/:id', requirePermission('checklists', 'delete'), (req, res) => {
-  getDb().prepare('DELETE FROM checklists WHERE id=?').run(req.params.id);
-  res.json({ message: 'Deleted' });
+  const db = getDb();
+  const id = req.params.id;
+  const row = db.prepare('SELECT id, title, description FROM checklists WHERE id=?').get(id);
+  if (!row) return res.status(404).json({ error: 'Checklist not found' });
+
+  const used = db.prepare('SELECT COUNT(*) AS c FROM checklist_completions WHERE checklist_id=?').get(id).c;
+  const force = String(req.query.force || '') === '1' || req.query.force === 'true';
+
+  if (used > 0 && !force) {
+    return res.status(409).json({
+      error: `This checklist already has ${used} uploaded proof${used === 1 ? '' : 's'}. Deleting it removes it from the master list; the ${used === 1 ? 'record' : 'records'} of what was filed will be kept.`,
+      completions: used,
+      can_force: true,
+    });
+  }
+
+  const label = row.description || row.title || 'Deleted checklist';
+  const tx = db.transaction(() => {
+    if (used > 0) {
+      // Keep the history, detach it. Nothing is destroyed.
+      db.prepare('UPDATE checklist_completions SET checklist_title = COALESCE(checklist_title, ?), checklist_id = NULL WHERE checklist_id = ?')
+        .run(label, id);
+    }
+    db.prepare('DELETE FROM checklists WHERE id=?').run(id);
+  });
+  tx();
+
+  res.json({
+    message: used > 0 ? `Deleted — ${used} proof record${used === 1 ? '' : 's'} kept` : 'Deleted',
+    completions_kept: used,
+  });
 });
 
 // Today's checklists for the logged-in user — used by the dashboard widget.

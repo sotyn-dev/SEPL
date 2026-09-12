@@ -3418,6 +3418,9 @@ function initializeDatabase() {
     // SQLite needs the column to physically exist or the query fails before
     // COALESCE runs — surfaces as 'no such column: active' on weekly score.
     ['checklists', 'active INTEGER DEFAULT 1'],
+    // Snapshot so a proof record survives its master checklist being deleted
+    // (mam 2026-09-12) - same rule as attendance keeping a deleted user's name.
+    ['checklist_completions', 'checklist_title TEXT'],
     // Category-specific asset identifiers — IP for laptops/routers/etc.,
     // IMEI for mobile/tablet (separate from generic serial_no).
     ['company_assets', 'ip_address TEXT'],

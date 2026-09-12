@@ -847,10 +847,30 @@ export default function Checklists() {
                       })()
                     )}
                     {canManage() && <button onClick={() => { setEditing(c); setForm(c); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>}
+                    {/* Delete asks twice when proof already exists: the server
+                        answers 409 with the count, and only then do we offer to
+                        go ahead (mam 2026-09-12 — this used to surface a raw
+                        "FOREIGN KEY constraint failed"). The proof records are
+                        kept either way. */}
                     {canManage() && canDelete('checklists') && <button onClick={async () => {
                       if (!confirm(`Delete this checklist?`)) return;
-                      try { await api.delete(`/hr/checklists/${c.id}`); toast.success('Deleted'); load(); }
-                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                      const del = async (force) => {
+                        const r = await api.delete(`/hr/checklists/${c.id}${force ? '?force=1' : ''}`);
+                        toast.success(r.data?.message || 'Deleted');
+                        load();
+                      };
+                      try { await del(false); }
+                      catch (err) {
+                        const d = err.response?.data;
+                        if (err.response?.status === 409 && d?.can_force) {
+                          if (confirm(`${d.error}\n\nDelete it anyway?`)) {
+                            try { await del(true); }
+                            catch (e2) { toast.error(e2.response?.data?.error || 'Delete failed'); }
+                          }
+                          return;
+                        }
+                        toast.error(d?.error || 'Delete failed');
+                      }
                     }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
                   </div></td>
                 </tr>
