@@ -14,6 +14,18 @@ const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJso
 // auto:po_bill_pending KPI so the flow-board tile and the KPI can never
 // disagree (mam 2026-09-07).
 const { poMissingBillWhere } = require('../lib/poBill');
+
+// Unit spellings that mean the same thing. Kept identical to the SQL CASE the
+// one-time unit_overridden backfill uses (db/schema.js), so "pcs" vs "nos" or
+// "metre" vs "mtr" is never mistaken for a deliberate override.
+const UNIT_ALIASES = {
+  metre: 'mtr', metres: 'mtr', meter: 'mtr', meters: 'mtr', mtrs: 'mtr', mt: 'mtr', m: 'mtr',
+  each: 'nos', piece: 'nos', pieces: 'nos', pcs: 'nos', pc: 'nos', no: 'nos', 'nos.': 'nos',
+};
+const normUnit = (u) => {
+  const s = String(u == null ? '' : u).trim().toLowerCase();
+  return UNIT_ALIASES[s] || s;
+};
 const router = express.Router();
 const { makeDeliveryBillResolver } = require('../lib/indentDeliveryBill');
 router.use(authMiddleware);
@@ -2681,12 +2693,24 @@ router.put('/indents/:id', (req, res) => {
       const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
       const insertItem = db.prepare(
         `INSERT INTO indent_items
-          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date, remarks)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date, remarks, unit_overridden)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
+      // unit_overridden must DESCRIBE the unit we are storing. This edit keeps a
+      // unit typed on the line (see below), but never raised the flag — so every
+      // screen that computes the EFFECTIVE unit (Item-wise Vendor Rates, the
+      // prints, dispatch) went on showing the Item-Master UOM. Mam 2026-09-12:
+      // "in indent change kg but not here here show pc" — the indent said KG,
+      // Vendor Rates said pcs.
+      //
+      // The flag is only ever RAISED here, never cleared: an approver's
+      // deliberate MTR→KG override must survive an unrelated edit to the same
+      // line. When the stored unit equals the master UOM the flag is moot anyway
+      // — both branches of that CASE give the same answer.
       const updateItem = db.prepare(
         `UPDATE indent_items
             SET po_item_id=?, item_master_id=?, description=?, make=?, quantity=?, unit=?,
+                unit_overridden = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(unit_overridden, 0) END,
                 item_type=?, is_foc=?, is_tool=?, required_date=?, remarks=?
           WHERE id=? AND indent_id=?`
       );
@@ -2710,6 +2734,7 @@ router.put('/indents/:id', (req, res) => {
             if (!masterId && p.item_master_id) masterId = p.item_master_id;
           }
         }
+        let masterUom = null;
         if (masterId) {
           const m = getMaster.get(masterId);
           if (m) {
@@ -2720,8 +2745,13 @@ router.put('/indents/:id', (req, res) => {
             // as POST handler — only override if the user explicitly
             // typed a different unit on this edit, else use master's.
             if (m.uom && !i.unit) unit = String(m.uom).toLowerCase();
+            if (m.uom) masterUom = String(m.uom).trim().toLowerCase();
           }
         }
+        // Does the unit we are about to store differ from the master's? Compared
+        // on the SAME normalisation the one-time backfill uses, so "pcs" and
+        // "nos" are not mistaken for a real override.
+        const unitOverride = masterUom && normUnit(unit) !== normUnit(masterUom) ? 1 : 0;
 
         const qty = +i.quantity || 0;
         const foc = String(itemType || '').toUpperCase() === 'FOC' ? 1 : 0;
@@ -2731,10 +2761,10 @@ router.put('/indents/:id', (req, res) => {
         const old = existing.get(lineId);
         if (old && !kept.has(lineId)) {
           kept.add(lineId);
-          updateItem.run(poItemId, masterId, desc, make, qty, unit, itemType, foc, tool, i.required_date || null, remarks, lineId, id);
+          updateItem.run(poItemId, masterId, desc, make, qty, unit, unitOverride, itemType, foc, tool, i.required_date || null, remarks, lineId, id);
           if ((+old.item_master_id || 0) !== (+masterId || 0)) dropRates.run(lineId);   // different sub-item → its old rates don't apply
         } else {
-          insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null, remarks);
+          insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null, remarks, unitOverride);
         }
       }
 

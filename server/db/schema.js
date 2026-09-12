@@ -5049,6 +5049,27 @@ function initializeDatabase() {
              AND ${norm('unit')} <> ${norm(mUom)}`);
         db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('unit_overridden_backfill_v1','done')").run();
       }
+      // v2, same rule, run once more (mam 2026-09-12: "in indent change kg but
+      // not here here show pc"). v1 only ever ran once, so every line edited
+      // AFTERWARDS kept unit_overridden = 0 and its typed unit stayed invisible
+      // downstream - the indent said KG while Item-wise Vendor Rates said pcs.
+      // The route now sets the flag on edit; this catches the rows already
+      // edited, so nobody has to re-save each indent by hand.
+      const done2 = db.prepare("SELECT value FROM app_settings WHERE key='unit_overridden_backfill_v2'").get();
+      if (!done2) {
+        const norm = (expr) => `(CASE LOWER(TRIM(${expr}))
+            WHEN 'metre' THEN 'mtr' WHEN 'metres' THEN 'mtr' WHEN 'meter' THEN 'mtr' WHEN 'meters' THEN 'mtr' WHEN 'mtrs' THEN 'mtr' WHEN 'mt' THEN 'mtr' WHEN 'm' THEN 'mtr'
+            WHEN 'each' THEN 'nos' WHEN 'piece' THEN 'nos' WHEN 'pieces' THEN 'nos' WHEN 'pcs' THEN 'nos' WHEN 'pc' THEN 'nos' WHEN 'no' THEN 'nos' WHEN 'nos.' THEN 'nos'
+            ELSE LOWER(TRIM(${expr})) END)`;
+        const mUom = `(SELECT uom FROM item_master WHERE id = indent_items.item_master_id)`;
+        const r = db.prepare(`UPDATE indent_items SET unit_overridden = 1
+           WHERE COALESCE(unit_overridden,0) = 0 AND item_master_id IS NOT NULL
+             AND TRIM(COALESCE(unit,'')) <> ''
+             AND TRIM(COALESCE(${mUom},'')) <> ''
+             AND ${norm('unit')} <> ${norm(mUom)}`).run();
+        if (r.changes) console.log(`[schema] unit_overridden backfill v2: flagged ${r.changes} indent line(s)`);
+        db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('unit_overridden_backfill_v2','done')").run();
+      }
     } catch (_) {}
   } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
 
