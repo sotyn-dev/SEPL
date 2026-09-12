@@ -5,6 +5,9 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
+
+const DELEG_STATUSES = ['pending', 'submitted', 'approved', 'rejected'];
 const { authMiddleware } = require('../middleware/auth');
 const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
 const { aiComplete, aiConfig } = require('../lib/aiComplete');
@@ -207,22 +210,10 @@ router.get('/', (req, res) => {
   } else {
     where.push('(d.assigned_to = ? OR d.assigned_by = ?)'); params.push(uid, uid);
   }
-  // Status filter — accepts SEVERAL statuses as a comma list, e.g.
-  // ?status=pending,rejected (mam 2026-09-12: "its good option if status like
-  // other drop down multiple can selects"). One value still behaves exactly as
-  // before, so older links and the mobile app keep working.
-  //
-  // Every value is checked against the real status set BEFORE the placeholders
-  // are built, so the placeholder count always matches the bound params and an
-  // unknown value can never widen the query (it is simply dropped).
-  const DELEG_STATUSES = ['pending', 'submitted', 'approved', 'rejected'];
-  const statuses = [...new Set(String(status || '').split(',')
-    .map(s => s.trim().toLowerCase())
-    .filter(s => DELEG_STATUSES.includes(s)))];
-  if (statuses.length) {
-    where.push(`d.status IN (${statuses.map(() => '?').join(',')})`);
-    params.push(...statuses);
-  }
+  // Status — one value or a comma list (?status=pending,rejected). See
+  // lib/statusFilter for the parsing and the allow-list rule.
+  const st = statusFilter(status, DELEG_STATUSES, 'd.status');
+  if (st) { where.push(st.sql); params.push(...st.params); }
   // Name filter — admin/EA filter by assignee_id from the dropdown
   if (assignee_id) { where.push('d.assigned_to = ?'); params.push(+assignee_id); }
   // Date range filters — inclusive on both ends. Uses due_date since that's

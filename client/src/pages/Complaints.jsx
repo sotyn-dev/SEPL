@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList, FiEdit2, FiTrash2, FiDownload, FiMessageSquare, FiUserCheck, FiKey, FiCopy, FiSend } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { STATES } from '../data/indiaLocations';
+import MultiUserSelect from '../components/MultiUserSelect';
 
 // Matches mam's "Complaint Register Form 24-25" Google Form. Categories are
 // the SEPL service lines; Customer Type is Old Site / Running Site (not
@@ -38,7 +39,7 @@ export default function Complaints() {
   const { canEdit, canDelete, isAdmin } = useAuth();
   const [list, setList] = useState([]);
   const [stats, setStats] = useState({ total:0, open:0, inProgress:0, resolved:0, byCategory:[] });
-  const [q, setQ] = useState({ search:'', status:'', category:'' });
+  const [q, setQ] = useState({ search:'', status:[], category:'' });
   const [tab, setTab] = useUrlTab('all');
   const [showAdd, setShowAdd] = useState(false);
   const [viewing, setViewing] = useState(null);
@@ -57,7 +58,9 @@ export default function Complaints() {
   const [registerAck, setRegisterAck] = useState(null);  // wa link surfaced right after Register
 
   const load = async () => {
-    const params = new URLSearchParams(Object.entries(q).filter(([,v]) => v)).toString();
+    const params = new URLSearchParams(Object.entries(q)
+      .map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : v])
+      .filter(([, v]) => v)).toString();
     const [l, s] = await Promise.all([
       api.get('/complaints' + (params ? '?'+params : '')),
       api.get('/complaints/stats'),
@@ -233,12 +236,20 @@ export default function Complaints() {
         </div>
         {tab === 'all' && (
           <>
-            <select value={q.status} onChange={e => setQ({ ...q, status: e.target.value })} className="border rounded-lg px-3 py-2 text-sm">
-              <option value="">All Statuses</option>
-              <option value="open">Open</option>
-              <option value="in_progress">In Progress</option>
-              <option value="resolved">Resolved</option>
-            </select>
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+            <div className="w-[248px]">
+              <MultiUserSelect
+                options={[
+                  { id: 'open', name: 'Open' },
+                  { id: 'in_progress', name: 'In Progress' },
+                  { id: 'resolved', name: 'Resolved' },
+                ]}
+                value={q.status}
+                onChange={v => setQ({ ...q, status: v })}
+                searchable={false}
+                placeholder="All Statuses"
+              />
+            </div>
             <select value={q.category} onChange={e => setQ({ ...q, category: e.target.value })} className="border rounded-lg px-3 py-2 text-sm">
               <option value="">All Categories</option>
               {CATEGORY_OPTIONS.map(c => <option key={c}>{c}</option>)}

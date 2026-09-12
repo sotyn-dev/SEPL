@@ -5,6 +5,7 @@
 
 const express = require('express');
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware } = require('../middleware/auth');
 const { validatePmsFlowNumber } = require('../lib/pmsFlowNumber');
 const router = express.Router();
@@ -69,13 +70,16 @@ router.get('/', (req, res) => {
 
   const where = [];
   const params = [];
+  // Worked out BEFORE the scope block: the followup default below asks "did the
+  // user actually pick a status?", and a junk value must not count as one.
+  const st = statusFilter(status, ['pending', 'submitted', 'approved', 'rejected'], 'p.status');
   if ((isAdmin || can(uid, 'approve')) && scope === 'all') {
     // admin or a PMS executive (approve on pms_tasks) sees everything
     // no filter
   } else if (scope === 'followup') {
     // Everyone's tasks, defaulting to active (non-approved). Status dropdown
     // can still override to show approved-only across everyone.
-    if (!status) where.push("p.status != 'approved'");
+    if (!st) where.push("p.status != 'approved'");
   } else if (scope === 'given') {
     where.push('p.assigned_by = ?'); params.push(uid);
   } else if (scope === 'mine') {
@@ -83,7 +87,7 @@ router.get('/', (req, res) => {
   } else {
     where.push('(p.assigned_to = ? OR p.assigned_by = ?)'); params.push(uid, uid);
   }
-  if (status) { where.push('p.status = ?'); params.push(status); }
+  if (st) { where.push(st.sql); params.push(...st.params); }
   // Mam-requested filters: CRM (assigner), assignee, date range on due_date
   if (crm_id) { where.push('p.assigned_by = ?'); params.push(+crm_id); }
   if (assignee_id) { where.push('p.assigned_to = ?'); params.push(+assignee_id); }

@@ -9,6 +9,7 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
+import MultiUserSelect from '../components/MultiUserSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard } from 'react-icons/fi';
@@ -47,7 +48,7 @@ export default function Tools() {
   const [stats, setStats] = useState(null);
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
-  const [filters, setFilters] = useState({ category: '', status: '', search: '' });
+  const [filters, setFilters] = useState({ category: '', status: [], search: '' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [actionTool, setActionTool] = useState(null);
@@ -64,7 +65,7 @@ export default function Tools() {
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (filters.category) params.set('category', filters.category);
-    if (filters.status) params.set('status', filters.status);
+    if (filters.status.length) params.set('status', filters.status.join(','));
     if (filters.search) params.set('search', filters.search);
     api.get(`/tools?${params}`).then(r => setTools(r.data)).catch(() => { });
     api.get('/tools/stats').then(r => setStats(r.data)).catch(() => { });
@@ -200,10 +201,16 @@ export default function Tools() {
               <option value="">All categories</option>
               {CATEGORIES.map(c => <option key={c}>{c}</option>)}
             </select>
-            <select className="select text-sm w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
-              <option value="">All statuses</option>
-              {STATUSES.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
-            </select>
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+            <div className="w-[248px]">
+              <MultiUserSelect
+                options={STATUSES.map(s => ({ id: s, name: s.replace('_', ' ') }))}
+                value={filters.status}
+                onChange={v => setFilters(f => ({ ...f, status: v }))}
+                searchable={false}
+                placeholder="All statuses"
+              />
+            </div>
           </div>
 
           <div className="card p-0 overflow-hidden">

@@ -375,10 +375,13 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         // Frequency-aware planned (mam 2026-08-31: the old ×6 assumed every
         // checklist is DAILY — a monthly task inflated the week's plan by 6).
         // Planned = Σ per checklist of the days it actually fires Mon–Sat.
-        const { weeklyExpected } = require('../lib/checklistFrequency');
-        const ckls = db.prepare(`SELECT frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
+        // Days the person was absent / on leave drop out of the plan too, so
+        // nobody is scored against a day they were not at work (mam 2026-09-12).
+        const { weeklyExpected, absenceSet, weekDates } = require('../lib/checklistFrequency');
+        const ckls = db.prepare(`SELECT assigned_to, frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
                                    FROM checklists WHERE assigned_to=? AND COALESCE(active,1)=1`).all(userId);
-        const given = ckls.reduce((s, c) => s + weeklyExpected(c, sinceDate), 0);
+        const cklAway = absenceSet(db, weekDates(sinceDate));
+        const given = ckls.reduce((s, c) => s + weeklyExpected(c, sinceDate, cklAway), 0);
         const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
@@ -1934,12 +1937,14 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
 
       // Checklists — frequency-aware (mam 2026-08-31): planned = the days
       // each checklist actually fires within the Mon–Sat week, not ×6 flat.
-      const { weeklyExpected } = require('../lib/checklistFrequency');
+      const { weeklyExpected, absenceSet, weekDates } = require('../lib/checklistFrequency');
       const cklRows = db.prepare(
-        `SELECT frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
+        `SELECT assigned_to, frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
            FROM checklists WHERE assigned_to = ? AND COALESCE(active, 1) = 1`
       ).all(u.id);
-      const cklGiven = cklRows.reduce((s, c) => s + weeklyExpected(c, start), 0);
+      // Absent / leave days are not expected of anyone (mam 2026-09-12).
+      const cklAway = absenceSet(db, weekDates(start));
+      const cklGiven = cklRows.reduce((s, c) => s + weeklyExpected(c, start, cklAway), 0);
       const cklDone = db.prepare(
         `SELECT COUNT(*) as c FROM checklist_completions cc
          JOIN checklists c ON c.id = cc.checklist_id

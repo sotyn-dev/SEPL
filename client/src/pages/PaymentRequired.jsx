@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
+import MultiUserSelect from '../components/MultiUserSelect';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -108,7 +109,7 @@ export default function PaymentRequired() {
   const [viewData, setViewData] = useState(null);
   const [form, setForm] = useState({ ...emptyForm });
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ status: '', category: '', date_from: '', date_to: '' });
+  const [filters, setFilters] = useState({ status: [], category: '', date_from: '', date_to: '' });
   // Client-side filter by LIVE workflow stage (current_step_name / Approved /
   // Rejected). Set by clicking a stage tile or chip. Empty = all stages.
   const [stageFilter, setStageFilter] = useState('');
@@ -271,7 +272,10 @@ export default function PaymentRequired() {
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (debouncedSearch) params.set('search', debouncedSearch);
-    Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+    Object.entries(filters).forEach(([k, v]) => {
+      const val = Array.isArray(v) ? v.join(',') : v;   // status is a list
+      if (val) params.set(k, val);
+    });
     listAbortRef.current?.abort();
     const ctrl = new AbortController();
     listAbortRef.current = ctrl;
@@ -652,9 +656,18 @@ export default function PaymentRequired() {
               <input type="date" className="select w-36" value={filters.date_to} onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))} />
             </div>
             <select className="select w-40" value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}><option value="">All Categories</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
-            <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}</select>
-            {(filters.date_from || filters.date_to || filters.category || filters.status || stageFilter || search) && (
-              <button onClick={() => { setSearch(''); setStageFilter(''); setApprovedLevel(null); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
+            {/* Status - tick as many as you like (mam 2026-09-12). */}
+            <div className="w-[212px]">
+              <MultiUserSelect
+                options={STATUSES.map(s => ({ id: s.value, name: s.label }))}
+                value={filters.status}
+                onChange={v => setFilters(f => ({ ...f, status: v }))}
+                searchable={false}
+                placeholder="All Status"
+              />
+            </div>
+            {(filters.date_from || filters.date_to || filters.category || filters.status.length || stageFilter || search) && (
+              <button onClick={() => { setSearch(''); setStageFilter(''); setApprovedLevel(null); setFilters({ status: [], category: '', date_from: '', date_to: '' }); }}
                 className="btn btn-secondary text-xs flex items-center gap-1 text-red-600 whitespace-nowrap">
                 <FiX size={12} /> Clear filters
               </button>

@@ -98,6 +98,7 @@ router.post('/public', (req, res) => {
 router.use(authMiddleware);
 
 const { complaintScope } = require('../lib/complaintScope');
+const { statusFilter } = require('../lib/statusFilter');
 
 router.get('/', requirePermission('complaints', 'view'), (req, res) => {
   const { status, search, category } = req.query;
@@ -108,7 +109,10 @@ router.get('/', requirePermission('complaints', 'view'), (req, res) => {
                LEFT JOIN users eng ON c.assigned_engineer_id = eng.id
               WHERE 1=1`;
   const params = [];
-  if (status) { sql += ' AND c.status=?'; params.push(status); }
+  // Status — one value or a comma list (mam 2026-09-12). 'closed' is a real
+  // complaint status even though the dropdown only offers the first three.
+  const st = statusFilter(status, ['open', 'in_progress', 'resolved', 'closed'], 'c.status');
+  if (st) { sql += ` AND ${st.sql}`; params.push(...st.params); }
   if (category) { sql += ' AND c.category=?'; params.push(category); }
   if (search) { sql += ' AND (c.client_name LIKE ? OR c.complaint_number LIKE ? OR c.company_name LIKE ? OR c.mobile_number LIKE ?)'; params.push(`%${search}%`,`%${search}%`,`%${search}%`,`%${search}%`); }
   const scope = complaintScope(req);

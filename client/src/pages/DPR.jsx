@@ -296,7 +296,9 @@ export default function DPR() {
   // A site store runs to 30+ items, so the sheet can fold the list away
   // (mam 2026-09-12: "here give option for expand and hide"). Open by
   // default — folded, the header still says what is inside.
-  const [matOpen, setMatOpen] = useState(true);
+  // Folded by default (mam 2026-09-12: "this material by default hide") - the
+  // list is 100+ rows on a big store and pushed the rest of the form off screen.
+  const [matOpen, setMatOpen] = useState(false);
   // Money / Material hindrances name a real stuck record — the site's pending
   // payment requests (3+ days) or indents still not dispatched (7+ days).
   const [hindOpts, setHindOpts] = useState({ loading: false, options: [] });

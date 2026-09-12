@@ -10,6 +10,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiUpload, FiMic, FiMicOff, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
+import MultiUserSelect from '../components/MultiUserSelect';
 
 // Web Speech API — live mic dictation (Chromium browsers only).
 const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
@@ -46,7 +47,7 @@ export default function PMSTasks() {
       return sp;
     }, { replace: true });
   };
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState([]);
   // Mam-requested filters: CRM (creator), assignee, date range
   const [crmFilter, setCrmFilter] = useState('');
   const [assigneeFilter, setAssigneeFilter] = useState('');
@@ -126,7 +127,7 @@ export default function PMSTasks() {
 
   const load = () => {
     const params = new URLSearchParams({ scope });
-    if (statusFilter) params.set('status', statusFilter);
+    if (statusFilter.length) params.set('status', statusFilter.join(','));
     if (crmFilter) params.set('crm_id', crmFilter);
     if (assigneeFilter) params.set('assignee_id', assigneeFilter);
     if (dateFrom) params.set('date_from', dateFrom);
@@ -354,13 +355,21 @@ export default function PMSTasks() {
             {t.label}
           </button>
         ))}
-        <select className="select text-sm max-w-[180px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="pending">Pending</option>
-          <option value="submitted">Submitted</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-        </select>
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+        <div className="w-[248px]">
+          <MultiUserSelect
+            options={[
+              { id: 'pending', name: 'Pending' },
+              { id: 'submitted', name: 'Submitted' },
+              { id: 'approved', name: 'Approved' },
+              { id: 'rejected', name: 'Rejected' },
+            ]}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            searchable={false}
+            placeholder="All statuses"
+          />
+        </div>
       </div>
 
       {/* Mam-requested filters: CRM (creator), Assignee, From / To date */}

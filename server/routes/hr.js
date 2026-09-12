@@ -1736,8 +1736,11 @@ router.get('/checklists/my-today', (req, res) => {
 
   // Shared frequency rule — a monthly task with no due_date now shows on
   // the 1st (instead of NEVER here / EVERY day on the register).
-  const { appliesOn } = require('../lib/checklistFrequency');
-  const out = rows.filter(c => appliesOn(c, today));
+  // ...and not expected at all on a Sunday, or on a day this person was
+  // absent / on leave (mam 2026-09-12).
+  const { expectedOn, absenceSet } = require('../lib/checklistFrequency');
+  const away = absenceSet(db, [today]);
+  const out = rows.filter(c => expectedOn(c, today, away));
 
   res.json(out);
 });
@@ -1850,8 +1853,9 @@ router.get('/checklists/by-date', (req, res) => {
   // intended day(s).  Uses due_date as the recurrence anchor for
   // monthly / quarterly / yearly — matches the followup's applies()
   // logic so by-date + followup stay in sync.
-  const { appliesOn: _appliesOn } = require('../lib/checklistFrequency');
-  const filtered = rows.filter(r => _appliesOn(r, date));
+  const { expectedOn: _expectedOn, absenceSet: _absenceSet } = require('../lib/checklistFrequency');
+  const _away = _absenceSet(db, [date]);
+  const filtered = rows.filter(r => _expectedOn(r, date, _away));
   res.json({ date, rows: filtered });
 });
 
@@ -1873,12 +1877,22 @@ router.get('/checklists/followup', (req, res) => {
   if (!isAdmin) { const _cp = db.prepare("SELECT rp.can_see_all, rp.can_edit, rp.can_create FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'checklists'").get(req.user.id); isAdmin = !!(_cp && (_cp.can_see_all || _cp.can_edit || _cp.can_create)); }
 
   // Build the date window (ISO YYYY-MM-DD strings, IST).
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  //
+  // This used to be `new Date()` + setHours(0,0,0,0) + toISOString(), which is
+  // the classic IST off-by-one: setHours picks LOCAL midnight, toISOString then
+  // converts to UTC, and IST is +5:30 - so local midnight is 18:30 the PREVIOUS
+  // day in UTC and every column shifted a day earlier. The register therefore
+  // labelled YESTERDAY as "today" (so yesterday could never show Missed) and
+  // real today as "future". my-today above already used istToday(), so the two
+  // screens disagreed by a day. Found 2026-09-12 while adding the absence rule.
+  const todayIso = istToday();
+  const isoAddDays = (iso, n) => {
+    const d = new Date(iso + 'T00:00:00');           // parsed in local time
+    d.setDate(d.getDate() + n);                      // calendar arithmetic only
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
   const dates = [];
-  for (let i = -back; i <= forward; i += 1) {
-    const d = new Date(today); d.setDate(d.getDate() + i);
-    dates.push(d.toISOString().slice(0, 10));
-  }
+  for (let i = -back; i <= forward; i += 1) dates.push(isoAddDays(todayIso, i));
   const fromDate = dates[0];
   const toDate = dates[dates.length - 1];
 
@@ -1919,8 +1933,12 @@ router.get('/checklists/followup', (req, res) => {
   // the register, my-today, by-date and the scorecard all use the same
   // appliesOn() now, so a monthly task fires ONCE a month (its due
   // day-of-month, else the 1st) instead of showing Missed daily.
-  const { appliesOn } = require('../lib/checklistFrequency');
-  const applies = (task, dateStr) => appliesOn(task, dateStr);
+  // Sunday, and any day the assignee was absent / on leave, come back false
+  // so the cell renders N/A and is never counted as Missed (mam 2026-09-12).
+  // One query for the whole window rather than one per cell.
+  const { expectedOn, absenceSet } = require('../lib/checklistFrequency');
+  const away = absenceSet(db, dates);
+  const applies = (task, dateStr) => expectedOn(task, dateStr, away);
 
   const rows = tasks.map(t => {
     const cells = dates.map(d => {

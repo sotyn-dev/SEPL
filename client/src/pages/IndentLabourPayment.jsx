@@ -10,6 +10,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import { Link } from 'react-router-dom';
 import api from '../api';
+import MultiUserSelect from '../components/MultiUserSelect';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import LabourRateWindow from '../components/LabourRateWindow';
@@ -1241,7 +1242,7 @@ function AddOrEditWorkOrder({ wo, projectId, onClose, onSaved }) {
 function WorkOrdersTab() {
   const [projects, setProjects] = useState([]);
   const [pid, setPid] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState([]);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
@@ -1254,7 +1255,7 @@ function WorkOrdersTab() {
     setLoading(true);
     const params = {};
     if (pid) params.project_id = pid;
-    if (status) params.status = status;
+    if (status.length) params.status = status.join(',');
     api.get('/indent-labour-payment/work-orders', { params })
       .then(r => setRows(r.data || []))
       .catch(() => toast.error('Could not load Work Orders'))
@@ -1286,10 +1287,16 @@ function WorkOrdersTab() {
         </div>
         <div>
           <label className="text-xs text-gray-600 block mb-1">Status</label>
-          <select value={status} onChange={e => setStatus(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
-            <option value="">All statuses</option>
-            {WO_STATUS_OPTIONS.map(s => <option key={s} value={s}>{WO_STATUS_LABEL[s]}</option>)}
-          </select>
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+          <div className="w-[248px]">
+            <MultiUserSelect
+              options={WO_STATUS_OPTIONS.map(s => ({ id: s, name: WO_STATUS_LABEL[s] }))}
+              value={status}
+              onChange={setStatus}
+              searchable={false}
+              placeholder="All statuses"
+            />
+          </div>
         </div>
         <button onClick={load} className="btn btn-secondary">Refresh</button>
         <button onClick={() => setNewOpen(true)} className="btn btn-primary flex items-center gap-1.5">

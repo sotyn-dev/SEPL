@@ -1,6 +1,7 @@
 const express = require('express');
 const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
@@ -75,7 +76,9 @@ router.get('/', (req, res) => {
   } else if (!scope && !canSeeAll) {
     where.push('(t.user_id = ? OR t.assigned_to = ?)'); params.push(req.user.id, req.user.id);
   }
-  if (status) { where.push('t.status = ?'); params.push(status); }
+  // Status — one value or a comma list (mam 2026-09-12).
+  const st = statusFilter(status, ['open', 'in_progress', 'submitted', 'resolved', 'rejected', 'closed'], 't.status');
+  if (st) { where.push(st.sql); params.push(...st.params); }
 
   let sql = `SELECT t.*,
       u.name as user_name,

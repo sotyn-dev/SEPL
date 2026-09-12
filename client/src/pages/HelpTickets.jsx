@@ -10,6 +10,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2, FiTrash2, FiSearch, FiUser, FiTag, FiDownload, FiUpload, FiExternalLink, FiRotateCcw } from 'react-icons/fi';
+import MultiUserSelect from '../components/MultiUserSelect';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDate } from '../utils/datetime';
 import { compressImage } from '../utils/compressImage';
@@ -97,7 +98,7 @@ export default function HelpTickets() {
   // every ticket and triage them.
   const canFollowAll = isAdmin() || canSeeAll('help_tickets');
   const [scope, setScope] = useState('mine');     // mine | given | all
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState([]);
   const [search, setSearch] = useState('');
   const [nameFilter, setNameFilter] = useState('');   // raiser / assignee name
   const [tickets, setTickets] = useState([]);
@@ -134,7 +135,7 @@ export default function HelpTickets() {
 
   const load = () => {
     const params = new URLSearchParams({ scope });
-    if (statusFilter) params.set('status', statusFilter);
+    if (statusFilter.length) params.set('status', statusFilter.join(','));
     api.get('/support?' + params.toString()).then(r => setTickets(r.data || [])).catch(() => setTickets([]));
     // Every create / status change / delete already calls load(), so hanging
     // the stats refresh here keeps the cards in step with no extra wiring.
@@ -311,15 +312,23 @@ export default function HelpTickets() {
             {t.label} <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded ${scope === t.id ? 'bg-white/20' : 'bg-gray-100 text-gray-500'}`}>{t.count}</span>
           </button>
         ))}
-        <select className="select w-44 text-sm" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="open">Open</option>
-          <option value="in_progress">In Progress</option>
-          <option value="submitted">Submitted (awaiting approval)</option>
-          <option value="resolved">Resolved</option>
-          <option value="rejected">Rejected</option>
-          <option value="closed">Closed</option>
-        </select>
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+        <div className="w-[264px]">
+          <MultiUserSelect
+            options={[
+              { id: 'open', name: 'Open' },
+              { id: 'in_progress', name: 'In Progress' },
+              { id: 'submitted', name: 'Submitted (awaiting approval)' },
+              { id: 'resolved', name: 'Resolved' },
+              { id: 'rejected', name: 'Rejected' },
+              { id: 'closed', name: 'Closed' },
+            ]}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            searchable={false}
+            placeholder="All statuses"
+          />
+        </div>
         {/* Dedicated NAME filter — narrows by the raiser's or assignee's name
             only, so you can isolate one person's tickets without the free-text
             box also matching a subject or description. Composes with the scope

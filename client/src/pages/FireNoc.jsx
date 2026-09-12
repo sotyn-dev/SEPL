@@ -11,6 +11,7 @@
 // rollback, Export Excel button, etc.).
 
 import { useState, useEffect } from 'react';
+import MultiUserSelect from '../components/MultiUserSelect';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -89,7 +90,7 @@ export default function FireNoc() {
   const [tab, setTab] = useUrlTab('dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [cycles, setCycles] = useState([]);
-  const [filters, setFilters] = useState({ state: '', stage: '', status: 'active', q: '' });
+  const [filters, setFilters] = useState({ state: '', stage: '', status: ['active'], q: '' });
   const [loading, setLoading] = useState(false);
   const [createModal, setCreateModal] = useState(false);
   const [form, setForm] = useState({
@@ -234,7 +235,11 @@ export default function FireNoc() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
+      // Array values (status) go as a comma list; [] means no filter.
+      Object.entries(filters).forEach(([k, v]) => {
+        const val = Array.isArray(v) ? v.join(',') : v;
+        if (val) params.set(k, val);
+      });
       setCycles((await api.get(`/fire-noc/cycles?${params}`)).data);
     } catch (e) { toast.error('Could not load cycles'); }
     finally { setLoading(false); }
@@ -428,14 +433,22 @@ export default function FireNoc() {
             <option value="">All stages</option>
             {STAGE_ORDER.map(s => <option key={s} value={s}>{STAGE_LABEL[s]}</option>)}
           </select>
-          <select className="select text-sm" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
-            <option value="">All statuses</option>
-            <option value="active">Active</option>
-            <option value="lost">Lost</option>
-            <option value="renewed">Renewed</option>
-            <option value="archived">Archived</option>
-          </select>
-          <button onClick={() => setFilters({ state: '', stage: '', status: '', q: '' })}
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+          <div className="w-[248px]">
+            <MultiUserSelect
+              options={[
+                { id: 'active', name: 'Active' },
+                { id: 'lost', name: 'Lost' },
+                { id: 'renewed', name: 'Renewed' },
+                { id: 'archived', name: 'Archived' },
+              ]}
+              value={filters.status}
+              onChange={v => setFilters(f => ({ ...f, status: v }))}
+              searchable={false}
+              placeholder="All statuses"
+            />
+          </div>
+          <button onClick={() => setFilters({ state: '', stage: '', status: [], q: '' })}
             className="btn btn-secondary text-sm">Clear</button>
         </div>
 

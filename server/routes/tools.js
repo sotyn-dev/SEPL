@@ -10,6 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { nextSequence } = require('../db/nextSequence');
 
@@ -34,7 +35,9 @@ router.get('/', requirePermission('tools', 'view'), (req, res) => {
     `;
     const params = [];
     if (category) { sql += ' AND t.category = ?'; params.push(category); }
-    if (status) { sql += ' AND t.status = ?'; params.push(status); }
+    // Status — one value or a comma list (mam 2026-09-12).
+    const st = statusFilter(status, ['available', 'in_use', 'maintenance', 'lost', 'scrapped'], 't.status');
+    if (st) { sql += ` AND ${st.sql}`; params.push(...st.params); }
     if (site_id) { sql += ' AND t.current_site_id = ?'; params.push(site_id); }
     if (user_id) { sql += ' AND t.current_user_id = ?'; params.push(user_id); }
     if (search) {

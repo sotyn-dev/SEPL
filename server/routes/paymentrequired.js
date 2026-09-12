@@ -1,6 +1,7 @@
 const express = require('express');
 const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
@@ -416,7 +417,10 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
   // Scope filter: non-approvers (e.g. site engineers) only see their own
   // requests. Approvers / admin see everything.
   if (!seesAll(req)) { sql += ' AND pr.created_by = ?'; params.push(req.user.id); }
-  if (status) { sql += ' AND pr.status=?'; params.push(status); }
+  // Status - one value or a comma list (mam 2026-09-12). The allow-list is
+  // the same three the flow ever writes (see the lookups route above).
+  const st = statusFilter(status, ['pending', 'final_approved', 'rejected'], 'pr.status');
+  if (st) { sql += ` AND ${st.sql}`; params.push(...st.params); }
   if (category) { sql += ' AND pr.category=?'; params.push(category); }
   if (step) { sql += ' AND pr.current_step=?'; params.push(step); }
   // Mam 2026-05-29: date range filter on created_at so she can scope
