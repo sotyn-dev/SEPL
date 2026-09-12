@@ -24,11 +24,14 @@
 //     still run). Every other frequency fires on one day only, so a Sunday
 //     anchor would lose the whole occurrence - those MOVE TO THE MONDAY after
 //     it instead (mam 2026-09-12: "monthly sunday move to monday").
-//   * the assignee was ABSENT or on LEAVE - `absentSet` carries "userId::date"
-//     keys, built by absenceSet() below from the attendance table. Only an
-//     EXPLICIT absent/leave row exempts anyone; a missing attendance row does
-//     NOT, or every checklist for staff whose attendance nobody tracks would
-//     quietly disappear.
+//   * the assignee was AWAY - `absentSet` carries "userId::date" keys, built by
+//     absenceSet() below. Away means an explicit absent/leave attendance mark,
+//     an APPROVED leave request covering the day, or - for people on the
+//     employee roster only - never having punched in on a day that is already
+//     over (past date, or today after their roster's end time).
+
+const { istToday, istNowMinutes } = require('./istDate');
+const { rosterCutoffs } = require('./roster');
 
 const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
@@ -126,7 +129,7 @@ function appliesOn(task, dateStr) {
 // the database is synchronous, so a per-cell query would be a visible N+1.
 const AWAY = ['absent', 'leave'];
 
-function absenceSet(db, dates) {
+function absenceSet(db, dates, opts = {}) {
   const list = (Array.isArray(dates) ? dates : [dates]).filter(Boolean).map(d => String(d).slice(0, 10));
   if (!list.length) return new Set();
   const marks = new Set();
@@ -138,6 +141,64 @@ function absenceSet(db, dates) {
        AND user_id IS NOT NULL
   `).all(...AWAY, ...list);
   att.forEach(r => marks.add(`${r.user_id}::${String(r.date).slice(0, 10)}`));
+
+  // ---- NEVER PUNCHED IN, and the day is over --------------------------------
+  // Nothing in the ERP ever CREATES an 'absent' row: attendance appears when
+  // someone punches in, or when an admin marks them. So the marks above only
+  // fire when HR explicitly marks somebody, which nobody does day to day - and
+  // mam's real case ("aanchal is not present than how this checklist") showed
+  // up as a person with NO attendance row at all, still owing her checklists.
+  //
+  // So a rostered person who never punched in is also away - but only once the
+  // day is SETTLED (mam 2026-09-12, "after shift end"): a past date, or today
+  // once their own roster's end time has passed. Before that the checklist
+  // still shows, otherwise every list would empty itself each morning and
+  // refill as people punch in.
+  //
+  // ONLY people on the employee roster (status active/training) are inferred
+  // this way. Guest logins never onboarded and inactive/terminated staff - both
+  // visible on the attendance dashboard - are left alone, or their checklists
+  // would disappear permanently on a day nobody ever punches for them.
+  //
+  // ANY attendance row counts as accounted for: an admin-marked 'present' with
+  // no punch times is still a working day, and 'absent'/'leave' rows were
+  // already added above. Only a total absence of a row is inferred.
+  if (opts.inferNoPunch !== false) {
+    const staff = db.prepare(`
+      SELECT e.user_id AS user_id, MAX(COALESCE(e.roster, '')) AS roster
+        FROM employees e
+        JOIN users u ON u.id = e.user_id
+       WHERE e.user_id IS NOT NULL
+         AND u.active = 1
+         AND LOWER(COALESCE(e.status, '')) IN ('active', 'training')
+       GROUP BY e.user_id
+    `).all();
+    if (staff.length) {
+      const accounted = new Set(db.prepare(`
+        SELECT user_id, date FROM attendance
+         WHERE date IN (${list.map(() => '?').join(',')})
+           AND user_id IS NOT NULL
+      `).all(...list).map(r => `${r.user_id}::${String(r.date).slice(0, 10)}`));
+
+      const settings = db.prepare('SELECT * FROM payroll_settings WHERE id = 1').get() || {};
+      const today = istToday();
+      const nowMin = istNowMinutes();
+      const hhmmToMin = (t) => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || ''));
+        return m ? (+m[1]) * 60 + (+m[2]) : 18 * 60 + 30;
+      };
+
+      staff.forEach((st) => {
+        const endMin = hhmmToMin(rosterCutoffs(settings, st.roster || undefined).roster_end);
+        list.forEach((d) => {
+          if (d > today) return;                              // the future settles nothing
+          if (d === today && nowMin < endMin) return;          // shift not over yet
+          if (accounted.has(`${st.user_id}::${d}`)) return;    // they have a record
+          marks.add(`${st.user_id}::${d}`);
+        });
+      });
+    }
+  }
 
   // Approved leave overlapping the window, then expanded onto each day it covers.
   // Same shape attendance.js already uses: from_date <= day AND to_date >= day.

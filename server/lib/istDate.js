@@ -4,4 +4,11 @@
 // Same fix as the SPOS cutoff audit 2026-07-31, now shared codebase-wide.
 const istToday = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 
-module.exports = { istToday };
+// Current IST time as minutes from midnight. Same +5:30 shift, same reason:
+// anything comparing "is the working day over yet?" must ask in IST, not UTC.
+const istNowMinutes = () => {
+  const d = new Date(Date.now() + 5.5 * 3600 * 1000);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+};
+
+module.exports = { istToday, istNowMinutes };
