@@ -3,6 +3,7 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const storage = require('../lib/storage');
 const { sites, indentsForSite, normalize, receivingApprovers, canApproveReceiving } = require('../lib/dispatchReceiving');
+const { sendReceivingApprovedMail } = require('../lib/receivingMail');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -105,7 +106,7 @@ router.put('/:id', requirePermission('procurement', 'create'), async (req, res, 
 
 // Approve / reject (mam 2026-09-11: "Lovely will approve this receiving").
 function decide(status) {
-  return (req, res) => {
+  return async (req, res) => {
     const db = getDb();
     if (!canApproveReceiving(db, req.user)) return res.status(403).json({ error: 'Only Lovely (or an admin) can approve receivings' });
     const row = db.prepare('SELECT * FROM dispatch_receiving WHERE id=?').get(req.params.id);
@@ -117,7 +118,14 @@ function decide(status) {
     }
     db.prepare(`UPDATE dispatch_receiving SET status=?, approved_by=?, approved_at=CURRENT_TIMESTAMP, rejected_reason=?
       WHERE id=? AND status='pending'`).run(status, req.user.id, status === 'rejected' ? reason : null, row.id);
-    res.json({ message: status === 'approved' ? 'Receiving approved' : 'Receiving rejected' });
+    // Approved → tell the customer (mam 2026-09-12). The mail never blocks the
+    // approval: its outcome rides back in the response so the UI can say whether
+    // it actually went out, and to whom.
+    let mail = null;
+    if (status === 'approved') {
+      mail = await sendReceivingApprovedMail(db, row, req.user?.name || 'Secured Engineers');
+    }
+    res.json({ message: status === 'approved' ? 'Receiving approved' : 'Receiving rejected', mail });
   };
 }
 router.post('/:id/approve', requirePermission('procurement', 'view'), decide('approved'));

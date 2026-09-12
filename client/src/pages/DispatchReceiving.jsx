@@ -91,7 +91,16 @@ export default function DispatchReceiving() {
     setBusyId(r.id);
     try {
       const res = await api.post(`/dispatch-receiving/${r.id}/${action}`, action === 'reject' ? { reason } : {});
-      toast.success(res.data?.message || 'Done'); await load();
+      toast.success(res.data?.message || 'Done');
+      // Approval mails the customer (mam 2026-09-12) — say whether it actually
+      // went and to whom, so a missing Email ID is noticed at once.
+      const mail = res.data?.mail;
+      if (mail?.sent) {
+        toast.success(`Mail sent to ${mail.to.join(', ')}${mail.cc?.length ? ` (cc ${mail.cc.join(', ')})` : ''}`, { duration: 6000 });
+      } else if (mail?.skipped) {
+        toast.error(`Customer mail NOT sent — ${mail.reason || 'no reason given'}`, { duration: 8000 });
+      }
+      await load();
     } catch (err) { toast.error(err.response?.data?.error || 'Could not update the receiving'); }
     finally { setBusyId(null); }
   };

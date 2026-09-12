@@ -38,7 +38,7 @@ function isConfigured() {
   return !!(c.host && c.user && c.pass);
 }
 
-async function sendEmail({ to, subject, html, text, from }) {
+async function sendEmail({ to, cc, subject, html, text, from, attachments }) {
   const c = getEmailConfig();
   if (!c.host || !c.user || !c.pass) {
     return { skipped: true, reason: 'SMTP not configured' };
@@ -57,6 +57,10 @@ async function sendEmail({ to, subject, html, text, from }) {
   // ignore a From that isn't the authenticated account / a verified alias.
   const info = await transporter.sendMail({
     from: from || c.from, to: to || c.director, subject, html, text,
+    // cc + attachments (mam 2026-09-12: an approved receiving mails the customer
+    // with the CC list copied and the signed receiving attached).
+    ...(cc ? { cc } : {}),
+    ...(attachments && attachments.length ? { attachments } : {}),
   });
   return { sent: true, messageId: info?.messageId };
 }
