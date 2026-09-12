@@ -1769,6 +1769,13 @@ export default function Attendance() {
           if (!form.date) return toast.error('Please pick a date');
           if (form.date > today) return toast.error('Cannot mark a future date');
           const worked = ['present', 'half_day', 'short_day'].includes(form.status || 'present');
+          // Punch times are MANDATORY on a worked day (mam 2026-09-12: "when
+          // punch in / punch out mark back time is mandatory to fill") so the
+          // day carries real hours instead of an assumed 8. The one-click
+          // Monthly-Grid / Mark-Present paths don't come through this form.
+          if (worked && (!form.punch_in || !form.punch_out)) {
+            return toast.error('Fill both Punch In and Punch Out times for a worked day');
+          }
           const isBackdate = form.date < today;
           if (worked && isBackdate && !form._proofFile && !form.proof_url) {
             return toast.error('Attach a proof document (signed sheet / photo) to back-date a worked day');
@@ -1821,16 +1828,16 @@ export default function Attendance() {
           {['present', 'half_day', 'short_day'].includes(form.status || 'present') && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="label">Punch In <span className="font-normal text-gray-500">(IST, optional)</span></label>
-                <input className="input" type="time" value={form.punch_in || ''} onChange={e => setForm({ ...form, punch_in: e.target.value })} />
+                <label className="label">Punch In * <span className="font-normal text-gray-500">(IST)</span></label>
+                <input className="input" type="time" required value={form.punch_in || ''} onChange={e => setForm({ ...form, punch_in: e.target.value })} />
               </div>
               <div>
-                <label className="label">Punch Out <span className="font-normal text-gray-500">(IST, optional)</span></label>
-                <input className="input" type="time" value={form.punch_out || ''} onChange={e => setForm({ ...form, punch_out: e.target.value })} />
+                <label className="label">Punch Out * <span className="font-normal text-gray-500">(IST)</span></label>
+                <input className="input" type="time" required value={form.punch_out || ''} onChange={e => setForm({ ...form, punch_out: e.target.value })} />
               </div>
               <p className="text-[11px] text-gray-500 sm:col-span-2">
-                For a missed punch. If the employee already punched one side, only the empty side is filled — a real punch is never overwritten.
-                With both times the day's hours are computed from them (under 4 h counts as half day).
+                Both times are required on a worked day — the day's hours are computed from them (under 4 h counts as half day).
+                If the employee already punched one side, that real punch is kept and only the missing side is filled.
               </p>
             </div>
           )}
