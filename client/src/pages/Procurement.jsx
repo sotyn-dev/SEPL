@@ -685,9 +685,11 @@ export default function Procurement() {
   // Indents
   const [indFilterStatus, setIndFilterStatus] = useState('all');
   const [indFilterCategory, setIndFilterCategory] = useState('all');  // mam's 5 categories (2026-05-26)
-  // Billable-only pill: just the indents that carry a delivery bill, so the
-  // tally bill can be filed against that PDF (mam 2026-09-12).
-  const [indBillOnly, setIndBillOnly] = useState(false);
+  // Tally Bill tab (mam 2026-09-12) — indents that carry a delivery bill, so
+  // the tally bill can be filed against that PDF.
+  const [tallySearch, setTallySearch] = useState('');
+  const [tallyPage, setTallyPage] = useState(1);
+  const [tallyPerPage, setTallyPerPage] = useState(15);
   const [indFilterFrom, setIndFilterFrom] = useState('');
   const [indFilterTo, setIndFilterTo] = useState('');
   const [indSearch, setIndSearch] = useState('');
@@ -826,6 +828,8 @@ export default function Procurement() {
     // refreshing on ?tab=payment showed 0 / 0 and "Mark cleared" never
     // reloaded (mam 2026-09-11: "i refresh data not showing").
     payment: () => api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
+    // Reads the indent list (delivery_bill_amount rides along with it).
+    tallybill: () => api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
     bills: () => Promise.all([
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
       api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
@@ -2133,6 +2137,10 @@ export default function Procurement() {
     // POs; once cleared, Purchase team picks them up in the next tab.
     { id: 'payment', label: 'Payment', show: canPurchaseOps },
     { id: 'bills', label: 'Purchase Bills', show: canPurchaseOps },
+    // Tally Bill — sits between Purchase Bills and Dispatch & Receiving (mam
+    // 2026-09-12): the billable slice of each indent, its delivery-bill PDF,
+    // and the matching bill from Tally filed against it.
+    { id: 'tallybill', label: 'Tally Bill', show: canPurchaseOps },
     { id: 'delivery', label: 'Dispatch & Receiving', show: canPurchaseOps },
     { id: 'debitnotes', label: 'Debit Notes', show: canPurchaseOps },
     { id: 'pipeline', label: 'PO Pipeline', show: canPurchaseOps },
@@ -2505,6 +2513,119 @@ export default function Procurement() {
 
       {tab === 'responsible' && <ResponsibilityTab module="indent_to_dispatch" title="Indent to Dispatch" />}
 
+      {/* ─── TALLY BILL tab (mam 2026-09-12) ───
+          Only the indents that carry a delivery bill: the billable amount, the
+          delivery-bill PDF to check it against, and the Tally bill filed on it.
+          Upload only — no number, no approval, no status change. */}
+      {tab === 'tallybill' && (() => {
+        const billable = (indents || []).filter(i => +i.delivery_bill_amount > 0);
+        const q = tallySearch.trim().toLowerCase();
+        const rows = billable.filter(i => !q
+          || `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''}`.toLowerCase().includes(q));
+        const total = rows.reduce((s, i) => s + (+i.delivery_bill_amount || 0), 0);
+        const filed = rows.filter(i => i.tally_bill_file_path).length;
+        const pg = usePagination(rows, tallyPerPage, tallyPage, setTallyPage);
+        const canUpload = canEdit('procurement') || isAdmin();
+        const fileInput = (i) => (
+          <label className="text-[11px] text-blue-600 hover:underline cursor-pointer">
+            {i.tally_bill_file_path ? 'Replace' : 'Upload tally bill'}
+            <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx,.doc,.docx"
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; uploadIndentTallyBill(i.id, f); }} />
+          </label>
+        );
+        return (
+          <div className="space-y-3">
+            <div className="card p-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">Tally Bill</h3>
+                <p className="text-[11px] text-gray-500">Indents with a delivery bill — check the PDF, then file the Tally bill against it.</p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                <span className="rounded-lg border border-teal-300 bg-teal-50 text-teal-700 px-2.5 py-1.5 font-semibold">
+                  {rows.length} billable · ₹{Math.round(total).toLocaleString('en-IN')}
+                </span>
+                <span className="rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 px-2.5 py-1.5 font-semibold">
+                  {filed} filed
+                </span>
+                <span className="rounded-lg border border-amber-300 bg-amber-50 text-amber-700 px-2.5 py-1.5 font-semibold">
+                  {rows.length - filed} pending
+                </span>
+              </div>
+            </div>
+
+            <div className="card p-3">
+              <label className="text-[11px] font-bold text-gray-500 uppercase">Search · indent no / site / raised by</label>
+              <input className="input" placeholder="e.g. IND-0070 or Chattargarh"
+                value={tallySearch} onChange={e => { setTallySearch(e.target.value); setTallyPage(1); }} />
+            </div>
+
+            {/* Desktop */}
+            <div className="card p-0 overflow-auto hidden md:block">
+              <table className="table text-sm">
+                <thead><tr><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th className="text-right">Delivery Bill</th><th>Bill PDF</th><th>Tally Bill</th><th>Status</th></tr></thead>
+                <tbody>
+                  {pg.rows.map(i => (
+                    <tr key={i.id}>
+                      <td className="font-semibold text-gray-800">{i.indent_number}</td>
+                      <td className="text-xs text-gray-600">{i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}</td>
+                      <td className="text-xs">{i.site_name || <span className="text-gray-300">—</span>}</td>
+                      <td className="text-xs">{i.raised_by_name || <span className="text-gray-300">—</span>}</td>
+                      <td className="text-right whitespace-nowrap font-semibold text-emerald-700">
+                        ₹{Math.round(i.delivery_bill_amount).toLocaleString('en-IN')}
+                        {i.delivery_pct ? <span className="block text-[9px] font-normal text-gray-400">@ {i.delivery_pct}%</span> : null}
+                      </td>
+                      <td>
+                        <a href={`/indent/${i.id}/delivery-bill`} target="_blank" rel="noreferrer"
+                          className="text-[11px] text-blue-600 hover:underline" title="Delivery bill working — Save as PDF to audit">📄 PDF</a>
+                      </td>
+                      <td className="whitespace-nowrap">
+                        {i.tally_bill_file_path && (
+                          <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer"
+                            className="text-[11px] font-semibold text-emerald-700 hover:underline mr-2">🧾 Bill ✓</a>
+                        )}
+                        {canUpload ? fileInput(i) : (!i.tally_bill_file_path && <span className="text-gray-300 text-xs">—</span>)}
+                      </td>
+                      <td><StatusBadge status={i.status} /></td>
+                    </tr>
+                  ))}
+                  {rows.length === 0 && (
+                    <tr><td colSpan={8} className="text-center text-gray-400 text-sm py-6">
+                      No indent carries a delivery bill yet — a bill appears once the BOQ sale rate and the against-delivery % are both set.
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile */}
+            <div className="md:hidden space-y-2">
+              {pg.rows.map(i => (
+                <div key={i.id} className="card p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-bold text-gray-900">{i.indent_number}</div>
+                      <div className="text-[11px] text-gray-500 truncate">{i.site_name || '—'}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold text-emerald-700">₹{Math.round(i.delivery_bill_amount).toLocaleString('en-IN')}</div>
+                      {i.delivery_pct ? <div className="text-[10px] text-gray-400">@ {i.delivery_pct}%</div> : null}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs flex-wrap pt-1 border-t border-gray-100">
+                    <a href={`/indent/${i.id}/delivery-bill`} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-semibold">📄 Bill PDF</a>
+                    {i.tally_bill_file_path && <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer" className="text-emerald-700 hover:underline font-semibold">🧾 Tally bill ✓</a>}
+                    {canUpload && fileInput(i)}
+                  </div>
+                </div>
+              ))}
+              {rows.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No indent carries a delivery bill yet.</div>}
+            </div>
+
+            <Pagination pg={pg} setPerPage={setTallyPerPage} />
+          </div>
+        );
+      })()}
+
       {tab === 'indents' && (() => {
         // ── Filtering / search ─────────────────────────────────────────
         // mam (2026-05-25): filter by date range + status + search by
@@ -2553,8 +2674,6 @@ export default function Procurement() {
               || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
             if (!inBucket) return false;
           }
-          // Billable pill — only rows that actually have a delivery bill.
-          if (indBillOnly && !(+i.delivery_bill_amount > 0)) return false;
           return true;
         });
         const indPg = usePagination(filteredIndents, indPerPage, indPage, setIndPage);
@@ -2656,8 +2775,8 @@ export default function Procurement() {
               // statusKey drives the indent-status filter on click; pass an
               // onClick override instead (e.g. for tiles that jump to another
               // tab like PO Generate / Payment Required).
-              const tile = (label, count, amount, color, statusKey, onClick, activeOverride) => {
-                const isActive = activeOverride !== undefined ? activeOverride : (!!statusKey && indFilterStatus === statusKey);
+              const tile = (label, count, amount, color, statusKey, onClick) => {
+                const isActive = !!statusKey && indFilterStatus === statusKey;
                 const handle = onClick || (() => { setIndFilterStatus(statusKey); setIndPage(1); });
                 return (
                   <button
@@ -2685,7 +2804,7 @@ export default function Procurement() {
                     2-up on phones, 4-up on tablets, 7/8-up on desktop. A Pending
                     L2 tile is added only when the L2 switch is ON. PO Generate +
                     Payment Required jump to their own tabs on click. */}
-                  <div className={`grid grid-cols-2 sm:grid-cols-4 ${l2Enabled ? 'lg:grid-cols-9' : 'lg:grid-cols-8'} gap-2`}>
+                  <div className={`grid grid-cols-2 sm:grid-cols-4 ${l2Enabled ? 'lg:grid-cols-8' : 'lg:grid-cols-7'} gap-2`}>
                     {tile('Total Indents', kpiScope.length, sum(kpiScope), { border: 'border-gray-300', bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-400' }, 'all')}
                     {tile(l2Enabled ? 'Pending L1' : 'Pending Approval', submitted.length, sum(submitted), { border: 'border-amber-300', bg: 'bg-amber-50', text: 'text-amber-700', ring: 'ring-amber-400' }, 'submitted')}
                     {l2Enabled && tile('Pending L2', l1Approved.length, sum(l1Approved), { border: 'border-purple-300', bg: 'bg-purple-50', text: 'text-purple-700', ring: 'ring-purple-400' }, 'l1_approved')}
@@ -2697,18 +2816,6 @@ export default function Procurement() {
                     {tile('Rejected', rejected.length, sum(rejected), { border: 'border-red-300', bg: 'bg-red-50', text: 'text-red-700', ring: 'ring-red-400' }, 'rejected')}
                     {tile('PO Generate', poGenCount, poGenAmount, { border: 'border-blue-300', bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-400' }, null, () => { setTab('vendorpo'); setVpoSubTab('list'); })}
                     {tile('Payment Required', payReqCount, payReqAmount, { border: 'border-rose-300', bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-400' }, null, () => setTab('payment'))}
-                    {/* Billable · Tally Bill (mam 2026-09-12): only the indents that
-                      carry a delivery bill, so its PDF can be checked and the
-                      matching Tally bill filed against it. Toggles on/off. */}
-                    {(() => {
-                      const billRows = kpiScope.filter(i => +i.delivery_bill_amount > 0);
-                      const billSum = billRows.reduce((s, i) => s + (+i.delivery_bill_amount || 0), 0);
-                      return tile('Billable · Tally Bill', billRows.length, billSum,
-                        { border: 'border-teal-300', bg: 'bg-teal-50', text: 'text-teal-700', ring: 'ring-teal-400' },
-                        null,
-                        () => { setIndBillOnly(v => !v); setIndFilterStatus('all'); setIndPage(1); },
-                        indBillOnly);
-                    })()}
                   </div>
                 </>
               );
@@ -2993,21 +3100,6 @@ export default function Procurement() {
                             📄 PDF
                           </a>
                         )}
-                        {i.delivery_bill_amount > 0 && (
-                          <div>
-                            {i.tally_bill_file_path && (
-                              <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer"
-                                className="block text-[10px] font-semibold text-emerald-700 hover:underline">🧾 Tally bill ✓</a>
-                            )}
-                            {(canEdit('procurement') || isAdmin()) && (
-                              <label className="block text-[10px] text-blue-600 hover:underline cursor-pointer">
-                                {i.tally_bill_file_path ? 'Replace' : 'Upload tally bill'}
-                                <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx,.doc,.docx"
-                                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; uploadIndentTallyBill(i.id, f); }} />
-                              </label>
-                            )}
-                          </div>
-                        )}
                       </div>
                     </div>
 
@@ -3239,22 +3331,6 @@ export default function Procurement() {
                               title="Open the delivery bill working — sale rate per line, its source, qty and the delivery % — Save as PDF to audit">
                               📄 PDF
                             </a>
-                          )}
-                          {/* Tally bill filed against this delivery bill (mam 2026-09-12) */}
-                          {i.delivery_bill_amount > 0 && (
-                            <div className="mt-0.5">
-                              {i.tally_bill_file_path && (
-                                <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer"
-                                  className="block text-[10px] font-semibold text-emerald-700 hover:underline">🧾 Tally bill ✓</a>
-                              )}
-                              {(canEdit('procurement') || isAdmin()) && (
-                                <label className="block text-[10px] font-normal text-blue-600 hover:underline cursor-pointer">
-                                  {i.tally_bill_file_path ? 'Replace' : 'Upload tally bill'}
-                                  <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx,.doc,.docx"
-                                    onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; uploadIndentTallyBill(i.id, f); }} />
-                                </label>
-                              )}
-                            </div>
                           )}
                         </td>
                         <td><StatusBadge status={i.status} /></td>

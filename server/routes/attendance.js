@@ -634,11 +634,23 @@ function computeGrid(db, month) {
     }
   }
 
+  // Late is measured from the payroll cut-off (late_after_time, 09:46 = the
+  // FIRST late minute), NOT from the shift start — the grid used to count from
+  // 09:30, so a 09:52 punch read "22m" while the salary sheet charged 7
+  // (mam 2026-09-12: "count after 45 not from 30"). Short leave forgives the
+  // late mark exactly as payroll does (skip_half_day_if_short_leave).
+  const paySettings = (() => {
+    try { return db.prepare('SELECT late_after_time, skip_half_day_if_short_leave FROM payroll_settings WHERE id=1').get() || {}; }
+    catch { return {}; }
+  })();
+  const shortLeaveForgives = !!paySettings.skip_half_day_if_short_leave;
+
   const rows = employees.map(e => {
     const cells = {};
     const totals = { present: 0, half: 0, leave: 0, late: 0 };
     const rst = ROSTERS[e.roster] || ROSTERS.general || {};
     const rosterStartMin = hhmmToMin(rst.start || '09:30');
+    const lateAfterMin = hhmmToMin(rosterCutoffs(paySettings, e.roster).late_after_time || '09:46');
     if (e.user_id) {
       const leaves = leavesByUser.get(e.user_id) || [];
       for (const day of days) {
@@ -647,7 +659,7 @@ function computeGrid(db, month) {
         if (att) {
           status = String(att.status || '').toLowerCase();
           source = att.admin_marked ? 'admin' : 'punch';
-        } else if (leaves.some(l => day.date >= l.from_date && day.date <= l.to_date)) {
+        } else if (leaves.some(l => l.leave_type !== 'short_leave' && day.date >= l.from_date && day.date <= l.to_date)) {
           status = 'leave'; source = 'leave';
         } else if (day.sunday) {
           status = 'sunday'; source = 'auto';
@@ -665,17 +677,26 @@ function computeGrid(db, month) {
           worked_on_off: !!(day.sunday && att && (att.punch_in_time || ['present', 'half_day', 'short_day', 'late'].includes(String(att.status || '').toLowerCase()))),
           future: day.future,
         };
-        // Late days show P plus how late they arrived vs their shift start.
+        // Late days show P plus how late they arrived — counted from the late
+        // cut-off, the same minutes payroll charges for. A short leave that day
+        // clears the late mark (mam 2026-09-12: "if some come late but that
+        // time fill short leave that means he or she is not late").
         if (status === 'late' && att && att.punch_in_time) {
-          const lm = Math.max(0, istMinuteOfDay(att.punch_in_time) - rosterStartMin);
-          cell.late_minutes = lm;
-          cell.late_label = lateLabel(lm);
+          const onShortLeave = shortLeaveForgives
+            && leaves.some(l => l.leave_type === 'short_leave' && day.date >= l.from_date && day.date <= l.to_date);
+          if (onShortLeave) {
+            cell.short_leave = true;
+          } else {
+            const lm = Math.max(0, istMinuteOfDay(att.punch_in_time) - lateAfterMin + 1);
+            cell.late_minutes = lm;
+            cell.late_label = lateLabel(lm);
+          }
         }
         const code = dayCode(cell);
         if (code === 'P' || code === 'WOP') totals.present++;
         else if (code === 'H') totals.half++;
         else if (code === 'L') totals.leave++;
-        if (status === 'late') totals.late++;
+        if (status === 'late' && cell.late_minutes != null) totals.late++;
         cells[day.date] = cell;
       }
     }
