@@ -3714,6 +3714,9 @@ function initializeDatabase() {
     // — critical for mam because without this the client sometimes denies
     // receiving material and SEPL takes the loss.
     ['delivery_notes', 'receipt_file_path TEXT'],
+    // Tally bill filed against an indent's delivery bill (mam 2026-09-12).
+    ['indents', 'tally_bill_file_path TEXT'],
+    ['indents', 'tally_bill_uploaded_at DATETIME'],
     // Support tickets — who is the ticket assigned to? When set, that user
     // sees the ticket on their dashboard and can respond / work on it.
     ['support_tickets', 'assigned_to INTEGER REFERENCES users(id)'],

@@ -685,6 +685,9 @@ export default function Procurement() {
   // Indents
   const [indFilterStatus, setIndFilterStatus] = useState('all');
   const [indFilterCategory, setIndFilterCategory] = useState('all');  // mam's 5 categories (2026-05-26)
+  // Billable-only pill: just the indents that carry a delivery bill, so the
+  // tally bill can be filed against that PDF (mam 2026-09-12).
+  const [indBillOnly, setIndBillOnly] = useState(false);
   const [indFilterFrom, setIndFilterFrom] = useState('');
   const [indFilterTo, setIndFilterTo] = useState('');
   const [indSearch, setIndSearch] = useState('');
@@ -1371,6 +1374,18 @@ export default function Procurement() {
       toast.success(`Cleared: ${r.data.counts.indents} dispatches, ${r.data.counts.vendor_pos} POs, ${r.data.counts.purchase_bills} bills, ${r.data.counts.delivery_notes} delivery notes`);
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Wipe failed'); }
+  };
+
+  // Tally bill against an indent's delivery bill — upload only (mam 2026-09-12).
+  const uploadIndentTallyBill = async (id, file) => {
+    if (!file) return;
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      await api.post(`/procurement/indents/${id}/tally-bill`, fd);
+      toast.success('Tally bill uploaded');
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
   };
 
   const approveIndent = async (id, status) => {
@@ -2538,6 +2553,8 @@ export default function Procurement() {
               || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
             if (!inBucket) return false;
           }
+          // Billable pill — only rows that actually have a delivery bill.
+          if (indBillOnly && !(+i.delivery_bill_amount > 0)) return false;
           return true;
         });
         const indPg = usePagination(filteredIndents, indPerPage, indPage, setIndPage);
@@ -2639,8 +2656,8 @@ export default function Procurement() {
               // statusKey drives the indent-status filter on click; pass an
               // onClick override instead (e.g. for tiles that jump to another
               // tab like PO Generate / Payment Required).
-              const tile = (label, count, amount, color, statusKey, onClick) => {
-                const isActive = !!statusKey && indFilterStatus === statusKey;
+              const tile = (label, count, amount, color, statusKey, onClick, activeOverride) => {
+                const isActive = activeOverride !== undefined ? activeOverride : (!!statusKey && indFilterStatus === statusKey);
                 const handle = onClick || (() => { setIndFilterStatus(statusKey); setIndPage(1); });
                 return (
                   <button
@@ -2668,7 +2685,7 @@ export default function Procurement() {
                     2-up on phones, 4-up on tablets, 7/8-up on desktop. A Pending
                     L2 tile is added only when the L2 switch is ON. PO Generate +
                     Payment Required jump to their own tabs on click. */}
-                  <div className={`grid grid-cols-2 sm:grid-cols-4 ${l2Enabled ? 'lg:grid-cols-8' : 'lg:grid-cols-7'} gap-2`}>
+                  <div className={`grid grid-cols-2 sm:grid-cols-4 ${l2Enabled ? 'lg:grid-cols-9' : 'lg:grid-cols-8'} gap-2`}>
                     {tile('Total Indents', kpiScope.length, sum(kpiScope), { border: 'border-gray-300', bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-400' }, 'all')}
                     {tile(l2Enabled ? 'Pending L1' : 'Pending Approval', submitted.length, sum(submitted), { border: 'border-amber-300', bg: 'bg-amber-50', text: 'text-amber-700', ring: 'ring-amber-400' }, 'submitted')}
                     {l2Enabled && tile('Pending L2', l1Approved.length, sum(l1Approved), { border: 'border-purple-300', bg: 'bg-purple-50', text: 'text-purple-700', ring: 'ring-purple-400' }, 'l1_approved')}
@@ -2680,6 +2697,18 @@ export default function Procurement() {
                     {tile('Rejected', rejected.length, sum(rejected), { border: 'border-red-300', bg: 'bg-red-50', text: 'text-red-700', ring: 'ring-red-400' }, 'rejected')}
                     {tile('PO Generate', poGenCount, poGenAmount, { border: 'border-blue-300', bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-400' }, null, () => { setTab('vendorpo'); setVpoSubTab('list'); })}
                     {tile('Payment Required', payReqCount, payReqAmount, { border: 'border-rose-300', bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-400' }, null, () => setTab('payment'))}
+                    {/* Billable · Tally Bill (mam 2026-09-12): only the indents that
+                      carry a delivery bill, so its PDF can be checked and the
+                      matching Tally bill filed against it. Toggles on/off. */}
+                    {(() => {
+                      const billRows = kpiScope.filter(i => +i.delivery_bill_amount > 0);
+                      const billSum = billRows.reduce((s, i) => s + (+i.delivery_bill_amount || 0), 0);
+                      return tile('Billable · Tally Bill', billRows.length, billSum,
+                        { border: 'border-teal-300', bg: 'bg-teal-50', text: 'text-teal-700', ring: 'ring-teal-400' },
+                        null,
+                        () => { setIndBillOnly(v => !v); setIndFilterStatus('all'); setIndPage(1); },
+                        indBillOnly);
+                    })()}
                   </div>
                 </>
               );
@@ -2964,6 +2993,21 @@ export default function Procurement() {
                             📄 PDF
                           </a>
                         )}
+                        {i.delivery_bill_amount > 0 && (
+                          <div>
+                            {i.tally_bill_file_path && (
+                              <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer"
+                                className="block text-[10px] font-semibold text-emerald-700 hover:underline">🧾 Tally bill ✓</a>
+                            )}
+                            {(canEdit('procurement') || isAdmin()) && (
+                              <label className="block text-[10px] text-blue-600 hover:underline cursor-pointer">
+                                {i.tally_bill_file_path ? 'Replace' : 'Upload tally bill'}
+                                <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx,.doc,.docx"
+                                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; uploadIndentTallyBill(i.id, f); }} />
+                              </label>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -3195,6 +3239,22 @@ export default function Procurement() {
                               title="Open the delivery bill working — sale rate per line, its source, qty and the delivery % — Save as PDF to audit">
                               📄 PDF
                             </a>
+                          )}
+                          {/* Tally bill filed against this delivery bill (mam 2026-09-12) */}
+                          {i.delivery_bill_amount > 0 && (
+                            <div className="mt-0.5">
+                              {i.tally_bill_file_path && (
+                                <a href={i.tally_bill_file_path} target="_blank" rel="noreferrer"
+                                  className="block text-[10px] font-semibold text-emerald-700 hover:underline">🧾 Tally bill ✓</a>
+                              )}
+                              {(canEdit('procurement') || isAdmin()) && (
+                                <label className="block text-[10px] font-normal text-blue-600 hover:underline cursor-pointer">
+                                  {i.tally_bill_file_path ? 'Replace' : 'Upload tally bill'}
+                                  <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx,.doc,.docx"
+                                    onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; uploadIndentTallyBill(i.id, f); }} />
+                                </label>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td><StatusBadge status={i.status} /></td>

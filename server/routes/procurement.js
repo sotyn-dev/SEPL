@@ -5346,6 +5346,30 @@ router.post('/delivery-notes/:id/sales-bill', needsApprove, vendorPoUpload.singl
   res.json({ ok: true, sales_bill_number, sales_bill_file_path: sbFilePath });
 });
 
+// Tally bill against an indent's DELIVERY BILL — upload only (mam
+// 2026-09-12: "that pdf against upload tally bill"). The delivery-bill PDF is
+// the billable slice raised on this indent; this parks the matching bill from
+// Tally next to it. No number, no workflow, no status change.
+router.post('/indents/:id/tally-bill', requirePermission('procurement', 'edit'), vendorPoUpload.single('file'), (req, res) => {
+  const db = getDb();
+  const ind = db.prepare('SELECT id FROM indents WHERE id=?').get(req.params.id);
+  if (!ind) return res.status(404).json({ error: 'Indent not found' });
+  if (!req.file) return res.status(400).json({ error: 'Choose the tally bill file to upload' });
+  let filePath;
+  try {
+    const safeName = (req.file.originalname || 'tally-bill').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const newName = `${Date.now()}-${safeName}`;
+    const newPath = path.join(path.dirname(req.file.path), newName);
+    fs.renameSync(req.file.path, newPath);
+    filePath = `/uploads/${newName}`;
+  } catch (e) {
+    filePath = `/uploads/${req.file.filename}`;
+  }
+  db.prepare('UPDATE indents SET tally_bill_file_path = ?, tally_bill_uploaded_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(filePath, req.params.id);
+  res.json({ ok: true, tally_bill_file_path: filePath });
+});
+
 // GENERATE a Sales Bill (invoice) from a challan — mam (2026-06-04):
 // "sales bill generate, not upload".  Builds a new sales_bill delivery
 // note from the challan's items (from-store challan → its items_json;
