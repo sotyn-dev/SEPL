@@ -7,7 +7,9 @@ import { useState, useRef, useEffect } from 'react';
 //   options : [{ id, name }]
 //   value   : array of selected ids
 //   onChange: (nextIds[]) => void
-export default function MultiUserSelect({ options, value = [], onChange, placeholder = 'Select one or more…', emptyText = 'No users found' }) {
+//   searchable: show the type-to-search box (default true). Pass false for a
+//     short fixed list — a search box over four statuses is just clutter.
+export default function MultiUserSelect({ options, value = [], onChange, placeholder = 'Select one or more…', emptyText = 'No users found', searchable = true }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef(null);
@@ -18,7 +20,7 @@ export default function MultiUserSelect({ options, value = [], onChange, placeho
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
-  useEffect(() => { if (open && inputRef.current) inputRef.current.focus(); }, [open]);
+  useEffect(() => { if (open && searchable && inputRef.current) inputRef.current.focus(); }, [open, searchable]);
 
   const sel = new Set(value);
   const selectedOpts = options.filter(o => sel.has(o.id));
@@ -38,7 +40,7 @@ export default function MultiUserSelect({ options, value = [], onChange, placeho
           {selectedOpts.length === 0
             ? <span className="text-gray-400">{placeholder}</span>
             : selectedOpts.map(o => (
-                <span key={o.id} className="inline-flex items-center gap-1 bg-red-600 text-white rounded-full px-2 py-0.5 text-xs">
+                <span key={o.id} className="inline-flex items-center gap-1 bg-red-600 text-white rounded-full px-2 py-0.5 text-xs whitespace-nowrap">
                   {o.name}
                   <span onClick={(e) => { e.stopPropagation(); toggle(o.id); }} className="cursor-pointer font-bold leading-none" title="Remove">×</span>
                 </span>
@@ -49,11 +51,13 @@ export default function MultiUserSelect({ options, value = [], onChange, placeho
 
       {open && (
         <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-80 overflow-hidden">
-          <div className="p-2 border-b">
-            <input ref={inputRef} type="text" className="input text-sm w-full" placeholder="Type to search…"
-              value={search} onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }} />
-          </div>
+          {searchable && (
+            <div className="p-2 border-b">
+              <input ref={inputRef} type="text" className="input text-sm w-full" placeholder="Type to search…"
+                value={search} onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }} />
+            </div>
+          )}
           <div className="overflow-y-auto max-h-64">
             {value.length > 0 && (
               <button type="button" onClick={() => onChange([])}

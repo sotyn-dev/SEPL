@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import Pagination, { usePagination } from '../components/PaginationBar';
+import MultiUserSelect from '../components/MultiUserSelect';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -37,7 +38,9 @@ export default function Delegation() {
   const [view, setView] = useState('list'); // 'list' | 'dashboard'
   const [dashboard, setDashboard] = useState([]);
   const [scope, setScope] = useState(isEA ? 'all' : 'mine'); // mine | given | all
-  const [statusFilter, setStatusFilter] = useState('');
+  // Several statuses at once (mam 2026-09-12) — e.g. Pending + Rejected is
+  // "everything that still owes me proof". [] = all statuses.
+  const [statusFilter, setStatusFilter] = useState([]);
   const [healthFilter, setHealthFilter] = useState(''); // '' | green | yellow | red (deadline-slippage light: times the due date was pushed)
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
@@ -84,7 +87,7 @@ export default function Delegation() {
 
   const load = () => {
     const params = new URLSearchParams({ scope });
-    if (statusFilter) params.set('status', statusFilter);
+    if (statusFilter.length) params.set('status', statusFilter.join(','));
     if (assigneeFilter) params.set('assignee_id', assigneeFilter);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
@@ -595,13 +598,21 @@ export default function Delegation() {
             {t.label}
           </button>
         ))}
-        <select className="select text-sm max-w-[180px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="pending">Pending</option>
-          <option value="submitted">Submitted</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-        </select>
+        {/* Status — tick as many as you like; the server gets a comma list. */}
+        <div className="w-[248px]">
+          <MultiUserSelect
+            options={[
+              { id: 'pending', name: 'Pending' },
+              { id: 'submitted', name: 'Submitted' },
+              { id: 'approved', name: 'Approved' },
+              { id: 'rejected', name: 'Rejected' },
+            ]}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            searchable={false}
+            placeholder="All statuses"
+          />
+        </div>
         {/* Deadline-slippage filter (mam 2026-07-06) — by how many times the due
             date was pushed. Composes with the status/assignee/date filters above. */}
         <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
