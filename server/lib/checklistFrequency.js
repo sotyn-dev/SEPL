@@ -20,8 +20,10 @@
 // he is absent that day checklist automatically not need and sunday checklist
 // no need"):
 //   * SUNDAY - the company's non-working day. No checklist of any frequency is
-//     expected on a Sunday. Note this is a blanket rule: a monthly task whose
-//     anchor day happens to fall on a Sunday is simply not expected that month.
+//     expected ON a Sunday. A DAILY task just skips it (the other six days
+//     still run). Every other frequency fires on one day only, so a Sunday
+//     anchor would lose the whole occurrence - those MOVE TO THE MONDAY after
+//     it instead (mam 2026-09-12: "monthly sunday move to monday").
 //   * the assignee was ABSENT or on LEAVE - `absentSet` carries "userId::date"
 //     keys, built by absenceSet() below from the attendance table. Only an
 //     EXPLICIT absent/leave row exempts anyone; a missing attendance row does
@@ -30,12 +32,11 @@
 
 const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-function appliesOn(task, dateStr) {
-  if (task.recurrence_start_date && dateStr < String(task.recurrence_start_date).slice(0, 10)) return false;
-  if (task.recurrence_end_date && dateStr > String(task.recurrence_end_date).slice(0, 10)) return false;
+// The raw frequency test: does this checklist's own recurrence land on this
+// date? No Sunday handling here — appliesOn() layers that on top.
+function firesOn(task, dateStr) {
   const f = String(task.frequency || 'daily').toLowerCase();
   const d = new Date(dateStr + 'T00:00:00');
-  if (d.getDay() === 0) return false;         // Sunday - nothing is expected
   const dueIso = task.due_date ? String(task.due_date).slice(0, 10) : null;
   const due = dueIso ? new Date(dueIso + 'T00:00:00') : null;
   if (!f || f === 'daily') return true;
@@ -56,6 +57,52 @@ function appliesOn(task, dateStr) {
     return anchor ? anchor === dateStr : false;
   }
   return true;   // unknown frequency — stay generous rather than hide work
+}
+
+const addDays = (iso, n) => {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return fmt(d);
+};
+
+function appliesOn(task, dateStr) {
+  if (task.recurrence_start_date && dateStr < String(task.recurrence_start_date).slice(0, 10)) return false;
+  if (task.recurrence_end_date && dateStr > String(task.recurrence_end_date).slice(0, 10)) return false;
+  const f = String(task.frequency || 'daily').toLowerCase();
+  const dow = new Date(dateStr + 'T00:00:00').getDay();
+
+  // Never ON a Sunday (mam 2026-09-12: "sunday checklist no need").
+  if (dow === 0) return false;
+
+  // A DAILY checklist simply skips Sunday — it still runs the other six days,
+  // so nothing is lost.
+  if (!f || f === 'daily') return true;
+
+  // Its own day, and that day isn't a Sunday.
+  if (firesOn(task, dateStr)) return true;
+
+  // Every OTHER frequency fires on one day only, so a Sunday anchor used to
+  // lose the whole occurrence — a monthly task anchored on the 1st vanished in
+  // any month whose 1st was a Sunday, and a weekly one anchored on Sunday never
+  // fired at all. Mam 2026-09-12: "monthly sunday move to monday" — so a Sunday
+  // occurrence moves to the Monday after it.
+  //
+  // Asked about monthly; applied to weekly / fortnightly / quarterly / yearly /
+  // once too, because the defect and the fix are identical for all of them and
+  // leaving weekly-on-Sunday firing NEVER would be the same bug she just named.
+  //
+  // No double-firing: if this Monday were itself an anchor, firesOn() above has
+  // already returned true. That is the case that matters for fortnightly, whose
+  // days list can contain two consecutive dates (e.g. "1,2").
+  if (dow === 1) {
+    const yesterday = addDays(dateStr, -1);
+    if (new Date(yesterday + 'T00:00:00').getDay() === 0 && firesOn(task, yesterday)) {
+      // The shifted day must still be inside the task's own recurrence window.
+      if (task.recurrence_end_date && dateStr > String(task.recurrence_end_date).slice(0, 10)) return false;
+      return true;
+    }
+  }
+  return false;
 }
 
 // Who was away, as a set of "userId::YYYY-MM-DD" keys, for the given dates.
