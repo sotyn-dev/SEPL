@@ -763,10 +763,17 @@ export default function Delegation() {
                       approved / rejected extension keeps showing both. */}
                   <td className="align-top">
                     {(() => {
-                      const reason = String(t.extension_reason || '').trim();
+                      const raw = String(t.extension_reason || '').trim();
+                      // Punctuation-only text ("," / ".") is not a reason — it used to
+                      // render as empty quotes (mam 2026-09-12).
+                      const reason = /[a-zA-Z0-9\u0900-\u097F]/.test(raw) ? raw : '';
                       const reasonEl = reason
                         ? <div className="text-[10px] text-gray-600 max-w-[170px] whitespace-normal" title={reason}>“{reason}”</div>
                         : null;
+                      // "extended" only when a date was really pushed (extension_count)
+                      // or a reason was typed. Otherwise the row simply offers Request
+                      // (mam 2026-09-12: "if not extend than only show request").
+                      const reallyExtended = (+t.extension_count || 0) > 0 || !!reason;
                       const askBtn = (label) => (
                         <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }}
                           className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> {label}</button>
@@ -785,7 +792,7 @@ export default function Delegation() {
                           </div>
                         );
                       }
-                      if (t.extension_status === 'approved' && t.requested_due_date) {
+                      if (t.extension_status === 'approved' && t.requested_due_date && reallyExtended) {
                         return (
                           <div className="flex flex-col gap-1">
                             <span className="text-[10px] text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block whitespace-nowrap">extended → {t.requested_due_date}</span>
@@ -794,7 +801,7 @@ export default function Delegation() {
                           </div>
                         );
                       }
-                      if (t.extension_status === 'rejected') {
+                      if (t.extension_status === 'rejected' && reason) {
                         return (
                           <div className="flex flex-col gap-1">
                             <span className="text-[10px] text-gray-500">Rejected</span>
