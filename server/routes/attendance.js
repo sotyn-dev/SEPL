@@ -445,7 +445,10 @@ router.post('/admin-mark', (req, res) => {
     }
     return res.json({ message: 'Cleared' });
   }
-  const finalStatus = ['present','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
+  // 'late' included (mam 2026-09-12): the backfill form sets the status from
+  // the punch times, and an admin-marked row is paid by STATUS alone, so a
+  // late arrival has to be storable as late.
+  const finalStatus = ['present','late','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
 
   // Punch in / out typed by the admin (mam 2026-09-12: "so that if someone
   // miss to punch in or out we can mark it"). Optional — a mark with no times

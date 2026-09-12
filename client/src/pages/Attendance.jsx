@@ -57,6 +57,26 @@ const fmtT = (iso) => {
   } catch { return '—'; }
 };
 
+// Status that matches the punch times, on the SAME thresholds payroll pays on
+// (late_after_time 09:46, half_day_after_time 10:00, min_hours_half_day 4).
+// An admin-marked row is paid by its STATUS alone — payroll ignores its punch
+// times — so a status that disagrees with the times pays the wrong day
+// (mam 2026-09-12: "click punch in or punch out according them time").
+const hhmmToMin = (t) => { const [h, m] = String(t || '').split(':').map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : null; };
+const statusFromPunches = (inHHMM, outHHMM, cfg) => {
+  const inM = hhmmToMin(inHHMM), outM = hhmmToMin(outHHMM);
+  if (inM == null || outM == null || outM <= inM) return null;
+  const hours = (outM - inM) / 60;
+  const lateAt = cfg?.late_after_time || '09:46';
+  const halfAt = cfg?.half_day_after_time || '10:00';
+  const minHalf = Number(cfg?.min_hours_half_day ?? 4);
+  const hrsTxt = `${hours.toFixed(2)} h`;
+  if (inM > hhmmToMin(halfAt)) return { status: 'half_day', why: `came in after ${halfAt} · ${hrsTxt}` };
+  if (hours < minHalf) return { status: 'half_day', why: `only ${hrsTxt} (under ${minHalf} h)` };
+  if (inM >= hhmmToMin(lateAt)) return { status: 'late', why: `came in at ${inHHMM}, late from ${lateAt} · ${hrsTxt}` };
+  return { status: 'present', why: `on time · ${hrsTxt}` };
+};
+
 export default function Attendance() {
   const { user, isAdmin, canDelete, canSeeAll, canView, canApprove } = useAuth();
   // Admins, or anyone granted "See All" on the attendance module, can view
@@ -124,6 +144,17 @@ export default function Attendance() {
   // { src, label } of the photo being viewed, or null when closed.
   const [lightbox, setLightbox] = useState(null);
   const [form, setForm] = useState({});
+  // Payroll cut-offs, so the backfill form names the same status payroll will pay.
+  const [payCfg, setPayCfg] = useState(null);
+  useEffect(() => { api.get('/payroll/settings').then(r => setPayCfg(r.data)).catch(() => setPayCfg(null)); }, []);
+  // Times typed → status follows them. Only re-runs when a time changes, so an
+  // admin who picks a different status afterwards keeps their choice.
+  const punchStatus = statusFromPunches(form.punch_in, form.punch_out, payCfg);
+  useEffect(() => {
+    const d = statusFromPunches(form.punch_in, form.punch_out, payCfg);
+    if (d) setForm(f => (f.status === d.status ? f : { ...f, status: d.status }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.punch_in, form.punch_out, payCfg]);
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -1768,7 +1799,7 @@ export default function Attendance() {
           if (!form.user_id) return toast.error('Please select an employee');
           if (!form.date) return toast.error('Please pick a date');
           if (form.date > today) return toast.error('Cannot mark a future date');
-          const worked = ['present', 'half_day', 'short_day'].includes(form.status || 'present');
+          const worked = ['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present');
           // Punch times are MANDATORY on a worked day (mam 2026-09-12: "when
           // punch in / punch out mark back time is mandatory to fill") so the
           // day carries real hours instead of an assumed 8. The one-click
@@ -1817,6 +1848,7 @@ export default function Attendance() {
               <label className="label">Status *</label>
               <select className="select" value={form.status || 'present'} onChange={e => setForm({ ...form, status: e.target.value })}>
                 <option value="present">Present</option>
+                <option value="late">Late</option>
                 <option value="half_day">Half Day</option>
                 <option value="short_day">Short Day</option>
                 <option value="absent">Absent</option>
@@ -1825,7 +1857,7 @@ export default function Attendance() {
               </select>
             </div>
           </div>
-          {['present', 'half_day', 'short_day'].includes(form.status || 'present') && (
+          {['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Punch In * <span className="font-normal text-gray-500">(IST)</span></label>
@@ -1835,17 +1867,24 @@ export default function Attendance() {
                 <label className="label">Punch Out * <span className="font-normal text-gray-500">(IST)</span></label>
                 <input className="input" type="time" required value={form.punch_out || ''} onChange={e => setForm({ ...form, punch_out: e.target.value })} />
               </div>
-              <p className="text-[11px] text-gray-500 sm:col-span-2">
-                Both times are required on a worked day — the day's hours are computed from them (under 4 h counts as half day).
-                If the employee already punched one side, that real punch is kept and only the missing side is filled.
-              </p>
+              {punchStatus ? (
+                <p className="text-[11px] sm:col-span-2 font-semibold text-blue-700">
+                  Status set from these times: {{ present: 'Present', late: 'Late', half_day: 'Half Day' }[punchStatus.status]} — {punchStatus.why}.
+                  <span className="font-normal text-gray-500"> Change Status above if this day is an exception.</span>
+                </p>
+              ) : (
+                <p className="text-[11px] text-gray-500 sm:col-span-2">
+                  Both times are required on a worked day — Status is then set from them (late arrival, or under 4 h = half day).
+                  If the employee already punched one side, that real punch is kept and only the missing side is filled.
+                </p>
+              )}
             </div>
           )}
           <div>
             <label className="label">Reason / Remarks (for audit)</label>
             <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
           </div>
-          {['present', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
+          {['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
             <div>
               <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date a worked day)</span></label>
               <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
