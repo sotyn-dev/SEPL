@@ -62,7 +62,10 @@ const fmtT = (iso) => {
 // An admin-marked row is paid by its STATUS alone — payroll ignores its punch
 // times — so a status that disagrees with the times pays the wrong day
 // (mam 2026-09-12: "click punch in or punch out according them time").
-const hhmmToMin = (t) => { const [h, m] = String(t || '').split(':').map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : null; };
+const hhmmToMin = (t) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '').trim());
+  return m ? +m[1] * 60 + +m[2] : null;
+};
 const statusFromPunches = (inHHMM, outHHMM, cfg) => {
   const inM = hhmmToMin(inHHMM), outM = hhmmToMin(outHHMM);
   if (inM == null || outM == null || outM <= inM) return null;
@@ -151,6 +154,7 @@ export default function Attendance() {
   // admin who picks a different status afterwards keeps their choice.
   const punchStatus = statusFromPunches(form.punch_in, form.punch_out, payCfg);
   useEffect(() => {
+    if (form.status === 'fill_in' || form.status === 'fill_out') return;   // admin is filling ONE side
     const d = statusFromPunches(form.punch_in, form.punch_out, payCfg);
     if (d) setForm(f => (f.status === d.status ? f : { ...f, status: d.status }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1799,7 +1803,15 @@ export default function Attendance() {
           if (!form.user_id) return toast.error('Please select an employee');
           if (!form.date) return toast.error('Please pick a date');
           if (form.date > today) return toast.error('Cannot mark a future date');
-          const worked = ['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present');
+          // Status can also say WHICH single punch is missing (mam 2026-09-12:
+          // "in status select punch in or out one can select and one time
+          // according to that enter") — then only that one time is asked for,
+          // and the other side of the day is left exactly as it is.
+          const fillOnly = form.status === 'fill_in' ? 'punch_in' : form.status === 'fill_out' ? 'punch_out' : null;
+          if (fillOnly && !form[fillOnly]) {
+            return toast.error(fillOnly === 'punch_in' ? 'Enter the missed Punch In time' : 'Enter the missed Punch Out time');
+          }
+          const worked = !fillOnly && ['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present');
           // Punch times are MANDATORY on a worked day (mam 2026-09-12: "when
           // punch in / punch out mark back time is mandatory to fill") so the
           // day carries real hours instead of an assumed 8. The one-click
@@ -1818,17 +1830,26 @@ export default function Attendance() {
               const up = await api.post('/upload', fd);
               proof_url = up.data.url;
             }
+            // fill_in / fill_out are choices of this form only. With just a
+            // punch-in the time itself still says late-or-not; with only a
+            // punch-out there is nothing to judge. A real punch row keeps its
+            // own status server-side either way.
+            const sentStatus = fillOnly === 'punch_in'
+              ? (statusFromPunches(form.punch_in, '23:59', payCfg)?.status === 'late' ? 'late' : 'present')
+              : fillOnly === 'punch_out' ? 'present'
+                : (form.status || 'present');
             const res = await api.post('/attendance/admin-mark', {
               user_id: +form.user_id, date: form.date,
-              status: form.status || 'present', remarks: form.remarks || '',
+              status: sentStatus, remarks: form.remarks || '',
               proof_url,
               // Missed punch in / out, typed in IST (mam 2026-09-12).
-              punch_in: form.punch_in || null, punch_out: form.punch_out || null,
+              punch_in: fillOnly === 'punch_out' ? null : (form.punch_in || null),
+              punch_out: fillOnly === 'punch_in' ? null : (form.punch_out || null),
             });
             const who = allUsers.find(u => u.id === +form.user_id)?.name || 'Employee';
             toast.success(/punch/i.test(res.data?.message || '')
               ? `${who} · ${res.data.message} (${form.date})`
-              : `${who} marked ${(form.status || 'present').replace('_', ' ')} for ${form.date}`);
+              : `${who} marked ${sentStatus.replace('_', ' ')} for ${form.date}`);
             setModal(null); load();
           } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
@@ -1847,27 +1868,42 @@ export default function Attendance() {
             <div>
               <label className="label">Status *</label>
               <select className="select" value={form.status || 'present'} onChange={e => setForm({ ...form, status: e.target.value })}>
-                <option value="present">Present</option>
-                <option value="late">Late</option>
-                <option value="half_day">Half Day</option>
-                <option value="short_day">Short Day</option>
-                <option value="absent">Absent</option>
-                <option value="leave">Leave</option>
-                <option value="holiday">Holiday</option>
+                <optgroup label="Missed ONE punch — enter that time only">
+                  <option value="fill_in">Punch In missed</option>
+                  <option value="fill_out">Punch Out missed</option>
+                </optgroup>
+                <optgroup label="Mark the whole day">
+                  <option value="present">Present</option>
+                  <option value="late">Late</option>
+                  <option value="half_day">Half Day</option>
+                  <option value="short_day">Short Day</option>
+                  <option value="absent">Absent</option>
+                  <option value="leave">Leave</option>
+                  <option value="holiday">Holiday</option>
+                </optgroup>
               </select>
             </div>
           </div>
-          {['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') && (
+          {['fill_in', 'fill_out', 'present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="label">Punch In * <span className="font-normal text-gray-500">(IST)</span></label>
-                <input className="input" type="time" required value={form.punch_in || ''} onChange={e => setForm({ ...form, punch_in: e.target.value })} />
-              </div>
-              <div>
-                <label className="label">Punch Out * <span className="font-normal text-gray-500">(IST)</span></label>
-                <input className="input" type="time" required value={form.punch_out || ''} onChange={e => setForm({ ...form, punch_out: e.target.value })} />
-              </div>
-              {punchStatus ? (
+              {form.status !== 'fill_out' && (
+                <div>
+                  <label className="label">Punch In * <span className="font-normal text-gray-500">(IST)</span></label>
+                  <input className="input" type="time" required value={form.punch_in || ''} onChange={e => setForm({ ...form, punch_in: e.target.value })} />
+                </div>
+              )}
+              {form.status !== 'fill_in' && (
+                <div>
+                  <label className="label">Punch Out * <span className="font-normal text-gray-500">(IST)</span></label>
+                  <input className="input" type="time" required value={form.punch_out || ''} onChange={e => setForm({ ...form, punch_out: e.target.value })} />
+                </div>
+              )}
+              {(form.status === 'fill_in' || form.status === 'fill_out') ? (
+                <p className="text-[11px] text-gray-600 sm:col-span-2">
+                  Only the {form.status === 'fill_in' ? 'Punch In' : 'Punch Out'} time is saved — the other side of the day stays as it is.
+                  A punch the employee really made is never overwritten, and once both sides exist the day's hours are recomputed.
+                </p>
+              ) : punchStatus ? (
                 <p className="text-[11px] sm:col-span-2 font-semibold text-blue-700">
                   Status set from these times: {{ present: 'Present', late: 'Late', half_day: 'Half Day' }[punchStatus.status]} — {punchStatus.why}.
                   <span className="font-normal text-gray-500"> Change Status above if this day is an exception.</span>
