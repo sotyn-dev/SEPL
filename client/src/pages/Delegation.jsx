@@ -494,7 +494,7 @@ export default function Delegation() {
             // columns the table shows to its right, which made the download
             // useless for reviewing follow-ups away from the screen.
             exportCsv('delegations',
-              ['Task ID','Description','Project','Assigned To','Due','Completed','Status','Extensions','Proof','Followup Remarks (EA → MD)'],
+              ['Task ID','Description','Project','Assigned To','Due','Completed','Status','Extensions','Extension Date','Extension Reason','Proof','Followup Remarks (EA → MD)'],
               visibleTasks.map(t => [
                 taskCode(t),
                 cleanDesc(t.description || t.title),
@@ -504,6 +504,8 @@ export default function Delegation() {
                 t.reviewed_at ? fmtDate(t.reviewed_at) : '',
                 t.status,
                 +t.extension_count || 0,
+                t.requested_due_date || '',
+                t.extension_reason || '',
                 t.proof_url || '',
                 t.followup_remarks || '',
               ]));
@@ -754,22 +756,57 @@ export default function Delegation() {
                       )}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap">
-                    {t.extension_status === 'pending' && t.requested_due_date ? (
-                      <div className="flex flex-col gap-1">
-                        <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 inline-block">→ {t.requested_due_date}</span>
-                        {isAdmin() && (
-                          <div className="flex gap-1">
-                            <button onClick={() => approveExtension(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
-                            <button onClick={() => rejectExtension(t)} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
+                  {/* Extension — the new date AND the reason typed with it. The
+                      reason was stored all along (delegations.extension_reason) but
+                      never shown, so an extension looked like a bare date change
+                      (mam 2026-09-12: "extend date remarks not showing"). An
+                      approved / rejected extension keeps showing both. */}
+                  <td className="align-top">
+                    {(() => {
+                      const reason = String(t.extension_reason || '').trim();
+                      const reasonEl = reason
+                        ? <div className="text-[10px] text-gray-600 max-w-[170px] whitespace-normal" title={reason}>“{reason}”</div>
+                        : null;
+                      const askBtn = (label) => (
+                        <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }}
+                          className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> {label}</button>
+                      );
+                      if (t.extension_status === 'pending' && t.requested_due_date) {
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 inline-block whitespace-nowrap">→ {t.requested_due_date}</span>
+                            {reasonEl}
+                            {isAdmin() && (
+                              <div className="flex gap-1">
+                                <button onClick={() => approveExtension(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
+                                <button onClick={() => rejectExtension(t)} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    ) : isAssignee && t.status !== 'approved' ? (
-                      <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> Request</button>
-                    ) : t.extension_status === 'rejected' ? (
-                      <span className="text-[10px] text-gray-400">Rejected</span>
-                    ) : <span className="text-gray-300 text-xs">—</span>}
+                        );
+                      }
+                      if (t.extension_status === 'approved' && t.requested_due_date) {
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block whitespace-nowrap">extended → {t.requested_due_date}</span>
+                            {reasonEl}
+                            {isAssignee && t.status !== 'approved' && askBtn('Request again')}
+                          </div>
+                        );
+                      }
+                      if (t.extension_status === 'rejected') {
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-500">Rejected</span>
+                            {reasonEl}
+                            {isAssignee && t.status !== 'approved' && askBtn('Request again')}
+                          </div>
+                        );
+                      }
+                      return isAssignee && t.status !== 'approved'
+                        ? askBtn('Request')
+                        : <span className="text-gray-300 text-xs">—</span>;
+                    })()}
                   </td>
                   {/* Followup Remarks — EA writes a manual note for the MD;
                       read-only for everyone else. Does not affect task status. */}
@@ -871,8 +908,14 @@ export default function Delegation() {
               {t.status === 'rejected' && t.reject_reason && (
                 <div className="bg-red-50 border border-red-200 rounded px-2 py-1 text-[11px] text-red-700 mb-2 flex items-start gap-1"><FiAlertTriangle size={11} className="mt-0.5" /> {t.reject_reason}</div>
               )}
-              {t.extension_status === 'pending' && t.requested_due_date && (
-                <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-[11px] text-amber-800 mb-2 flex items-start gap-1"><FiCalendar size={11} className="mt-0.5" /> Extension → {t.requested_due_date}</div>
+              {t.requested_due_date && ['pending', 'approved', 'rejected'].includes(t.extension_status) && (
+                <div className={`rounded px-2 py-1 text-[11px] mb-2 flex items-start gap-1 border ${t.extension_status === 'pending' ? 'bg-amber-50 border-amber-200 text-amber-800' : t.extension_status === 'approved' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
+                  <FiCalendar size={11} className="mt-0.5" />
+                  <span>
+                    {t.extension_status === 'pending' ? 'Extension' : t.extension_status === 'approved' ? 'Extended' : 'Extension rejected'} → {t.requested_due_date}
+                    {String(t.extension_reason || '').trim() && <span className="block text-[10px] opacity-80">“{t.extension_reason.trim()}”</span>}
+                  </span>
+                </div>
               )}
               {t.proof_remarks && (
                 <div className="text-[11px] text-gray-600 italic mb-2">{t.proof_remarks}</div>
