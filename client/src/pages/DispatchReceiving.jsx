@@ -92,13 +92,21 @@ export default function DispatchReceiving() {
     try {
       const res = await api.post(`/dispatch-receiving/${r.id}/${action}`, action === 'reject' ? { reason } : {});
       toast.success(res.data?.message || 'Done');
-      // Approval mails the customer (mam 2026-09-12) — say whether it actually
-      // went and to whom, so a missing Email ID is noticed at once.
+      // Approval fires the 'Dispatch Receiving — approved' email trigger; say
+      // what it actually did, so a missing rule or Email ID is noticed at once
+      // (mam 2026-09-12).
       const mail = res.data?.mail;
-      if (mail?.sent) {
-        toast.success(`Mail sent to ${mail.to.join(', ')}${mail.cc?.length ? ` (cc ${mail.cc.join(', ')})` : ''}`, { duration: 6000 });
-      } else if (mail?.skipped) {
-        toast.error(`Customer mail NOT sent — ${mail.reason || 'no reason given'}`, { duration: 8000 });
+      if (mail && action === 'approve') {
+        if (mail.sent?.length) {
+          for (const s of mail.sent) {
+            toast.success(`Mail sent to ${(s.to || []).join(', ')}${s.cc?.length ? ` (cc ${s.cc.join(', ')})` : ''}`, { duration: 6000 });
+          }
+        } else if (!mail.rules) {
+          toast(`No email trigger set for approved receivings — add one in Admin → Email Triggers`, { duration: 7000, icon: '✉️' });
+        } else {
+          const why = mail.skipped?.map(s => `${s.rule}: ${s.reason}`).join(' · ') || 'no reason given';
+          toast.error(`Customer mail NOT sent — ${why}`, { duration: 8000 });
+        }
       }
       await load();
     } catch (err) { toast.error(err.response?.data?.error || 'Could not update the receiving'); }

@@ -16,6 +16,22 @@
 // *_email people.  The UI and engine pick it up automatically.
 
 const EVENTS = {
+  'receiving.approved': {
+    label: 'Dispatch Receiving — approved',
+    group: 'Dispatch & Receiving',
+    live: true,
+    vars: ['site', 'indent_no', 'bill_no', 'approved_by', 'recorded_by', 'date'],
+    people: [
+      { key: 'customer_email', label: 'Customer — Email ID' },
+      { key: 'customer_cc_email', label: 'Customer — CC Email' },
+      { key: 'recorded_by_email', label: 'Who recorded the receiving' },
+      { key: 'director_email', label: 'Director (default recipient)' },
+    ],
+    fields: ['site', 'bill_no', 'indent_no'],
+    // The approved receiving document can ride along — tick "Attach the
+    // record's file" on the rule (mam 2026-09-12).
+    attachable: 'the approved receiving document',
+  },
   'indent.raised': {
     label: 'Indent raised',
     group: 'Indent',
@@ -419,6 +435,11 @@ const SAMPLE_CONTEXT = {
   due_at: '2026-08-14 13:00:00',
   delay: '0.6',
   reason: 'Awaiting vendor GST correction',
+  // Dispatch Receiving
+  bill_no_receiving: 'GST/25-26/2026',
+  recorded_by: 'Admin',
+  customer_email: 'client@example.com',
+  customer_cc_email: 'accounts@example.com',
 };
 
 function listEvents() {

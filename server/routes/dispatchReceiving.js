@@ -3,7 +3,8 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const storage = require('../lib/storage');
 const { sites, indentsForSite, normalize, receivingApprovers, canApproveReceiving } = require('../lib/dispatchReceiving');
-const { sendReceivingApprovedMail } = require('../lib/receivingMail');
+const { receivingEventContext } = require('../lib/receivingMail');
+const { runRulesForEvent } = require('../lib/emailRules');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -118,12 +119,26 @@ function decide(status) {
     }
     db.prepare(`UPDATE dispatch_receiving SET status=?, approved_by=?, approved_at=CURRENT_TIMESTAMP, rejected_reason=?
       WHERE id=? AND status='pending'`).run(status, req.user.id, status === 'rejected' ? reason : null, row.id);
-    // Approved → tell the customer (mam 2026-09-12). The mail never blocks the
-    // approval: its outcome rides back in the response so the UI can say whether
-    // it actually went out, and to whom.
+    // Approved → fire the 'receiving.approved' email trigger. What goes out (if
+    // anything) is whatever rule mam built in Admin → Email Triggers; this route
+    // only supplies the facts. Never blocks the approval, and the outcome rides
+    // back so the page can say whether a mail actually went and to whom.
     let mail = null;
     if (status === 'approved') {
-      mail = await sendReceivingApprovedMail(db, row, req.user?.name || 'Secured Engineers');
+      try {
+        const ctx = await receivingEventContext(db, row, req.user);
+        const results = await runRulesForEvent('receiving.approved', ctx);
+        mail = {
+          rules: results.length,
+          sent: results.filter(r => r.sent).map(r => ({ rule: r.rule, to: r.to, cc: r.cc, attached: r.attached })),
+          skipped: results.filter(r => !r.sent).map(r => ({ rule: r.rule, reason: r.skipped || r.error })),
+          customer_source: ctx.__customer_source,
+          customer_reason: ctx.__customer_reason,
+        };
+      } catch (e) {
+        console.warn('[receiving] approval mail failed:', e.message);
+        mail = { rules: 0, sent: [], skipped: [{ rule: 'trigger', reason: e.message }] };
+      }
     }
     res.json({ message: status === 'approved' ? 'Receiving approved' : 'Receiving rejected', mail });
   };

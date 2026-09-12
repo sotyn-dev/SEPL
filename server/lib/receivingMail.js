@@ -1,26 +1,23 @@
-// Mail the customer when a site receiving is approved (mam 2026-09-12: "when i
-// or crm approve here from customercare@securedengineers.com go mail after
-// approve on customer to and cc emails").
+// Facts for the 'receiving.approved' email trigger (mam 2026-09-12: "when i or
+// crm approve here from customercare@securedengineers.com go mail after approve
+// on customer to and cc emails" — then: "emails triggers i need to do").
 //
-// WHO GETS IT — the site's Business Book lead carries a customer code, and the
-// Customers master holds the addresses mam maintains:
-//     To  = Customers → Email ID
-//     Cc  = Customers → CC Email   (comma-separated, see lib/emailList)
-// A lead with no customer code (or a code with no addresses) falls back to the
-// lead's own Client Email ID / Email Address, so an older lead still reaches
-// someone. Nothing is invented: if there is no To address the mail is skipped
-// and the reason is handed back to the UI.
+// This file NEVER sends mail. It resolves who the customer is and reads the
+// receiving file, and hands both to the rules engine; the subject, body, From,
+// recipients and whether to attach are all set on the rule in Email Triggers.
 //
-// The mail never blocks the approval — a dead SMTP or a missing address is
-// reported, not thrown.
+// WHO THE CUSTOMER IS — the receiving's site → its Business Book lead → the
+// lead's customer code → Customers master:
+//     customer_email     = Customers → Email ID
+//     customer_cc_email  = Customers → CC Email   (comma list, see lib/emailList)
+// A lead with no customer code (or a code with no address) falls back to the
+// lead's own Client Email ID / Email Address. Nothing is invented: with no
+// address the context simply carries none and the rule resolves no recipient.
 
 const { cleanEmailList } = require('./emailList');
-const { sendEmail } = require('./email');
 const storage = require('./storage');
 
 const norm = (s) => String(s || '').trim().toLowerCase();
-const esc = (s) => String(s == null ? '' : s)
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function setting(db, key) {
   try { return db.prepare('SELECT value FROM app_settings WHERE key=?').get(key)?.value || null; }
@@ -82,60 +79,36 @@ async function proofAttachment(receivingUrl) {
   }
 }
 
-function body(row, approverName) {
-  const line = (label, value) => (value ? `<tr><td style="padding:4px 12px 4px 0;color:#6b7280">${esc(label)}</td><td style="padding:4px 0;font-weight:600">${esc(value)}</td></tr>` : '');
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111827">
-  <p>Dear Sir / Madam,</p>
-  <p>The material below has been <b>received at site</b> and the receiving is approved. The signed receiving document is attached for your record.</p>
-  <table style="border-collapse:collapse;margin:12px 0">
-    ${line('Site', row.site_name)}
-    ${line('Indent No.', row.indent_number)}
-    ${line('Bill No.', row.bill_number)}
-    ${line('Approved by', approverName)}
-  </table>
-  <p>Please reply to this mail if anything does not match your records.</p>
-  <p style="margin-top:16px">Regards,<br/>Customer Care<br/><b>Secured Engineers Pvt Ltd</b></p>
-</div>`;
-  const text = [
-    'Dear Sir / Madam,',
-    '',
-    'The material below has been received at site and the receiving is approved. The signed receiving document is attached for your record.',
-    '',
-    `Site: ${row.site_name || '-'}`,
-    `Indent No.: ${row.indent_number || '-'}`,
-    `Bill No.: ${row.bill_number || '-'}`,
-    `Approved by: ${approverName || '-'}`,
-    '',
-    'Please reply to this mail if anything does not match your records.',
-    '',
-    'Regards,',
-    'Customer Care',
-    'Secured Engineers Pvt Ltd',
-  ].join('\n');
-  return { html, text };
+// Context for the 'receiving.approved' email trigger. NOTHING is sent from
+// here: the subject, body, recipients, From and whether to attach the file all
+// live on the rule mam builds in Admin → Email Triggers (mam 2026-09-12: "this
+// is hard code like static u set but emails triggers i need to do"). This only
+// hands the rule engine the facts it can use.
+async function receivingEventContext(db, row, approver) {
+  const { to, cc, source, reason } = recipientsForSite(db, row.site_name);
+  const attachment = await proofAttachment(row.receiving_url);
+  const recorded = row.created_by
+    ? db.prepare('SELECT name, email FROM users WHERE id=?').get(row.created_by)
+    : null;
+  return {
+    // {{vars}} for the subject / body templates
+    site: row.site_name || '',
+    indent_no: row.indent_number || '',
+    bill_no: row.bill_number || '',
+    approved_by: approver?.name || '',
+    recorded_by: recorded?.name || '',
+    date: new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10),
+    // dynamic recipients the rule can tick
+    customer_email: to.join(', '),
+    customer_cc_email: cc.join(', '),
+    recorded_by_email: recorded?.email || '',
+    director_email: setting(db, 'email_director_to') || 'director@securedengineers.com',
+    // offered to the rule only when it ticks "attach the record's file"
+    __attachments: attachment ? [attachment] : [],
+    // diagnostics for the UI, never mailed
+    __customer_source: source,
+    __customer_reason: reason,
+  };
 }
 
-// → { sent, skipped, to, cc, source, reason }  — never throws.
-async function sendReceivingApprovedMail(db, row, approverName) {
-  try {
-    const { to, cc, source, reason } = recipientsForSite(db, row.site_name);
-    if (!to.length) return { sent: false, skipped: true, to: [], cc, reason };
-    const { html, text } = body(row, approverName);
-    const attachment = await proofAttachment(row.receiving_url);
-    const res = await sendEmail({
-      from: customerCareFrom(db),
-      to: to.join(', '),
-      cc: cc.join(', '),
-      subject: `Material received at site — ${row.site_name || ''}${row.bill_number ? ` · Bill ${row.bill_number}` : ''}`.trim(),
-      html, text,
-      attachments: attachment ? [attachment] : [],
-    });
-    if (res?.skipped) return { sent: false, skipped: true, to, cc, source, reason: res.reason };
-    return { sent: true, to, cc, source, attached: !!attachment };
-  } catch (e) {
-    console.warn('[receiving-mail] failed:', e.message);
-    return { sent: false, skipped: true, to: [], cc: [], reason: e.message };
-  }
-}
-
-module.exports = { sendReceivingApprovedMail, recipientsForSite, customerCareFrom };
+module.exports = { receivingEventContext, recipientsForSite, customerCareFrom };

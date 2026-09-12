@@ -49,22 +49,30 @@ function evalConditions(conditions, ctx) {
   return list.every(c => c && c.field ? evalOne(c, ctx) : true);
 }
 
-function resolveRecipients(recipients, ctx) {
+// people / fixed / roles → a de-duplicated address list. `peopleKey` and
+// `fixedKey` let the same resolver build the To list and the Cc list from one
+// recipients object (mam 2026-09-12: a customer mail needs both).
+function resolveRecipients(recipients, ctx, peopleKey = 'people', fixedKey = 'fixed') {
   let r = recipients;
   if (typeof r === 'string') { try { r = JSON.parse(r); } catch { r = {}; } }
   r = r || {};
   const out = new Set();
 
-  // 1. Dynamic-from-record people → context emails (e.g. raiser_email).
-  for (const key of (r.people || [])) {
-    const email = ctx[key];
-    if (email && String(email).includes('@')) out.add(String(email).trim());
+  // 1. Dynamic-from-record people → context emails (e.g. raiser_email). A
+  //    context value may itself hold several addresses (the customer's CC
+  //    field is a comma list), so split it the same way as the fixed list.
+  for (const key of (r[peopleKey] || [])) {
+    for (const part of String(ctx[key] || '').split(/[,;\n]+/)) {
+      const t = part.trim();
+      if (t.includes('@')) out.add(t);
+    }
   }
   // 2. Fixed list — comma / newline / semicolon separated.
-  for (const e of String(r.fixed || '').split(/[,;\n]+/)) {
+  for (const e of String(r[fixedKey] || '').split(/[,;\n]+/)) {
     const t = e.trim();
     if (t.includes('@')) out.add(t);
   }
+  if (peopleKey !== 'people') return [...out];   // Cc: roles below are To-only
   // 3. By role — every active user holding one of the named roles.
   if (Array.isArray(r.roles) && r.roles.length) {
     try {
@@ -114,15 +122,22 @@ async function runRulesForEvent(eventKey, ctx, { onlyRuleId = null } = {}) {
         results.push({ rule: rule.name, skipped: 'no recipients resolved' });
         continue;
       }
+      // Cc + the record's own file, both configured on the rule itself
+      // (mam 2026-09-12 — no hard-coded recipients or attachments in code).
+      const cc = resolveRecipients(rule.recipients, ctx, 'cc_people', 'cc_fixed')
+        .filter(a => !to.includes(a));
+      let rcpt = {};
+      try { rcpt = typeof rule.recipients === 'string' ? JSON.parse(rule.recipients || '{}') : (rule.recipients || {}); } catch {}
+      const attachments = rcpt.attach && Array.isArray(ctx.__attachments) ? ctx.__attachments : [];
       const subject = renderTemplate(rule.subject_tpl, ctx) || '(no subject)';
       const html = bodyToHtml(renderTemplate(rule.body_tpl, ctx));
       // Per-rule dynamic From (supports {{vars}}); blank → global default.
       const from = renderTemplate(rule.from_addr, ctx).trim() || undefined;
-      const res = await sendEmail({ to: to.join(','), subject, html, from });
+      const res = await sendEmail({ to: to.join(','), cc: cc.join(',') || undefined, subject, html, from, attachments });
       try {
         db.prepare('UPDATE email_rules SET last_fired_at = CURRENT_TIMESTAMP, fire_count = COALESCE(fire_count,0) + 1 WHERE id = ?').run(rule.id);
       } catch {}
-      results.push({ rule: rule.name, to, sent: !!res?.sent, skipped: res?.skipped ? res.reason : undefined });
+      results.push({ rule: rule.name, to, cc, attached: attachments.length, sent: !!res?.sent, skipped: res?.skipped ? res.reason : undefined });
     } catch (e) {
       results.push({ rule: rule.name, error: e.message });
     }
