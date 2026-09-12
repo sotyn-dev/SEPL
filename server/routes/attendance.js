@@ -789,7 +789,9 @@ router.get('/grid/export.xlsx', async (req, res) => {
     ['name', 'designation', 'site'].forEach(k => { r.getCell(k).alignment = { horizontal: 'left', vertical: 'middle' }; });
     grid.days.forEach(d => {
       const cell = emp.cells[d.date];
-      const argb = (cell && cell.status === 'late') ? LATE_FILL : CODE_FILL[dayCode(cell)];
+      // Amber only for a day that really counts late — a short leave forgives it
+      // (same rule as the on-screen grid, mam 2026-09-12).
+      const argb = (cell && cell.status === 'late' && cell.late_minutes > 0) ? LATE_FILL : CODE_FILL[dayCode(cell)];
       if (argb) r.getCell('d' + d.d).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
     });
   });

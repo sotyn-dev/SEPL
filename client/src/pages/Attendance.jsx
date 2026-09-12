@@ -411,7 +411,12 @@ export default function Attendance() {
     // so HR can see who's owed comp / extra-day pay.
     if (c?.worked_on_off) return { t: 'WOP', cls: 'bg-teal-100 text-teal-700 ring-1 ring-inset ring-teal-300' };
     if (s === 'present') return { t: 'P', cls: 'bg-emerald-100 text-emerald-700' };
-    if (s === 'late') return { t: 'P', cls: 'bg-amber-100 text-amber-700' };            // present, but late (tallied separately)
+    // Late = amber, but a short leave covering that day forgives it (payroll
+    // does the same), so it stays a plain green P — mam 2026-09-12: "if late
+    // but that time short leave than P is not show yellow its normal green P".
+    if (s === 'late') return c?.late_minutes > 0
+      ? { t: 'P', cls: 'bg-amber-100 text-amber-700' }                                  // present, but late (tallied separately)
+      : { t: 'P', cls: 'bg-emerald-100 text-emerald-700' };
     if (s === 'half_day' || s === 'short_day') return { t: 'H', cls: 'bg-orange-100 text-orange-700' };
     if (s === 'leave') return { t: 'L', cls: 'bg-purple-100 text-purple-700' };
     if (s === 'sunday' || c?.week_off) return { t: 'WO', cls: 'bg-indigo-50 text-indigo-400' };
@@ -454,7 +459,7 @@ export default function Attendance() {
       if (row) setCellAnchorTop(row.getBoundingClientRect().bottom - wrap.getBoundingClientRect().top);
     }
     setStagedStatus(null); setStagedProof(null); // fresh cell → no pending choice yet
-    setCellInfo({ user_id: emp.user_id, name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
+    setCellInfo({ user_id: emp.user_id, name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes, short_leave: c.short_leave });
   };
   const closeCellPanel = () => { setCellInfo(null); setStagedStatus(null); setStagedProof(null); };
   // A back-dated worked-day mark (Present/Half in the past) needs proof — but
@@ -514,6 +519,7 @@ export default function Attendance() {
             <span className="text-gray-300"> | </span>
             <b className="font-medium text-gray-700">{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b>
             {cellInfo.late_label && <span className="text-amber-600 ml-2">Late {cellInfo.late_label}</span>}
+            {cellInfo.short_leave && <span className="text-emerald-700 ml-2">Short leave — not counted late</span>}
           </div>
         </div>
 
@@ -687,7 +693,7 @@ export default function Attendance() {
                         // it (z) + ringed, so it stays crisp while the rest blurs —
                         // showing which cell the open drawer belongs to.
                         const isSel = cellInfo && cellInfo.user_id === emp.user_id && cellInfo.date === day.date;
-                        const cellTitle = `${day.date}${c.status ? ' · ' + c.status : ''}${c.week_off ? ' · Week-Off' : ''}${c.worked_on_off ? ' (worked)' : ''}${c.in ? ' · In ' + fmtT(c.in) : ''}${c.out ? ' · Out ' + fmtT(c.out) : ''}${c.hours ? ' · ' + c.hours + 'h' : ''}${c.late_label ? ' · ' + c.late_label + ' late' : ''}${c.source ? ' (' + c.source + ')' : ''}`;
+                        const cellTitle = `${day.date}${c.status ? ' · ' + c.status : ''}${c.week_off ? ' · Week-Off' : ''}${c.worked_on_off ? ' (worked)' : ''}${c.in ? ' · In ' + fmtT(c.in) : ''}${c.out ? ' · Out ' + fmtT(c.out) : ''}${c.hours ? ' · ' + c.hours + 'h' : ''}${c.late_label ? ' · ' + c.late_label + ' late' : ''}${c.short_leave ? ' · short leave — not counted late' : ''}${c.source ? ' (' + c.source + ')' : ''}`;
                         return (
                           <td key={day.date} className={`p-0 text-center ${isSel ? 'relative z-[25]' : ''}`} title={cellTitle}>
                             <button type="button" disabled={gridBusy || day.future}
