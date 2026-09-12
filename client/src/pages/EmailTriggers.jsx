@@ -21,12 +21,15 @@ const OPS = [
 const emptyForm = () => ({
   name: '', event_key: '', enabled: true,
   conditions: [], recipients: { people: [], roles: [], fixed: '', cc_people: [], cc_fixed: '', attach: false },
-  from_addr: '', subject_tpl: '', body_tpl: '',
+  from_addr: '', account_id: '', subject_tpl: '', body_tpl: '',
 });
 
 export default function EmailTriggers() {
   const [events, setEvents] = useState([]);
   const [roles, setRoles] = useState([]);
+  // Sending mailboxes from Email Settings → Mail accounts (mam 2026-09-12).
+  const [accounts, setAccounts] = useState([]);
+  useEffect(() => { api.get('/ai-agent/email-accounts').then(r => setAccounts(r.data || [])).catch(() => setAccounts([])); }, []);
   const [sample, setSample] = useState({});
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,7 +66,7 @@ export default function EmailTriggers() {
       name: r.name, event_key: r.event_key, enabled: !!r.enabled,
       conditions: Array.isArray(r.conditions) ? r.conditions : [],
       recipients: { people: [], roles: [], fixed: '', cc_people: [], cc_fixed: '', attach: false, ...(r.recipients || {}) },
-      from_addr: r.from_addr || '', subject_tpl: r.subject_tpl || '', body_tpl: r.body_tpl || '',
+      from_addr: r.from_addr || '', account_id: r.account_id || '', subject_tpl: r.subject_tpl || '', body_tpl: r.body_tpl || '',
     });
     setModalOpen(true);
   };
@@ -389,7 +392,20 @@ export default function EmailTriggers() {
                   ))}
                 </div>
                 <div>
-                  <label className="label">From address <span className="text-[10px] text-gray-400 font-normal normal-case">(optional — blank uses your SMTP default)</span></label>
+                  <label className="label">Send from <span className="text-[10px] text-gray-400 font-normal normal-case">(which mailbox actually sends it)</span></label>
+                  <select className="select" value={form.account_id || ''}
+                    onChange={e => setForm({ ...form, account_id: e.target.value ? +e.target.value : '' })}>
+                    <option value="">Default account (Email Settings)</option>
+                    {accounts.filter(a => a.active).map(a => (
+                      <option key={a.id} value={a.id}>{a.label} · {a.from_address}</option>
+                    ))}
+                  </select>
+                  <div className="text-[10px] text-gray-400 mt-0.5">
+                    Add mailboxes in Settings → Email → Mail accounts. The chosen mailbox's own From is used unless you type one below.
+                  </div>
+                </div>
+                <div>
+                  <label className="label">From address <span className="text-[10px] text-gray-400 font-normal normal-case">(optional — blank uses the mailbox's own From)</span></label>
                   <input className="input" value={form.from_addr} onChange={e => setForm({ ...form, from_addr: e.target.value })}
                     placeholder="e.g. alerts@securedengineers.com or {{crm_owner_email}}" />
                   <div className="text-[10px] text-gray-400 mt-0.5">Note: Gmail/most providers only send From the authenticated account or a verified alias.</div>

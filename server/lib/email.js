@@ -16,6 +16,7 @@
 
 const { getDb } = require('../db/schema');
 
+
 function getSetting(key) {
   const row = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key);
   return row?.value ?? null;
@@ -33,13 +34,39 @@ function getEmailConfig() {
   };
 }
 
+// One of the extra mailboxes (email_accounts). Returns the same shape as
+// getEmailConfig() so sendEmail can treat both the same way.
+function getAccountConfig(accountId) {
+  if (!accountId) return null;
+  try {
+    const a = getDb().prepare('SELECT * FROM email_accounts WHERE id=? AND active=1').get(accountId);
+    if (!a || !a.smtp_host || !a.smtp_user || !a.smtp_pass) return null;
+    return {
+      host: a.smtp_host,
+      port: +a.smtp_port || 587,
+      secure: !!a.smtp_secure,
+      user: a.smtp_user,
+      pass: a.smtp_pass,
+      from: a.from_address || a.smtp_user,
+      director: getSetting('email_director_to') || 'director@securedengineers.com',
+      label: a.label,
+    };
+  } catch { return null; }
+}
+
 function isConfigured() {
   const c = getEmailConfig();
   return !!(c.host && c.user && c.pass);
 }
 
-async function sendEmail({ to, cc, subject, html, text, from, attachments }) {
-  const c = getEmailConfig();
+// accountId → send through that mailbox (its own host/user/password and its
+// own From). Without it, the single account in Admin → Email Settings is used.
+async function sendEmail({ to, cc, subject, html, text, from, attachments, accountId }) {
+  const picked = getAccountConfig(accountId);
+  if (accountId && !picked) {
+    return { skipped: true, reason: 'the chosen mail account is missing, inactive or incomplete' };
+  }
+  const c = picked || getEmailConfig();
   if (!c.host || !c.user || !c.pass) {
     return { skipped: true, reason: 'SMTP not configured' };
   }
@@ -65,4 +92,4 @@ async function sendEmail({ to, cc, subject, html, text, from, attachments }) {
   return { sent: true, messageId: info?.messageId };
 }
 
-module.exports = { sendEmail, isConfigured, getEmailConfig };
+module.exports = { sendEmail, isConfigured, getEmailConfig, getAccountConfig };

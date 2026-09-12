@@ -212,6 +212,88 @@ router.put('/email-settings', adminOnly, (req, res) => {
   res.json({ message: 'Email settings saved' });
 });
 
+// ── Mail accounts (mam 2026-09-12: "not from customercare it can also from
+// sales or account etc") ────────────────────────────────────────────────────
+// Several sending mailboxes, each with its own login, on top of the single
+// default account above. An email trigger picks which one sends it. Passwords
+// are stored like the default account's and are never sent back to the browser.
+const maskPass = (p) => (p ? `${'•'.repeat(8)}${String(p).slice(-2)}` : null);
+
+router.get('/email-accounts', adminOnly, (req, res) => {
+  const rows = getDb().prepare('SELECT * FROM email_accounts ORDER BY label').all();
+  res.json(rows.map(a => ({
+    id: a.id, label: a.label, from_address: a.from_address,
+    smtp_host: a.smtp_host, smtp_port: a.smtp_port, smtp_secure: !!a.smtp_secure,
+    smtp_user: a.smtp_user, active: !!a.active, pass_masked: maskPass(a.smtp_pass),
+  })));
+});
+
+router.post('/email-accounts', adminOnly, (req, res) => {
+  const b = req.body || {};
+  const need = ['label', 'from_address', 'smtp_host', 'smtp_user', 'pass'];
+  for (const k of need) {
+    if (!String(b[k] || '').trim()) return res.status(400).json({ error: `${k.replace('_', ' ')} is required` });
+  }
+  const r = getDb().prepare(
+    `INSERT INTO email_accounts (label, from_address, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, active)
+     VALUES (?,?,?,?,?,?,?,?)`
+  ).run(
+    String(b.label).trim(), String(b.from_address).trim(), String(b.smtp_host).trim(),
+    +b.smtp_port || 587, b.smtp_secure ? 1 : 0,
+    String(b.smtp_user).trim(), String(b.pass).trim(), b.active === false ? 0 : 1,
+  );
+  res.status(201).json({ id: r.lastInsertRowid, message: 'Mail account added' });
+});
+
+router.put('/email-accounts/:id', adminOnly, (req, res) => {
+  const b = req.body || {};
+  const db = getDb();
+  const a = db.prepare('SELECT * FROM email_accounts WHERE id=?').get(req.params.id);
+  if (!a) return res.status(404).json({ error: 'Mail account not found' });
+  db.prepare(
+    `UPDATE email_accounts SET label=?, from_address=?, smtp_host=?, smtp_port=?, smtp_secure=?,
+            smtp_user=?, smtp_pass=?, active=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+  ).run(
+    String(b.label ?? a.label).trim(), String(b.from_address ?? a.from_address).trim(),
+    String(b.smtp_host ?? a.smtp_host).trim(), +b.smtp_port || a.smtp_port || 587,
+    b.smtp_secure === undefined ? a.smtp_secure : (b.smtp_secure ? 1 : 0),
+    String(b.smtp_user ?? a.smtp_user).trim(),
+    // blank password field = keep the stored one
+    (typeof b.pass === 'string' && b.pass.trim()) ? b.pass.trim() : a.smtp_pass,
+    b.active === undefined ? a.active : (b.active ? 1 : 0),
+    req.params.id,
+  );
+  res.json({ message: 'Mail account saved' });
+});
+
+router.delete('/email-accounts/:id', adminOnly, (req, res) => {
+  const db = getDb();
+  // A rule pointing at a deleted account would silently fall back to the
+  // default sender, so say no and let mam re-point the rules first.
+  const used = db.prepare('SELECT COUNT(*) c FROM email_rules WHERE account_id=?').get(req.params.id).c;
+  if (used) return res.status(409).json({ error: `${used} email trigger(s) send from this account — change them first` });
+  db.prepare('DELETE FROM email_accounts WHERE id=?').run(req.params.id);
+  res.json({ message: 'Mail account removed' });
+});
+
+router.post('/email-accounts/:id/test', adminOnly, async (req, res) => {
+  const to = (req.body?.to || '').trim();
+  if (!to.includes('@')) return res.status(400).json({ error: 'Enter the address to send the test to' });
+  try {
+    const { sendEmail } = require('../lib/email');
+    const r = await sendEmail({
+      to, accountId: +req.params.id,
+      subject: '[SEPL ERP] Test email',
+      html: '<p>Test email from SEPL ERP — this mailbox can send.</p>',
+      text: 'Test email from SEPL ERP — this mailbox can send.',
+    });
+    if (r?.skipped) return res.status(400).json({ error: r.reason });
+    res.json({ message: `Test email sent to ${to}` });
+  } catch (e) {
+    res.status(502).json({ error: `Send failed: ${e.message}` });
+  }
+});
+
 // Send a test email to confirm SMTP works.
 router.post('/email-test', adminOnly, async (req, res) => {
   const to = (req.body?.to || '').trim() || getSetting('email_director_to') || 'director@securedengineers.com';

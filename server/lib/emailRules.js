@@ -133,7 +133,12 @@ async function runRulesForEvent(eventKey, ctx, { onlyRuleId = null } = {}) {
       const html = bodyToHtml(renderTemplate(rule.body_tpl, ctx));
       // Per-rule dynamic From (supports {{vars}}); blank → global default.
       const from = renderTemplate(rule.from_addr, ctx).trim() || undefined;
-      const res = await sendEmail({ to: to.join(','), cc: cc.join(',') || undefined, subject, html, from, attachments });
+      // The rule's own mailbox (Customer Care / Sales / Accounts …); its From
+      // is used unless the rule types one (mam 2026-09-12).
+      const res = await sendEmail({
+        to: to.join(','), cc: cc.join(',') || undefined, subject, html, from,
+        attachments, accountId: rule.account_id || null,
+      });
       try {
         db.prepare('UPDATE email_rules SET last_fired_at = CURRENT_TIMESTAMP, fire_count = COALESCE(fire_count,0) + 1 WHERE id = ?').run(rule.id);
       } catch {}

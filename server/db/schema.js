@@ -1817,6 +1817,25 @@ function initializeDatabase() {
     -- trigger and pattern with my selected things, dynamic"). Each row is a
     -- user-built rule: when <event_key> fires AND <conditions> match, email
     -- <recipients> using <subject_tpl>/<body_tpl> with {{variable}} merge.
+    -- Several sending mailboxes, each with its OWN login (mam 2026-09-12:
+    -- "not from customercare it can also from sales or account etc"). The
+    -- single account in Admin → Email Settings stays the default sender; these
+    -- are the extra ones a trigger can pick. Passwords sit here exactly as the
+    -- existing SMTP password sits in app_settings — never echoed back by the API.
+    CREATE TABLE IF NOT EXISTS email_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label TEXT NOT NULL,              -- "Customer Care", "Sales", "Accounts"
+      from_address TEXT NOT NULL,       -- what the customer sees in From
+      smtp_host TEXT NOT NULL,
+      smtp_port INTEGER DEFAULT 587,
+      smtp_secure INTEGER DEFAULT 0,    -- 1 for port 465
+      smtp_user TEXT NOT NULL,          -- full mailbox address
+      smtp_pass TEXT NOT NULL,          -- app password
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS email_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -3079,6 +3098,8 @@ function initializeDatabase() {
     // Per-rule dynamic From address for email triggers (mam 2026-06-03:
     // "from mail which id also dynamic"). Optional; supports {{vars}}.
     ['email_rules', 'from_addr TEXT'],
+    // Which mailbox sends this rule; NULL = the default Email Settings account.
+    ['email_rules', 'account_id INTEGER'],
     // Supervisor → site linkage so Supervisor template KPIs (DPR Daily
     // Actual, Stock report, Tools List, Material Receiving) can scope
     // by site. The TEXT 'supervisor' column was insufficient for joins.

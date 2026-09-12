@@ -38,14 +38,15 @@ router.post('/', adminOnly, (req, res) => {
     if (dupe) return res.status(409).json({ error: 'This recipient list already has a rule — edit the existing one instead of adding another.' });
   }
   const r = db.prepare(
-    `INSERT INTO email_rules (name, event_key, enabled, conditions, recipients, from_addr, subject_tpl, body_tpl, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO email_rules (name, event_key, enabled, conditions, recipients, from_addr, account_id, subject_tpl, body_tpl, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
   ).run(
     String(b.name).trim(), b.event_key,
     b.enabled === false ? 0 : 1,
     JSON.stringify(b.conditions || []),
     JSON.stringify(b.recipients || {}),
     b.from_addr || '',
+    b.account_id ? +b.account_id : null,
     b.subject_tpl || '', b.body_tpl || '',
     req.user.id,
   );
@@ -65,7 +66,7 @@ router.put('/:id', adminOnly, (req, res) => {
   }
   db.prepare(
     `UPDATE email_rules SET name=?, event_key=?, enabled=?, conditions=?, recipients=?,
-                            from_addr=?, subject_tpl=?, body_tpl=?, updated_at=CURRENT_TIMESTAMP
+                            from_addr=?, account_id=?, subject_tpl=?, body_tpl=?, updated_at=CURRENT_TIMESTAMP
        WHERE id=?`
   ).run(
     String(b.name || '').trim(), b.event_key,
@@ -73,6 +74,7 @@ router.put('/:id', adminOnly, (req, res) => {
     JSON.stringify(b.conditions || []),
     JSON.stringify(b.recipients || {}),
     b.from_addr || '',
+    b.account_id ? +b.account_id : null,
     b.subject_tpl || '', b.body_tpl || '',
     req.params.id,
   );
