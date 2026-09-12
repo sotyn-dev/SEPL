@@ -59,24 +59,55 @@ function appliesOn(task, dateStr) {
 }
 
 // Who was away, as a set of "userId::YYYY-MM-DD" keys, for the given dates.
-// 'absent' and 'leave' both mean the person was not at work, so neither is
-// expected to file a checklist that day. 'half_day', 'short_day' and 'late'
-// are working days and still count.
+// Nobody away is expected to file a checklist (mam 2026-09-12, then "leave also
+// no need checklist"). Away means EITHER of two things, because the ERP records
+// them in two places:
 //
-// One query for the whole window - the callers render a grid, and a per-cell
-// query would be N+1 on a synchronous database.
+//   1. an attendance row marked 'absent' or 'leave';
+//   2. an APPROVED leave_requests row whose from_date..to_date covers the day -
+//      this is the one that matters in practice, since a person on three days'
+//      casual leave usually has no attendance rows at all for those days. Only
+//      checking attendance would have missed exactly the case she asked about.
+//
+// 'short_leave' is deliberately NOT away: it is a part-day allowance (hours),
+// the person is at work, and it already only forgives lateness. 'half_day',
+// 'short_day' and 'late' are working days too and still owe their checklist.
+//
+// A pending or rejected leave request does not exempt anyone - only approved.
+//
+// Two queries for the whole window, not per cell: the callers render a grid and
+// the database is synchronous, so a per-cell query would be a visible N+1.
 const AWAY = ['absent', 'leave'];
 
 function absenceSet(db, dates) {
   const list = (Array.isArray(dates) ? dates : [dates]).filter(Boolean).map(d => String(d).slice(0, 10));
   if (!list.length) return new Set();
-  const rows = db.prepare(`
-    SELECT user_id, date, status FROM attendance
+  const marks = new Set();
+
+  const att = db.prepare(`
+    SELECT user_id, date FROM attendance
      WHERE status IN (${AWAY.map(() => '?').join(',')})
        AND date IN (${list.map(() => '?').join(',')})
        AND user_id IS NOT NULL
   `).all(...AWAY, ...list);
-  return new Set(rows.map(r => `${r.user_id}::${String(r.date).slice(0, 10)}`));
+  att.forEach(r => marks.add(`${r.user_id}::${String(r.date).slice(0, 10)}`));
+
+  // Approved leave overlapping the window, then expanded onto each day it covers.
+  // Same shape attendance.js already uses: from_date <= day AND to_date >= day.
+  const lv = db.prepare(`
+    SELECT user_id, from_date, to_date FROM leave_requests
+     WHERE status = 'approved'
+       AND COALESCE(leave_type, '') != 'short_leave'
+       AND user_id IS NOT NULL
+       AND from_date <= ? AND to_date >= ?
+  `).all(list[list.length - 1], list[0]);
+  lv.forEach(r => {
+    const from = String(r.from_date || '').slice(0, 10);
+    const to = String(r.to_date || from).slice(0, 10);
+    list.forEach(d => { if (d >= from && d <= to) marks.add(`${r.user_id}::${d}`); });
+  });
+
+  return marks;
 }
 
 // The question every consumer should ask: is a completion expected from THIS
