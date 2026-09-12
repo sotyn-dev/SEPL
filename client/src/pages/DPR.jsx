@@ -297,6 +297,20 @@ export default function DPR() {
   // (mam 2026-09-12: "here give option for expand and hide"). Open by
   // default — folded, the header still says what is inside.
   const [matOpen, setMatOpen] = useState(true);
+  // Money / Material hindrances name a real stuck record — the site's pending
+  // payment requests (3+ days) or indents still not dispatched (7+ days).
+  const [hindOpts, setHindOpts] = useState({ loading: false, options: [] });
+  useEffect(() => {
+    const cat = form.hindrance_category;
+    if (!modal || !form.site_id || !['Money', 'Material'].includes(cat)) { setHindOpts({ loading: false, options: [] }); return; }
+    let alive = true;
+    setHindOpts({ loading: true, options: [] });
+    api.get(`/dpr/sites/${form.site_id}/hindrance-options`, { params: { category: cat } })
+      .then(r => { if (alive) setHindOpts({ loading: false, options: r.data?.options || [] }); })
+      .catch(() => { if (alive) setHindOpts({ loading: false, options: [] }); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal, form.site_id, form.hindrance_category]);
   // Merges live store stock with today's Issue/Return slip totals (mam
   // 2026-07-31): items with slips get consumed = issued − returned,
   // READ-ONLY (from_slips) — the jr. engineer's slips are the source of
@@ -1883,6 +1897,32 @@ export default function DPR() {
                   <option value="Site Clearance">Site Clearance</option>
                 </select>
               </div>
+              {['Money', 'Material'].includes(form.hindrance_category) && (
+                <div className="mb-2">
+                  <label className="text-[11px] font-bold text-gray-700 uppercase">
+                    {form.hindrance_category === 'Money' ? 'Pending payment · over 3 days' : 'Indent not dispatched · over 7 days'}
+                  </label>
+                  {hindOpts.loading ? (
+                    <p className="text-[11px] text-gray-500">Loading…</p>
+                  ) : hindOpts.options.length ? (
+                    <select className="select" value=""
+                      onChange={e => {
+                        const o = hindOpts.options.find(x => String(x.id) === e.target.value);
+                        if (!o) return;
+                        setForm(f => ({ ...f, hindrances: (f.hindrances || '').trim() ? `${f.hindrances.trim()} · ${o.label}` : o.label }));
+                      }}>
+                      <option value="">— pick what is holding this site up —</option>
+                      {hindOpts.options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                    </select>
+                  ) : (
+                    <p className="text-[11px] text-gray-500">
+                      {form.hindrance_category === 'Money'
+                        ? 'No payment request for this site is pending beyond 3 days.'
+                        : 'No indent for this site is waiting beyond 7 days.'} Write the reason below.
+                    </p>
+                  )}
+                </div>
+              )}
               <label className="text-[11px] font-bold text-gray-700 uppercase">Reason {profitLoss < 0 && <span className="text-red-600">*</span>}</label>
               <textarea
                 className="input"

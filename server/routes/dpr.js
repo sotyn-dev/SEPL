@@ -463,6 +463,66 @@ router.get('/sites/:site_id/staff-cost', (req, res) => {
 // then UNION the resulting set so every BOQ item the user uploaded in
 // Orders/Planning surfaces in DPR, regardless of which way the BB was
 // linked. Diagnostic message names whichever paths found nothing.
+// ── What is actually holding this site up (mam 2026-09-12) ──────────────
+// "if money fill then drop down select his payable which is pending and
+// before 3 days / if material which indents their sites are pending (from
+// dispatch) before 7 days" — the engineer picks the real stuck record
+// instead of typing "payment pending", so the DPR reason names something
+// the office can chase. Read-only list; nothing is written here.
+router.get('/sites/:site_id/hindrance-options', (req, res) => {
+  const db = getDb();
+  const category = String(req.query.category || '');
+  const site = db.prepare('SELECT id, name FROM sites WHERE id=?').get(req.params.site_id);
+  if (!site) return res.json({ site_name: null, options: [] });
+  const money = (n) => 'Rs ' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+  const words = (t) => String(t || '').replace(/_/g, ' ');
+
+  try {
+    if (category === 'Money') {
+      // Raised for this site, not released and not rejected, 3+ days old.
+      const rows = db.prepare(
+        `SELECT request_no, category, amount, status,
+                CAST(julianday('now') - julianday(created_at) AS INT) AS age_days
+           FROM payment_requests
+          WHERE (site_id = ? OR LOWER(TRIM(COALESCE(site_name, ''))) = LOWER(TRIM(?)))
+            AND COALESCE(status, '') NOT IN ('final_approved', 'rejected')
+            AND julianday('now') - julianday(created_at) >= 3
+          ORDER BY created_at ASC LIMIT 50`
+      ).all(site.id, site.name);
+      return res.json({
+        site_name: site.name,
+        options: rows.map(r => ({
+          id: r.request_no,
+          label: `${r.request_no || 'Payment request'} · ${r.category} · ${money(r.amount)} · pending ${r.age_days}d (${words(r.status)})`,
+        })),
+      });
+    }
+    if (category === 'Material') {
+      // Indents for this site that have not reached dispatch, 7+ days old.
+      const rows = db.prepare(
+        `SELECT i.indent_number, i.status,
+                CAST(julianday('now') - julianday(i.created_at) AS INT) AS age_days,
+                (SELECT COUNT(*) FROM indent_items ii WHERE ii.indent_id = i.id) AS items
+           FROM indents i
+          WHERE LOWER(TRIM(COALESCE(i.site_name, ''))) = LOWER(TRIM(?))
+            AND COALESCE(i.status, '') NOT IN ('dispatched', 'received', 'rejected')
+            AND julianday('now') - julianday(i.created_at) >= 7
+          ORDER BY i.created_at ASC LIMIT 50`
+      ).all(site.name);
+      return res.json({
+        site_name: site.name,
+        options: rows.map(r => ({
+          id: r.indent_number,
+          label: `${r.indent_number} · ${r.items} item(s) · waiting ${r.age_days}d (${words(r.status)})`,
+        })),
+      });
+    }
+    return res.json({ site_name: site.name, options: [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/sites/:site_id/po-items', (req, res) => {
   const db = getDb();
   const site = db.prepare('SELECT id, name, po_id, business_book_id FROM sites WHERE id=?').get(req.params.site_id);
