@@ -293,6 +293,10 @@ export default function DPR() {
   const [dprMaterials, setDprMaterials] = useState([]);
   const [dprStoreName, setDprStoreName] = useState(null);
   const [dprStoreErr, setDprStoreErr] = useState(false);
+  // A site store runs to 30+ items, so the sheet can fold the list away
+  // (mam 2026-09-12: "here give option for expand and hide"). Open by
+  // default — folded, the header still says what is inside.
+  const [matOpen, setMatOpen] = useState(true);
   // Merges live store stock with today's Issue/Return slip totals (mam
   // 2026-07-31): items with slips get consumed = issued − returned,
   // READ-ONLY (from_slips) — the jr. engineer's slips are the source of
@@ -1773,10 +1777,25 @@ export default function DPR() {
               site store; consumed qty auto-reduces stock at submit. */}
           <div className="border rounded-lg p-3 bg-indigo-50">
             <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
-              <h5 className="font-semibold text-sm text-indigo-700">Material Consumed Today {dprStoreName ? <span className="font-normal text-indigo-500">· {dprStoreName}</span> : ''}</h5>
+              <button type="button" onClick={() => setMatOpen(o => !o)} aria-expanded={matOpen}
+                className="flex items-center gap-1.5 text-left text-indigo-700 hover:text-indigo-900">
+                <span className={`text-[10px] leading-none transition-transform ${matOpen ? 'rotate-90' : ''}`}>▶</span>
+                <h5 className="font-semibold text-sm">Material Consumed Today {dprStoreName ? <span className="font-normal text-indigo-500">· {dprStoreName}</span> : ''}</h5>
+                <span className="text-[11px] font-semibold underline">{matOpen ? 'Hide' : 'Show'}</span>
+              </button>
               <button type="button" onClick={() => loadStoreStock(form.site_id)} className="text-xs text-indigo-700 hover:underline">↻ Reload stock</button>
             </div>
-            {dprStoreErr ? (
+            {!matOpen && dprMaterials.length > 0 && (() => {
+              const typed = dprMaterials.filter(m => +m.consumed_today > 0).length;
+              return (
+                <button type="button" onClick={() => setMatOpen(true)} className="text-xs text-indigo-700 text-left hover:underline">
+                  {dprMaterials.length} material{dprMaterials.length === 1 ? '' : 's'} in this store · {typed
+                    ? <><b>{typed}</b> with consumption entered</>
+                    : 'no consumption entered yet'} — tap to open
+                </button>
+              );
+            })()}
+            {matOpen && (dprStoreErr ? (
               <div className="text-xs text-red-600">
                 Could not load the site store (network/server error) — <button type="button" className="underline font-semibold" onClick={() => loadStoreStock(form.site_id)}>tap to retry</button>. Don't assume the store is empty.
               </div>
@@ -1826,7 +1845,7 @@ export default function DPR() {
                   Items without slips can be typed directly and auto-reduce store stock on submit. SPOS: zero manual stock calculations.
                 </p>
               </div>
-            )}
+            ))}
           </div>
 
           {/* Safety */}
