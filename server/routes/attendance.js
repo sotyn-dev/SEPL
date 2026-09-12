@@ -40,6 +40,21 @@ try {
 // Always derive the attendance DATE in IST; point-in-time `now` stamps stay UTC.
 const istTodayStr = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().split('T')[0];
 
+// "09:40" typed by an admin (IST, on `date`) → the UTC ISO string every punch
+// is stored as. Payroll reads punch_in_time as UTC and adds 5:30, so storing
+// the raw IST text would read 5.5 h early and never cross the late cutoff.
+const istTimeToUtcIso = (date, hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  const ms = Date.parse(`${date}T${String(m[1]).padStart(2, '0')}:${m[2]}:00Z`) - 5.5 * 3600 * 1000;
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+};
+// Hours between two stored punches, clamped like the real punch-out path.
+const punchHours = (inIso, outIso) => {
+  const h = Math.round((new Date(outIso) - new Date(inIso)) / 36000) / 100;
+  return Number.isFinite(h) && h > 0 ? Math.min(h, 24) : 0;
+};
+
 // Late detection — read cutoff from payroll_settings (admin-tunable), fall
 // back to 09:46 IST. Returns true if `whenIso` (ISO string in UTC) lies
 // AFTER the IST cutoff for that day.
@@ -399,7 +414,7 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
 // admin_marked=1 so the user's own dashboard / month view skips it.
 // Restricted to admins or roles with attendance.approve.
 router.post('/admin-mark', (req, res) => {
-  const { user_id, date, status, remarks, proof_url } = req.body;
+  const { user_id, date, status, remarks, proof_url, punch_in, punch_out } = req.body;
   if (!user_id || !date) return res.status(400).json({ error: 'user_id and date are required' });
 
   // Admin may backfill any PAST date, but never a future one.
@@ -432,6 +447,17 @@ router.post('/admin-mark', (req, res) => {
   }
   const finalStatus = ['present','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
 
+  // Punch in / out typed by the admin (mam 2026-09-12: "so that if someone
+  // miss to punch in or out we can mark it"). Optional — a mark with no times
+  // behaves exactly as before.
+  const piIso = punch_in ? istTimeToUtcIso(date, punch_in) : null;
+  const poIso = punch_out ? istTimeToUtcIso(date, punch_out) : null;
+  if (punch_in && !piIso) return res.status(400).json({ error: 'Punch in time must be HH:MM (24-hour)' });
+  if (punch_out && !poIso) return res.status(400).json({ error: 'Punch out time must be HH:MM (24-hour)' });
+  if (piIso && poIso && new Date(poIso) <= new Date(piIso)) {
+    return res.status(400).json({ error: 'Punch out must be after punch in' });
+  }
+
   // Proof is OPTIONAL on this endpoint (dme 2026-07-26). The 07-24 gate that
   // rejected a back-dated worked day without proof_url was reverted for the
   // grid marking path: the monthly-grid cycle marks click-by-click via markCell
@@ -444,21 +470,55 @@ router.post('/admin-mark', (req, res) => {
 
   // If a real attendance row already exists (user actually punched), don't
   // overwrite it. Admin-mark is meant for the missing-row case only.
-  const existing = db.prepare('SELECT id, admin_marked FROM attendance WHERE user_id=? AND date=?').get(user_id, date);
+  const existing = db.prepare(
+    'SELECT id, admin_marked, punch_in_time, punch_out_time, total_hours, status FROM attendance WHERE user_id=? AND date=?'
+  ).get(user_id, date);
   if (existing && !existing.admin_marked) {
-    return res.status(400).json({ error: 'User already has an attendance record for this date' });
+    // A REAL punch row. Still the missed-punch case mam asked for: fill the
+    // side the employee never punched, and never touch the side they did.
+    const fillIn = piIso && !existing.punch_in_time ? piIso : null;
+    const fillOut = poIso && !existing.punch_out_time ? poIso : null;
+    if (!fillIn && !fillOut) {
+      return res.status(400).json({
+        error: (piIso || poIso)
+          ? 'That punch is already recorded — an existing punch time is never overwritten.'
+          : 'User already has an attendance record for this date',
+      });
+    }
+    const newIn = fillIn || existing.punch_in_time;
+    const newOut = fillOut || existing.punch_out_time;
+    const hrs = newIn && newOut ? punchHours(newIn, newOut) : (existing.total_hours || 0);
+    // Same rule the real punch-out uses: under 4 h is a half day.
+    const newStatus = (newIn && newOut && hrs < 4) ? 'half_day' : existing.status;
+    db.prepare(
+      `UPDATE attendance SET punch_in_time=?, punch_out_time=?, total_hours=?, status=?,
+              remarks=COALESCE(NULLIF(?, ''), remarks), marked_by=?, marked_at=CURRENT_TIMESTAMP
+         WHERE id=?`
+    ).run(newIn, newOut, hrs, newStatus, remarks || '', req.user.id, existing.id);
+    return res.json({
+      id: existing.id,
+      message: `Missing punch ${fillIn && fillOut ? 'times' : fillIn ? 'in' : 'out'} filled${newIn && newOut ? ` — ${hrs} h` : ''}`,
+    });
   }
   if (existing && existing.admin_marked) {
+    const newIn = piIso || existing.punch_in_time;
+    const newOut = poIso || existing.punch_out_time;
+    const hrs = newIn && newOut
+      ? punchHours(newIn, newOut)
+      : (finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
     db.prepare(
-      `UPDATE attendance SET status=?, remarks=?, marked_by=?, marked_at=CURRENT_TIMESTAMP, proof_url=COALESCE(?, proof_url) WHERE id=?`
-    ).run(finalStatus, remarks || null, req.user.id, proof_url || null, existing.id);
+      `UPDATE attendance SET status=?, remarks=?, marked_by=?, marked_at=CURRENT_TIMESTAMP, proof_url=COALESCE(?, proof_url),
+              punch_in_time=?, punch_out_time=?, total_hours=? WHERE id=?`
+    ).run(finalStatus, remarks || null, req.user.id, proof_url || null, newIn, newOut, hrs, existing.id);
     return res.json({ message: 'Updated', id: existing.id });
   }
 
   const r = db.prepare(
-    `INSERT INTO attendance (user_id, date, status, remarks, admin_marked, marked_by, marked_at, proof_url, total_hours)
-     VALUES (?,?,?,?,1,?,CURRENT_TIMESTAMP,?, ?)`
-  ).run(user_id, date, finalStatus, remarks || null, req.user.id, proof_url || null, finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
+    `INSERT INTO attendance (user_id, date, status, remarks, admin_marked, marked_by, marked_at, proof_url, total_hours, punch_in_time, punch_out_time)
+     VALUES (?,?,?,?,1,?,CURRENT_TIMESTAMP,?,?,?,?)`
+  ).run(user_id, date, finalStatus, remarks || null, req.user.id, proof_url || null,
+    piIso && poIso ? punchHours(piIso, poIso) : (finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0),
+    piIso, poIso);
   // Deliberately NOT scored on the breaker: the Monthly Grid marks payroll
   // corrections cell-by-cell through this endpoint (mam's core workflow —
   // 15+ clicks in a sitting is NORMAL), and marking is already gated by

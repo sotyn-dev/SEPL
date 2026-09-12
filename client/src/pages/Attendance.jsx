@@ -1780,13 +1780,17 @@ export default function Attendance() {
               const up = await api.post('/upload', fd);
               proof_url = up.data.url;
             }
-            await api.post('/attendance/admin-mark', {
+            const res = await api.post('/attendance/admin-mark', {
               user_id: +form.user_id, date: form.date,
               status: form.status || 'present', remarks: form.remarks || '',
               proof_url,
+              // Missed punch in / out, typed in IST (mam 2026-09-12).
+              punch_in: form.punch_in || null, punch_out: form.punch_out || null,
             });
             const who = allUsers.find(u => u.id === +form.user_id)?.name || 'Employee';
-            toast.success(`${who} marked ${(form.status || 'present').replace('_', ' ')} for ${form.date}`);
+            toast.success(/punch/i.test(res.data?.message || '')
+              ? `${who} · ${res.data.message} (${form.date})`
+              : `${who} marked ${(form.status || 'present').replace('_', ' ')} for ${form.date}`);
             setModal(null); load();
           } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
@@ -1814,6 +1818,22 @@ export default function Attendance() {
               </select>
             </div>
           </div>
+          {['present', 'half_day', 'short_day'].includes(form.status || 'present') && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Punch In <span className="font-normal text-gray-500">(IST, optional)</span></label>
+                <input className="input" type="time" value={form.punch_in || ''} onChange={e => setForm({ ...form, punch_in: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Punch Out <span className="font-normal text-gray-500">(IST, optional)</span></label>
+                <input className="input" type="time" value={form.punch_out || ''} onChange={e => setForm({ ...form, punch_out: e.target.value })} />
+              </div>
+              <p className="text-[11px] text-gray-500 sm:col-span-2">
+                For a missed punch. If the employee already punched one side, only the empty side is filled — a real punch is never overwritten.
+                With both times the day's hours are computed from them (under 4 h counts as half day).
+              </p>
+            </div>
+          )}
           <div>
             <label className="label">Reason / Remarks (for audit)</label>
             <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
