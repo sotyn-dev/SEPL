@@ -46,7 +46,7 @@ export default function Snags() {
   const [snags, setSnags] = useState([]);
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
-  const [filters, setFilters] = useState({ status: '', priority: '', search: '', scope: '', site_id: '' });
+  const [filters, setFilters] = useState({ status: '', priority: '', search: '', scope: '', site_id: '', due_from: '', due_to: '' });
   const [modal, setModal] = useState(false);          // raise/edit
   const [proofModal, setProofModal] = useState(null); // snag obj being submitted
   // Which snag's proof modal is actually open right now — checked before an
@@ -294,6 +294,22 @@ export default function Snags() {
             <option value="low">Low</option>
           </select>
         </div>
+        {/* Due (target) date window — inclusive, runs server-side so the
+            cards and the Excel export follow it too. */}
+        <div className="w-36 shrink-0">
+          <label className="label">Due From</label>
+          <input type="date" className="input" value={filters.due_from} max={filters.due_to || undefined}
+            onChange={e => setFilters(f => ({ ...f, due_from: e.target.value }))} />
+        </div>
+        <div className="w-36 shrink-0">
+          <label className="label">Due To</label>
+          <input type="date" className="input" value={filters.due_to} min={filters.due_from || undefined}
+            onChange={e => setFilters(f => ({ ...f, due_to: e.target.value }))} />
+        </div>
+        {(filters.due_from || filters.due_to) && (
+          <button type="button" className="text-xs text-gray-500 hover:text-gray-800 underline pb-2"
+            onClick={() => setFilters(f => ({ ...f, due_from: '', due_to: '' }))}>Clear dates</button>
+        )}
       </div>
 
       {/* Reverted to the original 10-column table per mam

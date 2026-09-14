@@ -79,7 +79,7 @@ function siteScopeWhere(db, user) {
 // Shared filtered-list query — used by the JSON list AND the .xlsx export so
 // a downloaded sheet always matches what's on screen.
 function buildSnagQuery(db, req) {
-  const { status, priority, site_id, assigned_to, scope, search } = req.query;
+  const { status, priority, site_id, assigned_to, scope, search, due_from, due_to } = req.query;
   let sql = `
     SELECT s.*,
            rb.name as raised_by_name,
@@ -105,6 +105,11 @@ function buildSnagQuery(db, req) {
   if (priority) { sql += ' AND s.priority = ?'; params.push(priority); }
   if (site_id) { sql += ' AND s.site_id = ?'; params.push(site_id); }
   if (assigned_to) { sql += ' AND s.assigned_to = ?'; params.push(assigned_to); }
+  // Due (target) date window, inclusive. target_date may carry a time part,
+  // so compare on the date alone; snags with no target date drop out.
+  const isoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+  if (isoDate(due_from)) { sql += ' AND substr(s.target_date, 1, 10) >= ?'; params.push(due_from); }
+  if (isoDate(due_to)) { sql += ' AND substr(s.target_date, 1, 10) <= ?'; params.push(due_to); }
   // scope=mine → only those raised-by or assigned-to me
   if (scope === 'mine') {
     sql += ' AND (s.raised_by = ? OR s.assigned_to = ?)';
