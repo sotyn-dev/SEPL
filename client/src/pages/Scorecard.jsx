@@ -511,7 +511,7 @@ export default function Scorecard() {
                 <button
                   onClick={() => exportCsv(
                     `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
-                    ['Employee', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Commitment'],
+                    ['Employee', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Previous Done', 'Previous Score %', 'Commitment'],
                     (displayCard.kpis || []).map(k => [
                       cardOwnerName,
                       k.group_name || 'Other',
@@ -522,6 +522,9 @@ export default function Scorecard() {
                       k.actual ?? 0,
                       vsPlan(k.actual_pct) ?? '',
                       k.pending_uptodate ?? '',
+                      k.pending_work ?? '',
+                      // (done ÷ pending) × 100 − 100; nothing pending = on plan (0)
+                      vsPlan((+k.pending_uptodate || 0) > 0 ? ((+k.pending_work || 0) / +k.pending_uptodate) * 100 : 100) ?? '',
                       [k.commitment_prev ? `Prev: ${k.commitment_prev}` : '', k.commitment ? `Now: ${k.commitment}` : '']
                         .filter(Boolean).join(' · '),
                     ])
@@ -607,7 +610,7 @@ export default function Scorecard() {
                     <th className="text-center p-2 w-24">Planned</th>
                     <th className="text-center p-2 w-24">Actual</th>
                     <th className="text-center p-2 w-20">Actual %</th>
-                    <th className="text-center p-2 w-20">Previous Pending</th>
+                    <th className="text-center p-2 w-24">Previous<br />Pending / Done</th>
                     <th className="text-left p-2">Commitment</th>
                   </tr>
                 </thead>
@@ -1080,6 +1083,12 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
   // Show the % as variance vs plan (achievement − 100): 0% = on plan, negative =
   // behind, positive = ahead.  Colour on that scale (see vsPlan note up top).
   const pctClr = vsClr(kpi.actual_pct);
+  // Previous-pendency score (mam 2026-09-14): (done ÷ pending) × 100 − 100,
+  // e.g. 4 done of 226 pending = −98%. Kept as an achievement % (100 = on
+  // plan) so fmtVs/vsClr format it like Actual %. Nothing pending = on plan.
+  const prevPend = +(kpi.pending_auto ? kpi.pending_uptodate : pendingUp) || 0;
+  const prevDoneN = +(kpi.pending_auto ? kpi.pending_work : pendingWork) || 0;
+  const prevAch = prevPend > 0 ? (prevDoneN / prevPend) * 100 : 100;
   const isAuto = kpi.is_auto;
 
   return (
@@ -1128,17 +1137,34 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       {/* Total Up-to-date column removed (mam 2026-09-14: "no need here").
           totalUp stays in state so a save never wipes an old stored value. */}
       <td className="text-center p-2">
-        {/* Previous pendency only (mam 2026-09-14): tasks due BEFORE this week
-            still not done at the week end. This week's own leftover is already
-            Planned − Actual. pendingWork stays in state so a save keeps it. */}
+        {/* Previous pendency only (mam 2026-09-14): of the tasks due BEFORE this
+            week, how many are still pending at the week end / how many were done
+            during this week. Carried in = pending + done. This week's own
+            leftover is already Planned − Actual, so it is not in here. */}
         {kpi.pending_auto ? (
-          <span className={`font-semibold ${kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}`}
-            title="Previous pending — tasks due before this week that are still not done (a task re-dated to a later week is not counted)">
-            {kpi.pending_uptodate}
-          </span>
+          <div className="flex items-start justify-center gap-2 font-semibold leading-tight"
+            title={`Previous (due before this week): ${(+kpi.pending_uptodate || 0) + (+kpi.pending_work || 0)} carried in — ${kpi.pending_uptodate || 0} still pending, ${kpi.pending_work || 0} done this week`}>
+            <div className="text-center">
+              <div className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate || 0}</div>
+              <div className="text-[9px] font-normal text-gray-400">pending</div>
+            </div>
+            <span className="text-gray-300">/</span>
+            <div className="text-center">
+              <div className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work || 0}</div>
+              <div className="text-[9px] font-normal text-gray-400">done</div>
+            </div>
+          </div>
         ) : (
-          <input type="number" className="input text-center text-xs w-16 mx-auto" placeholder="prev" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
+          <div className="flex items-center justify-center gap-1">
+            <input type="number" className="input text-center text-xs w-14" placeholder="pending" title="Previous tasks still pending" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <span className="text-gray-300">/</span>
+            <input type="number" className="input text-center text-xs w-14" placeholder="done" title="Previous tasks done this week" value={pendingWork} onChange={e => setPendingWork(e.target.value)} onBlur={flush} disabled={readOnly} />
+          </div>
         )}
+        <div className={`text-center text-[11px] font-bold mt-1 ${vsClr(prevAch)}`}
+          title={`Previous score = (done ÷ pending) × 100 − 100 = (${prevDoneN} ÷ ${prevPend}) × 100 − 100${prevPend ? '' : ' — nothing pending, on plan'}`}>
+          {fmtVs(prevAch)}
+        </div>
       </td>
       <td className="p-2">
         {/* Two commitments (mam 2026-08-27): the promise on the PREVIOUS
