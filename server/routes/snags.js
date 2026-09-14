@@ -105,11 +105,13 @@ function buildSnagQuery(db, req) {
   if (priority) { sql += ' AND s.priority = ?'; params.push(priority); }
   if (site_id) { sql += ' AND s.site_id = ?'; params.push(site_id); }
   if (assigned_to) { sql += ' AND s.assigned_to = ?'; params.push(assigned_to); }
-  // Due (target) date window, inclusive. target_date may carry a time part,
-  // so compare on the date alone; snags with no target date drop out.
+  // Due (target) date window, inclusive; snags with no target date drop out.
+  // Same expression as the Snag List scorecard row, so a Mon→Sat filter here
+  // always shows the scorecard's Planned (lib/dueDay.js snagDue).
   const isoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
-  if (isoDate(due_from)) { sql += ' AND substr(s.target_date, 1, 10) >= ?'; params.push(due_from); }
-  if (isoDate(due_to)) { sql += ' AND substr(s.target_date, 1, 10) <= ?'; params.push(due_to); }
+  const due = require('../lib/dueDay').snagDue('s.');
+  if (isoDate(due_from)) { sql += ` AND ${due} >= ?`; params.push(due_from); }
+  if (isoDate(due_to)) { sql += ` AND ${due} <= ?`; params.push(due_to); }
   // scope=mine → only those raised-by or assigned-to me
   if (scope === 'mine') {
     sql += ' AND (s.raised_by = ? OR s.assigned_to = ?)';

@@ -16,12 +16,8 @@
 // of a user's tasks evaluating date()/strftime() per row; the leaderboard ran
 // that ~100 times (users × weeks). The expression indexes below turn each
 // count into an index range seek (measured 25 ms → <0.1 ms per query).
-// `fallbackCol` is the "created" timestamp for undated rows. Snags pass
-// raised_at: imported snags carry the real raise time there, while their
-// created_at is only the import time. The default keeps every existing
-// expression (and so its index) byte-for-byte unchanged.
-const dueDay = (col, alias = '', fallbackCol = 'created_at') => {
-  const d = `COALESCE(date(NULLIF(${alias}${col}, '')), date(${alias}${fallbackCol}, '+330 minutes'))`;
+const dueDay = (col, alias = '') => {
+  const d = `COALESCE(date(NULLIF(${alias}${col}, '')), date(${alias}created_at, '+330 minutes'))`;
   return `(CASE WHEN strftime('%w', ${d}) = '0' THEN date(${d}, '-1 day') ELSE ${d} END)`;
 };
 
@@ -59,4 +55,14 @@ function dueDayIndexSql() {
   return out;
 }
 
-module.exports = { dueDay, dueDayIndexSql, DUE_SOURCES };
+// Snag due day — deliberately NOT dueDay() (mam 2026-09-14, checked against
+// the Snags page: filter 07→12 Sep = 98, the scorecard must say 98 too):
+//  • the plain Target Date, no Sunday fold — a week is exactly Mon→Sat,
+//    the same From/To window the Snags page filter uses;
+//  • a snag with no Target Date is NULL, so it drops out of every week
+//    (BETWEEN and < are both false for NULL) instead of falling back.
+// ONE definition for the Snags page filter (routes/snags.js) and the
+// scorecard (routes/scoring.js), so the two can never disagree again.
+const snagDue = (alias = '') => `NULLIF(substr(${alias}target_date, 1, 10), '')`;
+
+module.exports = { dueDay, dueDayIndexSql, DUE_SOURCES, snagDue };

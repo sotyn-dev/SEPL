@@ -43,8 +43,9 @@ const DUE_DELEG = dueDay('due_date'), DUE_PMS = dueDay('due_date'), DUE_TKT = du
 const DUE_FLOW = dueDay('target_date');   // ERP Management (System Flow) v1 (retired)
 const DUE_SYSFLOW = dueDay('st.planned_date');   // System Flow v2 steps
 // Snag List on the due-date basis too (mam 2026-09-14: "snag list scoring
-// evaluate according due date"): target_date, undated → the IST raise day.
-const DUE_SNAG = dueDay('target_date', '', 'raised_at');
+// evaluate according due date"): the Target Date Mon→Sat, undated snags not
+// counted — shared with the Snags page filter so both show the same total.
+const DUE_SNAG = require('../lib/dueDay').snagDue();
 
 // ---------- TEMPLATES & KPIs (admin manages) ----------
 
@@ -396,9 +397,9 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       // Formula: Plan = snags DUE this week (target_date) AND assigned = user;
       // Actual = same + status='approved' (current status only, NO
       // approved_at window — a later approval still counts toward the due
-      // week).  Due-date basis since 2026-09-14 (was raise date), same as
-      // delegations: a snag with no target date falls back to its IST raise
-      // day, and a Sunday due day folds into that week (see DUE_SNAG).
+      // week).  Due-date basis since 2026-09-14 (was raise date): Target
+      // Date Mon→Sat, snags with no Target Date not counted — the same
+      // window as the Snags page Due From/To filter (see DUE_SNAG).
       // Tolerant assignee match (mam 2026-08-13 "ur calculation is wrong"):
       // app-created rows link assigned_to = users.id, but imported/WhatsApp
       // rows carry only the NAME (either in assigned_to_name with a NULL id,
@@ -1277,12 +1278,13 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     const computeCarry = (source, since, until) => {
       // Snags keep their tolerant assignee match and IST approved_at dates
       // (same rules as computeAutoCount above), but since 2026-09-14 the
-      // backlog is on the due-day basis like delegations: "previous" = due
-      // before this week, and a snag re-dated to a later week is scheduled,
-      // not pending.
+      // backlog is on the Target Date: "previous" = due before this week's
+      // Monday (undated snags never count), and a snag re-dated to a later
+      // week is scheduled, not pending.
       if (source === 'auto:snags' || source === 'auto:snags_all') {
         const sinceDate = since.slice(0, 10), untilDate = until.slice(0, 10);
-        // Sunday due days fold into this week, so a Sunday approval lands here too.
+        // Approvals are counted through Sunday so a Sunday close-out is never
+        // lost between two weeks (next week's backlog starts from Monday).
         const weekEndDate = shiftWeek(sinceDate, 6);
         const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
         const who = source === 'auto:snags'
