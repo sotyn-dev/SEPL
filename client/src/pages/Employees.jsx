@@ -1,3 +1,5 @@
+import EmployeeDetailsFields from '../components/EmployeeDetailsFields';
+import { probationEndDate } from '../utils/probation';
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -139,6 +141,20 @@ export default function Employees() {
     // alongside the rest of the employee fields. Existing URLs (when
     // editing) stay untouched if no new file is picked.
     const payload = { ...form };
+    for (const key of ['form11_file', 'form_f_file']) {
+      delete payload[`_${key}`];
+      const file = form[`_${key}`];
+      if (!file) continue;
+      if (file.size > 10 * 1024 * 1024) return toast.error('Document must be 10 MB or smaller');
+      if (!/\.(pdf|jpe?g|png)$/i.test(file.name)) return toast.error('Upload a PDF, JPG or PNG document');
+      const url = await uploadFile(file);
+      if (!url) return;
+      payload[key] = url;
+    }
+    if (payload.same_as_permanent) {
+      payload.current_address = payload.permanent_address || null;
+      payload.current_pin = payload.permanent_pin || null;
+    }
     delete payload._aadhar_file;
     delete payload._pan_file;
     delete payload._qualification_file;
@@ -489,8 +505,52 @@ export default function Employees() {
             <div><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({ ...form, designation: e.target.value })} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
             <div><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({ ...form, department: e.target.value })} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
             <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({ ...form, join_date: e.target.value })} /></div>
+            <div>
+              <label className="label">Reports To (Manager)</label>
+              <SearchableSelect options={employees.filter(employee => String(employee.id) !== String(editing?.id))}
+                value={form.reports_to || null} valueKey="id" displayKey="name" placeholder="Select manager"
+                onChange={manager => setForm({ ...form, reports_to: manager?.id ?? null })} />
+            </div>
+            {[
+              ['employment_type', 'Employment Type', [['permanent', 'Permanent'], ['contract', 'Contract'], ['intern', 'Intern']]],
+              ['employment_status', 'Employment Status', [['probation', 'Probation'], ['confirmed', 'Confirmed']]],
+              ['notice_period_days', 'Notice Period Days', [[30, '30'], [60, '60'], [90, '90']]],
+            ].map(([field, label, options]) => (
+              <div key={field}>
+                <label className="label" htmlFor={`employee-${field}`}>{label}</label>
+                <select id={`employee-${field}`} className="select" value={form[field] ?? ''}
+                  onChange={event => setForm({ ...form, [field]: event.target.value === '' ? null : field === 'notice_period_days' ? Number(event.target.value) : event.target.value })}>
+                  <option value="">Select {label.toLowerCase()}</option>
+                  {options.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+                </select>
+              </div>
+            ))}
+            <div>
+              <label className="label" htmlFor="probation-end">Probation End Date</label>
+              <div className="flex gap-2 mb-2">
+                {[3, 6].map(months => <button key={months} type="button" disabled={!form.join_date}
+                  aria-pressed={!!form.probation_end_date && form.probation_end_date === probationEndDate(form.join_date, months)}
+                  onClick={() => setForm({ ...form, probation_end_date: probationEndDate(form.join_date, months) })}
+                  className={`rounded-lg border px-4 py-2 text-sm font-semibold disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-blue-500 ${months === 3 ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700'}`}>
+                  {months} M{form.probation_end_date && form.probation_end_date === probationEndDate(form.join_date, months) ? ' ✓' : ''}
+                </button>)}
+              </div>
+              <input id="probation-end" type="date" className="input" min={form.join_date || undefined} value={form.probation_end_date || ''}
+                onChange={event => setForm({ ...form, probation_end_date: event.target.value || null })} />
+              <p className="text-xs text-gray-500 mt-1">Calculated from join date. You can adjust the date.</p>
+            </div>
+            <div>
+              <label className="label" htmlFor="employee-uan">UAN Number</label>
+              <input id="employee-uan" className="input" inputMode="numeric" pattern="[0-9]{12}" maxLength={12} placeholder="12-digit UAN"
+                value={form.uan_number || ''} onChange={event => setForm({ ...form, uan_number: event.target.value.replace(/\D/g, ''), uan_verified: 0 })} />
+              <label className="flex items-center gap-2 text-sm mt-2">
+                <input type="checkbox" checked={!!form.uan_verified} disabled={!/^\d{12}$/.test(form.uan_number || '')}
+                  onChange={event => setForm({ ...form, uan_verified: event.target.checked ? 1 : 0 })} /> Verified by HR
+              </label>
+              <p className="text-xs text-gray-500 mt-1">Mark only after checking supporting records. No automatic EPFO verification.</p>
+            </div>
             {canSeeSalary && <div><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({ ...form, salary: +e.target.value })} /></div>}
-            {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({ ...form, status: e.target.value })}>{['active', 'training', 'inactive', 'terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
+            {editing && <div><label className="label">Account Status</label><select className="select" value={form.status || ''} onChange={e => setForm({ ...form, status: e.target.value })}>{['active', 'training', 'inactive', 'terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
             <div>
               <label className="label">Roster / Shift</label>
               <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
@@ -611,6 +671,8 @@ export default function Employees() {
               </div>
             ))}
           </div>
+
+          <EmployeeDetailsFields form={form} setForm={setForm} canSeeSalary={canSeeSalary} />
 
           {/* Salary bank account (mam 2026-09-04). The columns bank_account_no
               and bank_ifsc have existed since 17 Aug but had no field anywhere

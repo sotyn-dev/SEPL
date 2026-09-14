@@ -3374,6 +3374,29 @@ function initializeDatabase() {
     // bank_account_no / bank_ifsc / emergency_contact_* already existed from
     // 2026-08-17 but had no form field anywhere — this is what finally makes
     // them enterable. bank_name is the one genuinely new banking column.
+    ['employees', 'reports_to INTEGER REFERENCES employees(id) ON DELETE SET NULL'],
+    ['employees', 'employment_type TEXT'],
+    ['employees', 'employment_status TEXT'],
+    ['employees', 'notice_period_days INTEGER'],
+    ['employees', 'probation_end_date TEXT'],
+    ['employees', 'uan_number TEXT'],
+    ['employees', 'permanent_address TEXT'],
+    ['employees', 'permanent_pin TEXT'],
+    ['employees', 'current_address TEXT'],
+    ['employees', 'current_pin TEXT'],
+    ['employees', 'same_as_permanent INTEGER NOT NULL DEFAULT 0'],
+    ['employees', 'pf_number TEXT'],
+    ['employees', 'esi_number TEXT'],
+    ['employees', 'pt_state TEXT'],
+    ['employees', 'form11_file TEXT'],
+    ['employees', 'form_f_file TEXT'],
+    ['employees', 'ctc_annual REAL'],
+    ['employees', 'variable_bonus REAL'],
+    ['employees', 'basic_salary REAL'],
+    ['employees', 'hra REAL'],
+    ['employees', 'pf_deduction REAL'],
+    ['employees', 'esi_deduction REAL'],
+    ['employees', 'uan_verified INTEGER NOT NULL DEFAULT 0'],
     ['employees', 'gender TEXT'],                 // Male / Female / Other
     ['employees', 'guardian_title TEXT'],         // Mr. / Mrs. / Sh. / Smt.
     ['employees', 'guardian_relation TEXT'],      // Father / Spouse / Mother
