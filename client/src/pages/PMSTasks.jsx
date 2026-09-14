@@ -10,7 +10,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiUpload, FiMic, FiMicOff, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
-import MultiUserSelect from '../components/MultiUserSelect';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 
 // Web Speech API — live mic dictation (Chromium browsers only).
 const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
@@ -357,7 +357,7 @@ export default function PMSTasks() {
         ))}
 {/* Status - tick as many as you like (mam 2026-09-12). */}
         <div className="w-[248px]">
-          <MultiUserSelect
+          <StatusMultiSelect
             options={[
               { id: 'pending', name: 'Pending' },
               { id: 'submitted', name: 'Submitted' },
@@ -366,7 +366,6 @@ export default function PMSTasks() {
             ]}
             value={statusFilter}
             onChange={setStatusFilter}
-            searchable={false}
             placeholder="All statuses"
           />
         </div>

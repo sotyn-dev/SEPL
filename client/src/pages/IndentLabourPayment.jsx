@@ -10,7 +10,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import { Link } from 'react-router-dom';
 import api from '../api';
-import MultiUserSelect from '../components/MultiUserSelect';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import LabourRateWindow from '../components/LabourRateWindow';
@@ -1289,12 +1289,12 @@ function WorkOrdersTab() {
           <label className="text-xs text-gray-600 block mb-1">Status</label>
 {/* Status - tick as many as you like (mam 2026-09-12). */}
           <div className="w-[248px]">
-            <MultiUserSelect
+            <StatusMultiSelect
               options={WO_STATUS_OPTIONS.map(s => ({ id: s, name: WO_STATUS_LABEL[s] }))}
               value={status}
               onChange={setStatus}
-              searchable={false}
               placeholder="All statuses"
+              label=""
             />
           </div>
         </div>

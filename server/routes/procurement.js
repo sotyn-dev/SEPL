@@ -8076,14 +8076,18 @@ function ratesItemRows(db, where, params, tail) {
     SELECT pi.id, pi.po_id, pi.description, pi.quantity, pi.unit, pi.rate AS estimate_rate,
            pi.item_master_id, im.item_code, im.item_name, COALESCE(im.long_delivery,0) AS long_delivery,
            po.po_number, COALESCE(bb.client_name, bb.company_name) AS client_name,
-           (SELECT MIN(op.planned_start) FROM order_planning_items opi
-              JOIN order_planning op ON op.id = opi.planning_id
+           -- The ITEM's own need dates only (mam 2026-09-14: "no one enter the
+           -- data … from where this linked?"). The plan header's dates are the
+           -- Business Book committed start/completion copied in automatically
+           -- when the order was booked, so falling back to them showed dates
+           -- nobody entered — and hid a date typed here, which PUT
+           -- /orders/planning-itemwise saves on the item row. Empty until set.
+           (SELECT MIN(opi.planned_start) FROM order_planning_items opi
              WHERE opi.po_item_id = pi.id) AS need_date,
            -- Need-till alongside need-from so the S1 cell can carry BOTH
            -- editable dates (mam 2026-09-05: this view replaces the old
            -- Order Planning table, which is where the dates used to be set).
-           (SELECT MIN(op.planned_end) FROM order_planning_items opi
-              JOIN order_planning op ON op.id = opi.planning_id
+           (SELECT MIN(opi.planned_end) FROM order_planning_items opi
              WHERE opi.po_item_id = pi.id) AS need_till,
            rc.id AS rc_id, rc.vendor1_name AS rc_v1n, rc.vendor1_rate AS rc_v1, rc.vendor2_name AS rc_v2n, rc.vendor2_rate AS rc_v2,
            rc.vendor3_name AS rc_v3n, rc.vendor3_rate AS rc_v3, rc.final_rate AS rc_final, rc.final_vendor_name AS rc_fvn, rc.finalized_at AS rc_fat,

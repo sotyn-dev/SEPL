@@ -882,11 +882,13 @@ router.get('/planning-itemwise', (req, res) => {
   const rows = db.prepare(`SELECT pi.id, pi.description, pi.quantity, pi.unit, pi.po_id,
       po.po_number, COALESCE(bb.client_name, bb.company_name) AS client_name,
       opi.id AS opi_id,
-      COALESCE(opi.planned_start, op.planned_start) AS planned_start,
-      COALESCE(opi.planned_end, op.planned_end) AS planned_end,
+      -- Item dates only, never the plan header's (Business Book dates copied
+      -- in on booking) — same rule as /procurement/rates-items (2026-09-14).
+      opi.planned_start AS planned_start,
+      opi.planned_end AS planned_end,
       COALESCE(op.status, 'pending') AS status
     ${base}
-    ORDER BY (COALESCE(opi.planned_start, op.planned_start) IS NULL), COALESCE(opi.planned_start, op.planned_start), pi.id
+    ORDER BY (opi.planned_start IS NULL), opi.planned_start, pi.id
     LIMIT ${PER} OFFSET ${(page - 1) * PER}`).all(...params);
   res.json({ total, page, per: PER, rows });
 });

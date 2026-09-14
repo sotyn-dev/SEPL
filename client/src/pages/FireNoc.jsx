@@ -11,7 +11,7 @@
 // rollback, Export Excel button, etc.).
 
 import { useState, useEffect } from 'react';
-import MultiUserSelect from '../components/MultiUserSelect';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -435,7 +435,7 @@ export default function FireNoc() {
           </select>
 {/* Status - tick as many as you like (mam 2026-09-12). */}
           <div className="w-[248px]">
-            <MultiUserSelect
+            <StatusMultiSelect
               options={[
                 { id: 'active', name: 'Active' },
                 { id: 'lost', name: 'Lost' },
@@ -444,7 +444,6 @@ export default function FireNoc() {
               ]}
               value={filters.status}
               onChange={v => setFilters(f => ({ ...f, status: v }))}
-              searchable={false}
               placeholder="All statuses"
             />
           </div>

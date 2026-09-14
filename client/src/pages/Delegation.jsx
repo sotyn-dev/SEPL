@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import Pagination, { usePagination } from '../components/PaginationBar';
-import MultiUserSelect from '../components/MultiUserSelect';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -600,7 +600,7 @@ export default function Delegation() {
         ))}
         {/* Status — tick as many as you like; the server gets a comma list. */}
         <div className="w-[248px]">
-          <MultiUserSelect
+          <StatusMultiSelect
             options={[
               { id: 'pending', name: 'Pending' },
               { id: 'submitted', name: 'Submitted' },
@@ -609,7 +609,6 @@ export default function Delegation() {
             ]}
             value={statusFilter}
             onChange={setStatusFilter}
-            searchable={false}
             placeholder="All statuses"
           />
         </div>

@@ -10,7 +10,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2, FiTrash2, FiSearch, FiUser, FiTag, FiDownload, FiUpload, FiExternalLink, FiRotateCcw } from 'react-icons/fi';
-import MultiUserSelect from '../components/MultiUserSelect';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDate } from '../utils/datetime';
 import { compressImage } from '../utils/compressImage';
@@ -314,7 +314,7 @@ export default function HelpTickets() {
         ))}
 {/* Status - tick as many as you like (mam 2026-09-12). */}
         <div className="w-[264px]">
-          <MultiUserSelect
+          <StatusMultiSelect
             options={[
               { id: 'open', name: 'Open' },
               { id: 'in_progress', name: 'In Progress' },
@@ -325,7 +325,6 @@ export default function HelpTickets() {
             ]}
             value={statusFilter}
             onChange={setStatusFilter}
-            searchable={false}
             placeholder="All statuses"
           />
         </div>

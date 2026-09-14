@@ -9,7 +9,7 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
-import MultiUserSelect from '../components/MultiUserSelect';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard } from 'react-icons/fi';
@@ -203,11 +203,10 @@ export default function Tools() {
             </select>
 {/* Status - tick as many as you like (mam 2026-09-12). */}
             <div className="w-[248px]">
-              <MultiUserSelect
+              <StatusMultiSelect
                 options={STATUSES.map(s => ({ id: s, name: s.replace('_', ' ') }))}
                 value={filters.status}
                 onChange={v => setFilters(f => ({ ...f, status: v }))}
-                searchable={false}
                 placeholder="All statuses"
               />
             </div>
