@@ -1,6 +1,7 @@
 import { STATES } from '../data/indiaLocations';
 
 const MONEY_FIELDS = [
+  ['tds_estimated_annual', 'TDS Estimated Annual (Rs/year)'],
   ['ctc_annual', 'CTC Annual (Rs/year)'], ['variable_bonus', 'Variable / Bonus (Rs/year)'],
   ['basic_salary', 'Basic (Rs/month)'], ['hra', 'HRA (Rs/month)'],
   ['pf_deduction', 'PF Deduction (Rs/month)'], ['esi_deduction', 'ESI Deduction (Rs/month)'],
@@ -16,6 +17,13 @@ export default function EmployeeDetailsFields({ form, setForm, canSeeSalary }) {
     return next;
   });
   return <>
+    <div>
+      <label className="label" htmlFor="blood-group">Blood Group</label>
+      <select id="blood-group" className="select" value={form.blood_group || ''} onChange={e => change('blood_group', e.target.value || null)}>
+        <option value="">Select blood group</option>
+        {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map(group => <option key={group} value={group}>{group}</option>)}
+      </select>
+    </div>
     <fieldset className="rounded-xl border border-gray-200 p-4 space-y-4">
       <legend className="px-1 text-sm font-semibold text-gray-800">Addresses</legend>
       <label className="flex items-center gap-2 text-sm text-gray-700">
@@ -68,13 +76,18 @@ export default function EmployeeDetailsFields({ form, setForm, canSeeSalary }) {
     {canSeeSalary && <fieldset className="rounded-xl border border-gray-200 p-4">
       <legend className="px-1 text-sm font-semibold text-gray-800">Compensation and deductions</legend>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="label" htmlFor="last-increment-date">Last Increment Date</label>
+          <input id="last-increment-date" type="date" className="input" value={form.last_increment_date || ''}
+            onChange={e => change('last_increment_date', e.target.value || null)} />
+        </div>
         {MONEY_FIELDS.map(([key, label]) => <div key={key}>
           <label className="label" htmlFor={key}>{label}</label>
           <input id={key} type="number" min="0" step="0.01" className="input" value={form[key] ?? ''}
             onChange={e => change(key, e.target.value === '' ? null : Number(e.target.value))} />
         </div>)}
       </div>
-      <p className="text-xs text-gray-500 mt-3">Annual CTC and bonus; monthly basic, HRA and deductions. Amounts are entered manually.</p>
+      <p className="text-xs text-gray-500 mt-3">Annual CTC, bonus and estimated TDS; monthly basic, HRA and deductions. Amounts are entered manually.</p>
     </fieldset>}
   </>;
 }

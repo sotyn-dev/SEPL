@@ -713,7 +713,7 @@ router.get('/employees', (req, res) => {
   // Redact salary for everyone else
   res.json(rows.map(row => {
     const safe = { ...row };
-    for (const field of ['salary', ...["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction"]]) delete safe[field];
+    for (const field of ['salary', ...["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual","last_increment_date"]]) delete safe[field];
     return safe;
   }));
 });
@@ -868,7 +868,7 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
   const m = masterValues(req.body);
   const termsBody = { ...req.body };
   if (!getUserPermissions(req.user.id)['employee_salary']?.can_view) {
-    for (const field of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction"]) delete termsBody[field];
+    for (const field of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual","last_increment_date"]) delete termsBody[field];
   }
   let terms;
   try { terms = employeeTerms(termsBody, db, req.params.id); }
@@ -889,14 +889,14 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
                            date_of_birth, gender, guardian_title, guardian_relation, guardian_name,
                            pan_number, aadhaar_last4,
                            bank_name, bank_branch, bank_account_no, bank_ifsc,
-                           emergency_contact_name, emergency_contact_phone, reports_to, employment_type, employment_status, notice_period_days, probation_end_date, uan_number, uan_verified, permanent_address, permanent_pin, current_address, current_pin, same_as_permanent, pf_number, esi_number, pt_state, form11_file, form_f_file, ctc_annual, variable_bonus, basic_salary, hra, pf_deduction, esi_deduction)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                           emergency_contact_name, emergency_contact_phone, reports_to, employment_type, employment_status, notice_period_days, probation_end_date, uan_number, uan_verified, permanent_address, permanent_pin, current_address, current_pin, same_as_permanent, pf_number, esi_number, pt_state, form11_file, form_f_file, ctc_annual, variable_bonus, basic_salary, hra, pf_deduction, esi_deduction, blood_group, tds_estimated_annual, last_increment_date)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
         aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
         m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
         m.pan_number, m.aadhaar_last4,
         m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
-        m.emergency_contact_name, m.emergency_contact_phone, terms.reports_to ?? null, terms.employment_type ?? null, terms.employment_status ?? null, terms.notice_period_days ?? null, terms.probation_end_date ?? null, terms.uan_number ?? null, terms.uan_verified ?? 0, terms.permanent_address ?? null, terms.permanent_pin ?? null, terms.current_address ?? null, terms.current_pin ?? null, terms.same_as_permanent ?? 0, terms.pf_number ?? null, terms.esi_number ?? null, terms.pt_state ?? null, terms.form11_file ?? null, terms.form_f_file ?? null, terms.ctc_annual ?? null, terms.variable_bonus ?? null, terms.basic_salary ?? null, terms.hra ?? null, terms.pf_deduction ?? null, terms.esi_deduction ?? null);
+        m.emergency_contact_name, m.emergency_contact_phone, terms.reports_to ?? null, terms.employment_type ?? null, terms.employment_status ?? null, terms.notice_period_days ?? null, terms.probation_end_date ?? null, terms.uan_number ?? null, terms.uan_verified ?? 0, terms.permanent_address ?? null, terms.permanent_pin ?? null, terms.current_address ?? null, terms.current_pin ?? null, terms.same_as_permanent ?? 0, terms.pf_number ?? null, terms.esi_number ?? null, terms.pt_state ?? null, terms.form11_file ?? null, terms.form_f_file ?? null, terms.ctc_annual ?? null, terms.variable_bonus ?? null, terms.basic_salary ?? null, terms.hra ?? null, terms.pf_deduction ?? null, terms.esi_deduction ?? null, terms.blood_group ?? null, terms.tds_estimated_annual ?? null, terms.last_increment_date ?? null);
   res.status(201).json({ id: r.lastInsertRowid, linked_user_id: user_id || null });
 });
 
@@ -996,7 +996,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   const m = masterValues(req.body);
   const termsBody = { ...req.body };
   if (!getUserPermissions(req.user.id)['employee_salary']?.can_view) {
-    for (const field of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction"]) delete termsBody[field];
+    for (const field of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual","last_increment_date"]) delete termsBody[field];
   }
   let terms;
   try { terms = employeeTerms(termsBody, db, req.params.id); }
@@ -1067,7 +1067,10 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
            basic_salary = CASE WHEN ? THEN ? ELSE basic_salary END,
            hra = CASE WHEN ? THEN ? ELSE hra END,
            pf_deduction = CASE WHEN ? THEN ? ELSE pf_deduction END,
-           esi_deduction = CASE WHEN ? THEN ? ELSE esi_deduction END
+           esi_deduction = CASE WHEN ? THEN ? ELSE esi_deduction END,
+           blood_group = CASE WHEN ? THEN ? ELSE blood_group END,
+           tds_estimated_annual = CASE WHEN ? THEN ? ELSE tds_estimated_annual END,
+           last_increment_date = CASE WHEN ? THEN ? ELSE last_increment_date END
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null,
         join_date || null,
@@ -1077,7 +1080,7 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
         m.pan_number, m.aadhaar_last4,
         m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
         m.emergency_contact_name, m.emergency_contact_phone,
-        ...['reports_to', 'employment_type', 'employment_status', 'notice_period_days', 'probation_end_date', 'uan_number', 'uan_verified', 'permanent_address', 'permanent_pin', 'current_address', 'current_pin', 'same_as_permanent', 'pf_number', 'esi_number', 'pt_state', 'form11_file', 'form_f_file', 'ctc_annual', 'variable_bonus', 'basic_salary', 'hra', 'pf_deduction', 'esi_deduction'].flatMap(key => [Object.prototype.hasOwnProperty.call(terms, key) ? 1 : 0, terms[key] ?? null]), req.params.id);
+        ...['reports_to', 'employment_type', 'employment_status', 'notice_period_days', 'probation_end_date', 'uan_number', 'uan_verified', 'permanent_address', 'permanent_pin', 'current_address', 'current_pin', 'same_as_permanent', 'pf_number', 'esi_number', 'pt_state', 'form11_file', 'form_f_file', 'ctc_annual', 'variable_bonus', 'basic_salary', 'hra', 'pf_deduction', 'esi_deduction', 'blood_group', 'tds_estimated_annual', 'last_increment_date'].flatMap(key => [Object.prototype.hasOwnProperty.call(terms, key) ? 1 : 0, terms[key] ?? null]), req.params.id);
 
   // Sync the linked login's `active` flag to the employee's on-roll status.
   // Attendance strength counts users.active, but HR only edits employees.status —

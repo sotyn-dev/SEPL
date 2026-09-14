@@ -1,4 +1,4 @@
-const FIELDS = ['reports_to', 'employment_type', 'employment_status', 'notice_period_days', 'probation_end_date', 'uan_number', 'uan_verified', 'permanent_address', 'permanent_pin', 'current_address', 'current_pin', 'same_as_permanent', 'pf_number', 'esi_number', 'pt_state', 'form11_file', 'form_f_file', 'ctc_annual', 'variable_bonus', 'basic_salary', 'hra', 'pf_deduction', 'esi_deduction'];
+const FIELDS = ['reports_to', 'employment_type', 'employment_status', 'notice_period_days', 'probation_end_date', 'uan_number', 'uan_verified', 'permanent_address', 'permanent_pin', 'current_address', 'current_pin', 'same_as_permanent', 'pf_number', 'esi_number', 'pt_state', 'form11_file', 'form_f_file', 'ctc_annual', 'variable_bonus', 'basic_salary', 'hra', 'pf_deduction', 'esi_deduction', 'blood_group', 'tds_estimated_annual', 'last_increment_date'];
 function employeeTerms(body, db, employeeId) {
   const values = {};
   for (const field of FIELDS) {
@@ -35,7 +35,7 @@ function employeeTerms(body, db, employeeId) {
     if (!uan || (current?.uan_number && 'uan_number' in values && values.uan_number !== current.uan_number)) values.uan_verified = 0;
     else if ('uan_verified' in values) values.uan_verified = values.uan_verified ? 1 : 0;
   }
-  for (const key of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction"]) {
+  for (const key of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual"]) {
     if (values[key] != null) {
       if (!['number', 'string'].includes(typeof values[key])) throw new Error('Enter a valid amount');
       values[key] = Number(values[key]);
@@ -61,6 +61,11 @@ function employeeTerms(body, db, employeeId) {
       values.current_address = 'permanent_address' in values ? values.permanent_address : previous?.permanent_address ?? null;
       values.current_pin = 'permanent_pin' in values ? values.permanent_pin : previous?.permanent_pin ?? null;
     }
+  }
+  if (values.blood_group != null && !['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].includes(values.blood_group)) throw new Error('Select a valid blood group');
+  if (values.last_increment_date != null) {
+    const date = values.last_increment_date;
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) throw new Error('Enter a valid last increment date');
   }
   return values;
 }
