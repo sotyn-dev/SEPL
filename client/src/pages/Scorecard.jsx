@@ -376,9 +376,15 @@ export default function Scorecard() {
   // Mam 2026-08-17: "add option for print this scoring also". Browser-print of
   // just the scorecard area — a body class + CSS in index.css hides the rest
   // of the app (sidebar, tabs, pickers) while printing.
+  // Landscape (mam 2026-09-14): @page can't be scoped to a body class, so the
+  // rule is injected only for this print and removed after — bills and other
+  // print pages keep their own portrait layout.
   const printScorecard = () => {
     document.body.classList.add('print-scorecard');
-    const done = () => { document.body.classList.remove('print-scorecard'); window.removeEventListener('afterprint', done); };
+    const pageStyle = document.createElement('style');
+    pageStyle.textContent = '@page { size: A4 landscape; margin: 8mm; }';
+    document.head.appendChild(pageStyle);
+    const done = () => { document.body.classList.remove('print-scorecard'); pageStyle.remove(); window.removeEventListener('afterprint', done); };
     window.addEventListener('afterprint', done);
     setTimeout(() => window.print(), 60);
   };
@@ -505,7 +511,7 @@ export default function Scorecard() {
                 <button
                   onClick={() => exportCsv(
                     `scorecard-${(cardOwnerName || 'user').replace(/\s+/g, '-')}-${periodCard ? `${periodCard.from}_to_${periodCard.to}` : weekStart}`,
-                    ['Employee', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Total Up-to-date', 'Pending', 'Commitment'],
+                    ['Employee', 'Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Previous Pending', 'Commitment'],
                     (displayCard.kpis || []).map(k => [
                       cardOwnerName,
                       k.group_name || 'Other',
@@ -515,10 +521,7 @@ export default function Scorecard() {
                       k.planned ?? 0,
                       k.actual ?? 0,
                       vsPlan(k.actual_pct) ?? '',
-                      k.total_uptodate ?? '',
-                      (k.pending_uptodate != null || k.pending_work != null)
-                        ? `${k.pending_uptodate ?? ''}${k.pending_work != null ? ` pending / ${k.pending_work} prev done` : ''}`
-                        : '',
+                      k.pending_uptodate ?? '',
                       [k.commitment_prev ? `Prev: ${k.commitment_prev}` : '', k.commitment ? `Now: ${k.commitment}` : '']
                         .filter(Boolean).join(' · '),
                     ])
@@ -604,8 +607,7 @@ export default function Scorecard() {
                     <th className="text-center p-2 w-24">Planned</th>
                     <th className="text-center p-2 w-24">Actual</th>
                     <th className="text-center p-2 w-20">Actual %</th>
-                    <th className="text-center p-2 w-20">Total Up-to-date</th>
-                    <th className="text-center p-2 w-20">Pending</th>
+                    <th className="text-center p-2 w-20">Previous Pending</th>
                     <th className="text-left p-2">Commitment</th>
                   </tr>
                 </thead>
@@ -624,7 +626,7 @@ export default function Scorecard() {
                         />
                         {isRaci && raci.open && (
                           <tr className="border-t bg-gray-50">
-                            <td colSpan={9} className="p-3">
+                            <td colSpan={8} className="p-3">
                               {raci.loading
                                 ? <p className="text-sm text-gray-500">Loading step-wise…</p>
                                 : <RaciBreakdown data={raci.data} />}
@@ -1123,28 +1125,19 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           <input type="number" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={flush} disabled={readOnly} />}
       </td>
       <td className={`text-center p-2 font-bold ${pctClr}`}>{fmtVs(kpi.actual_pct)}</td>
+      {/* Total Up-to-date column removed (mam 2026-09-14: "no need here").
+          totalUp stays in state so a save never wipes an old stored value. */}
       <td className="text-center p-2">
-        <input type="number" className="input text-center text-xs w-20 mx-auto" value={totalUp} onChange={e => setTotalUp(e.target.value)} onBlur={flush} disabled={readOnly} />
-      </td>
-      <td className="text-center p-2">
+        {/* Previous pendency only (mam 2026-09-14): tasks due BEFORE this week
+            still not done at the week end. This week's own leftover is already
+            Planned − Actual. pendingWork stays in state so a save keeps it. */}
         {kpi.pending_auto ? (
-          // Auto-computed pending pair (mam 2026-08-26 "19/4"):
-          // Due-date rule (2026-09-05): only open tasks due on/before week end.
-          // first = ALL tasks still pending as of the week end (backlog +
-          // this week's leftover); second = of the PREVIOUS tasks, how many
-          // were completed during this week (green — backlog being cleared).
-          <div className="flex items-center justify-center gap-1 font-semibold"
-            title={`${kpi.pending_uptodate} pending in total (open tasks due on/before week end — a task whose date was extended ahead is not counted yet) / ${kpi.pending_work} previous task(s) completed this week`}>
-            <span className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate}</span>
-            <span className="text-gray-300">/</span>
-            <span className={kpi.pending_work > 0 ? 'text-emerald-700' : 'text-gray-400'}>{kpi.pending_work}</span>
-          </div>
+          <span className={`font-semibold ${kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}`}
+            title="Previous pending — tasks due before this week that are still not done (a task re-dated to a later week is not counted)">
+            {kpi.pending_uptodate}
+          </span>
         ) : (
-          <div className="flex items-center justify-center gap-1">
-            <input type="number" className="input text-center text-xs w-16" placeholder="up" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
-            <span className="text-gray-300">/</span>
-            <input type="number" className="input text-center text-xs w-16" placeholder="wk" value={pendingWork} onChange={e => setPendingWork(e.target.value)} onBlur={flush} disabled={readOnly} />
-          </div>
+          <input type="number" className="input text-center text-xs w-16 mx-auto" placeholder="prev" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
         )}
       </td>
       <td className="p-2">

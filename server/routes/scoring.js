@@ -1449,14 +1449,18 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
             // Due-date rule (2026-09-05): both halves come from computeCarry
             // already filtered to tasks due on/before the week end, so a task
             // whose date was extended into the future is not "pending" yet.
-            pendingUp = (carry.stillOpen || 0) + (carry.weekOpen || 0);
+            // mam 2026-09-14: Pending = PREVIOUS pendency only — tasks due
+            // before this week still not done at the week end. This week's own
+            // leftover already reads as Planned − Actual, so it is not re-added.
+            pendingUp = carry.stillOpen || 0;
             pendingWk = carry.prevDone;
             pendingAuto = true;
           } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
             // RACI: same pair — openBefore joins the outstanding total (never
             // Planned, 2026-08-22 rule) and closedBefore = backlog steps the
             // user closed this week. Checklists have neither → 0s.
-            pendingUp = Math.max(0, given - done) + (autoRes.openBefore || 0);
+            // Previous pendency only (mam 2026-09-14) — same rule as above.
+            pendingUp = autoRes.openBefore || 0;
             pendingWk = autoRes.closedBefore || 0;
             carryPrevPending = autoRes.openBefore || 0;
             carryPrevDone = autoRes.closedBefore || 0;
