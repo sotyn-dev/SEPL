@@ -42,6 +42,9 @@ const { dueDay } = require('../lib/dueDay');
 const DUE_DELEG = dueDay('due_date'), DUE_PMS = dueDay('due_date'), DUE_TKT = dueDay('deadline_date');
 const DUE_FLOW = dueDay('target_date');   // ERP Management (System Flow) v1 (retired)
 const DUE_SYSFLOW = dueDay('st.planned_date');   // System Flow v2 steps
+// Snag List on the due-date basis too (mam 2026-09-14: "snag list scoring
+// evaluate according due date"): target_date, undated → the IST raise day.
+const DUE_SNAG = dueDay('target_date', '', 'raised_at');
 
 // ---------- TEMPLATES & KPIs (admin manages) ----------
 
@@ -390,29 +393,24 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       // site-scope gate further down: snags are per-assignee like delegations,
       // not site-scoped, and when this block sat below the gate every user
       // with no site mapping silently read 0/0.
-      // Mam's verbatim formula: Plan = raise date BETWEEN week start/end AND
-      // assigned = user; Actual = same + status='approved' (current status
-      // only, NO approved_at window — a later approval still counts toward
-      // the raised week).
-      // Two hard-won correctness rules (mam 2026-08-13 "ur calculation is
-      // wrong" — Vivek's snags landed one week off / counted as nobody's):
-      // 1) IST week bucketing: raised_at is stored UTC, so date() alone puts
-      //    a Monday-morning IST snag on Sunday = last week.  '+330 minutes'
-      //    shifts UTC → IST before taking the calendar date, matching the
-      //    dates the Snags page displays.  (Date-only imports are unaffected:
-      //    00:00 + 5h30 stays the same date.)
-      // 2) Tolerant assignee match: app-created rows link assigned_to =
-      //    users.id, but imported/WhatsApp rows carry only the NAME (either
-      //    in assigned_to_name with a NULL id, or the name string sitting in
-      //    the id column itself) — match all three shapes.
+      // Formula: Plan = snags DUE this week (target_date) AND assigned = user;
+      // Actual = same + status='approved' (current status only, NO
+      // approved_at window — a later approval still counts toward the due
+      // week).  Due-date basis since 2026-09-14 (was raise date), same as
+      // delegations: a snag with no target date falls back to its IST raise
+      // day, and a Sunday due day folds into that week (see DUE_SNAG).
+      // Tolerant assignee match (mam 2026-08-13 "ur calculation is wrong"):
+      // app-created rows link assigned_to = users.id, but imported/WhatsApp
+      // rows carry only the NAME (either in assigned_to_name with a NULL id,
+      // or the name string sitting in the id column itself) — match all three.
       if (source === 'auto:snags') {
         const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
         const who = `(assigned_to=? OR (assigned_to IS NULL AND assigned_to_name=?) OR CAST(assigned_to AS TEXT)=?)`;
         const given = db.prepare(
-          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND date(raised_at, '+330 minutes') BETWEEN ? AND ?`
+          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND ${DUE_SNAG} BETWEEN ? AND ?`
         ).get(userId, uname, uname, sinceDate, untilDate).c;
         const done = db.prepare(
-          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND date(raised_at, '+330 minutes') BETWEEN ? AND ? AND status='approved'`
+          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND ${DUE_SNAG} BETWEEN ? AND ? AND status='approved'`
         ).get(userId, uname, uname, sinceDate, untilDate).c;
         return { given, done };
       }
@@ -438,10 +436,10 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       if (source === 'auto:snags_all') {
         // Company-wide twin of auto:snags — same formula, no assignee filter.
         // Kept beside the other *_all owner sources, above the site gate.
-        // Same IST shift as auto:snags so both views bucket a snag into the
-        // same week the Snags page displays.
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at, '+330 minutes') BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at, '+330 minutes') BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
+        // Same due-day basis as auto:snags so both views bucket a snag into
+        // the same week.
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE ${DUE_SNAG} BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE ${DUE_SNAG} BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       // ERP module coverage — how many of the tracked modules had ANY activity
@@ -1277,35 +1275,39 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       'auto:sysflow_all':       { table: 'sysflow_system_steps', who: null,         doneCond: 'actual_date IS NOT NULL', doneAt: 'actual_date', dueCol: 'planned_date' },
     };
     const computeCarry = (source, since, until) => {
-      // Snags keep their special shapes: IST week bucketing on raised_at and
-      // the tolerant assignee match (same rules as computeAutoCount above).
+      // Snags keep their tolerant assignee match and IST approved_at dates
+      // (same rules as computeAutoCount above), but since 2026-09-14 the
+      // backlog is on the due-day basis like delegations: "previous" = due
+      // before this week, and a snag re-dated to a later week is scheduled,
+      // not pending.
       if (source === 'auto:snags' || source === 'auto:snags_all') {
         const sinceDate = since.slice(0, 10), untilDate = until.slice(0, 10);
+        // Sunday due days fold into this week, so a Sunday approval lands here too.
+        const weekEndDate = shiftWeek(sinceDate, 6);
         const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
         const who = source === 'auto:snags'
           ? `(assigned_to=? OR (assigned_to IS NULL AND assigned_to_name=?) OR CAST(assigned_to AS TEXT)=?) AND `
           : '';
         const whoArgs = source === 'auto:snags' ? [userId, uname, uname] : [];
+        const approvedDay = `date(approved_at, '+330 minutes')`;
         const prevPending = db.prepare(
-          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
-             AND (status != 'approved' OR (approved_at IS NOT NULL AND date(approved_at, '+330 minutes') >= ?))`
+          `SELECT COUNT(*) c FROM snags WHERE ${who}${DUE_SNAG} < ?
+             AND (status != 'approved' OR (approved_at IS NOT NULL AND ${approvedDay} >= ?))`
         ).get(...whoArgs, sinceDate, sinceDate).c;
         const prevDone = db.prepare(
-          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
-             AND status = 'approved' AND date(approved_at, '+330 minutes') BETWEEN ? AND ?`
-        ).get(...whoArgs, sinceDate, sinceDate, untilDate).c;
-        // Pending "up" — due-date rule: only snags whose target_date is on or
-        // before the week end (or unset) count as still pending.
-        const dueOk = `(target_date IS NULL OR target_date = '' OR date(target_date) <= ?)`;
+          `SELECT COUNT(*) c FROM snags WHERE ${who}${DUE_SNAG} < ?
+             AND status = 'approved' AND ${approvedDay} BETWEEN ? AND ?`
+        ).get(...whoArgs, sinceDate, sinceDate, weekEndDate).c;
+        // Pending "up" halves: stillOpen = due before the week, not approved as
+        // of the week end; weekOpen = due this week, not approved.
         const stillOpen = db.prepare(
-          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') < ?
-             AND (status != 'approved' OR (approved_at IS NOT NULL AND date(approved_at, '+330 minutes') > ?))
-             AND ${dueOk}`
-        ).get(...whoArgs, sinceDate, untilDate, untilDate).c;
+          `SELECT COUNT(*) c FROM snags WHERE ${who}${DUE_SNAG} < ?
+             AND (status != 'approved' OR (approved_at IS NOT NULL AND ${approvedDay} > ?))`
+        ).get(...whoArgs, sinceDate, weekEndDate).c;
         const weekOpen = db.prepare(
-          `SELECT COUNT(*) c FROM snags WHERE ${who}date(raised_at, '+330 minutes') BETWEEN ? AND ?
-             AND status != 'approved' AND ${dueOk}`
-        ).get(...whoArgs, sinceDate, untilDate, untilDate).c;
+          `SELECT COUNT(*) c FROM snags WHERE ${who}${DUE_SNAG} BETWEEN ? AND ?
+             AND status != 'approved'`
+        ).get(...whoArgs, sinceDate, untilDate).c;
         return { prevPending, prevDone, stillOpen, weekOpen };
       }
       const cfg = CARRY_CFG[source];
