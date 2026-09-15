@@ -11,6 +11,7 @@
 // rollback, Export Excel button, etc.).
 
 import { useState, useEffect } from 'react';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -89,7 +90,7 @@ export default function FireNoc() {
   const [tab, setTab] = useUrlTab('dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [cycles, setCycles] = useState([]);
-  const [filters, setFilters] = useState({ state: '', stage: '', status: 'active', q: '' });
+  const [filters, setFilters] = useState({ state: '', stage: '', status: ['active'], q: '' });
   const [loading, setLoading] = useState(false);
   const [createModal, setCreateModal] = useState(false);
   const [form, setForm] = useState({
@@ -234,7 +235,11 @@ export default function FireNoc() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
+      // Array values (status) go as a comma list; [] means no filter.
+      Object.entries(filters).forEach(([k, v]) => {
+        const val = Array.isArray(v) ? v.join(',') : v;
+        if (val) params.set(k, val);
+      });
       setCycles((await api.get(`/fire-noc/cycles?${params}`)).data);
     } catch (e) { toast.error('Could not load cycles'); }
     finally { setLoading(false); }
@@ -298,19 +303,23 @@ export default function FireNoc() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-2">
-        {[
-          { id: 'dashboard', label: 'Dashboard' },
-          { id: 'cycles',    label: 'Cycles' },
-          { id: 'rules',     label: 'State Rules' },
-        ].map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'} text-sm`}>
-            {t.label}
-          </button>
-        ))}
-        <button onClick={() => { loadDashboard(); loadCycles(); }} className="btn btn-secondary text-sm flex items-center gap-1">
+      {/* Tabs & Refresh — responsive flex-wrap without cutting off the refresh button */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-0.5 max-w-full">
+          {[
+            { id: 'dashboard', label: 'Dashboard' },
+            { id: 'cycles',    label: 'Cycles' },
+            { id: 'rules',     label: 'State Rules' },
+          ].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm px-3 py-1.5 whitespace-nowrap shrink-0`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => { loadDashboard(); loadCycles(); }}
+          className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1 px-3 py-1.5 whitespace-nowrap ml-auto sm:ml-0 shadow-2xs"
+          title="Refresh dashboard & cycles">
           <FiRefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
@@ -379,12 +388,12 @@ export default function FireNoc() {
         </div>
 
         {/* Next 7 days expiries */}
-        <div className="card p-0">
+        <div className="card p-0 table-responsive">
           <div className="p-3 border-b bg-gradient-to-r from-blue-50 to-amber-50">
             <h4 className="font-bold text-blue-900">Next 7 days expiries</h4>
             <p className="text-[11px] text-gray-500">cycles whose NOC expires this week — call today</p>
           </div>
-          <table>
+          <table className="min-w-[650px]">
             <thead><tr>
               <th>Building</th><th>State</th><th>Type</th><th>Customer</th>
               <th>Expiry</th><th>Days</th><th>Stage</th>
@@ -424,19 +433,26 @@ export default function FireNoc() {
             <option value="">All stages</option>
             {STAGE_ORDER.map(s => <option key={s} value={s}>{STAGE_LABEL[s]}</option>)}
           </select>
-          <select className="select text-sm" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
-            <option value="">All statuses</option>
-            <option value="active">Active</option>
-            <option value="lost">Lost</option>
-            <option value="renewed">Renewed</option>
-            <option value="archived">Archived</option>
-          </select>
-          <button onClick={() => setFilters({ state: '', stage: '', status: '', q: '' })}
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+          <div className="w-[248px]">
+            <StatusMultiSelect
+              options={[
+                { id: 'active', name: 'Active' },
+                { id: 'lost', name: 'Lost' },
+                { id: 'renewed', name: 'Renewed' },
+                { id: 'archived', name: 'Archived' },
+              ]}
+              value={filters.status}
+              onChange={v => setFilters(f => ({ ...f, status: v }))}
+              placeholder="All statuses"
+            />
+          </div>
+          <button onClick={() => setFilters({ state: '', stage: '', status: [], q: '' })}
             className="btn btn-secondary text-sm">Clear</button>
         </div>
 
-        <div className="card p-0">
-          <table>
+        <div className="card p-0 table-responsive">
+          <table className="min-w-[850px]">
             <thead><tr>
               <th>Building</th><th>Customer</th><th>State</th><th>Type</th>
               <th>Expiry</th><th>Days</th><th>Stage</th><th>Status</th><th>Owner</th>
@@ -469,12 +485,12 @@ export default function FireNoc() {
 
       {/* ============ STATE RULES TAB ============ */}
       {tab === 'rules' && dashboard && (
-        <div className="card p-0">
+        <div className="card p-0 table-responsive">
           <div className="p-3 border-b">
             <h4 className="font-semibold text-sm">State cycle-year rules</h4>
             <p className="text-[11px] text-gray-500">Regulatory — not editable from UI. Most-specific match wins; fallback is __DEFAULT__ 5 years.</p>
           </div>
-          <table>
+          <table className="min-w-[500px]">
             <thead><tr><th>State</th><th>Building type filter</th><th>Cycle years</th></tr></thead>
             <tbody>
               {dashboard.state_rules.map((r, i) => (
@@ -492,7 +508,7 @@ export default function FireNoc() {
       {/* CREATE MODAL */}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="New Fire NOC Cycle" wide>
         <form onSubmit={create} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">State *</label>
               <SearchableSelect
@@ -525,7 +541,7 @@ export default function FireNoc() {
               <label className="label">Pincode</label>
               <input className="input" value={form.pincode} onChange={e => setForm({ ...form, pincode: e.target.value })} />
             </div>
-            <div className="col-span-2">
+            <div className="col-span-1 sm:col-span-2">
               <label className="label">Address</label>
               <input className="input" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
             </div>

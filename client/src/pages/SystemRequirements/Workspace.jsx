@@ -380,6 +380,15 @@ export default function SystemRequirementWorkspace() {
     });
   };
 
+  // Hooks must run on EVERY render, so this tab-clamp effect sits ABOVE the
+  // loading return. It used to live after it, which made React throw
+  // "Rendered more hooks than during the previous render" the moment data
+  // arrived — and the app-root error boundary then blanked the whole ERP.
+  const tabsForRole = data && (data.is_tech_operator || data.is_staff) ? ALL_TABS : RAISER_TABS;
+  useEffect(() => {
+    if (data && !tabsForRole.includes(tab)) setTab('overview');
+  }, [data, tabsForRole, tab]);
+
   if (!data) {
     return <div className="p-6 text-sm text-gray-500">Loading…</div>;
   }
@@ -446,11 +455,7 @@ export default function SystemRequirementWorkspace() {
   };
 
   const canDevAttach = !!(data.is_tech_operator || data.is_staff || canField(data, 'tech_analysis'));
-  const tabs = (data.is_tech_operator || data.is_staff) ? ALL_TABS : RAISER_TABS;
-
-  useEffect(() => {
-    if (!tabs.includes(tab)) setTab('overview');
-  }, [tabs, tab]);
+  const tabs = tabsForRole;
 
   return (
     <div className="space-y-4 min-h-[calc(100vh-180px)]">

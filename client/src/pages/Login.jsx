@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { isStorageBlocked } from '../lib/tokenStore';
+import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { FiUser, FiLock, FiEye, FiEyeOff, FiArrowRight } from 'react-icons/fi';
 
@@ -29,37 +30,52 @@ export default function Login() {
   const [form, setForm] = useState({ identifier: savedIdentifier, password: '' });
   const [remember, setRemember] = useState(!!savedIdentifier);
   const [showPassword, setShowPassword] = useState(false);
-  const { login } = useAuth();
+  const [totp, setTotp] = useState(null); // { tempToken, qr?, secret? }
+  const [code, setCode] = useState('');
+  const { login, loginTotp } = useAuth();
+
+  const afterLogin = (data) => {
+    try {
+      if (remember) localStorage.setItem('sepl_remember_identifier', form.identifier);
+      else localStorage.removeItem('sepl_remember_identifier');
+    } catch { /* storage blocked — non-critical, skip remember-me */ }
+    if (isStorageBlocked()) {
+      toast('Your browser is blocking site data, so you may get logged out. Please open securederp.in in Chrome/Safari directly (not inside another app) and turn off Private/Incognito mode.', { duration: 9000, icon: '⚠️' });
+      toast.success(`Welcome back, ${data.user.name}!`);
+    } else {
+      toast.success(`Welcome back, ${data.user.name}!`);
+      window.location.replace('/');
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       const data = await login(form.identifier, form.password);
-      try {
-        if (remember) localStorage.setItem('sepl_remember_identifier', form.identifier);
-        else localStorage.removeItem('sepl_remember_identifier');
-      } catch { /* storage blocked — non-critical, skip remember-me */ }
-      // If the browser is blocking site data, the session will only last
-      // this page view and they'll be logged out on the next reload. Tell
-      // them plainly instead of letting it look like a random logout.
-      if (isStorageBlocked()) {
-        // In-app / private browsers keep the token in memory only — a full
-        // reload would wipe it and loop straight back to login. So DON'T reload
-        // here; the soft state transition keeps THIS page-view working.
-        toast('Your browser is blocking site data, so you may get logged out. Please open securederp.in in Chrome/Safari directly (not inside another app) and turn off Private/Incognito mode.', { duration: 9000, icon: '⚠️' });
-        toast.success(`Welcome back, ${data.user.name}!`);
-      } else {
-        // Full reload so the ENTIRE app boots fresh on the NEW token. A soft
-        // state transition leaves any page that was already mounted with the
-        // old/expired token still showing its 401'd data — mam 2026-07-01: after
-        // re-login the Sales Funnel + employees stayed empty because those calls
-        // had already gone out on the dead token and never refetched. Reloading
-        // guarantees every request uses the fresh token.
-        toast.success(`Welcome back, ${data.user.name}!`);
-        window.location.replace('/');
+      if (data.totp_required || data.totp_setup_required) {
+        setCode('');
+        setTotp({
+          tempToken: data.temp_token,
+          qr: data.qr || null,
+          secret: data.secret || null,
+        });
+        return;
       }
+      afterLogin(data);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Something went wrong');
+    }
+  };
+
+  const handleTotp = async (e) => {
+    e.preventDefault();
+    if (!totp?.tempToken || code.length !== 6) return;
+    try {
+      const data = await loginTotp(totp.tempToken, code);
+      setTotp(null);
+      afterLogin(data);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Invalid authenticator code');
     }
   };
 
@@ -171,6 +187,19 @@ export default function Login() {
             <p className="mt-6 text-center text-[11px] text-zinc-500">
               Contact your admin for login credentials
             </p>
+
+            {/* SEPL Mission — mobile/tablet view (the right brand panel is
+                hidden below lg, but site engineers ARE the mobile users —
+                the mission must reach them too, mam 2026-08-03). */}
+            <div className="lg:hidden mt-5 bg-blue-50 border border-blue-200 rounded-xl p-3">
+              <div className="text-blue-800 font-bold text-[10px] uppercase tracking-wider mb-1">SEPL Mission</div>
+              <p className="text-blue-900/80 text-[11px] leading-relaxed">
+                "Ham software isliye bana rahe hain taki <b>site par kaam bina rukawat chale</b>.
+                Planning pehle hogi. Material pehle site par pahunchega.<br />
+                <b>Har Friday planning hogi. Har Monday site ready hogi.</b><br />
+                Hamari priority <b>smooth execution aur profit</b> hai."
+              </p>
+            </div>
           </div>
 
           {/* ─── RIGHT — Brand panel (royal blue half, was red) ─── */}
@@ -218,6 +247,44 @@ export default function Login() {
           </div>
         </div>
       </div>
+
+      <Modal
+        isOpen={!!totp}
+        onClose={() => { setTotp(null); setCode(''); }}
+        title={totp?.qr ? 'Set up authenticator' : 'Authenticator code'}
+      >
+        <form onSubmit={handleTotp} className="space-y-4">
+          {totp?.qr && (
+            <div className="text-center space-y-2">
+              <p className="text-sm text-zinc-600">Scan this QR with Google Authenticator or Microsoft Authenticator, then enter the 6-digit code.</p>
+              <img src={totp.qr} alt="Authenticator QR" className="mx-auto w-[220px] h-[220px] rounded-lg border border-zinc-200 bg-white" />
+              {totp.secret && (
+                <p className="text-[11px] text-zinc-500 break-all font-mono">Key: {totp.secret}</p>
+              )}
+            </div>
+          )}
+          {!totp?.qr && (
+            <p className="text-sm text-zinc-600">Enter the 6-digit code from your authenticator app.</p>
+          )}
+          <input
+            autoFocus
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={code}
+            onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            className="w-full text-center text-2xl tracking-[0.4em] font-mono bg-white border border-zinc-300 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 rounded-xl py-3 outline-none"
+            placeholder="000000"
+          />
+          <button
+            type="submit"
+            disabled={code.length !== 6}
+            className="w-full bg-gradient-to-r from-blue-700 to-blue-800 disabled:opacity-50 text-white font-semibold py-3 rounded-xl"
+          >
+            Verify
+          </button>
+        </form>
+      </Modal>
 
       {/* Footer */}
       <footer className="relative z-10 py-5 px-4 text-center select-none">

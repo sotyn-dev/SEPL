@@ -81,7 +81,7 @@ export default function WeeklyScore() {
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <FiTrendingUp className="text-indigo-600" /> Weekly Score
           </h1>
-          <p className="text-sm text-gray-500">Mon-Sat work given vs done per employee. Click any cell to drill into the actual tasks.</p>
+          <p className="text-sm text-gray-500">Work due vs done per employee this week — delegations, PMS tasks and tickets by their due date, checklists by day. Click any cell to drill into the actual tasks.</p>
         </div>
       </div>
 
@@ -103,8 +103,12 @@ export default function WeeklyScore() {
         )}
         {data?.users && (
           <button onClick={() => exportCsv(`weekly-score-${weekStart}`,
-            ['Rank','Employee','Dept','Given','Done','Score %'],
-            data.users.map((u, i) => [i + 1, u.name, u.department, u.given_total, u.done_total, u.score_pct]))}
+            ['Rank','Employee','Dept','Due','Done','Score %'],
+            // given_total/done_total/score_pct never existed on the API rows —
+            // /scoring returns total_given/total_done/score (scoring.js:1631),
+            // which is what the table below renders. The three CSV columns
+            // exported blank on every row until 2026-09-03.
+            data.users.map((u, i) => [i + 1, u.name, u.department || u.role || '', u.total_given, u.total_done, u.score]))}
             className="btn btn-secondary text-xs flex items-center gap-1"><FiDownload size={12} /> Export Excel</button>
         )}
       </div>
@@ -125,11 +129,11 @@ export default function WeeklyScore() {
             </tr>
             <tr className="text-[10px] text-gray-500 uppercase">
               <th></th><th></th><th></th>
-              <th>Given</th><th>Done</th>
-              <th>Given</th><th>Done</th>
-              <th>Given</th><th>Done</th>
-              <th>Given</th><th>Done</th>
-              <th>Given</th><th>Done</th>
+              <th>Due</th><th>Done</th>
+              <th>Due</th><th>Done</th>
+              <th>Due</th><th>Done</th>
+              <th>Due</th><th>Done</th>
+              <th>Due</th><th>Done</th>
               <th></th>
             </tr>
           </thead>
@@ -207,6 +211,7 @@ export default function WeeklyScore() {
                   {r.assigned_by_name && <span>by {r.assigned_by_name}</span>}
                   {r.raised_by_name && <span>raised by {r.raised_by_name}</span>}
                   {r.due_date && <span>due {r.due_date}</span>}
+                  {r.deadline_date && <span>deadline {r.deadline_date}</span>}
                   {r.date && <span>📅 {r.date}</span>}
                   {r.created_at && <span>created {String(r.created_at).split('T')[0]}</span>}
                   {r.priority && <span>{r.priority}</span>}

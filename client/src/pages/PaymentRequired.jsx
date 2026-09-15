@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
+import MultiUserSelect from '../components/MultiUserSelect';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -62,6 +63,11 @@ const emptyForm = {
 
 export default function PaymentRequired() {
   const { canCreate, canApprove, canDelete, user } = useAuth();
+  // ⚙ Responsible (mam 2026-08-19): the server authorises whoever is named
+  // Responsible for a step, so the buttons must appear for them too — gating
+  // purely on the module 'approve' permission hid the action from the very
+  // person the RACI screen put in charge. Server still re-checks every action.
+  const mayAct = (r) => canApprove('payment_required') || !!(r && r.can_approve_current);
   const [tab, setTab] = useUrlTab('dashboard');
   // Mam (2026-05-30): My Inbox tab removed.  Old bookmarks pointing
   // at ?tab=inbox land back on Dashboard so they don't dead-end.
@@ -70,6 +76,8 @@ export default function PaymentRequired() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
   const [requests, setRequests] = useState([]);
+  // Bulk Approve is worth showing if this user can act on ANY loaded row.
+  const mayActAnywhere = canApprove('payment_required') || requests.some(r => r.can_approve_current);
   // Bulk approve (mam 2026-06-25): pick a person, see all their pending with
   // proof, tick-tick approve — instead of opening each one by one.
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -101,7 +109,7 @@ export default function PaymentRequired() {
   const [viewData, setViewData] = useState(null);
   const [form, setForm] = useState({ ...emptyForm });
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ status: '', category: '', date_from: '', date_to: '' });
+  const [filters, setFilters] = useState({ status: [], category: '', date_from: '', date_to: '' });
   // Client-side filter by LIVE workflow stage (current_step_name / Approved /
   // Rejected). Set by clicking a stage tile or chip. Empty = all stages.
   const [stageFilter, setStageFilter] = useState('');
@@ -112,6 +120,19 @@ export default function PaymentRequired() {
   const [approvedLevel, setApprovedLevel] = useState(null);
   const clearedAt = (r, step) => !!(r.step_amounts && r.step_amounts[step] != null);
   const [uploading, setUploading] = useState(false);
+  // ── List paging + single render tree (2026-08-20 payables hang audit) ──
+  // The register used to mount EVERY row twice — mobile cards AND desktop
+  // table, the CSS-hidden tree still fully built by React — with no
+  // pagination, so at prod volume the page froze for seconds on open and on
+  // every re-render. Now one tree renders, 50 rows a page.
+  const [page, setPage] = useState(0);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const onChange = e => setIsMobile(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   // The lists that used to be hardcoded module constants, same names, now served
   // from /payment-required/lookups. Empty until the fetch resolves.
@@ -233,16 +254,37 @@ export default function PaymentRequired() {
     }
   };
 
+  // Debounce the SEARCH VALUE only (not load itself): the input stays fully
+  // controlled by `search`, while `debouncedSearch` trails it by 350ms and is
+  // what the fetch uses. This way mount and single-click filter changes fetch
+  // IMMEDIATELY — only keystroke bursts coalesce (self-review 2026-08-20: the
+  // first debounce version delayed page-open and every dropdown pick too).
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Abort the previous in-flight list fetch when a new one starts — without
+  // this a slow stale response could land AFTER a newer one and overwrite it
+  // (2026-08-20 payables hang audit).
+  const listAbortRef = useRef(null);
   const load = useCallback(() => {
     const params = new URLSearchParams();
-    if (search) params.set('search', search);
-    Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
-    api.get(`/payment-required?${params}`).then(r => setRequests(r.data)).catch(() => {});
-    api.get('/payment-required/stats').then(r => setStats(r.data)).catch(() => {});
+    if (debouncedSearch) params.set('search', debouncedSearch);
+    Object.entries(filters).forEach(([k, v]) => {
+      const val = Array.isArray(v) ? v.join(',') : v;   // status is a list
+      if (val) params.set(k, val);
+    });
+    listAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    listAbortRef.current = ctrl;
+    api.get(`/payment-required?${params}`, { signal: ctrl.signal }).then(r => setRequests(r.data)).catch(() => {});
+    api.get('/payment-required/stats', { signal: ctrl.signal }).then(r => setStats(r.data)).catch(() => {});
     // Mam (2026-05-30): My Inbox tab removed → no need to fetch the
     // inbox list or poll the count.  Endpoints remain on the server
     // for any external consumer / future re-introduction.
-  }, [search, filters]);
+  }, [debouncedSearch, filters]);
 
   // Workflow option lists — fetched on mount, and again whenever a routing
   // override is saved (the `flows` half names the current holder of each step,
@@ -255,15 +297,29 @@ export default function PaymentRequired() {
   }, []);
   useEffect(() => { loadLookups(); }, [loadLookups]);
 
+  // Static dropdown data — fetched ONCE on mount. These used to live in the
+  // [load] effect below, so every search keystroke refetched sites, employees
+  // and vendors along with the list (2026-08-20 payables hang audit: typing a
+  // 10-letter name fired ~50 requests and stalled the single-threaded server
+  // for every user).
   useEffect(() => {
-    load();
     // ?all=1 → any employee raising a payment request can pick from ALL
     // sites (not just ones they're assigned to as a site engineer). Matches
     // mam's ask on 2026-04-23.
     api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => {});
     api.get('/hr/employees').then(r => setEmployees(r.data)).catch(() => {});
     api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => {});
-  }, [load]);
+  }, []);
+
+  // Fires immediately on mount and on every filter click; typing only
+  // reaches here via debouncedSearch (350ms after the last keystroke), so
+  // a keystroke burst is one request, not one per letter. Action handlers
+  // still call load() directly for an instant refresh.
+  useEffect(() => { load(); }, [load]);
+
+  // Any change of search/filter/tab shows a new result set — jump back to
+  // its first page so the user never lands on an empty tail page.
+  useEffect(() => { setPage(0); }, [debouncedSearch, filters, tab, stageFilter, approvedLevel]);
 
   // Mandatory-proof validation per category + mode (mam: 'if proof
   // mandatory then why missing'). Block submission until every required
@@ -461,6 +517,22 @@ export default function PaymentRequired() {
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
 
+  // Rows actually ON SCREEN: tab (pending/approved/rejected) + the stage-tile
+  // filter + the "Approved by Lx" view.  Search / dropdown filters are already
+  // applied server-side in load(), so they're baked into `requests`.  Shared by
+  // the request list AND Export Excel — the CSV used to map raw `requests`, so
+  // exporting from the Rejected tab (or an L3 tile) dumped every request on the
+  // server instead of the handful on screen.
+  const visibleRows = (tab === 'inbox' ? myInbox : requests).filter(r => {
+    if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
+    if (tab === 'approved' && r.status !== 'final_approved') return false;
+    if (tab === 'rejected' && r.status !== 'rejected') return false;
+    // "Approved by Lx" view, else the live-stage chip filter.
+    if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
+    else if (stageFilter && stageOf(r) !== stageFilter) return false;
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -468,10 +540,10 @@ export default function PaymentRequired() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><LuIndianRupee className="text-orange-600" /> Payment Required</h1>
           <p className="text-sm text-gray-500">Request payments with multi-level approval workflow</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button onClick={() => exportCsv('payment-requests',
             ['Req No','Employee','Site','Category','Amount','Purpose','Step','Status','Required By','Created'],
-            requests.map(r => [r.request_no, r.employee_name, r.site_name, r.category, r.amount, r.purpose, r.current_step, r.status, r.required_by_date, r.created_at]))}
+            visibleRows.map(r => [r.request_no, r.employee_name, r.site_name, r.category, r.amount, r.purpose, displayWorkflowStage(r.current_step_name, r.category, r.current_step), r.status, r.required_by_date, r.created_at]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload size={16} /> Export Excel</button>
           {isAdmin && (
             <button onClick={openRoutingModal} className="btn btn-secondary flex items-center gap-2"
@@ -479,7 +551,7 @@ export default function PaymentRequired() {
               <FiSettings size={16} /> Approval Routing
             </button>
           )}
-          {canApprove('payment_required') && (
+          {mayActAnywhere && (
             <button onClick={openBulk} className="btn btn-secondary flex items-center gap-2"
                     title="Approve many of your pending requests at once — filter by person, see proofs, tick-tick approve">
               <FiCheckCircle size={16} /> Bulk Approve
@@ -497,7 +569,7 @@ export default function PaymentRequired() {
           (no migration needed) — they're just no longer surfaced
           here.  If anyone lands on ?tab=inbox via bookmark, the
           redirect effect just below kicks them to Dashboard. */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
         {['dashboard', 'all', 'pending', 'approved', 'rejected', 'responsible'].map(t => {
           const label = t === 'all' ? 'All Requests'
                       : t === 'responsible' ? '⚙ Responsible'
@@ -515,12 +587,12 @@ export default function PaymentRequired() {
       {/* Dashboard */}
       {tab === 'dashboard' && stats && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div className="card p-4 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Requests</p><p className="text-2xl font-bold">{stats.total}</p></div>
-            <div className="card p-4 border-l-4 border-orange-500"><p className="text-xs text-gray-500">Total Amount</p><p className="text-2xl font-bold text-orange-600">{fmt(stats.totalAmount)}</p></div>
-            <div className="card p-4 border-l-4 border-amber-500"><p className="text-xs text-gray-500">Pending</p><p className="text-2xl font-bold text-amber-600">{stats.pending}</p></div>
-            <div className="card p-4 border-l-4 border-emerald-500"><p className="text-xs text-gray-500">Approved</p><p className="text-2xl font-bold text-emerald-600">{stats.approved}</p></div>
-            <div className="card p-4 border-l-4 border-red-500"><p className="text-xs text-gray-500">Rejected</p><p className="text-2xl font-bold text-red-600">{stats.rejected}</p></div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
+            <div className="card p-3 sm:p-4 border-l-4 border-red-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Total Requests</p><p className="text-lg sm:text-2xl font-bold break-words">{stats.total}</p></div>
+            <div className="card p-3 sm:p-4 border-l-4 border-orange-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Total Amount</p><p className="text-lg sm:text-2xl font-bold text-orange-600 break-words">{fmt(stats.totalAmount)}</p></div>
+            <div className="card p-3 sm:p-4 border-l-4 border-amber-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Pending</p><p className="text-lg sm:text-2xl font-bold text-amber-600 break-words">{stats.pending}</p></div>
+            <div className="card p-3 sm:p-4 border-l-4 border-emerald-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Approved</p><p className="text-lg sm:text-2xl font-bold text-emerald-600 break-words">{stats.approved}</p></div>
+            <div className="card p-3 sm:p-4 border-l-4 border-red-500 overflow-hidden"><p className="text-xs text-gray-500 truncate">Rejected</p><p className="text-lg sm:text-2xl font-bold text-red-600 break-words">{stats.rejected}</p></div>
           </div>
 
           {/* Category breakdown */}
@@ -584,9 +656,18 @@ export default function PaymentRequired() {
               <input type="date" className="select w-36" value={filters.date_to} onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))} />
             </div>
             <select className="select w-40" value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}><option value="">All Categories</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
-            <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}</select>
-            {(filters.date_from || filters.date_to || filters.category || filters.status || stageFilter || search) && (
-              <button onClick={() => { setSearch(''); setStageFilter(''); setApprovedLevel(null); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
+            {/* Status - tick as many as you like (mam 2026-09-12). */}
+            <div className="w-[212px]">
+              <MultiUserSelect
+                options={STATUSES.map(s => ({ id: s.value, name: s.label }))}
+                value={filters.status}
+                onChange={v => setFilters(f => ({ ...f, status: v }))}
+                searchable={false}
+                placeholder="All Status"
+              />
+            </div>
+            {(filters.date_from || filters.date_to || filters.category || filters.status.length || stageFilter || search) && (
+              <button onClick={() => { setSearch(''); setStageFilter(''); setApprovedLevel(null); setFilters({ status: [], category: '', date_from: '', date_to: '' }); }}
                 className="btn btn-secondary text-xs flex items-center gap-1 text-red-600 whitespace-nowrap">
                 <FiX size={12} /> Clear filters
               </button>
@@ -698,16 +779,36 @@ export default function PaymentRequired() {
             );
           })()}
 
-          {/* ─── MOBILE CARDS (mam 2026-06-02) ───────────────────── */}
-          <div className="md:hidden space-y-3">
-            {(tab === 'inbox' ? myInbox : requests).filter(r => {
-              if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
-              if (tab === 'approved' && r.status !== 'final_approved') return false;
-              if (tab === 'rejected' && r.status !== 'rejected') return false;
-              if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
-              else if (stageFilter && stageOf(r) !== stageFilter) return false;
-              return true;
-            }).map(r => {
+          {/* ─── REQUEST LIST — ONE render tree (cards on mobile, table on
+              desktop) paged 50 rows at a time. 2026-08-20 payables hang
+              audit: both trees used to mount EVERY row (the CSS-hidden one
+              is still fully built by React) with no pagination — a quarter
+              million DOM nodes at prod volume froze the page. ──────────── */}
+          {(() => {
+            // Same rows Export Excel writes — see visibleRows above.
+            const listRows = visibleRows;
+            const PAGE_SIZE = 50;
+            const pageCount = Math.max(1, Math.ceil(listRows.length / PAGE_SIZE));
+            const safePage = Math.min(page, pageCount - 1);
+            // Write the clamp back to state (React's adjust-state-during-render
+            // pattern) — a display-only clamp left `page` stale after the list
+            // shrank, so a later regrow teleported the pager back to the old
+            // page (self-review 2026-08-20).
+            if (safePage !== page) setPage(safePage);
+            const pageRows = listRows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+            const pager = listRows.length > PAGE_SIZE ? (
+              <div className="flex items-center justify-between text-xs text-gray-600 px-1 py-2">
+                <span>{listRows.length} requests · page {safePage + 1} of {pageCount}</span>
+                <div className="flex gap-1.5">
+                  <button type="button" className="btn btn-secondary text-xs py-1 disabled:opacity-40" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>← Prev</button>
+                  <button type="button" className="btn btn-secondary text-xs py-1 disabled:opacity-40" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)}>Next →</button>
+                </div>
+              </div>
+            ) : null;
+            return isMobile ? (
+            /* ─── MOBILE CARDS (mam 2026-06-02) ───────────────────── */
+            <div className="space-y-3">
+            {pageRows.map(r => {
               const { date, time } = fmtISTPair(r.created_at);
               return (
                 <div key={r.id} className="card p-3 space-y-2">
@@ -759,7 +860,7 @@ export default function PaymentRequired() {
                     <span>{date} · {time}</span>
                     <div className="flex gap-1">
                       <button onClick={() => viewRequest(r.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><FiEye size={14} /></button>
-                      {canApprove('payment_required') && r.status !== 'final_approved' && r.status !== 'rejected' && (
+                      {mayAct(r) && r.status !== 'final_approved' && r.status !== 'rejected' && (
                         <button onClick={() => viewRequest(r.id)} className="btn btn-secondary text-[10px] py-0.5 px-2">Review</button>
                       )}
                       {canDelete('payment_required') && <button onClick={async () => {
@@ -772,22 +873,15 @@ export default function PaymentRequired() {
                 </div>
               );
             })}
-            {requests.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No requests found</div>}
+            {listRows.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No requests found</div>}
+            {pager}
           </div>
-
-          {/* ─── DESKTOP TABLE (md+) ───────────────────────────────── */}
-          <div className="hidden md:block card p-0"><table className="freeze-head">
+            ) : (
+          /* ─── DESKTOP TABLE (md+) ───────────────────────────────── */
+          <><div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th title="Amount the approver agreed — may be less than requested">Approval Amt</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
-              {(tab === 'inbox' ? myInbox : requests).filter(r => {
-                if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
-                if (tab === 'approved' && r.status !== 'final_approved') return false;
-                if (tab === 'rejected' && r.status !== 'rejected') return false;
-                // "Approved by Lx" view, else the live-stage chip filter.
-                if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
-                else if (stageFilter && stageOf(r) !== stageFilter) return false;
-                return true;
-              }).map(r => (
+              {pageRows.map(r => (
                 <tr key={r.id}>
                   <td className="font-bold text-red-600 cursor-pointer" onClick={() => viewRequest(r.id)}>{r.request_no}</td>
                   <td className="font-medium">{r.employee_name}</td>
@@ -892,7 +986,7 @@ export default function PaymentRequired() {
                   </td>
                   <td><div className="flex gap-1">
                     <button onClick={() => viewRequest(r.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><FiEye size={15} /></button>
-                    {canApprove('payment_required') && r.status !== 'final_approved' && r.status !== 'rejected' && <>
+                    {mayAct(r) && r.status !== 'final_approved' && r.status !== 'rejected' && <>
                       <button onClick={() => viewRequest(r.id)} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded font-bold text-xs" title="Review & Approve/Reject">Review</button>
                     </>}
                     {canDelete('payment_required') && <button onClick={async () => {
@@ -903,9 +997,12 @@ export default function PaymentRequired() {
                   </div></td>
                 </tr>
               ))}
-              {requests.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No requests found</td></tr>}
+              {listRows.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No requests found</td></tr>}
             </tbody>
           </table></div>
+          {pager}</>
+            );
+          })()}
         </>
       )}
 
@@ -1231,6 +1328,16 @@ export default function PaymentRequired() {
             )}
 
             {/* Action buttons - role based */}
+            {/* Separation of duties — the viewer WOULD be this step's approver
+                but raised the request themselves AND this is the final payout
+                step (mam 2026-08-20: own-step approval is allowed on
+                intermediate steps; only self-RELEASE is blocked). Explain
+                instead of offering Approve and then erroring. */}
+            {viewData.status !== 'final_approved' && viewData.status !== 'rejected' && viewData.sod_block_reason && (
+              <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50 text-sm text-amber-800">
+                <b>Someone else must complete this step:</b> {viewData.sod_block_reason}. Separation of duties — you cannot release the payment on your own request; a different authorised person (e.g. admin or the release approver) must do the payout.
+              </div>
+            )}
             {viewData.status !== 'final_approved' && viewData.status !== 'rejected' && viewData.can_approve_current && (() => {
               const original = +(viewData.amount || 0);
               const currentApproved = viewData.approved_amount != null ? +viewData.approved_amount : original;
@@ -1292,7 +1399,7 @@ export default function PaymentRequired() {
 
       {/* New Request Modal */}
       <Modal isOpen={modal === 'add'} onClose={() => setModal(null)} title="New Payment Request" wide>
-        <form onSubmit={handleSave} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+        <form onSubmit={handleSave} className="space-y-4 pr-1">
 
           {/* Common fields */}
           {/* Shared suggestion lists — pick from the master OR keep typing
@@ -1301,7 +1408,7 @@ export default function PaymentRequired() {
           <datalist id="prEmployeesDL">{employees.map(e => <option key={e.id} value={e.name} />)}</datalist>
           <div className="border rounded-lg p-3 bg-gray-50">
             <h4 className="font-semibold text-sm text-gray-700 mb-3">Request Details</h4>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <div>
                 <label className="label">Employee Name *</label>
                 <SearchableSelect
@@ -1334,7 +1441,7 @@ export default function PaymentRequired() {
               </div>
               {/* `|| ''` lets backspace clear field (mam 2026-05-25). */}
               <div><label className="label">Amount Required (Rs) *</label><input className="input" type="number" value={form.amount || ''} onChange={e => F('amount', +e.target.value)} required /></div>
-              <div className="col-span-2"><label className="label">Purpose / Description *</label><input className="input" value={form.purpose} onChange={e => F('purpose', e.target.value)} required /></div>
+              <div className="col-span-1 sm:col-span-2"><label className="label">Purpose / Description *</label><input className="input" value={form.purpose} onChange={e => F('purpose', e.target.value)} required /></div>
               <div><label className="label">Payment Mode</label>
                 <select className="select" value={form.payment_mode} onChange={e => F('payment_mode', e.target.value)}>
                   <option>Cash</option><option>Bank</option><option>UPI</option>
@@ -1354,7 +1461,7 @@ export default function PaymentRequired() {
           {form.category === 'TA/DA' && (
             <div className="border rounded-lg p-3 bg-purple-50">
               <h4 className="font-semibold text-sm text-purple-700 mb-3">TA/DA Details</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="label">Travel From-To *</label><input className="input" value={form.travel_from_to} onChange={e => F('travel_from_to', e.target.value)} required /></div>
                 <div><label className="label">Travel Dates *</label>
                   <input className="input" type="date" value={form.travel_dates}
@@ -1389,7 +1496,7 @@ export default function PaymentRequired() {
               {/* Car/Bike → KM + 2 Separate Photos */}
               {['Car','Bike'].includes(form.mode_of_travel) && (
                 <div className="mt-3 p-3 bg-white rounded border border-purple-200 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-2 p-2 bg-red-50 rounded">
                       <label className="label">Start KM *</label>
                       <input className="input" type="number" value={form.start_km || ''} onChange={e => F('start_km', +e.target.value)} required />
@@ -1434,10 +1541,10 @@ export default function PaymentRequired() {
           {form.category === 'Purchase' && (
             <div className="border rounded-lg p-3 bg-red-50">
               <h4 className="font-semibold text-sm text-red-700 mb-3">Purchase Details</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="label">Indent Number *</label><input className="input" value={form.indent_number} onChange={e => F('indent_number', e.target.value)} required /></div>
                 <div><label className="label">Vendor Name *</label><input className="input" list="prVendorsDL" value={form.vendor_name} onChange={e => F('vendor_name', e.target.value)} placeholder="Pick or type" required /></div>
-                <div className="col-span-2"><label className="label">Item Description</label><textarea className="input" rows="2" value={form.item_description} onChange={e => F('item_description', e.target.value)} /></div>
+                <div className="col-span-1 sm:col-span-2"><label className="label">Item Description</label><textarea className="input" rows="2" value={form.item_description} onChange={e => F('item_description', e.target.value)} /></div>
                 <div><label className="label">Purchase Order Upload *</label>
                   {form.quotation_link ? (
                     <div className="flex items-center gap-2"><a href={form.quotation_link} className="text-red-600 text-sm underline">Quotation uploaded</a><button type="button" onClick={() => F('quotation_link', '')} className="text-red-500 text-xs">Remove</button></div>
@@ -1457,7 +1564,7 @@ export default function PaymentRequired() {
           {form.category === 'Labour' && (
             <div className="border rounded-lg p-3 bg-green-50">
               <h4 className="font-semibold text-sm text-green-700 mb-3">Labour Details</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="label">Labour Type *</label><select className="select" value={form.labour_type} onChange={e => F('labour_type', e.target.value)} required><option value="">Select</option><option>Skilled</option><option>Unskilled</option><option>Semi-skilled</option><option>Contractor</option></select></div>
                 <div><label className="label">Number of Workers *</label><input className="input" type="number" value={form.number_of_workers || ''} onChange={e => F('number_of_workers', +e.target.value)} required /></div>
                 <div><label className="label">Work Duration</label><input className="input" value={form.work_duration} onChange={e => F('work_duration', e.target.value)} placeholder="e.g. 5 days, 2 weeks" /></div>
@@ -1470,7 +1577,7 @@ export default function PaymentRequired() {
           {form.category === 'Transport' && (
             <div className="border rounded-lg p-3 bg-gray-50">
               <h4 className="font-semibold text-sm text-gray-700 mb-3">Transport Details</h4>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><label className="label">Vehicle Type *</label><select className="select" value={form.vehicle_type} onChange={e => F('vehicle_type', e.target.value)} required><option value="">Select</option><option>Truck</option><option>Pickup</option><option>Tempo</option><option>Car</option><option>Auto</option><option>Crane</option></select></div>
                 <div><label className="label">From-To Location *</label><input className="input" value={form.from_to_location} onChange={e => F('from_to_location', e.target.value)} required /></div>
                 <div><label className="label">Material Description</label><input className="input" value={form.material_description} onChange={e => F('material_description', e.target.value)} /></div>

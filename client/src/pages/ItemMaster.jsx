@@ -144,12 +144,24 @@ export default function ItemMaster() {
   useEffect(() => { loadPendingCount(); }, [loadPendingCount, items]);
 
   // Approve / reject a pending item (Admin only). Refreshes list + count.
-  const setApproval = async (item, action) => {
+  // Reject needs a remark (mam 2026-09-05) — opens a small dialog; the
+  // server also refuses a blank reason, so the button alone can't reject.
+  const [rejecting, setRejecting] = useState(null);      // item being rejected
+  const [rejectReason, setRejectReason] = useState('');
+  const setApproval = async (item, action, reason) => {
+    if (action === 'reject' && reason === undefined) { setRejecting(item); setRejectReason(''); return; }
     try {
-      await api.post(`/item-master/${item.id}/${action}`);
+      await api.post(`/item-master/${item.id}/${action}`, action === 'reject' ? { reason } : undefined);
       toast.success(action === 'approve' ? 'Item approved' : 'Item rejected');
+      setRejecting(null); setRejectReason('');
       load(); loadPendingCount();
     } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+  const submitReject = (e) => {
+    e.preventDefault();
+    const reason = rejectReason.trim();
+    if (!reason) { toast.error('Please enter the rejection remark'); return; }
+    setApproval(rejecting, 'reject', reason);
   };
   const approveAllPending = async () => {
     if (!window.confirm(`Approve all ${pendingCount} pending item(s)?`)) return;
@@ -533,6 +545,9 @@ export default function ItemMaster() {
                         <div className="flex flex-col items-center gap-1">
                           <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-semibold ${badge}`}>{label}</span>
                           {st === 'approved' && i.approved_by_name && <span className="text-[9px] text-gray-400">by {i.approved_by_name}</span>}
+                          {st === 'rejected' && i.rejection_reason && (
+                            <span className="text-[10px] text-red-700 max-w-[160px] whitespace-normal text-left" title={`Rejected${i.approved_by_name ? ' by ' + i.approved_by_name : ''}: ${i.rejection_reason}`}>{i.rejection_reason}</span>
+                          )}
                           {admin && st !== 'approved' && (
                             <div className="flex gap-1">
                               <button onClick={() => setApproval(i, 'approve')} className="text-[10px] font-semibold px-2 py-0.5 rounded bg-green-600 text-white hover:bg-green-700">Approve</button>
@@ -556,24 +571,32 @@ export default function ItemMaster() {
             {items.length === 0 && <tr><td colSpan="12" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
           </tbody>
         </table>
-        {/* Paginator — keeps the page snappy even on 2,000+ item masters. */}
+        {/* Paginator — responsive mobile layout + desktop layout */}
         {total > PAGE_SIZE && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50 text-xs">
-            <div className="text-gray-600">
-              Showing <span className="font-semibold">{page * PAGE_SIZE + 1}</span>–<span className="font-semibold">{Math.min(total, (page + 1) * PAGE_SIZE)}</span> of <span className="font-semibold">{total.toLocaleString('en-IN')}</span>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 px-4 py-3 border-t border-gray-100 bg-gray-50 text-xs">
+            <div className="text-gray-600 text-center sm:text-left whitespace-nowrap">
+              Showing <span className="font-semibold text-gray-800">{page * PAGE_SIZE + 1}</span>–<span className="font-semibold text-gray-800">{Math.min(total, (page + 1) * PAGE_SIZE)}</span> of <span className="font-semibold text-gray-800">{total.toLocaleString('en-IN')}</span> items
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-center sm:justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setPage(p => Math.max(0, p - 1))}
                 disabled={page === 0 || loading}
-                className="btn btn-secondary text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-              ><FiChevronLeft size={14} /> Prev</button>
-              <span className="text-gray-500">Page <b>{page + 1}</b> of <b>{Math.max(1, Math.ceil(total / PAGE_SIZE))}</b></span>
+                className="btn btn-secondary text-xs flex items-center gap-1 py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs"
+              >
+                <FiChevronLeft size={14} /> Prev
+              </button>
+              <span className="text-gray-600 px-2.5 py-1 bg-white border border-gray-200 rounded-md font-medium text-xs whitespace-nowrap shadow-2xs">
+                Page <b className="text-gray-900">{page + 1}</b> of <b className="text-gray-900">{Math.max(1, Math.ceil(total / PAGE_SIZE))}</b>
+              </span>
               <button
+                type="button"
                 onClick={() => setPage(p => ((p + 1) * PAGE_SIZE < total ? p + 1 : p))}
                 disabled={(page + 1) * PAGE_SIZE >= total || loading}
-                className="btn btn-secondary text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-              >Next <FiChevronRight size={14} /></button>
+                className="btn btn-secondary text-xs flex items-center gap-1 py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs"
+              >
+                Next <FiChevronRight size={14} />
+              </button>
             </div>
           </div>
         )}
@@ -778,6 +801,25 @@ export default function ItemMaster() {
 
       {/* Pipe Weight master (MTR → KG) */}
       <PipeWeightsModal isOpen={pipeModal} onClose={() => { setPipeModal(false); loadPipeWeights(); }} />
+
+      {/* Reject remark (mam 2026-09-05: "when reject need to enter remarks") */}
+      <Modal isOpen={!!rejecting} onClose={() => setRejecting(null)} title={`Reject item${rejecting?.item_code ? ` · ${rejecting.item_code}` : ''}`}>
+        {rejecting && (
+          <form onSubmit={submitReject} className="space-y-3">
+            <div className="text-sm text-gray-700">
+              <span className="font-semibold">{rejecting.item_name || rejecting.name}</span>
+              {rejecting.specification ? <span className="text-gray-500"> · {rejecting.specification}</span> : null}
+            </div>
+            <label className="block text-xs font-semibold text-gray-600">Remark <span className="text-red-600">*</span> — why is this item being rejected?</label>
+            <textarea autoFocus required rows={3} className="input w-full text-sm" placeholder="e.g. wrong make / duplicate of ELE0231 / rate not as per bill"
+              value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setRejecting(null)} className="btn btn-secondary text-sm">Cancel</button>
+              <button type="submit" disabled={!rejectReason.trim()} className="btn text-sm bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">Reject item</button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       {/* Photo lightbox — click a thumbnail (table or form) to view full-size. */}
       {lightbox && (

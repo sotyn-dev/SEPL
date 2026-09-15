@@ -17,6 +17,7 @@
 // email for the CMD without giving the AI a user login.
 
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const fs = require('fs');
 const path = require('path');
 const { getDb } = require('../db/schema');
@@ -44,7 +45,7 @@ router.use((req, res, next) => {
 });
 
 // --- Small helpers --------------------------------------------------
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => istToday();
 const daysAgo = (n) => {
   const d = new Date(); d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);

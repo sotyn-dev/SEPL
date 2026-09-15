@@ -11,11 +11,12 @@
 // Skip via ERP_DISABLE_DPR_PROMPT=1 in dev / staging.
 
 const { getDb } = require('../db/schema');
+const { istToday } = require('../lib/istDate');
 
 const TARGET_HOUR = 18;   // 18:00 = 6 PM
 const TARGET_MIN = 0;
 
-function todayIso() { return new Date().toISOString().slice(0, 10); }
+function todayIso() { return istToday(); }
 function isWeekend() {
   const d = new Date().getDay();
   return d === 0; // Sunday only; SEPL works 6-day week with Saturday active

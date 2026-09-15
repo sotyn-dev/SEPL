@@ -1,0 +1,25 @@
+const assert = require('node:assert/strict');
+const Database = require('better-sqlite3');
+const { resolveInstallationBillUnits } = require('../installationBillUnits');
+const db = new Database(':memory:');
+db.exec(`
+  CREATE TABLE po_items (id INTEGER, business_book_id INTEGER, description TEXT, unit TEXT, rate REAL);
+  CREATE TABLE dpr (id INTEGER, sales_bill_id INTEGER);
+  CREATE TABLE dpr_work_items (dpr_id INTEGER, po_item_id INTEGER, description TEXT, unit TEXT);
+  INSERT INTO po_items VALUES (1, 42, '37mm Heavy Duty Pvc pipe', 'mtr', 0);
+  INSERT INTO po_items VALUES (2, 43, '37mm Heavy Duty Pvc pipe', 'PCS', 50);
+  INSERT INTO dpr VALUES (1, 8);
+  INSERT INTO dpr_work_items VALUES (1, 1, '37mm Heavy Duty Pvc pipe (floor 1)', 'PCS');
+`);
+const item = { description: '37mm Heavy Duty Pvc pipe', unit: 'PCS', rate: 50, qty_delivered: 75, amount: 3750 };
+const bill = { id: 8, bill_type: 3, business_book_id: 43 };
+assert.deepEqual(resolveInstallationBillUnits(db, bill, [item]), [{ ...item, unit: 'mtr' }]);
+const renamed = { ...item, description: '37mm Heavy Duty Pvc pipe (floor 1)' };
+assert.equal(resolveInstallationBillUnits(db, bill, [renamed])[0].unit, 'mtr');
+assert.equal(resolveInstallationBillUnits(db, { ...bill, id: 9, business_book_id: 42 }, [item])[0].unit, 'mtr');
+assert.deepEqual(resolveInstallationBillUnits(db, { ...bill, bill_type: 2 }, [item]), [item]);
+assert.equal(resolveInstallationBillUnits(db, bill, [{ ...item, description: 'Extra work', unit: 'Each' }])[0].unit, 'Each');
+db.exec(`INSERT INTO dpr_work_items VALUES (1, 2, '37mm Heavy Duty Pvc pipe', 'PCS')`);
+assert.equal(resolveInstallationBillUnits(db, bill, [item])[0].unit, 'PCS');
+db.close();
+console.log('Installation bill unit regression checks passed');

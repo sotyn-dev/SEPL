@@ -14,11 +14,46 @@ const atDirector = () => { try { return getEmailConfig().director; } catch { ret
 const router = express.Router();
 router.use(authMiddleware);
 
+// One-time self-heal for epoch-poisoned hour totals (mam 2026-08-26: "wrong
+// hours calculate" — dashboard showed 496,650 Total Hrs). Cause: punching out
+// on a row that had NO punch_in_time (admin/allow-list mark) computed the
+// duration from new Date(null) = 1970. The punch-out route now guards this;
+// this repairs rows already stored. Idempotent — recompute where both punch
+// times are valid, otherwise fall back to 0; runs in ms on every boot.
+try {
+  const db = getDb();
+  const fixed = db.prepare(`
+    UPDATE attendance SET total_hours = CASE
+      WHEN punch_in_time IS NOT NULL AND punch_out_time IS NOT NULL
+       AND (julianday(punch_out_time) - julianday(punch_in_time)) * 24 BETWEEN 0 AND 24
+      THEN ROUND((julianday(punch_out_time) - julianday(punch_in_time)) * 24, 2)
+      WHEN COALESCE(admin_marked, 0) = 1 THEN 8
+      ELSE 0 END
+    WHERE total_hours > 24 OR total_hours < 0
+  `).run();
+  if (fixed.changes) console.log(`[attendance] repaired ${fixed.changes} row(s) with impossible total_hours`);
+} catch (e) { console.warn('[attendance] total_hours self-heal skipped:', e.message); }
+
 // "Today" as an IST (UTC+5:30) YYYY-MM-DD. The VPS runs UTC, so a bare
 // toISOString().split('T')[0] rolls the date over at 05:30 IST — punches and
 // admin-marks in that pre-dawn window landed on the WRONG calendar day (L4).
 // Always derive the attendance DATE in IST; point-in-time `now` stamps stay UTC.
 const istTodayStr = () => new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().split('T')[0];
+
+// "09:40" typed by an admin (IST, on `date`) → the UTC ISO string every punch
+// is stored as. Payroll reads punch_in_time as UTC and adds 5:30, so storing
+// the raw IST text would read 5.5 h early and never cross the late cutoff.
+const istTimeToUtcIso = (date, hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  const ms = Date.parse(`${date}T${String(m[1]).padStart(2, '0')}:${m[2]}:00Z`) - 5.5 * 3600 * 1000;
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+};
+// Hours between two stored punches, clamped like the real punch-out path.
+const punchHours = (inIso, outIso) => {
+  const h = Math.round((new Date(outIso) - new Date(inIso)) / 36000) / 100;
+  return Number.isFinite(h) && h > 0 ? Math.min(h, 24) : 0;
+};
 
 // Late detection — read cutoff from payroll_settings (admin-tunable), fall
 // back to 09:46 IST. Returns true if `whenIso` (ISO string in UTC) lies
@@ -42,7 +77,7 @@ function isPunchLate(db, whenIso, roster) {
   // the shifted Date — those values are now the actual IST time-of-day.
   const ist = new Date(new Date(whenIso || Date.now()).getTime() + 5.5 * 60 * 60 * 1000);
   const istMin = ist.getUTCHours() * 60 + ist.getUTCMinutes();
-  return istMin > cutoffMin;
+  return istMin >= cutoffMin;   // late_after_time is the FIRST late minute (see payroll.js)
 }
 
 // GET today's attendance for current user.
@@ -110,7 +145,7 @@ router.get('/my-month', (req, res) => {
 
   // Build a per-day map of status. Key = YYYY-MM-DD.
   // Order of precedence: attendance row wins; else leave; else (past weekdays) absent; future = blank.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istTodayStr();
   const todayObj = new Date(today);
   const days = [];
   const byStatus = { present: 0, late: 0, half_day: 0, short_day: 0, absent: 0, on_leave: 0, weekend: 0, future: 0 };
@@ -138,7 +173,7 @@ router.get('/my-month', (req, res) => {
         const piIst = new Date(new Date(att.punch_in_time).getTime() + 5.5 * 60 * 60 * 1000);
         if (!isNaN(piIst)) {
           const piMin = piIst.getUTCHours() * 60 + piIst.getUTCMinutes();
-          if (piMin > lateCutoffMin) status = 'late';
+          if (piMin >= lateCutoffMin) status = 'late';   // first-late-minute boundary
         }
       }
     } else if (onLeave) {
@@ -274,6 +309,12 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   if (status) { sql += ' AND a.status=?'; params.push(status); }
   if (date_from) { sql += ' AND a.date >= ?'; params.push(date_from); }
   if (date_to) { sql += ' AND a.date <= ?'; params.push(date_to); }
+  // No filter at all = every punch ever recorded (measured 42 MB / 5 s on a
+  // year-scale copy, and it blocks every other user while it serialises).
+  // The UI always sends a date or a range; a bare call gets the last 31 days.
+  if (!date && !user_id && !date_from && !date_to) {
+    sql += " AND a.date >= date('now', '+330 minutes', '-31 days')";
+  }
   sql += ' ORDER BY a.date DESC, a.punch_in_time DESC';
   res.json(getDb().prepare(sql).all(...params));
 });
@@ -373,7 +414,7 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
 // admin_marked=1 so the user's own dashboard / month view skips it.
 // Restricted to admins or roles with attendance.approve.
 router.post('/admin-mark', (req, res) => {
-  const { user_id, date, status, remarks, proof_url } = req.body;
+  const { user_id, date, status, remarks, proof_url, punch_in, punch_out } = req.body;
   if (!user_id || !date) return res.status(400).json({ error: 'user_id and date are required' });
 
   // Admin may backfill any PAST date, but never a future one.
@@ -395,10 +436,30 @@ router.post('/admin-mark', (req, res) => {
   // absent / whatever the punch was).  Never touches a real punch row.
   if (status === 'clear') {
     const ex = db.prepare('SELECT id, admin_marked FROM attendance WHERE user_id=? AND date=?').get(user_id, date);
-    if (ex && ex.admin_marked) db.prepare('DELETE FROM attendance WHERE id=?').run(ex.id);
+    if (ex && ex.admin_marked) {
+      db.prepare('DELETE FROM attendance WHERE id=?').run(ex.id);
+      // A clear IS a delete, hidden inside a POST — the 22–24 incident used
+      // exactly this. Score it like DELETE /attendance/:id (which the audit
+      // log counts automatically; this path it can't see).
+      require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'admin_mark_clear');
+    }
     return res.json({ message: 'Cleared' });
   }
-  const finalStatus = ['present','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
+  // 'late' included (mam 2026-09-12): the backfill form sets the status from
+  // the punch times, and an admin-marked row is paid by STATUS alone, so a
+  // late arrival has to be storable as late.
+  const finalStatus = ['present','late','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
+
+  // Punch in / out typed by the admin (mam 2026-09-12: "so that if someone
+  // miss to punch in or out we can mark it"). Optional — a mark with no times
+  // behaves exactly as before.
+  const piIso = punch_in ? istTimeToUtcIso(date, punch_in) : null;
+  const poIso = punch_out ? istTimeToUtcIso(date, punch_out) : null;
+  if (punch_in && !piIso) return res.status(400).json({ error: 'Punch in time must be HH:MM (24-hour)' });
+  if (punch_out && !poIso) return res.status(400).json({ error: 'Punch out time must be HH:MM (24-hour)' });
+  if (piIso && poIso && new Date(poIso) <= new Date(piIso)) {
+    return res.status(400).json({ error: 'Punch out must be after punch in' });
+  }
 
   // Proof is OPTIONAL on this endpoint (dme 2026-07-26). The 07-24 gate that
   // rejected a back-dated worked day without proof_url was reverted for the
@@ -412,21 +473,62 @@ router.post('/admin-mark', (req, res) => {
 
   // If a real attendance row already exists (user actually punched), don't
   // overwrite it. Admin-mark is meant for the missing-row case only.
-  const existing = db.prepare('SELECT id, admin_marked FROM attendance WHERE user_id=? AND date=?').get(user_id, date);
+  const existing = db.prepare(
+    'SELECT id, admin_marked, punch_in_time, punch_out_time, total_hours, status FROM attendance WHERE user_id=? AND date=?'
+  ).get(user_id, date);
   if (existing && !existing.admin_marked) {
-    return res.status(400).json({ error: 'User already has an attendance record for this date' });
+    // A REAL punch row. Still the missed-punch case mam asked for: fill the
+    // side the employee never punched, and never touch the side they did.
+    const fillIn = piIso && !existing.punch_in_time ? piIso : null;
+    const fillOut = poIso && !existing.punch_out_time ? poIso : null;
+    if (!fillIn && !fillOut) {
+      return res.status(400).json({
+        error: (piIso || poIso)
+          ? 'That punch is already recorded — an existing punch time is never overwritten.'
+          : 'User already has an attendance record for this date',
+      });
+    }
+    const newIn = fillIn || existing.punch_in_time;
+    const newOut = fillOut || existing.punch_out_time;
+    const hrs = newIn && newOut ? punchHours(newIn, newOut) : (existing.total_hours || 0);
+    // Same rule the real punch-out uses: under 4 h is a half day.
+    const newStatus = (newIn && newOut && hrs < 4) ? 'half_day' : existing.status;
+    db.prepare(
+      `UPDATE attendance SET punch_in_time=?, punch_out_time=?, total_hours=?, status=?,
+              remarks=COALESCE(NULLIF(?, ''), remarks), marked_by=?, marked_at=CURRENT_TIMESTAMP
+         WHERE id=?`
+    ).run(newIn, newOut, hrs, newStatus, remarks || '', req.user.id, existing.id);
+    return res.json({
+      id: existing.id,
+      message: `Missing punch ${fillIn && fillOut ? 'times' : fillIn ? 'in' : 'out'} filled${newIn && newOut ? ` — ${hrs} h` : ''}`,
+    });
   }
   if (existing && existing.admin_marked) {
+    const newIn = piIso || existing.punch_in_time;
+    const newOut = poIso || existing.punch_out_time;
+    const hrs = newIn && newOut
+      ? punchHours(newIn, newOut)
+      : (finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
     db.prepare(
-      `UPDATE attendance SET status=?, remarks=?, marked_by=?, marked_at=CURRENT_TIMESTAMP, proof_url=COALESCE(?, proof_url) WHERE id=?`
-    ).run(finalStatus, remarks || null, req.user.id, proof_url || null, existing.id);
+      `UPDATE attendance SET status=?, remarks=?, marked_by=?, marked_at=CURRENT_TIMESTAMP, proof_url=COALESCE(?, proof_url),
+              punch_in_time=?, punch_out_time=?, total_hours=? WHERE id=?`
+    ).run(finalStatus, remarks || null, req.user.id, proof_url || null, newIn, newOut, hrs, existing.id);
     return res.json({ message: 'Updated', id: existing.id });
   }
 
   const r = db.prepare(
-    `INSERT INTO attendance (user_id, date, status, remarks, admin_marked, marked_by, marked_at, proof_url, total_hours)
-     VALUES (?,?,?,?,1,?,CURRENT_TIMESTAMP,?, ?)`
-  ).run(user_id, date, finalStatus, remarks || null, req.user.id, proof_url || null, finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
+    `INSERT INTO attendance (user_id, date, status, remarks, admin_marked, marked_by, marked_at, proof_url, total_hours, punch_in_time, punch_out_time)
+     VALUES (?,?,?,?,1,?,CURRENT_TIMESTAMP,?,?,?,?)`
+  ).run(user_id, date, finalStatus, remarks || null, req.user.id, proof_url || null,
+    piIso && poIso ? punchHours(piIso, poIso) : (finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0),
+    piIso, poIso);
+  // Deliberately NOT scored on the breaker: the Monthly Grid marks payroll
+  // corrections cell-by-cell through this endpoint (mam's core workflow —
+  // 15+ clicks in a sitting is NORMAL), and marking is already gated by
+  // attendance.approve, visible (admin_marked=1 + audit log), and
+  // reversible. Only the DESTRUCTIVE paths score: status=clear above (+1,
+  // it deletes a row) and DELETE /attendance/:id (counted via audit_log).
+  // A locked user still can't reach this endpoint at all (GUARDED_WRITES).
   res.status(201).json({ id: r.lastInsertRowid, message: 'Marked' });
 });
 
@@ -532,11 +634,23 @@ function computeGrid(db, month) {
     }
   }
 
+  // Late is measured from the payroll cut-off (late_after_time, 09:46 = the
+  // FIRST late minute), NOT from the shift start — the grid used to count from
+  // 09:30, so a 09:52 punch read "22m" while the salary sheet charged 7
+  // (mam 2026-09-12: "count after 45 not from 30"). Short leave forgives the
+  // late mark exactly as payroll does (skip_half_day_if_short_leave).
+  const paySettings = (() => {
+    try { return db.prepare('SELECT late_after_time, skip_half_day_if_short_leave FROM payroll_settings WHERE id=1').get() || {}; }
+    catch { return {}; }
+  })();
+  const shortLeaveForgives = !!paySettings.skip_half_day_if_short_leave;
+
   const rows = employees.map(e => {
     const cells = {};
     const totals = { present: 0, half: 0, leave: 0, late: 0 };
     const rst = ROSTERS[e.roster] || ROSTERS.general || {};
     const rosterStartMin = hhmmToMin(rst.start || '09:30');
+    const lateAfterMin = hhmmToMin(rosterCutoffs(paySettings, e.roster).late_after_time || '09:46');
     if (e.user_id) {
       const leaves = leavesByUser.get(e.user_id) || [];
       for (const day of days) {
@@ -545,7 +659,7 @@ function computeGrid(db, month) {
         if (att) {
           status = String(att.status || '').toLowerCase();
           source = att.admin_marked ? 'admin' : 'punch';
-        } else if (leaves.some(l => day.date >= l.from_date && day.date <= l.to_date)) {
+        } else if (leaves.some(l => l.leave_type !== 'short_leave' && day.date >= l.from_date && day.date <= l.to_date)) {
           status = 'leave'; source = 'leave';
         } else if (day.sunday) {
           status = 'sunday'; source = 'auto';
@@ -563,17 +677,26 @@ function computeGrid(db, month) {
           worked_on_off: !!(day.sunday && att && (att.punch_in_time || ['present', 'half_day', 'short_day', 'late'].includes(String(att.status || '').toLowerCase()))),
           future: day.future,
         };
-        // Late days show P plus how late they arrived vs their shift start.
+        // Late days show P plus how late they arrived — counted from the late
+        // cut-off, the same minutes payroll charges for. A short leave that day
+        // clears the late mark (mam 2026-09-12: "if some come late but that
+        // time fill short leave that means he or she is not late").
         if (status === 'late' && att && att.punch_in_time) {
-          const lm = Math.max(0, istMinuteOfDay(att.punch_in_time) - rosterStartMin);
-          cell.late_minutes = lm;
-          cell.late_label = lateLabel(lm);
+          const onShortLeave = shortLeaveForgives
+            && leaves.some(l => l.leave_type === 'short_leave' && day.date >= l.from_date && day.date <= l.to_date);
+          if (onShortLeave) {
+            cell.short_leave = true;
+          } else {
+            const lm = Math.max(0, istMinuteOfDay(att.punch_in_time) - lateAfterMin + 1);
+            cell.late_minutes = lm;
+            cell.late_label = lateLabel(lm);
+          }
         }
         const code = dayCode(cell);
         if (code === 'P' || code === 'WOP') totals.present++;
         else if (code === 'H') totals.half++;
         else if (code === 'L') totals.leave++;
-        if (status === 'late') totals.late++;
+        if (status === 'late' && cell.late_minutes != null) totals.late++;
         cells[day.date] = cell;
       }
     }
@@ -666,7 +789,9 @@ router.get('/grid/export.xlsx', async (req, res) => {
     ['name', 'designation', 'site'].forEach(k => { r.getCell(k).alignment = { horizontal: 'left', vertical: 'middle' }; });
     grid.days.forEach(d => {
       const cell = emp.cells[d.date];
-      const argb = (cell && cell.status === 'late') ? LATE_FILL : CODE_FILL[dayCode(cell)];
+      // Amber only for a day that really counts late — a short leave forgives it
+      // (same rule as the on-screen grid, mam 2026-09-12).
+      const argb = (cell && cell.status === 'late' && cell.late_minutes > 0) ? LATE_FILL : CODE_FILL[dayCode(cell)];
       if (argb) r.getCell('d' + d.d).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
     });
   });
@@ -712,6 +837,10 @@ router.post('/admin-mark-bulk', (req, res) => {
     }
   });
   tx();
+  // Scored +1 per CALL, not per day marked: one legitimate month-mark (proof
+  // document required, attendance.approve gated) must not insta-lock HR at
+  // month-end — but ten of these inside ten minutes is a spray, and trips.
+  if (marked > 0) require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'admin_mark_bulk');
   res.json({ message: `Marked ${marked} day(s)`, marked });
 });
 
@@ -818,10 +947,23 @@ router.post('/punch-out', (req, res) => {
     }
   }
 
-  // Calculate total hours
+  // Calculate total hours. A row can exist WITHOUT punch_in_time (admin
+  // manual mark, allow-list auto-mark) — new Date(null) is the 1970 epoch,
+  // and punching out on such a row stored ~496,650 hours (mam 2026-08-26:
+  // "wrong hours calculate" — Admin's own dashboard tile). No punch-in →
+  // no duration to compute; keep the marked hours and just record the out.
   const punchIn = new Date(record.punch_in_time);
+  if (!record.punch_in_time || Number.isNaN(punchIn.getTime())) {
+    db.prepare('UPDATE attendance SET punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, punch_out_accuracy=? WHERE id=?')
+      .run(now, latitude, longitude, address, photo, accuracy || null, record.id);
+    return res.json({ message: 'Punched Out. (No punch-in time on today\'s record — hours kept as marked.)', totalHours: record.total_hours || 0 });
+  }
   const punchOut = new Date(now);
-  const totalHours = Math.round((punchOut - punchIn) / (1000 * 60 * 60) * 100) / 100;
+  let totalHours = Math.round((punchOut - punchIn) / (1000 * 60 * 60) * 100) / 100;
+  // A day is at most 24h — anything outside means corrupt timestamps, never
+  // a real shift. Clamp so one bad row can't poison monthly/weekly sums.
+  if (!Number.isFinite(totalHours) || totalHours < 0) totalHours = 0;
+  if (totalHours > 24) totalHours = 24;
   const status = totalHours < 4 ? 'half_day' : record.status;
 
   db.prepare(`UPDATE attendance SET punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, total_hours=?, status=?, punch_out_accuracy=? WHERE id=?`)
@@ -1105,7 +1247,7 @@ router.post('/leave', (req, res) => {
     to_date: to_date || from_date,
     days: String(days),
     reason: reason || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istTodayStr(),
     requester_email: req.user.email || atUserEmail(db, req.user.id),
     director_email: atDirector(),
   });
@@ -1148,7 +1290,7 @@ router.put('/leave/:id/approve', requirePermission('attendance', 'approve'), (re
     leave_type: lr?.leave_type || '',
     status: status || '',
     decided_by: req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istTodayStr(),
     requester_email: atUserEmail(db, lr?.user_id),
     director_email: atDirector(),
   });
@@ -1224,7 +1366,11 @@ function runAutoPunchCheck() {
       } catch (e) { console.error('[auto-punch] IN failed:', e.message); }
     } else if (attendance && attendance.punch_in_time && !attendance.punch_out_time && allOutside) {
       const punchIn = new Date(attendance.punch_in_time);
-      const totalHours = Math.round((new Date(now) - punchIn) / (1000 * 60 * 60) * 100) / 100;
+      // Same 0–24h clamp as manual punch-out — corrupt timestamps must never
+      // store epoch-sized hour totals.
+      let totalHours = Math.round((new Date(now) - punchIn) / (1000 * 60 * 60) * 100) / 100;
+      if (!Number.isFinite(totalHours) || totalHours < 0) totalHours = 0;
+      if (totalHours > 24) totalHours = 24;
       const status = totalHours < 4 ? 'half_day' : (totalHours < 8 ? 'short_day' : attendance.status);
       try {
         db.prepare(`UPDATE attendance

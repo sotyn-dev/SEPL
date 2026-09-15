@@ -1,6 +1,8 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { statusFilter } = require('../lib/statusFilter');
+const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
 const { getRaciForRecords } = require('./raci');
@@ -179,7 +181,61 @@ try {
   }
 } catch (e) { console.error('[migration] TA/DA HR backfill failed:', e.message); }
 
+// ── Names out of the code, into config (mam 2026-08-19) ─────────────
+// "u dont do hardcode hr approval, prabhdeep will do" — the flow definitions
+// name real people (HR Prabhdeep Singh, L2 Nitin Jain, L3 Ankur Kaplesh,
+// Release Aanchal). Those names are only a FIRST-RUN DEFAULT: on boot each one
+// is copied into payment_approval_overrides, the table ⚙ Approval Routing edits,
+// so every step becomes a row mam can reassign without touching source. Once a
+// row exists it is never re-seeded, so her choices are never overwritten — and a
+// step she clears back to "— Default —" simply stops having a row.
+// Idempotent: only fills a (category, step) that has no row and whose name
+// resolves to an active user.
+// Latches only once EVERY named step has a row. If a name did not resolve (that
+// person is not created yet, or is spelled differently), we retry later instead
+// of latching — otherwise a user added after the first call would never get their
+// config row until the next restart. Throttled so an unresolvable name cannot
+// re-run this on every request.
+let _routingSeedDone = false, _routingSeedAt = 0;
+function seedApprovalRoutingDefaults(db) {
+  if (_routingSeedDone) return;
+  const now = Date.now();
+  if (now - _routingSeedAt < 60000) return;
+  _routingSeedAt = now;
+  let skipped = 0;
+  try {
+    ensureOverrideTable(db);
+    const has = db.prepare('SELECT 1 FROM payment_approval_overrides WHERE category=? AND step=?');
+    const ins = db.prepare(`INSERT INTO payment_approval_overrides (category, step, user_id, updated_at, updated_by)
+                            VALUES (?,?,?,CURRENT_TIMESTAMP,NULL)`);
+    const seeded = [];
+    for (const [category, flow] of Object.entries(WORKFLOW)) {
+      for (const st of flow) {
+        if (!st.approver_name) continue;                 // role-based steps stay role-based
+        if (has.get(category, st.step)) continue;        // never overwrite a real choice
+        const u = resolveUserByName(db, st.approver_name);
+        if (!u) { skipped++; continue; }                  // name not created yet → retry later
+        ins.run(category, st.step, u.id);
+        seeded.push(`${category}/${st.step}=${u.name}`);
+      }
+    }
+    if (seeded.length) console.log(`[payables] approval routing seeded from defaults: ${seeded.join(', ')}`);
+    if (!skipped) _routingSeedDone = true;                // nothing left to fill — stop checking
+  } catch (e) { console.warn('[payables] approval routing seed failed:', e.message); }
+}
+
+// The HR gate is whichever step the flow labels 'HR Approval' — read from the
+// flow definition rather than hard-coding step 0, so renumbering a flow can't
+// silently point this at the wrong stage.
+function isHrApprovalStep(category, step) {
+  const flow = WORKFLOW[category];
+  if (!flow) return false;
+  const st = flow.find(w => w.step === step);
+  return !!st && /^hr approval$/i.test(String(st.name || '').trim());
+}
+
 function getApprovalRoutingFor(db, category, step) {
+  seedApprovalRoutingDefaults(db);   // first call in this process fills the defaults
   try {
     const row = db.prepare(`SELECT user_id FROM payment_approval_overrides WHERE category=? AND step=?`).get(category, step);
     return row?.user_id || null;
@@ -196,9 +252,36 @@ function canUserApproveStep(db, userId, category, step) {
   // Explicit override wins.  Only the assigned user (or admin) can
   // approve when an override is set.  No fallback to role-based —
   // that's the point of the override.
+  // ── HR Approval belongs to the HR TEAM (mam 2026-08-20) ──────────
+  // PR-2026-1584: Prabhdeep raised his own TA/DA, so separation of duties
+  // correctly refused him — but the step was pinned to him ALONE, leaving the
+  // request stuck with nobody able to clear it ("hr approval prabhdeep can't
+  // approve, dont use hard code"). The HR gate is a TEAM responsibility, so any
+  // HR-team member may clear it: membership is the hr_team permission in the
+  // role matrix (the same capability hr.js uses for hiring requests), which mam
+  // manages herself — no name in source, and no single point of failure when
+  // that person is the requester, on leave, or has left.
+  // Additive: the assigned/named approver still works exactly as before, and
+  // sodBlockReason still refuses whoever raised the request.
+  if (isHrApprovalStep(category, step)) {
+    try {
+      if (getUserPermissions(userId)['hr_team']?.can_view) return true;
+    } catch (_) { /* fall through to the normal checks */ }
+  }
+
   const overrideUserId = getApprovalRoutingFor(db, category, step);
   if (overrideUserId) {
-    return overrideUserId === userId;
+    if (overrideUserId === userId) return true;
+    // The COO stand-in for L2/L3 used to be reachable only because those steps
+    // had no row. Now that the defaults are seeded as rows, check it here too —
+    // otherwise seeding would silently strip an escalation path that works today
+    // (mam 2026-06-18: "coo@securedengineers unable to approve").
+    if (step === 2 || step === 3) {
+      const me = db.prepare('SELECT email, username FROM users WHERE id=?').get(userId);
+      const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
+      if (isCoo(me?.email) || isCoo(me?.username)) return true;
+    }
+    return false;
   }
   // COO escalation (mam 2026-06-18: "coo@securedengineers unable to approve").
   // The COO may clear the L2 and L3 sign-offs. Matched by EMAIL (the `coo@`
@@ -271,11 +354,16 @@ const publicSteps = (flow) => flow.map(({ step, name }) => ({ step, name }));
 //   default  — the flow's own named approver
 //   role     — open to anyone holding the role
 function stepHolder(db, category, stepInfo, nameById, userForName) {
+  // The HR gate is held by the HR TEAM, so say so instead of printing one
+  // person's name — that label is what made it look like only Prabhdeep could
+  // ever clear it (mam 2026-08-20).
+  const hrStep = isHrApprovalStep(category, stepInfo.step);
   const overrideId = getApprovalRoutingFor(db, category, stepInfo.step);
   if (overrideId) {
     const nm = nameById(overrideId);
-    if (nm) return { approver: nm, approver_kind: 'override' };
+    if (nm) return { approver: hrStep ? `${nm} or HR team` : nm, approver_kind: 'override' };
   }
+  if (hrStep) return { approver: 'HR team', approver_kind: 'override' };
   if (stepInfo.approver_name) {
     return {
       approver: userForName(stepInfo.approver_name)?.name || stepInfo.approver_name,
@@ -329,7 +417,10 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
   // Scope filter: non-approvers (e.g. site engineers) only see their own
   // requests. Approvers / admin see everything.
   if (!seesAll(req)) { sql += ' AND pr.created_by = ?'; params.push(req.user.id); }
-  if (status) { sql += ' AND pr.status=?'; params.push(status); }
+  // Status - one value or a comma list (mam 2026-09-12). The allow-list is
+  // the same three the flow ever writes (see the lookups route above).
+  const st = statusFilter(status, ['pending', 'final_approved', 'rejected'], 'pr.status');
+  if (st) { sql += ` AND ${st.sql}`; params.push(...st.params); }
   if (category) { sql += ' AND pr.category=?'; params.push(category); }
   if (step) { sql += ' AND pr.current_step=?'; params.push(step); }
   // Mam 2026-05-29: date range filter on created_at so she can scope
@@ -385,6 +476,13 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
   const nameById = (uid) => { if (!idNameMemo.has(uid)) idNameMemo.set(uid, db.prepare('SELECT name FROM users WHERE id=?').get(uid)?.name || null); return idNameMemo.get(uid); };
   const byNameMemo = new Map();
   const userForName = (nm) => { if (!byNameMemo.has(nm)) byNameMemo.set(nm, resolveUserByName(db, nm) || null); return byNameMemo.get(nm); };
+  // can_approve_current is identical for every row sharing (category,
+  // current_step) for a fixed user — at most ~35 distinct pairs exist.
+  // Un-memoized it re-ran canUserApproveStep's 1-5 queries PER ROW,
+  // re-introducing the exact per-row pattern the 2026-06-25 hang fix
+  // above removed (2026-08-20 payables hang audit).
+  const canMemo = new Map();
+  const canApproveFor = (cat, step) => { const k = cat + '|' + step; if (!canMemo.has(k)) canMemo.set(k, canUserApproveStep(db, req.user.id, cat, step)); return canMemo.get(k); };
 
   for (const row of rows) {
     try {
@@ -394,7 +492,9 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
       row.current_step_name = curStep?.name || null;
       if (curStep) {
         const overrideUserId = routeFor(row.category, row.current_step);
-        if (overrideUserId) row.next_approver_name = nameById(overrideUserId);
+        const hrStep2 = isHrApprovalStep(row.category, curStep.step);
+        if (overrideUserId) row.next_approver_name = nameById(overrideUserId) + (hrStep2 ? ' or HR team' : '');
+        else if (hrStep2) row.next_approver_name = 'HR team';
         else if (curStep.approver_name) { const u = userForName(curStep.approver_name); row.next_approver_name = u?.name || curStep.approver_name; }
         else row.next_approver_name = null;
         row.next_approver_role = curStep.approver_role || null;
@@ -428,6 +528,17 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
       }
       row.step_amounts = {};
       for (const a of appr) row.step_amounts[a.step] = (a.step_amount != null ? +a.step_amount : (+row.approved_amount || +row.amount || 0));
+      // Can THIS user act on THIS row right now? The Review / Bulk Approve
+      // controls were gated purely on the payment_required 'approve' permission,
+      // so someone the server DOES authorise — e.g. a person assigned to a step
+      // in ⚙ Approval Routing whose role lacks that permission tick — saw no
+      // button at all (mam 2026-08-19: "aanchal can't bulk approval"). This is
+      // the exact pair of checks the approve endpoint runs (authorisation AND
+      // separation of duties), so the UI can never offer an action the server
+      // then refuses, and never hides one it would allow.
+      row.can_approve_current = (row.status !== 'final_approved' && row.status !== 'rejected')
+        && canApproveFor(row.category, row.current_step)
+        && !sodBlockReason(db, row, req.user.id);
     } catch (e) {
       console.warn('[payment-required GET] enrich failed for row', row.id, e.message);
     }
@@ -504,14 +615,30 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
     const k = category + '|' + w.step;
     if (!(k in _whoCache)) {
       const ov = getApprovalRoutingFor(db, category, w.step);
-      if (ov) _whoCache[k] = nameById(ov);
+      if (ov) _whoCache[k] = nameById(ov) + (isHrApprovalStep(category, w.step) ? ' or HR team' : '');
+      else if (isHrApprovalStep(category, w.step)) _whoCache[k] = 'HR team';
       else if (w.approver_name) { const u = resolveUserByName(db, w.approver_name); _whoCache[k] = u?.name || w.approver_name; }
       else _whoCache[k] = null;
     }
     return _whoCache[k];
   };
 
-  const inbox = [];
+  // PERF (2026-08-20 payables hang audit): this loop used to run FOUR
+  // separate payment_approvals queries PER inbox row (last approval,
+  // distinct-step count, step amounts, per-step pipeline) — full table
+  // scans until idx_pa_request existed — plus un-memoized routing and
+  // authorisation lookups per row, all synchronous on the event loop.
+  // Same class as the 2026-06-25 list hang, same cure: decide "is mine"
+  // first with memoized checks (only a few distinct (category, step)
+  // pairs exist), then ONE chunked prefetch of the approval rows for the
+  // inbox ids, then enrich from the in-memory map. Response shape is
+  // byte-identical — Bulk Approve renders exactly what it did before.
+  const routingMemo = new Map();
+  const routingFor = (cat, step) => { const k = cat + '|' + step; if (!routingMemo.has(k)) routingMemo.set(k, getApprovalRoutingFor(db, cat, step)); return routingMemo.get(k); };
+  const canMemo = new Map();
+  const canFor = (cat, step) => { const k = cat + '|' + step; if (!canMemo.has(k)) canMemo.set(k, canUserApproveStep(db, uid, cat, step)); return canMemo.get(k); };
+
+  const mine = [];
   for (const row of rows) {
     const workflow = WORKFLOW[row.category];
     if (!workflow) continue;
@@ -520,7 +647,7 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
     // System steps (Velocity Check) never go to a human inbox.
     if (stepInfo.approver_role === 'System') continue;
 
-    const overrideUserId = getApprovalRoutingFor(db, row.category, row.current_step);
+    const overrideUserId = routingFor(row.category, row.current_step);
     let isMine = false;
     if (overrideUserId) {
       // Explicit override — ONLY the assigned user (or admin) is "next".
@@ -531,10 +658,30 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
       // Also surface steps pinned to a NAMED approver (L2/L3/Release) and
       // the COO escalation, using the same check the approve action uses —
       // the role-only test above misses those (mam 2026-06-18).
-      if (!isMine) isMine = canUserApproveStep(db, uid, row.category, row.current_step);
+      if (!isMine) isMine = canFor(row.category, row.current_step);
     }
-    if (!isMine) continue;
+    if (isMine) mine.push({ row, workflow, stepInfo });
+  }
 
+  // One chunked query serves what used to be four per-row lookups — the
+  // same prefetch shape the GET / list endpoint uses.
+  const apprByReq = new Map();        // request_id -> [approval rows], step-ordered
+  const mineIds = mine.map(m => m.row.id);
+  for (let i = 0; i < mineIds.length; i += 900) {
+    const chunk = mineIds.slice(i, i + 900);
+    const ph = chunk.map(() => '?').join(',');
+    for (const a of db.prepare(`
+      SELECT pa.request_id, pa.step, pa.step_name, pa.approved_at, pa.step_amount, u.name AS by_name
+        FROM payment_approvals pa LEFT JOIN users u ON u.id = pa.approved_by
+       WHERE pa.action = 'approved' AND pa.request_id IN (${ph})
+       ORDER BY pa.step, pa.id`).all(...chunk)) {
+      if (!apprByReq.has(a.request_id)) apprByReq.set(a.request_id, []);
+      apprByReq.get(a.request_id).push(a);
+    }
+  }
+
+  const inbox = [];
+  for (const { row, workflow, stepInfo } of mine) {
     // Enrich the same way the list endpoint does so the UI can show
     // "✓ HR Approval by Aanchal · ⏳ Waiting on you" cleanly.
     try {
@@ -542,41 +689,25 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
       row.current_step_name = stepInfo.name;
       row.next_approver_role = stepInfo.approver_role;
       row.next_approver_name = whoFor(row.category, stepInfo);
-      const lastApproval = db.prepare(`
-        SELECT pa.step_name, pa.approved_at, u.name AS approved_by_name
-          FROM payment_approvals pa
-          LEFT JOIN users u ON u.id = pa.approved_by
-         WHERE pa.request_id = ? AND pa.action = 'approved'
-         ORDER BY pa.step DESC, pa.id DESC LIMIT 1
-      `).get(row.id);
-      if (lastApproval) {
-        row.last_approved_step_name = lastApproval.step_name;
-        row.last_approved_by_name   = lastApproval.approved_by_name;
-        row.last_approved_at        = lastApproval.approved_at;
+      const appr = apprByReq.get(row.id) || [];
+      if (appr.length) {
+        const last = appr[appr.length - 1];        // highest step, latest id
+        row.last_approved_step_name = last.step_name;
+        row.last_approved_by_name   = last.by_name;
+        row.last_approved_at        = last.approved_at;
       }
-      const cleared = db.prepare(
-        `SELECT COUNT(DISTINCT step) AS c FROM payment_approvals
-          WHERE request_id = ? AND action = 'approved'`
-      ).get(row.id);
-      row.approvals_count = cleared?.c || 0;
+      row.approvals_count = new Set(appr.map(a => a.step)).size;
       // Per-step approved amount (mam 2026-06-15: per-level Pending/Approved
       // views — "when I select Approved on L1 then show how much amount").
       // step_amounts = { <step>: <amount approved at that step> }.
       row.step_amounts = {};
-      for (const s of db.prepare(
-        `SELECT step, step_amount FROM payment_approvals
-          WHERE request_id = ? AND action = 'approved'`
-      ).all(row.id)) {
-        row.step_amounts[s.step] = (s.step_amount != null ? +s.step_amount : (+row.approved_amount || +row.amount || 0));
-      }
       // Full step pipeline for the rich bulk-approve card (mam 2026-06-25):
       // each workflow step with done / current / pending + who cleared it.
       const apprByStep = {};
-      for (const a of db.prepare(
-        `SELECT pa.step, pa.approved_at, u.name AS by_name
-           FROM payment_approvals pa LEFT JOIN users u ON u.id = pa.approved_by
-          WHERE pa.request_id = ? AND pa.action = 'approved'`
-      ).all(row.id)) { apprByStep[a.step] = a; }
+      for (const a of appr) {
+        row.step_amounts[a.step] = (a.step_amount != null ? +a.step_amount : (+row.approved_amount || +row.amount || 0));
+        apprByStep[a.step] = a;
+      }
       // RACI + timing per step: elapsed = time from the previous step's clear
       // (or the request creation) to this step; for the CURRENT step it's how
       // long it's been waiting NOW. late = elapsed beyond the step's SLA hours.
@@ -620,6 +751,9 @@ router.get('/my-inbox-count', requirePermission('payment_required', 'view'), (re
      WHERE status NOT IN ('final_approved','rejected')
   `).all();
   let count = 0;
+  // Memoized by (category, step) — same cure as /my-inbox above; the answer
+  // is identical for every row sharing the pair (2026-08-20 hang audit).
+  const canMemo = new Map();
   for (const row of rows) {
     const workflow = WORKFLOW[row.category];
     if (!workflow) continue;
@@ -629,7 +763,9 @@ router.get('/my-inbox-count', requirePermission('payment_required', 'view'), (re
     // named approver / COO / role). The old role-only check here showed a 0
     // badge to the named L2/L3/Release approvers — which is why those accounts
     // got handed the admin role, gutting the whole chain (manager 2026-07-30).
-    if (canUserApproveStep(db, uid, row.category, row.current_step)) count++;
+    const k = row.category + '|' + row.current_step;
+    if (!canMemo.has(k)) canMemo.set(k, canUserApproveStep(db, uid, row.category, row.current_step));
+    if (canMemo.get(k)) count++;
   }
   res.json({ count });
 });
@@ -654,7 +790,19 @@ router.get('/:id', requirePermission('payment_required', 'view'), (req, res, nex
   if (!request) return res.status(404).json({ error: 'Not found' });
   request.approvals = db.prepare(`SELECT pa.*, u.name as approved_by_name FROM payment_approvals pa LEFT JOIN users u ON pa.approved_by=u.id WHERE pa.request_id=? ORDER BY pa.step`).all(req.params.id);
   request.workflow = WORKFLOW[request.category] || [];
-  request.can_approve_current = canUserApproveStep(db, req.user.id, request.category, request.current_step);
+  // Same THREE checks the list endpoint runs (status, step authorisation,
+  // separation of duties) — this line used to skip the SoD check, so the
+  // Review modal offered Approve to the very person who raised the request
+  // and the server's SoD 403 then read as an error (mam 2026-08-20,
+  // PR-2026-1584: HR head reviewing his own TA/DA claim).
+  const sodReason = sodBlockReason(db, request, req.user.id);
+  const wouldApprove = request.status !== 'final_approved' && request.status !== 'rejected'
+    && canUserApproveStep(db, req.user.id, request.category, request.current_step);
+  request.can_approve_current = wouldApprove && !sodReason;
+  // Set ONLY when SoD is the one thing stopping this viewer, so the modal can
+  // explain "you raised this — someone else must approve" instead of silently
+  // hiding the panel.
+  request.sod_block_reason = (wouldApprove && sodReason) ? sodReason : null;
   // Mam (2026-05-22): same next-approver enrichment as the list
   // endpoint, so the detail modal's workflow strip can show
   // "WAITING ON: <name>" on the current step.
@@ -806,7 +954,7 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     site: b.site_name || '',
     purpose: b.purpose || '',
     requested_by: b.employee_name || req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     requester_email: req.user.email || userEmail(db, req.user.id),
     director_email: directorEmail(),
   });
@@ -851,7 +999,7 @@ function advanceToNextStep(db, request, approvedBy) {
     db.prepare('UPDATE payment_requests SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run('final_approved', request.id);
     // Add to cash flow outflow
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = istToday();
       let daily = db.prepare('SELECT id FROM cash_flow_daily WHERE date=?').get(today);
       if (!daily) {
         const prev = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE date < ? ORDER BY date DESC LIMIT 1').get(today);
@@ -900,15 +1048,25 @@ function stepRequirementLabel(db, category, stepInfo) {
 
 // Separation of duties (mam 2026-07-08 bug: an admin who FILLED a payable could
 // approve every step himself in seconds → instant "Final Approved / Paid",
-// bypassing L1 Accountant → L2 Nitin → L3 MD → Release Aanchal). Rule, applied to
-// EVERYONE including admin/COO: the person who RAISED the request can't approve
-// it — the whole point of the chain is that someone else signs off. Returns a
+// bypassing L1 Accountant → L2 Nitin → L3 MD → Release Aanchal). Returns a
 // reason string, or null if OK.
+// Mam 2026-08-20 (Prabhdeep, PR-2026-1584): being a step's Responsible approver
+// WINS on intermediate steps — an HR head may approve his own TA/DA at the HR
+// step, because the rest of the chain (L1 → L2 → L3 → Release) still has to be
+// cleared by other people. What the 2026-07-08 rule must prevent is one person
+// completing the chain alone, so the block now applies ONLY to the FINAL step:
+// nobody — including admin/COO — can release the payout on a request they
+// raised themselves. At least one other person always signs before money moves.
 // NOTE: we deliberately do NOT block a user from approving two DIFFERENT steps of
 // the same request — the COO is meant to stand in for both L2 and L3 (see the
 // payment-approval-flow note). Blocking that would break intentional coverage.
 function sodBlockReason(db, request, userId) {
-  if (request.created_by === userId) return 'you raised this request';
+  if (request.created_by !== userId) return null;
+  const flow = WORKFLOW[request.category] || [];
+  const finalStep = flow.length ? flow[flow.length - 1].step : null;
+  if (finalStep != null && request.current_step === finalStep) {
+    return 'you raised this request and this is the final payout step';
+  }
   return null;
 }
 
@@ -985,7 +1143,7 @@ router.put('/:id/approve', (req, res) => {
     category: request.category || '',
     step: stepInfo.name || '',
     approved_by: req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     requester_email: userEmail(db, request.created_by),
     director_email: directorEmail(),
   });
@@ -1026,6 +1184,12 @@ router.post('/bulk-approve', (req, res) => {
     }
   });
   run();
+  // Breaker weight = +1 per CALL, not per id: a legit approver clearing a
+  // morning batch of 25 must not lock themselves out of everything else
+  // (adversarial-review find). The per-step + SoD gates above already
+  // constrain WHO can approve; a stolen approver's damage lands in call #1
+  // regardless of weighting, and ten bulk calls in ten minutes still trips.
+  if (approved.length) require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'payment_bulk_approve');
   res.json({ message: `Approved ${approved.length}${skipped.length ? `, skipped ${skipped.length}` : ''}`, approved, skipped });
 });
 
@@ -1054,6 +1218,8 @@ router.post('/bulk-reject', (req, res) => {
     }
   });
   run();
+  // +1 per call, same rationale as bulk-approve above.
+  if (rejected.length) require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'payment_bulk_reject');
   res.json({ message: `Rejected ${rejected.length}${skipped.length ? `, skipped ${skipped.length}` : ''}`, rejected, skipped });
 });
 
@@ -1084,7 +1250,7 @@ router.put('/:id/reject', (req, res) => {
     category: request.category || '',
     rejected_by: req.user.name || '',
     reason: remarks,
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     requester_email: userEmail(db, request.created_by),
     director_email: directorEmail(),
   });
@@ -1093,6 +1259,28 @@ router.put('/:id/reject', (req, res) => {
 
 router.delete('/:id', requirePermission('payment_required', 'delete'), (req, res) => {
   const db = getDb();
+  const request = db.prepare('SELECT id, status, request_no, amount FROM payment_requests WHERE id=?').get(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Not found' });
+  // Audit 2026-08-17: a RELEASED request is a record of money that actually
+  // left the company — deleting it erased the trail. Only an admin may force
+  // it (?force=1), and the force itself is logged before the rows go.
+  if (request.status === 'final_approved') {
+    if (req.user.role !== 'admin' || req.query.force !== '1') {
+      return res.status(409).json({
+        error: 'This payment was already released — deleting it would erase the money trail. Only an admin can force-delete it.',
+        needs_force: req.user.role === 'admin',
+      });
+    }
+    try {
+      require('../middleware/audit').logAuditEvent({
+        user: req.user, action: 'FORCE_DELETE', entity_type: 'payment_requests',
+        entity_id: request.id,
+        entity_label: `FORCE-deleted RELEASED payment ${request.request_no} (Rs ${(+request.amount || 0).toLocaleString('en-IN')})`,
+        method: 'DELETE', path: req.originalUrl,
+        before: request,
+      });
+    } catch (_) {}
+  }
   db.prepare('DELETE FROM payment_approvals WHERE request_id=?').run(req.params.id);
   db.prepare('DELETE FROM payment_requests WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
@@ -1181,6 +1369,10 @@ router.get('/approval-routing', (req, res) => {
   try {
     const db = getDb();
     ensureOverrideTable(db);
+    // Fill the defaults before rendering, so opening ⚙ Approval Routing SHOWS who
+    // currently holds each step instead of a blank "— Default —" that hides the
+    // name baked into the code.
+    seedApprovalRoutingDefaults(db);
     let overrides = [];
     try {
       overrides = db.prepare(`

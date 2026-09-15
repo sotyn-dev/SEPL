@@ -421,6 +421,13 @@ router.post('/rent-requests', requirePermission('rentals', 'create'), (req, res)
     if (!b.owner_name || !b.rent_month || !b.arrange_for) {
       return res.status(400).json({ error: 'owner_name, rent_month, and arrange_for are required' });
     }
+    // Rent deed is MANDATORY (mam 2026-09-03) — enforced here, not just in the
+    // form: admins run the UI with validation off (global noValidate), so a
+    // front-end `required` alone would let the one person who most needs the
+    // document on file skip it.
+    if (!b.rent_deed_url || !String(b.rent_deed_url).trim()) {
+      return res.status(400).json({ error: 'Rent deed document is required — upload the signed rent deed / agreement before raising the request' });
+    }
     if (!['SEPL', 'Contractor'].includes(b.arrange_for)) {
       return res.status(400).json({ error: 'arrange_for must be SEPL or Contractor' });
     }
@@ -440,17 +447,17 @@ router.post('/rent-requests', requirePermission('rentals', 'create'), (req, res)
       INSERT INTO rent_requests (
         request_no, site_id, site_name, arrange_for, contractor_name,
         employee_user_id, employee_name,
-        owner_name, owner_phone, owner_aadhar_url,
+        owner_name, owner_phone, owner_aadhar_url, rent_deed_url,
         room_photo_url, photo_taken_at, photo_lat, photo_lng,
         payment_mode, bank_account, ifsc_code, upi_id, scanner_url,
         pincode, pincode_city, metro_type,
         rent_month, rent_amount, pay_by_day, notes, created_by
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       requestNo, b.site_id || null, b.site_name || null,
       b.arrange_for, b.contractor_name || null,
       b.employee_user_id || null, b.employee_name || null,
-      b.owner_name, b.owner_phone || null, b.owner_aadhar_url || null,
+      b.owner_name, b.owner_phone || null, b.owner_aadhar_url || null, String(b.rent_deed_url).trim(),
       b.room_photo_url || null, b.photo_taken_at || null, b.photo_lat || null, b.photo_lng || null,
       mode, bankAcc, ifsc, upiId, scannerUrl,
       b.pincode || null, b.pincode_city || null,
@@ -485,7 +492,7 @@ router.put('/rent-requests/:id', requirePermission('rentals', 'edit'), (req, res
     const fields = [
       'site_id','site_name','arrange_for','contractor_name',
       'employee_user_id','employee_name',
-      'owner_name','owner_phone','owner_aadhar_url',
+      'owner_name','owner_phone','owner_aadhar_url','rent_deed_url',
       'room_photo_url','photo_taken_at','photo_lat','photo_lng',
       'payment_mode','bank_account','ifsc_code','upi_id','scanner_url',
       'pincode','pincode_city','metro_type',
@@ -548,6 +555,13 @@ router.post('/rent-requests/:id/mark-paid', requirePermission('rentals', 'edit')
   try {
     const { paid_via, transaction_ref, receipt_url } = req.body;
     const db = getDb();
+    // Audit 2026-08-17: no precondition meant a pending/rejected request could
+    // be marked paid (skipping approval), and re-firing on an already-paid row
+    // silently overwrote paid_via / transaction_ref and re-sent the push.
+    const cur = db.prepare('SELECT status, paid_at FROM rent_requests WHERE id=?').get(req.params.id);
+    if (!cur) return res.status(404).json({ error: 'Rent request not found' });
+    if (cur.status === 'paid') return res.status(409).json({ error: `Already marked paid (${cur.paid_at || 'earlier'})` });
+    if (cur.status !== 'approved') return res.status(400).json({ error: `Only an approved rent request can be marked paid (this one is ${cur.status})` });
     db.prepare(`
       UPDATE rent_requests SET
         status='paid', paid_by=?, paid_at=CURRENT_TIMESTAMP,

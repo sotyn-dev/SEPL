@@ -19,6 +19,7 @@ const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { syncCycle, expectedStageAndStatus, daysToExpiry } = require('../lib/fireNocSync');
@@ -151,7 +152,9 @@ router.get('/cycles', requirePermission('fire_noc', 'view'), (req, res) => {
   const params = [];
   if (state)  { where.push('p.state = ?');               params.push(state); }
   if (stage)  { where.push('c.current_stage = ?');       params.push(stage); }
-  if (status) { where.push('c.status = ?');              params.push(status); }
+  // Status — one value or a comma list (mam 2026-09-12).
+  const st = statusFilter(status, ['active', 'lost', 'renewed', 'archived'], 'c.status');
+  if (st) { where.push(st.sql); params.push(...st.params); }
   if (owner)  { where.push('c.owner_user_id = ?');       params.push(+owner); }
   if (q) {
     where.push('(p.building_name LIKE ? OR p.address LIKE ? OR cust.company_name LIKE ?)');

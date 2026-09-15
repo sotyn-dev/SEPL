@@ -7,7 +7,9 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard } from 'react-icons/fi';
@@ -46,7 +48,7 @@ export default function Tools() {
   const [stats, setStats] = useState(null);
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
-  const [filters, setFilters] = useState({ category: '', status: '', search: '' });
+  const [filters, setFilters] = useState({ category: '', status: [], search: '' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [actionTool, setActionTool] = useState(null);
@@ -56,23 +58,26 @@ export default function Tools() {
   const [submissions, setSubmissions] = useState([]);
   const [submissionWeek, setSubmissionWeek] = useState(lastMonday());
   const [submitForm, setSubmitForm] = useState({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' });
+  // Windows the catalog table only — `tools` itself stays the full filtered
+  // list (the weekly-submission modal's picker needs every tool).
+  const toolsPager = usePagination(tools, { resetKey: [filters.search, filters.category, filters.status] });
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (filters.category) params.set('category', filters.category);
-    if (filters.status) params.set('status', filters.status);
+    if (filters.status.length) params.set('status', filters.status.join(','));
     if (filters.search) params.set('search', filters.search);
-    api.get(`/tools?${params}`).then(r => setTools(r.data)).catch(() => {});
-    api.get('/tools/stats').then(r => setStats(r.data)).catch(() => {});
+    api.get(`/tools?${params}`).then(r => setTools(r.data)).catch(() => { });
+    api.get('/tools/stats').then(r => setStats(r.data)).catch(() => { });
   }, [filters]);
 
   useEffect(() => {
     if (tab === 'catalog' || tab === 'dashboard') load();
     if (tab === 'submissions') {
-      api.get(`/tools/submissions/list?week_start=${submissionWeek}`).then(r => setSubmissions(r.data)).catch(() => {});
+      api.get(`/tools/submissions/list?week_start=${submissionWeek}`).then(r => setSubmissions(r.data)).catch(() => { });
     }
-    api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => {});
-    api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
+    api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => { });
+    api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => { });
   }, [tab, load, submissionWeek]);
 
   const save = async (e) => {
@@ -196,69 +201,77 @@ export default function Tools() {
               <option value="">All categories</option>
               {CATEGORIES.map(c => <option key={c}>{c}</option>)}
             </select>
-            <select className="select text-sm w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
-              <option value="">All statuses</option>
-              {STATUSES.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
-            </select>
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+            <div className="w-[248px]">
+              <StatusMultiSelect
+                options={STATUSES.map(s => ({ id: s, name: s.replace('_', ' ') }))}
+                value={filters.status}
+                onChange={v => setFilters(f => ({ ...f, status: v }))}
+                placeholder="All statuses"
+              />
+            </div>
           </div>
 
-          <div className="card p-0 overflow-x-auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>Code</th>
-                  <th>Name</th>
-                  <th>Category</th>
-                  <th>Brand / Model</th>
-                  <th>Serial</th>
-                  <th>Cond.</th>
-                  <th>Status</th>
-                  <th>Current Site / User</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tools.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No tools yet — click "Add Tool" to start the catalog</td></tr>}
-                {tools.map(t => (
-                  <tr key={t.id} className="hover:bg-gray-50">
-                    <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
-                    <td className="font-medium">{t.name}</td>
-                    <td className="text-xs">{t.category || '—'}</td>
-                    <td className="text-xs">{[t.brand, t.model].filter(Boolean).join(' / ') || '—'}</td>
-                    <td className="text-xs text-gray-500">{t.serial_no || '—'}</td>
-                    <td><span className={`text-[10px] px-1.5 py-0.5 rounded border ${CONDITION_PILL[t.condition] || 'bg-gray-50'}`}>{t.condition}</span></td>
-                    <td><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[t.status]}`}>{t.status.replace('_', ' ')}</span></td>
-                    <td className="text-xs">
-                      {t.current_user_name && <div>👤 {t.current_user_name}</div>}
-                      {t.current_site_name && <div>📍 {t.current_site_name}</div>}
-                      {!t.current_user_name && !t.current_site_name && <span className="text-gray-300">Stored</span>}
-                    </td>
-                    <td className="whitespace-nowrap">
-                      <div className="flex gap-1">
-                        {canEdit('tools') && t.status === 'available' && (
-                          <button onClick={() => { setActionTool(t); setActionType('issue'); setActionForm({}); }} className="btn btn-success text-[10px] px-2 py-1" title="Issue"><FiTruck size={11} /></button>
-                        )}
-                        {canEdit('tools') && t.status === 'in_use' && (
-                          <button onClick={() => { setActionTool(t); setActionType('return'); setActionForm({}); }} className="btn btn-secondary text-[10px] px-2 py-1" title="Return"><FiArrowDownCircle size={11} /></button>
-                        )}
-                        {canEdit('tools') && t.status !== 'scrapped' && (
-                          <>
-                            <button onClick={() => { setActionTool(t); setActionType('maintenance'); setActionForm({}); }} className="btn btn-secondary text-[10px] px-2 py-1" title="Maintenance"><FiAlertCircle size={11} /></button>
-                          </>
-                        )}
-                        <button onClick={() => setHistoryTool(t)} className="btn btn-secondary text-[10px] px-2 py-1" title="History">📜</button>
-                        {canEdit('tools') && (
-                          <button onClick={() => { setForm(t); setModal('add'); }} className="p-1 text-gray-400 hover:text-blue-600"><FiEdit2 size={12} /></button>
-                        )}
-                        {canDelete('tools') && (
-                          <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={12} /></button>
-                        )}
-                      </div>
-                    </td>
+          <div className="card p-0 overflow-hidden">
+            <div className="table-responsive">
+              <table className="min-w-[800px]">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Brand / Model</th>
+                    <th>Serial</th>
+                    <th>Cond.</th>
+                    <th>Status</th>
+                    <th>Current Site / User</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {tools.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No tools yet — click "Add Tool" to start the catalog</td></tr>}
+                  {toolsPager.pageItems.map(t => (
+                    <tr key={t.id} className="hover:bg-gray-50">
+                      <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
+                      <td className="font-medium">{t.name}</td>
+                      <td className="text-xs">{t.category || '—'}</td>
+                      <td className="text-xs">{[t.brand, t.model].filter(Boolean).join(' / ') || '—'}</td>
+                      <td className="text-xs text-gray-500">{t.serial_no || '—'}</td>
+                      <td><span className={`text-[10px] px-1.5 py-0.5 rounded border ${CONDITION_PILL[t.condition] || 'bg-gray-50'}`}>{t.condition}</span></td>
+                      <td><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[t.status]}`}>{t.status.replace('_', ' ')}</span></td>
+                      <td className="text-xs">
+                        {t.current_user_name && <div>👤 {t.current_user_name}</div>}
+                        {t.current_site_name && <div>📍 {t.current_site_name}</div>}
+                        {!t.current_user_name && !t.current_site_name && <span className="text-gray-300">Stored</span>}
+                      </td>
+                      <td className="whitespace-nowrap">
+                        <div className="flex gap-1">
+                          {canEdit('tools') && t.status === 'available' && (
+                            <button onClick={() => { setActionTool(t); setActionType('issue'); setActionForm({}); }} className="btn btn-success text-[10px] px-2 py-1" title="Issue"><FiTruck size={11} /></button>
+                          )}
+                          {canEdit('tools') && t.status === 'in_use' && (
+                            <button onClick={() => { setActionTool(t); setActionType('return'); setActionForm({}); }} className="btn btn-secondary text-[10px] px-2 py-1" title="Return"><FiArrowDownCircle size={11} /></button>
+                          )}
+                          {canEdit('tools') && t.status !== 'scrapped' && (
+                            <>
+                              <button onClick={() => { setActionTool(t); setActionType('maintenance'); setActionForm({}); }} className="btn btn-secondary text-[10px] px-2 py-1" title="Maintenance"><FiAlertCircle size={11} /></button>
+                            </>
+                          )}
+                          <button onClick={() => setHistoryTool(t)} className="btn btn-secondary text-[10px] px-2 py-1" title="History">📜</button>
+                          {canEdit('tools') && (
+                            <button onClick={() => { setForm(t); setModal('add'); }} className="p-1 text-gray-400 hover:text-blue-600"><FiEdit2 size={12} /></button>
+                          )}
+                          {canDelete('tools') && (
+                            <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={12} /></button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination {...toolsPager} />
           </div>
         </>
       )}
@@ -297,7 +310,7 @@ export default function Tools() {
       {/* Add / Edit Tool Modal */}
       <Modal isOpen={modal === 'add'} onClose={() => { setModal(null); setForm({}); }} title={form.id ? `Edit ${form.tool_code}` : 'Add Tool'} wide>
         <form onSubmit={save} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Name *</label><input className="input" required value={form.name || ''} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Bosch GBM 350 drill" /></div>
             <div>
               <label className="label">Category</label>
@@ -314,7 +327,7 @@ export default function Tools() {
             <div>
               <label className="label">Condition</label>
               <select className="select" value={form.condition || 'good'} onChange={e => setForm(f => ({ ...f, condition: e.target.value }))}>
-                {['new','good','fair','poor','scrap'].map(c => <option key={c}>{c}</option>)}
+                {['new', 'good', 'fair', 'poor', 'scrap'].map(c => <option key={c}>{c}</option>)}
               </select>
             </div>
             <div>
@@ -349,7 +362,7 @@ export default function Tools() {
                 onChange={(u) => setForm(f => ({ ...f, current_user_id: u?.id || '' }))}
               />
             </div>
-            <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t">
             <button type="button" onClick={() => { setModal(null); setForm({}); }} className="btn btn-secondary">Cancel</button>
@@ -379,7 +392,7 @@ export default function Tools() {
               <div>
                 <label className="label">Condition on Return</label>
                 <select className="select" value={actionForm.condition || actionTool.condition} onChange={e => setActionForm(f => ({ ...f, condition: e.target.value }))}>
-                  {['new','good','fair','poor','scrap'].map(c => <option key={c}>{c}</option>)}
+                  {['new', 'good', 'fair', 'poor', 'scrap'].map(c => <option key={c}>{c}</option>)}
                 </select>
               </div>
             )}

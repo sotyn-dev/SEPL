@@ -39,6 +39,23 @@ try {
   console.warn('[perf] compression not installed — run npm install for faster pages');
 }
 
+
+// Hang detector — logs [slow] requests and [lag] event-loop stalls with the
+// requests in flight, so `pm2 logs erp | grep -E '\[slow\]|\[lag\]'` names
+// what froze the ERP (see lib/hangDetector.js). Must sit before the routers.
+try { require('./lib/hangDetector').install(app); }
+catch (e) { console.warn('[hang-detector] not started:', e.message); }
+
+// Sotyn Leads public webhook. Mounted AFTER the hang detector so the one
+// internet-facing route still gets [slow] logging and in-flight tracking, but
+// BEFORE the global 10 MB JSON parser so its own 32 kb cap is real — behind
+// that parser the cap was dead code and an unauthenticated caller could push
+// 10 MB through a synchronous server (audit 2026-09-07).
+app.use('/api/public', require('./routes/publicSotynLead'));
+
+// Global body parser for every OTHER route. Deliberately last of the three:
+// the hang detector must see all traffic, and the public webhook must parse
+// its own body under a 32 kb cap before this 10 MB one can claim it.
 app.use(express.json({ limit: '10mb' }));
 
 // Cache static assets (logo, icons, JS bundles) for 1 day in browser.
@@ -272,6 +289,16 @@ try {
   console.warn('[spos-report] Scheduler not started:', e.message);
 }
 
+// Bank statement mailbox poll (mam 2026-09-04) — the bank emails the
+// statement, the ERP collects it and imports it, so nobody uploads anything.
+// Inert until BANK_MAIL_* is set in .env. Skip via ERP_DISABLE_BANK_MAIL=1.
+try {
+  const { scheduleBankMailCron } = require('./scripts/bankMailCron');
+  scheduleBankMailCron();
+} catch (e) {
+  console.warn('[bank-mail] Scheduler not started:', e.message);
+}
+
 // AR collection-day auto-roll — daily 01:00 moves unpaid, overdue AR entries
 // to the next Mon/Thu (mam 2026-06-18). Skip via ERP_DISABLE_ARAP_ROLL=1.
 try {
@@ -381,6 +408,18 @@ try {
   console.warn('[procsch-reminder] Scheduler not started:', e.message);
 }
 
+// Tally Bill SLA escalation cron — Director CR (2026-08-13 §6):
+// reminder at 80% of a stage SLA, reporting manager at 100%, Director at
+// 150%.  Every 15 min (the Stage-4 approval SLA is only 4 business hours, so
+// an hourly tick would deliver the 80% reminder after the fact).  Dedup table
+// makes re-runs safe.  Skip via ERP_DISABLE_TALLY_SLA_CRON=1.
+try {
+  const { scheduleTallySlaCron } = require('./scripts/tallySlaCron');
+  scheduleTallySlaCron();
+} catch (e) {
+  console.warn('[tally-sla] Scheduler not started:', e.message);
+}
+
 // Daily 09:00 CMD audit email — audit item B20 + TOC v3 P0 #5.
 // Reads the 07:30 snapshot JSON (falls back to live /audit/kpi if
 // the snapshot folder is missing) and emails the director address
@@ -457,6 +496,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/sales-funnel', require('./routes/salesfunnel'));
 app.use('/api/quotations', require('./routes/quotations'));
+app.use('/api/files', require('./routes/filePreview'));
 app.use('/api/solar', require('./routes/solar'));
 app.use('/api/solar-site', require('./routes/solarSite'));
 app.use('/api/orders', require('./routes/orders'));
@@ -470,6 +510,7 @@ app.use('/api/drawing-tracker', require('./routes/drawingTracker'));
 app.use('/api/pipe-weights', require('./routes/pipeweights'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/sales-bill-receive', require('./routes/salesBillReceive'));
+app.use('/api/dispatch-receiving', require('./routes/dispatchReceiving'));
 app.use('/api/customers', require('./routes/customers'));
 app.use('/api/installation', require('./routes/installation'));
 app.use('/api/sales-billing', require('./routes/salesBilling'));
@@ -480,6 +521,10 @@ app.use('/api/hr', require('./routes/hr'));
 // candidates can accept / decline via /offer/:token without
 // logging in to the ERP.
 app.use('/api/public', require('./routes/publicHr'));
+// Public webhooks (securedengineers.com website leads) — secured via x-webhook-secret
+app.use('/api/webhooks', require('./routes/webhooks'));
+app.use('/api/public/leads', require('./routes/webhooks'));
+app.use('/api/sotyn-leads', require('./routes/sotynLeads'));
 app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
 app.use('/api/gamification', require('./routes/champions'));
@@ -513,7 +558,10 @@ app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
+app.use('/api/tally-bills', require('./routes/tallyBills'));
+app.use('/api/module-videos', require('./routes/moduleVideos'));
 app.use('/api/admin/backups', require('./routes/backups'));
+app.use('/api/admin/perf', require('./routes/perf'));         // Admin ▸ Performance (hang audit 2026-09-05)
 app.use('/api/admin/uploads', require('./routes/uploadsSweep'));
 app.use('/api/admin/word-count', require('./routes/wordcount'));
 app.use('/api/admin/changelog', require('./routes/changelog'));
@@ -535,9 +583,14 @@ app.use('/api/hr-system', require('./routes/hrSystem'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));
+// Bank module — statement import + reconciliation now, AA auto-sync later (mam 2026-08-31)
+app.use('/api/bank', require('./routes/bank'));
 app.use('/api/collections', require('./routes/collections'));
 // AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
+// Data Completion — "how much of the required data is actually filled", per
+// module. Feeds the on-page bar and the Data Entry KPI (mam 2026-09-03).
+app.use('/api/data-completion', require('./routes/dataCompletion'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
 // requireModuleEnabled: admin can switch the whole module off (see lib/features.js);
 // when off every endpoint 404s, so a pasted URL has nothing to load. NOTE this gates
@@ -548,6 +601,8 @@ app.use('/api/site-chat', requireModuleEnabled('site_chat'), require('./routes/s
 app.use('/api/sotyn-flow', requireModuleEnabled('sotyn_flow'), require('./routes/sotynFlow'));
 // System Requirements — product evolution tracker (upload-heavy; swept/quarantined)
 app.use('/api/system-requirements', requireModuleEnabled('system_requirements'), require('./routes/systemRequirements'));
+// System Flow & ERP Implementation Control (mam 2026-09-01)
+app.use('/api/system-flow', require('./routes/systemFlow'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 
@@ -576,6 +631,36 @@ app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) 
   // identical to what this endpoint has always returned.
   res.json({ url, filename: req.file.originalname, size: req.file.size });
 });
+
+// Public, token-scoped upload for the employee self-fill form (2026-08-17).
+// No login — the fill token IS the authorization: it must exist, be unused
+// and unexpired, and only document-ish types are accepted. The token check
+// runs BEFORE multer so invalid callers can't even write a temp file.
+const FILL_UPLOAD_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+app.post('/api/public/employee-upload/:token',
+  (req, res, next) => {
+    try {
+      const { getDb } = require('./db/schema');
+      const link = getDb().prepare(
+        `SELECT id FROM employee_fill_links
+          WHERE token=? AND used_at IS NULL
+            AND (expires_at IS NULL OR expires_at >= datetime('now'))`
+      ).get(String(req.params.token || ''));
+      if (!link) return res.status(403).json({ error: 'This link is not valid any more' });
+      next();
+    } catch (e) { res.status(500).json({ error: 'Upload unavailable' }); }
+  },
+  upload.single('file'),
+  async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!FILL_UPLOAD_TYPES.has(req.file.mimetype)) {
+      try { require('fs').unlinkSync(req.file.path); } catch (_) { }
+      return res.status(400).json({ error: 'Only JPG / PNG / WEBP images or PDF files are allowed' });
+    }
+    const key = uploadKey(req, req.file);
+    const url = await storage.adoptLocalFile(req.file.path, key, req.file.mimetype);
+    res.json({ url, filename: req.file.originalname, size: req.file.size });
+  });
 
 // Serve uploaded files
 // Lazy restore: if a requested upload is missing from disk but sitting in
@@ -621,8 +706,70 @@ app.use('/uploads', async (req, res, next) => {
 app.use('/uploads', express.static(uploadsDir));
 
 // Health check for deployment platforms
+// Health + DEPLOY FINGERPRINT.
+//
+// Static files under client/dist update the moment `git reset --hard` runs,
+// but the Node process keeps serving the OLD server code until pm2 actually
+// reloads it. That gap is invisible from outside and is exactly how prod once
+// drifted 80 commits behind while every boot log looked healthy (2026-07-01).
+// Reporting the commit the RUNNING process booted from makes "did the deploy
+// take?" answerable in one request:
+//     curl -s https://securederp.in/api/health
+// If `commit` doesn't match the SHA you just pushed, pm2 never reloaded.
+//
+// Read once at boot from .git (no child process, no git binary needed); a
+// deployment without a .git directory simply reports null.
+const BOOT_COMMIT = (() => {
+  try {
+    const fsx = require('fs'); const px = require('path');
+    const gitDir = px.join(__dirname, '..', '.git');
+    const head = fsx.readFileSync(px.join(gitDir, 'HEAD'), 'utf8').trim();
+    if (head.startsWith('ref: ')) {
+      const ref = head.slice(5).trim();
+      // Loose ref first, then packed-refs (a freshly cloned/reset repo may use either).
+      const loose = px.join(gitDir, ref);
+      if (fsx.existsSync(loose)) return fsx.readFileSync(loose, 'utf8').trim().slice(0, 40);
+      const packed = fsx.readFileSync(px.join(gitDir, 'packed-refs'), 'utf8');
+      const line = packed.split('\n').find(l => l.endsWith(' ' + ref));
+      return line ? line.split(' ')[0].slice(0, 40) : null;
+    }
+    return head.slice(0, 40);   // detached HEAD
+  } catch (_) { return null; }
+})();
+const BOOTED_AT = new Date().toISOString();
+
+// Build id = the entry chunk named by the index.html THIS process serves
+// (index-<hash>.js). The client compares it with the chunk it is running
+// from (client/src/components/UpdateWatcher.jsx) and moves itself to the new
+// build after a deploy (mam 2026-09-05: "it should be automatic"). Read once
+// at boot — a deploy always restarts the process. Not the git commit: dist is
+// built BEFORE the commit that ships it, so the commit would be one behind.
+const BUILD_ID = (() => {
+  try {
+    const html = require('fs').readFileSync(path.join(__dirname, '..', 'client', 'dist', 'index.html'), 'utf8');
+    const m = html.match(/<script[^>]+src="[^"]*\/(index-[A-Za-z0-9_-]+\.js)"/);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+})();
+
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    commit: BOOT_COMMIT,
+    commit_short: BOOT_COMMIT ? BOOT_COMMIT.slice(0, 8) : null,
+    build: BUILD_ID,
+    booted_at: BOOTED_AT,
+    uptime_seconds: Math.round(process.uptime()),
+  });
+});
+
+// Polled by every tab (focus / visibility / route change / 10 min) — keep it
+// tiny and uncacheable. Public like /api/health: it reveals only the chunk
+// name already visible in index.html.
+app.get('/api/version', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.json({ build: BUILD_ID, commit_short: BOOT_COMMIT ? BOOT_COMMIT.slice(0, 8) : null, booted_at: BOOTED_AT });
 });
 
 // Serve React build in production.
@@ -635,6 +782,36 @@ app.get('/api/health', (req, res) => {
 //   - Hashed asset files (under /assets/*) → cache forever (immutable)
 //   - index.html + other root files → no-cache so a refresh ALWAYS
 //     fetches the current bundle name.
+// /join — the PERMANENT new-joiner URL (mam 2026-08-17 "only make link"):
+// short enough to print in the joining kit / pin in WhatsApp. Redirects to
+// the currently ACTIVE standing self-fill link, so rotating the token from
+// the Employees page never changes the URL people share. No active link →
+// the invalid-link card explains to contact HR.
+app.get('/join', (req, res) => {
+  try {
+    const { getDb } = require('./db/schema');
+    const db = getDb();
+    let link = db.prepare(
+      `SELECT token FROM employee_fill_links
+        WHERE employee_id IS NULL AND COALESCE(multi_use,0)=1 AND used_at IS NULL
+          AND (expires_at IS NULL OR expires_at >= datetime('now'))
+        ORDER BY id DESC LIMIT 1`
+    ).get();
+    if (!link) {
+      // Self-healing: /join must always work — provision a fresh standing
+      // link when none is active (expired / first boot). HR can still rotate
+      // it any time from the Employees page (new token, same /join URL).
+      const token = require('crypto').randomBytes(24).toString('base64url');
+      db.prepare(`INSERT INTO employee_fill_links (token, employee_id, created_by, expires_at, multi_use)
+                  VALUES (?,NULL,NULL, datetime('now','+30 days'), 1)`).run(token);
+      link = { token };
+    }
+    res.redirect(302, `/employee-fill/${link.token}`);
+  } catch (e) {
+    res.redirect(302, '/employee-fill/none-active');
+  }
+});
+
 const clientBuild = path.join(__dirname, '..', 'client', 'dist');
 const fs2 = require('fs');
 if (fs2.existsSync(clientBuild)) {
@@ -718,12 +895,22 @@ try {
   const flowSeeAll = (uid) => { try { return !!getDb().prepare("SELECT MAX(rp.can_see_all) a FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE ur.user_id=? AND rp.module='sotyn_flow'").get(uid)?.a; } catch { return false; } };
   require('./lib/sotynFlowSocket').registerBoardSocket(io, flowSeeAll);
   console.log('[flow] Socket.IO ready');
+  // Live update push: every (re)connection is told which build this process
+  // serves. `pm2 reload` drops all sockets → they reconnect → every open tab
+  // hears the new build within seconds (UpdateWatcher.jsx does the rest).
+  io.on('connection', (socket) => { try { socket.emit('app:version', { build: BUILD_ID }); } catch (_) { /* never break chat */ } });
 }
 catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
-httpServer.listen(serverPort, '0.0.0.0', () => {
+// Bind loopback-only by default (2026-08-26): on the VPS, nginx is the sole
+// public front door (HTTPS, server_tokens off) — with 0.0.0.0 anyone could
+// hit http://<vps-ip>:5000 directly, skipping nginx and sending logins over
+// plain HTTP. Set HOST=0.0.0.0 explicitly (env) only when LAN access to the
+// bare API is genuinely needed (e.g. phone testing against a dev machine).
+const bindHost = process.env.HOST || '127.0.0.1';
+httpServer.listen(serverPort, bindHost, () => {
   console.log(`\n======================================`);
   console.log(`  Business ERP Server`);
-  console.log(`  Running on port ${serverPort}`);
+  console.log(`  Running on ${bindHost}:${serverPort}`);
   console.log(`  Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`======================================\n`);
 });

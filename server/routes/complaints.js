@@ -1,6 +1,7 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
 // Email-trigger helpers (recipient resolution). Best-effort.
@@ -62,7 +63,7 @@ router.post('/public', (req, res) => {
   const db = getDb();
 
   // Safe migrations (legacy — kept for older deploys)
-  const newCols = ['client_name TEXT','company_name TEXT','mobile_number TEXT','category TEXT','problem_detail TEXT','customer_type TEXT','complaint_type TEXT','emp_name TEXT','step1_planned_date DATE','step1_actual_date DATE','step1_time_delay INTEGER','step1_assigned_to TEXT','step2_planned_date DATE','step2_actual_date DATE','step2_time_delay INTEGER','step2_assigned_to TEXT','service_report TEXT','updated_at DATETIME'];
+  const newCols = ['client_name TEXT','company_name TEXT','mobile_number TEXT','category TEXT','problem_detail TEXT','customer_type TEXT','complaint_type TEXT','emp_name TEXT','step1_planned_date DATE','step1_actual_date DATE','step1_time_delay INTEGER','step1_assigned_to TEXT','step2_planned_date DATE','step2_actual_date DATE','step2_time_delay INTEGER','step2_assigned_to TEXT','service_report TEXT','service_report_url TEXT','updated_at DATETIME'];
   newCols.forEach(col => { try { db.exec(`ALTER TABLE complaints ADD COLUMN ${col}`); } catch(e){} });
 
   const { nextSequence } = require('../db/nextSequence');
@@ -96,6 +97,9 @@ router.post('/public', (req, res) => {
 // All routes below require auth
 router.use(authMiddleware);
 
+const { complaintScope } = require('../lib/complaintScope');
+const { statusFilter } = require('../lib/statusFilter');
+
 router.get('/', requirePermission('complaints', 'view'), (req, res) => {
   const { status, search, category } = req.query;
   let sql = `SELECT c.*, u.name as assigned_to_name,
@@ -105,27 +109,57 @@ router.get('/', requirePermission('complaints', 'view'), (req, res) => {
                LEFT JOIN users eng ON c.assigned_engineer_id = eng.id
               WHERE 1=1`;
   const params = [];
-  if (status) { sql += ' AND c.status=?'; params.push(status); }
+  // Status — one value or a comma list (mam 2026-09-12). 'closed' is a real
+  // complaint status even though the dropdown only offers the first three.
+  const st = statusFilter(status, ['open', 'in_progress', 'resolved', 'closed'], 'c.status');
+  if (st) { sql += ` AND ${st.sql}`; params.push(...st.params); }
   if (category) { sql += ' AND c.category=?'; params.push(category); }
   if (search) { sql += ' AND (c.client_name LIKE ? OR c.complaint_number LIKE ? OR c.company_name LIKE ? OR c.mobile_number LIKE ?)'; params.push(`%${search}%`,`%${search}%`,`%${search}%`,`%${search}%`); }
+  const scope = complaintScope(req);
+  if (scope) { sql += scope.sql; params.push(...scope.params); }
   sql += ' ORDER BY c.created_at DESC';
   res.json(getDb().prepare(sql).all(...params));
 });
 
 router.get('/stats', requirePermission('complaints', 'view'), (req, res) => {
   const db = getDb();
-  const total = db.prepare('SELECT COUNT(*) as c FROM complaints').get();
-  const open = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status='open'").get();
-  const inProgress = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status='in_progress'").get();
+  // Same scope as the list — tiles counting complaints the user cannot see
+  // would contradict the rows underneath them.
+  const scope = complaintScope(req);
+  const w = scope ? scope.sql : '';
+  const p = scope ? scope.params : [];
+  const total = db.prepare(`SELECT COUNT(*) as c FROM complaints c WHERE 1=1${w}`).get(...p);
+  const open = db.prepare(`SELECT COUNT(*) as c FROM complaints c WHERE c.status='open'${w}`).get(...p);
+  const inProgress = db.prepare(`SELECT COUNT(*) as c FROM complaints c WHERE c.status='in_progress'${w}`).get(...p);
   // Mam (2026-05-22 audit fix): UI treats both 'resolved' AND legacy
   // 'closed' as done (Complaints.jsx:161 OR check) but stats only
   // counted 'resolved' → tile undershoot.  Match the UI's union.
-  const resolved = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status IN ('resolved','closed')").get();
-  const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM complaints WHERE category IS NOT NULL GROUP BY category").all();
+  const resolved = db.prepare(`SELECT COUNT(*) as c FROM complaints c WHERE c.status IN ('resolved','closed')${w}`).get(...p);
+  const byCategory = db.prepare(`SELECT c.category, COUNT(*) as count FROM complaints c WHERE c.category IS NOT NULL${w} GROUP BY c.category`).all(...p);
   res.json({ total: total.c, open: open.c, inProgress: inProgress.c, resolved: resolved.c, byCategory });
 });
 
+// Same scope as the list, applied to ONE record. Hiding a complaint from the
+// list while still serving it at /complaints/:id would only be cosmetic — the id
+// is sequential, so anyone could walk other people's complaints (and edit them,
+// since the write routes take the same path). Returns an error object when the
+// caller may not touch this record, null when they may.
+function complaintDenied(req, id) {
+  const scope = complaintScope(req);
+  if (!scope) return null;                       // admin or "See All" — everything allowed
+  const row = getDb().prepare(`SELECT c.id FROM complaints c WHERE c.id = ?${scope.sql}`)
+    .get(id, ...scope.params);
+  if (row) return null;
+  // Distinguish "does not exist" from "not yours" so a real 404 still reads as one.
+  const exists = getDb().prepare('SELECT 1 FROM complaints WHERE id=?').get(id);
+  return exists
+    ? { code: 403, error: "This complaint isn't assigned to you. Ask your admin to tick \"See All\" on Complaints if you need to work on everyone's." }
+    : { code: 404, error: 'Not found' };
+}
+
 router.get('/:id', requirePermission('complaints', 'view'), (req, res) => {
+  const denied = complaintDenied(req, req.params.id);
+  if (denied) return res.status(denied.code).json({ error: denied.error });
   const c = getDb().prepare(`
     SELECT c.*, eng.name as assigned_engineer_name, eng.phone as assigned_engineer_phone
     FROM complaints c LEFT JOIN users eng ON c.assigned_engineer_id = eng.id
@@ -179,7 +213,7 @@ router.post('/', requirePermission('complaints', 'create'), (req, res) => {
     category: b.category || '',
     problem: b.problem_detail || '',
     created_by: req.user.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     creator_email: req.user.email || ceUserEmail(db, req.user.id),
     director_email: ceDirector(),
   });
@@ -188,6 +222,22 @@ router.post('/', requirePermission('complaints', 'create'), (req, res) => {
 
 // Update (Step 1 / Step 2 progression)
 router.put('/:id', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
+  // Closing a complaint has to say WHAT was done — remarks are mandatory to mark
+  // it resolved/closed, while the service-report proof upload stays optional
+  // (mam 2026-08-20). Checked against what the record will hold AFTER this save,
+  // so remarks entered earlier still count.
+  {
+    const b0 = req.body || {};
+    const nextStatus = b0.status;
+    if (nextStatus === 'resolved' || nextStatus === 'closed') {
+      const existing = getDb().prepare('SELECT resolution_notes FROM complaints WHERE id=?').get(req.params.id) || {};
+      const remarks = b0.resolution_notes !== undefined ? b0.resolution_notes : existing.resolution_notes;
+      if (!String(remarks || '').trim()) {
+        return res.status(400).json({ error: 'Add Remarks describing what was done before marking this complaint resolved. (The service report upload is optional.)' });
+      }
+    }
+  }
   const b = req.body;
   const db = getDb();
 
@@ -207,17 +257,19 @@ router.put('/:id', requirePermission('complaints', 'edit'), (req, res) => {
     complaint_type=COALESCE(?,complaint_type), emp_name=COALESCE(?,emp_name),
     step1_planned_date=COALESCE(?,step1_planned_date), step1_actual_date=COALESCE(?,step1_actual_date), step1_time_delay=?, step1_assigned_to=COALESCE(?,step1_assigned_to),
     step2_planned_date=COALESCE(?,step2_planned_date), step2_actual_date=COALESCE(?,step2_actual_date), step2_time_delay=?, step2_assigned_to=COALESCE(?,step2_assigned_to),
-    service_report=COALESCE(?,service_report), status=COALESCE(?,status), priority=COALESCE(?,priority),
+    service_report=COALESCE(?,service_report), service_report_url=COALESCE(?,service_report_url),
+    resolution_notes=COALESCE(?,resolution_notes), status=COALESCE(?,status), priority=COALESCE(?,priority),
     updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(
     b.client_name, b.company_name, b.mobile_number, b.category, b.problem_detail, b.customer_type, b.complaint_type, b.emp_name,
     b.step1_planned_date, b.step1_actual_date, s1Delay, b.step1_assigned_to,
     b.step2_planned_date, b.step2_actual_date, s2Delay, b.step2_assigned_to,
-    b.service_report, b.status, b.priority, req.params.id
+    b.service_report, b.service_report_url, b.resolution_notes, b.status, b.priority, req.params.id
   );
   res.json({ message: 'Updated' });
 });
 
 router.delete('/:id', requirePermission('complaints', 'delete'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   getDb().prepare('DELETE FROM complaints WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -233,6 +285,7 @@ router.delete('/:id', requirePermission('complaints', 'delete'), (req, res) => {
 // one to the client carrying the OTP).  The OTP itself is NEVER sent
 // to the engineer — only to the client.
 router.post('/:id/assign', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const db = getDb();
   const id = +req.params.id;
   const engId = +req.body.engineer_user_id;
@@ -280,7 +333,7 @@ router.post('/:id/assign', requirePermission('complaints', 'edit'), (req, res) =
     complaint_no: c.complaint_number,
     client: c.client_name || '',
     engineer: eng.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     engineer_email: ceUserEmail(db, engId),
     creator_email: ceUserEmail(db, c.created_by),
     director_email: ceDirector(),
@@ -304,6 +357,7 @@ router.post('/:id/assign', requirePermission('complaints', 'edit'), (req, res) =
 // timestamp which messages have been dispatched.  Pure audit-trail.
 // Body: { kind: 'register' | 'engineer_assign' | 'client_assign' }
 router.post('/:id/whatsapp/sent', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const map = {
     register:        'client_register_msg_sent_at',
     engineer_assign: 'engineer_assign_msg_sent_at',
@@ -321,6 +375,7 @@ router.post('/:id/whatsapp/sent', requirePermission('complaints', 'edit'), (req,
 // Mismatch → attempts++ and return remaining attempts so the UI can
 // shame the engineer into asking the client again.
 router.post('/:id/verify-otp', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const db = getDb();
   const id = +req.params.id;
   const given = String(req.body.otp || '').trim();
@@ -354,7 +409,7 @@ router.post('/:id/verify-otp', requirePermission('complaints', 'edit'), (req, re
     complaint_no: full?.complaint_number || '',
     client: full?.client_name || '',
     engineer: db.prepare('SELECT name FROM users WHERE id=?').get(full?.assigned_engineer_id)?.name || '',
-    date: new Date().toISOString().slice(0, 10),
+    date: istToday(),
     creator_email: ceUserEmail(db, full?.created_by),
     engineer_email: ceUserEmail(db, full?.assigned_engineer_id),
     director_email: ceDirector(),
@@ -367,6 +422,7 @@ router.post('/:id/verify-otp', requirePermission('complaints', 'edit'), (req, re
 // number, generate a fresh OTP and return the new client-side
 // WhatsApp link.  Resets the attempts counter.
 router.post('/:id/resend-otp', requirePermission('complaints', 'edit'), (req, res) => {
+  { const denied = complaintDenied(req, req.params.id); if (denied) return res.status(denied.code).json({ error: denied.error }); }
   const db = getDb();
   const id = +req.params.id;
   const c = db.prepare(`

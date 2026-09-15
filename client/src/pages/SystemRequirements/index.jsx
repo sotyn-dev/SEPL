@@ -158,16 +158,34 @@ export default function SystemRequirementsBoard() {
 
   const exportReport = () => {
     if (!report) return;
-    if (report.rows) {
-      exportCsv(`sysreq-${reportKey}`, report.rows);
+    const label = (k) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const reportRows = report.rows || [];
+    const byMonth = report.by_month || [];
+    // Row reports (by_status / by_priority / assignee_workload / stale / delivery_log)
+    if (reportRows.length) {
+      const keys = Object.keys(reportRows[0]);
+      const body = reportRows.map(r => keys.map(k => r[k]));
+      if (byMonth.length) {
+        // delivery_log also shows a per-month tally on screen — keep it in the file
+        body.push([], ['Month', 'Released']);
+        byMonth.forEach(m => body.push([m.month, m.cnt]));
+      }
+      exportCsv(`sysreq-${reportKey}`, keys.map(label), body);
       return;
     }
-    if (report.averages) {
-      exportCsv(`sysreq-${reportKey}`, [
-        ...Object.entries(report.averages).map(([k, v]) => ({ metric: k, days: v })),
-        ...(report.outcomes || []).map(o => ({ metric: o.status, days: o.cnt })),
+    // cycle_times — averages tiles + outcome counts
+    if (report.averages || report.outcomes) {
+      exportCsv(`sysreq-${reportKey}`, ['Metric', 'Value'], [
+        ...Object.entries(report.averages || {}).map(([k, v]) => [label(k), v ?? '']),
+        ...(report.outcomes || []).map(o => [labelOf(STATUSES, o.status), o.cnt]),
       ]);
+      return;
     }
+    if (byMonth.length) {
+      exportCsv(`sysreq-${reportKey}`, ['Month', 'Released'], byMonth.map(m => [m.month, m.cnt]));
+      return;
+    }
+    toast.error('No data to export');
   };
 
   return (

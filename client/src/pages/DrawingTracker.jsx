@@ -53,11 +53,11 @@ export default function DrawingTracker() {
         </p>
       </div>
 
-      <div className="flex gap-2 border-b border-gray-200 flex-wrap">
+      <div className="flex items-center gap-1 border-b border-gray-200 overflow-x-auto scrollbar-none pb-0.5 sm:flex-wrap">
         {TABS.map(([k, label, Icon]) => (
           <button key={k} onClick={() => setTab(k)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px flex items-center gap-1.5 ${tab === k
-              ? 'border-red-600 text-red-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 -mb-px flex items-center gap-1.5 whitespace-nowrap shrink-0 ${tab === k
+              ? 'border-red-600 text-red-700 font-semibold' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
             <Icon size={14} /> {label}
           </button>
         ))}
@@ -434,15 +434,15 @@ function MatrixTab() {
     actual: W.sr + W.site + W.dwg + W.cat,
   };
   const FROZEN_W = L.actual + W.actual;
-  const stickyShadow = 'shadow-[4px_0_6px_-2px_rgba(0,0,0,0.15)]';
+  const stickyShadow = 'md:shadow-[4px_0_6px_-2px_rgba(0,0,0,0.15)]';
   // Only Rev 1 and up scroll — Rev 0 has its own frozen column above.
   const revCols = Array.from({ length: Math.max(data.max_revision, 0) }, (_, i) => i + 1);
-  const headCell = 'sticky top-0 z-30 bg-slate-800 text-white text-[10px] font-semibold border-r border-b border-slate-700';
+  const headCell = 'md:sticky md:top-0 z-30 bg-slate-800 text-white text-[10px] font-semibold border-r border-b border-slate-700';
 
   return (
     <div className="space-y-3">
-      <div className="card p-3 flex flex-wrap gap-2 items-end">
-        <div className="flex-1 min-w-[200px]">
+      <div className="card p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-end">
+        <div>
           <label className="label text-xs">Search</label>
           <div className="relative">
             <FiSearch className="absolute left-2 top-2.5 text-gray-400" size={14} />
@@ -451,39 +451,34 @@ function MatrixTab() {
           </div>
         </div>
         <div><label className="label text-xs">Site</label>
-          <select className="select" value={filters.site_id} onChange={e => setFilters(f => ({ ...f, site_id: e.target.value }))}>
+          <select className="select w-full" value={filters.site_id} onChange={e => setFilters(f => ({ ...f, site_id: e.target.value }))}>
             <option value="">All sites</option>
             {(opts?.sites || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
         <div><label className="label text-xs">Category</label>
-          <select className="select" value={filters.discipline} onChange={e => setFilters(f => ({ ...f, discipline: e.target.value }))}>
+          <select className="select w-full" value={filters.discipline} onChange={e => setFilters(f => ({ ...f, discipline: e.target.value }))}>
             <option value="">All</option>
             {(opts?.disciplines || []).map(d => <option key={d} value={d}>{d}</option>)}
           </select>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-gray-500">{data.drawings.length} drawing(s)</span>
-          {/* Explicit nudge buttons — the horizontal scrollbar sits at the
-              bottom of a tall grid and is easy to miss, and trackpad users
-              often don't think to shift-scroll. */}
-          <div className="flex gap-1">
-            <button onClick={() => scrollBy(-320)} className="btn btn-secondary text-xs px-2 py-1" title="Scroll to older revisions">
+        <div className="flex items-center justify-between sm:justify-end gap-2 w-full pt-1 sm:pt-0">
+          <span className="text-xs text-gray-500 whitespace-nowrap">{data.drawings.length} drawing(s)</span>
+          {/* Explicit nudge buttons */}
+          <div className="flex gap-1 shrink-0">
+            <button onClick={() => scrollBy(-320)} className="btn btn-secondary text-xs px-2.5 py-1.5" title="Scroll to older revisions">
               <FiChevronLeft size={14} />
             </button>
-            <button onClick={() => scrollBy(320)} className="btn btn-secondary text-xs px-2 py-1" title="Scroll to newer revisions">
+            <button onClick={() => scrollBy(320)} className="btn btn-secondary text-xs px-2.5 py-1.5" title="Scroll to newer revisions">
               <FiChevronRight size={14} />
             </button>
           </div>
         </div>
       </div>
 
-      {/* overflowX 'scroll' (not 'auto') keeps the horizontal bar permanently
-          visible, so it's obvious the revision columns run further right even
-          when the current set happens to fit. scrollbarWidth 'thin' keeps it
-          unobtrusive. */}
-      <div ref={scrollRef} className="card p-0"
-        style={{ maxHeight: '70vh', overflowX: 'scroll', overflowY: 'auto', scrollbarWidth: 'thin' }}>
+      {/* Responsive matrix: smooth touch horizontal scroll on mobile; frozen sticky columns on md+ screens */}
+      <div ref={scrollRef} className="card p-0 table-responsive"
+        style={{ maxHeight: '70vh', overflowX: 'auto', overflowY: 'auto', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'thin' }}>
         <table className="border-collapse text-xs"
           style={{ tableLayout: 'fixed', width: FROZEN_W + revCols.length * REV_W + 56 }}>
           <colgroup>
@@ -496,24 +491,22 @@ function MatrixTab() {
             <col style={{ width: 56 }} />
           </colgroup>
 
-          <thead>
+          <thead className="sticky top-0 z-30 bg-slate-800">
             <tr>
-              <th className={`${headCell} sticky left-0 z-40 px-1 text-center`} style={{ left: L.sr, height: 40 }}>SR</th>
-              <th className={`${headCell} sticky z-40 px-2 text-left`} style={{ left: L.site, height: 40 }}>SITE NAME</th>
-              <th className={`${headCell} sticky z-40 px-2 text-left`} style={{ left: L.dwg, height: 40 }}>DRAWING NO</th>
-              <th className={`${headCell} sticky z-40 px-2 text-left`} style={{ left: L.cat, height: 40 }}>CATEGORY</th>
-              {/* Rev 0 — the original drawing. Frozen so it stays on screen
-                  as a reference however far the revisions scroll. */}
-              <th className={`sticky top-0 z-40 bg-slate-900 text-white text-[10px] font-bold text-center border-r border-b border-slate-700 ${stickyShadow}`}
+              <th className={`${headCell} md:sticky md:left-0 z-40 px-1 text-center`} style={{ left: L.sr, height: 40 }}>SR</th>
+              <th className={`${headCell} md:sticky z-40 px-2 text-left`} style={{ left: L.site, height: 40 }}>SITE NAME</th>
+              <th className={`${headCell} md:sticky z-40 px-2 text-left`} style={{ left: L.dwg, height: 40 }}>DRAWING NO</th>
+              <th className={`${headCell} md:sticky z-40 px-2 text-left`} style={{ left: L.cat, height: 40 }}>CATEGORY</th>
+              {/* Rev 0 — the original drawing. Frozen on desktop beside identity columns */}
+              <th className={`md:sticky md:top-0 z-40 bg-slate-900 text-white text-[10px] font-bold text-center border-r border-b border-slate-700 ${stickyShadow}`}
                 style={{ left: L.actual, height: 40 }}>ACTUAL</th>
               {revCols.map(n => (
-                <th key={n} className="sticky top-0 z-20 bg-slate-700 text-white text-[10px] font-bold text-center border-r border-b border-slate-600" style={{ height: 40 }}>
+                <th key={n} className="md:sticky md:top-0 z-20 bg-slate-700 text-white text-[10px] font-bold text-center border-r border-b border-slate-600" style={{ height: 40 }}>
                   REV {n}
                 </th>
               ))}
-              {/* Pinned to the RIGHT edge — the "+" must stay reachable no
-                  matter how far the revision columns are scrolled. */}
-              <th className="sticky top-0 right-0 z-40 bg-slate-900 text-white text-[10px] font-bold text-center border-b border-l border-slate-700 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.15)]" style={{ height: 40 }}>ADD</th>
+              {/* Pinned to the RIGHT edge on desktop */}
+              <th className="md:sticky md:top-0 md:right-0 z-40 bg-slate-900 text-white text-[10px] font-bold text-center border-b border-l border-slate-700 md:shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.15)]" style={{ height: 40 }}>ADD</th>
             </tr>
           </thead>
 
@@ -552,16 +545,16 @@ function MatrixTab() {
               };
               return (
                 <tr key={d.id} className="hover:bg-red-50/20">
-                  <td className="sticky left-0 z-20 bg-white text-center text-gray-500 border-r border-b" style={{ left: L.sr }}>{idx + 1}</td>
-                  <td className="sticky z-20 bg-white px-2 border-r border-b truncate" style={{ left: L.site }} title={d.site_name}>{d.site_name || '—'}</td>
-                  <td className="sticky z-20 bg-white px-2 border-r border-b" style={{ left: L.dwg }}>
+                  <td className="md:sticky md:left-0 z-20 bg-white text-center text-gray-500 border-r border-b" style={{ left: L.sr }}>{idx + 1}</td>
+                  <td className="md:sticky z-20 bg-white px-2 border-r border-b truncate" style={{ left: L.site }} title={d.site_name}>{d.site_name || '—'}</td>
+                  <td className="md:sticky z-20 bg-white px-2 border-r border-b" style={{ left: L.dwg }}>
                     <Link to={`/drawing-tracker/${d.id}`} className="font-mono font-bold text-red-600 hover:underline">{d.drawing_number}</Link>
                     <div className="text-[9px] text-gray-400 truncate" title={d.title}>{d.title}</div>
                   </td>
-                  <td className="sticky z-20 bg-white px-2 border-r border-b truncate" style={{ left: L.cat }} title={d.discipline}>{d.discipline || '—'}</td>
+                  <td className="md:sticky z-20 bg-white px-2 border-r border-b truncate" style={{ left: L.cat }} title={d.discipline}>{d.discipline || '—'}</td>
 
-                  {/* ACTUAL = Rev 0, frozen beside the identity columns. */}
-                  <td className={`sticky z-20 bg-white border-r border-b p-1 text-center align-middle ${stickyShadow}`} style={{ left: L.actual }}>
+                  {/* ACTUAL = Rev 0, frozen beside the identity columns on desktop. */}
+                  <td className={`md:sticky z-20 bg-white border-r border-b p-1 text-center align-middle ${stickyShadow}`} style={{ left: L.actual }}>
                     {revCellBody(d.revisions.find(r => r.revision_no === 0), 0)}
                   </td>
 
@@ -575,7 +568,7 @@ function MatrixTab() {
                     );
                   })}
 
-                  <td className="sticky right-0 z-20 bg-white border-b border-l text-center p-1 shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.15)]">
+                  <td className="md:sticky md:right-0 z-20 bg-white border-b border-l text-center p-1 md:shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.15)]">
                     {canCreate('drawing_tracker') && (
                       <button onClick={() => setUploadFor(d)} title={`Add Rev ${(current?.revision_no ?? -1) + 1}`}
                         className="w-8 h-8 rounded-full bg-red-600 text-white hover:bg-red-700 inline-flex items-center justify-center">
@@ -593,11 +586,11 @@ function MatrixTab() {
         </table>
       </div>
 
-      <div className="flex gap-4 text-[11px] text-gray-500">
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-gray-500">
         <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded border bg-emerald-100 border-emerald-300" /> Current</span>
         <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded border bg-white border-gray-300" /> Superseded — still viewable</span>
         <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded border bg-gray-50 border-gray-200" /> No revision at this number</span>
-        <span className="text-gray-400">· ACTUAL = Rev 0, the original drawing — stays on screen while revisions scroll</span>
+        <span className="text-gray-400">· ACTUAL = Rev 0, original drawing</span>
       </div>
 
       {viewing && (
@@ -635,8 +628,8 @@ function SitesTab() {
   }
 
   return (
-    <div className="card p-0 overflow-x-auto">
-      <table className="min-w-full text-sm">
+    <div className="card p-0 table-responsive">
+      <table className="min-w-[700px] w-full text-sm">
         <thead><tr className="bg-gray-50 text-xs text-gray-600">
           <th className="px-3 py-2 text-left">Site</th>
           <th className="px-3 py-2 text-right">Drawings</th>
@@ -784,8 +777,8 @@ function ReportsTab() {
         </div>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
+      <div className="card p-0 table-responsive">
+        <table className="min-w-[800px] w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
             {def[2].map(h => <th key={h} className="px-3 py-2 text-left">{h}</th>)}
           </tr></thead>

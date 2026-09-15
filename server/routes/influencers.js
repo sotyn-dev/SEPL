@@ -21,6 +21,7 @@
 //   GET    /api/influencers/export         — .xlsx download
 
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -163,6 +164,26 @@ router.get('/', requirePermission('influencers', 'view'), (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
+// ─── GET /api/influencers/export ─────────────────────────────────
+// MUST be registered above /:id — otherwise GET /api/influencers/export
+// is eaten by the id-matcher (id='export') and always 404s, so the
+// Export Excel button could never download anything.
+router.get('/export', requirePermission('influencers', 'view'), (req, res) => {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM influencers ORDER BY id DESC').all();
+  const headerKeys = ['form_id', ...FIELDS];
+  const headers = headerKeys.map(k => HEADERS[k] || k);
+  const data = [headers, ...rows.map(r => headerKeys.map(k => r[k] ?? ''))];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(18, Math.min(40, h.length + 4)) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Influencers');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="influencers-export-${istToday()}.xlsx"`);
+  res.send(buf);
+});
+
 // ─── GET /api/influencers/:id ────────────────────────────────────
 router.get('/:id', requirePermission('influencers', 'view'), (req, res) => {
   const r = getDb().prepare('SELECT * FROM influencers WHERE id = ?').get(req.params.id);
@@ -300,7 +321,7 @@ router.get('/import/template', requirePermission('influencers', 'view'), (req, r
     'linkedin.com/in/rajeshkumar', 'fb.com/kumararch', '@kumar.architects', '', 'youtube.com/c/kumarArch', '', '',
     'Referral', 'Mr Singh', '2026-01-15', 'Active', 'Commercial Interiors', '50 L - 2 Cr', 5, 12500000, 2, 'Prompt',
     '2% on completion', 'Patel Designs, M+R Studio',
-    new Date().toISOString().slice(0,10), 'Admin', '',
+    istToday(), 'Admin', '',
   ];
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
@@ -309,23 +330,6 @@ router.get('/import/template', requirePermission('influencers', 'view'), (req, r
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="influencers-template.xlsx"');
-  res.send(buf);
-});
-
-// ─── GET /api/influencers/export ─────────────────────────────────
-router.get('/export', requirePermission('influencers', 'view'), (req, res) => {
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM influencers ORDER BY id DESC').all();
-  const headerKeys = ['form_id', ...FIELDS];
-  const headers = headerKeys.map(k => HEADERS[k] || k);
-  const data = [headers, ...rows.map(r => headerKeys.map(k => r[k] ?? ''))];
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = headers.map(h => ({ wch: Math.max(18, Math.min(40, h.length + 4)) }));
-  XLSX.utils.book_append_sheet(wb, ws, 'Influencers');
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="influencers-export-${new Date().toISOString().slice(0,10)}.xlsx"`);
   res.send(buf);
 });
 

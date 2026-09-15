@@ -30,6 +30,21 @@ const STATUS_CLS = {
   blocked:     'bg-red-50 text-red-700 border-red-300',
 };
 
+// Uploaded step-files sit behind requirePermission, so a plain <a href> can never
+// fetch them (no Authorization header → 401). Pull the file through axios as a blob
+// and open it, same pattern as SystemRequirements/AttachmentsPanel openAttachment.
+async function openHiringFile(f) {
+  try {
+    const r = await api.get(`/subcon-hiring/file/${f.id}`, { responseType: 'blob' });
+    const blob = r.data instanceof Blob
+      ? r.data
+      : new Blob([r.data], { type: f.file_type || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch { toast.error('Could not open file'); }
+}
+
 export default function SubconHiring() {
   const { canEdit, canDelete, canCreate } = useAuth();
   const [list, setList] = useState([]);
@@ -526,7 +541,7 @@ function StepWizardPanel({ meta, step, hiringId, files, canEdit, onReload, onPre
               {files.map(f => (
                 <span key={f.id} className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-1">
                   <FiPaperclip size={12} />
-                  <a href={`/api/subcon-hiring/file/${f.id}`} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[200px]">{f.filename}</a>
+                  <button type="button" onClick={() => openHiringFile(f)} className="hover:underline truncate max-w-[200px]">{f.filename}</button>
                   {canEdit && <button onClick={() => delFile(f.id)} className="text-blue-400 hover:text-red-600 ml-0.5"><FiX size={12} /></button>}
                 </span>
               ))}
@@ -617,7 +632,7 @@ function FilesPanel({ data, hiringId, canEdit, onReload }) {
               {filesByStep[stepNo].map(f => (
                 <span key={f.id} className="inline-flex items-center gap-1 text-[11px] bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-1">
                   <FiPaperclip size={11} />
-                  <a href={`/api/subcon-hiring/file/${f.id}`} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[260px]">{f.filename}</a>
+                  <button type="button" onClick={() => openHiringFile(f)} className="hover:underline truncate max-w-[260px]">{f.filename}</button>
                   <span className="text-[9px] text-blue-400 ml-1">· {f.uploaded_by_name || '—'}</span>
                   {canEdit && <button onClick={() => delFile(f.id)} className="text-blue-400 hover:text-red-600 ml-0.5"><FiX size={11} /></button>}
                 </span>

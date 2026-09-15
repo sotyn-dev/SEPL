@@ -3,11 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage } = require('../lib/aiComplete');
 const router = express.Router();
 
-// Read an app setting (AI provider/key/model live in app_settings, set in
-// Admin → AI Settings). Used by the contractor-attendance photo head-count.
-const getSetting = (k) => getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(k)?.value ?? null;
+// (AI provider/key/model live in app_settings, set in Admin → AI Settings —
+// the contractor-attendance photo head-count reads them through
+// lib/aiComplete.js since 2026-08-21, so no local getter is needed here.)
 router.use(authMiddleware);
 
 // ── Contractor Manpower Attendance — morning punch (mam 2026-06-22) ──────
@@ -50,7 +51,7 @@ router.get('/contractor-attendance/records', (req, res) => {
   res.json(db.prepare(sql).all(...p));
 });
 
-router.post('/contractor-attendance', (req, res) => {
+router.post('/contractor-attendance', requirePermission('dpr', 'create'), (req, res) => {
   const { site_id, date, rows } = req.body;
   if (!site_id || !date) return res.status(400).json({ error: 'site_id and date required' });
   const db = getDb();
@@ -74,7 +75,7 @@ router.post('/contractor-attendance', (req, res) => {
 // a photo of the contractor's gang; Claude vision counts the people and returns
 // the head-count, which pre-fills the manpower field. Image is already on disk
 // (uploaded via /upload); we pass its path in as photo_url.
-router.post('/contractor-attendance/count-photo', async (req, res) => {
+router.post('/contractor-attendance/count-photo', requirePermission('dpr', 'create'), async (req, res) => {
   const { photo_url } = req.body;
   if (!photo_url) return res.status(400).json({ error: 'photo_url required' });
   // Resolve to the on-disk file. Uploads live at <repo>/data/uploads (see
@@ -89,34 +90,26 @@ router.post('/contractor-attendance/count-photo', async (req, res) => {
   const media_type = mediaMap[ext];
   if (!media_type) return res.status(400).json({ error: 'Unsupported image type — use JPG / PNG / WEBP' });
 
-  const apiKey = getSetting('ai_api_key');
-  if (!apiKey) return res.status(400).json({ error: 'AI key not set — add it in Admin → AI Settings to use photo head-count' });
-  let Anthropic;
-  try { Anthropic = require('@anthropic-ai/sdk'); }
-  catch { return res.status(500).json({ error: '@anthropic-ai/sdk not installed on the server' }); }
+  // Vision through the shared one-shot helper so the head-count follows the
+  // provider picked in Admin → AI Settings — Anthropic OR Gemini (mam
+  // 2026-08-21). media_type above is already the exact mime string both want.
+  const cfg = aiConfig(getDb());
+  if (!cfg.configured) return res.status(400).json({ error: aiNotConfiguredMessage(cfg.provider) });
 
   try {
     const data = fs.readFileSync(filePath).toString('base64');
-    const client = new Anthropic.default({ apiKey, timeout: 60000 });
-    // Vision works across the 4.x family; default to a fast model for counting.
-    const model = getSetting('ai_model') || 'claude-opus-4-7';
-    const msg = await client.messages.create({
-      model, max_tokens: 50,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type, data } },
-          { type: 'text', text: 'This is a site attendance photo of construction/MEPF labourers. Count how many distinct people (workers) are visible. Reply with ONLY a single integer — no words, no punctuation.' },
-        ],
-      }],
+    const out = await aiComplete(getDb(), {
+      prompt: 'This is a site attendance photo of construction/MEPF labourers. Count how many distinct people (workers) are visible. Reply with ONLY a single integer — no words, no punctuation.',
+      maxTokens: 50, timeout: 60000,
+      attachments: [{ mime: media_type, data }],
     });
-    const txt = (msg.content || []).map(b => b.text || '').join(' ');
-    const m = txt.match(/\d+/);
+    const m = out.text.match(/\d+/);
     const count = m ? parseInt(m[0], 10) : null;
     if (count == null) return res.status(422).json({ error: 'Could not read a count from the photo — enter manpower manually' });
     res.json({ count });
   } catch (e) {
-    res.status(500).json({ error: e.message || 'Photo head-count failed' });
+    console.error('[dpr] photo head-count failed:', e.status || '', e.message);
+    res.status(e.status === 429 ? 429 : 500).json({ error: aiErrorMessage(e, cfg.provider) });
   }
 });
 
@@ -221,7 +214,7 @@ router.get('/sites', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-router.post('/sites', (req, res) => {
+router.post('/sites', requirePermission('dpr', 'create'), (req, res) => {
   const db = getDb();
   const { name, address, client_name, po_id, site_engineer_id, supervisor } = req.body;
   // Auto-resolve business_book_id so the new site is wired to BOQ items
@@ -246,7 +239,7 @@ router.post('/sites', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, business_book_id: bbId });
 });
 
-router.put('/sites/:id', (req, res) => {
+router.put('/sites/:id', requirePermission('dpr', 'edit'), (req, res) => {
   const { name, address, client_name, site_engineer_id, supervisor, supervisor_id, status } = req.body;
   const db = getDb();
   db.prepare(
@@ -470,6 +463,66 @@ router.get('/sites/:site_id/staff-cost', (req, res) => {
 // then UNION the resulting set so every BOQ item the user uploaded in
 // Orders/Planning surfaces in DPR, regardless of which way the BB was
 // linked. Diagnostic message names whichever paths found nothing.
+// ── What is actually holding this site up (mam 2026-09-12) ──────────────
+// "if money fill then drop down select his payable which is pending and
+// before 3 days / if material which indents their sites are pending (from
+// dispatch) before 7 days" — the engineer picks the real stuck record
+// instead of typing "payment pending", so the DPR reason names something
+// the office can chase. Read-only list; nothing is written here.
+router.get('/sites/:site_id/hindrance-options', (req, res) => {
+  const db = getDb();
+  const category = String(req.query.category || '');
+  const site = db.prepare('SELECT id, name FROM sites WHERE id=?').get(req.params.site_id);
+  if (!site) return res.json({ site_name: null, options: [] });
+  const money = (n) => 'Rs ' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+  const words = (t) => String(t || '').replace(/_/g, ' ');
+
+  try {
+    if (category === 'Money') {
+      // Raised for this site, not released and not rejected, 3+ days old.
+      const rows = db.prepare(
+        `SELECT request_no, category, amount, status,
+                CAST(julianday('now') - julianday(created_at) AS INT) AS age_days
+           FROM payment_requests
+          WHERE (site_id = ? OR LOWER(TRIM(COALESCE(site_name, ''))) = LOWER(TRIM(?)))
+            AND COALESCE(status, '') NOT IN ('final_approved', 'rejected')
+            AND julianday('now') - julianday(created_at) >= 3
+          ORDER BY created_at ASC LIMIT 50`
+      ).all(site.id, site.name);
+      return res.json({
+        site_name: site.name,
+        options: rows.map(r => ({
+          id: r.request_no,
+          label: `${r.request_no || 'Payment request'} · ${r.category} · ${money(r.amount)} · pending ${r.age_days}d (${words(r.status)})`,
+        })),
+      });
+    }
+    if (category === 'Material') {
+      // Indents for this site that have not reached dispatch, 7+ days old.
+      const rows = db.prepare(
+        `SELECT i.indent_number, i.status,
+                CAST(julianday('now') - julianday(i.created_at) AS INT) AS age_days,
+                (SELECT COUNT(*) FROM indent_items ii WHERE ii.indent_id = i.id) AS items
+           FROM indents i
+          WHERE LOWER(TRIM(COALESCE(i.site_name, ''))) = LOWER(TRIM(?))
+            AND COALESCE(i.status, '') NOT IN ('dispatched', 'received', 'rejected')
+            AND julianday('now') - julianday(i.created_at) >= 7
+          ORDER BY i.created_at ASC LIMIT 50`
+      ).all(site.name);
+      return res.json({
+        site_name: site.name,
+        options: rows.map(r => ({
+          id: r.indent_number,
+          label: `${r.indent_number} · ${r.items} item(s) · waiting ${r.age_days}d (${words(r.status)})`,
+        })),
+      });
+    }
+    return res.json({ site_name: site.name, options: [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/sites/:site_id/po-items', (req, res) => {
   const db = getDb();
   const site = db.prepare('SELECT id, name, po_id, business_book_id FROM sites WHERE id=?').get(req.params.site_id);
@@ -636,7 +689,7 @@ router.get('/', (req, res) => {
 // Dashboard summary
 router.get('/summary', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayIso();
   // Use the normalized site key so phantom-duplicate rows (Excel paste
   // junk) don't inflate the active-site count or the missing-DPR list.
   const activeSites = db.prepare(
@@ -792,28 +845,28 @@ try { getDb().exec(`
 // day comes back as `items: [{ id, po_item_id, description, unit,
 // planned_qty, actual_qty }]` so the UI can render the full plan.
 // Mam, 2026-05-16: "in one day multiple boq item have".
-// SPOS daily compliance grid (mam 2026-07-29): per active site — morning
-// punch by 09:00, DPR by 20:00 cutoff, photos, weekly plan approved.
+// SPOS daily compliance grid (mam 2026-07-29): morning punch by 09:00,
+// DPR by 20:00 cutoff, photos, weekly plan approved. Rows are ENGINEER-wise
+// since mam 2026-08-21 ("no need compliance eng wise that ok") — `sites` is
+// still returned for scoping/back-compat, `engineers` is what the grid draws.
 // Same compute as the 18:30 exception-report cron (lib/sposCompliance).
 router.get('/spos-compliance', requirePermission('dpr', 'view'), (req, res) => {
   const date = String(req.query.date || istTodayIso()).slice(0, 10);
   try {
     const db = getDb();
-    const { computeSposCompliance } = require('../lib/sposCompliance');
+    const { computeSposCompliance, rollupByEngineer } = require('../lib/sposCompliance');
     const result = computeSposCompliance(db, date);
     // Scope: a plain engineer sees only their own sites' rows (audit).
+    // Filter the SITES first, then rebuild the engineer rollup from what
+    // survived — an aggregate row can then never carry a site the viewer
+    // is not allowed to see.
     if (!dprCanSeeAll(db, req.user)) {
       const owned = new Set(db.prepare(`SELECT s.id FROM sites s WHERE ${siteScopeSql('s')}`)
         .all(...siteScopeParams(req.user.id)).map(r => r.id));
       result.sites = result.sites.filter(r => (r.site_ids || [r.site_id]).some(id => owned.has(id)));
-      const n = result.sites.length || 1;
-      result.summary = {
-        sites: result.sites.length,
-        punch_pct: Math.round(result.sites.filter(r => r.punch_done).length / n * 100),
-        dpr_pct: Math.round(result.sites.filter(r => r.dpr_done).length / n * 100),
-        photos_pct: Math.round(result.sites.filter(r => r.photos_done).length / n * 100),
-        plan_approved_pct: Math.round(result.sites.filter(r => r.plan_status === 'approved').length / n * 100),
-      };
+      const roll = rollupByEngineer(result.sites);
+      result.engineers = roll.engineers;
+      result.summary = roll.summary;
     }
     res.json(result);
   } catch (e) {
@@ -1331,7 +1384,7 @@ router.post('/weekly-plans/:id/approve', requirePermission('dpr', 'approve'), (r
         site: plan.site_name,
         amount: '0',
         raised_by: 'Weekly Plan (auto)',
-        date: new Date().toISOString().slice(0, 10),
+        date: istTodayIso(),
         raiser_email: result.auto_indent.raiser_email,
       });
     } catch (_) {}
@@ -1745,7 +1798,28 @@ router.post('/', (req, res) => {
   // (mam, 2026-05-16: "actual per day according to that").  Otherwise
   // INSERT a fresh row.  Either way, dprId is the row we just wrote.
   let dprId;
-  const existing = db.prepare(`SELECT id, is_planned_template, site_photos FROM dpr WHERE site_id = ? AND report_date = ?`).get(site_id, report_date);
+  const existing = db.prepare(`SELECT id, is_planned_template, site_photos, approval_status, billing_ready, sales_bill_id
+                                 FROM dpr WHERE site_id = ? AND report_date = ?`).get(site_id, report_date);
+
+  // Editing an APPROVED DPR sends it back for approval (mam 2026-09-09: "admin
+  // can back edit data change and rejected also again reapprove"). Until now a
+  // resubmit silently overwrote the figures and left the row marked approved —
+  // so an approval could end up standing over numbers nobody had approved.
+  //
+  // A DPR already on a client bill is not overwritten at all without a
+  // deliberate confirmation: the invoice was raised off these figures.
+  let reopened = false;
+  if (existing && !existing.is_planned_template && existing.approval_status === 'approved') {
+    if (existing.sales_bill_id && req.body.force !== true) {
+      const bill = db.prepare('SELECT bill_number FROM sales_bills WHERE id=?').get(existing.sales_bill_id);
+      return res.status(409).json({
+        error: `This DPR is already billed on ${bill?.bill_number || 'a sales bill'}. Editing it changes what the client was invoiced — confirm to continue.`,
+        needs_force: true,
+        bill_number: bill?.bill_number || null,
+      });
+    }
+    reopened = true;
+  }
   // Multi-shift photo MERGE: evening's photos join morning's instead of
   // replacing them (union, capped at 30).
   if (existing && sitePhotosJson) {
@@ -1766,7 +1840,11 @@ router.post('/', (req, res) => {
         is_planned_template = 0,
         -- Rates sent by the app are already the labour portion (11% of SITC),
         -- so flag this DPR as converted — the labour-pct backfill skips it.
-        labour_pct_applied = 1
+        labour_pct_applied = 1,
+        -- Edited after approval? Then the approval no longer describes this
+        -- data, so it goes back in the queue (mam 2026-09-09).
+        approval_status = CASE WHEN ? = 1 THEN 'pending' ELSE approval_status END,
+        billing_ready   = CASE WHEN ? = 1 THEN 0 ELSE billing_ready END
       WHERE id = ?`)
       .run(req.user.id, weather || 'clear', overall_status || 'on_track',
         shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
@@ -1774,8 +1852,13 @@ router.post('/', (req, res) => {
         floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
         safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks,
         sitePhotosJson,
+        reopened ? 1 : 0, reopened ? 1 : 0,
         existing.id);
     dprId = existing.id;
+    if (reopened) {
+      console.log(`[dpr] ${req.user?.name || req.user?.id} edited approved DPR ${existing.id}`
+        + ` (${report_date}) — sent back to pending for re-approval`);
+    }
     // Resubmit hygiene (audit 2026-07-31) + three-shift additive (mam
     // 2026-08-03): clear only THIS SHIFT's previous rows — morning's data
     // survives the evening submit, evening's survives night's. Plan-week
@@ -1828,16 +1911,17 @@ router.post('/', (req, res) => {
     const rate = w.rate || 0;
     const amount = qty * rate;
     // Verify po_item_id exists, set null if not.
-    const validPoItemId = w.po_item_id
-      ? (db.prepare('SELECT id FROM po_items WHERE id=?').get(w.po_item_id) ? w.po_item_id : null)
+    const selectedPoItem = w.po_item_id
+      ? db.prepare('SELECT id, unit FROM po_items WHERE id=?').get(w.po_item_id)
       : null;
+    const validPoItemId = selectedPoItem?.id || null;
     // Same FK guard for work_order_id — silently drop the link if the
     // referenced WO no longer exists (mam may have deleted it).
     const validWoId = w.work_order_id
       ? (db.prepare('SELECT id FROM proj_work_orders WHERE id=?').get(+w.work_order_id) ? +w.work_order_id : null)
       : null;
     insertWork.run(
-      dprId, validPoItemId, validWoId, w.description, w.unit, w.location || w.floor_zone,
+      dprId, validPoItemId, validWoId, w.description, selectedPoItem?.unit || w.unit, w.location || w.floor_zone,
       w.boq_qty || 0, rate, amount, qty, qty, w.cumulative_qty || 0, 0, w.remarks, shiftVal,
     );
   }
@@ -2096,8 +2180,30 @@ router.get('/loss-dashboard', (req, res) => {
 
   // Use the shared helper so the loss-dashboard streak count and the
   // alert-on-submit streak count never diverge.
+  // Bulk form of consecutiveLossDays: ONE aggregate query for every site on
+  // the page instead of one query per row (hang audit 2026-09-05 — this loop
+  // was 3.9 s on a year-scale copy, and it blocks every user while it runs).
+  // Same rule as the helper: walk back day by day from the row's date while
+  // each day is present AND a net loss; a gap or a non-loss day ends the streak.
+  const siteIds = [...new Set(rows.map(r => r.site_id).filter(id => id != null))];
+  const plBySite = new Map(); // site_id -> Map(report_date -> net P/L)
+  for (let i = 0; i < siteIds.length; i += 400) {
+    const chunk = siteIds.slice(i, i + 400);
+    const ph = chunk.map(() => '?').join(',');
+    for (const d of db.prepare(`SELECT site_id, report_date AS d, SUM(profit_loss) AS pl
+                                  FROM dpr WHERE site_id IN (${ph}) GROUP BY site_id, report_date`).all(...chunk)) {
+      if (!plBySite.has(d.site_id)) plBySite.set(d.site_id, new Map());
+      plBySite.get(d.site_id).set(d.d, +d.pl || 0);
+    }
+  }
   for (const r of rows) {
-    r.consecutive_loss_days = consecutiveLossDays(db, r.site_id, r.report_date);
+    const days = plBySite.get(r.site_id);
+    let streak = 0, cursor = r.report_date;
+    while (days && streak < 30 && days.has(cursor) && days.get(cursor) < 0) {
+      streak += 1;
+      cursor = isoMinusOneDay(cursor);
+    }
+    r.consecutive_loss_days = streak;
   }
 
   res.json(rows);
@@ -2110,7 +2216,7 @@ try { getDb().exec(`ALTER TABLE dpr ADD COLUMN loss_addressed_proof_url TEXT`); 
 // Mark a loss as followed-up / addressed.  Optional proof_url (a
 // file URL from POST /api/upload) stored so management can later
 // click through to verify the issue was actually fixed.
-router.patch('/:id/loss-addressed', (req, res) => {
+router.patch('/:id/loss-addressed', requirePermission('dpr', 'approve'), (req, res) => {
   const db = getDb();
   const { addressed, note, proof_url } = req.body || {};
   const next = addressed ? 1 : 0;
@@ -2154,7 +2260,7 @@ router.get('/engineer-compliance', (req, res) => {
   // this site in the filter range".
 
   // Default range: last 30 days inclusive of today.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istTodayIso();
   const thirtyAgo = (() => {
     const d = new Date(); d.setDate(d.getDate() - 29);
     return d.toISOString().slice(0, 10);
@@ -2537,12 +2643,49 @@ router.get('/:id', (req, res) => {
 
 // Approve/Reject DPR — requires can_approve on the dpr module.
 // Site Engineers can only submit DPRs; admin / billing engineers approve.
+// Mam (2026-09-09): "admin can back edit data change and rejected also again
+// reapprove like something". The decision is no longer one-way — an approved DPR
+// can be rejected or reopened, and a rejected one re-approved.
+//
+// Two things this endpoint has to protect, because a DPR is money:
+//   • the status is now VALIDATED. It used to write whatever arrived, so a typo
+//     could park a DPR in a state no screen filters for.
+//   • a DPR already pulled into a client sales bill is NOT quietly unapproved.
+//     The bill was raised off these figures; changing them underneath it needs a
+//     deliberate act, so it takes force:true and is logged.
+const DPR_STATUSES = ['pending', 'approved', 'rejected'];
+
 router.put('/:id/approve', requirePermission('dpr', 'approve'), (req, res) => {
-  const { approval_status, billing_ready } = req.body;
+  const { approval_status, billing_ready, reason } = req.body;
   const db = getDb();
+
+  if (!DPR_STATUSES.includes(approval_status)) {
+    return res.status(400).json({ error: `Status must be one of: ${DPR_STATUSES.join(', ')}` });
+  }
+  const cur = db.prepare('SELECT id, approval_status, billing_ready, sales_bill_id, report_date FROM dpr WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'DPR not found' });
+
+  // Already invoiced? Then walking it back changes what a client was billed.
+  const leavingApproved = cur.approval_status === 'approved' && approval_status !== 'approved';
+  if (cur.sales_bill_id && (leavingApproved || (cur.billing_ready && !billing_ready))) {
+    if (req.body.force !== true) {
+      const bill = db.prepare('SELECT bill_number FROM sales_bills WHERE id=?').get(cur.sales_bill_id);
+      return res.status(409).json({
+        error: `This DPR is already billed on ${bill?.bill_number || 'a sales bill'}. Reopening it changes what the client was invoiced — confirm to continue.`,
+        needs_force: true,
+        bill_number: bill?.bill_number || null,
+      });
+    }
+    console.warn(`[dpr] ${req.user?.name || req.user?.id} forced a BILLED DPR ${cur.id} (${cur.report_date}) from `
+      + `${cur.approval_status} to ${approval_status}${reason ? ` — ${String(reason).slice(0, 200)}` : ''}`);
+  }
+
+  // Anything that is not an approval cannot stay billable.
+  const nextBillingReady = approval_status === 'approved' ? (billing_ready ? 1 : 0) : 0;
+
   db.prepare('UPDATE dpr SET approval_status=?, billing_ready=?, approved_by=? WHERE id=?')
-    .run(approval_status, billing_ready ? 1 : 0, req.user.id, req.params.id);
-  if (billing_ready) {
+    .run(approval_status, nextBillingReady, req.user.id, req.params.id);
+  if (nextBillingReady) {                  // the EFFECTIVE flag, not the requested one
     const dpr = db.prepare('SELECT d.*, s.client_name, s.name as site_name FROM dpr d JOIN sites s ON d.site_id=s.id WHERE d.id=?').get(req.params.id);
     if (dpr?.client_name) {
       const existing = db.prepare('SELECT id FROM receivables WHERE client_name=? AND project_name=? AND invoice_date=?').get(dpr.client_name, dpr.site_name, dpr.report_date);
@@ -2556,7 +2699,7 @@ router.put('/:id/approve', requirePermission('dpr', 'approve'), (req, res) => {
 });
 
 // Delete DPR (cascade child tables)
-router.delete('/:id', (req, res) => {
+router.delete('/:id', requirePermission('dpr', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   db.prepare('DELETE FROM dpr_work_items WHERE dpr_id=?').run(id);
@@ -2567,7 +2710,7 @@ router.delete('/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-router.delete('/sites/:id', (req, res) => {
+router.delete('/sites/:id', requirePermission('dpr', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const dprCount = db.prepare('SELECT COUNT(*) as c FROM dpr WHERE site_id=?').get(id).c;
@@ -2778,7 +2921,7 @@ function progressHandler(req, res) {
 // No DPR = no payment check
 router.get('/payment-check/:site_id', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istTodayIso();
   const dpr = db.prepare('SELECT id FROM dpr WHERE site_id=? AND report_date=?').get(req.params.site_id, today);
   res.json({ site_id: req.params.site_id, dpr_submitted: !!dpr, payment_allowed: !!dpr,
     message: dpr ? 'DPR submitted - payment can proceed' : 'NO DPR submitted today - payment NOT allowed' });
