@@ -6616,6 +6616,8 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-05-28): Procurement Schedule — backward-pass Gantt
     // per project so "raise indent by" dates are computed, not guessed.
     'procurement_schedule',
+    // Sales Bill Receive — indent → Business Book site → bill number → upload.
+    'sales_bill_receive',
     // Mam (2026-05-30): Labour Payment Indents — site engineer raises,
     // manager approves, accounts pays.  Under Projects sidebar group.
     'labour_payment',
@@ -7172,6 +7174,13 @@ in your first week. If a process feels broken, raise a Help Ticket
     runRentalToolsMigrations(db);
   } catch (e) {
     console.warn('[rental_tools] migrations skipped (non-fatal):', e.message);
+  }
+
+  try {
+    const { runSalesBillReceiveMigrations } = require('./salesBillReceiveSchema');
+    runSalesBillReceiveMigrations(db);
+  } catch (e) {
+    console.warn('[sales_bill_receive] migrations skipped (non-fatal):', e.message);
   }
 
   // Indent → Dispatch approval flow settings (2026-07-23) — the single home for
