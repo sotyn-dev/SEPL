@@ -530,24 +530,24 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FiCamera className="text-red-600" />
-            Client Snags & Site Readiness FMS
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
+            <FiCamera className="text-red-600 shrink-0" />
+            <span>Client Snags &amp; Site Readiness FMS</span>
           </h1>
-          <p className="text-sm text-gray-500">
+          <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
             {activeTab === 'site_readiness'
               ? 'Site-to-Client civil readiness register — tracks if plaster, tiles, foundations, or cutouts are left at site.'
               : "Client-facing document snags — e.g. bill missing client's signature (Ajmer / Lovely Sharma approval)."}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
           {activeTab === 'billing_doc' && isAdmin() && (
-            <button onClick={openGate} className="btn btn-secondary flex items-center gap-1 text-sm">
+            <button onClick={openGate} className="btn btn-secondary flex items-center justify-center gap-1 text-xs sm:text-sm">
               <FiSettings size={14} /> Reassign
             </button>
           )}
           {canCreate('client_snag') && (
-            <button onClick={openCreate} className="btn btn-primary flex items-center gap-1 shadow-sm">
+            <button onClick={openCreate} className="btn btn-primary flex items-center justify-center gap-1 shadow-sm text-xs sm:text-sm w-full sm:w-auto">
               <FiPlus size={14} />
               {activeTab === 'site_readiness' ? 'Log Civil Work Left' : 'New Client Snag'}
             </button>
@@ -556,18 +556,18 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-200">
+      <div className="flex border-b border-gray-200 overflow-x-auto no-scrollbar scroll-smooth gap-1">
         <button
           onClick={() => handleTabChange('site_readiness')}
-          className={`px-5 py-3 text-sm font-semibold border-b-2 flex items-center gap-2 transition ${activeTab === 'site_readiness'
+          className={`px-3 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center gap-2 transition whitespace-nowrap shrink-0 ${activeTab === 'site_readiness'
               ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
               : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
         >
           <FiLayers size={16} />
-          🏗️ Site Readiness FMS (Client Scope)
+          <span>🏗️ Site Readiness FMS (Client Scope)</span>
           {counters?.sr_total_open > 0 && (
-            <span className="ml-1.5 px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800 font-bold">
+            <span className="ml-1 px-1.5 py-0.5 text-[11px] rounded-full bg-amber-100 text-amber-800 font-bold">
               {counters.sr_total_open}
             </span>
           )}
@@ -575,15 +575,15 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
 
         <button
           onClick={() => handleTabChange('billing_doc')}
-          className={`px-5 py-3 text-sm font-semibold border-b-2 flex items-center gap-2 transition ${activeTab === 'billing_doc'
+          className={`px-3 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold border-b-2 flex items-center gap-2 transition whitespace-nowrap shrink-0 ${activeTab === 'billing_doc'
               ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
               : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
         >
           <FiFileText size={16} />
-          📄 Billing & Document Snags
+          <span>📄 Billing &amp; Document Snags</span>
           {counters?.pending_approval > 0 && (
-            <span className="ml-1.5 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 font-bold">
+            <span className="ml-1 px-1.5 py-0.5 text-[11px] rounded-full bg-blue-100 text-blue-800 font-bold">
               {counters.pending_approval}
             </span>
           )}
@@ -593,94 +593,94 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
       {/* Metric Cards (Clickable Server Filters) */}
       {counters && (
         activeTab === 'site_readiness' ? (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
             <div
               onClick={() => updateFilter({ stage: '', civilScopeType: '' })}
-              className={`card p-3 border-l-4 border-indigo-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-indigo-50/30 ${!stage && !civilScopeType ? 'ring-2 ring-indigo-400' : ''}`}
+              className={`card p-2.5 sm:p-3 border-l-4 border-indigo-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-indigo-50/30 ${!stage && !civilScopeType ? 'ring-2 ring-indigo-400' : ''}`}
               title="Click to view all open clearances"
             >
-              <p className="text-xs text-gray-500 font-medium">Total Open Clearances</p>
-              <p className="text-2xl font-bold text-indigo-700">{counters.sr_total_open || 0}</p>
+              <p className="text-[11px] sm:text-xs text-gray-500 font-medium truncate">Total Open Clearances</p>
+              <p className="text-xl sm:text-2xl font-bold text-indigo-700">{counters.sr_total_open || 0}</p>
             </div>
             <div
               onClick={() => updateFilter({ civilScopeType: civilScopeType === 'Plastering' ? '' : 'Plastering' })}
-              className={`card p-3 border-l-4 border-orange-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-orange-50/30 ${civilScopeType === 'Plastering' ? 'ring-2 ring-orange-400' : ''}`}
+              className={`card p-2.5 sm:p-3 border-l-4 border-orange-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-orange-50/30 ${civilScopeType === 'Plastering' ? 'ring-2 ring-orange-400' : ''}`}
               title="Click to filter by Plaster Pending"
             >
-              <p className="text-xs text-gray-500 font-medium">🧱 Plaster Pending</p>
-              <p className="text-2xl font-bold text-orange-700">{counters.sr_plaster || 0}</p>
+              <p className="text-[11px] sm:text-xs text-gray-500 font-medium truncate">🧱 Plaster Pending</p>
+              <p className="text-xl sm:text-2xl font-bold text-orange-700">{counters.sr_plaster || 0}</p>
             </div>
             <div
               onClick={() => updateFilter({ civilScopeType: civilScopeType === 'Tiling (Floor/Wall)' ? '' : 'Tiling (Floor/Wall)' })}
-              className={`card p-3 border-l-4 border-blue-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-blue-50/30 ${civilScopeType === 'Tiling (Floor/Wall)' ? 'ring-2 ring-blue-400' : ''}`}
+              className={`card p-2.5 sm:p-3 border-l-4 border-blue-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-blue-50/30 ${civilScopeType === 'Tiling (Floor/Wall)' ? 'ring-2 ring-blue-400' : ''}`}
               title="Click to filter by Tiles Pending"
             >
-              <p className="text-xs text-gray-500 font-medium">🔲 Tiles Pending</p>
-              <p className="text-2xl font-bold text-blue-700">{counters.sr_tiles || 0}</p>
+              <p className="text-[11px] sm:text-xs text-gray-500 font-medium truncate">🔲 Tiles Pending</p>
+              <p className="text-xl sm:text-2xl font-bold text-blue-700">{counters.sr_tiles || 0}</p>
             </div>
             <div
               onClick={() => updateFilter({ stage: stage === 'overdue' ? '' : 'overdue' })}
-              className={`card p-3 border-l-4 border-red-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-red-50/30 ${stage === 'overdue' ? 'ring-2 ring-red-400' : ''}`}
+              className={`card p-2.5 sm:p-3 border-l-4 border-red-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-red-50/30 ${stage === 'overdue' ? 'ring-2 ring-red-400' : ''}`}
               title="Click to filter Overdue Items"
             >
-              <p className="text-xs text-gray-500 font-medium">⚠️ Overdue (&gt; Promised Date)</p>
-              <p className="text-2xl font-bold text-red-700">{counters.sr_overdue || 0}</p>
+              <p className="text-[11px] sm:text-xs text-gray-500 font-medium truncate">⚠️ Overdue (&gt; Promised)</p>
+              <p className="text-xl sm:text-2xl font-bold text-red-700">{counters.sr_overdue || 0}</p>
             </div>
             <div
               onClick={() => updateFilter({ stage: stage === 'cleared' ? '' : 'cleared' })}
-              className={`card p-3 border-l-4 border-emerald-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-emerald-50/30 ${stage === 'cleared' ? 'ring-2 ring-emerald-400' : ''}`}
+              className={`card p-2.5 sm:p-3 border-l-4 border-emerald-500 cursor-pointer hover:shadow-md transition bg-gradient-to-br from-white to-emerald-50/30 col-span-2 sm:col-span-1 ${stage === 'cleared' ? 'ring-2 ring-emerald-400' : ''}`}
               title="Click to filter Cleared & Verified"
             >
-              <p className="text-xs text-gray-500 font-medium">✅ Cleared &amp; Verified</p>
-              <p className="text-2xl font-bold text-emerald-700">{counters.sr_cleared || 0}</p>
+              <p className="text-[11px] sm:text-xs text-gray-500 font-medium truncate">✅ Cleared &amp; Verified</p>
+              <p className="text-xl sm:text-2xl font-bold text-emerald-700">{counters.sr_cleared || 0}</p>
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
             {counters.is_uploader && (
               <div
                 onClick={() => updateFilter({ status: status === 'awaiting_document' ? '' : 'awaiting_document' })}
-                className={`card p-3 border-l-4 border-amber-500 cursor-pointer hover:shadow-md transition ${status === 'awaiting_document' ? 'ring-2 ring-amber-400' : ''}`}
+                className={`card p-2.5 sm:p-3 border-l-4 border-amber-500 cursor-pointer hover:shadow-md transition ${status === 'awaiting_document' ? 'ring-2 ring-amber-400' : ''}`}
                 title="Click to filter Awaiting Document"
               >
-                <p className="text-xs text-gray-500">Awaiting Document</p>
-                <p className="text-2xl font-bold text-amber-600">{counters.awaiting_document}</p>
+                <p className="text-[11px] sm:text-xs text-gray-500">Awaiting Document</p>
+                <p className="text-xl sm:text-2xl font-bold text-amber-600">{counters.awaiting_document}</p>
               </div>
             )}
             <div
               onClick={() => updateFilter({ status: status === 'pending_approval' ? '' : 'pending_approval' })}
-              className={`card p-3 border-l-4 border-blue-500 cursor-pointer hover:shadow-md transition ${status === 'pending_approval' ? 'ring-2 ring-blue-400' : ''}`}
+              className={`card p-2.5 sm:p-3 border-l-4 border-blue-500 cursor-pointer hover:shadow-md transition ${status === 'pending_approval' ? 'ring-2 ring-blue-400' : ''}`}
               title="Click to filter Pending Approval"
             >
-              <p className="text-xs text-gray-500">Pending Approval</p>
-              <p className="text-2xl font-bold text-blue-600">{counters.pending_approval}</p>
+              <p className="text-[11px] sm:text-xs text-gray-500">Pending Approval</p>
+              <p className="text-xl sm:text-2xl font-bold text-blue-600">{counters.pending_approval}</p>
             </div>
             <div
               onClick={() => updateFilter({ status: status === 'approved' ? '' : 'approved' })}
-              className={`card p-3 border-l-4 border-emerald-500 cursor-pointer hover:shadow-md transition ${status === 'approved' ? 'ring-2 ring-emerald-400' : ''}`}
+              className={`card p-2.5 sm:p-3 border-l-4 border-emerald-500 cursor-pointer hover:shadow-md transition ${status === 'approved' ? 'ring-2 ring-emerald-400' : ''}`}
               title="Click to filter Approved"
             >
-              <p className="text-xs text-gray-500">Approved</p>
-              <p className="text-2xl font-bold text-emerald-600">{counters.approved}</p>
+              <p className="text-[11px] sm:text-xs text-gray-500">Approved</p>
+              <p className="text-xl sm:text-2xl font-bold text-emerald-600">{counters.approved}</p>
             </div>
             <div
               onClick={() => updateFilter({ status: status === 'rejected' ? '' : 'rejected' })}
-              className={`card p-3 border-l-4 border-red-500 cursor-pointer hover:shadow-md transition ${status === 'rejected' ? 'ring-2 ring-red-400' : ''}`}
+              className={`card p-2.5 sm:p-3 border-l-4 border-red-500 cursor-pointer hover:shadow-md transition ${status === 'rejected' ? 'ring-2 ring-red-400' : ''}`}
               title="Click to filter Rejected"
             >
-              <p className="text-xs text-gray-500">Rejected</p>
-              <p className="text-2xl font-bold text-red-700">{counters.rejected}</p>
+              <p className="text-[11px] sm:text-xs text-gray-500">Rejected</p>
+              <p className="text-xl sm:text-2xl font-bold text-red-700">{counters.rejected}</p>
             </div>
           </div>
         )
       )}
 
       {/* Filter Bar */}
-      <div className="card p-3 flex flex-wrap items-end gap-3 bg-white shadow-sm">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="card p-3 flex flex-wrap items-end gap-2.5 sm:gap-3 bg-white shadow-sm">
+        <div className="relative w-full sm:flex-1 sm:min-w-[200px]">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
           <input
-            className="input pl-9 pr-8 text-sm w-full"
+            className="input pl-9 pr-8 text-xs sm:text-sm w-full"
             placeholder={activeTab === 'site_readiness' ? "Search site, client, plaster, tiles, floor…" : "Search snag #, client, description…"}
             value={searchInput}
             onChange={e => setSearchInput(e.target.value)}
@@ -708,10 +708,10 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
 
         {activeTab === 'site_readiness' ? (
           <>
-            <div className="w-48 shrink-0">
-              <label className="label text-xs">Site</label>
+            <div className="w-[calc(50%-5px)] sm:w-44 lg:w-48 shrink-0">
+              <label className="label text-[11px] sm:text-xs">Site</label>
               <select
-                className="select text-xs"
+                className="select text-xs w-full"
                 value={site}
                 onChange={e => updateFilter({ site: e.target.value })}
               >
@@ -722,10 +722,10 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               </select>
             </div>
 
-            <div className="w-48 shrink-0">
-              <label className="label text-xs">Civil Scope Type</label>
+            <div className="w-[calc(50%-5px)] sm:w-44 lg:w-48 shrink-0">
+              <label className="label text-[11px] sm:text-xs">Civil Scope Type</label>
               <select
-                className="select text-xs"
+                className="select text-xs w-full"
                 value={civilScopeType}
                 onChange={e => updateFilter({ civilScopeType: e.target.value })}
               >
@@ -736,10 +736,10 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               </select>
             </div>
 
-            <div className="w-36 shrink-0">
-              <label className="label text-xs">Floor / Zone</label>
+            <div className="w-[calc(50%-5px)] sm:w-36 shrink-0">
+              <label className="label text-[11px] sm:text-xs">Floor / Zone</label>
               <select
-                className="select text-xs"
+                className="select text-xs w-full"
                 value={floor}
                 onChange={e => updateFilter({ floor: e.target.value })}
               >
@@ -750,10 +750,10 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               </select>
             </div>
 
-            <div className="w-44 shrink-0">
-              <label className="label text-xs">FMS Stage</label>
+            <div className="w-[calc(50%-5px)] sm:w-44 shrink-0">
+              <label className="label text-[11px] sm:text-xs">FMS Stage</label>
               <select
-                className="select text-xs"
+                className="select text-xs w-full"
                 value={stage}
                 onChange={e => updateFilter({ stage: e.target.value })}
               >
@@ -768,28 +768,28 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
           </>
         ) : (
           <>
-            <div className="w-40 shrink-0">
-              <label className="label text-xs">Client</label>
+            <div className="w-[calc(50%-5px)] sm:w-40 shrink-0">
+              <label className="label text-[11px] sm:text-xs">Client</label>
               <input
-                className="input text-xs"
+                className="input text-xs w-full"
                 value={client}
                 onChange={e => updateFilter({ client: e.target.value })}
                 placeholder="Filter client..."
               />
             </div>
-            <div className="w-40 shrink-0">
-              <label className="label text-xs">Site / Location</label>
+            <div className="w-[calc(50%-5px)] sm:w-40 shrink-0">
+              <label className="label text-[11px] sm:text-xs">Site / Location</label>
               <input
-                className="input text-xs"
+                className="input text-xs w-full"
                 value={site}
                 onChange={e => updateFilter({ site: e.target.value })}
                 placeholder="Filter site/location..."
               />
             </div>
-            <div className="w-32 shrink-0">
-              <label className="label text-xs">Priority</label>
+            <div className="w-[calc(50%-5px)] sm:w-32 shrink-0">
+              <label className="label text-[11px] sm:text-xs">Priority</label>
               <select
-                className="select text-xs"
+                className="select text-xs w-full"
                 value={priority}
                 onChange={e => updateFilter({ priority: e.target.value })}
               >
@@ -800,10 +800,10 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                 <option value="low">Low</option>
               </select>
             </div>
-            <div className="w-44 shrink-0">
-              <label className="label text-xs">Status</label>
+            <div className="w-[calc(50%-5px)] sm:w-44 shrink-0">
+              <label className="label text-[11px] sm:text-xs">Status</label>
               <select
-                className="select text-xs"
+                className="select text-xs w-full"
                 value={status}
                 onChange={e => updateFilter({ status: e.target.value })}
               >
@@ -817,11 +817,11 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
           </>
         )}
 
-        <div className="w-36 shrink-0">
-          <label className="label text-xs">Date</label>
+        <div className="w-[calc(50%-5px)] sm:w-36 shrink-0">
+          <label className="label text-[11px] sm:text-xs">Date</label>
           <input
             type="date"
-            className="input text-xs"
+            className="input text-xs w-full"
             value={date}
             onChange={e => updateFilter({ date: e.target.value })}
           />
@@ -835,7 +835,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               if (activeTab !== 'site_readiness') next.set('tab', activeTab);
               setSearchParams(next);
             }}
-            className="btn btn-secondary text-xs px-2.5 py-1.5 shrink-0 text-gray-500 hover:text-red-600 transition"
+            className="btn btn-secondary text-xs px-2.5 py-1.5 shrink-0 text-gray-500 hover:text-red-600 transition w-full sm:w-auto h-[34px]"
             title="Reset all filters"
           >
             Reset Filters
@@ -1162,7 +1162,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
       >
         <form onSubmit={create} className="space-y-4">
           {activeTab === 'site_readiness' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {/* Site Select from Sites Master */}
               <div>
                 <label className="label">Site Name *</label>
@@ -1219,7 +1219,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               </div>
 
               {/* Specific Location details */}
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Specific Location / Room Details (optional)</label>
                 <input
                   className="input"
@@ -1230,7 +1230,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               </div>
 
               {/* Description */}
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Work Pending Description *</label>
                 <textarea
                   className="input"
@@ -1271,7 +1271,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
             </div>
           ) : (
             /* Legacy Billing Snag Form */
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Client *</label>
                 <input className="input" required value={form.client_name || ''} onChange={e => setForm(f => ({ ...f, client_name: e.target.value }))} placeholder="Client name" />
@@ -1295,11 +1295,11 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                 <label className="label">Location *</label>
                 <input className="input" required value={form.location || ''} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. 2nd floor accounts desk" />
               </div>
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Description *</label>
                 <textarea className="input" rows="3" required value={form.description || ''} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What's the snag?" />
               </div>
-              <div>
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Priority *</label>
                 <select className="select" required value={form.priority || 'medium'} onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}>
                   <option value="low">Low</option>
@@ -1317,7 +1317,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               Before Photo (Mandatory Proof of Incomplete Civil Work) *
             </label>
             {form.before_photo_url ? (
-              <div className="flex items-start gap-3 bg-gray-50 p-2.5 rounded-lg border">
+              <div className="flex flex-col sm:flex-row items-start gap-3 bg-gray-50 p-2.5 rounded-lg border">
                 <img src={form.before_photo_url} alt="" width="96" height="96" className="w-24 h-24 object-cover rounded border" />
                 <div className="text-xs text-gray-500">
                   <div className="font-medium text-gray-700">Photo Attached</div>
@@ -1326,13 +1326,13 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <label className="cursor-pointer border-2 border-indigo-200 hover:border-indigo-400 bg-indigo-50/60 rounded-lg p-3 text-center transition flex items-center justify-center gap-1.5">
-                  <span className="text-indigo-700 font-semibold text-sm">📷 Take Site Photo</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <label className="cursor-pointer border-2 border-indigo-200 hover:border-indigo-400 bg-indigo-50/60 rounded-lg p-2.5 sm:p-3 text-center transition flex items-center justify-center gap-1.5">
+                  <span className="text-indigo-700 font-semibold text-xs sm:text-sm">📷 Take Site Photo</span>
                   <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => { await uploadForCreate('before_photo_url', e.target.files?.[0]); e.target.value = ''; }} />
                 </label>
-                <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-3 text-center transition flex items-center justify-center gap-1.5">
-                  <span className="text-gray-700 font-semibold text-sm">📂 Upload Image File</span>
+                <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2.5 sm:p-3 text-center transition flex items-center justify-center gap-1.5">
+                  <span className="text-gray-700 font-semibold text-xs sm:text-sm">📂 Upload Image File</span>
                   <input type="file" accept="image/*" className="hidden" onChange={async e => { await uploadForCreate('before_photo_url', e.target.files?.[0]); e.target.value = ''; }} />
                 </label>
               </div>
@@ -1340,8 +1340,8 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
           </div>
 
           <div className="flex justify-end gap-2 pt-3 border-t">
-            <button type="button" onClick={() => { setCreateModal(false); setForm({}); }} className="btn btn-secondary">Cancel</button>
-            <button type="submit" disabled={uploading} className="btn btn-primary">
+            <button type="button" onClick={() => { setCreateModal(false); setForm({}); }} className="btn btn-secondary text-xs sm:text-sm">Cancel</button>
+            <button type="submit" disabled={uploading} className="btn btn-primary text-xs sm:text-sm">
               {uploading ? 'Uploading…' : activeTab === 'site_readiness' ? 'Log Site Blocker' : 'Create Snag'}
             </button>
           </div>
@@ -1373,7 +1373,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
                 <label className="label">Client Contact Person</label>
                 <input
@@ -1406,8 +1406,8 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
             </div>
 
             <div className="flex justify-end gap-2 pt-2 border-t">
-              <button type="button" onClick={() => setIntimateModal(null)} className="btn btn-secondary">Cancel</button>
-              <button type="submit" className="btn btn-primary">Save Commitment</button>
+              <button type="button" onClick={() => setIntimateModal(null)} className="btn btn-secondary text-xs sm:text-sm">Cancel</button>
+              <button type="submit" className="btn btn-primary text-xs sm:text-sm">Save Commitment</button>
             </div>
           </form>
         )}
@@ -1432,7 +1432,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                 Clearance Verification Photo (Mandatory Proof of Completed Civil Work) *
               </label>
               {clearanceForm.cleared_photo_url ? (
-                <div className="flex items-start gap-3 bg-gray-50 p-2.5 rounded border">
+                <div className="flex flex-col sm:flex-row items-start gap-3 bg-gray-50 p-2.5 rounded border">
                   <img src={clearanceForm.cleared_photo_url} alt="Cleared" width="96" height="96" className="w-24 h-24 object-cover rounded ring-2 ring-emerald-500" />
                   <div className="text-xs text-gray-500">
                     <div className="font-semibold text-emerald-700">Verification Photo Attached</div>
@@ -1440,13 +1440,13 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="cursor-pointer border-2 border-emerald-200 hover:border-emerald-400 bg-emerald-50/60 rounded-lg p-3 text-center transition flex items-center justify-center gap-1.5">
-                    <span className="text-emerald-800 font-semibold text-sm">📷 Take Verification Photo</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="cursor-pointer border-2 border-emerald-200 hover:border-emerald-400 bg-emerald-50/60 rounded-lg p-2.5 sm:p-3 text-center transition flex items-center justify-center gap-1.5">
+                    <span className="text-emerald-800 font-semibold text-xs sm:text-sm">📷 Take Verification Photo</span>
                     <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => { const url = await upload(e.target.files?.[0]); if (url) setClearanceForm(f => ({ ...f, cleared_photo_url: url })); e.target.value = ''; }} />
                   </label>
-                  <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-3 text-center transition flex items-center justify-center gap-1.5">
-                    <span className="text-gray-700 font-semibold text-sm">📂 Upload Photo</span>
+                  <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2.5 sm:p-3 text-center transition flex items-center justify-center gap-1.5">
+                    <span className="text-gray-700 font-semibold text-xs sm:text-sm">📂 Upload Photo</span>
                     <input type="file" accept="image/*" className="hidden" onChange={async e => { const url = await upload(e.target.files?.[0]); if (url) setClearanceForm(f => ({ ...f, cleared_photo_url: url })); e.target.value = ''; }} />
                   </label>
                 </div>
@@ -1465,8 +1465,8 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
             </div>
 
             <div className="flex justify-end gap-2 pt-2 border-t">
-              <button type="button" onClick={() => setClearanceModal(null)} className="btn btn-secondary">Cancel</button>
-              <button type="submit" disabled={!clearanceForm.cleared_photo_url} className="btn btn-success">
+              <button type="button" onClick={() => setClearanceModal(null)} className="btn btn-secondary text-xs sm:text-sm">Cancel</button>
+              <button type="submit" disabled={!clearanceForm.cleared_photo_url} className="btn btn-success text-xs sm:text-sm">
                 Mark as Cleared
               </button>
             </div>
@@ -1483,40 +1483,40 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
       >
         {noticeModal && (
           <div className="space-y-4">
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-col sm:flex-row justify-end gap-2">
               <button
                 onClick={copyNoticeToClipboard}
-                className="btn btn-primary flex items-center gap-1.5 text-xs"
+                className="btn btn-primary flex items-center justify-center gap-1.5 text-xs w-full sm:w-auto"
               >
                 {copiedNotice ? <FiCheck size={14} /> : <FiCopy size={14} />}
                 {copiedNotice ? 'Copied to Clipboard!' : 'Copy for WhatsApp / Email'}
               </button>
               <button
                 onClick={() => window.print()}
-                className="btn btn-secondary flex items-center gap-1.5 text-xs"
+                className="btn btn-secondary flex items-center justify-center gap-1.5 text-xs w-full sm:w-auto"
               >
                 <FiPrinter size={14} /> Print Memo
               </button>
             </div>
 
             {/* Printable Memo Paper */}
-            <div className="border border-gray-300 rounded-lg p-6 bg-white shadow-sm space-y-4 text-gray-800 text-xs">
-              <div className="border-b pb-3 flex justify-between items-start">
+            <div className="border border-gray-300 rounded-lg p-3.5 sm:p-6 bg-white shadow-sm space-y-4 text-gray-800 text-xs">
+              <div className="border-b pb-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                 <div>
-                  <h2 className="text-base font-bold text-gray-900 tracking-wide">SECURED ENGINEERS PVT. LTD.</h2>
-                  <p className="text-[11px] text-gray-500">Fire Protection · Solar · MEPF Contracting Systems</p>
+                  <h2 className="text-sm sm:text-base font-bold text-gray-900 tracking-wide">SECURED ENGINEERS PVT. LTD.</h2>
+                  <p className="text-[10px] sm:text-[11px] text-gray-500">Fire Protection · Solar · MEPF Contracting Systems</p>
                 </div>
-                <div className="text-right text-[11px] text-gray-500">
+                <div className="sm:text-right text-[10px] sm:text-[11px] text-gray-500">
                   <div><strong>Ref:</strong> {noticeModal.snag_no}</div>
                   <div><strong>Date:</strong> {fmtDate(noticeModal.raised_at || new Date())}</div>
                 </div>
               </div>
 
-              <div className="bg-amber-50/80 border border-amber-200 rounded p-2 text-center font-bold text-amber-900 uppercase tracking-wider text-xs">
+              <div className="bg-amber-50/80 border border-amber-200 rounded p-2 text-center font-bold text-amber-900 uppercase tracking-wider text-[11px] sm:text-xs">
                 MEMORANDUM: SITE READINESS &amp; PENDING CLIENT CIVIL SCOPE
               </div>
 
-              <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3 bg-gray-50 p-2.5 sm:p-3 rounded border">
                 <div><strong>Project / Site:</strong> {noticeModal.site_name}</div>
                 <div><strong>Client:</strong> {noticeModal.client_name}</div>
                 <div><strong>Floor / Zone:</strong> {noticeModal.floor_zone} {noticeModal.location ? `(${noticeModal.location})` : ''}</div>
@@ -1537,7 +1537,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                 <p className="mt-1 p-2 bg-gray-50 rounded border text-gray-700">{noticeModal.description}</p>
               </div>
 
-              <div className="p-3 bg-red-50/80 border border-red-200 rounded text-red-900 text-[11px] leading-relaxed">
+              <div className="p-2.5 sm:p-3 bg-red-50/80 border border-red-200 rounded text-red-900 text-[10px] sm:text-[11px] leading-relaxed">
                 <strong>Important Notice to Client / Project Management Consultant (PMC):</strong>
                 <p className="mt-0.5">
                   Please be advised that MEPF / Fire Protection installation work at the above referenced location is currently suspended / blocked due to pending civil prerequisites (e.g. wall/ceiling plaster, flooring, pedestals). In accordance with contracting standards, continued delay in handing over clear civil work will directly affect project handover milestones. Kindly expedite clearance.
@@ -1547,14 +1547,14 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               {noticeModal.before_photo_url && (
                 <div>
                   <strong>Site Photographic Evidence:</strong>
-                  <div className="mt-1.5 flex gap-3">
+                  <div className="mt-1.5 flex flex-wrap gap-3">
                     <div>
                       <img
                         src={noticeModal.before_photo_url}
                         alt="Site Condition"
                         width="160"
                         height="160"
-                        className="w-40 h-40 object-cover rounded border"
+                        className="w-36 h-36 sm:w-40 sm:h-40 object-cover rounded border"
                       />
                       <div className="text-[10px] text-gray-500 mt-1">Observed Condition at Site</div>
                     </div>
@@ -1565,7 +1565,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                           alt="Cleared Condition"
                           width="160"
                           height="160"
-                          className="w-40 h-40 object-cover rounded border ring-2 ring-emerald-500"
+                          className="w-36 h-36 sm:w-40 sm:h-40 object-cover rounded border ring-2 ring-emerald-500"
                         />
                         <div className="text-[10px] text-emerald-700 font-semibold mt-1">Verified Cleared Condition</div>
                       </div>
@@ -1605,12 +1605,12 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
             </div>
 
             {/* Photos */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="label font-semibold">Before Photo (Incomplete Work)</label>
+                <label className="label font-semibold text-xs sm:text-sm">Before Photo (Incomplete Work)</label>
                 {detail.before_photo_url ? (
                   <a href={detail.before_photo_url} target="_blank" rel="noreferrer">
-                    <img src={detail.before_photo_url} alt="Before" width="160" height="160" className="w-44 h-44 object-cover rounded border hover:opacity-90" />
+                    <img src={detail.before_photo_url} alt="Before" width="160" height="160" className="w-full sm:w-44 h-44 object-cover rounded border hover:opacity-90" />
                   </a>
                 ) : (
                   <div className="text-xs text-gray-400">No before photo uploaded.</div>
@@ -1618,10 +1618,10 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               </div>
 
               <div>
-                <label className="label font-semibold">Clearance / After Photo</label>
+                <label className="label font-semibold text-xs sm:text-sm">Clearance / After Photo</label>
                 {detail.cleared_photo_url || detail.photo_url ? (
                   <a href={detail.cleared_photo_url || detail.photo_url} target="_blank" rel="noreferrer">
-                    <img src={detail.cleared_photo_url || detail.photo_url} alt="Cleared" width="160" height="160" className="w-44 h-44 object-cover rounded ring-2 ring-emerald-500 hover:opacity-90" />
+                    <img src={detail.cleared_photo_url || detail.photo_url} alt="Cleared" width="160" height="160" className="w-full sm:w-44 h-44 object-cover rounded ring-2 ring-emerald-500 hover:opacity-90" />
                   </a>
                 ) : (
                   <div className="text-xs text-gray-400">Civil work pending clearance.</div>
@@ -1633,13 +1633,13 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
             {detail.can_upload && (
               <div className="border-t pt-3 space-y-2">
                 <label className="label">{detail.photo_url ? 'Replace After Photo' : 'Upload After Photo'}</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
-                    <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2.5 sm:p-2 text-center transition flex items-center justify-center gap-1.5">
+                    <span className="text-blue-700 font-semibold text-xs sm:text-sm">📷 Take Photo</span>
                     <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => { await uploadDocument(e.target.files?.[0]); e.target.value = ''; }} />
                   </label>
-                  <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
-                    <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
+                  <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2.5 sm:p-2 text-center transition flex items-center justify-center gap-1.5">
+                    <span className="text-gray-700 font-semibold text-xs sm:text-sm">📂 Choose File</span>
                     <input type="file" accept="image/*,.pdf" className="hidden" onChange={async e => { await uploadDocument(e.target.files?.[0]); e.target.value = ''; }} />
                   </label>
                 </div>
