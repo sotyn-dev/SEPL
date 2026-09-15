@@ -158,6 +158,7 @@ const SIDEBAR_GROUPS = [
     // there is only one place in the sidebar that owns Work Orders.
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
+    { path: '/client-snag',  label: 'Site Readiness & Snags', icon: FiCamera, module: 'client_snag' },
     // WhatsApp moved OUT of this group → pinned at the bottom of the sidebar,
     // just above Change Password (mam 2026-06-19). See SIDEBAR footer render.
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },

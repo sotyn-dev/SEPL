@@ -78,6 +78,31 @@ function runClientSnagMigrations(db) {
       updated_by INTEGER REFERENCES users(id)
     );
   `);
+
+  // Site Readiness FMS migrations — adds civil scope tracking columns idempotently
+  function addCol(colName, colDef) {
+    const cols = db.prepare(`PRAGMA table_info(client_snags)`).all();
+    if (!cols.some(c => c.name === colName)) {
+      db.exec(`ALTER TABLE client_snags ADD COLUMN ${colName} ${colDef}`);
+    }
+  }
+
+  addCol('snag_type', "TEXT DEFAULT 'site_readiness'");
+  addCol('scope_category', 'TEXT');
+  addCol('floor_zone', 'TEXT');
+  addCol('site_id', 'INTEGER');
+  addCol('before_photo_url', 'TEXT');
+  addCol('client_promised_date', 'DATE');
+  addCol('fms_stage', "TEXT DEFAULT 'reported'");
+  addCol('cleared_at', 'DATETIME');
+  addCol('cleared_by', 'INTEGER');
+  addCol('cleared_photo_url', 'TEXT');
+  addCol('client_contact_person', 'TEXT');
+  addCol('client_contact_phone', 'TEXT');
+  addCol('intimation_notes', 'TEXT');
+
+  // Any legacy rows created before this migration default to billing_doc
+  db.exec(`UPDATE client_snags SET snag_type = 'billing_doc' WHERE snag_type IS NULL`);
 }
 
 module.exports = { runClientSnagMigrations };
