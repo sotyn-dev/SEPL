@@ -22,6 +22,21 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
 
+// ── Ageing helpers ──────────────────────────────────────────────────────────
+// Target: every open/submitted snag must be resolved within 72 hours of being
+// raised. Returns { hours, label, cls } for the badge.
+const SLA_HOURS = 72;
+function snagAge(raised_at) {
+  if (!raised_at) return null;
+  const hours = (Date.now() - new Date(raised_at).getTime()) / 3600000;
+  const h = Math.floor(hours);
+  const days = Math.floor(h / 24);
+  const rem = h % 24;
+  const label = days > 0 ? `${days}d ${rem}h` : `${h}h`;
+  if (hours < 24) return { hours, label, cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+  if (hours < SLA_HOURS) return { hours, label, cls: 'bg-amber-50 text-amber-700 border-amber-200' };
+  return { hours, label: `${label} ⚠`, cls: 'bg-red-50 text-red-700 border-red-300 font-bold' };
+}
 const STATUS_PILL = {
   open: 'bg-amber-100 text-amber-700',
   submitted: 'bg-blue-100 text-blue-700',
@@ -58,6 +73,7 @@ export default function Snags() {
   const [form, setForm] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [, setAgeingTick] = useState(0);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(15);
   const scrollBoxRef = useRef(null);   // the table's own overflow container
@@ -72,16 +88,26 @@ export default function Snags() {
   // status, priority, search, scope) — derived from the loaded rows so
   // the numbers always match the table below.
   const stats = useMemo(() => {
-    const s = { total: snags.length, open: 0, submitted: 0, approved: 0, rejected: 0, critical: 0 };
+    const s = { total: snags.length, open: 0, submitted: 0, approved: 0, rejected: 0, critical: 0, overdue: 0 };
     for (const x of snags) {
       if (x.status === 'open') s.open++;
       else if (x.status === 'submitted') s.submitted++;
       else if (x.status === 'approved') s.approved++;
       else if (x.status === 'rejected') s.rejected++;
       if (x.priority === 'critical' && x.status !== 'approved') s.critical++;
+      if (x.status !== 'approved') {
+        const age = snagAge(x.raised_at);
+        if (age && age.hours >= SLA_HOURS) s.overdue++;
+      }
     }
     return s;
   }, [snags]);
+
+  // Re-render ageing badges and the overdue counter while the page stays open.
+  useEffect(() => {
+    const timer = setInterval(() => setAgeingTick(tick => tick + 1), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Only the table is paginated; summary cards and export use all matches.
   const pg = usePagination(snags, perPage, page, setPage);
@@ -246,11 +272,15 @@ export default function Snags() {
       </div>
 
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
           <div className="card p-3 border-l-4 border-amber-500"><p className="text-xs text-gray-500">Open</p><p className="text-2xl font-bold text-amber-600">{stats.open}</p></div>
           <div className="card p-3 border-l-4 border-blue-500"><p className="text-xs text-gray-500">Awaiting Approval</p><p className="text-2xl font-bold text-blue-600">{stats.submitted}</p></div>
           <div className="card p-3 border-l-4 border-emerald-500"><p className="text-xs text-gray-500">Approved</p><p className="text-2xl font-bold text-emerald-600">{stats.approved}</p></div>
           <div className="card p-3 border-l-4 border-red-500"><p className="text-xs text-gray-500">Critical Open</p><p className="text-2xl font-bold text-red-700">{stats.critical}</p></div>
+          <div className={`card p-3 border-l-4 ${stats.overdue > 0 ? 'border-red-600 bg-red-50' : 'border-gray-300'}`}>
+            <p className="text-xs text-gray-500">Overdue (72h+)</p>
+            <p className={`text-2xl font-bold ${stats.overdue > 0 ? 'text-red-700' : 'text-gray-400'}`}>{stats.overdue}</p>
+          </div>
           <div className="card p-3 border-l-4 border-gray-500"><p className="text-xs text-gray-500">Total</p><p className="text-2xl font-bold">{stats.total}</p></div>
         </div>
       )}
@@ -323,7 +353,7 @@ export default function Snags() {
         <table className="freeze-head freeze-col min-w-[850px]">
           <thead>
             <tr>
-              <th>Snag No</th><th>Raised</th><th>Site / Location</th><th>Description</th>
+              <th>Snag No</th><th>Raised</th><th>Aging</th><th>Site / Location</th><th>Description</th>
               <th>Snag Photo</th><th>Assigned To</th><th>Target Date</th><th>Proof</th>
               <th>Priority</th><th>Status</th><th>Actions</th>
             </tr>
@@ -338,6 +368,17 @@ export default function Snags() {
                 <td className="text-xs">
                   <div>{s.raised_at ? fmtDate(s.raised_at) : '—'}</div>
                   <div className="text-[10px] text-gray-500">{s.raised_by_name || '—'}</div>
+                </td>
+                <td className="text-xs whitespace-nowrap">
+                  {s.status !== 'approved' ? (() => {
+                    const age = snagAge(s.raised_at);
+                    if (!age) return <span className="text-gray-300">—</span>;
+                    return (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${age.cls}`}>
+                        {age.label}
+                      </span>
+                    );
+                  })() : <span className="text-gray-300 text-[10px]">—</span>}
                 </td>
                 <td className="text-xs">
                   <div className="font-medium">{s.site_name || s.site_name_live || '—'}</div>
