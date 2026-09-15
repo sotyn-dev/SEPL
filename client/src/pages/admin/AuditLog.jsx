@@ -8,7 +8,7 @@
 import { useState, useEffect } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { FiShield, FiRefreshCw, FiSearch, FiFilter, FiEye, FiX, FiUser, FiCalendar } from 'react-icons/fi';
+import { FiShield, FiRefreshCw, FiSearch, FiFilter, FiEye, FiX, FiUser, FiCalendar, FiAlertTriangle } from 'react-icons/fi';
 import { fmtDateTime } from '../../utils/datetime';
 
 const ACTION_COLORS = {
@@ -30,15 +30,25 @@ export default function AuditLog() {
   const [filters, setFilters] = useState({ user_id: '', entity_type: '', action: '', date_from: '', date_to: '', q: '' });
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState(null);
+  // Suspicious mode — /admin/audit/suspicious flags changes whose device /
+  // login history doesn't match the user id they were recorded under
+  // (mam 2026-08-17: "users not use but changes show from their id").
+  const [suspicious, setSuspicious] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page, limit });
-      Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
-      const r = await api.get(`/admin/audit?${params.toString()}`);
-      setRows(r.data.rows || []);
-      setTotal(r.data.total || 0);
+      if (suspicious) {
+        const r = await api.get('/admin/audit/suspicious?days=30');
+        setRows(r.data.rows || []);
+        setTotal(r.data.flagged || 0);
+      } else {
+        const params = new URLSearchParams({ page, limit });
+        Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+        const r = await api.get(`/admin/audit?${params.toString()}`);
+        setRows(r.data.rows || []);
+        setTotal(r.data.total || 0);
+      }
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to load');
     }
@@ -46,9 +56,9 @@ export default function AuditLog() {
   };
 
   useEffect(() => {
-    api.get('/admin/audit/meta').then(r => setMeta(r.data || {})).catch(() => {});
+    api.get('/admin/audit/meta').then(r => setMeta(r.data || {})).catch(() => { });
   }, []);
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [page, filters]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [page, filters, suspicious]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const resetFilters = () => { setFilters({ user_id: '', entity_type: '', action: '', date_from: '', date_to: '', q: '' }); setPage(1); };
@@ -60,10 +70,30 @@ export default function AuditLog() {
           <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FiShield className="text-red-600" /> Audit Log</h3>
           <p className="text-sm text-gray-500">Every create / update / delete action across the SOTYN.AI, with user and timestamp. Admin-only.</p>
         </div>
-        <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
-          <FiRefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setSuspicious(s => !s); setPage(1); }}
+            className={`btn flex items-center gap-2 ${suspicious ? 'bg-red-600 text-white hover:bg-red-700' : 'btn-secondary'}`}
+            title="Changes whose device / login history doesn't match the user they were recorded under"
+          >
+            <FiAlertTriangle size={14} /> {suspicious ? 'Showing suspicious' : 'Suspicious'}
+          </button>
+          <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
+            <FiRefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
+          </button>
+        </div>
       </div>
+
+      {suspicious && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-700 flex items-start gap-2">
+          <FiAlertTriangle className="mt-0.5 shrink-0" />
+          <span>
+            Showing last-30-day changes where the <b>device was never seen at that user&apos;s login</b>, or the
+            user has <b>no recent login at all</b>. These may be forged or borrowed sessions — check the IP and
+            device in the detail view, then compare with the user&apos;s real phone/PC.
+          </span>
+        </div>
+      )}
 
       {/* Summary strip */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -129,7 +159,10 @@ export default function AuditLog() {
                     "it showing wrong time" was seeing UTC because the
                     browser's local timezone was wrong. */}
                 <td className="px-2 py-1.5 whitespace-nowrap">{fmtDateTime(r.at, { timeZone: 'Asia/Kolkata' })}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap"><FiUser className="inline mr-1 text-gray-400" size={11} />{r.user_name || <span className="text-gray-300">anon</span>}{r.user_role && <span className="text-[10px] text-gray-400 ml-1">[{r.user_role}]</span>}</td>
+                <td className="px-2 py-1.5 whitespace-nowrap">
+                  <FiUser className="inline mr-1 text-gray-400" size={11} />{r.user_name || <span className="text-gray-300">anon</span>}{r.user_role && <span className="text-[10px] text-gray-400 ml-1">[{r.user_role}]</span>}
+                  {r.suspect_reasons && <div className="text-[10px] text-red-600 font-semibold whitespace-normal max-w-[220px]">{r.suspect_reasons}</div>}
+                </td>
                 <td className="px-2 py-1.5"><span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${actionClass(r.action)}`}>{r.action}</span></td>
                 <td className="px-2 py-1.5 whitespace-nowrap">{r.entity_type || <span className="text-gray-300">—</span>}{r.entity_id ? <span className="text-gray-400 ml-1">#{r.entity_id}</span> : ''}</td>
                 <td className="px-2 py-1.5 font-mono text-[10px] max-w-[260px] truncate" title={r.path}>{r.path}</td>
@@ -145,12 +178,12 @@ export default function AuditLog() {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex justify-between items-center text-xs text-gray-500">
-          <span>Showing {(page - 1) * limit + 1}-{Math.min(page * limit, total)} of {total.toLocaleString()}</span>
-          <div className="flex gap-1">
-            <button disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))} className="btn btn-secondary text-xs disabled:opacity-40">‹ Prev</button>
-            <span className="px-3 py-1.5">Page {page} / {totalPages}</span>
-            <button disabled={page === totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="btn btn-secondary text-xs disabled:opacity-40">Next ›</button>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 text-xs text-gray-500 mt-2 px-1">
+          <span className="text-center sm:text-left whitespace-nowrap">Showing <b className="text-gray-800">{(page - 1) * limit + 1}</b>–<b className="text-gray-800">{Math.min(page * limit, total)}</b> of <b className="text-gray-800">{total.toLocaleString()}</b></span>
+          <div className="flex items-center justify-center sm:justify-end gap-2">
+            <button type="button" disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))} className="btn btn-secondary text-xs py-1.5 px-3 disabled:opacity-40 shadow-2xs">‹ Prev</button>
+            <span className="px-2.5 py-1 bg-white border border-gray-200 rounded-md font-medium text-xs whitespace-nowrap shadow-2xs">Page <b className="text-gray-900">{page}</b> of <b className="text-gray-900">{totalPages}</b></span>
+            <button type="button" disabled={page === totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="btn btn-secondary text-xs py-1.5 px-3 disabled:opacity-40 shadow-2xs">Next ›</button>
           </div>
         </div>
       )}
@@ -175,6 +208,11 @@ export default function AuditLog() {
                 <div><span className="text-gray-400">HTTP:</span> <b>{selected.method}</b> → <span className={statusClass(selected.status_code)}>{selected.status_code}</span></div>
                 <div><span className="text-gray-400">IP:</span> {selected.ip || '—'}</div>
               </div>
+              {selected.suspect_reasons && (
+                <div className="bg-red-50 border border-red-200 rounded p-2 text-red-700">
+                  <b>Why flagged:</b> {selected.suspect_reasons}
+                </div>
+              )}
               <div><span className="text-gray-400">Path:</span> <code className="bg-gray-100 px-1 py-0.5 rounded font-mono text-[11px]">{selected.path}</code></div>
               {selected.entity_label && <div><span className="text-gray-400">Label:</span> <b>{selected.entity_label}</b></div>}
               {selected.query && <div><span className="text-gray-400">Query:</span> <code className="bg-gray-100 px-1 py-0.5 rounded font-mono text-[10px] break-all">{selected.query}</code></div>}

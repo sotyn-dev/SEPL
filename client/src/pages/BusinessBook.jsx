@@ -12,6 +12,7 @@ import {
 import { LuIndianRupee } from 'react-icons/lu';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, DISTRICTS_BY_STATE, gstStateCode } from '../data/indiaLocations';
+import DataCompletion from '../components/DataCompletion';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell,
   PieChart, Pie, Legend
@@ -226,7 +227,7 @@ export default function BusinessBook() {
 
   const clearFilters = () => { setFilters({ status: '', category: '', order_type: '', lead_type: '' }); setSearch(''); };
   const activeFilters = Object.values(filters).filter(Boolean).length + (search ? 1 : 0);
-  const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
+  const fmt = (n) => `Rs ${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
   // Mam (2026-05-21): PO Amount (with GST) is always (NET Sale) × 1.18.
   // Mam (2026-06-16): a Management Discount comes off the Sale Amount first.
   // The % and Rs discount fields are kept in two-way sync, then Net Sale =
@@ -374,6 +375,41 @@ export default function BusinessBook() {
   const CAT_PILL = ['bg-blue-50 text-blue-700', 'bg-emerald-50 text-emerald-700', 'bg-purple-50 text-purple-700', 'bg-orange-50 text-orange-700', 'bg-pink-50 text-pink-700', 'bg-cyan-50 text-cyan-700', 'bg-rose-50 text-rose-700', 'bg-teal-50 text-teal-700'];
   const catColor = (c) => { let h = 0; const s = String(c || ''); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return CAT_PILL[h % CAT_PILL.length]; };
 
+  // Every file attached to a lead, as short links in the row (mam 2026-09-10:
+  // "this all files show ... with boq and from order to planning if po upload
+  // show here"). The lead's own uploads first, then the client PO / BOQ
+  // uploaded in Order to Planning. A file uploaded in both places shows once.
+  const LEAD_FILES = [
+    ['po_copy_link', 'PO', 'PO copy'],
+    ['boq_file_link', 'BOQ', 'BOQ file'],
+    ['boq_signed_link', 'BOQ ✓', 'Signed BOQ'],
+    ['tpa_material_link', 'TPA-M', 'TPA material'],
+    ['tpa_material_signed_link', 'TPA-M ✓', 'Signed TPA material'],
+    ['tpa_labour_link', 'TPA-L', 'TPA labour'],
+    ['tpa_labour_signed_link', 'TPA-L ✓', 'Signed TPA labour'],
+    ['final_drawing_link', 'Drawing', 'Final drawing'],
+    ['working_sheet_link', 'Sheet', 'Working sheet'],
+  ];
+  const fileLinksOf = (b) => {
+    const out = [];
+    const seen = new Set();
+    const add = (url, label, title) => {
+      const u = String(url || '').trim();
+      if (!u || seen.has(u)) return;
+      seen.add(u);
+      out.push({ url: u, label, title });
+    };
+    for (const [key, label, title] of LEAD_FILES) add(b[key], label, title);
+    let orderPos = [];
+    try { orderPos = JSON.parse(b.order_po_files || '[]') || []; } catch { orderPos = []; }
+    for (const po of orderPos) {
+      const ref = po.po_number ? ` ${po.po_number}` : '';
+      add(po.po_copy_link, 'Order PO', `Client PO${ref} (Order to Planning)`);
+      add(po.boq_file_link, 'Order BOQ', `PO BOQ${ref} (Order to Planning)`);
+    }
+    return out;
+  };
+
   const renderLeadRow = (b, child = false) => (
     <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-blue-50/40'}`}>
       {/* Lead No + Type */}
@@ -409,10 +445,22 @@ export default function BusinessBook() {
       <td className="px-3 py-1.5 align-top">
         <div className="flex items-center justify-center gap-0.5">
           <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="View"><FiEye size={15} /></button>
-          {b.boq_file_link && <a href={b.boq_file_link} target="_blank" rel="noreferrer" className="px-1.5 py-1 text-indigo-600 hover:bg-indigo-50 rounded-md text-[10px] font-bold transition-colors" title="View attached BOQ file">BOQ</a>}
           {canEdit('business_book') && <button onClick={() => handleEdit(b)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-md transition-colors" title="Edit"><FiEdit2 size={15} /></button>}
           {canDelete('business_book') && <button onClick={() => handleDelete(b.id, b.lead_no)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" title="Delete"><FiTrash2 size={15} /></button>}
         </div>
+        {(() => {
+          const files = fileLinksOf(b);
+          return files.length > 0 && (
+            <div className="mt-1 flex flex-wrap justify-center gap-1 max-w-[180px] mx-auto">
+              {files.map(f => (
+                <a key={f.url} href={f.url} target="_blank" rel="noreferrer" title={`View ${f.title}`}
+                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold whitespace-nowrap transition-colors ${f.label.startsWith('Order') ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100' : 'text-indigo-600 bg-indigo-50/60 hover:bg-indigo-100'}`}>
+                  {f.label}
+                </a>
+              ))}
+            </div>
+          );
+        })()}
       </td>
     </tr>
   );
@@ -464,7 +512,7 @@ export default function BusinessBook() {
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><FiBook className="text-red-600" /> Business Book</h1>
           <p className="text-sm text-gray-500 mt-1">Master New Business Booked Sheet</p>
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center w-full sm:w-auto">
           <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
             <button onClick={() => setViewMode('list')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'list' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
@@ -482,9 +530,13 @@ export default function BusinessBook() {
         </div>
       </div>
 
+      {/* Data Completion (mam 2026-09-03) — same bar as Item Master;
+          the field list and the Data Entry KPI share one definition. */}
+      <DataCompletion module="business_book" />
+
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
           <StatCard icon={FiBook} color="blue" label="Total Entries" value={stats.total} subtext="↗ across all projects" subColor="text-blue-600" />
           <StatCard icon={LuIndianRupee} color="emerald" label="Total PO Value" value={fmt(stats.total_po)} subtext="High-value pipeline (incl GST)" subColor="text-emerald-600" />
           <StatCard icon={FiTrendingUp} color="amber" label="Advance Received" value={fmt(stats.total_advance)} valueColor="text-emerald-600" subtext="✓ verified payments" subColor="text-amber-600" />
@@ -561,7 +613,7 @@ export default function BusinessBook() {
       {viewMode === 'list' && (
       <div className="card p-0">
         <div className="overflow-x-auto">
-          <table className="min-w-full freeze-head">
+          <table className="min-w-full freeze-head min-w-[850px]">
             <thead><tr className="bg-gray-50/80 border-b border-gray-200">
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Lead No</th>
               <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Client</th>
@@ -715,7 +767,7 @@ export default function BusinessBook() {
           {/* Merged client + site table */}
           <div className="card p-0">
           <div className="overflow-x-auto">
-            <table className="min-w-full freeze-head">
+            <table className="min-w-full freeze-head min-w-[850px]">
               <thead><tr className="bg-gray-50">
                 <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600 w-8"></th>
                 <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Client</th>
@@ -796,7 +848,7 @@ export default function BusinessBook() {
       {/* View Modal */}
       <Modal isOpen={modal === 'view'} onClose={() => { setModal(null); setViewEntry(null); }} title={`${viewEntry?.lead_no || ''} - ${viewEntry?.client_name || ''}`} wide>
         {viewEntry && (
-          <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+          <div className="space-y-4">
             <div className="flex items-center justify-between bg-gradient-to-r from-blue-50 to-blue-50 p-4 rounded-lg">
               <div>
                 <h3 className="text-lg font-bold text-blue-900">{viewEntry.lead_no}</h3>
@@ -837,7 +889,7 @@ export default function BusinessBook() {
       {/* Add/Edit Modal */}
       <Modal isOpen={modal === 'add' || modal === 'edit'} onClose={() => { setModal(null); setForm({ ...emptyForm }); }}
         title={modal === 'edit' ? `Edit - ${form.lead_no || ''}` : 'New Business Book Entry'} wide>
-        <form onSubmit={handleSave} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+        <form onSubmit={handleSave} className="space-y-4">
           {modal === 'add' && <p className="text-xs text-emerald-600 bg-emerald-50 p-2 rounded font-medium">Lead No. auto-generated. Auto-creates: Order Planning + DPR Site + Receivable + Cash Flow.</p>}
 
           {/* 1. Client */}
@@ -1124,24 +1176,24 @@ export default function BusinessBook() {
 // Reusable components
 function StatCard({ icon: Icon, color, label, value, valueColor, subtext, subColor }) {
   return (
-    <div className={`card p-4 border-t-2 border-${color}-500`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-[11px] text-gray-500 font-semibold uppercase tracking-wider">{label}</p>
-          <p className={`text-2xl font-bold mt-1 ${valueColor || 'text-gray-900'}`}>{value}</p>
+    <div className={`card p-3 sm:p-4 border-t-2 border-${color}-500 overflow-hidden`}>
+      <div className="flex items-start justify-between gap-1.5 sm:gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] sm:text-[11px] text-gray-500 font-semibold uppercase tracking-wider truncate">{label}</p>
+          <p className={`text-base sm:text-xl lg:text-2xl font-bold mt-1 break-words leading-tight ${valueColor || 'text-gray-900'}`}>{value}</p>
         </div>
-        <div className={`p-2 bg-${color}-50 rounded-lg shrink-0`}><Icon className={`text-${color}-600`} size={18} /></div>
+        <div className={`p-1.5 sm:p-2 bg-${color}-50 rounded-lg shrink-0`}><Icon className={`text-${color}-600`} size={16} /></div>
       </div>
-      {subtext && <p className={`text-[11px] mt-2 font-medium ${subColor || 'text-gray-400'}`}>{subtext}</p>}
+      {subtext && <p className={`text-[10px] sm:text-[11px] mt-1.5 sm:mt-2 font-medium truncate ${subColor || 'text-gray-400'}`}>{subtext}</p>}
     </div>
   );
 }
 
 function KpiCard({ label, value, color }) {
   return (
-    <div className="card p-3">
-      <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">{label}</p>
-      <p className={`text-lg font-bold mt-0.5 ${color || 'text-gray-900'}`}>{value}</p>
+    <div className="card p-3 overflow-hidden">
+      <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide truncate">{label}</p>
+      <p className={`text-base sm:text-lg font-bold mt-0.5 break-words ${color || 'text-gray-900'}`}>{value}</p>
     </div>
   );
 }

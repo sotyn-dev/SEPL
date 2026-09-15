@@ -246,17 +246,27 @@ router.post('/drawings/:id/revisions', canCreate, upload.single('file'), async (
     return fail(500, 'Could not store the uploaded file.');
   }
 
-  // If the caller supplied an explicit revision number, honour it but validate
-  // it. Otherwise take the next free one. Either way the UNIQUE constraint is
-  // the real arbiter, so two simultaneous uploads can't both win a number.
-  const explicit = b.revision_no !== undefined && b.revision_no !== '' ? int(b.revision_no) : null;
-  if (explicit !== null && explicit < 0) return fail(400, 'Revision number cannot be negative.');
+  // Explicit numbers are accepted only when they are exactly the next number.
+  // An omitted number is assigned automatically inside the transaction.
+  const hasExplicit = b.revision_no !== undefined && b.revision_no !== '';
+  const explicitValue = hasExplicit ? String(b.revision_no).trim() : '';
+  const explicit = hasExplicit && /^\d+$/.test(explicitValue) ? int(explicitValue) : null;
+  if (hasExplicit && explicit === null) {
+    return fail(400, 'Revision number must be a non-negative integer.');
+  }
 
   // One retry: if a concurrent upload took the number we computed, recompute and
   // go again rather than failing a legitimate upload.
   const attempt = (revisionNo) => db.transaction(() => {
-    const no = revisionNo != null ? revisionNo
-      : (db.prepare('SELECT COALESCE(MAX(revision_no), -1) + 1 AS n FROM drawing_revisions WHERE drawing_id=?').get(drawing.id).n);
+    const nextNo = db.prepare(
+      'SELECT COALESCE(MAX(revision_no), -1) + 1 AS n FROM drawing_revisions WHERE drawing_id=?'
+    ).get(drawing.id).n;
+    if (revisionNo != null && revisionNo !== nextNo) {
+      const error = new Error(`Revision must be the next sequential number: Rev ${nextNo}.`);
+      error.code = 'REVISION_SEQUENCE';
+      throw error;
+    }
+    const no = revisionNo != null ? revisionNo : nextNo;
 
     // ORDER MATTERS. The partial unique index (…WHERE status='current') is
     // checked per-statement, not deferred to COMMIT — so inserting the new row
@@ -286,9 +296,13 @@ router.post('/drawings/:id/revisions', canCreate, upload.single('file'), async (
   try {
     result = attempt(explicit);
   } catch (e) {
+    if (e.code === 'REVISION_SEQUENCE') {
+      discardFile(req.file);
+      return res.status(400).json({ error: e.message });
+    }
     if (/UNIQUE/i.test(e.message) && explicit !== null) {
       discardFile(req.file);
-      return res.status(409).json({ error: `Revision ${explicit} already exists for this drawing.` });
+      return res.status(409).json({ error: `Revision ${explicit} is no longer the next sequential revision.` });
     }
     if (/UNIQUE/i.test(e.message)) {
       try {

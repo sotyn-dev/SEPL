@@ -50,6 +50,65 @@ function nullReferencers(db, targetTable, ids) {
   return { referencers, errors };
 }
 
+// Everything currently pointing at `ids`, captured BEFORE they are nulled so the
+// links can be put back once the rows are re-inserted. Without this, saving a PO's
+// line items silently severs every DPR, indent and planning row attached to that
+// order — and installation billing then has nothing but the BOQ description text
+// to find the contracted SITC rate with (mam 2026-09-09).
+function captureReferrers(db, targetTable, ids) {
+  const out = [];
+  if (!ids || !ids.length) return out;
+  const ph = ids.map(() => '?').join(',');
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name);
+  for (const t of tables) {
+    let fks = [];
+    try { fks = db.prepare(`PRAGMA foreign_key_list(${t})`).all(); } catch (_) { continue; }
+    for (const fk of fks) {
+      if (fk.table !== targetTable) continue;
+      try {
+        const rows = db.prepare(`SELECT rowid AS rid, ${fk.from} AS ref FROM ${t} WHERE ${fk.from} IN (${ph})`).all(...ids);
+        for (const row of rows) out.push({ table: t, column: fk.from, rid: row.rid, oldId: row.ref });
+      } catch (e) { console.warn(`[captureReferrers] ${t}.${fk.from}:`, e.message); }
+    }
+  }
+  return out;
+}
+
+// Re-point the captured references at the rows that replaced them, matching on
+// the BOQ description. Identical descriptions are paired in their original order,
+// so a BOQ with repeated lines still lands one-for-one. A line whose description
+// was edited in the same save has no counterpart and is left unlinked — reported,
+// never guessed onto the wrong item.
+function restoreReferrers(db, saved, oldById, newRows) {
+  if (!saved.length) return { restored: 0, orphaned: 0 };
+  const key = (d) => String(d || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const pools = new Map();
+  for (const r of newRows) {
+    const k = key(r.description);
+    if (!pools.has(k)) pools.set(k, []);
+    pools.get(k).push(r.id);
+  }
+  const taken = new Map();
+  const mapFor = (oldId) => {
+    if (taken.has(oldId)) return taken.get(oldId);
+    const k = oldById.get(oldId);
+    const pool = k !== undefined ? pools.get(k) : null;
+    const newId = pool && pool.length ? pool.shift() : null;
+    taken.set(oldId, newId);
+    return newId;
+  };
+  let restored = 0, orphaned = 0;
+  for (const ref of saved) {
+    const newId = mapFor(ref.oldId);
+    if (!newId) { orphaned++; continue; }
+    try {
+      db.prepare(`UPDATE ${ref.table} SET ${ref.column}=? WHERE rowid=?`).run(newId, ref.rid);
+      restored++;
+    } catch (e) { console.warn(`[restoreReferrers] ${ref.table}.${ref.column}:`, e.message); }
+  }
+  return { restored, orphaned };
+}
+
 // Count how many rows still reference `ids` across the given referencers —
 // used to build a precise diagnostic when a DELETE still fails after a
 // null-out pass. Returns `{ "table.col": N, ... }` for non-zero counts only.
@@ -441,19 +500,27 @@ router.delete('/po/:id', requirePermission('orders', 'delete'), (req, res) => {
 });
 
 router.delete('/planning/:id', requirePermission('orders', 'delete'), (req, res) => {
-  getDb().prepare('DELETE FROM order_planning WHERE id=?').run(req.params.id);
+  const db = getDb();
+  // Explicit — SQLite FK cascade only fires when foreign_keys pragma is on.
+  try { db.prepare('DELETE FROM order_planning_items WHERE planning_id=?').run(req.params.id); } catch (_) {}
+  db.prepare('DELETE FROM order_planning WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
 
 // PO Items CRUD
 router.get('/po/:id/items', (req, res) => {
-  // Get items via business_book_id linked to this PO
-  const po = getDb().prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
-  if (po?.business_book_id) {
-    res.json(getDb().prepare('SELECT * FROM po_items WHERE business_book_id=?').all(po.business_book_id));
-  } else {
-    res.json([]);
-  }
+  const db = getDb();
+  const po = db.prepare('SELECT id, business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
+  if (!po) return res.json([]);
+  // Read the SAME scope the items save writes: this PO's rows (po_id), plus
+  // the legacy po_id-NULL rows on its business book. Reading by
+  // business_book_id ALONE returned every SIBLING PO's rows too — so after
+  // mapping + save, the reopened modal showed the siblings' unmapped copies
+  // ("mapping removed", mam 2026-08-31) and re-saving adopted sibling rows
+  // into this PO, duplicating items across the project's POs.
+  res.json(db.prepare(`SELECT * FROM po_items
+     WHERE po_id = ? OR (po_id IS NULL AND business_book_id = ?)
+     ORDER BY sr_no, id`).all(po.id, po.business_book_id || -1));
 });
 
 // Reset (zero out) labour_rate + labour_amount on every po_items row
@@ -494,13 +561,15 @@ router.post('/po/:id/auto-map-items', requirePermission('orders', 'edit'), (req,
   const db = getDb();
   const THRESHOLD = 0.95;
   try {
-    // Same scoping as GET /po/:id/items — the PO's business_book lines.
-    const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id = ?').get(+req.params.id);
-    if (!po?.business_book_id) return res.json({ total_unmapped: 0, mapped: 0, results: [] });
+    // Same scoping as GET /po/:id/items (fixed 2026-08-31): THIS PO's rows
+    // + legacy po_id-NULL rows — not every sibling PO on the business book.
+    const po = db.prepare('SELECT id, business_book_id FROM purchase_orders WHERE id = ?').get(+req.params.id);
+    if (!po) return res.json({ total_unmapped: 0, mapped: 0, results: [] });
     const rows = db.prepare(`
       SELECT id, description FROM po_items
-      WHERE business_book_id = ? AND item_master_id IS NULL AND COALESCE(description,'') <> ''
-    `).all(po.business_book_id);
+      WHERE (po_id = ? OR (po_id IS NULL AND business_book_id = ?))
+        AND item_master_id IS NULL AND COALESCE(description,'') <> ''
+    `).all(po.id, po.business_book_id || -1);
     const masters = db.prepare(`
       SELECT id, item_name, specification, size, uom FROM item_master
       WHERE COALESCE(item_name,'') <> ''
@@ -628,6 +697,15 @@ router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => 
      WHERE po_id = ?
         OR (po_id IS NULL AND business_book_id = ?)
   `).all(poId, bbId).map(r => r.id);
+  // What the old rows are, and what points at them — both needed to put the links
+  // back after the delete-and-reinsert below.
+  const oldById = new Map(
+    db.prepare(`SELECT id, description FROM po_items WHERE po_id = ? OR (po_id IS NULL AND business_book_id = ?)`)
+      .all(poId, bbId)
+      .map(r => [r.id, String(r.description || '').toLowerCase().replace(/\s+/g, ' ').trim()])
+  );
+  const savedRefs = captureReferrers(db, 'po_items', poItemIds);
+
   if (poItemIds.length) {
     const { referencers, errors: nullErrors } = nullReferencers(db, 'po_items', poItemIds);
     try {
@@ -698,10 +776,25 @@ router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => 
       }
     });
     runInserts();
+
+    // Put the DPR / indent / planning links back onto the rows that replaced the
+    // old ones. Until now they were simply dropped, which is why installation
+    // billing had to fall back to matching BOQ text (mam 2026-09-09).
+    try {
+      const newRows = db.prepare('SELECT id, description FROM po_items WHERE po_id = ? ORDER BY id').all(poId);
+      const { restored, orphaned } = restoreReferrers(db, savedRefs, oldById, newRows);
+      if (restored || orphaned) {
+        console.log(`[PO items save] PO ${poId}: re-linked ${restored} reference(s)`
+          + (orphaned ? ` — ${orphaned} left unlinked (their BOQ line was renamed or removed)` : ''));
+      }
+    } catch (e) {
+      console.error('[PO items save] could not restore references:', e.message);
+    }
     if (errors.length) {
       return res.status(400).json({ error: `Saved ${count} items; ${errors.length} failed`, failures: errors });
     }
-    res.json({ message: 'Items saved', count });
+    const unitSync = require('../lib/installationBillUnits').syncInstallationUnits(db, bbId);
+    res.json({ message: 'Items saved', count, unit_sync: unitSync });
   } catch (err) {
     console.error('[PO items save] transaction failed:', err.message);
     res.status(500).json({ error: 'Items save failed: ' + err.message });
@@ -718,24 +811,147 @@ router.get('/bb/:bbId/items', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM po_items WHERE business_book_id=?').all(req.params.bbId));
 });
 
-// Order Planning
+// Order Planning — plans map ITEM-WISE to po_items (mam 2026-08-28:
+// "pick here item wise which is mapping"): order_planning_items carries
+// which items (and planned qty) each plan covers.
 router.get('/planning', (req, res) => {
-  res.json(getDb().prepare(`SELECT op.*, po.po_number, bb.client_name FROM order_planning op
+  const db = getDb();
+  // AUTO-MAP (mam 2026-08-31 "automatically come here from Edit PO"): a plan
+  // that has a PO but no item mapping inherits ALL of that PO's items
+  // (planned qty = PO qty) on its own — the Edit-PO item grid flows straight
+  // into planning; 🔗 Map is then only for trimming/adjusting the subset.
+  // Idempotent + best-effort: only touches plans with ZERO mappings.
+  try {
+    const unmapped = db.prepare(`SELECT op.id, op.po_id FROM order_planning op
+      WHERE op.po_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM order_planning_items x WHERE x.planning_id = op.id)`).all();
+    if (unmapped.length) {
+      const ins = db.prepare(`INSERT INTO order_planning_items (planning_id, po_item_id, quantity)
+        SELECT ?, id, quantity FROM po_items
+         WHERE po_id = ? OR (po_id IS NULL AND business_book_id = (SELECT business_book_id FROM purchase_orders WHERE id = ?))`);
+      const tx = db.transaction(() => { for (const p of unmapped) ins.run(p.id, p.po_id, p.po_id); });
+      tx();
+    }
+  } catch (e) { console.warn('[planning auto-map] skipped:', e.message); }
+  res.json(db.prepare(`SELECT op.*, po.po_number, bb.client_name,
+      (SELECT COUNT(*) FROM order_planning_items x WHERE x.planning_id=op.id) AS item_count
+    FROM order_planning op
     LEFT JOIN purchase_orders po ON op.po_id=po.id LEFT JOIN business_book bb ON op.business_book_id=bb.id ORDER BY op.created_at DESC`).all());
 });
 
+// Pickable items for a PO — its own items, plus legacy rows that predate
+// po_items.po_id (linked only through the business book).
+router.get('/planning-items/:poId', (req, res) => {
+  const db = getDb();
+  const po = db.prepare('SELECT id, business_book_id FROM purchase_orders WHERE id=?').get(req.params.poId);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  res.json(db.prepare(`SELECT id, description, quantity, unit, rate FROM po_items
+    WHERE po_id=? OR (po_id IS NULL AND business_book_id=?) ORDER BY sr_no, id`).all(po.id, po.business_book_id || -1));
+});
+
+// The items a plan maps to (for the expandable row on the Planning tab).
+router.get('/planning/:id/items', (req, res) => {
+  res.json(getDb().prepare(`SELECT opi.id, opi.po_item_id, opi.quantity AS planned_qty,
+      pi.description, pi.unit, pi.quantity AS po_qty, pi.rate
+    FROM order_planning_items opi LEFT JOIN po_items pi ON pi.id=opi.po_item_id
+    WHERE opi.planning_id=? ORDER BY opi.id`).all(req.params.id));
+});
+
+// ── ITEM-WISE planning view (mam 2026-08-31: "recreate as item wise so
+// that when open so here") — the Order Planning tab lists ITEMS directly,
+// each with its own need dates. Dates live on order_planning_items
+// (fallback: the parent plan's dates for rows planned before this).
+router.get('/planning-itemwise', (req, res) => {
+  const db = getDb();
+  const search = String(req.query.search || '').trim().toLowerCase();
+  const page = Math.max(1, parseInt(req.query.page || '1', 10));
+  const PER = 50;
+  const params = [];
+  let where = "COALESCE(pi.description,'') <> ''";
+  if (search) {
+    where += ` AND (LOWER(pi.description) LIKE ? OR LOWER(COALESCE(po.po_number,'')) LIKE ? OR LOWER(COALESCE(bb.client_name, bb.company_name,'')) LIKE ?)`;
+    for (let i = 0; i < 3; i++) params.push(`%${search}%`);
+  }
+  const base = `FROM po_items pi
+    LEFT JOIN purchase_orders po ON po.id = pi.po_id
+    LEFT JOIN business_book bb ON bb.id = pi.business_book_id
+    LEFT JOIN order_planning_items opi ON opi.id = (SELECT x.id FROM order_planning_items x WHERE x.po_item_id = pi.id ORDER BY x.id DESC LIMIT 1)
+    LEFT JOIN order_planning op ON op.id = opi.planning_id
+    WHERE ${where}`;
+  const total = db.prepare(`SELECT COUNT(*) c ${base}`).get(...params).c;
+  const rows = db.prepare(`SELECT pi.id, pi.description, pi.quantity, pi.unit, pi.po_id,
+      po.po_number, COALESCE(bb.client_name, bb.company_name) AS client_name,
+      opi.id AS opi_id,
+      -- Item dates only, never the plan header's (Business Book dates copied
+      -- in on booking) — same rule as /procurement/rates-items (2026-09-14).
+      opi.planned_start AS planned_start,
+      opi.planned_end AS planned_end,
+      COALESCE(op.status, 'pending') AS status
+    ${base}
+    ORDER BY (opi.planned_start IS NULL), opi.planned_start, pi.id
+    LIMIT ${PER} OFFSET ${(page - 1) * PER}`).all(...params);
+  res.json({ total, page, per: PER, rows });
+});
+
+// Set an ITEM's need dates. Joins/creates the PO's plan on the fly so a
+// bare item can be dated in one action.
+router.put('/planning-itemwise/:poItemId', requirePermission('orders', 'edit'), (req, res) => {
+  const db = getDb();
+  const pi = db.prepare('SELECT id, po_id, business_book_id, quantity FROM po_items WHERE id=?').get(+req.params.poItemId);
+  if (!pi) return res.status(404).json({ error: 'Item not found' });
+  const ps = req.body?.planned_start || null;
+  const pe = req.body?.planned_end || null;
+  const tx = db.transaction(() => {
+    const opi = db.prepare('SELECT id FROM order_planning_items WHERE po_item_id=? ORDER BY id DESC LIMIT 1').get(pi.id);
+    if (opi) {
+      db.prepare('UPDATE order_planning_items SET planned_start=?, planned_end=? WHERE id=?').run(ps, pe, opi.id);
+      return;
+    }
+    let plan = pi.po_id ? db.prepare('SELECT id FROM order_planning WHERE po_id=? ORDER BY id DESC LIMIT 1').get(pi.po_id) : null;
+    if (!plan) {
+      const r = db.prepare('INSERT INTO order_planning (po_id, business_book_id, created_by) VALUES (?,?,?)')
+        .run(pi.po_id || null, pi.business_book_id || null, req.user.id);
+      plan = { id: r.lastInsertRowid };
+    }
+    db.prepare('INSERT INTO order_planning_items (planning_id, po_item_id, quantity, planned_start, planned_end) VALUES (?,?,?,?,?)')
+      .run(plan.id, pi.id, pi.quantity || null, ps, pe);
+  });
+  tx();
+  res.json({ ok: true });
+});
+
+const savePlanItems = (db, planningId, items) => {
+  db.prepare('DELETE FROM order_planning_items WHERE planning_id=?').run(planningId);
+  const ins = db.prepare('INSERT INTO order_planning_items (planning_id, po_item_id, quantity) VALUES (?,?,?)');
+  for (const it of items) {
+    if (+it.po_item_id) ins.run(planningId, +it.po_item_id, +it.quantity > 0 ? +it.quantity : null);
+  }
+};
+
 router.post('/planning', requirePermission('orders', 'create'), (req, res) => {
-  const { po_id, business_book_id, planned_start, planned_end, notes } = req.body;
-  const r = getDb().prepare(
-    'INSERT INTO order_planning (po_id, business_book_id, planned_start, planned_end, notes, created_by) VALUES (?,?,?,?,?,?)'
-  ).run(po_id, business_book_id, planned_start, planned_end, notes, req.user.id);
-  res.status(201).json({ id: r.lastInsertRowid });
+  const { po_id, business_book_id, planned_start, planned_end, notes, items } = req.body;
+  const db = getDb();
+  const tx = db.transaction(() => {
+    const r = db.prepare(
+      'INSERT INTO order_planning (po_id, business_book_id, planned_start, planned_end, notes, created_by) VALUES (?,?,?,?,?,?)'
+    ).run(po_id, business_book_id, planned_start, planned_end, notes, req.user.id);
+    if (Array.isArray(items) && items.length) savePlanItems(db, r.lastInsertRowid, items);
+    return r.lastInsertRowid;
+  });
+  res.status(201).json({ id: tx() });
 });
 
 router.put('/planning/:id', requirePermission('orders', 'edit'), (req, res) => {
-  const { status, planned_start, planned_end, notes } = req.body;
-  getDb().prepare('UPDATE order_planning SET status=?, planned_start=?, planned_end=?, notes=? WHERE id=?')
-    .run(status, planned_start, planned_end, notes, req.params.id);
+  const { status, planned_start, planned_end, notes, items, po_id } = req.body;
+  const db = getDb();
+  const tx = db.transaction(() => {
+    // po_id: only set when the caller sends one — the map-items modal can
+    // attach a PO to a legacy plan that never had one (mam 2026-08-31).
+    db.prepare('UPDATE order_planning SET status=?, planned_start=?, planned_end=?, notes=?, po_id=COALESCE(?, po_id) WHERE id=?')
+      .run(status, planned_start, planned_end, notes, +po_id || null, req.params.id);
+    if (Array.isArray(items)) savePlanItems(db, +req.params.id, items);
+  });
+  tx();
   res.json({ message: 'Updated' });
 });
 

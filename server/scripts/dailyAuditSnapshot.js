@@ -17,6 +17,7 @@
 // Skip in dev: ERP_DISABLE_AUDIT_SNAPSHOT=1
 
 const fs = require('fs');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const { getDb } = require('../db/schema');
 
@@ -32,7 +33,7 @@ const RETENTION_DAYS = 90;
 
 function ensureDir(p) { try { fs.mkdirSync(p, { recursive: true }); } catch (_) {} }
 
-function todayIso() { return new Date().toISOString().slice(0, 10); }
+function todayIso() { return istToday(); }
 
 function prune() {
   try {

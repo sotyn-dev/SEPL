@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sepl-erp": {
+      "command": "node",
+      "args": ["mcp-connector/server.js"]
+    }
+  }
+}

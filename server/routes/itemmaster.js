@@ -181,39 +181,16 @@ router.get('/', requirePermission('item_master', 'view'), (req, res) => {
 // and per-field missing counts. Each item has N required fields, so the
 // denominator is items × N.
 router.get('/completion', requirePermission('item_master', 'view'), (req, res) => {
-  const db = getDb();
-  const F = (expr) => `SUM(CASE WHEN ${expr} THEN 1 ELSE 0 END)`;
-  const COND = {
-    item_name: "TRIM(COALESCE(item_name,''))<>''",
-    type: "TRIM(COALESCE(type,''))<>''",
-    specification: "TRIM(COALESCE(specification,''))<>''",
-    size: "TRIM(COALESCE(size,''))<>''",
-    uom: "TRIM(COALESCE(uom,''))<>''",
-    gst: "TRIM(COALESCE(gst,''))<>''",
-    make: "TRIM(COALESCE(make,''))<>''",
-    rate: "COALESCE(current_price,0)>0",
-    vendor: "vendor_id IS NOT NULL",
-    source_type: "TRIM(COALESCE(source_type,''))<>''",
-    bill_po_number: "TRIM(COALESCE(bill_po_number,''))<>''",
-    bill_po_date: "TRIM(COALESCE(bill_po_date,''))<>''",
-  };
-  const keys = Object.keys(COND);
-  const selects = keys.map(k => `${F(COND[k])} AS ${k}`).join(', ');
-  const allFilled = keys.map(k => `(${COND[k]})`).join(' AND ');
-  const row = db.prepare(
-    `SELECT COUNT(*) AS total, ${selects}, ${F(allFilled)} AS complete_items FROM item_master`
-  ).get();
-  const total = row.total || 0;
-  const per_field = keys.map(k => ({ key: k, filled: row[k] || 0, missing: total - (row[k] || 0) }));
-  const filled_total = per_field.reduce((s, x) => s + x.filled, 0);
-  res.json({
-    total_items: total,
-    field_count: keys.length,
-    required_total: total * keys.length,
-    filled_total,
-    complete_items: row.complete_items || 0,
-    per_field,
-  });
+  // The field list moved to server/lib/dataCompletion.js (mam 2026-09-03) so the
+  // bar, the same bar on Business Book / Employees / Users, and the Data Entry
+  // KPI all measure the SAME thing. Response shape is unchanged.
+  const { completionFor } = require('../lib/dataCompletion');
+  try {
+    res.json(completionFor(getDb(), 'item_master'));
+  } catch (e) {
+    console.error('[item-master] completion failed:', e.message);
+    res.status(500).json({ error: 'Could not compute data completion' });
+  }
 });
 
 // Lightweight dropdown — unchanged shape so callers don't break.
@@ -370,19 +347,23 @@ router.post('/:id/approve', adminOnly, (req, res) => {
   const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
   db.prepare(`UPDATE item_master
-                 SET approval_status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+                 SET approval_status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, rejection_reason=NULL, updated_at=CURRENT_TIMESTAMP
                WHERE id=?`).run(req.user.id, req.params.id);
   res.json({ message: 'Item approved', approval_status: 'approved' });
 });
 
+// Rejecting REQUIRES a remark (mam 2026-09-05: "when reject need to enter
+// remarks") so the person who entered the item knows what to correct.
 router.post('/:id/reject', adminOnly, (req, res) => {
   const db = getDb();
+  const reason = String(req.body?.reason || '').trim();
+  if (!reason) return res.status(400).json({ error: 'Rejection remark is required' });
   const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
   db.prepare(`UPDATE item_master
-                 SET approval_status='rejected', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
-               WHERE id=?`).run(req.user.id, req.params.id);
-  res.json({ message: 'Item rejected', approval_status: 'rejected' });
+                 SET approval_status='rejected', approved_by=?, approved_at=CURRENT_TIMESTAMP, rejection_reason=?, updated_at=CURRENT_TIMESTAMP
+               WHERE id=?`).run(req.user.id, reason, req.params.id);
+  res.json({ message: 'Item rejected', approval_status: 'rejected', rejection_reason: reason });
 });
 
 router.post('/', requirePermission('item_master', 'create'), (req, res) => {
@@ -512,7 +493,8 @@ router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
        priced_at, priced_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  let added = 0;
+  const { nextSequence } = require('../db/nextSequence');
+  let added = 0, skipped = 0;
   const errors = [];
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
@@ -523,18 +505,30 @@ router.post('/bulk', requirePermission('item_master', 'create'), (req, res) => {
         : (it.vendor_name ? vendorByName.get(String(it.vendor_name).trim().toLowerCase()) || null : null);
       const source = ALLOWED_SOURCES.includes(it.source_type) ? it.source_type : (it.source_type ? null : 'Manual');
       const price = +it.current_price || 0;
-      insert.run(
-        it.item_code || '', it.department || '', String(it.item_name).trim(),
+      // item_code is UNIQUE. A row with no code used to insert as '' — fine
+      // for the FIRST such row, but item_code TEXT UNIQUE treats a repeated
+      // '' as a duplicate, so INSERT OR IGNORE silently dropped every row
+      // after the first one with a blank code, while `added` still counted
+      // it. Generate a real code the same way the single-item add route
+      // does, so every row actually lands.
+      let code = it.item_code && String(it.item_code).trim();
+      if (!code) {
+        const dept = (it.department || 'GEN').toUpperCase().substring(0, 3);
+        code = nextSequence(db, 'item_master', 'item_code', dept, { startFrom: 0, pad: 4 });
+      }
+      const r = insert.run(
+        code, it.department || '', String(it.item_name).trim(),
         it.specification || '', it.size || '', it.uom || 'PCS',
         it.gst || '18%', it.type || 'PO', it.make || '',
         price, vendorId, source, it.bill_po_number || null, it.bill_po_date || null,
         price > 0 ? new Date().toISOString() : null,
         price > 0 ? req.user.id : null,
       );
-      added++;
+      if (r.changes > 0) added++;
+      else { skipped++; errors.push(`Row ${i + 1}: "${it.item_name}" — code "${code}" already exists, skipped`); }
     } catch (err) { errors.push(`Row ${i + 1}: ${err.message}`); }
   }
-  res.json({ added, errors, total: items.length });
+  res.json({ added, skipped, errors, total: items.length });
 });
 
 module.exports = router;

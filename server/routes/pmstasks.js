@@ -5,7 +5,9 @@
 
 const express = require('express');
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware } = require('../middleware/auth');
+const { validatePmsFlowNumber } = require('../lib/pmsFlowNumber');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -68,13 +70,16 @@ router.get('/', (req, res) => {
 
   const where = [];
   const params = [];
+  // Worked out BEFORE the scope block: the followup default below asks "did the
+  // user actually pick a status?", and a junk value must not count as one.
+  const st = statusFilter(status, ['pending', 'submitted', 'approved', 'rejected'], 'p.status');
   if ((isAdmin || can(uid, 'approve')) && scope === 'all') {
     // admin or a PMS executive (approve on pms_tasks) sees everything
     // no filter
   } else if (scope === 'followup') {
     // Everyone's tasks, defaulting to active (non-approved). Status dropdown
     // can still override to show approved-only across everyone.
-    if (!status) where.push("p.status != 'approved'");
+    if (!st) where.push("p.status != 'approved'");
   } else if (scope === 'given') {
     where.push('p.assigned_by = ?'); params.push(uid);
   } else if (scope === 'mine') {
@@ -82,7 +87,7 @@ router.get('/', (req, res) => {
   } else {
     where.push('(p.assigned_to = ? OR p.assigned_by = ?)'); params.push(uid, uid);
   }
-  if (status) { where.push('p.status = ?'); params.push(status); }
+  if (st) { where.push(st.sql); params.push(...st.params); }
   // Mam-requested filters: CRM (assigner), assignee, date range on due_date
   if (crm_id) { where.push('p.assigned_by = ?'); params.push(+crm_id); }
   if (assignee_id) { where.push('p.assigned_to = ?'); params.push(+assignee_id); }
@@ -119,6 +124,8 @@ router.post('/', (req, res) => {
   if (!can(req.user.id, 'create')) return res.status(403).json({ error: 'Not allowed to create PMS tasks' });
   const { description, project_id, assigned_to, due_date, attachment_url } = req.body;
   const desc = String(description || '').trim();
+  const flowNumber = validatePmsFlowNumber(req.body.flow_number);
+  if (!flowNumber) return res.status(400).json({ error: 'A valid Flow Number is required. Enter an existing ERP step, for example 1.1.' });
   if (!desc) return res.status(400).json({ error: 'Description is required' });
   if (!project_id) return res.status(400).json({ error: 'Project is required' });
   if (!assigned_to) return res.status(400).json({ error: 'Assignee is required' });
@@ -140,9 +147,9 @@ router.post('/', (req, res) => {
   const attachment = attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null;
   const r = db.prepare(
     `INSERT INTO pms_tasks
-       (title, description, project_id, project_name_snapshot, crm_name, assigned_by, assigned_to, due_date, attachment_url)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(derivedTitle, desc, proj.id, proj.project_name, proj.crm_name, req.user.id, assigned_to, due_date || null, attachment);
+       (title, description, project_id, project_name_snapshot, crm_name, assigned_by, assigned_to, due_date, attachment_url, flow_number)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(derivedTitle, desc, proj.id, proj.project_name, proj.crm_name, req.user.id, assigned_to, due_date || null, attachment, flowNumber);
 
   try {
     const { notify } = require('../lib/push');
@@ -257,6 +264,14 @@ router.post('/:id/approve', (req, res) => {
   if (t.status !== 'submitted') return res.status(400).json({ error: 'Task is not awaiting approval' });
   db.prepare(`UPDATE pms_tasks SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewer_id=? WHERE id=?`)
     .run(req.user.id, req.params.id);
+  // A task raised from a Tally bill closes Stage 3 for that bill once it is the
+  // LAST one outstanding (Director CR 2026-08-13 §4). Required lazily so this
+  // module keeps no load-time dependency on the tally route; the tally list/detail
+  // endpoints run the same check, so a failure here self-heals on next read.
+  if (t.tally_bill_id) {
+    try { require('./tallyBills').syncTaskCompletion(db, t.tally_bill_id, req.user); }
+    catch (e) { console.warn('[pms-tasks] tally stage-3 sync failed:', e.message); }
+  }
   res.json({ message: 'Approved' });
 });
 

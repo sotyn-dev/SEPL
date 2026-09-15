@@ -179,9 +179,40 @@ export default function PublicOffer() {
             </tbody>
           </table>
 
+          {/* Full SEPL clause set (mam 2026-08-18) — kept in sync with the
+              printable OfferLetterPrint. All terms run from the date of joining. */}
           <p className="mb-3 text-justify">
-            <strong>Probationary Period:</strong>&nbsp; 3 months from the date of joining.
-            <strong className="ml-3">Notice Period:</strong>&nbsp; 15 days.
+            <strong>Date of Joining:</strong>&nbsp; Your date of joining would be{' '}
+            <strong>{fmtDateLong(offer.joining_date)}</strong>. If joining does not take
+            place on the given date then the offer letter will be considered invalid.
+          </p>
+          <p className="mb-3 text-justify">
+            <strong>Unauthorized Absence:</strong>&nbsp; If any employee remains absent
+            from work for more than three (3) consecutive days without informing or
+            obtaining prior approval from the company, the company reserves the right to
+            terminate the employee with immediate effect without serving or paying any
+            notice period.
+          </p>
+          <p className="mb-3 text-justify">
+            <strong>Probationary Period:</strong>&nbsp; The probationary period of 3
+            months need to be served by candidate, after joining the job.
+          </p>
+          <p className="mb-3 text-justify">
+            <strong>Performance Notice Period:</strong>&nbsp; In case of unsatisfactory
+            performance, a performance notice period of one (1) month will be given. If
+            the required improvement is not observed during this period, the company may
+            off board the employee within the same one-month period.
+          </p>
+          <p className="mb-3 text-justify">
+            <strong>Resignation Notice Period:</strong>&nbsp; If an employee resigns from
+            the company, a notice period of fifteen (15) days must be served. Failing to
+            serve the required notice period may result in the salary for the notice
+            period not being paid by the company.
+          </p>
+          <p className="mb-3 text-justify">
+            <strong>Warning:</strong>&nbsp; If your performance is weak, you will receive
+            three warning emails. If there is no improvement after these warnings, the
+            company may terminate your employment immediately.
           </p>
         </div>
 

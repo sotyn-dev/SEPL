@@ -15,13 +15,14 @@
 // Skip via ERP_DISABLE_CMD_EMAIL=1.
 
 const fs = require('fs');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const { getDb } = require('../db/schema');
 const { sendEmail, isConfigured } = require('../lib/email');
 
 const SNAPSHOT_ROOT = path.join(__dirname, '..', '..', 'data', 'audit-snapshots');
 
-function todayIso() { return new Date().toISOString().slice(0, 10); }
+function todayIso() { return istToday(); }
 function isSunday() { return new Date().getDay() === 0; }
 
 function readSnapshotOrLive(db) {

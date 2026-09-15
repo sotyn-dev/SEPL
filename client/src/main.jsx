@@ -17,6 +17,9 @@ import { getToken } from './lib/tokenStore'
 import '@fontsource-variable/inter/wght.css'
 import './index.css'
 import App from './App.jsx'
+// Live update after a deploy — every open tab moves to the new build by
+// itself (mam 2026-09-05). Details in the component.
+import UpdateWatcher from './components/UpdateWatcher'
 
 // --- Stale-chunk recovery after a code-split deploy -----------------------
 // Each deploy gives the lazy route chunks new hashed filenames and removes the
@@ -89,6 +92,7 @@ createRoot(document.getElementById('root')).render(
                 admin flips a switch — no extra listener component needed. */}
             <ModuleFlagsProvider>
               <App />
+              <UpdateWatcher />
               <Toaster position="top-right" />
             </ModuleFlagsProvider>
           </SocketProvider>

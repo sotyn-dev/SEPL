@@ -7,8 +7,10 @@
 // Budget = L1 + L2 + L3 running total per project.
 
 import { useState, useEffect, useMemo } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import { Link } from 'react-router-dom';
 import api from '../api';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import LabourRateWindow from '../components/LabourRateWindow';
@@ -75,7 +77,7 @@ export default function IndentLabourPayment() {
           return (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`btn ${active ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
-              <Icon size={14} /> {t.label}
+              <Icon size={14} /> {flowStepLabel('/indent-labour-payment', t.label)}
               <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
                 active ? 'bg-white text-indigo-700' : 'bg-gray-200 text-gray-600'
               }`}>P{t.phase}</span>
@@ -1240,7 +1242,7 @@ function AddOrEditWorkOrder({ wo, projectId, onClose, onSaved }) {
 function WorkOrdersTab() {
   const [projects, setProjects] = useState([]);
   const [pid, setPid] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState([]);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
@@ -1253,7 +1255,7 @@ function WorkOrdersTab() {
     setLoading(true);
     const params = {};
     if (pid) params.project_id = pid;
-    if (status) params.status = status;
+    if (status.length) params.status = status.join(',');
     api.get('/indent-labour-payment/work-orders', { params })
       .then(r => setRows(r.data || []))
       .catch(() => toast.error('Could not load Work Orders'))
@@ -1285,10 +1287,16 @@ function WorkOrdersTab() {
         </div>
         <div>
           <label className="text-xs text-gray-600 block mb-1">Status</label>
-          <select value={status} onChange={e => setStatus(e.target.value)} className="border rounded px-2 py-1.5 text-sm">
-            <option value="">All statuses</option>
-            {WO_STATUS_OPTIONS.map(s => <option key={s} value={s}>{WO_STATUS_LABEL[s]}</option>)}
-          </select>
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+          <div className="w-[248px]">
+            <StatusMultiSelect
+              options={WO_STATUS_OPTIONS.map(s => ({ id: s, name: WO_STATUS_LABEL[s] }))}
+              value={status}
+              onChange={setStatus}
+              placeholder="All statuses"
+              label=""
+            />
+          </div>
         </div>
         <button onClick={load} className="btn btn-secondary">Refresh</button>
         <button onClick={() => setNewOpen(true)} className="btn btn-primary flex items-center gap-1.5">

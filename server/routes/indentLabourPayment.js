@@ -14,6 +14,7 @@
 
 const express = require('express');
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { nextSequence } = require('../db/nextSequence');
@@ -363,7 +364,10 @@ router.get('/work-orders', requirePermission('indent_labour_payment', 'view'), (
   const where = [];
   const args = [];
   if (req.query.project_id) { where.push('wo.project_id = ?'); args.push(req.query.project_id); }
-  if (req.query.status) { where.push('wo.status = ?'); args.push(req.query.status); }
+  // Status — one value or a comma list (mam 2026-09-12).
+  const st = statusFilter(req.query.status,
+    ['draft', 'submitted', 'approved', 'work_started', 'in_progress', 'completed', 'cancelled'], 'wo.status');
+  if (st) { where.push(st.sql); args.push(...st.params); }
   res.json(db.prepare(`
     SELECT wo.id, wo.project_id, p.name AS project_name, wo.wo_number,
            wo.sub_contractor_id, wo.sub_contractor_name, wo.scope,

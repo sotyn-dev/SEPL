@@ -1,14 +1,33 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
 const { nextSequence } = require('../db/nextSequence');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
+const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJsonArray } = require('../lib/aiComplete');
+// "Approved PO with no purchase bill" — shared with the scorecard's
+// auto:po_bill_pending KPI so the flow-board tile and the KPI can never
+// disagree (mam 2026-09-07).
+const { poMissingBillWhere } = require('../lib/poBill');
+
+// Unit spellings that mean the same thing. Kept identical to the SQL CASE the
+// one-time unit_overridden backfill uses (db/schema.js), so "pcs" vs "nos" or
+// "metre" vs "mtr" is never mistaken for a deliberate override.
+const UNIT_ALIASES = {
+  metre: 'mtr', metres: 'mtr', meter: 'mtr', meters: 'mtr', mtrs: 'mtr', mt: 'mtr', m: 'mtr',
+  each: 'nos', piece: 'nos', pieces: 'nos', pcs: 'nos', pc: 'nos', no: 'nos', 'nos.': 'nos',
+};
+const normUnit = (u) => {
+  const s = String(u == null ? '' : u).trim().toLowerCase();
+  return UNIT_ALIASES[s] || s;
+};
 const router = express.Router();
+const { makeDeliveryBillResolver } = require('../lib/indentDeliveryBill');
 router.use(authMiddleware);
 
 // Build the merge context for an indent email event (mam 2026-06-03 email
@@ -46,7 +65,7 @@ function buildIndentContext(db, indentId, extra = {}) {
       site: row.site_name,
       amount: Math.round(+row.amount || 0).toLocaleString('en-IN'),
       raised_by: row.raised_by_name,
-      date: new Date().toISOString().slice(0, 10),
+      date: istToday(),
       raiser_email: row.raiser_email,
       crm_owner_email: crmOwnerEmail,
       director_email: director,
@@ -342,7 +361,7 @@ router.get('/vendors', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM vendors WHERE active=1 ORDER BY name').all());
 });
 
-router.post('/vendors', (req, res) => {
+router.post('/vendors', requirePermission('procurement', 'create'), (req, res) => {
   const b = req.body;
   if (!b.name) return res.status(400).json({ error: 'Vendor name required' });
   const db = getDb();
@@ -396,7 +415,7 @@ router.post('/vendors', (req, res) => {
 //   - no match → INSERTS a new vendor (auto-codes a blank Vendor Code).
 // Excel users save the sheet as CSV; the client parses it (quote-aware) and
 // posts the rows here.
-router.post('/vendors/bulk', (req, res) => {
+router.post('/vendors/bulk', requirePermission('procurement', 'create'), (req, res) => {
   const rows = Array.isArray(req.body?.vendors) ? req.body.vendors : [];
   if (!rows.length) return res.status(400).json({ error: 'No vendors to import' });
   const db = getDb();
@@ -475,17 +494,31 @@ router.post('/vendors/bulk', (req, res) => {
   res.json({ added, updated, skipped, errors, total: rows.length });
 });
 
-router.put('/vendors/:id', (req, res) => {
-  const b = req.body;
+router.put('/vendors/:id', requirePermission('procurement', 'edit'), (req, res) => {
+  const raw = req.body || {};
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM vendors WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Vendor not found' });
+  // Lost-update guard (audit 2026-08-17, same pattern as Business Book):
+  // stale form → 409 instead of silently wiping the other editor's changes;
+  // fields the client didn't send keep their stored values.
+  if (raw.updated_at && existing.updated_at && String(raw.updated_at) !== String(existing.updated_at)) {
+    return res.status(409).json({
+      error: 'This vendor was edited by someone else while you had it open. Please reload and re-apply your change.',
+      stale: true,
+    });
+  }
+  const b = { ...existing };
+  for (const k of Object.keys(raw)) { if (raw[k] !== undefined) b[k] = raw[k]; }
   const rating = (b.rating === '' || b.rating === null || b.rating === undefined)
     ? null
     : Math.max(0, Math.min(10, Number(b.rating) || 0));
-  getDb().prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,makes=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+  db.prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,makes=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
     .run(b.vendor_code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.sub_category, rating, normaliseMakes(b.makes), b.active !== undefined ? (b.active ? 1 : 0) : 1, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/vendors/:id', (req, res) => {
+router.delete('/vendors/:id', requirePermission('procurement', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const uses = db.prepare(`SELECT
@@ -511,7 +544,7 @@ router.get('/vendor-rates', (req, res) => {
   res.json(getDb().prepare(sql).all(...params));
 });
 
-router.post('/vendor-rates', (req, res) => {
+router.post('/vendor-rates', requirePermission('procurement', 'create'), (req, res) => {
   const { planning_id, item_description, vendor1_id, vendor1_rate, vendor2_id, vendor2_rate, vendor3_id, vendor3_rate, final_rate, selected_vendor_id } = req.body;
   const r = getDb().prepare(
     'INSERT INTO vendor_rates (planning_id,item_description,vendor1_id,vendor1_rate,vendor2_id,vendor2_rate,vendor3_id,vendor3_rate,final_rate,selected_vendor_id) VALUES (?,?,?,?,?,?,?,?,?,?)'
@@ -519,15 +552,17 @@ router.post('/vendor-rates', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.delete('/vendor-rates/:id', (req, res) => {
+router.delete('/vendor-rates/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM vendor_rates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
 
-router.put('/vendor-rates/:id/approve', (req, res) => {
-  const { approval_status, approved_by } = req.body;
+router.put('/vendor-rates/:id/approve', requirePermission('procurement', 'approve'), (req, res) => {
+  const { approval_status } = req.body;
+  // approved_by is ALWAYS the logged-in approver — a client-supplied name
+  // could stamp someone else's approval (audit 2026-08-17 SoD fix).
   getDb().prepare('UPDATE vendor_rates SET approval_status=?, approved_by=? WHERE id=?')
-    .run(approval_status, approved_by || req.user.name, req.params.id);
+    .run(approval_status, req.user.name, req.params.id);
   res.json({ message: 'Updated' });
 });
 
@@ -766,12 +801,10 @@ router.get('/boq-items', (req, res) => {
 // List indents with a BOQ file link derived from the site's Client PO.
 // The mapping is: indent.site_name → sites.business_book_id → purchase_orders.
 // boq_file_link (pick the most recent PO for that business_book).
-router.get('/indents', (req, res) => {
-  const db = getDb();
-  // Scope filter: anyone with 'approve' permission on procurement (or admin)
-  // sees ALL indents. Plain users (site engineers with only view + create)
-  // see only the ones they raised. Mam toggles this by checking / unchecking
-  // 'approve' on the role's procurement permissions.
+// Who may see EVERY indent (everyone else sees only the ones they raised).
+// Shared by GET /indents and the delivery-bill audit print so the two can
+// never apply different rules.
+function canSeeAllIndents(db, req) {
   const isAdmin = req.user.role === 'admin';
   // ANYONE named on an indent approval gate must be able to SEE every indent,
   // even if their role lacks procurement.approve — otherwise naming an approver
@@ -803,6 +836,16 @@ router.get('/indents', (req, res) => {
     `).get(req.user.id);
     return !!r?.ok;
   })();
+  return canSeeAll;
+}
+
+router.get('/indents', (req, res) => {
+  const db = getDb();
+  // Scope filter: anyone with 'approve' permission on procurement (or admin)
+  // sees ALL indents. Plain users (site engineers with only view + create)
+  // see only the ones they raised. Mam toggles this by checking / unchecking
+  // 'approve' on the role's procurement permissions.
+  const canSeeAll = canSeeAllIndents(db, req);
   // Mam (2026-06-02): "gurcharan fill indent when i open his id he
   // is not showing his own filled indent please dont do this type
   // blunder".  The old filter only checked created_by — so any indent
@@ -945,113 +988,23 @@ router.get('/indents', (req, res) => {
   }
 
   // ── Billable + Delivery-Bill preview (mam 2026-06-16) ───────────────
-  // Billable = Σ (BOQ item rate × indent qty). The BOQ rate is the CLIENT
-  // SALE rate from the priced BOQ (po_items), resolved EXACTLY like the
-  // Sales Bill: the line's po_item link first, then a description match
-  // within the same order's BOQ. We deliberately DON'T require the indent
-  // to have a planning→Business Book link — in practice most indents reach
-  // their BOQ purely through indent_items.po_item_id (planning_id is often
-  // unset), so keying off that link directly is what makes the numbers
-  // appear. Delivery Bill = Billable × the order's Against-Delivery %.
-  // Both fall back to 0 → UI shows "—" when the BOQ rate or % is missing.
-
-  // Global po_item lookup: id → { rate, business_book }. One pass, reused
-  // for every indent so we never query per line.
-  const poItemById = new Map();
-  for (const p of db.prepare('SELECT id, business_book_id, rate FROM po_items').all()) {
-    poItemById.set(p.id, { rate: +p.rate || 0, bb: p.business_book_id });
-  }
-  // Lazy per-Business-Book description→rate map (the fallback the Sales
-  // Bill uses when a line has no usable po_item rate) — only priced rows.
-  const bbDescCache = new Map();
-  const bbDescMap = (bbId) => {
-    if (bbDescCache.has(bbId)) return bbDescCache.get(bbId);
-    const m = new Map();
-    for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
-      if (p.description && +p.rate > 0) m.set(String(p.description).toLowerCase().trim(), +p.rate || 0);
-    }
-    bbDescCache.set(bbId, m);
-    return m;
-  };
-  // Lazy Business-Book against-delivery % (used when the planning join
-  // didn't carry the term — e.g. the bb was inferred from a po_item).
-  const bbPctCache = new Map();
-  const bbPct = (bbId) => {
-    if (bbPctCache.has(bbId)) return bbPctCache.get(bbId);
-    const row = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
-    const pct = parseFloat(String((row && row.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
-    bbPctCache.set(bbId, pct);
-    return pct;
-  };
-  // Planning-derived Business Book + % per indent (primary, from the join).
-  const planBbByIndent = new Map();
-  const planPctByIndent = new Map();
-  for (const i of indents) {
-    if (i.business_book_id) planBbByIndent.set(i.id, i.business_book_id);
-    planPctByIndent.set(i.id, parseFloat(String(i.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0);
-  }
-  // Indent site (name) — the most reliable bridge to the Order-to-Planning
-  // order when neither a planning link nor a po_item link is present.
-  const siteByIndent = new Map();
-  for (const i of indents) siteByIndent.set(i.id, i.site_name || i.client_name || '');
-  // site/project name → business_book_id, resolved the same way findBoq
-  // links a site to its order (sites.business_book_id, else a project /
-  // company name match on business_book). Cached per name.
-  const bbIdBySiteCache = new Map();
-  const bbIdForSite = (siteName) => {
-    if (!siteName) return null;
-    if (bbIdBySiteCache.has(siteName)) return bbIdBySiteCache.get(siteName);
-    const row = db.prepare(
-      `SELECT id FROM business_book
-        WHERE id IN (SELECT DISTINCT business_book_id FROM sites
-                      WHERE name = ? AND business_book_id IS NOT NULL)
-           OR project_name = ? OR company_name = ?
-        ORDER BY id DESC LIMIT 1`
-    ).get(siteName, siteName, siteName);
-    const id = row?.id || null;
-    bbIdBySiteCache.set(siteName, id);
-    return id;
-  };
+  // Billable = Σ (client SALE rate × indent qty); Delivery Bill = Billable ×
+  // the order's Against-Delivery %. Which order, which rate and whose % are
+  // resolved in lib/indentDeliveryBill.js — shared with the per-indent audit
+  // print (GET /indents/:id/delivery-bill) so the PDF shows exactly these
+  // numbers. Both fall back to 0 → UI shows "—" when the BOQ rate or % is
+  // missing.
+  const resolveDeliveryBill = makeDeliveryBillResolver(db);
   const billableByIndent = new Map();
   const deliveryByIndent = new Map();
   const pctByIndent = new Map();
-  for (const [indentId, its] of itemsByIndent) {
-    // Resolve the order's Business Book (the Order-to-Planning order the
-    // BOQ rate is picked from): planning link first, else the first line's
-    // po_item link, else the indent's site → order mapping.
-    let bbId = planBbByIndent.get(indentId) || null;
-    if (!bbId) {
-      for (const it of its) {
-        const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
-        if (po && po.bb) { bbId = po.bb; break; }
-      }
-    }
-    if (!bbId) bbId = bbIdForSite(siteByIndent.get(indentId));
-    const descMap = bbId ? bbDescMap(bbId) : null;
-    let billable = 0;
-    for (const it of its) {
-      let rate = 0;
-      // FOC = Free Of Cost, RGP = returnable — NOT billed to the client, so
-      // their sale rate is 0 (mam 2026-06-24: "sale bill is wrong" — FOC lines
-      // were wrongly inheriting the parent BOQ rate). Only PO lines bill.
-      const t = String(it.item_type || '').toUpperCase();
-      if (t !== 'FOC' && t !== 'RGP') {
-        const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
-        if (po && po.rate > 0) rate = po.rate;
-        if (!rate && descMap) rate = descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
-      }
-      // Attach the BOQ SALE rate + billable per line so the expanded indent
-      // can show "indent vs sales bill per BOQ" for estimation (mam 2026-06-24).
-      it.boq_sale_rate = +rate.toFixed(2);
-      it.billable_line = +(rate * (+it.quantity || 0)).toFixed(2);
-      billable += rate * (+it.quantity || 0);
-    }
-    // Against-delivery %: planning value first, else the resolved bb's.
-    let pct = planPctByIndent.get(indentId) || 0;
-    if (!pct && bbId) pct = bbPct(bbId);
-    billableByIndent.set(indentId, billable);
-    pctByIndent.set(indentId, pct);
-    deliveryByIndent.set(indentId, pct > 0 ? billable * pct / 100 : 0);
+  for (const i of indents) {
+    const its = itemsByIndent.get(i.id);
+    if (!its || !its.length) continue;          // no lines → no billable, no %
+    const bill = resolveDeliveryBill(i, its);
+    billableByIndent.set(i.id, bill.billable);
+    pctByIndent.set(i.id, bill.pct);
+    deliveryByIndent.set(i.id, bill.delivery);
   }
 
   // One BOQ-link lookup per unique site_name — cached in the loop so we
@@ -1277,28 +1230,17 @@ router.put('/indent-raise-window', (req, res) => {
   res.json(indentRaiseWindow(db));
 });
 
-// Site + Department existence check — drives the category lock on the
-// Raise Purchase Indent screen. Rule (not derivable from PPE Kit presence,
-// only from whether ANY indent has ever been raised for this exact
-// site+department pair):
-//   exists=true  → this site+department already has indent history →
-//                  PPE Kit locked, all other categories unlocked.
-//   exists=false → brand-new site+department pair → PPE Kit is the ONLY
-//                  category unlocked (mam's "raise PPE Kit first" rule).
+// Category lock endpoint — the lock itself is REMOVED (mam 2026-08-26, 3rd
+// revision: every category open to everyone; only the Wed/Sat day gate
+// remains). Kept only so browsers running a stale cached frontend don't
+// error AND don't lock: always answer exists=true so any old client's
+// category chips stay unlocked.
 router.get('/site-department-status', (req, res) => {
   const siteId = String(req.query.siteId || req.query.site_name || '').trim();
-  const departmentId = String(req.query.departmentId || req.query.department || '').trim();
-  if (!siteId || !departmentId) {
-    return res.status(400).json({ error: 'siteId and departmentId are both required' });
-  }
-  const db = getDb();
-  const row = db.prepare(
-    `SELECT 1 FROM indents WHERE site_name = ? AND department = ? LIMIT 1`
-  ).get(siteId, departmentId);
-  res.json({ exists: !!row, siteId, departmentId });
+  res.json({ exists: true, siteId });
 });
 
-router.post('/indents', (req, res) => {
+router.post('/indents', requirePermission('procurement', 'create'), (req, res) => {
   const db = getDb();
   const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category, department } = req.body;
   if (!items || items.length === 0) {
@@ -1311,13 +1253,17 @@ router.post('/indents', (req, res) => {
   // The admin one-day override keeps working — indents raised under it are
   // auto-flagged emergency too, so the KPI never under-counts.
   const win = indentRaiseWindow(db);
-  const wantsEmergency = req.body.is_emergency === true || req.body.is_emergency === 1 || req.body.is_emergency === '1';
+  // Self-service emergency tick is admin-only (mam 2026-08-20) — a regular
+  // user can no longer flag their own indent as EMERGENCY to bypass the
+  // Wed/Sat gate; only an admin can raise one directly, or open the whole
+  // day for everyone via the emergency-date toggle above.
+  const wantsEmergency = req.user.role === 'admin' && (req.body.is_emergency === true || req.body.is_emergency === 1 || req.body.is_emergency === '1');
   const emergencyReason = String(req.body.emergency_reason || '').trim();
   let isEmergency = 0;
   if (!win.isIndentDay) {
     if (!wantsEmergency && !win.emergencyActive) {
       return res.status(403).json({
-        error: 'Routine indents are raised on Wednesday & Saturday only (SPOS). To raise one today, tick "Emergency indent" and write the reason — it will be flagged for PM approval.',
+        error: 'Indents are raised on Wednesday & Saturday only (SPOS). Ask an admin to open emergency raising for today.',
         code: 'INDENT_DAY_BLOCKED',
       });
     }
@@ -1345,22 +1291,11 @@ router.post('/indents', (req, res) => {
   // Item Master shape (same as RGP/Rental), mirrored end-to-end below.
   const isPpeKit            = category === 'ppe_kit';
 
-  // ─── Site + Department category lock (backend enforcement) ────────────
-  // Mirrors the frontend lock so a direct API call can't bypass it. PPE Kit
-  // is ALWAYS allowed. The other 5 categories need ANY indent to already
-  // exist for this exact site_name + department pair:
-  //   pair already has indent history → every category open
-  //   pair has never been indented    → only PPE Kit is open
-  const deptForLock = String(department || '').trim();
-  if (!deptForLock) {
-    return res.status(400).json({ error: 'Department is required — it determines whether the non-PPE-Kit categories are available for this Site.' });
-  }
-  const siteDeptExists = !!db.prepare(
-    'SELECT 1 FROM indents WHERE site_name = ? AND department = ? LIMIT 1'
-  ).get(site_name, deptForLock);
-  if (!siteDeptExists && !isPpeKit) {
-    return res.status(400).json({ error: 'This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.' });
-  }
+  // Category lock REMOVED (mam 2026-08-26, 3rd revision: "no need … every
+  // one indent on wednesday and saturday material rgp all category is
+  // accessible"). History: 13-Aug PPE-first gate keyed on site+department
+  // → site-only earlier today → gone entirely. Every category is open to
+  // everyone; only the Wed/Sat day gate above still applies.
   // Master-price lookup reused by the rental block check. Returns
   // 0 if no rate has ever been recorded, which triggers a clear error
   // instead of silently letting the indent through.
@@ -1564,7 +1499,7 @@ router.post('/indents', (req, res) => {
   // before L1/L2 sign off on the spend.  Policy becomes 'crm_two_level'.
   // Material / RGP / Rental keep the existing two_level path.
   const TWO_LEVEL_CUTOFF = '2026-05-25';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday();
   const isBillable = category === 'extra_schedule' || category === 'extra_non_schedule';
   const basePolicy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
   // RGP now follows the normal L1 → L2 chain like Material (mam 2026-06-06:
@@ -1623,8 +1558,9 @@ router.post('/indents', (req, res) => {
     `INSERT INTO indent_items
       (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount,
        item_type, is_foc, is_tool, required_date,
-       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day, weight_per_meter, unit_overridden)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day, weight_per_meter, unit_overridden,
+       remarks)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const i of (items || [])) {
     let desc = i.description || '';
@@ -1688,67 +1624,16 @@ router.post('/indents', (req, res) => {
       r.lastInsertRowid, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool,
       i.required_date || null,
       extraSch, extraNon, rentDays, rentRate, wpm, unitWasOverridden ? 1 : 0,
+      String(i.remarks || '').trim().slice(0, 500) || null,
     );
   }
-  // CRM funnel "requirement" at RAISE time (mam 2026-06-06: "if extra
-  // schedule also go in crm funnel and show requirement"). Extra-Schedule /
-  // Extra-Non-Schedule indents are client-billable, so the moment they're
-  // raised we drop a CRM funnel lead listing the requirement (items) + a
-  // link back to the indent, so the sales team can start quoting before CRM
-  // approval. On CRM approval the same entry is updated with the billable
-  // amount. Deduped by a [auto-indent:<id>] marker. Best-effort.
-  if (isBillable && policy === 'crm_two_level') {
-    try {
-      const { nextSequence } = require('../db/nextSequence');
-      const reqItems = db.prepare('SELECT description, quantity, unit FROM indent_items WHERE indent_id=?').all(r.lastInsertRowid);
-      const reqText = reqItems
-        .map(it => `${(+it.quantity || 0).toLocaleString('en-IN')}${it.unit ? ' ' + it.unit : ''} × ${it.description || 'item'}`)
-        .join('; ');
-      let fi = db.prepare(
-        `SELECT bb.company_name AS bb_company, bb.client_name AS bb_client,
-                bb.client_contact AS bb_mobile,
-                COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
-                bb.billing_address AS bb_address, bb.source_of_enquiry AS bb_source,
-                bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner
-           FROM order_planning op LEFT JOIN business_book bb ON bb.id = op.business_book_id
-          WHERE op.id = ?`
-      ).get(resolvedPlanningId) || {};
-      // No project link (or thin data)? Match the Business Book by name.
-      if (!fi.bb_mobile) fi = fillBbBlanks(fi, bbByName(db, site_name));
-      // Auto-priced quotation total — ONLY for Extra-Schedule (its items come
-      // from the BOQ, so previous rates exist). Extra-Non-Schedule is quoted
-      // MANUALLY (mam 2026-06-06), so its amount is left blank.
-      let quoteAmt = 0;
-      if (category === 'extra_schedule') {
-        try { quoteAmt = buildExtraQuotation(db, r.lastInsertRowid)?.supply_total || 0; } catch (_) {}
-      }
-      const marker = `[auto-indent:${r.lastInsertRowid}]`;
-      const already = db.prepare('SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?')
-        .get(r.lastInsertRowid, `%${marker}%`);
-      if (!already) {
-        // Prefer the Business Book client/company; fall back to the indent's
-        // own site name only when there's no BB link.
-        const clientName = String(fi.bb_client || fi.bb_company || site_name || 'Extra item').trim() || 'Extra item';
-        const companyName = fi.bb_company || fi.bb_client || site_name || null;
-        const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
-        db.prepare(
-          `INSERT INTO crm_funnel
-             (lead_no, client_name, company_name, mobile, email, source, address,
-              state, district, remarks, category, type, lead_type, quotation_amount,
-              requirement_items, source_indent_id, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-        ).run(
-          funnelLeadNo, clientName, companyName,
-          fi.bb_mobile || null, fi.bb_email || null, fi.bb_source || 'Extra Indent', fi.bb_address || null,
-          fi.bb_state || null, fi.bb_district || null,
-          `Requirement from Extra indent ${indentNum} (awaiting CRM approval)`
-            + (fi.bb_owner ? ` · owner ${fi.bb_owner}` : '') + ` ${marker}`,
-          category, 'Extra Item', 'Extra Enquiry', quoteAmt,
-          reqText || null, r.lastInsertRowid, req.user.id,
-        );
-      }
-    } catch (e) { console.error('[indent] CRM funnel requirement-at-raise failed (indent saved anyway):', e.message); }
-  }
+  // CRM funnel auto-create at RAISE time -- REMOVED (mam 2026-09-04: "i want
+  // to delete that automation and previous data which come from indent to
+  // dispatch"). Extra-Schedule / Extra-Non-Schedule indents used to drop a
+  // CRM funnel lead the moment they were raised, which filled the Sales
+  // Funnel with rows carrying no quote and no amount. Extra work gets its
+  // own module instead of riding the sales pipeline.
+  // The removed block is in this commit's parent if it is ever wanted back.
 
   fireIndent(db, r.lastInsertRowid, 'indent.raised');
   res.status(201).json({ id: r.lastInsertRowid, indent_number: indentNum });
@@ -2018,86 +1903,11 @@ router.put('/indents/:id', (req, res) => {
           } catch (e) {
             console.error('[crm-approve] auto-billable line failed (CRM approval saved anyway):', e.message);
           }
-          // Mam (2026-06-03): "after crm approval indent go to crm funnel
-          // automatically".  Create one CRM Sales Funnel entry per
-          // CRM-approved Extra indent so the sales team tracks the billable
-          // enquiry without re-keying.  A [auto-indent:<id>] marker in
-          // remarks dedups in case the path is ever re-entered.
-          try {
-            let fi = db.prepare(
-              `SELECT i.indent_number, i.client_name, i.site_name,
-                      bb.company_name AS bb_company, bb.client_name AS bb_client,
-                      bb.client_contact AS bb_mobile,
-                      COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
-                      bb.billing_address AS bb_address, bb.source_of_enquiry AS bb_source,
-                      bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner,
-                      COALESCE((SELECT SUM(amount) FROM indent_items WHERE indent_id = i.id), 0) AS total_amt
-                 FROM indents i
-                 LEFT JOIN order_planning op ON op.id = i.planning_id
-                 LEFT JOIN business_book bb ON bb.id = op.business_book_id
-                WHERE i.id = ?`
-            ).get(id);
-            // No project link (or thin data)? Match the Business Book by name.
-            if (fi && !fi.bb_mobile) fi = fillBbBlanks(fi, bbByName(db, fi.site_name || fi.client_name));
-            const marker = `[auto-indent:${id}]`;
-            // The requirement entry was already created when the indent was
-            // raised (mam 2026-06-06).  On CRM approval, UPDATE it with the
-            // now-known billable amount instead of creating a duplicate.
-            const already = db.prepare(
-              `SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?`
-            ).get(id, `%${marker}%`);
-            // Prefer the Business Book client/company; site name is the fallback.
-            const clientName = String(
-              fi?.bb_client || fi?.bb_company || fi?.client_name || fi?.site_name || 'Extra item'
-            ).trim() || 'Extra item';
-            // Auto-priced quotation total — ONLY Extra-Schedule (BOQ-priced).
-            // Extra-Non-Schedule is quoted manually, so its amount stays blank.
-            let quoteAmt = 0;
-            if (cur2.indent_category === 'extra_schedule') {
-              try { quoteAmt = buildExtraQuotation(db, id)?.supply_total || 0; } catch (_) {}
-              if (!quoteAmt) quoteAmt = +fi?.total_amt || 0;
-            }
-            if (already) {
-              db.prepare(
-                `UPDATE crm_funnel
-                    SET quotation_amount = ?,
-                        remarks = REPLACE(remarks, '(awaiting CRM approval)', '(CRM approved)'),
-                        updated_at = CURRENT_TIMESTAMP
-                  WHERE id = ?`
-              ).run(quoteAmt, already.id);
-            } else {
-              const reqItems = db.prepare('SELECT description, quantity, unit FROM indent_items WHERE indent_id=?').all(id);
-              const reqText = reqItems
-                .map(it => `${(+it.quantity || 0).toLocaleString('en-IN')}${it.unit ? ' ' + it.unit : ''} × ${it.description || 'item'}`)
-                .join('; ');
-              const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
-              db.prepare(
-                `INSERT INTO crm_funnel
-                   (lead_no, client_name, company_name, mobile, email, source, address,
-                    state, district, remarks, category, type, lead_type, quotation_amount,
-                    requirement_items, source_indent_id, created_by)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-              ).run(
-                funnelLeadNo,
-                clientName,
-                fi?.bb_company || fi?.bb_client || fi?.site_name || null,
-                fi?.bb_mobile || null, fi?.bb_email || null, fi?.bb_source || 'Extra Indent', fi?.bb_address || null,
-                fi?.bb_state || null,
-                fi?.bb_district || null,
-                `Auto-created from Extra indent ${fi?.indent_number || id} on CRM approval`
-                  + (fi?.bb_owner ? ` · owner ${fi.bb_owner}` : '') + ` ${marker}`,
-                cur2.indent_category || null,
-                'Extra Item',
-                'Extra Enquiry',
-                quoteAmt,
-                reqText || null,
-                id,
-                actor.id,
-              );
-            }
-          } catch (e) {
-            console.error('[crm-approve] auto crm_funnel entry failed (CRM approval saved anyway):', e.message);
-          }
+          // CRM funnel auto-create on CRM APPROVAL -- REMOVED (mam
+          // 2026-09-04). Was: "after crm approval indent go to crm funnel
+          // automatically" (2026-06-03). Extra indents no longer create or
+          // update Sales Funnel leads; that work moves to its own module.
+          // Removed block is in this commit's parent.
           db.prepare(
             `UPDATE indents
                SET crm_status='approved',
@@ -2490,8 +2300,8 @@ router.put('/indents/:id', (req, res) => {
               `INSERT INTO indent_items
                   (indent_id, description, quantity, unit, rate, amount, vendor_id,
                    item_master_id, make, is_foc, is_tool, item_type, po_item_id,
-                   required_date, source, parent_item_id, stock_issue_note_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'store', ?, ?)`
+                   required_date, source, parent_item_id, stock_issue_note_id, remarks)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'store', ?, ?, ?)`
             );
             // The store child copies FK columns from the parent. If the parent
             // carries a STALE reference (e.g. po_item_id whose po_items row was
@@ -2577,6 +2387,9 @@ router.put('/indents/:id', (req, res) => {
                   parent.is_foc, parent.is_tool, parent.item_type,
                   safeFk(parent.po_item_id, 'po_items'), parent.required_date,
                   parent.id, issueNoteId,
+                  // The engineer's remark rides along to the store slip —
+                  // "red colour" matters as much at the store as at Purchase.
+                  parent.remarks || null,
                 );
               }
             }
@@ -2600,7 +2413,7 @@ router.put('/indents/:id', (req, res) => {
               item_type: p.item_type || '',
             }));
             const billable = storePlans.some(p => String(p.item_type || '').toUpperCase() === 'PO');
-            const today = new Date().toISOString().slice(0, 10);
+            const today = istToday();
             const chRes = db.prepare(
               `INSERT INTO delivery_notes
                  (vendor_po_id, indent_id, stock_issue_note_id, source, delivery_date,
@@ -2654,7 +2467,7 @@ router.put('/indents/:id', (req, res) => {
               const exists = db.prepare("SELECT id FROM delivery_notes WHERE indent_id=? AND source='rgp'").get(id);
               if (!exists) {
                 const { nextSequence } = require('../db/nextSequence');
-                const gpDate = new Date().toISOString().slice(0, 10);
+                const gpDate = istToday();
                 const gpNum = nextSequence(db, 'delivery_notes', 'document_number', `RGP/${new Date().getFullYear()}/`, { pad: 4 });
                 const gpItems = rgpRows.map(r => ({
                   description: [r.name, r.size, r.specification].filter(Boolean).join(' / '),
@@ -2731,10 +2544,24 @@ router.put('/indents/:id', (req, res) => {
 
   // Full edit path
   if (items) {
-    const cur = db.prepare('SELECT status, indent_category, site_name, department FROM indents WHERE id=?').get(id);
+    const cur = db.prepare('SELECT status, indent_category, created_by, site_name, department FROM indents WHERE id=?').get(id);
     if (!cur) return res.status(404).json({ error: 'Indent not found' });
-    if (cur.status === 'approved') {
-      return res.status(400).json({ error: 'Cannot edit an approved indent' });
+    // Audit follow-up 2026-08-17: the items-edit path was auth-only — any
+    // logged-in user could rewrite a pending indent's items/quantities.
+    // Allowed: the indent's creator, procurement.can_edit holders, admin.
+    // Approver flows are untouched — quantity/unit overrides ride the
+    // status (approve) branch above, never this items branch.
+    {
+      const isCreator = cur.created_by != null && cur.created_by === req.user.id;
+      const canEditProc = req.user.role === 'admin' || !!getUserPermissions(req.user.id)['procurement']?.can_edit;
+      if (!isCreator && !canEditProc) {
+        return res.status(403).json({ error: 'Only the indent creator or procurement can edit this indent' });
+      }
+    }
+    // Approved indents: admin may still edit BOQ + items until a Vendor PO is
+    // made (mam 2026-09-11: "if admin can edit he can edit boq and items also").
+    if (cur.status === 'approved' && req.user.role !== 'admin') {
+      return res.status(400).json({ error: 'Cannot edit an approved indent — only an admin can' });
     }
     const vpoCount = db.prepare(
       'SELECT COUNT(*) as c FROM vendor_pos WHERE indent_id=? AND COALESCE(cancelled, 0) = 0'
@@ -2742,24 +2569,18 @@ router.put('/indents/:id', (req, res) => {
     if (vpoCount > 0) {
       return res.status(400).json({ error: `Cannot edit — ${vpoCount} active Vendor PO(s) reference this indent` });
     }
+    // Store-issued lines carry stock movements + an SI note; editing them here
+    // would leave stock wrong. Re-approve resets the store issue first.
+    const storeLines = db.prepare(
+      `SELECT COUNT(*) AS c FROM indent_items
+        WHERE indent_id=? AND (source='store' OR parent_item_id IS NOT NULL OR stock_issue_note_id IS NOT NULL)`
+    ).get(id).c;
+    if (storeLines > 0) {
+      return res.status(400).json({ error: 'Some items were issued from store. Use Re-approve to reset the store issue first, then edit.' });
+    }
 
-    // ─── Site + Department category lock (backend enforcement, edit path) ──
-    // Same rule as create: PPE Kit is ALWAYS allowed. The other 5 need ANY
-    // OTHER indent to already exist for this site_name + department pair.
-    // Excludes this indent's own row so re-saving the very first indent
-    // raised for a pair doesn't see itself as "already exists".
-    const editSiteName = String(site_name || cur.site_name || '').trim();
-    const editDept = String(department || cur.department || '').trim();
-    if (!editDept) {
-      return res.status(400).json({ error: 'Department is required — it determines whether the non-PPE-Kit categories are available for this Site.' });
-    }
-    const editSiteDeptExists = !!db.prepare(
-      'SELECT 1 FROM indents WHERE site_name = ? AND department = ? AND id <> ? LIMIT 1'
-    ).get(editSiteName, editDept, id);
-    const editIsPpeKit = String(cur.indent_category || 'material').toLowerCase() === 'ppe_kit';
-    if (!editSiteDeptExists && !editIsPpeKit) {
-      return res.status(400).json({ error: 'This Site + Department combination does not exist yet. Raise the PPE Kit indent first to unlock this category.' });
-    }
+    // Category lock removed on the edit path too (mam 2026-08-26, 3rd
+    // revision) — see the create-path comment above.
 
     // Same per-row validation as POST — including PO qty cap (mam 2026-05-25).
     // On edit, exclude the CURRENT indent's own rows from the already-indented
@@ -2859,15 +2680,41 @@ router.put('/indents/:id', (req, res) => {
          WHERE id=?`
       ).run(site_name || '', raised_by_name || '', site_name || '', notes || '', department || null, id);
 
-      db.prepare('DELETE FROM indent_items WHERE indent_id=?').run(id);
+      // Save lines IN PLACE (mam 2026-09-11: admin edits approved indents too).
+      // A line that comes back with its id keeps that id, so its Vendor Rates
+      // stay; only a changed sub-item loses its rates. Lines left out are
+      // deleted. Delete-all + re-insert used to wipe every vendor rate.
+      const existing = new Map(
+        db.prepare('SELECT id, item_master_id, description FROM indent_items WHERE indent_id=?').all(id).map(r => [r.id, r])
+      );
+      const kept = new Set();
 
       const getPoItem = db.prepare('SELECT description, unit, quantity as boq_qty, item_master_id FROM po_items WHERE id=?');
       const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
       const insertItem = db.prepare(
         `INSERT INTO indent_items
-          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date, remarks, unit_overridden)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
+      // unit_overridden must DESCRIBE the unit we are storing. This edit keeps a
+      // unit typed on the line (see below), but never raised the flag — so every
+      // screen that computes the EFFECTIVE unit (Item-wise Vendor Rates, the
+      // prints, dispatch) went on showing the Item-Master UOM. Mam 2026-09-12:
+      // "in indent change kg but not here here show pc" — the indent said KG,
+      // Vendor Rates said pcs.
+      //
+      // The flag is only ever RAISED here, never cleared: an approver's
+      // deliberate MTR→KG override must survive an unrelated edit to the same
+      // line. When the stored unit equals the master UOM the flag is moot anyway
+      // — both branches of that CASE give the same answer.
+      const updateItem = db.prepare(
+        `UPDATE indent_items
+            SET po_item_id=?, item_master_id=?, description=?, make=?, quantity=?, unit=?,
+                unit_overridden = CASE WHEN ? = 1 THEN 1 ELSE COALESCE(unit_overridden, 0) END,
+                item_type=?, is_foc=?, is_tool=?, required_date=?, remarks=?
+          WHERE id=? AND indent_id=?`
+      );
+      const dropRates = db.prepare('DELETE FROM indent_item_rates WHERE indent_item_id=?');
       for (const i of items) {
         let desc = i.description || '';
         let unit = i.unit || 'nos';
@@ -2887,6 +2734,7 @@ router.put('/indents/:id', (req, res) => {
             if (!masterId && p.item_master_id) masterId = p.item_master_id;
           }
         }
+        let masterUom = null;
         if (masterId) {
           const m = getMaster.get(masterId);
           if (m) {
@@ -2897,20 +2745,46 @@ router.put('/indents/:id', (req, res) => {
             // as POST handler — only override if the user explicitly
             // typed a different unit on this edit, else use master's.
             if (m.uom && !i.unit) unit = String(m.uom).toLowerCase();
+            if (m.uom) masterUom = String(m.uom).trim().toLowerCase();
           }
         }
+        // Does the unit we are about to store differ from the master's? Compared
+        // on the SAME normalisation the one-time backfill uses, so "pcs" and
+        // "nos" are not mistaken for a real override.
+        const unitOverride = masterUom && normUnit(unit) !== normUnit(masterUom) ? 1 : 0;
 
         const qty = +i.quantity || 0;
         const foc = String(itemType || '').toUpperCase() === 'FOC' ? 1 : 0;
         const tool = String(itemType || '').toUpperCase() === 'RGP' ? 1 : 0;
-        insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null);
+        const remarks = String(i.remarks || '').trim().slice(0, 500) || null;
+        const lineId = +i.id;
+        const old = existing.get(lineId);
+        if (old && !kept.has(lineId)) {
+          kept.add(lineId);
+          updateItem.run(poItemId, masterId, desc, make, qty, unit, unitOverride, itemType, foc, tool, i.required_date || null, remarks, lineId, id);
+          if ((+old.item_master_id || 0) !== (+masterId || 0)) dropRates.run(lineId);   // different sub-item → its old rates don't apply
+        } else {
+          insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null, remarks, unitOverride);
+        }
+      }
+
+      // Lines removed in the edit. One that sits on a (cancelled) Vendor PO
+      // stays — that PO's print reads its description from this line.
+      const onVendorPo = db.prepare('SELECT COUNT(*) AS c FROM vendor_po_items WHERE indent_item_id=?');
+      const deleteItem = db.prepare('DELETE FROM indent_items WHERE id=?');
+      for (const [lineId, old] of existing) {
+        if (kept.has(lineId)) continue;
+        if (onVendorPo.get(lineId).c > 0) {
+          throw Object.assign(new Error(`"${String(old.description || 'Item').slice(0, 60)}" is on a cancelled Vendor PO, so it can't be removed. Keep it and change its quantity instead.`), { status: 400 });
+        }
+        deleteItem.run(lineId);   // its vendor rates go with it (ON DELETE CASCADE)
       }
     });
     try {
       tx();
       return res.json({ message: 'Indent updated' });
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      return res.status(err.status || 500).json({ error: err.message });
     }
   }
 
@@ -3016,7 +2890,7 @@ router.post('/indents/:id/reset-store-issue', (req, res) => {
 //   indent_tracker   → audit-only, safe to delete alongside (mam 2026-05-25
 //                      "73 indent approved but now admin is unable to delete"
 //                      — the FK constraint failed BECAUSE of this table)
-router.delete('/indents/:id', (req, res) => {
+router.delete('/indents/:id', requirePermission('procurement', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
 
@@ -3066,6 +2940,71 @@ router.delete('/indents/:id', (req, res) => {
 // indent page expanded view (BoQ description + sub-item from item
 // master + make + qty + unit + type), plus site + raised-by info
 // for the page header. Mam: 'where 19 items show able to download pdf'.
+// Delivery Bill working for ONE indent — the audit print behind the list's
+// Delivery Bill amount (mam 2026-09-11: "show here delivery bill pdf so that i
+// can audit"). Same resolver and same who-can-see rule as GET /indents.
+router.get('/indents/:id/delivery-bill', (req, res) => {
+  try {
+    const db = getDb();
+    const indent = db.prepare(`
+      SELECT i.*, u.name AS created_by_name,
+             op.business_book_id AS business_book_id,
+             opb.payment_against_delivery AS bb_delivery_terms
+        FROM indents i
+        LEFT JOIN users u ON u.id = i.created_by
+        LEFT JOIN order_planning op ON op.id = i.planning_id
+        LEFT JOIN business_book opb ON opb.id = op.business_book_id
+       WHERE i.id = ?`).get(req.params.id);
+    const raisedBy = String((indent && indent.raised_by_name) || '').trim().toLowerCase();
+    const own = !!indent && (indent.created_by === req.user.id
+      || (raisedBy !== '' && raisedBy === String(req.user.name || '').trim().toLowerCase()));
+    if (!indent || !(own || canSeeAllIndents(db, req))) return res.status(404).json({ error: 'Indent not found' });
+
+    const items = db.prepare(`
+      SELECT ii.id, ii.description, ii.quantity, ii.item_type, ii.po_item_id,
+             CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
+                    THEN ii.unit ELSE COALESCE(NULLIF(im.uom, ''), ii.unit) END AS unit,
+             im.item_code, im.item_name AS master_name,
+             poi.description AS boq_description, poi.unit AS boq_unit
+        FROM indent_items ii
+        LEFT JOIN item_master im ON im.id = ii.item_master_id
+        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+       WHERE ii.indent_id = ?
+       ORDER BY ii.id`).all(indent.id);
+
+    const bill = makeDeliveryBillResolver(db)(indent, items);
+    const lineById = new Map(bill.lines.map((l) => [l.id, l]));
+    const order = bill.business_book_id
+      ? db.prepare('SELECT id, lead_no, project_name, company_name, client_name, payment_against_delivery FROM business_book WHERE id=?').get(bill.business_book_id)
+      : null;
+
+    res.json({
+      indent: {
+        id: indent.id, indent_number: indent.indent_number, indent_date: indent.indent_date,
+        created_at: indent.created_at, site_name: indent.site_name, client_name: indent.client_name,
+        status: indent.status, raised_by_name: indent.raised_by_name, created_by_name: indent.created_by_name,
+      },
+      order: order || null,
+      bb_source: bill.bb_source,
+      pct: bill.pct,
+      pct_source: bill.pct_source,
+      billable: +bill.billable.toFixed(2),
+      delivery: +bill.delivery.toFixed(2),
+      lines: items.map((it) => {
+        const l = lineById.get(it.id);
+        return {
+          id: it.id, description: it.description, boq_description: it.boq_description,
+          item_code: it.item_code, master_name: it.master_name, item_type: it.item_type,
+          quantity: it.quantity, unit: it.unit, boq_unit: it.boq_unit,
+          rate: l.rate, rate_source: l.rate_source, billable: l.billable,
+        };
+      }),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/indents/:id/print', (req, res) => {
   const db = getDb();
   const indent = db.prepare(`
@@ -3175,8 +3114,9 @@ router.get('/indents/:id', (req, res) => {
 // always right; the list endpoint was naively returning the stale
 // header value.
 //
-// Fix: compute display_total live from vendor_po_items + 18% GST
-// (matches the print logic).  Store side-by-side with the original
+// Fix: compute display_total live from vendor_po_items + the PO's GST %
+// (default 18, editable per PO — matches the print logic).  Store
+// side-by-side with the original
 // total_amount so admins can see drift.  Frontend uses display_total
 // for the Amount column.  Drift > ₹1 also surfaces in /audit later
 // as its own exception type (TODO).
@@ -3191,7 +3131,7 @@ router.get('/vendor-po', (req, res) => {
            pcu.name as payment_cleared_by_name,
            l1u.name as po_l1_by_name, l2u.name as po_l2_by_name, rju.name as po_reject_by_name,
            COALESCE((
-             SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
+             SELECT ROUND(SUM(vpi.amount) * (1 + COALESCE(vp.gst_pct, 18) / 100.0), 2)
              FROM vendor_po_items vpi
              WHERE vpi.vendor_po_id = vp.id
            ), vp.total_amount) as display_total
@@ -3237,6 +3177,91 @@ router.get('/vendor-po', (req, res) => {
   }
   res.json(rows);
 });
+
+// ── Fallback lines for POs saved WITHOUT linked vendor_po_items ──────────
+// Older POs (pre "mandatory PO items", f5632f5a 2026-08-27) could be created
+// with just a typed total — no vendor_po_items rows — so the print and the
+// Delivery Note showed "No line items" (mam 2026-08-31: "previous not showing
+// data"). This derives the lines from the PO's own indent instead. Guards:
+//   1. Multi-vendor indents: only items whose FINALISED vendor matches this
+//      PO's vendor are used; if none match by name, the whole indent is used
+//      only when this is the indent's ONLY live PO — never guess on a split.
+// Returns { ids, sum } (indent_item ids + Σ qty × final_rate) or null.
+function fallbackIndentLines(db, vendorPoId) {
+  const po = db.prepare(`
+    SELECT vp.id, vp.indent_id, vp.vendor_id, v.name as vname, v.firm_name as fname
+      FROM vendor_pos vp LEFT JOIN vendors v ON v.id = vp.vendor_id
+     WHERE vp.id = ?`).get(vendorPoId);
+  const none = (why) => ({ ids: [], sum: 0, reason: why });
+  if (!po) return none(null);
+  if (!po.indent_id) return none('This PO is not linked to an indent, so there are no indent lines to fall back on.');
+  // ONLY lines that carry verifiable money are candidates. The caller proves a
+  // derived set is right by matching its sum to the buyer's typed total, and a
+  // line with no/zero final_rate adds R0 — invisible to that check, so it would
+  // ride onto a vendor's document unverified (adversarial review 2026-09-03).
+  const cand = db.prepare(`
+    SELECT ii.id, ii.quantity, ir.final_rate, ir.final_vendor_name
+      FROM indent_items ii
+      LEFT JOIN indent_item_rates ir ON ir.id =
+        (SELECT MAX(ir2.id) FROM indent_item_rates ir2 WHERE ir2.indent_item_id = ii.id)
+     WHERE ii.indent_id = ?
+       AND COALESCE(ii.quantity, 0) > 0
+       AND COALESCE(ir.final_rate, 0) > 0
+     ORDER BY ii.id`).all(po.indent_id);
+  if (!cand.length) return none('The indent has no rate-finalised lines to derive from — its lines are FOC, issued from stock, or their rates were never finalised.');
+
+  // Normalised vendor name: lower-case, drop punctuation and the boilerplate
+  // suffixes buyers type inconsistently, so "PIPELINE PRODUCTS INDIA" matches
+  // "Pipeline Products India Pvt. Ltd." Short ambiguous tokens (co/inc/&) are
+  // deliberately NOT stripped so two real suppliers cannot collapse into one.
+  const norm = s => String(s || '')
+    .toLowerCase()
+    .replace(/\b(?:m\/s|pvt|private|ltd|limited|llp|company|and)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  const vnames = new Set([norm(po.vname), norm(po.fname)].filter(Boolean));
+
+  // The indent's OTHER live POs, with how completely each has declared its lines.
+  const siblings = db.prepare(`
+    SELECT ovp.id, ovp.po_number, ovp.vendor_id,
+           (SELECT COUNT(*) FROM vendor_po_items x WHERE x.vendor_po_id = ovp.id) AS rows_n,
+           (SELECT COUNT(*) FROM vendor_po_items x
+             WHERE x.vendor_po_id = ovp.id AND x.indent_item_id IS NULL) AS freetext_n
+      FROM vendor_pos ovp
+     WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
+  `).all(po.indent_id, po.id);
+  const undeclared = siblings.filter(s2 => s2.rows_n === 0 || s2.freetext_n > 0);
+
+  const claimed = new Set(db.prepare(`
+    SELECT DISTINCT vpi.indent_item_id AS id
+      FROM vendor_po_items vpi
+      JOIN vendor_pos ovp ON ovp.id = vpi.vendor_po_id
+     WHERE ovp.indent_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled, 0) = 0
+       AND vpi.indent_item_id IS NOT NULL
+  `).all(po.indent_id, po.id).map(r => r.id));
+  const unclaimed = cand.filter(c => !claimed.has(c.id));
+  if (!unclaimed.length) return none('Every rate-finalised line on this indent is already linked to another PO.');
+
+  // Path 1 — the line's own finalised vendor names this PO's vendor. That is a
+  // POSITIVE statement of ownership, so it stands even when a sibling PO has
+  // not declared its lines — UNLESS a sibling is for the SAME vendor, where the
+  // name cannot tell the two POs apart.
+  const named = unclaimed.filter(c => c.final_vendor_name && vnames.has(norm(c.final_vendor_name)));
+  if (named.length) {
+    const sameVendorSibling = siblings.some(s2 => s2.vendor_id && s2.vendor_id === po.vendor_id);
+    if (!sameVendorSibling) {
+      return { ids: named.map(c => c.id), sum: named.reduce((a, c) => a + ((+c.quantity || 0) * (+c.final_rate || 0)), 0) };
+    }
+  }
+  // Path 2 — no usable vendor stamp. Only safe once every sibling has declared
+  // its lines; otherwise their items still look unclaimed and would print here.
+  if (undeclared.length) {
+    const names = undeclared.map(s2 => s2.po_number).filter(Boolean).join(', ');
+    return none(`Cannot tell which lines belong to this PO: ${names || 'another PO'} on the same indent also has no linked lines, and the indent's lines do not record which vendor they were finalised to. Open either PO in Edit PO, tick its indent lines and save — both will then print.`);
+  }
+  const sum = unclaimed.reduce((a, c) => a + ((+c.quantity || 0) * (+c.final_rate || 0)), 0);
+  return { ids: unclaimed.map(c => c.id), sum };
+}
 
 // Full Vendor PO payload for the print/share page — includes vendor
 // contact details, indent info, and every line item with item_master
@@ -3339,6 +3364,18 @@ router.get('/vendor-po/:id/print', (req, res) => {
            -- (in Vendor Rates step) is reflected on every fresh print.
            ir.final_rate as latest_rate,
            ir.final_vendor_name as latest_vendor,
+           -- Which of the two rate sources was touched last (see the filter
+           -- below the query): the PO line itself, or the finalised rate.
+           vpi.rate_updated_at as po_rate_updated_at,
+           -- finalized_at ONLY — deliberately NOT COALESCE(ir.updated_at, …).
+           -- indent_item_rates.updated_at is bumped by writers that never touch
+           -- final_rate (saving any vendor name/rate/terms, AI rate-suggest, and
+           -- the bulk AI suggest the Vendor Rates tab fires automatically), so
+           -- comparing against it means "was the rate ROW touched later", and a
+           -- deliberate PO rate edit would silently revert on the next reprint.
+           -- final_rate moves in exactly one place (finalize), which stamps
+           -- finalized_at in the same UPDATE.
+           ir.finalized_at as final_rate_updated_at,
            -- Payment terms negotiated at the Finalise-Rate step (mam
            -- 2026-06-04: "or may be enter in finalise rate").  Per-item;
            -- the print picks the first non-empty one for the PO header.
@@ -3358,6 +3395,83 @@ router.get('/vendor-po/:id/print', (req, res) => {
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);
+
+  // ── Which rate does the PDF print? (mam 2026-08-19) ────────────────
+  // Two sources compete: the PO's own line (vendor_po_items.rate, what "Edit
+  // PO" writes) and the finalised 3-vendor rate (indent_item_rates.final_rate).
+  // The print page prefers latest_rate whenever it is set, which was added so
+  // that re-finalising a rate reflected on a fresh print (mam 2026-05-21) — but
+  // it also meant editing the RATE on the PO itself changed nothing on the PDF.
+  // Resolve by recency: if this PO line's rate was edited AFTER the finalised
+  // rate was last touched, the PO wins, so we drop latest_rate for that line and
+  // the print falls back to vpi.rate. Lines never edited (no stamp) keep the old
+  // behaviour exactly.
+  // ONLY lines carrying an explicit rate_updated_at stamp are re-decided. It is
+  // tempting to fall back to vpi.created_at for lines predating the stamp, but
+  // the Create-PO grid lets the buyer TYPE a rate over the pre-filled finalised
+  // one, so "rate differs from final_rate and there is no stamp" does not imply
+  // a later edit — and there is no audit trail to tell the two apart. That
+  // fallback would silently re-price every historical PO on deploy, including
+  // orders the vendor already holds and acknowledged. A PO edited before this
+  // shipped just needs its rate saved once more to earn a stamp.
+  for (const it of items) {
+    if (!it.po_rate_updated_at || !it.final_rate_updated_at) continue;
+    if (String(it.po_rate_updated_at) >= String(it.final_rate_updated_at)) {
+      it.latest_rate = null;
+      it.latest_vendor = null;
+    }
+  }
+
+  // ── No linked lines? Derive them from the PO's indent (mam 2026-08-31:
+  // old POs printed "No line items" even though the indent has them). The
+  // derived lines are used ONLY when their sum matches the total the buyer
+  // typed on Create PO (±₹1) — a vendor already holds this document, so the
+  // print must never re-price it. On a mismatch the banner + typed-total
+  // fallback stay exactly as before.
+  if (!items.length) {
+    const fb = fallbackIndentLines(db, po.id);
+    const storedBase = Math.max(0, (+po.total_amount || 0) - (+po.freight_amount || 0));
+    // storedBase <= 0 used to SKIP the check entirely, which printed
+    // uncorroborated lines on any PO with no/zero total. The sum match is
+    // the only proof the derived set belongs to this PO, so a PO with no
+    // total to match against gets no derived lines (review 2026-09-03).
+    if (fb && fb.reason) po.derive_blocked_reason = fb.reason;
+    if (fb && fb.ids.length && storedBase > 0 && !(Math.abs(fb.sum - storedBase) <= 1)) {
+      // Lines found, but they do not add up to the total the buyer typed, so we
+      // cannot prove they are this PO's. Say so instead of a bare "no items".
+      po.derive_blocked_reason = `The indent's unlinked lines add up to Rs ${Math.round(fb.sum).toLocaleString('en-IN')}, but this PO was saved for Rs ${Math.round(storedBase).toLocaleString('en-IN')}. They are not shown because they may belong to a different PO. Open this PO in Edit PO, tick its indent lines and save.`;
+    }
+    if (fb && fb.ids.length && storedBase > 0 && Math.abs(fb.sum - storedBase) <= 1) {
+      const ph = fb.ids.map(() => '?').join(',');
+      const derived = db.prepare(`
+        SELECT NULL as id, ii.quantity, ir.final_rate as rate,
+               (ii.quantity * COALESCE(ir.final_rate, 0)) as amount,
+               NULL as terms, NULL as credit_days,
+               NULL as weight_per_meter, NULL as original_qty_mtr,
+               ii.description, ii.make as ii_make, ii.unit, ii.required_date,
+               ii.item_type,
+               im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
+               im.type as im_type,
+               poi.description as boq_description,
+               ir.final_rate as latest_rate,
+               ir.final_vendor_name as latest_vendor,
+               NULL as po_rate_updated_at,
+               ir.finalized_at as final_rate_updated_at,
+               ir.final_terms as final_terms,
+               ir.final_credit_days as final_credit_days
+          FROM indent_items ii
+          LEFT JOIN item_master im ON im.id = ii.item_master_id
+          LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+          LEFT JOIN indent_item_rates ir
+            ON ir.id = (SELECT MAX(ir2.id) FROM indent_item_rates ir2
+                         WHERE ir2.indent_item_id = ii.id)
+         WHERE ii.id IN (${ph})
+         ORDER BY ii.id
+      `).all(...fb.ids);
+      items.push(...derived);
+      po.derived_items = 1;
+    }
+  }
 
   res.json({ po, items });
 });
@@ -3483,6 +3597,43 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);
+
+  // Old POs saved without linked vendor_po_items rows: derive the DN lines
+  // from the PO's indent (same fallback as the PO print — mam 2026-08-31
+  // "previous not showing data").
+  // The DN carries no money, so it used to skip the total check the PO print
+  // applies. That was the hole: the sum check is what proves the derived set
+  // is THIS PO's, so without it a DN could list another vendor's material and
+  // that material could be dispatched/received against the wrong PO
+  // (adversarial review 2026-09-03). The DN now demands the same corroboration
+  // and prints nothing when it fails.
+  if (!items.length) {
+    const fb = fallbackIndentLines(db, req.params.id);
+    const gate = db.prepare('SELECT total_amount, freight_amount FROM vendor_pos WHERE id = ?')
+      .get(req.params.id) || {};
+    const storedBase = Math.max(0, (+gate.total_amount || 0) - (+gate.freight_amount || 0));
+    const corroborated = !!fb && fb.ids.length > 0 && storedBase > 0 && Math.abs(fb.sum - storedBase) <= 1;
+    if (fb && fb.reason) data.derive_blocked_reason = fb.reason;
+    if (corroborated) {
+      const ph = fb.ids.map(() => '?').join(',');
+      items.push(...db.prepare(`
+        SELECT NULL as id, ii.quantity,
+               COALESCE(NULLIF(TRIM(im.item_name), ''), ii.description) as description,
+               im.specification, im.size,
+               COALESCE(im.make, ii.make) as make,
+               CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
+                      THEN ii.unit ELSE COALESCE(im.uom, ii.unit) END as uom,
+               im.item_code,
+               poi.hsn_code as hsn_code,
+               im.gst as gst_text
+          FROM indent_items ii
+          LEFT JOIN item_master im ON im.id = ii.item_master_id
+          LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+         WHERE ii.id IN (${ph})
+         ORDER BY ii.id
+      `).all(...fb.ids));
+    }
+  }
 
   // mam 2026-06-30: show the RECEIVED quantity (entered on the purchase bill, saved
   // onto the auto-created challan's items_json) instead of the full ordered qty.
@@ -3674,7 +3825,7 @@ router.get('/indents/:id/billable-print', (req, res) => {
   <div class="title">BILLABLE STATEMENT (ITEM-WISE)</div>
   <div class="meta">
     <div><b>Indent No:</b> ${esc(indent.indent_number)}<br><b>Site / Project:</b> ${esc(indent.site_name || (bb && bb.project_name) || '—')}</div>
-    <div><b>Date:</b> ${esc(String(indent.indent_date || indent.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10))}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
+    <div><b>Date:</b> ${esc(String(indent.indent_date || indent.created_at || '').slice(0, 10) || istToday())}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
   </div>
   ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
   <table>
@@ -3773,7 +3924,7 @@ router.get('/vendor-po/:id/budget-print', (req, res) => {
   <div class="title">SALES BILL BUDGET — VENDOR PO</div>
   <div class="meta">
     <div><b>Vendor PO:</b> ${esc(vp.po_number)}<br><b>Vendor:</b> ${esc(vp.vendor_name || '—')}<br><b>Indent No:</b> ${esc(vp.indent_number || '—')}</div>
-    <div><b>Date:</b> ${esc(String(vp.po_date || vp.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10))}<br><b>Site / Project:</b> ${esc(vp.site_name || (bb && bb.project_name) || '—')}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
+    <div><b>Date:</b> ${esc(String(vp.po_date || vp.created_at || '').slice(0, 10) || istToday())}<br><b>Site / Project:</b> ${esc(vp.site_name || (bb && bb.project_name) || '—')}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
   </div>
   ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
   <table>
@@ -3806,6 +3957,57 @@ router.get('/indents/:id/quotation', (req, res) => {
 // on top of the Vendor PO tab. Joins item_master so the Pending table can
 // show item_code + full master name (mam's ask: 'no item of item master
 // which I fill in indent').
+// Indent lines this PO could still be linked to (mam 2026-09-03).
+// A PO saved without vendor_po_items prints "No line items", and Edit PO only
+// ever showed rows that were ALREADY linked — so there was no way in the UI to
+// attach them. This lists the indent's lines that no other live PO has taken,
+// so Edit PO can offer them as tick-boxes.
+router.get('/vendor-po/:id/linkable-lines', (req, res) => {
+  const db = getDb();
+  const po = db.prepare(`
+    SELECT vp.id, vp.indent_id, vp.vendor_id, v.name AS vendor_name, v.firm_name
+      FROM vendor_pos vp LEFT JOIN vendors v ON v.id = vp.vendor_id
+     WHERE vp.id = ?`).get(req.params.id);
+  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+  if (!po.indent_id) return res.json({ indent_id: null, lines: [] });
+  const rows = db.prepare(`
+    SELECT ii.id AS indent_item_id, ii.description, ii.make, ii.quantity, ii.unit,
+           ii.item_master_id, im.item_code, im.item_name AS master_name,
+           im.specification, im.size, im.uom,
+           r.final_rate, r.final_vendor_name, r.status AS rate_status,
+           (SELECT ovp.po_number FROM vendor_po_items vpi
+              JOIN vendor_pos ovp ON ovp.id = vpi.vendor_po_id
+             WHERE vpi.indent_item_id = ii.id AND COALESCE(ovp.cancelled,0) = 0
+               AND ovp.id <> ? LIMIT 1) AS taken_by
+      FROM indent_items ii
+      LEFT JOIN indent_item_rates r ON r.id = (
+        SELECT r2.id FROM indent_item_rates r2
+         WHERE r2.indent_item_id = ii.id
+         ORDER BY CASE WHEN r2.status = 'finalized' THEN 0 ELSE 1 END,
+                  COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1)
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE ii.indent_id = ?
+       AND COALESCE(ii.quantity, 0) > 0
+       AND (ii.source IS NULL OR ii.source <> 'store')
+     ORDER BY ii.id`).all(po.id, po.indent_id);
+  // Lines already on THIS PO are returned as linked so the UI can show them ticked.
+  const mine = new Set(db.prepare(
+    'SELECT indent_item_id AS id FROM vendor_po_items WHERE vendor_po_id = ? AND indent_item_id IS NOT NULL'
+  ).all(po.id).map(r => r.id));
+  const norm = t => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const vn = new Set([norm(po.vendor_name), norm(po.firm_name)].filter(Boolean));
+  res.json({
+    indent_id: po.indent_id,
+    vendor_name: po.vendor_name,
+    lines: rows.map(r => ({
+      ...r,
+      linked_here: mine.has(r.indent_item_id) ? 1 : 0,
+      // Hint the buyer: this line's rate was finalised to THIS vendor.
+      vendor_match: r.final_vendor_name && vn.has(norm(r.final_vendor_name)) ? 1 : 0,
+    })),
+  });
+});
+
 router.get('/pending-po-items', (req, res) => {
   const db = getDb();
   const rows = db.prepare(
@@ -3869,6 +4071,20 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   }
   const lines = Array.isArray(items) ? items.filter(i => i.indent_item_id && +i.quantity > 0 && +i.rate > 0) : [];
 
+  // ── At least ONE linked line is MANDATORY (mam 2026-08-27: "at least one
+  // item need to link for create — as civic sense"). Zero-item POs print an
+  // empty table with an unverifiable total (the VPO/0211 batch), and lines
+  // used to be dropped SILENTLY when the rate was 0 or the indent link was
+  // missing — now creation refuses and says exactly why.
+  if (lines.length === 0) {
+    const sent = Array.isArray(items) ? items.length : 0;
+    return res.status(400).json({
+      error: sent > 0
+        ? `${sent} item(s) were sent but none are valid — every line needs an indent link, quantity > 0 AND rate > 0. Fill the missing rates and try again.`
+        : 'Link at least one indent item (tick the line, enter quantity and rate) — a Vendor PO cannot be created without items.',
+    });
+  }
+
   // PO number is always auto-generated with a year-stamped pattern
   // VPO/YYYY/#### (e.g. VPO/2026/0001) — mam's "professional behaviour"
   // requirement. Any po_number sent by the client is ignored so we have
@@ -3883,6 +4099,11 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   const VALID_FREIGHT = ['Ex-Works', 'FOR'];
   const freight_terms = VALID_FREIGHT.includes(b.freight_terms) ? b.freight_terms : null;
   const freight_amount = +b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0;
+
+  // GST % (mam 2026-08-12): default 18, editable per PO (e.g. 5 for some
+  // materials). 0 is a valid choice; blank/garbage falls back to 18.
+  const gst_pct = (b.gst_pct !== undefined && b.gst_pct !== '' && Number.isFinite(+b.gst_pct) && +b.gst_pct >= 0 && +b.gst_pct <= 100)
+    ? Math.round(+b.gst_pct * 100) / 100 : 18;
 
   // Total: prefer what the user typed (matches the Tally printout). Fall back
   // to the computed sum of line items if blank.  Freight is always added on
@@ -3935,14 +4156,17 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   try {
     const tx = db.transaction(() => {
       const r = db.prepare(
+        // created_by (2026-09-07): who raised the PO. The table never recorded
+        // it, so "whose PO is still unbilled" had to be guessed from the
+        // approval stamps — see lib/poBill. Exact from here on.
         `INSERT INTO vendor_pos
            (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
             payment_block_type, payment_block_amount, payment_block_notes, payment_block_status,
-            payment_terms, credit_days, freight_terms, freight_amount, po_approval)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
+            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, created_by, po_approval)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
             pmtType, pmtAmount, pmtNotes, pmtStatus,
-            payment_terms, credit_days, freight_terms, freight_amount);
+            payment_terms, credit_days, freight_terms, freight_amount, gst_pct, req.user?.id || null);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.
@@ -4069,7 +4293,7 @@ router.post('/vendor-po/:id/po-reject', (req, res) => {
 //   - Cancelled POs must be uncancelled before editing.
 //   - PO with linked Purchase Bills can edit dates / remarks but
 //     NOT total_amount / vendor_id (those would invalidate the bill).
-router.put('/vendor-po/:id', (req, res) => {
+router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const b = req.body || {};
@@ -4125,6 +4349,16 @@ router.put('/vendor-po/:id', (req, res) => {
     ? (+b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0)
     : (+cur.freight_amount || 0);
 
+  // GST % (mam 2026-08-12): editable per PO, default 18. Same validation as
+  // create; the effective value also drives the total recompute below.
+  let gstForTotal = (cur.gst_pct != null && Number.isFinite(+cur.gst_pct)) ? +cur.gst_pct : 18;
+  if (b.gst_pct !== undefined) {
+    const g = (b.gst_pct !== '' && Number.isFinite(+b.gst_pct) && +b.gst_pct >= 0 && +b.gst_pct <= 100)
+      ? Math.round(+b.gst_pct * 100) / 100 : 18;
+    set('gst_pct', g);
+    gstForTotal = g;
+  }
+
   // High-impact edits: blocked when bills exist (would invalidate them)
   if (b.total_amount !== undefined) {
     if (billCount > 0) {
@@ -4145,6 +4379,55 @@ router.put('/vendor-po/:id', (req, res) => {
   // present on each row; id is required to match an existing
   // vendor_po_items row.  Total is auto-recomputed at the end.
   let itemUpdates = 0;
+  // ATTACH indent lines to a PO that has none (mam 2026-09-03). Such POs
+  // printed "No line items" and Edit PO offered nothing to fix it, because the
+  // items block below only UPDATES rows that already exist. body.link_items[] =
+  // [{ indent_item_id, quantity, rate }] creates the missing rows.
+  if (Array.isArray(b.link_items) && b.link_items.length) {
+    if (billCount > 0) {
+      return res.status(409).json({ error: `Cannot link line items — ${billCount} purchase bill(s) reference this PO. Cancel the bill first.` });
+    }
+    const dnCount0 = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(id).c;
+    if (dnCount0 > 0) {
+      return res.status(409).json({ error: `Cannot link line items — ${dnCount0} delivery note(s) reference this PO. Cancel them first.` });
+    }
+    const poRow = db.prepare('SELECT indent_id FROM vendor_pos WHERE id=?').get(id);
+    const belongs = db.prepare('SELECT 1 FROM indent_items WHERE id=? AND indent_id=?');
+    // A line already on another LIVE PO must never be double-allocated.
+    const takenBy = db.prepare(`
+      SELECT ovp.po_number FROM vendor_po_items vpi
+        JOIN vendor_pos ovp ON ovp.id = vpi.vendor_po_id
+       WHERE vpi.indent_item_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled,0)=0 LIMIT 1`);
+    const already = db.prepare('SELECT 1 FROM vendor_po_items WHERE vendor_po_id=? AND indent_item_id=?');
+    const ins = db.prepare(`INSERT INTO vendor_po_items
+      (vendor_po_id, indent_item_id, quantity, rate, amount, description, rate_updated_at)
+      VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+    try {
+      db.transaction(() => {
+        for (const li of b.link_items) {
+          const iid = +li.indent_item_id;
+          if (!iid) continue;
+          if (!poRow?.indent_id || !belongs.get(iid, poRow.indent_id)) {
+            throw new Error('Line does not belong to the indent this PO was raised against');
+          }
+          const t = takenBy.get(iid, id);
+          if (t) throw new Error(`Line already on ${t.po_number} — remove it there first`);
+          if (already.get(id, iid)) continue;
+          const qty = +li.quantity || 0;
+          const rate = +li.rate || 0;
+          ins.run(id, iid, qty, rate, +(qty * rate).toFixed(2), li.description ? String(li.description) : null);
+          itemUpdates++;
+        }
+        // Keep the stored total in step with what was just attached, unless the
+        // caller set it explicitly in the same request.
+        if (b.total_amount === undefined) {
+          const sum = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM vendor_po_items WHERE vendor_po_id=?').get(id).t;
+          const newTotal = Math.round(sum * (1 + gstForTotal / 100) * 100) / 100;
+          db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
+        }
+      })();
+    } catch (err) { return res.status(400).json({ error: err.message }); }
+  }
   if (Array.isArray(b.items) && b.items.length) {
     // Block line-item edits when bills exist — they invalidate the bill
     // amount + GST tracking.  Mam should cancel the bill first.
@@ -4161,7 +4444,18 @@ router.put('/vendor-po/:id', (req, res) => {
              rate        = COALESCE(?, rate),
              amount      = COALESCE(?, amount),
              description = COALESCE(?, description),
-             hsn_code    = COALESCE(?, hsn_code)
+             hsn_code    = COALESCE(?, hsn_code),
+             -- Stamp whenever the caller SUBMITS a rate for this line, even if
+             -- the value is unchanged. The Edit PO modal always sends every
+             -- line's rate, so saving it is the user asserting "this PO's rate
+             -- is what I am looking at" — and the PDF must then agree with the
+             -- screen they just approved. Stamping only on a CHANGED value made
+             -- the obvious recovery ("open Edit PO and save it again") do
+             -- nothing for a line edited before the stamp existed: same value in,
+             -- no stamp out, PDF stuck on the old finalised rate (mam 2026-08-19,
+             -- PRIMER on VPO/2026/0198 — screen 246, PDF 161).
+             rate_updated_at = CASE WHEN ? IS NOT NULL
+                                    THEN CURRENT_TIMESTAMP ELSE rate_updated_at END
        WHERE id = ? AND vendor_po_id = ?`
     );
     const tx = db.transaction(() => {
@@ -4173,26 +4467,28 @@ router.put('/vendor-po/:id', (req, res) => {
         const amount = qty != null && rate != null ? +(qty * rate).toFixed(2) : null;
         const desc = it.description !== undefined ? String(it.description || '') : null;
         const hsn = it.hsn_code !== undefined ? String(it.hsn_code || '') : null;
-        const r = updLine.run(qty, rate, amount, desc, hsn, itemId, id);
+        const r = updLine.run(qty, rate, amount, desc, hsn, rate, itemId, id);
         itemUpdates += r.changes;
       }
-      // Auto-recompute total_amount = sum(line amounts) × 1.18 (GST) + freight.
+      // Auto-recompute total_amount = sum(line amounts) × (1 + GST%) + freight.
       // Skips if caller explicitly set total_amount above (avoid double-set).
       if (b.total_amount === undefined) {
-        const newTotal = db.prepare(
-          'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
+        const sum = db.prepare(
+          'SELECT COALESCE(SUM(amount), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
         ).get(id).t;
+        const newTotal = Math.round(sum * (1 + gstForTotal / 100) * 100) / 100;
         db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
       }
     });
     try { tx(); }
     catch (err) { return res.status(500).json({ error: 'Line items update failed: ' + err.message }); }
-  } else if (b.freight_amount !== undefined && b.total_amount === undefined && billCount === 0) {
-    // Freight changed without touching line items — refresh the stored total
-    // so the Vendor PO list reflects the new freight (sum × 1.18 + freight).
-    const newTotal = db.prepare(
-      'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
+  } else if ((b.freight_amount !== undefined || b.gst_pct !== undefined) && b.total_amount === undefined && billCount === 0) {
+    // Freight or GST% changed without touching line items — refresh the stored
+    // total so the Vendor PO list reflects it (sum × (1 + GST%) + freight).
+    const sum = db.prepare(
+      'SELECT COALESCE(SUM(amount), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
     ).get(id).t;
+    const newTotal = Math.round(sum * (1 + gstForTotal / 100) * 100) / 100;
     db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
   }
 
@@ -4206,7 +4502,7 @@ router.put('/vendor-po/:id', (req, res) => {
 // 'pending' → 'cleared' + audit stamp (who clicked, when). Lets the
 // purchase team know material is unblocked. Re-runnable: if already
 // cleared, returns the existing cleared row unchanged.
-router.patch('/vendor-po/:id/clear-payment', (req, res) => {
+router.patch('/vendor-po/:id/clear-payment', requirePermission('procurement', 'edit'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const cur = db.prepare('SELECT id, payment_block_type, payment_block_status FROM vendor_pos WHERE id=?').get(id);
@@ -4279,7 +4575,7 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
   res.json({ po, items, bill_count: billCount, dn_count: dnCount, edit_locked: billCount > 0 || dnCount > 0 });
 });
 
-router.delete('/vendor-po/:id', (req, res) => {
+router.delete('/vendor-po/:id', requirePermission('procurement', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(id).c;
@@ -4433,9 +4729,12 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   try {
     const db = getDb();
     const r = db.prepare(
-      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path, material_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath, materialStatus);
+      // created_by (2026-09-07): who uploaded the bill — the row already
+      // stamps debit_notes.created_by from the same handler, so the user id
+      // was in hand all along.
+      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path, material_status, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath, materialStatus, req.user?.id || null);
 
     // Mam (2026-06-02): "in rec. against delivery note show here ok
     // site name also show here delivery note number and against it
@@ -4466,7 +4765,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     let autoDnId = null, autoDnNumber = null;
     const { nextSequence } = require('../db/nextSequence');
     const dnYear = new Date().getFullYear();
-    const dnToday = new Date().toISOString().slice(0, 10);
+    const dnToday = istToday();
     if (vendor_po_id) {
       const existingDn = db.prepare(
         'SELECT id, document_number FROM delivery_notes WHERE vendor_po_id = ? LIMIT 1'
@@ -4651,7 +4950,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   }
 });
 
-router.delete('/purchase-bills/:id', (req, res) => {
+router.delete('/purchase-bills/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM purchase_bills WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -4739,7 +5038,7 @@ router.get('/debit-notes', (req, res) => {
   res.json(rows);
 });
 
-router.post('/debit-notes', (req, res) => {
+router.post('/debit-notes', requirePermission('procurement', 'create'), (req, res) => {
   const db = getDb();
   const b = req.body || {};
   const VALID = ['rejected', 'extra_rate', 'short_supply'];
@@ -4763,7 +5062,7 @@ router.post('/debit-notes', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, dn_number: dnNum, amount });
 });
 
-router.patch('/debit-notes/:id', (req, res) => {
+router.patch('/debit-notes/:id', requirePermission('procurement', 'edit'), (req, res) => {
   const db = getDb();
   const b = req.body || {};
   if (b.status && ['open', 'sent', 'settled', 'cancelled'].includes(b.status)) {
@@ -4772,7 +5071,7 @@ router.patch('/debit-notes/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/debit-notes/:id', (req, res) => {
+router.delete('/debit-notes/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM debit_notes WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -4931,7 +5230,7 @@ router.put('/vendor-po/:id/received-qty', needsApprove, (req, res) => {
   const { nextSequence } = require('../db/nextSequence');
   const year = new Date().getFullYear();
   const dnNum = nextSequence(db, 'delivery_notes', 'document_number', `DC/${year}/`, { pad: 4 });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday();
   const ins = db.prepare(`INSERT INTO delivery_notes (vendor_po_id, delivery_date, document_type, document_number, status, notes, items_json) VALUES (?, ?, 'challan', ?, 'pending', 'Received qty edited', ?)`).run(vendor_po_id, today, dnNum, recvJson);
   res.json({ ok: true, delivery_note_id: ins.lastInsertRowid, document_number: dnNum });
 });
@@ -5077,6 +5376,38 @@ router.post('/delivery-notes/:id/sales-bill', needsApprove, vendorPoUpload.singl
   res.json({ ok: true, sales_bill_number, sales_bill_file_path: sbFilePath });
 });
 
+// Tally bill against an indent's DELIVERY BILL — upload only (mam
+// 2026-09-12: "that pdf against upload tally bill"). The delivery-bill PDF is
+// the billable slice raised on this indent; this parks the matching bill from
+// Tally next to it. No number, no workflow, no status change.
+router.post('/indents/:id/tally-bill', requirePermission('procurement', 'edit'), vendorPoUpload.single('file'), (req, res) => {
+  const db = getDb();
+  const ind = db.prepare('SELECT id FROM indents WHERE id=?').get(req.params.id);
+  if (!ind) return res.status(404).json({ error: 'Indent not found' });
+  if (!req.file) return res.status(400).json({ error: 'Choose the tally bill file to upload' });
+  let filePath;
+  try {
+    const safeName = (req.file.originalname || 'tally-bill').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const newName = `${Date.now()}-${safeName}`;
+    const newPath = path.join(path.dirname(req.file.path), newName);
+    fs.renameSync(req.file.path, newPath);
+    filePath = `/uploads/${newName}`;
+  } catch (e) {
+    filePath = `/uploads/${req.file.filename}`;
+  }
+  // Remarks ride along with the file (mam 2026-09-12: "upload tally bill with
+  // remarks") — kept as typed, trimmed, and only overwritten when something new
+  // is typed, so re-uploading a file doesn't wipe the earlier note.
+  const remarks = String((req.body && req.body.remarks) || '').trim().slice(0, 500);
+  db.prepare(
+    `UPDATE indents
+        SET tally_bill_file_path = ?, tally_bill_uploaded_at = CURRENT_TIMESTAMP,
+            tally_bill_remarks = COALESCE(NULLIF(?, ''), tally_bill_remarks)
+      WHERE id = ?`
+  ).run(filePath, remarks, req.params.id);
+  res.json({ ok: true, tally_bill_file_path: filePath, tally_bill_remarks: remarks || null });
+});
+
 // GENERATE a Sales Bill (invoice) from a challan — mam (2026-06-04):
 // "sales bill generate, not upload".  Builds a new sales_bill delivery
 // note from the challan's items (from-store challan → its items_json;
@@ -5130,7 +5461,7 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
   const { nextSequence } = require('../db/nextSequence');
   const year = new Date().getFullYear();
   const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = istToday();
   const sb = db.prepare(`
     INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
     VALUES (?, ?, ?, ?, 'sales_bill', ?, 'pending', ?, ?, ?)
@@ -5444,7 +5775,7 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
           const { nextSequence } = require('../db/nextSequence');
           const year = new Date().getFullYear();
           const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
-          const today = new Date().toISOString().slice(0, 10);
+          const today = istToday();
           const sb = db.prepare(`
             INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
             VALUES (?, ?, 'po', ?, 'sales_bill', ?, 'pending', ?, ?, ?)
@@ -5463,13 +5794,25 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
   }
 });
 
-router.put('/delivery-notes/:id', (req, res) => {
-  const { status, notes } = req.body;
-  getDb().prepare('UPDATE delivery_notes SET status=?, notes=? WHERE id=?').run(status, notes, req.params.id);
+router.put('/delivery-notes/:id', requirePermission('procurement', 'edit'), (req, res) => {
+  // Partial update: only the fields sent are touched. A notes-only save
+  // (Procurement Board popup) must not carry a stale status along and
+  // un-receive a dispatch that site staff marked received meanwhile
+  // (review 2026-09-05). `received` itself is set by the receive flow.
+  const { status, notes } = req.body || {};
+  const sets = []; const params = [];
+  if (status !== undefined) {
+    if (!['pending', 'received', 'partial', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    sets.push('status=?'); params.push(status);
+  }
+  if (notes !== undefined) { sets.push('notes=?'); params.push(notes || null); }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  const r = getDb().prepare(`UPDATE delivery_notes SET ${sets.join(', ')} WHERE id=?`).run(...params, req.params.id);
+  if (!r.changes) return res.status(404).json({ error: 'Dispatch not found' });
   res.json({ message: 'Updated' });
 });
 
-router.delete('/delivery-notes/:id', (req, res) => {
+router.delete('/delivery-notes/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM delivery_notes WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -5647,7 +5990,7 @@ function autoGenerateSalesBillForPO(db, vendorPoId, userId) {
         place_of_supply, state_code, reverse_charge, cgst_pct, sgst_pct, igst_pct,
         freight_amount, round_off_amount, subtotal_amount, grand_total_amount, items_json, sales_bill_pending)
      VALUES (?, ?, ?, 'sales_bill', ?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, ?, 0)`
-  ).run(vendorPoId, new Date().toISOString().slice(0, 10), userId || null, document_number,
+  ).run(vendorPoId, istToday(), userId || null, document_number,
         bt.client_state || null, bt.client_state_code || null,
         cgst_pct, sgst_pct, igst_pct, subtotal, grand, JSON.stringify(payloadItems));
   return { id: ins.lastInsertRowid, document_number };
@@ -6638,7 +6981,7 @@ router.get('/sales-bills', (req, res) => {
     LEFT JOIN purchase_orders po ON sb.po_id=po.id ORDER BY sb.created_at DESC`).all());
 });
 
-router.post('/sales-bills', (req, res) => {
+router.post('/sales-bills', requirePermission('procurement', 'create'), (req, res) => {
   const db = getDb();
   const { po_id, bill_date, amount, gst_amount, total_amount } = req.body;
   const { nextSequence } = require('../db/nextSequence');
@@ -6648,7 +6991,7 @@ router.post('/sales-bills', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, bill_number: billNum });
 });
 
-router.delete('/sales-bills/:id', (req, res) => {
+router.delete('/sales-bills/:id', requirePermission('procurement', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM sales_bills WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -6745,6 +7088,9 @@ router.get('/item-rates', (req, res) => {
      -- present = ready for rates, regardless of the status column.
      WHERE (i.status IN ${APPROVED_FOR_RATES}
             OR (i.l1_status='approved' AND i.l2_status='approved'))
+       -- A soft-rejected / cancelled indent keeps its L1+L2 signatures for
+       -- audit — it must not come back as rate work (review 2026-09-05).
+       AND i.status NOT IN ('rejected','cancelled')
        -- From-store lines are fulfilled from stock — they don't need a
        -- vendor rate / PO, so only the PROCURE portion shows here.  mam
        -- (2026-06-04): a 1000 line approved as 10-store + 990-procure
@@ -6803,6 +7149,34 @@ router.post('/item-rates', needsApprove, (req, res) => {
   }
 });
 
+// Read a vendor's quotation for the ticked Vendor Rates items (mam 2026-09-11:
+// "select items and vendor upload pdf/imag anything else pick rate by item
+// match"). PROPOSES a rate per item (lib/quoteRateMatch.js) — nothing is saved
+// here; the page shows the proposals for review and saves the accepted ones
+// through POST /item-rates exactly like a typed rate.
+const quoteUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+router.post('/item-rates/read-quotation', needsApprove, quoteUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Upload the vendor quotation file' });
+  let items = null;
+  try { items = JSON.parse(req.body?.items || '[]'); } catch (_) { items = null; }
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'Tick the items to price first' });
+  if (items.length > 200) return res.status(400).json({ error: 'Read at most 200 items at a time' });
+  const clean = items.map((it) => ({
+    name: String(it?.name || '').slice(0, 300),
+    specification: String(it?.specification || '').slice(0, 200),
+    size: String(it?.size || '').slice(0, 100),
+    make: String(it?.make || '').slice(0, 100),
+    qty: Number(it?.qty) || 0,
+    unit: String(it?.unit || '').slice(0, 20),
+  }));
+  try {
+    const { matchQuotationRates } = require('../lib/quoteRateMatch');
+    res.json(await matchQuotationRates(getDb(), clean, req.file.buffer, req.file.originalname));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message || 'Could not read the quotation' });
+  }
+});
+
 // AI "marketing rate" suggestion (mam 2026-06-19) — on-demand per item. Asks
 // the configured AI model to estimate the current market PURCHASE rate for the
 // item. Suggestion ONLY: saved to indent_item_rates.marketing_rate, never the
@@ -6816,27 +7190,32 @@ router.post('/item-rates/ai-suggest', needsApprove, async (req, res) => {
            LOWER(COALESCE(NULLIF(TRIM(im.uom),''), NULLIF(TRIM(ii.unit),''), 'nos')) AS unit
     FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id WHERE ii.id=?`).get(iiId);
   if (!item) return res.status(404).json({ error: 'Item not found' });
-  const apiKey = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_api_key')?.value;
-  if (!apiKey) return res.status(400).json({ error: 'AI not configured — add an API key in Admin → AI Settings' });
-  const model = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_model')?.value || 'claude-opus-4-7';
-  let Anthropic;
-  try { Anthropic = require('@anthropic-ai/sdk'); }
-  catch (e) { return res.status(500).json({ error: 'AI SDK not installed on the server (run npm install on the VPS)' }); }
+  // Provider fork lives in lib/aiComplete.js (mam 2026-08-21: "ai kpi i want
+  // from gemini") — cfg is read OUTSIDE the try so the catch can word the
+  // error for the right provider.
+  const cfg = aiConfig(db);
+  if (!cfg.configured) return res.status(400).json({ error: aiNotConfiguredMessage(cfg.provider) });
   try {
-    const client = new Anthropic.default({ apiKey, timeout: 45000 });
     const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. Give the LOWEST (minimum) current market PURCHASE rate in INR, per ${item.unit}, for the item below — the cheapest realistic price a buyer could get in the open market. Reply with ONLY a plain number in rupees — no currency symbol, no commas, no words.\n\nItem: ${item.description}${item.make ? `\nMake/Brand: ${item.make}` : ''}\nUnit: ${item.unit}`;
-    const resp = await client.messages.create({ model, max_tokens: 40, messages: [{ role: 'user', content: prompt }] });
-    const text = (resp?.content || []).map(c => c.text || '').join(' ');
+    const out = await aiComplete(db, { prompt, maxTokens: 40, timeout: 45000 });
+    const text = out.text;
     const m = String(text).replace(/[,\s₹]/g, '').match(/\d+(\.\d+)?/);
     const rate = m ? Math.round(parseFloat(m[0]) * 100) / 100 : 0;
     if (!rate) return res.status(422).json({ error: 'AI could not estimate a rate for this item' });
     db.prepare('INSERT OR IGNORE INTO indent_item_rates (indent_item_id, status) VALUES (?, ?)').run(iiId, 'pending');
     db.prepare('UPDATE indent_item_rates SET marketing_rate=?, updated_at=CURRENT_TIMESTAMP WHERE indent_item_id=?').run(rate, iiId);
-    res.json({ marketing_rate: rate, model });
+    res.json({ marketing_rate: rate, model: out.model });
   } catch (err) {
-    res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
+    console.error('[ai-rates] suggest failed:', err.status || '', err.message);
+    // 429 must stay a 429 — Procurement.jsx backs off and retries the batch
+    // on 429 only; flattening it to 500 stranded the rows (mam 2026-08-21).
+    res.status(err.status === 429 ? 429 : 500).json({ error: aiErrorMessage(err, cfg.provider) });
   }
 });
+
+// The stale-model self-heal + actionable error wording (audit 2026-08-18) now
+// live in server/lib/aiComplete.js, shared by every one-shot AI caller — that
+// is also where the anthropic/gemini fork happens (mam 2026-08-21).
 
 // AI "marketing rate" — BULK auto-suggest (mam 2026-06-19 "don't need to click,
 // automatically rate here"). Estimates many items in ONE AI call. Only the ids
@@ -6847,27 +7226,23 @@ router.post('/item-rates/ai-suggest-bulk', needsApprove, async (req, res) => {
   const ids = Array.isArray(req.body?.indent_item_ids)
     ? req.body.indent_item_ids.map(n => parseInt(n, 10)).filter(Boolean).slice(0, 40) : [];
   if (!ids.length) return res.json({ results: [] });
-  const apiKey = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_api_key')?.value;
-  if (!apiKey) return res.status(400).json({ error: 'AI not configured — add an API key in Admin → AI Settings' });
-  const model = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_model')?.value || 'claude-opus-4-7';
+  const cfg = aiConfig(db);
+  if (!cfg.configured) return res.status(400).json({ error: aiNotConfiguredMessage(cfg.provider) });
   const ph = ids.map(() => '?').join(',');
   const items = db.prepare(`
     SELECT ii.id, ii.description, ii.make,
            LOWER(COALESCE(NULLIF(TRIM(im.uom),''), NULLIF(TRIM(ii.unit),''), 'nos')) AS unit
     FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id WHERE ii.id IN (${ph})`).all(...ids);
   if (!items.length) return res.json({ results: [] });
-  let Anthropic;
-  try { Anthropic = require('@anthropic-ai/sdk'); }
-  catch (e) { return res.status(500).json({ error: 'AI SDK not installed on the server (run npm install on the VPS)' }); }
   try {
-    const client = new Anthropic.default({ apiKey, timeout: 90000 });
     const list = items.map(it => `${it.id}|${it.description}${it.make ? ` (Make: ${it.make})` : ''}|per ${it.unit}`).join('\n');
     const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. For EACH item below, give the LOWEST (minimum) current market PURCHASE rate in INR per its unit — the cheapest realistic open-market price a buyer could get. Each line is "id|description|unit". Reply with ONLY a JSON array of objects like [{"id":123,"rate":450}] — one per item, rate a plain number, no commas, no other text.\n\n${list}`;
-    const resp = await client.messages.create({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt }] });
-    const text = (resp?.content || []).map(c => c.text || '').join(' ');
-    const jm = text.match(/\[[\s\S]*\]/);
-    let arr = [];
-    try { arr = JSON.parse(jm ? jm[0] : text); } catch (_) { arr = []; }
+    const out = await aiComplete(db, {
+      prompt, maxTokens: 2000, timeout: 90000, json: true,
+      jsonSchema: { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: { type: 'INTEGER' }, rate: { type: 'NUMBER' } }, required: ['id', 'rate'] } },
+    });
+    const arr = extractJsonArray(out.text) || [];
+    if (!arr.length) console.warn('[ai-rates] bulk: no JSON array in reply —', String(out.text).slice(0, 200));
     const ins = db.prepare('INSERT OR IGNORE INTO indent_item_rates (indent_item_id, status) VALUES (?, ?)');
     const upd = db.prepare('UPDATE indent_item_rates SET marketing_rate=?, updated_at=CURRENT_TIMESTAMP WHERE indent_item_id=?');
     const idSet = new Set(ids);
@@ -6881,7 +7256,9 @@ router.post('/item-rates/ai-suggest-bulk', needsApprove, async (req, res) => {
     })();
     res.json({ results });
   } catch (err) {
-    res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
+    console.error('[ai-rates] bulk suggest failed:', err.status || '', err.message);
+    // 429 → HTTP 429 so the client's back-off branch fires (mam 2026-08-21).
+    res.status(err.status === 429 ? 429 : 500).json({ error: aiErrorMessage(err, cfg.provider) });
   }
 });
 
@@ -7028,7 +7405,7 @@ const bulkUpload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 102
 // BOQ was uploaded during PO creation; items either weren't saved to po_items
 // or were never saved because the final 'Update Purchase Order' step was
 // skipped. This endpoint fishes the items out and persists them to po_items.
-router.post('/fetch-existing-boq', (req, res) => {
+router.post('/fetch-existing-boq', requirePermission('procurement', 'view'), (req, res) => {
   const siteName = String(req.body?.site_name || '').trim();
   if (!siteName) return res.status(400).json({ error: 'site_name is required' });
   const db = getDb();
@@ -7117,7 +7494,7 @@ router.post('/fetch-existing-boq', (req, res) => {
   res.json({ message: 'Items fetched', items_saved: src.items.length, source: src.name, po_number: src.po_number || null });
 });
 
-router.post('/upload-boq-for-site', bulkUpload.single('file'), (req, res) => {
+router.post('/upload-boq-for-site', requirePermission('procurement', 'create'), bulkUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const siteName = String(req.body?.site_name || '').trim();
   if (!siteName) {
@@ -7192,6 +7569,773 @@ router.post('/upload-boq-for-site', bulkUpload.single('file'), (req, res) => {
   }
 
   res.json({ message: 'BOQ saved', file_url: fileUrl, items_saved: savedCount, parsed_items_count: parsedItems.length, business_book_id: bbId, po_id: po.id });
+});
+
+// ═══ SOP-07 FLOW BOARD (mam 2026-08-28: "same ditto design, our workflow") ═══
+// One aggregate for the Procurement pipeline dashboard — KPI tiles, the
+// stage pipeline (indent → PO approval → with vendor → arriving → received →
+// billed/debit), SLA alerts, today's tasks, distributions and the activity
+// feed. Everything read-only, computed live from the same tables the tabs use.
+router.get('/flow-board', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const now = Date.now();
+    const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+    const today = iso(now), wkAgo = iso(now - 7 * 864e5), wk2Ago = iso(now - 14 * 864e5), tomorrow = iso(now + 864e5);
+    const cnt = (sql, ...p) => { try { return db.prepare(sql).get(...p)?.c || 0; } catch { return 0; } };
+    const all = (sql, ...p) => { try { return db.prepare(sql).all(...p); } catch { return []; } };
+
+    // ── KPI tiles (this week vs last week) ──────────────────────────────
+    const kpi = (curSql, prevSql, ...base) => {
+      const cur = cnt(curSql, ...base, wkAgo);
+      const prev = cnt(prevSql, ...base, wk2Ago, wkAgo);
+      return { value: cur, prev };
+    };
+    const kpis = {
+      indents: kpi('SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ?',
+                   'SELECT COUNT(*) c FROM indents WHERE date(created_at) >= ? AND date(created_at) < ?'),
+      pos: kpi("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND date(created_at) >= ?",
+               "SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND date(created_at) >= ? AND date(created_at) < ?"),
+      received: kpi('SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ?',
+                    'SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ? AND date(created_at) < ?'),
+      bills: kpi('SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ?',
+                 'SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ? AND date(created_at) < ?'),
+      debit_open: { value: cnt("SELECT COUNT(*) c FROM debit_notes WHERE COALESCE(status,'open') NOT IN ('settled','closed','cancelled')"), prev: null },
+      awaiting_dispatch: { value: cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                                        AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)`), prev: null },
+    };
+
+    // ── Overdue processes, measured in HOURS (mam 2026-08-28) ───────────
+    // Anything sitting past its SOP clock: indents waiting approval > 24h,
+    // POs waiting L1/L2 > 24h, and approved POs past their delivery date
+    // with no GRN. value = how many; oldest_hrs = the worst one's age.
+    {
+      const overdueIndents = all(`SELECT created_at FROM indents WHERE status='submitted' AND created_at <= datetime('now','-1 day')`);
+      const overduePos = all(`SELECT created_at FROM vendor_pos WHERE COALESCE(cancelled,0)=0
+                               AND po_approval IN ('pending_l1','pending_l2') AND created_at <= datetime('now','-1 day')`);
+      const overdueDeliveries = all(`SELECT expected_receipt_date AS created_at FROM vendor_pos vp
+                                      WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                                        AND vp.expected_receipt_date < ? AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)`, today);
+      const ages = [...overdueIndents, ...overduePos, ...overdueDeliveries]
+        .map(r => (now - new Date(String(r.created_at).replace(' ', 'T') + (String(r.created_at).length <= 10 ? 'T00:00:00Z' : 'Z')).getTime()) / 3600000)
+        .filter(h => Number.isFinite(h) && h > 0);
+      kpis.overdue = {
+        value: ages.length,
+        oldest_hrs: ages.length ? Math.round(Math.max(...ages)) : 0,
+        prev: null,
+      };
+    }
+
+    // ── Pipeline columns (mam 2026-08-28 revision): Indent Raised/Approval →
+    // Finalised Rate → PO Create → PO Approval → Purchase Bill → Sales Bill →
+    // Received (GRN) → Billed/Debit. 3 cards + count each.
+    const col = (key, label, sop, rows, total) => ({ key, label, sop, total, cards: rows });
+    // An indent item has a FINALISED rate when its latest rate row carries
+    // final_rate > 0; "on a PO" when a vendor_po_items row points at it.
+    const notOnPo = `NOT EXISTS (SELECT 1 FROM vendor_po_items vpi JOIN vendor_pos vpp ON vpp.id=vpi.vendor_po_id
+                                  WHERE vpi.indent_item_id=ii.id AND COALESCE(vpp.cancelled,0)=0)`;
+    const hasFinalRate = `EXISTS (SELECT 1 FROM indent_item_rates ir WHERE ir.indent_item_id=ii.id AND COALESCE(ir.final_rate,0) > 0)`;
+    // The RATE / PO CREATE universe is the Rates tab's (GET /item-rates):
+    // fully approved (status approved/po_sent, or L1 + L2 both signed), not
+    // from store, not returnable-RGP, qty > 0. `crm_approved` is a PRE-
+    // approval state whose items the quote endpoint refuses (403), and
+    // `po_sent` is where an indent sits after its FIRST partial PO — its
+    // remaining lines must stay on the board (review 2026-09-05).
+    const rateItem = `(i.status IN ${APPROVED_FOR_RATES} OR (i.l1_status='approved' AND i.l2_status='approved'))
+                      AND i.status NOT IN ('rejected','cancelled')
+                      AND (ii.source IS NULL OR ii.source <> 'store')
+                      AND NOT (UPPER(COALESCE(ii.item_type,''))='RGP' AND LOWER(COALESCE(ii.source,''))<>'procure')
+                      AND COALESCE(ii.quantity,0) > 0`;
+    const pipeline = [
+      // rid + items_n power the board's in-place Approve/Reject popup
+      // (mam 2026-08-31: "click on record → open pop of action").
+      col('indent', 'Indent Raised / Approval', 'S1', all(`
+        SELECT i.id AS rid, i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
+               COALESCE(i.raised_by_name,'') AS owner, i.created_at,
+               (SELECT COUNT(*) FROM indent_items ii2 WHERE ii2.indent_id=i.id) AS items_n
+          FROM indents i WHERE i.status='submitted' ORDER BY i.created_at DESC LIMIT 50`),
+        cnt("SELECT COUNT(*) c FROM indents WHERE status='submitted'")),
+      // Every column below carries `rid` + the fields its on-board action
+      // needs (mam 2026-09-05 "here also open actions"): the popup on the
+      // Procurement Board does the stage's real action with the real
+      // endpoint, the way Indent Approval and PO Approval already did.
+      // RATE is one card per ITEM (it was one per indent) because the action
+      // is per item: 3 vendor quotes then finalise — POST /item-rates and
+      // POST /item-rates/:id/finalize. The count follows the cards.
+      col('rates', 'Finalised Rate', 'RATE', all(`
+        SELECT ii.id AS rid, ii.id AS indent_item_id, i.id AS indent_id, i.indent_number AS ref,
+               COALESCE(NULLIF(TRIM(ii.description),''), im.item_name, 'Item') AS title,
+               COALESCE(NULLIF(TRIM(ii.description),''), im.item_name) AS description, ii.quantity, ii.unit, ii.make,
+               ir.id AS rate_id,
+               ir.vendor1_name, ir.vendor1_rate, ir.vendor2_name, ir.vendor2_rate, ir.vendor3_name, ir.vendor3_rate,
+               ir.final_rate, ir.final_vendor_name,
+               ((CASE WHEN COALESCE(ir.vendor1_rate,0) > 0 AND TRIM(COALESCE(ir.vendor1_name,'')) <> '' THEN 1 ELSE 0 END) +
+                (CASE WHEN COALESCE(ir.vendor2_rate,0) > 0 AND TRIM(COALESCE(ir.vendor2_name,'')) <> '' THEN 1 ELSE 0 END) +
+                (CASE WHEN COALESCE(ir.vendor3_rate,0) > 0 AND TRIM(COALESCE(ir.vendor3_name,'')) <> '' THEN 1 ELSE 0 END)) || '/3 quotes · ' || COALESCE(i.site_name, i.client_name, '—') AS owner,
+               COALESCE(ir.updated_at, i.created_at) AS created_at
+          FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+          LEFT JOIN indent_item_rates ir ON ir.id = (SELECT MAX(x.id) FROM indent_item_rates x WHERE x.indent_item_id=ii.id)
+          LEFT JOIN item_master im ON im.id = ii.item_master_id
+         WHERE ${rateItem} AND ${notOnPo} AND NOT ${hasFinalRate}
+         ORDER BY i.created_at DESC, ii.id LIMIT 50`),
+        cnt(`SELECT COUNT(*) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+              WHERE ${rateItem} AND ${notOnPo} AND NOT ${hasFinalRate}`)),
+      col('po_create', 'PO Create', 'PO', all(`
+        SELECT i.id AS rid, i.indent_number AS ref, COALESCE(i.site_name, i.client_name, '—') AS title,
+               COUNT(ii.id) || ' item(s) ready for PO' AS owner, MAX(i.created_at) AS created_at,
+               COUNT(ii.id) AS items_n
+          FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+         WHERE ${rateItem} AND ${notOnPo} AND ${hasFinalRate}
+         GROUP BY i.id ORDER BY MAX(i.created_at) DESC LIMIT 50`),
+        cnt(`SELECT COUNT(DISTINCT i.id) c FROM indents i JOIN indent_items ii ON ii.indent_id=i.id
+              WHERE ${rateItem} AND ${notOnPo} AND ${hasFinalRate}`)),
+      col('po_approval', 'PO Approval', 'APPROVE', all(`
+        SELECT vp.id AS rid, vp.po_number AS ref, COALESCE(v.name,'—') AS title,
+               CASE vp.po_approval WHEN 'pending_l1' THEN 'L1 pending' ELSE 'L2 pending' END AS owner, vp.created_at,
+               vp.total_amount AS amount
+          FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
+         WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval IN ('pending_l1','pending_l2')
+         ORDER BY vp.created_at DESC LIMIT 50`),
+        cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval IN ('pending_l1','pending_l2')")),
+      col('purchase_bill', 'Purchase Bill', 'P.BILL', all(`
+        SELECT vp.id AS rid, vp.po_number AS ref, COALESCE(v.name,'—') AS title,
+               COALESCE('due ' || vp.expected_receipt_date, 'bill awaited') AS owner, vp.created_at,
+               vp.expected_receipt_date, vp.total_amount AS amount, vp.payment_block_status
+          FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
+         WHERE ${poMissingBillWhere()}
+         ORDER BY vp.created_at DESC LIMIT 50`),
+        cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE ${poMissingBillWhere()}`)),
+      col('sales_bill', 'Sales Bill', 'DISPATCH', all(`
+        SELECT dn.id AS rid, COALESCE(dn.document_number, 'DN-' || dn.id) AS ref,
+               COALESCE(vp.po_number, CASE WHEN dn.vendor_po_id IS NULL THEN 'From Store' ELSE '—' END) AS title,
+               COALESCE(dn.document_type,'') || CASE WHEN dn.received_at IS NULL THEN ' · in transit' ELSE ' · received' END AS owner,
+               dn.created_at,
+               dn.document_type, dn.status, dn.notes, dn.received_at, dn.vendor_po_id, dn.sales_bill_number
+          FROM delivery_notes dn LEFT JOIN vendor_pos vp ON vp.id=dn.vendor_po_id
+         ORDER BY dn.created_at DESC LIMIT 50`),
+        cnt('SELECT COUNT(*) c FROM delivery_notes WHERE date(created_at) >= ?', wkAgo)),
+      col('received', 'Received (GRN)', 'S8', all(`
+        SELECT g.id AS rid, g.grn_number AS ref, COALESCE(vp.po_number,'—') AS title,
+               COALESCE(u.name, CAST(g.received_by AS TEXT), '') AS owner, g.created_at,
+               g.vendor_po_id, g.grn_date
+          FROM grn g LEFT JOIN vendor_pos vp ON vp.id=g.vendor_po_id
+          LEFT JOIN users u ON u.id = g.received_by
+         ORDER BY g.created_at DESC LIMIT 50`),
+        cnt('SELECT COUNT(*) c FROM grn WHERE date(created_at) >= ?', wkAgo)),
+      col('billed', 'Billed / Debit', 'S9-S10', all(`
+        SELECT pb.id AS rid, pb.bill_number AS ref, COALESCE(v.name,'—') AS title,
+               'Rs ' || CAST(COALESCE(pb.total_amount, pb.amount, 0) AS INTEGER) AS owner, pb.created_at,
+               pb.vendor_po_id, pb.vendor_id, COALESCE(pb.total_amount, pb.amount, 0) AS amount
+          FROM purchase_bills pb LEFT JOIN vendors v ON v.id=pb.vendor_id
+         ORDER BY pb.created_at DESC LIMIT 50`),
+        cnt('SELECT COUNT(*) c FROM purchase_bills WHERE date(created_at) >= ?', wkAgo)),
+    ];
+
+    // ── Stage completion % (mam 2026-08-28): done/all × 100 − 100 — the
+    // scorecard variance convention. 0% = everything through the stage,
+    // −100% = nothing done. null (no work reached the stage) → "clear".
+    {
+      const onPo = `EXISTS (SELECT 1 FROM vendor_po_items vpi JOIN vendor_pos vpp ON vpp.id=vpi.vendor_po_id
+                             WHERE vpi.indent_item_id=ii.id AND COALESCE(vpp.cancelled,0)=0)`;
+      const apprItems = `FROM indent_items ii JOIN indents i ON i.id=ii.indent_id WHERE ${rateItem}`;
+      const pctOf = (done, allc) => (allc > 0 ? Math.round((done / allc) * 100) - 100 : null);
+      const indAll = cnt('SELECT COUNT(*) c FROM indents');
+      const ratesDone = cnt(`SELECT COUNT(*) c ${apprItems} AND (${hasFinalRate} OR ${onPo})`);
+      const ratesPend = cnt(`SELECT COUNT(*) c ${apprItems} AND ${notOnPo} AND NOT ${hasFinalRate}`);
+      const poDone = cnt(`SELECT COUNT(*) c ${apprItems} AND ${onPo}`);
+      const poPend = cnt(`SELECT COUNT(*) c ${apprItems} AND ${notOnPo} AND ${hasFinalRate}`);
+      const apprPend = cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval IN ('pending_l1','pending_l2')");
+      const apprDone = cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval IN ('approved','rejected')");
+      const poApproved = cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval='approved'");
+      const poBilled = cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                             AND EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)`);
+      const dnAll = cnt('SELECT COUNT(*) c FROM delivery_notes');
+      const dnRecv = cnt('SELECT COUNT(*) c FROM delivery_notes WHERE received_at IS NOT NULL');
+      const poRecv = cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                           AND EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)`);
+      const recvBilled = cnt(`SELECT COUNT(*) c FROM vendor_pos vp WHERE COALESCE(vp.cancelled,0)=0
+                               AND EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)
+                               AND EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id)`);
+      const stagePct = {
+        indent: pctOf(indAll - pipeline[0].total, indAll),
+        rates: pctOf(ratesDone, ratesDone + ratesPend),
+        po_create: pctOf(poDone, poDone + poPend),
+        po_approval: pctOf(apprDone, apprDone + apprPend),
+        purchase_bill: pctOf(poBilled, poApproved),
+        sales_bill: pctOf(dnRecv, dnAll),
+        received: pctOf(poRecv, poApproved),
+        billed: pctOf(recvBilled, poRecv),
+      };
+      for (const c of pipeline) c.pct = stagePct[c.key] ?? null;
+    }
+
+    // ── SLA alerts (SOP-07 rule breaks, oldest/most severe first) ───────
+    const alerts = [];
+    for (const r of all(`SELECT indent_number, site_name, raised_by_name, created_at FROM indents
+                          WHERE status='submitted' AND created_at <= datetime('now','-1 day') ORDER BY created_at LIMIT 3`)) {
+      alerts.push({ level: 'red', ref: r.indent_number, text: 'Indent approval pending over 24 hrs', owner: r.raised_by_name || r.site_name, at: r.created_at });
+    }
+    for (const r of all(`SELECT vp.po_number, vp.po_approval, vp.created_at, v.name vname FROM vendor_pos vp
+                          LEFT JOIN vendors v ON v.id=vp.vendor_id
+                          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval IN ('pending_l1','pending_l2')
+                            AND vp.created_at <= datetime('now','-1 day') ORDER BY vp.created_at LIMIT 3`)) {
+      alerts.push({ level: 'red', ref: r.po_number, text: `PO ${r.po_approval === 'pending_l1' ? 'L1' : 'L2'} approval pending over 24 hrs`, owner: r.vname, at: r.created_at });
+    }
+    for (const r of all(`SELECT vp.po_number, v.name vname, vp.created_at FROM vendor_pos vp
+                          LEFT JOIN vendors v ON v.id=vp.vendor_id
+                          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved' AND vp.expected_receipt_date IS NULL
+                            AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)
+                          ORDER BY vp.created_at DESC LIMIT 3`)) {
+      alerts.push({ level: 'amber', ref: r.po_number, text: 'No delivery date on PO — SOP-07.5 "no date, no PO"', owner: r.vname, at: r.created_at });
+    }
+    for (const r of all(`SELECT vp.po_number, v.name vname, vp.expected_receipt_date, vp.created_at FROM vendor_pos vp
+                          LEFT JOIN vendors v ON v.id=vp.vendor_id
+                          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+                            AND vp.expected_receipt_date < ? AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)
+                          ORDER BY vp.expected_receipt_date LIMIT 3`, today)) {
+      alerts.push({ level: 'amber', ref: r.po_number, text: `Delivery overdue — was due ${r.expected_receipt_date}`, owner: r.vname, at: r.created_at });
+    }
+
+    // ── Tasks due today ─────────────────────────────────────────────────
+    const tasks = [];
+    for (const r of all(`SELECT vp.po_number, v.name vname FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
+                          WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved' AND vp.expected_receipt_date = ?
+                            AND NOT EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id) LIMIT 4`, today)) {
+      tasks.push({ text: `Receive material — ${r.po_number} (${r.vname || 'vendor'})`, tag: 'GRN today' });
+    }
+    for (const r of all(`SELECT po_number FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval='pending_l1' ORDER BY created_at LIMIT 3`)) {
+      tasks.push({ text: `Approve PO ${r.po_number} (L1)`, tag: 'approval' });
+    }
+    for (const r of all(`SELECT indent_number FROM indents WHERE status='submitted' ORDER BY created_at LIMIT 3`)) {
+      tasks.push({ text: `Approve indent ${r.indent_number}`, tag: 'approval' });
+    }
+
+    // ── Distributions (donuts) ──────────────────────────────────────────
+    const indentDist = all(`SELECT status AS label, COUNT(*) c FROM indents GROUP BY status ORDER BY c DESC`);
+    const poDist = [
+      { label: 'Pending L1', c: cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval='pending_l1'") },
+      { label: 'Pending L2', c: cnt("SELECT COUNT(*) c FROM vendor_pos WHERE COALESCE(cancelled,0)=0 AND po_approval='pending_l2'") },
+      { label: 'With vendor', c: kpis.awaiting_dispatch.value },
+      { label: 'Received', c: cnt('SELECT COUNT(*) c FROM vendor_pos vp WHERE EXISTS (SELECT 1 FROM grn g WHERE g.vendor_po_id=vp.id)') },
+      { label: 'Rejected', c: cnt("SELECT COUNT(*) c FROM vendor_pos WHERE po_approval='rejected'") },
+    ].filter(d => d.c > 0);
+
+    // ── Activity feed (latest 8 across the chain) ───────────────────────
+    const activity = [
+      ...all(`SELECT 'indent' k, indent_number ref, COALESCE(raised_by_name,'Site') who, 'raised indent' verb, created_at FROM indents ORDER BY created_at DESC LIMIT 4`),
+      ...all(`SELECT 'po' k, po_number ref, '' who, 'Vendor PO created' verb, created_at FROM vendor_pos WHERE COALESCE(cancelled,0)=0 ORDER BY created_at DESC LIMIT 4`),
+      ...all(`SELECT 'grn' k, g.grn_number ref, COALESCE(u.name, CAST(g.received_by AS TEXT), 'Store') who, 'received material' verb, g.created_at FROM grn g LEFT JOIN users u ON u.id = g.received_by ORDER BY g.created_at DESC LIMIT 4`),
+      ...all(`SELECT 'bill' k, bill_number ref, '' who, 'purchase bill booked' verb, created_at FROM purchase_bills ORDER BY created_at DESC LIMIT 3`),
+      ...all(`SELECT 'debit' k, dn_number ref, '' who, 'debit note raised' verb, created_at FROM debit_notes ORDER BY created_at DESC LIMIT 2`),
+    ].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 8);
+
+    res.json({ week: { from: wkAgo, to: today }, kpis, pipeline, alerts: alerts.slice(0, 6), tasks: tasks.slice(0, 6), indentDist, poDist, activity });
+  } catch (err) {
+    console.error('flow-board error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══ SOP-05 RATES BOARD (mam 2026-08-28: "vendor & rates fixed BEFORE
+// indent — same design flow board") ═══ Same response shape as /flow-board
+// so the client's generic FlowBoard component renders both. Universe =
+// items in the 3-vendor rates flow; estimate = the BOQ rate (po_items.rate).
+router.get('/rates-board', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const now = Date.now();
+    const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+    const today = iso(now), wkAgo = iso(now - 7 * 864e5);
+    const cnt = (sql, ...p) => { try { return db.prepare(sql).get(...p)?.c || 0; } catch { return 0; } };
+    const all = (sql, ...p) => { try { return db.prepare(sql).all(...p); } catch { return []; } };
+    const pctOf = (done, allc) => (allc > 0 ? Math.round((done / allc) * 100) - 100 : null);
+
+    // ── Source of truth = ORDER TO PLANNING, not indents ──────────────────
+    // mam (2026-09-05): "this data is link to indent to dispatch which is
+    // wrong, it is link to be order to planning". Every stage from S2 on used
+    // to count indent_items ⋈ indent_item_rates — the indent-TIME quote flow —
+    // which contradicts this board's own premise ("rates fixed BEFORE indent")
+    // and made it disagree with the Item-wise Rates register that now IS the
+    // Order Planning tab. Rebased onto the register's universe: po_items (the
+    // booked orders' BOQ lines) ⋈ rate_contracts per Item Master, with the
+    // register's exact fallback to the latest indent-flow rate row, so both
+    // screens count the same items the same way. S1 was already order-based.
+    const RSRC = `
+      LEFT JOIN rate_contracts rc ON rc.item_master_id = pi.item_master_id
+      LEFT JOIN indent_item_rates r ON r.id = (
+            SELECT r2.id FROM indent_item_rates r2
+              JOIN indent_items ii2 ON ii2.id = r2.indent_item_id
+             WHERE pi.item_master_id IS NOT NULL AND ii2.item_master_id = pi.item_master_id
+             ORDER BY (COALESCE(r2.final_rate,0) > 0) DESC, r2.id DESC LIMIT 1)`;
+    // Effective fields: the Rate Contract wins, else the indent-flow row —
+    // the same precedence the register applies in JS after its query.
+    const EF = (col) => `CASE WHEN rc.id IS NOT NULL THEN rc.${col} ELSE r.${col} END`;
+    const V1 = EF('vendor1_rate'), V2 = EF('vendor2_rate'), V3 = EF('vendor3_rate');
+    const FINAL_RATE = EF('final_rate'), FINAL_VENDOR = EF('final_vendor_name');
+    const FINALIZED_AT = EF('finalized_at'), RATE_UPDATED = EF('updated_at');
+    const SLOTS = `((CASE WHEN COALESCE(${V1},0) > 0 THEN 1 ELSE 0 END) +
+                    (CASE WHEN COALESCE(${V2},0) > 0 THEN 1 ELSE 0 END) +
+                    (CASE WHEN COALESCE(${V3},0) > 0 THEN 1 ELSE 0 END))`;
+    const FINAL = `COALESCE(${FINAL_RATE}, 0) > 0`;
+    const BASE = `FROM po_items pi
+                  LEFT JOIN purchase_orders po ON po.id = pi.po_id
+                  LEFT JOIN business_book bb ON bb.id = pi.business_book_id
+                  LEFT JOIN item_master im ON im.id = pi.item_master_id
+                  ${RSRC}
+                  WHERE COALESCE(pi.description,'') <> ''`;
+    // S5 rule verbatim from the register: final > 0 AND estimate > 0 AND final > estimate.
+    const ABOVE = `${FINAL} AND COALESCE(pi.rate,0) > 0 AND ${FINAL_RATE} > pi.rate`;
+    const WITHIN = `${FINAL} AND NOT (COALESCE(pi.rate,0) > 0 AND ${FINAL_RATE} > pi.rate)`;
+    const ITEM_REF = `COALESCE(im.item_name, pi.description, 'Item')`;
+
+    const enquiryPend = cnt(`SELECT COUNT(*) c ${BASE} AND NOT ${FINAL} AND ${SLOTS} = 0`);
+    const comparePend = cnt(`SELECT COUNT(*) c ${BASE} AND NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`);
+    const finalisePend = cnt(`SELECT COUNT(*) c ${BASE} AND NOT ${FINAL} AND ${SLOTS} = 3`);
+    const locked = cnt(`SELECT COUNT(*) c ${BASE} AND ${FINAL}`);
+    const lockedWithin = cnt(`SELECT COUNT(*) c ${BASE} AND ${WITHIN}`);
+    const aboveMd = cnt(`SELECT COUNT(*) c ${BASE} AND ${ABOVE}`);
+    // S7 is the Item Master flag the register toggles — no longer a guess
+    // from the wording of the indent's delivery terms.
+    const longDelivery = cnt(`SELECT COUNT(*) c ${BASE} AND COALESCE(im.long_delivery,0) = 1`);
+    const pkgPend = cnt(`SELECT COUNT(*) c FROM purchase_orders po WHERE NOT EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)`);
+    const pkgDone = cnt(`SELECT COUNT(*) c FROM purchase_orders po WHERE EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)`);
+
+    // S2–S7 cards: one per ITEM, carrying the full row the register's Rate
+    // Contract modal needs (mam 2026-09-05: clicking a card opens that modal
+    // right on the board). Same field names as /rates-items so the shared
+    // useRateActions hook can take a board card exactly as it takes a
+    // register row. `ref` is the item text — FlowBoard also uses it for the
+    // ?q= deep link, and the register searches on description.
+    const ITEM_FIELDS = `
+      pi.id AS id, pi.id AS rid, pi.po_id, pi.item_master_id, im.item_code, pi.description, pi.quantity, pi.unit,
+      pi.rate AS estimate_rate, COALESCE(im.long_delivery,0) AS long_delivery,
+      ${EF('vendor1_name')} AS vendor1_name, ${V1} AS vendor1_rate,
+      ${EF('vendor2_name')} AS vendor2_name, ${V2} AS vendor2_rate,
+      ${EF('vendor3_name')} AS vendor3_name, ${V3} AS vendor3_rate,
+      ${FINAL_RATE} AS final_rate, ${FINAL_VENDOR} AS final_vendor_name, ${FINALIZED_AT} AS finalized_at,
+      ${SLOTS} AS quotes,
+      ${ITEM_REF} AS ref,
+      COALESCE(po.po_number, 'No PO') || ' · ' || COALESCE(bb.client_name, bb.company_name, '—') AS title`;
+    const itemCards = (cond, ownerSql, orderSql, limit = 50) => all(`
+      SELECT ${ITEM_FIELDS}, ${ownerSql} AS owner, ${orderSql} AS created_at
+        ${BASE} AND ${cond} ORDER BY created_at DESC, pi.id DESC LIMIT ${limit}`);
+
+    const pipeline = [
+      { key: 'packages', label: 'Package List', sop: 'S1', total: pkgPend, pct: pctOf(pkgDone, pkgDone + pkgPend),
+        cards: all(`SELECT po.id AS rid, po.business_book_id AS bb,
+                           COALESCE(po.po_number, 'PO #' || po.id) AS ref, COALESCE(bb.company_name, bb.client_name, '—') AS title,
+                           'planning pending' AS owner, po.created_at
+                      FROM purchase_orders po LEFT JOIN business_book bb ON bb.id = po.business_book_id
+                     WHERE NOT EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id = po.id)
+                     ORDER BY po.created_at DESC LIMIT 50`) },
+      { key: 'enquiry', label: 'Rate Enquiry', sop: 'S2', total: enquiryPend,
+        pct: pctOf(comparePend + finalisePend + locked, enquiryPend + comparePend + finalisePend + locked),
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} = 0`, `'0/3 quotes — send enquiry'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
+      { key: 'compare', label: 'Rate Comparison', sop: 'S3', total: comparePend,
+        pct: pctOf(finalisePend + locked, comparePend + finalisePend + locked),
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2`, `${SLOTS} || '/3 quotes — awaited'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
+      { key: 'finalise', label: 'Finalise Vendor', sop: 'S4', total: finalisePend,
+        pct: pctOf(locked, finalisePend + locked),
+        cards: itemCards(`NOT ${FINAL} AND ${SLOTS} = 3`, `'3/3 quotes — finalise vendor'`, `COALESCE(${RATE_UPDATED}, po.created_at)`) },
+      { key: 'md_lock', label: 'Rate Lock / MD', sop: 'S5', total: aboveMd,
+        pct: pctOf(lockedWithin, locked),
+        cards: itemCards(ABOVE, `'Rs ' || ${FINAL_RATE} || ' vs est ' || pi.rate || ' — MD sir'`, FINALIZED_AT) },
+      { key: 'contract', label: 'Rate Contract', sop: 'S6', total: locked,
+        pct: pctOf(locked, locked + finalisePend + comparePend + enquiryPend),
+        cards: itemCards(FINAL, `COALESCE(${FINAL_VENDOR}, 'vendor') || ' · Rs ' || ${FINAL_RATE} || ' · locked'`, FINALIZED_AT) },
+      { key: 'long_delivery', label: 'Long Delivery — Order Today', sop: 'S7', total: longDelivery, pct: null,
+        cards: itemCards(`COALESCE(im.long_delivery,0) = 1`, `'order today'`, `po.created_at`) },
+    ];
+
+    // Alerts: S1 packages waiting >24h, S3 3-day comparison clock, S5 MD list.
+    const alerts = [];
+    for (const r of all(`SELECT COALESCE(po.po_number,'PO #'||po.id) ref, bb.company_name owner, po.created_at
+                           FROM purchase_orders po LEFT JOIN business_book bb ON bb.id=po.business_book_id
+                          WHERE NOT EXISTS (SELECT 1 FROM order_planning op WHERE op.po_id=po.id)
+                            AND po.created_at <= datetime('now','-1 day') ORDER BY po.created_at LIMIT 2`)) {
+      alerts.push({ level: 'amber', ref: r.ref, text: 'Order booked but package/planning not made (SOP-05.1)', owner: r.owner, at: r.created_at });
+    }
+    for (const r of all(`SELECT COALESCE(po.po_number,'No PO') ref, COUNT(pi.id) n, MIN(${RATE_UPDATED}) at ${BASE}
+                          AND NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2 AND ${RATE_UPDATED} <= datetime('now','-3 day')
+                          GROUP BY po.id ORDER BY MIN(${RATE_UPDATED}) LIMIT 3`)) {
+      alerts.push({ level: 'red', ref: r.ref, text: `${r.n} item(s) past the 3-day rate-comparison clock (SOP-05.3)`, owner: 'Avadesh Sharma', at: r.at });
+    }
+    if (aboveMd > 0) {
+      alerts.push({ level: 'red', ref: `${aboveMd} item(s)`, text: 'Finalised ABOVE estimate — needs MD sir (SOP-05.5)', owner: 'Ankur Kaplesh', at: null });
+    }
+
+    const tasks = [];
+    if (pkgPend > 0) tasks.push({ text: `Make package/planning for ${pkgPend} booked order(s)`, tag: 'S1' });
+    if (enquiryPend > 0) tasks.push({ text: `Send rate enquiry for ${enquiryPend} item(s) — full project qty`, tag: 'S2' });
+    if (finalisePend > 0) tasks.push({ text: `Finalise vendor on ${finalisePend} item(s) (all 3 quotes in)`, tag: 'S4' });
+    if (aboveMd > 0) tasks.push({ text: `MD review: ${aboveMd} item(s) above estimate`, tag: 'S5' });
+    if (longDelivery > 0) tasks.push({ text: `Order ${longDelivery} long-delivery item(s) TODAY`, tag: 'S7' });
+
+    const dists = [
+      { title: 'Items by Rate Stage', data: [
+        { label: 'Enquiry pending', c: enquiryPend }, { label: 'Comparing', c: comparePend },
+        { label: 'Ready to finalise', c: finalisePend }, { label: 'Contract locked', c: locked },
+      ].filter(x => x.c > 0) },
+      { title: 'Rate Lock vs Estimate', data: [
+        { label: 'Within estimate', c: lockedWithin }, { label: 'Above — MD sir', c: aboveMd },
+      ].filter(x => x.c > 0) },
+    ];
+
+    const activity = [
+      // One line per CONTRACT, not per order line — a contract is per Item
+      // Master and many BOQ lines share it, so group on that.
+      ...all(`SELECT 'contract' k, COALESCE(${FINAL_VENDOR},'vendor') who, 'locked rate on' verb,
+                     ${ITEM_REF} ref, MAX(${FINALIZED_AT}) AS created_at
+                ${BASE} AND ${FINAL} AND ${FINALIZED_AT} IS NOT NULL
+                GROUP BY COALESCE(pi.item_master_id, pi.id) ORDER BY created_at DESC LIMIT 5`),
+      ...all(`SELECT 'package' k, COALESCE(u.name,'System') who, 'made planning for' verb,
+                     COALESCE(po.po_number, 'Plan #' || op.id) ref, op.created_at
+                FROM order_planning op LEFT JOIN purchase_orders po ON po.id=op.po_id
+                LEFT JOIN users u ON u.id=op.created_by ORDER BY op.created_at DESC LIMIT 4`),
+    ].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 8);
+
+    // Overdue tile: S3 3-day breaches, in hours past the clock.
+    const breaches = all(`SELECT ${RATE_UPDATED} AS updated_at ${BASE} AND NOT ${FINAL} AND ${SLOTS} BETWEEN 1 AND 2 AND ${RATE_UPDATED} <= datetime('now','-3 day')`);
+    const ages = breaches.map(r => (now - new Date(String(r.updated_at).replace(' ', 'T') + 'Z').getTime()) / 3600000).filter(h => Number.isFinite(h) && h > 0);
+    const kpis = { overdue: { value: ages.length, oldest_hrs: ages.length ? Math.round(Math.max(...ages)) : 0, prev: null } };
+
+    res.json({ week: { from: wkAgo, to: today }, kpis, pipeline, alerts: alerts.slice(0, 6), tasks: tasks.slice(0, 6), dists, activity });
+  } catch (err) {
+    console.error('rates-board error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SOP-05.2 Rate Enquiry sheet (mam 2026-08-28 "make it here system"): the
+// ready-made enquiry format for ONE indent's unrated items, quoting the
+// FULL PROJECT QUANTITY (BOQ qty when the item is linked, else the indent
+// qty — "big quantity = better rate"). The /rate-enquiry/:id/print page
+// renders it for print / WhatsApp to vendors.
+router.get('/rate-enquiry/:indentId', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const ind = db.prepare(`SELECT i.*, u.name AS raised_by FROM indents i LEFT JOIN users u ON u.id=i.created_by WHERE i.id=?`).get(req.params.indentId);
+    if (!ind) return res.status(404).json({ error: 'Indent not found' });
+    const items = db.prepare(`
+      SELECT ii.id, COALESCE(im.item_name, ii.description, 'Item') AS name,
+             COALESCE(im.specification,'') AS specification, COALESCE(im.size,'') AS size,
+             COALESCE(im.make, ii.make, '') AS make,
+             COALESCE(im.uom, ii.unit, '') AS uom,
+             ii.quantity AS indent_qty,
+             poi.quantity AS boq_qty,
+             COALESCE(poi.quantity, ii.quantity) AS full_qty,
+             CASE WHEN poi.quantity IS NOT NULL THEN 'BOQ (full project)' ELSE 'indent' END AS qty_source
+        FROM indent_items ii
+        LEFT JOIN item_master im ON im.id = ii.item_master_id
+        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+       WHERE ii.indent_id = ?
+         AND NOT EXISTS (SELECT 1 FROM indent_item_rates ir
+                          WHERE ir.indent_item_id = ii.id
+                            AND (COALESCE(ir.vendor1_rate,0) > 0 OR COALESCE(ir.vendor2_rate,0) > 0
+                                 OR COALESCE(ir.vendor3_rate,0) > 0 OR COALESCE(ir.final_rate,0) > 0))
+       ORDER BY ii.id`).all(req.params.indentId);
+    res.json({
+      indent: { id: ind.id, indent_number: ind.indent_number, site_name: ind.site_name,
+                client_name: ind.client_name, lead_no: ind.lead_no, indent_date: ind.indent_date,
+                raised_by: ind.raised_by_name || ind.raised_by },
+      items,
+    });
+  } catch (err) {
+    console.error('rate-enquiry error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══ SOP-05 ITEM-WISE register (mam 2026-08-31: "i need item wise system") ═
+// One row per BOQ item of the booked orders — each item carries its OWN
+// stage status through SOP-05:
+//   S1 package  = the item sits in an order plan (need-date = plan start)
+//   S2 enquiry  = ≥1 vendor quote exists for its Item Master
+//   S3 compare  = all 3 vendor quotes in (mam's 3-quote rule)
+//   S4-S5       = rate finalised; above our estimate (po_items.rate) → MD sir
+//   S6 contract = final rate locked (vendor + date) — valid for the project
+//   S7 long-dvl = item_master.long_delivery flag ("order them today")
+// Quotes/finals resolve via the item's Item Master (latest finalised row wins)
+// so a rate fixed once serves every order of that item — the Rate Contract.
+// ── Item-wise rates rows (SOP-05): ONE implementation for the register
+// list (GET /rates-items) and the single-row fetch (GET /rates-items/row/:id)
+// that RateActions uses to open the Rate Contract modal on FRESH data — a
+// stale card/register row must never seed a Save that overwrites a contract
+// shared by every order of that Item Master (review 2026-09-05).
+function ratesItemBase(where) {
+  return `
+      FROM po_items pi
+      LEFT JOIN purchase_orders po ON po.id = pi.po_id
+      LEFT JOIN business_book bb ON bb.id = pi.business_book_id
+      LEFT JOIN item_master im ON im.id = pi.item_master_id
+      WHERE ${where} AND COALESCE(pi.description,'') <> ''`;
+}
+function ratesItemRows(db, where, params, tail) {
+  const base = ratesItemBase(where);
+  const rows = db.prepare(`
+    SELECT pi.id, pi.po_id, pi.description, pi.quantity, pi.unit, pi.rate AS estimate_rate,
+           pi.item_master_id, im.item_code, im.item_name, COALESCE(im.long_delivery,0) AS long_delivery,
+           po.po_number, COALESCE(bb.client_name, bb.company_name) AS client_name,
+           -- The ITEM's own need dates only (mam 2026-09-14: "no one enter the
+           -- data … from where this linked?"). The plan header's dates are the
+           -- Business Book committed start/completion copied in automatically
+           -- when the order was booked, so falling back to them showed dates
+           -- nobody entered — and hid a date typed here, which PUT
+           -- /orders/planning-itemwise saves on the item row. Empty until set.
+           (SELECT MIN(opi.planned_start) FROM order_planning_items opi
+             WHERE opi.po_item_id = pi.id) AS need_date,
+           -- Need-till alongside need-from so the S1 cell can carry BOTH
+           -- editable dates (mam 2026-09-05: this view replaces the old
+           -- Order Planning table, which is where the dates used to be set).
+           (SELECT MIN(opi.planned_end) FROM order_planning_items opi
+             WHERE opi.po_item_id = pi.id) AS need_till,
+           rc.id AS rc_id, rc.vendor1_name AS rc_v1n, rc.vendor1_rate AS rc_v1, rc.vendor2_name AS rc_v2n, rc.vendor2_rate AS rc_v2,
+           rc.vendor3_name AS rc_v3n, rc.vendor3_rate AS rc_v3, rc.final_rate AS rc_final, rc.final_vendor_name AS rc_fvn, rc.finalized_at AS rc_fat,
+           r.vendor1_name AS ir_v1n, r.vendor1_rate AS ir_v1, r.vendor2_name AS ir_v2n, r.vendor2_rate AS ir_v2,
+           r.vendor3_name AS ir_v3n, r.vendor3_rate AS ir_v3, r.final_rate AS ir_final, r.final_vendor_name AS ir_fvn, r.finalized_at AS ir_fat
+      ${base.replace('WHERE', `LEFT JOIN rate_contracts rc ON rc.item_master_id = pi.item_master_id
+      LEFT JOIN indent_item_rates r ON r.id = (
+            SELECT r2.id FROM indent_item_rates r2
+              JOIN indent_items ii2 ON ii2.id = r2.indent_item_id
+             WHERE pi.item_master_id IS NOT NULL AND ii2.item_master_id = pi.item_master_id
+             ORDER BY (COALESCE(r2.final_rate,0) > 0) DESC, r2.id DESC LIMIT 1)
+      WHERE`)}
+    ${tail}`).all(...params);
+  for (const it of rows) {
+    // Rate source: the item's RATE CONTRACT wins; else the latest 3-vendor
+    // row from the indent flow (a rate fixed either way serves the item).
+    const useRc = it.rc_id != null;
+    it.vendor1_name = useRc ? it.rc_v1n : it.ir_v1n; it.vendor1_rate = useRc ? it.rc_v1 : it.ir_v1;
+    it.vendor2_name = useRc ? it.rc_v2n : it.ir_v2n; it.vendor2_rate = useRc ? it.rc_v2 : it.ir_v2;
+    it.vendor3_name = useRc ? it.rc_v3n : it.ir_v3n; it.vendor3_rate = useRc ? it.rc_v3 : it.ir_v3;
+    it.final_rate = useRc ? it.rc_final : it.ir_final;
+    it.final_vendor_name = useRc ? it.rc_fvn : it.ir_fvn;
+    it.finalized_at = useRc ? it.rc_fat : it.ir_fat;
+    for (const k of Object.keys(it)) if (k.startsWith('rc_') || k.startsWith('ir_')) delete it[k];
+    const quotes = [it.vendor1_rate, it.vendor2_rate, it.vendor3_rate].filter(v => +v > 0).length;
+    it.quotes = quotes;
+    const est = +it.estimate_rate || 0;
+    const fin = +it.final_rate || 0;
+    it.stage = {
+      s1: !!it.need_date,
+      s2: quotes >= 1,
+      s3: quotes >= 3,
+      s6: fin > 0,
+      md: fin > 0 && est > 0 && fin > est,       // S5: above our estimate → MD sir
+      s7: !!it.long_delivery,
+    };
+  }
+  return rows;
+}
+
+router.get('/rates-items', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const PER = 50;
+    const params = [];
+    let where = '1=1';
+    if (search) {
+      where += ` AND (LOWER(pi.description) LIKE ? OR LOWER(COALESCE(im.item_name,'')) LIKE ? OR LOWER(COALESCE(im.item_code,'')) LIKE ? OR LOWER(COALESCE(po.po_number,'')) LIKE ? OR LOWER(COALESCE(bb.client_name,'')) LIKE ?)`;
+      for (let i = 0; i < 5; i++) params.push(`%${search}%`);
+    }
+    const base = ratesItemBase(where);
+    const total = db.prepare(`SELECT COUNT(*) c ${base}`).get(...params).c;
+    const rows = ratesItemRows(db, where, params, `ORDER BY (need_date IS NULL), need_date, pi.id LIMIT ${PER} OFFSET ${(page - 1) * PER}`);
+    res.json({ total, page, per: PER, rows });
+  } catch (err) {
+    console.error('rates-items error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// One row, fresh — what the Rate Contract modal opens on (see ratesItemRows).
+router.get('/rates-items/row/:id', requirePermission('procurement', 'view'), (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'id required' });
+  const row = ratesItemRows(getDb(), 'pi.id = ?', [id], '')[0];
+  if (!row) return res.status(404).json({ error: 'Item not found' });
+  res.json(row);
+});
+
+// Inline mapping action (mam 2026-08-31 "how can i do action?"): link a BOQ
+// line to its Item Master straight from the register.
+router.put('/rates-items/map/:poItemId', requirePermission('procurement', 'edit'), (req, res) => {
+  const db = getDb();
+  const mid = +req.body?.item_master_id || null;
+  if (mid && !db.prepare('SELECT 1 FROM item_master WHERE id=?').get(mid)) {
+    return res.status(404).json({ error: 'Item Master row not found' });
+  }
+  const r = db.prepare('UPDATE po_items SET item_master_id=? WHERE id=?').run(mid, +req.params.poItemId);
+  if (!r.changes) return res.status(404).json({ error: 'BOQ item not found' });
+  res.json({ ok: true });
+});
+
+// Quotes + Rate Contract (SOP-05 S2→S6): upsert the 3 vendor quotes and the
+// finalised rate PER ITEM MASTER — locked for the project.
+router.put('/rates-items/quotes/:itemMasterId', requirePermission('procurement', 'edit'), (req, res) => {
+  const db = getDb();
+  const mid = +req.params.itemMasterId;
+  if (!db.prepare('SELECT 1 FROM item_master WHERE id=?').get(mid)) {
+    return res.status(404).json({ error: 'Item Master row not found — map the item first' });
+  }
+  const b = req.body || {};
+  const num = (v) => (+v > 0 ? +v : null);
+  const txt = (v) => (v && String(v).trim() ? String(v).trim().slice(0, 120) : null);
+  const finalRate = num(b.final_rate);
+  db.prepare(`INSERT INTO rate_contracts
+      (item_master_id, vendor1_name, vendor1_rate, vendor2_name, vendor2_rate, vendor3_name, vendor3_rate,
+       final_rate, final_vendor_name, finalized_at, updated_by, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?, CASE WHEN ? IS NOT NULL THEN CURRENT_TIMESTAMP END, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(item_master_id) DO UPDATE SET
+        vendor1_name=excluded.vendor1_name, vendor1_rate=excluded.vendor1_rate,
+        vendor2_name=excluded.vendor2_name, vendor2_rate=excluded.vendor2_rate,
+        vendor3_name=excluded.vendor3_name, vendor3_rate=excluded.vendor3_rate,
+        final_rate=excluded.final_rate, final_vendor_name=excluded.final_vendor_name,
+        finalized_at=CASE WHEN excluded.final_rate IS NOT NULL
+                          THEN COALESCE(rate_contracts.finalized_at, CURRENT_TIMESTAMP) END,
+        updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`)
+    .run(mid, txt(b.vendor1_name), num(b.vendor1_rate), txt(b.vendor2_name), num(b.vendor2_rate),
+         txt(b.vendor3_name), num(b.vendor3_rate), finalRate, txt(b.final_vendor_name), finalRate, req.user.id);
+  res.json({ ok: true, locked: finalRate != null });
+});
+
+// S7 toggle — flag/unflag long delivery on the item master.
+router.put('/rates-items/long-delivery/:itemMasterId', requirePermission('procurement', 'edit'), (req, res) => {
+  const db = getDb();
+  const flag = req.body?.flag ? 1 : 0;
+  const r = db.prepare('UPDATE item_master SET long_delivery=? WHERE id=?').run(flag, +req.params.itemMasterId);
+  if (!r.changes) return res.status(404).json({ error: 'Item Master row not found' });
+  res.json({ ok: true, long_delivery: flag });
+});
+
+// ═══ VENDOR SCORECARD / GAMIFICATION (mam 2026-08-31, her template file) ═══
+// SOP-05.4 vendor score card + SOP-07 S11 "report card updates on every
+// delivery". Nobody has to measure anything — the ERP measures:
+//   CREDIT (40): credit days — finalised rates' credit days, else vendor master
+//   PRICE (28): relative — 10 × lowest quote ÷ vendor's quote, avg over quotes
+//   DELIVERY (20): on-time % — GRN date vs the PO's written delivery date
+//   QUOTE SPEED (12): hrs from indent raised → vendor's quote entered
+// Weighted 0-100, normalised over the metrics that HAVE data. Tiers per
+// mam's sheet: Platinum 85+ · Gold 70-84 · Silver 55-69 · Bronze <55.
+// Quarterly reset: ?months=3 (default) scopes quotes/deliveries; 0 = all time.
+router.get('/vendor-scorecard', requirePermission('procurement', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const months = req.query.months === '0' ? 0 : Math.max(1, parseInt(req.query.months || '3', 10));
+    const sinceIso = months ? new Date(Date.now() - months * 30 * 864e5).toISOString().slice(0, 10) : '0000-01-01';
+    const WEIGHTS = { credit: 40, price: 28, delivery: 20, speed: 12 };
+    const creditScore = (d) => (d >= 60 ? 10 : d >= 45 ? 8 : d >= 30 ? 6 : d >= 15 ? 4 : 1);
+    const deliveryScore = (p) => (p >= 98 ? 10 : p >= 95 ? 8 : p >= 90 ? 6 : p >= 85 ? 4 : 2);
+    const speedScore = (h) => (h <= 4 ? 10 : h <= 12 ? 8 : h <= 24 ? 6 : h <= 48 ? 4 : 2);
+    const tierOf = (s) => (s >= 85 ? 'Platinum' : s >= 70 ? 'Gold' : s >= 55 ? 'Silver' : 'Bronze');
+
+    const vendors = db.prepare('SELECT id, name, firm_name, credit_days FROM vendors').all();
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    const byName = new Map();
+    for (const v of vendors) {
+      if (norm(v.name)) byName.set(norm(v.name), v.id);
+      if (norm(v.firm_name)) byName.set(norm(v.firm_name), v.id);
+    }
+    const agg = new Map();   // vendor_id → accumulators
+    const acc = (id) => {
+      if (!agg.has(id)) agg.set(id, { priceRatios: [], credit: [], speedHrs: [], quotes: 0, delivered: 0, onTime: 0, pos: 0, bills: 0 });
+      return agg.get(id);
+    };
+
+    // Quotes: 3-vendor rows (indent flow, with indent timestamps for TAT)
+    const quoteRows = db.prepare(`
+      SELECT r.vendor1_name v1n, r.vendor1_rate v1, r.vendor2_name v2n, r.vendor2_rate v2,
+             r.vendor3_name v3n, r.vendor3_rate v3, r.final_credit_days fcd, r.final_vendor_name fvn,
+             r.created_at rc, i.created_at ic
+        FROM indent_item_rates r
+        JOIN indent_items ii ON ii.id = r.indent_item_id
+        LEFT JOIN indents i ON i.id = ii.indent_id
+       WHERE date(r.created_at) >= ?`).all(sinceIso);
+    // Rate contracts (pre-indent) count for price competition too
+    const rcRows = db.prepare(`
+      SELECT vendor1_name v1n, vendor1_rate v1, vendor2_name v2n, vendor2_rate v2,
+             vendor3_name v3n, vendor3_rate v3, NULL AS fcd, NULL AS fvn, updated_at rc, NULL AS ic
+        FROM rate_contracts WHERE date(updated_at) >= ?`).all(sinceIso);
+    for (const q of [...quoteRows, ...rcRows]) {
+      const slots = [[q.v1n, +q.v1], [q.v2n, +q.v2], [q.v3n, +q.v3]].filter(([n, r]) => norm(n) && r > 0);
+      if (!slots.length) continue;
+      const lowest = Math.min(...slots.map(([, r]) => r));
+      for (const [n, r] of slots) {
+        const vid = byName.get(norm(n));
+        if (!vid) continue;
+        const a = acc(vid);
+        a.quotes += 1;
+        a.priceRatios.push(Math.min(10, (lowest / r) * 10));
+        if (q.ic && q.rc) {
+          const hrs = (new Date(String(q.rc).replace(' ', 'T') + 'Z') - new Date(String(q.ic).replace(' ', 'T') + 'Z')) / 36e5;
+          if (Number.isFinite(hrs) && hrs >= 0 && hrs < 24 * 60) a.speedHrs.push(hrs);
+        }
+      }
+      // credit days from the finalised vendor's terms
+      if (q.fvn && +q.fcd > 0) {
+        const vid = byName.get(norm(q.fvn));
+        if (vid) acc(vid).credit.push(+q.fcd);
+      }
+    }
+
+    // Deliveries: vendor POs with a written delivery date + their GRN
+    const poRows = db.prepare(`
+      SELECT vp.vendor_id, vp.expected_receipt_date erd,
+             (SELECT MIN(date(g.created_at)) FROM grn g WHERE g.vendor_po_id = vp.id) grn_date,
+             (SELECT COUNT(*) FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id) bills
+        FROM vendor_pos vp
+       WHERE COALESCE(vp.cancelled,0)=0 AND vp.vendor_id IS NOT NULL AND date(vp.created_at) >= ?`).all(sinceIso);
+    for (const p of poRows) {
+      const a = acc(p.vendor_id);
+      a.pos += 1;
+      a.bills += +p.bills || 0;
+      if (p.erd && p.grn_date) {
+        a.delivered += 1;
+        if (p.grn_date <= p.erd) a.onTime += 1;
+      }
+    }
+
+    const out = [];
+    for (const v of vendors) {
+      const a = agg.get(v.id);
+      if (!a || (a.quotes === 0 && a.pos === 0)) continue;   // never seen — skip
+      const creditDays = a.credit.length ? Math.max(...a.credit) : (+v.credit_days > 0 ? +v.credit_days : null);
+      const scores = {
+        credit: creditDays != null ? creditScore(creditDays) : null,
+        price: a.priceRatios.length ? Math.round((a.priceRatios.reduce((s, x) => s + x, 0) / a.priceRatios.length) * 100) / 100 : null,
+        delivery: a.delivered ? deliveryScore((a.onTime / a.delivered) * 100) : null,
+        speed: a.speedHrs.length ? speedScore(a.speedHrs.reduce((s, x) => s + x, 0) / a.speedHrs.length) : null,
+      };
+      let wSum = 0, sSum = 0;
+      for (const k of Object.keys(WEIGHTS)) {
+        if (scores[k] != null) { wSum += WEIGHTS[k]; sSum += WEIGHTS[k] * scores[k]; }
+      }
+      const weighted = wSum ? Math.round((sSum / wSum) * 10 * 10) / 10 : 0;
+      out.push({
+        vendor_id: v.id, vendor: v.firm_name || v.name,
+        credit_days: creditDays,
+        avg_price_ratio: scores.price,
+        ontime_pct: a.delivered ? Math.round((a.onTime / a.delivered) * 100) : null,
+        avg_quote_hrs: a.speedHrs.length ? Math.round(a.speedHrs.reduce((s, x) => s + x, 0) / a.speedHrs.length) : null,
+        scores, weighted, tier: tierOf(weighted),
+        measured: { quotes: a.quotes, pos: a.pos, deliveries: a.delivered, bills: a.bills },
+      });
+    }
+    out.sort((x, y) => y.weighted - x.weighted);
+    out.forEach((o, i) => { o.rank = i + 1; });
+    res.json({ months, weights: WEIGHTS, rows: out,
+      tiers: [
+        { tier: 'Platinum', range: '85 – 100', reward: 'First right of refusal, largest volume share' },
+        { tier: 'Gold', range: '70 – 84', reward: 'Priority allocation, fast-track for new items' },
+        { tier: 'Silver', range: '55 – 69', reward: 'Standard business' },
+        { tier: 'Bronze', range: 'Below 55', reward: 'Reduced volume, improvement plan, on notice' },
+      ] });
+  } catch (err) {
+    console.error('vendor-scorecard error', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

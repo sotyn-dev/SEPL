@@ -406,7 +406,13 @@ router.put('/:id/cards/:cardId/move', (req, res) => {
 router.delete('/:id/cards/:cardId', (req, res) => {
   const db = getBoardDb(); const b = +req.params.id; const c = +req.params.cardId;
   if (!canAccess(db, req, b)) return res.status(403).json({ error: 'Not a member' });
-  if (!db.prepare('SELECT 1 FROM board_cards WHERE id=? AND board_id=?').get(c, b)) return res.status(404).json({ error: 'Card not found' });
+  const card = db.prepare('SELECT id, created_by FROM board_cards WHERE id=? AND board_id=?').get(c, b);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+  // Audit 2026-08-17: any board member could hard-delete ANY card (with its
+  // whole comment/activity trail). Now: card creator or a board admin only.
+  if (card.created_by !== req.user.id && !canManage(db, req, b)) {
+    return res.status(403).json({ error: 'Only the card creator or a board admin can delete this card' });
+  }
   const atts = db.prepare('SELECT attachment_url FROM board_card_comments WHERE card_id=? AND attachment_url IS NOT NULL').all(c).map(r => r.attachment_url);
   db.transaction(() => {
     db.prepare('DELETE FROM board_card_comments WHERE card_id=?').run(c);

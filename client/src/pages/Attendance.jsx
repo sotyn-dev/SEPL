@@ -57,6 +57,29 @@ const fmtT = (iso) => {
   } catch { return '—'; }
 };
 
+// Status that matches the punch times, on the SAME thresholds payroll pays on
+// (late_after_time 09:46, half_day_after_time 10:00, min_hours_half_day 4).
+// An admin-marked row is paid by its STATUS alone — payroll ignores its punch
+// times — so a status that disagrees with the times pays the wrong day
+// (mam 2026-09-12: "click punch in or punch out according them time").
+const hhmmToMin = (t) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '').trim());
+  return m ? +m[1] * 60 + +m[2] : null;
+};
+const statusFromPunches = (inHHMM, outHHMM, cfg) => {
+  const inM = hhmmToMin(inHHMM), outM = hhmmToMin(outHHMM);
+  if (inM == null || outM == null || outM <= inM) return null;
+  const hours = (outM - inM) / 60;
+  const lateAt = cfg?.late_after_time || '09:46';
+  const halfAt = cfg?.half_day_after_time || '10:00';
+  const minHalf = Number(cfg?.min_hours_half_day ?? 4);
+  const hrsTxt = `${hours.toFixed(2)} h`;
+  if (inM > hhmmToMin(halfAt)) return { status: 'half_day', why: `came in after ${halfAt} · ${hrsTxt}` };
+  if (hours < minHalf) return { status: 'half_day', why: `only ${hrsTxt} (under ${minHalf} h)` };
+  if (inM >= hhmmToMin(lateAt)) return { status: 'late', why: `came in at ${inHHMM}, late from ${lateAt} · ${hrsTxt}` };
+  return { status: 'present', why: `on time · ${hrsTxt}` };
+};
+
 export default function Attendance() {
   const { user, isAdmin, canDelete, canSeeAll, canView, canApprove } = useAuth();
   // Admins, or anyone granted "See All" on the attendance module, can view
@@ -71,7 +94,7 @@ export default function Attendance() {
   //                 enforces marking via attendance.can_approve.)
   const canGrid = isAdmin() || canView('attendance_grid');
   const canMarkGrid = isAdmin() || canApprove('attendance');
-  const [tab, setTab] = useUrlTab('punch');
+  const [tab, setTab] = useUrlTab(['punch', 'byuser', 'dashboard', 'geofence', 'grid', 'leaves', 'myhistory', 'records', 'report'], 'punch');
   const [myToday, setMyToday] = useState(null);
   // Mam: daily attendance detail (in/out times + leave) belongs on the
   // Attendance page next to the punch UI, not on the dashboard.
@@ -124,6 +147,18 @@ export default function Attendance() {
   // { src, label } of the photo being viewed, or null when closed.
   const [lightbox, setLightbox] = useState(null);
   const [form, setForm] = useState({});
+  // Payroll cut-offs, so the backfill form names the same status payroll will pay.
+  const [payCfg, setPayCfg] = useState(null);
+  useEffect(() => { api.get('/payroll/settings').then(r => setPayCfg(r.data)).catch(() => setPayCfg(null)); }, []);
+  // Times typed → status follows them. Only re-runs when a time changes, so an
+  // admin who picks a different status afterwards keeps their choice.
+  const punchStatus = statusFromPunches(form.punch_in, form.punch_out, payCfg);
+  useEffect(() => {
+    if (form.status === 'fill_in' || form.status === 'fill_out') return;   // admin is filling ONE side
+    const d = statusFromPunches(form.punch_in, form.punch_out, payCfg);
+    if (d) setForm(f => (f.status === d.status ? f : { ...f, status: d.status }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.punch_in, form.punch_out, payCfg]);
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -197,7 +232,10 @@ export default function Attendance() {
       navigator.geolocation.getCurrentPosition(pos => {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
         setLocation(loc);
-        api.post('/attendance/track-location', { ...loc, address: '' }).catch(() => {});
+        // No POST here: Layout.jsx already sends the 30-second location ping
+        // for every page, so this page was writing a SECOND row per ping
+        // (2× location_tracking growth, 2× the geofence work on the server).
+        // The GPS-OFF heartbeats below stay — Layout's tracker is silent on error.
       }, (err) => {
         // GPS off / permission denied / timeout — send a "GPS OFF"
         // heartbeat so the admin Location Tracking page can surface
@@ -373,7 +411,12 @@ export default function Attendance() {
     // so HR can see who's owed comp / extra-day pay.
     if (c?.worked_on_off) return { t: 'WOP', cls: 'bg-teal-100 text-teal-700 ring-1 ring-inset ring-teal-300' };
     if (s === 'present') return { t: 'P', cls: 'bg-emerald-100 text-emerald-700' };
-    if (s === 'late') return { t: 'P', cls: 'bg-amber-100 text-amber-700' };            // present, but late (tallied separately)
+    // Late = amber, but a short leave covering that day forgives it (payroll
+    // does the same), so it stays a plain green P — mam 2026-09-12: "if late
+    // but that time short leave than P is not show yellow its normal green P".
+    if (s === 'late') return c?.late_minutes > 0
+      ? { t: 'P', cls: 'bg-amber-100 text-amber-700' }                                  // present, but late (tallied separately)
+      : { t: 'P', cls: 'bg-emerald-100 text-emerald-700' };
     if (s === 'half_day' || s === 'short_day') return { t: 'H', cls: 'bg-orange-100 text-orange-700' };
     if (s === 'leave') return { t: 'L', cls: 'bg-purple-100 text-purple-700' };
     if (s === 'sunday' || c?.week_off) return { t: 'WO', cls: 'bg-indigo-50 text-indigo-400' };
@@ -416,7 +459,7 @@ export default function Attendance() {
       if (row) setCellAnchorTop(row.getBoundingClientRect().bottom - wrap.getBoundingClientRect().top);
     }
     setStagedStatus(null); setStagedProof(null); // fresh cell → no pending choice yet
-    setCellInfo({ user_id: emp.user_id, name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes });
+    setCellInfo({ user_id: emp.user_id, name: emp.name, date: day.date, status: c.status, source: c.source, in: c.in, out: c.out, hours: c.hours, week_off: c.week_off, worked_on_off: c.worked_on_off, late_label: c.late_label, late_minutes: c.late_minutes, short_leave: c.short_leave });
   };
   const closeCellPanel = () => { setCellInfo(null); setStagedStatus(null); setStagedProof(null); };
   // A back-dated worked-day mark (Present/Half in the past) needs proof — but
@@ -476,6 +519,7 @@ export default function Attendance() {
             <span className="text-gray-300"> | </span>
             <b className="font-medium text-gray-700">{cellInfo.hours != null ? cellInfo.hours + 'h' : '—'}</b>
             {cellInfo.late_label && <span className="text-amber-600 ml-2">Late {cellInfo.late_label}</span>}
+            {cellInfo.short_leave && <span className="text-emerald-700 ml-2">Short leave — not counted late</span>}
           </div>
         </div>
 
@@ -557,7 +601,7 @@ export default function Attendance() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
         <button onClick={() => setTab('punch')} className={`btn ${tab === 'punch' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Punch In/Out</button>
         <button onClick={() => setTab('myhistory')} className={`btn ${tab === 'myhistory' ? 'btn-primary' : 'btn-secondary'} text-sm`}>My History</button>
         {seeAll && <>
@@ -569,6 +613,9 @@ export default function Attendance() {
         </>}
         {canGrid && <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>}
         {isAdmin() && <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>}
+        {/* Training video button moved to the shared Layout header
+            (mam 2026-08-26: "every where") — same "attendance" module key,
+            so previously added videos still show. */}
       </div>
 
       {/* MONTHLY ATTENDANCE GRID TAB */}
@@ -646,7 +693,7 @@ export default function Attendance() {
                         // it (z) + ringed, so it stays crisp while the rest blurs —
                         // showing which cell the open drawer belongs to.
                         const isSel = cellInfo && cellInfo.user_id === emp.user_id && cellInfo.date === day.date;
-                        const cellTitle = `${day.date}${c.status ? ' · ' + c.status : ''}${c.week_off ? ' · Week-Off' : ''}${c.worked_on_off ? ' (worked)' : ''}${c.in ? ' · In ' + fmtT(c.in) : ''}${c.out ? ' · Out ' + fmtT(c.out) : ''}${c.hours ? ' · ' + c.hours + 'h' : ''}${c.late_label ? ' · ' + c.late_label + ' late' : ''}${c.source ? ' (' + c.source + ')' : ''}`;
+                        const cellTitle = `${day.date}${c.status ? ' · ' + c.status : ''}${c.week_off ? ' · Week-Off' : ''}${c.worked_on_off ? ' (worked)' : ''}${c.in ? ' · In ' + fmtT(c.in) : ''}${c.out ? ' · Out ' + fmtT(c.out) : ''}${c.hours ? ' · ' + c.hours + 'h' : ''}${c.late_label ? ' · ' + c.late_label + ' late' : ''}${c.short_leave ? ' · short leave — not counted late' : ''}${c.source ? ' (' + c.source + ')' : ''}`;
                         return (
                           <td key={day.date} className={`p-0 text-center ${isSel ? 'relative z-[25]' : ''}`} title={cellTitle}>
                             <button type="button" disabled={gridBusy || day.future}
@@ -1017,7 +1064,14 @@ export default function Attendance() {
             <input type="date" className="input w-48" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
             <button onClick={() => exportCsv(`attendance-${filterDate || 'all'}`,
               ['Name','Date','In','Out','Hours','Site','Status'],
-              records.map(r => [r.user_name, r.date, r.punch_in_time, r.punch_out_time, r.total_hours, r.site_name, r.status]))}
+              records.map(r => [
+                r.user_name, r.date,
+                // Punch times are stored UTC — export them in IST so the CSV
+                // matches the times the table shows via fmtT (mam 2026-09-03).
+                r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                r.total_hours, r.site_name, r.status,
+              ]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
           </div>
           {/* Desktop table (mobile gets card list below — mam 2026-06-02). */}
@@ -1438,7 +1492,7 @@ export default function Attendance() {
             <button onClick={() => { setForm({ site_name: '', latitude: '', longitude: '', radius_meters: 200 }); setModal('geofence'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={14} /> Add Geofence</button>
           </div>
           <p className="text-xs text-gray-500">Employees can only punch in/out when inside these areas. If no geofence set, punch from anywhere.</p>
-          <div className="card p-0 overflow-x-auto"><table className="text-sm">
+          <div className="card p-0 overflow-x-auto"><table className="text-sm min-w-[650px]">
             <thead><tr><th>Site</th><th>Latitude</th><th>Longitude</th><th>Radius</th><th>Active</th><th>Actions</th></tr></thead>
             <tbody>{geofences.map(g => (
               <tr key={g.id}>
@@ -1681,7 +1735,7 @@ export default function Attendance() {
           catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
           <div><label className="label">Leave Type</label><select className="select" value={form.leave_type} onChange={e => setForm({ ...form, leave_type: e.target.value })}><option value="casual">Casual Leave</option><option value="sick">Sick Leave</option><option value="earned">Earned Leave</option><option value="half_day">Half Day</option><option value="short_leave">Short Leave (max 4hrs/month)</option><option value="comp_off">Comp Off</option></select></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">From Date *</label>
               <input
@@ -1719,10 +1773,10 @@ export default function Attendance() {
             )}
           </div>
           {form.leave_type === 'short_leave' && (
-            <div className="grid grid-cols-2 gap-3 bg-amber-50 p-3 rounded">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-amber-50 p-3 rounded">
               <div><label className="label">From Time *</label><TimePicker value={form.from_time || ''} onChange={v => setForm({ ...form, from_time: v })} required /></div>
               <div><label className="label">To Time *</label><TimePicker value={form.to_time || ''} onChange={v => setForm({ ...form, to_time: v })} required /></div>
-              <p className="col-span-2 text-xs text-amber-600">Monthly limit: 4 hours. Exceeding will be rejected.</p>
+              <p className="col-span-1 sm:col-span-2 text-xs text-amber-600">Monthly limit: 4 hours. Exceeding will be rejected.</p>
             </div>
           )}
           <div><label className="label">Reason</label><textarea className="input" rows="2" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} /></div>
@@ -1734,11 +1788,11 @@ export default function Attendance() {
       <Modal isOpen={modal === 'edit-geofence'} onClose={() => setModal(null)} title="Edit Geofence">
         <form onSubmit={async (e) => { e.preventDefault(); try { await api.put(`/attendance/geofence/${form.id}`, form); toast.success('Updated'); setModal(null); load(); } catch { toast.error('Failed'); } }} className="space-y-4">
           <div><label className="label">Site Name *</label><input className="input" value={form.site_name || ''} onChange={e => setForm({ ...form, site_name: e.target.value })} required /></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Latitude</label><input className="input" type="number" step="any" value={form.latitude || ''} onChange={e => setForm({ ...form, latitude: e.target.value })} /></div>
             <div><label className="label">Longitude</label><input className="input" type="number" step="any" value={form.longitude || ''} onChange={e => setForm({ ...form, longitude: e.target.value })} /></div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Radius (m)</label><input className="input" type="number" value={form.radius_meters || 200} onChange={e => setForm({ ...form, radius_meters: +e.target.value })} /></div>
             <div><label className="label">Active</label><select className="select" value={form.active ? '1' : '0'} onChange={e => setForm({ ...form, active: e.target.value === '1' })}><option value="1">Yes</option><option value="0">No</option></select></div>
           </div>
@@ -1755,7 +1809,22 @@ export default function Attendance() {
           if (!form.user_id) return toast.error('Please select an employee');
           if (!form.date) return toast.error('Please pick a date');
           if (form.date > today) return toast.error('Cannot mark a future date');
-          const worked = ['present', 'half_day', 'short_day'].includes(form.status || 'present');
+          // Status can also say WHICH single punch is missing (mam 2026-09-12:
+          // "in status select punch in or out one can select and one time
+          // according to that enter") — then only that one time is asked for,
+          // and the other side of the day is left exactly as it is.
+          const fillOnly = form.status === 'fill_in' ? 'punch_in' : form.status === 'fill_out' ? 'punch_out' : null;
+          if (fillOnly && !form[fillOnly]) {
+            return toast.error(fillOnly === 'punch_in' ? 'Enter the missed Punch In time' : 'Enter the missed Punch Out time');
+          }
+          const worked = !fillOnly && ['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present');
+          // Punch times are MANDATORY on a worked day (mam 2026-09-12: "when
+          // punch in / punch out mark back time is mandatory to fill") so the
+          // day carries real hours instead of an assumed 8. The one-click
+          // Monthly-Grid / Mark-Present paths don't come through this form.
+          if (worked && (!form.punch_in || !form.punch_out)) {
+            return toast.error('Fill both Punch In and Punch Out times for a worked day');
+          }
           const isBackdate = form.date < today;
           if (worked && isBackdate && !form._proofFile && !form.proof_url) {
             return toast.error('Attach a proof document (signed sheet / photo) to back-date a worked day');
@@ -1767,13 +1836,26 @@ export default function Attendance() {
               const up = await api.post('/upload', fd);
               proof_url = up.data.url;
             }
-            await api.post('/attendance/admin-mark', {
+            // fill_in / fill_out are choices of this form only. With just a
+            // punch-in the time itself still says late-or-not; with only a
+            // punch-out there is nothing to judge. A real punch row keeps its
+            // own status server-side either way.
+            const sentStatus = fillOnly === 'punch_in'
+              ? (statusFromPunches(form.punch_in, '23:59', payCfg)?.status === 'late' ? 'late' : 'present')
+              : fillOnly === 'punch_out' ? 'present'
+                : (form.status || 'present');
+            const res = await api.post('/attendance/admin-mark', {
               user_id: +form.user_id, date: form.date,
-              status: form.status || 'present', remarks: form.remarks || '',
+              status: sentStatus, remarks: form.remarks || '',
               proof_url,
+              // Missed punch in / out, typed in IST (mam 2026-09-12).
+              punch_in: fillOnly === 'punch_out' ? null : (form.punch_in || null),
+              punch_out: fillOnly === 'punch_in' ? null : (form.punch_out || null),
             });
             const who = allUsers.find(u => u.id === +form.user_id)?.name || 'Employee';
-            toast.success(`${who} marked ${(form.status || 'present').replace('_', ' ')} for ${form.date}`);
+            toast.success(/punch/i.test(res.data?.message || '')
+              ? `${who} · ${res.data.message} (${form.date})`
+              : `${who} marked ${sentStatus.replace('_', ' ')} for ${form.date}`);
             setModal(null); load();
           } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         }} className="space-y-4">
@@ -1784,7 +1866,7 @@ export default function Attendance() {
               {allUsers.map(u => { const d = hrDeptText(u); return <option key={u.id} value={u.id}>{u.name}{d ? ` · ${d}` : ''}</option>; })}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Date *</label>
               <input className="input" type="date" max={today} value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} required />
@@ -1792,20 +1874,59 @@ export default function Attendance() {
             <div>
               <label className="label">Status *</label>
               <select className="select" value={form.status || 'present'} onChange={e => setForm({ ...form, status: e.target.value })}>
-                <option value="present">Present</option>
-                <option value="half_day">Half Day</option>
-                <option value="short_day">Short Day</option>
-                <option value="absent">Absent</option>
-                <option value="leave">Leave</option>
-                <option value="holiday">Holiday</option>
+                <optgroup label="Missed ONE punch — enter that time only">
+                  <option value="fill_in">Punch In missed</option>
+                  <option value="fill_out">Punch Out missed</option>
+                </optgroup>
+                <optgroup label="Mark the whole day">
+                  <option value="present">Present</option>
+                  <option value="late">Late</option>
+                  <option value="half_day">Half Day</option>
+                  <option value="short_day">Short Day</option>
+                  <option value="absent">Absent</option>
+                  <option value="leave">Leave</option>
+                  <option value="holiday">Holiday</option>
+                </optgroup>
               </select>
             </div>
           </div>
+          {['fill_in', 'fill_out', 'present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {form.status !== 'fill_out' && (
+                <div>
+                  <label className="label">Punch In * <span className="font-normal text-gray-500">(IST)</span></label>
+                  <input className="input" type="time" required value={form.punch_in || ''} onChange={e => setForm({ ...form, punch_in: e.target.value })} />
+                </div>
+              )}
+              {form.status !== 'fill_in' && (
+                <div>
+                  <label className="label">Punch Out * <span className="font-normal text-gray-500">(IST)</span></label>
+                  <input className="input" type="time" required value={form.punch_out || ''} onChange={e => setForm({ ...form, punch_out: e.target.value })} />
+                </div>
+              )}
+              {(form.status === 'fill_in' || form.status === 'fill_out') ? (
+                <p className="text-[11px] text-gray-600 sm:col-span-2">
+                  Only the {form.status === 'fill_in' ? 'Punch In' : 'Punch Out'} time is saved — the other side of the day stays as it is.
+                  A punch the employee really made is never overwritten, and once both sides exist the day's hours are recomputed.
+                </p>
+              ) : punchStatus ? (
+                <p className="text-[11px] sm:col-span-2 font-semibold text-blue-700">
+                  Status set from these times: {{ present: 'Present', late: 'Late', half_day: 'Half Day' }[punchStatus.status]} — {punchStatus.why}.
+                  <span className="font-normal text-gray-500"> Change Status above if this day is an exception.</span>
+                </p>
+              ) : (
+                <p className="text-[11px] text-gray-500 sm:col-span-2">
+                  Both times are required on a worked day — Status is then set from them (late arrival, or under 4 h = half day).
+                  If the employee already punched one side, that real punch is kept and only the missing side is filled.
+                </p>
+              )}
+            </div>
+          )}
           <div>
             <label className="label">Reason / Remarks (for audit)</label>
             <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
           </div>
-          {['present', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
+          {['present', 'late', 'half_day', 'short_day'].includes(form.status || 'present') && form.date && form.date < today && (
             <div>
               <label className="label">Proof document * <span className="font-normal text-gray-500">(required to back-date a worked day)</span></label>
               <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx"
@@ -1859,7 +1980,7 @@ export default function Attendance() {
       <Modal isOpen={modal === 'geofence'} onClose={() => setModal(null)} title="Add Geofence Area">
         <form onSubmit={async (e) => { e.preventDefault(); try { await api.post('/attendance/geofence', form); toast.success('Geofence added'); setModal(null); load(); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } }} className="space-y-4">
           <div><label className="label">Site Name *</label><input className="input" value={form.site_name} onChange={e => setForm({ ...form, site_name: e.target.value })} required /></div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Latitude *</label><input className="input" type="number" step="any" value={form.latitude} onChange={e => setForm({ ...form, latitude: e.target.value })} required /></div>
             <div><label className="label">Longitude *</label><input className="input" type="number" step="any" value={form.longitude} onChange={e => setForm({ ...form, longitude: e.target.value })} required /></div>
           </div>

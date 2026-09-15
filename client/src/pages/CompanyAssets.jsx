@@ -12,6 +12,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMonitor, FiSmartphone, FiCpu, FiUserPlus, FiCornerUpLeft, FiTool, FiArchive, FiTrash2, FiEdit2, FiSearch, FiClock, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime } from '../utils/datetime';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 const CATEGORIES = [
   'Laptop', 'Desktop', 'Mobile', 'Tablet', 'SIM Card',
@@ -52,6 +53,7 @@ export default function CompanyAssets() {
   const [actionForm, setActionForm] = useState({});
   const [history, setHistory] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const pager = usePagination(assets, { resetKey: [filters.search, filters.category, filters.status] });
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -150,7 +152,11 @@ export default function CompanyAssets() {
         <div className="flex gap-2">
           <button onClick={() => exportCsv('company-assets',
             ['Asset #','Category','Name/Model','Serial/IMEI','SIM/Mobile','Issued To','Condition','Status'],
-            assets.map(a => [a.asset_no, a.category, a.name, a.serial_imei, a.sim_mobile, a.issued_to_name, a.condition, a.status]))}
+            assets.map(a => [a.asset_no, a.category, a.name,
+              [a.serial_no, a.imei].filter(Boolean).join(' / '),
+              [a.mobile_number, a.carrier].filter(Boolean).join(' / '),
+              a.current_user_live_name || a.current_user_name,
+              a.condition, a.status]))}
             className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('company_assets') && (
             <button onClick={openAdd} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Asset</button>
@@ -204,7 +210,7 @@ export default function CompanyAssets() {
             {assets.length === 0 && (
               <tr><td colSpan="10" className="text-center py-8 text-gray-400">No assets yet — click "Add Asset" to start the register</td></tr>
             )}
-            {assets.map(a => (
+            {pager.pageItems.map(a => (
               <tr key={a.id}>
                 <td className="font-bold text-indigo-700 text-xs">{a.asset_no}</td>
                 <td className="text-xs">{a.category || <span className="text-gray-300">—</span>}</td>
@@ -253,6 +259,7 @@ export default function CompanyAssets() {
           </tbody>
         </table>
       </div>
+      <Pagination {...pager} />
 
       {/* ADD / EDIT MODAL */}
       <Modal isOpen={modal === 'edit'} onClose={() => { setModal(null); setForm({}); }} title={form.id ? `Edit ${form.asset_no}` : 'Add Asset'} wide>

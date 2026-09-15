@@ -60,7 +60,7 @@ SEPL/
 
 ```bash
 # Clone the repository
-git clone https://github.com/Monikarajput17/SEPL.git
+git clone https://github.com/sotyn-dev/SEPL.git
 cd SEPL
 
 # Install dependencies

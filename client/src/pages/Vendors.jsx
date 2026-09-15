@@ -47,7 +47,7 @@ export default function Vendors() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [vendors, setVendors] = useState([]);
   const [rates, setRates] = useState([]);
-  const [tab, setTab] = useUrlTab('vendors');
+  const [tab, setTab] = useUrlTab(['vendors', 'rates', 'scorecard'], 'vendors');
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});
@@ -234,19 +234,22 @@ export default function Vendors() {
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setTab('vendors')} className={`btn ${tab === 'vendors' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Vendors ({vendors.length})</button>
         <button onClick={() => setTab('rates')} className={`btn ${tab === 'rates' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Rate Comparison</button>
+        <button onClick={() => setTab('scorecard')} className={`btn ${tab === 'scorecard' ? 'btn-primary' : 'btn-secondary'} text-sm`}>🏆 Scorecard</button>
       </div>
+
+      {tab === 'scorecard' && <VendorScorecard />}
 
       {tab === 'vendors' && (
         <>
           {/* Category filter chips */}
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
             <button onClick={() => setFilterCat('')} className={`px-3 py-1 rounded-full text-xs font-semibold border ${!filterCat ? 'bg-red-600 text-white' : 'bg-white text-gray-600 border-gray-200'}`}>All ({vendors.length})</button>
             {Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
               <button key={cat} onClick={() => setFilterCat(filterCat === cat ? '' : cat)} className={`px-3 py-1 rounded-full text-xs font-semibold border ${filterCat === cat ? 'bg-red-600 text-white' : 'bg-white text-gray-600 border-gray-200'}`}>{cat} ({count})</button>
             ))}
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <div className="relative flex-1"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search vendor name, firm name, deals in, code, district, phone..." value={search} onChange={e => setSearch(e.target.value)} /></div>
             <button onClick={() => exportCsv('vendors',
               ['Code','Name','Firm','Category','Deals In','Type','Phone','Email','District','State','Authorized Dealer','Turnover'],
@@ -318,13 +321,13 @@ export default function Vendors() {
 
           {/* Paginator — only when there's more than one page */}
           {pageCount > 1 && (
-            <div className="flex items-center justify-between text-xs text-gray-600 mt-1">
-              <span>Page <b>{safePage + 1}</b> of <b>{pageCount}</b></span>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0}
-                  className="btn btn-secondary text-xs disabled:opacity-40 disabled:cursor-not-allowed">‹ Prev</button>
-                <button onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={safePage >= pageCount - 1}
-                  className="btn btn-secondary text-xs disabled:opacity-40 disabled:cursor-not-allowed">Next ›</button>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 text-xs text-gray-600 mt-2 px-1">
+              <span className="text-center sm:text-left whitespace-nowrap">Page <b className="text-gray-900">{safePage + 1}</b> of <b className="text-gray-900">{pageCount}</b></span>
+              <div className="flex items-center justify-center sm:justify-end gap-2">
+                <button type="button" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0}
+                  className="btn btn-secondary text-xs py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs">‹ Prev</button>
+                <button type="button" onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={safePage >= pageCount - 1}
+                  className="btn btn-secondary text-xs py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs">Next ›</button>
               </div>
             </div>
           )}
@@ -337,7 +340,7 @@ export default function Vendors() {
             <h3 className="font-semibold text-sm">3 Vendor Rate Comparison</h3>
             <button onClick={() => { setForm({ item_description: '', vendor1_id: '', vendor1_rate: 0, vendor2_id: '', vendor2_rate: 0, vendor3_id: '', vendor3_rate: 0, final_rate: 0, selected_vendor_id: '' }); setModal('rate'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> Add Comparison</button>
           </div>
-          <div className="card p-0"><table className="text-xs freeze-head">
+          <div className="card p-0 table-responsive"><table className="text-xs freeze-head min-w-[950px]">
             <thead><tr><th>Item</th><th>Vendor 1</th><th>Rate 1</th><th>Vendor 2</th><th>Rate 2</th><th>Vendor 3</th><th>Rate 3</th><th>Final</th><th>Selected</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{rates.map(r => (
               <tr key={r.id}>
@@ -399,7 +402,7 @@ export default function Vendors() {
 
       {/* Add/Edit Vendor Modal */}
       <Modal isOpen={modal === 'vendor'} onClose={() => { setModal(false); setEditing(null); }} title={editing ? 'Edit Vendor' : 'Add Vendor'} wide>
-        <form onSubmit={saveVendor} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+        <form onSubmit={saveVendor} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div><label className="label">Vendor Code</label><input className="input" value={form.vendor_code || ''} onChange={e => setForm({...form, vendor_code: e.target.value})} placeholder="Auto if empty" /></div>
             <div><label className="label">Vendor Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
@@ -586,8 +589,8 @@ export default function Vendors() {
           {bulkPreview.length > 0 && (
             <div>
               <p className="text-sm font-semibold mb-2">{bulkPreview.length} vendor{bulkPreview.length === 1 ? '' : 's'} ready to import</p>
-              <div className="max-h-52 overflow-auto border rounded text-xs">
-                <table className="w-full">
+              <div className="max-h-52 overflow-auto border rounded text-xs table-responsive">
+                <table className="w-full min-w-[500px]">
                   <thead><tr className="bg-gray-50">
                     <th className="px-2 py-1 text-left">Name</th><th className="px-2 py-1 text-left">Firm</th>
                     <th className="px-2 py-1">Category</th><th className="px-2 py-1">Phone</th>
@@ -660,6 +663,93 @@ export default function Vendors() {
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+// ── 🏆 Vendor Scorecard / gamification (mam 2026-08-31, her template) ──────
+// SOP-05.4 vendor score card · SOP-07 S11 report card. The ERP measures on
+// its own: Credit 40 · Price 28 · Delivery 20 · Quote Speed 12 → tiered
+// leaderboard so management picks vendors on data, not memory.
+function VendorScorecard() {
+  const [d, setD] = useState(null);
+  const [months, setMonths] = useState(3);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api.get('/procurement/vendor-scorecard', { params: { months } })
+      .then(r => setD(r.data)).catch(e => setErr(e.response?.data?.error || 'Failed to load'));
+  }, [months]);
+  const TIER_STYLE = {
+    Platinum: 'bg-violet-100 text-violet-800 border-violet-300',
+    Gold: 'bg-amber-100 text-amber-800 border-amber-300',
+    Silver: 'bg-gray-100 text-gray-700 border-gray-300',
+    Bronze: 'bg-orange-100 text-orange-800 border-orange-300',
+  };
+  const medal = (r) => (r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : r);
+  if (err) return <p className="text-red-600 text-sm">{err}</p>;
+  if (!d) return <p className="text-gray-400 text-sm p-6 text-center">Calculating vendor scores…</p>;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-gray-500">
+          Auto-measured from your data — Credit <b>{d.weights.credit}</b> · Price <b>{d.weights.price}</b> · Delivery <b>{d.weights.delivery}</b> · Quote Speed <b>{d.weights.speed}</b>. Quarterly reset so no one coasts on old glory.
+        </p>
+        <div className="flex gap-1">
+          {[[3, 'This Quarter'], [12, 'This Year'], [0, 'All Time']].map(([m, l]) => (
+            <button key={m} onClick={() => setMonths(m)}
+              className={`text-xs px-3 py-1.5 rounded font-semibold ${months === m ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card p-0 overflow-x-auto">
+        <table className="w-full text-xs min-w-[1050px]">
+          <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
+            <tr>
+              <th className="p-2 w-12">Rank</th>
+              <th className="text-left p-2">Vendor</th>
+              <th className="p-2 w-24">Tier</th>
+              <th className="p-2 w-24">Score /100</th>
+              <th className="p-2 w-24">Credit<br />(days · /10)</th>
+              <th className="p-2 w-24">Price<br />(vs lowest · /10)</th>
+              <th className="p-2 w-24">Delivery<br />(on-time % · /10)</th>
+              <th className="p-2 w-24">Quote Speed<br />(hrs · /10)</th>
+              <th className="p-2 w-32">Measured From</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.rows.map(v => (
+              <tr key={v.vendor_id} className={`border-t ${v.rank <= 3 ? 'bg-amber-50/40' : ''}`}>
+                <td className="text-center p-2 text-lg">{medal(v.rank)}</td>
+                <td className="p-2 font-semibold">{v.vendor}</td>
+                <td className="text-center p-2">
+                  <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${TIER_STYLE[v.tier]}`}
+                    title={(d.tiers.find(t => t.tier === v.tier) || {}).reward}>{v.tier}</span>
+                </td>
+                <td className="text-center p-2"><span className="text-lg font-extrabold">{v.weighted}</span></td>
+                <td className="text-center p-2">{v.credit_days != null ? <>{v.credit_days}d <span className="text-gray-400">·</span> <b>{v.scores.credit}</b></> : <span className="text-gray-300">—</span>}</td>
+                <td className="text-center p-2">{v.scores.price != null ? <b>{v.scores.price}</b> : <span className="text-gray-300">—</span>}</td>
+                <td className="text-center p-2">{v.ontime_pct != null ? <>{v.ontime_pct}% <span className="text-gray-400">·</span> <b>{v.scores.delivery}</b></> : <span className="text-gray-300">—</span>}</td>
+                <td className="text-center p-2">{v.avg_quote_hrs != null ? <>{v.avg_quote_hrs}h <span className="text-gray-400">·</span> <b>{v.scores.speed}</b></> : <span className="text-gray-300">—</span>}</td>
+                <td className="text-center p-2 text-[10px] text-gray-500">{v.measured.quotes} quotes · {v.measured.pos} POs · {v.measured.deliveries} delivered · {v.measured.bills} bills</td>
+              </tr>
+            ))}
+            {d.rows.length === 0 && <tr><td colSpan={9} className="text-center py-10 text-gray-400">No vendor activity in this period — quotes and POs feed the scorecard automatically</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+        {d.tiers.map(t => (
+          <div key={t.tier} className={`rounded-lg border p-3 ${TIER_STYLE[t.tier]}`}>
+            <div className="font-bold text-sm">{t.tier} <span className="font-normal text-xs">({t.range})</span></div>
+            <div className="text-[11px] mt-0.5">{t.reward}</div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-gray-400">
+        A metric with no data yet shows — and the score fairly re-weights over what IS measured. More quotes, POs and GRNs = more accurate ranks.
+      </p>
     </div>
   );
 }

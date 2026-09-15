@@ -3,6 +3,27 @@ import { getToken, setToken, clearToken } from './lib/tokenStore';
 
 const api = axios.create({ baseURL: '/api' });
 
+// Request timeouts (hang audit 2026-09-05). Without one a stalled request
+// spins forever and the page looks "hung" with no way out. Policy:
+//   GET (page data)             60 s
+//   POST/PUT/PATCH/DELETE        5 min  (never cut a write short cheaply —
+//                                        the server still finishes it, and a
+//                                        retry would duplicate)
+//   known long jobs             10 min  (exports, backups, uploads, imports,
+//                                        payroll finalise, AI, transcription)
+// A caller can still pass its own `timeout`; a negative value means "none".
+const TIMEOUT_GET_MS = 60 * 1000;
+const TIMEOUT_WRITE_MS = 5 * 60 * 1000;
+const TIMEOUT_LONG_MS = 10 * 60 * 1000;
+const LONG_RUNNING_URL = /(export|download|backup|upload|import|finali[sz]e|transcri|whisper|\/ai\b|\/ask\b|report|pdf|xlsx|csv|print|bulk|generate|sync)/i;
+function timeoutFor(config) {
+  if (typeof config.timeout === 'number' && config.timeout !== 0) return config.timeout < 0 ? 0 : config.timeout;
+  const method = String(config.method || 'get').toLowerCase();
+  if (LONG_RUNNING_URL.test(config.url || '')) return TIMEOUT_LONG_MS;
+  return method === 'get' ? TIMEOUT_GET_MS : TIMEOUT_WRITE_MS;
+}
+api.interceptors.request.use(config => { config.timeout = timeoutFor(config); return config; });
+
 // Seed the auth header from storage at module load — BEFORE the first render —
 // so any request fired on the very first tick after a fresh page load (e.g. the
 // post-login reload) carries the token even if it somehow races the request
@@ -35,6 +56,12 @@ api.interceptors.response.use(
     return res;
   },
   err => {
+    // A timed-out request surfaces as a plain sentence instead of axios's
+    // "timeout of 60000ms exceeded" — pages render err.message directly.
+    if (err.code === 'ECONNABORTED' && /timeout/i.test(err.message || '')) {
+      err.isTimeout = true;
+      err.message = 'The server took too long to respond. Please try again.';
+    }
     if (err.response?.status === 401) {
       // Bulletproof logout policy (mam, repeatedly: "automatically logout —
       // very bad"). The ONLY thing that may end a session is the definitive
@@ -81,11 +108,16 @@ api.interceptors.response.use(
         // NEVER end the session — it can be a stale in-flight request, a flaky
         // call, or an endpoint wrongly 401'ing. We do NOT force an immediate
         // /auth/me logout here (that change, 5d5a6c8, kicked active users out
-        // on the first failing request and was reverted 2026-06-26). The
-        // deliberate session check — AuthContext's /auth/me on mount, on tab
-        // focus, and every 2 min — still catches a genuinely dead token and
-        // logs out cleanly. We only strip the raw "Invalid token" text so the
-        // page shows its own friendly fallback instead of the internal string.
+        // on the first failing request and was reverted 2026-06-26; the
+        // 2026-08-18 "instant probe" was a softer take on the same idea but it
+        // amplified a post-rotation signature storm into a login→5s→logout LOOP
+        // for everyone — reverted 2026-08-19, the real cure is server-side: the
+        // multi-legacy-secret bridge silently migrates the stuck tokens so there
+        // is nothing to log out from). The deliberate session check —
+        // AuthContext's /auth/me on mount, on tab focus, and every 2 min — still
+        // catches a genuinely dead token and logs out cleanly. We only strip the
+        // raw "Invalid token" text so the page shows its own friendly fallback
+        // instead of the internal string.
         if (err.response.data && /token/i.test(err.response.data.error || '')) {
           err.response.data = { ...err.response.data, error: null };
         }
