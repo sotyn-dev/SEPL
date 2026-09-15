@@ -28,7 +28,11 @@ export default function SearchableSelect({ options, value, onChange, placeholder
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
   }, []);
 
   useEffect(() => {
@@ -56,11 +60,8 @@ export default function SearchableSelect({ options, value, onChange, placeholder
       </button>
 
       {open && (
-        // Panel width = parent input width (w-full). Long option labels
-        // wrap to multiple lines via whitespace-normal break-words on the
-        // item buttons. Keeping panel = input width prevents the dropdown
-        // from blowing past tight modals (Delegation, Payment Required).
-        <div className="absolute z-50 mt-1 w-full max-w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-80 overflow-hidden">
+        // Panel width expands to at least 240px (up to 90vw) when button is narrow
+        <div className="absolute z-50 mt-1 left-0 min-w-full sm:min-w-[240px] max-w-[90vw] bg-white border border-gray-200 rounded-lg shadow-lg max-h-80 overflow-hidden">
           <div className="p-2 border-b">
             <input ref={inputRef} type="text" className="input text-sm w-full" placeholder="Type to search..."
               value={search} onChange={e => setSearch(e.target.value)}

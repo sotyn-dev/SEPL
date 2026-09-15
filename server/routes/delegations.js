@@ -1,11 +1,16 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
+const { statusFilter } = require('../lib/statusFilter');
+
+const DELEG_STATUSES = ['pending', 'submitted', 'approved', 'rejected'];
 const { authMiddleware } = require('../middleware/auth');
 const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
+const { aiComplete, aiConfig } = require('../lib/aiComplete');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -54,11 +59,6 @@ function resolveWhisperModel() {
   return path.join(WHISPER_MODELS_DIR, 'ggml-base.bin');
 }
 
-function getSetting(key) {
-  try { const row = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key); return row?.value ?? null; }
-  catch (_) { return null; }
-}
-
 // Staff type tasks in Roman letters, so convert Whisper's accurate Hindi
 // (Devanagari) into casual Hinglish using the Claude key the ERP already has.
 // Best-effort: no key, or any failure, just returns the original text so
@@ -100,21 +100,24 @@ async function romanizeToHinglish(text) {
   if (!text) return text;
   if (process.env.WHISPER_ROMANIZE === '0') return text;
   if (!/[ऀ-ॿ]/.test(text)) return text;   // no Hindi script → nothing to do
-  // Prefer Claude (natural Hinglish) IF a key is set — use the SAME model the
-  // ERP's AI agent already uses, so we never fail on an unsupported model id.
-  const apiKey = getSetting('ai_api_key');
-  if (apiKey) {
+  // Prefer the AI (natural Hinglish) IF a key is set — use the SAME provider +
+  // model the ERP's AI agent already uses, so we never fail on an unsupported
+  // model id. Whichever provider Admin → AI Settings selects (anthropic OR gemini) —
+  // shared one-shot helper, mam 2026-08-21. retries429:0 on purpose: a voice
+  // note must NEVER stall 12s waiting out a rate limit when the free local
+  // transliterator below is one line away.
+  if (aiConfig(getDb()).configured) {
     try {
-      const Anthropic = require('@anthropic-ai/sdk');
-      const client = new Anthropic.default({ apiKey, timeout: 30000 });
-      const model = process.env.ROMANIZE_MODEL || getSetting('ai_model') || 'claude-opus-4-7';
-      const r = await client.messages.create({
-        model, max_tokens: 1200,
+      const out = await aiComplete(getDb(), {
+        prompt: text,
         system: 'You transliterate Hindi (Devanagari) into casual Romanized Hinglish exactly how an Indian office worker types in English letters (e.g. "मटेरियल भेजो" -> "material bhejo"). Keep English / brand / product words in English. Do NOT translate the meaning, and do NOT add, remove, or explain anything. Output ONLY the transliterated text.',
-        messages: [{ role: 'user', content: text }],
+        maxTokens: 1200, timeout: 30000, retries429: 0,
+        // ROMANIZE_MODEL goes through override so aiConfig still coerces it
+        // per provider — a leftover Claude id would otherwise kill Hinglish
+        // on a Gemini install.
+        override: process.env.ROMANIZE_MODEL ? { model: process.env.ROMANIZE_MODEL } : undefined,
       });
-      const out = (r.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-      if (out && !/[ऀ-ॿ]/.test(out)) return out;        // good Roman result from Claude
+      if (out.text && !/[ऀ-ॿ]/.test(out.text)) return out.text;   // good Roman result from the AI
     } catch (_) { /* fall through to the free local transliterator */ }
   }
   return devanagariToRoman(text);                         // guaranteed Roman, no key needed
@@ -207,7 +210,10 @@ router.get('/', (req, res) => {
   } else {
     where.push('(d.assigned_to = ? OR d.assigned_by = ?)'); params.push(uid, uid);
   }
-  if (status) { where.push('d.status = ?'); params.push(status); }
+  // Status — one value or a comma list (?status=pending,rejected). See
+  // lib/statusFilter for the parsing and the allow-list rule.
+  const st = statusFilter(status, DELEG_STATUSES, 'd.status');
+  if (st) { where.push(st.sql); params.push(...st.params); }
   // Name filter — admin/EA filter by assignee_id from the dropdown
   if (assignee_id) { where.push('d.assigned_to = ?'); params.push(+assignee_id); }
   // Date range filters — inclusive on both ends. Uses due_date since that's
@@ -252,7 +258,7 @@ function lastWorkingDays(todayYmd, n = 6) {
 // WIP limit is 3 per day (avg) by default for everyone; can be made per-user later.
 router.get('/dashboard', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   const WIP_LIMIT_DEFAULT = 3;
   const WIP_WINDOW_DAYS = 6;
   const windowDays = lastWorkingDays(today, WIP_WINDOW_DAYS);

@@ -104,10 +104,18 @@ export default function VendorPOPrint() {
   // indent_item_rates.final_rate when present (mam, 2026-05-21:
   // "update here if i update rate in 3 vendor"), falling back to the
   // PO-frozen rate, then to the stored amount.
-  const subtotal = items.reduce((s, it) => {
+  let subtotal = items.reduce((s, it) => {
     const r = (it.latest_rate != null && +it.latest_rate > 0) ? +it.latest_rate : +it.rate;
     return s + (+r * +it.quantity || +it.amount || 0);
   }, 0);
+  // No linked lines (uploaded ready-made PO) — fall back to the total the
+  // buyer TYPED on Create Vendor PO (vendor_pos.total_amount = typed base +
+  // freight, pre-GST), so the print matches the amount the list shows
+  // instead of reading Rs 0 (mam 2026-08-27 "from where u pick amount?").
+  // Freight is subtracted here because the taxable line below adds it back.
+  if (items.length === 0 && +po.total_amount > 0) {
+    subtotal = Math.max(0, +po.total_amount - (+po.freight_amount || 0));
+  }
 
   // Freight (mam 2026-06-12). Added to the taxable value so GST is charged
   // on (goods + freight), matching how vendors bill freight. freight_terms
@@ -115,11 +123,14 @@ export default function VendorPOPrint() {
   const freightAmount = +po.freight_amount || 0;
   const taxable = subtotal + freightAmount;
 
-  // GST split. Same-state vendor → CGST 9% + SGST 9% (intra). Different
-  // state → IGST 18%. Defaults to intra-state when state is missing,
-  // matching mam's sample (Punjab buyer, Punjab vendor).
+  // GST split. Same-state vendor → CGST + SGST (half each, intra). Different
+  // state → IGST (full). Defaults to intra-state when state is missing,
+  // matching mam's sample (Punjab buyer, Punjab vendor). The rate comes from
+  // the PO's editable gst_pct (mam 2026-08-12: "gst 18% but some time 5%"),
+  // falling back to 18% for older POs saved before the column existed.
   const sameState = !po.state || String(po.state).trim().toLowerCase() === COMPANY.state.toLowerCase();
-  const gstRate = 0.18;
+  const gstPct = (po.gst_pct != null && Number.isFinite(+po.gst_pct)) ? +po.gst_pct : 18;
+  const gstRate = gstPct / 100;
   const cgst = sameState ? taxable * (gstRate / 2) : 0;
   const sgst = sameState ? taxable * (gstRate / 2) : 0;
   const igst = sameState ? 0 : taxable * gstRate;
@@ -342,6 +353,28 @@ export default function VendorPOPrint() {
             </tr>
           </thead>
           <tbody>
+            {/* No linked line items (mam 2026-08-27 "why data is not
+                showing"): this PO was saved without linking indent lines —
+                usually an uploaded ready-made (Tally) PO where the items
+                live inside the attached file. Say so instead of printing a
+                silent empty table with Rs 0. */}
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-4 py-6 text-center text-[12px] text-amber-800 bg-amber-50 print:bg-white">
+                  <b>No line items are linked to this PO.</b><br />
+                  {po.file_path
+                    ? <>The items are inside the uploaded PO file — <a className="text-blue-700 underline" href={`/file-view?src=${encodeURIComponent(po.file_path)}`} target="_blank" rel="noreferrer">open the uploaded PO</a>.<br /></>
+                    : null}
+                  {/* The server can usually rebuild the lines from the indent. When
+                      it refuses, say WHY and what to do — "no line items" alone left
+                      mam re-reporting the same PO with nothing to act on
+                      (2026-09-03). */}
+                  {po.derive_blocked_reason
+                    ? <span className="block mt-1 text-[11.5px] text-amber-900">{po.derive_blocked_reason}</span>
+                    : <>To print the items here, open this PO in <b>Edit PO</b> (Procurement → Vendor POs), link the indent lines, and save.</>}
+                </td>
+              </tr>
+            )}
             {items.map((it, idx) => {
               const desc = it.master_name || it.description || '—';
               const detail = [it.size, it.specification].filter(Boolean).join(' · ');
@@ -442,19 +475,19 @@ export default function VendorPOPrint() {
               <>
                 <tr className="text-gray-600">
                   <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">CGST @ 9%</td>
+                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">CGST @ {+(gstPct / 2).toFixed(2)}%</td>
                   <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(cgst)}</td>
                 </tr>
                 <tr className="text-gray-600">
                   <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">SGST @ 9%</td>
+                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">SGST @ {+(gstPct / 2).toFixed(2)}%</td>
                   <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(sgst)}</td>
                 </tr>
               </>
             ) : (
               <tr className="text-gray-600">
                 <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">IGST @ 18%</td>
+                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">IGST @ {+gstPct.toFixed(2)}%</td>
                 <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(igst)}</td>
               </tr>
             )}

@@ -126,6 +126,59 @@ router.put('/settings', adminOnly, (req, res) => {
   res.json({ message: 'AI settings saved' });
 });
 
+// POST /api/ai-agent/settings/test — one-click "Test connection" (mam
+// 2026-08-21: she switched to Gemini and had no way to know the key worked
+// until Vendor Rates went red). Tests the values BEING TYPED without saving
+// them; the posted key is never persisted, echoed back, or logged.
+router.post('/settings/test', adminOnly, async (req, res) => {
+  const { aiComplete, aiConfig, aiErrorMessage } = require('../lib/aiComplete');
+  const override = {
+    provider: req.body?.provider,
+    model: req.body?.model,
+    apiKey: (req.body?.api_key || '').trim() || getSetting('ai_api_key'),
+  };
+  const cfg = aiConfig(getDb(), override);
+  if (!cfg.configured) return res.status(400).json({ ok: false, error: 'Paste a key first' });
+  try {
+    const out = await aiComplete(getDb(), {
+      prompt: 'Reply with the single word: OK', maxTokens: 16, timeout: 20000, retries429: 0, override,
+    });
+    res.json({ ok: true, provider: out.provider, model: out.model, reply: out.text.slice(0, 60) });
+  } catch (e) {
+    console.error('[AI Agent /settings/test] failed:', e.status || '', e.message);
+    res.status(400).json({ ok: false, error: aiErrorMessage(e, cfg.provider) });
+  }
+});
+
+// GET /api/ai-agent/settings/models — live model list for the Admin dropdown.
+// mam 2026-08-21: the dropdown was three HARDCODED Gemini ids and Google had
+// retired all of them, so every option 404'd and she had no way to type a
+// working one. Ask her own key what it can call instead of shipping another
+// list that expires. The key stays server-side; only ids/labels go out.
+// Falls back to the static list when the key is unset or Google is unreachable.
+router.get('/settings/models', adminOnly, async (req, res) => {
+  const { listGeminiModels, AI_DEFAULTS, GEMINI_PREFERRED } = require('../lib/aiComplete');
+  const provider = String(req.query.provider || getSetting('ai_provider') || 'anthropic').toLowerCase();
+  if (provider !== 'gemini' && provider !== 'google') {
+    return res.json({ provider: 'anthropic', source: 'static', models: [
+      { id: 'claude-opus-4-7', label: 'Claude Opus 4.7 (most capable)' },
+      { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (faster, cheaper)' },
+      { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (fastest, cheapest)' },
+    ] });
+  }
+  const key = getSetting('ai_api_key');
+  const live = key ? await listGeminiModels(key) : [];
+  if (!live.length) {
+    return res.json({ provider: 'gemini', source: 'static',
+      models: GEMINI_PREFERRED.map(id => ({ id, label: id })) });
+  }
+  // Preferred (cheap, fast, non-preview) first — that's what these one-shot
+  // features want — then everything else this key can reach, A-Z.
+  const rank = (id) => { const i = GEMINI_PREFERRED.indexOf(id); return i === -1 ? 999 : i; };
+  live.sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
+  res.json({ provider: 'gemini', source: 'live', default: AI_DEFAULTS.gemini, models: live });
+});
+
 // Email (SMTP) settings — also lives in app_settings. Admin-only;
 // password is never echoed back. Separate from the AI Agent settings
 // so the UI can show two clear panels even though both go through this
@@ -157,6 +210,88 @@ router.put('/email-settings', adminOnly, (req, res) => {
   if (b.from !== undefined) setSetting('email_from', String(b.from).trim());
   if (b.director_to !== undefined) setSetting('email_director_to', String(b.director_to).trim());
   res.json({ message: 'Email settings saved' });
+});
+
+// ── Mail accounts (mam 2026-09-12: "not from customercare it can also from
+// sales or account etc") ────────────────────────────────────────────────────
+// Several sending mailboxes, each with its own login, on top of the single
+// default account above. An email trigger picks which one sends it. Passwords
+// are stored like the default account's and are never sent back to the browser.
+const maskPass = (p) => (p ? `${'•'.repeat(8)}${String(p).slice(-2)}` : null);
+
+router.get('/email-accounts', adminOnly, (req, res) => {
+  const rows = getDb().prepare('SELECT * FROM email_accounts ORDER BY label').all();
+  res.json(rows.map(a => ({
+    id: a.id, label: a.label, from_address: a.from_address,
+    smtp_host: a.smtp_host, smtp_port: a.smtp_port, smtp_secure: !!a.smtp_secure,
+    smtp_user: a.smtp_user, active: !!a.active, pass_masked: maskPass(a.smtp_pass),
+  })));
+});
+
+router.post('/email-accounts', adminOnly, (req, res) => {
+  const b = req.body || {};
+  const need = ['label', 'from_address', 'smtp_host', 'smtp_user', 'pass'];
+  for (const k of need) {
+    if (!String(b[k] || '').trim()) return res.status(400).json({ error: `${k.replace('_', ' ')} is required` });
+  }
+  const r = getDb().prepare(
+    `INSERT INTO email_accounts (label, from_address, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, active)
+     VALUES (?,?,?,?,?,?,?,?)`
+  ).run(
+    String(b.label).trim(), String(b.from_address).trim(), String(b.smtp_host).trim(),
+    +b.smtp_port || 587, b.smtp_secure ? 1 : 0,
+    String(b.smtp_user).trim(), String(b.pass).trim(), b.active === false ? 0 : 1,
+  );
+  res.status(201).json({ id: r.lastInsertRowid, message: 'Mail account added' });
+});
+
+router.put('/email-accounts/:id', adminOnly, (req, res) => {
+  const b = req.body || {};
+  const db = getDb();
+  const a = db.prepare('SELECT * FROM email_accounts WHERE id=?').get(req.params.id);
+  if (!a) return res.status(404).json({ error: 'Mail account not found' });
+  db.prepare(
+    `UPDATE email_accounts SET label=?, from_address=?, smtp_host=?, smtp_port=?, smtp_secure=?,
+            smtp_user=?, smtp_pass=?, active=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+  ).run(
+    String(b.label ?? a.label).trim(), String(b.from_address ?? a.from_address).trim(),
+    String(b.smtp_host ?? a.smtp_host).trim(), +b.smtp_port || a.smtp_port || 587,
+    b.smtp_secure === undefined ? a.smtp_secure : (b.smtp_secure ? 1 : 0),
+    String(b.smtp_user ?? a.smtp_user).trim(),
+    // blank password field = keep the stored one
+    (typeof b.pass === 'string' && b.pass.trim()) ? b.pass.trim() : a.smtp_pass,
+    b.active === undefined ? a.active : (b.active ? 1 : 0),
+    req.params.id,
+  );
+  res.json({ message: 'Mail account saved' });
+});
+
+router.delete('/email-accounts/:id', adminOnly, (req, res) => {
+  const db = getDb();
+  // A rule pointing at a deleted account would silently fall back to the
+  // default sender, so say no and let mam re-point the rules first.
+  const used = db.prepare('SELECT COUNT(*) c FROM email_rules WHERE account_id=?').get(req.params.id).c;
+  if (used) return res.status(409).json({ error: `${used} email trigger(s) send from this account — change them first` });
+  db.prepare('DELETE FROM email_accounts WHERE id=?').run(req.params.id);
+  res.json({ message: 'Mail account removed' });
+});
+
+router.post('/email-accounts/:id/test', adminOnly, async (req, res) => {
+  const to = (req.body?.to || '').trim();
+  if (!to.includes('@')) return res.status(400).json({ error: 'Enter the address to send the test to' });
+  try {
+    const { sendEmail } = require('../lib/email');
+    const r = await sendEmail({
+      to, accountId: +req.params.id,
+      subject: '[SEPL ERP] Test email',
+      html: '<p>Test email from SEPL ERP — this mailbox can send.</p>',
+      text: 'Test email from SEPL ERP — this mailbox can send.',
+    });
+    if (r?.skipped) return res.status(400).json({ error: r.reason });
+    res.json({ message: `Test email sent to ${to}` });
+  } catch (e) {
+    res.status(502).json({ error: `Send failed: ${e.message}` });
+  }
 });
 
 // Send a test email to confirm SMTP works.
@@ -202,6 +337,23 @@ const HEARTBEAT_MS = 12_000;
 // so deep Opus questions with multiple web_search iterations have room
 // to complete instead of returning a "took too long" hint.
 const ANTHROPIC_TIMEOUT_MS = 90_000;
+// GEMINI budgets (audit 2026-08-21). The Gemini chat path had NO timeout at all
+// and no walk-wide deadline: post() fetched with no signal, so one question on a
+// quota-capped key could sit through 4 models x MAX_TOOL_ITER agentic calls at
+// undici's ~300s header timeout each while the 12s heartbeat kept nginx happy
+// and client/src/api.js (axios, no timeout) waited — mam watching '…' for
+// minutes, i.e. "chat not replying good".
+//   GEMINI_CALL_TIMEOUT_MS — one generateContent request.
+//   GEMINI_DEADLINE_MS     — the WHOLE turn, hops included, checked before every
+//                            hop, every tool iteration and every 429 sleep.
+//   GEMINI_MAX_HOPS        — model hops after the first attempt. ONE, not three:
+//                            unlike lib/aiComplete's single ~40-token retry, a
+//                            chat hop restarts an entire agentic conversation.
+//   GEMINI_MIN_HOP_MS      — don't start a hop we cannot finish.
+const GEMINI_CALL_TIMEOUT_MS = 60_000;
+const GEMINI_DEADLINE_MS = 150_000;
+const GEMINI_MAX_HOPS = 1;
+const GEMINI_MIN_HOP_MS = 8_000;
 const ROW_LIMIT = 500;
 
 // Tables Claude is allowed to read. Skipping sensitive auth tables.
@@ -574,7 +726,8 @@ const SOLAR_ESTIMATE_SCHEMA = {
 // grounding — so it can quote live MARKET RATES, not only ERP data (mam:
 // "not satisfied ... give me rate from market also"). Search grounding is
 // handled server-side by Gemini; we only execute our own function calls.
-async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, db }) {
+async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, db,
+                                retries429, signal, deadlineAt, noGrounding }) {
   if (typeof fetch !== 'function') {
     const e = new Error('This server\'s Node is too old for Gemini (needs Node 18+).'); e.status = 500; throw e;
   }
@@ -597,7 +750,16 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
     },
   ];
   // Both tools: our functions + Google Search grounding (for market rates).
-  let tools = [{ function_declarations: functionDeclarations }, { google_search: {} }];
+  // noGrounding is the caller's per-QUESTION memory of models that rejected
+  // grounding + function calling together. Without it every hop re-learned the
+  // incompatibility from scratch, paying one extra failed request per model
+  // (audit 2026-08-21). Per-request, not per-process, so a one-off error message
+  // that happens to match the regex can't silently kill market-rate grounding
+  // for the rest of the day.
+  const groundingBanned = noGrounding && noGrounding.has(model);
+  let tools = groundingBanned
+    ? [{ function_declarations: functionDeclarations }]
+    : [{ function_declarations: functionDeclarations }, { google_search: {} }];
 
   const contents = [];
   for (const m of history) {
@@ -612,21 +774,63 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
   // retry with backoff so a transient limit doesn't surface as an error
   // (mam 2026-06-15). The route's heartbeat keeps the connection alive while
   // we wait.
-  const post = async (body, retries = 2) => {
-    for (let attempt = 0; ; attempt++) {
-      const r = await fetch(endpoint, {
+  // retries429 lets the caller say "don't sit out a quota window here". The
+  // model walk in /ask passes 0 on a HOP (mam 2026-08-21): an agentic turn is
+  // several generateContent calls, so 4s+8s per call per hop could hang the
+  // chat for minutes when the answer is simply "try another model".
+  // Client-gone / timed-out error shapes the walk in /ask understands.
+  const gone = () => { const e = new Error('chat closed by the user'); e.status = 499; e.clientGone = true; return e; };
+  const tooSlow = () => { const e = new Error('Gemini took too long to answer'); e.status = 408; return e; };
+  const msLeft = () => (deadlineAt ? deadlineAt - Date.now() : GEMINI_CALL_TIMEOUT_MS);
+
+  // ONE generateContent request, with BOTH an abort signal (mam closed the chat
+  // panel — stop burning free-tier quota on an answer nobody will read) and a
+  // hard per-request timeout. AbortSignal.any() is Node 20.3+, so the two
+  // sources are merged by hand to stay safe on the VPS's Node.
+  const doFetch = async (payload, perAttempt) => {
+    const ac = new AbortController();
+    let timedOut = false;
+    const onAbort = () => { try { ac.abort(); } catch (_) {} };
+    if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+    const timer = setTimeout(() => { timedOut = true; onAbort(); }, Math.max(1000, perAttempt));
+    try {
+      return await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify(body),
+        body: payload,
+        signal: ac.signal,
       });
+    } catch (e) {
+      if (signal && signal.aborted) throw gone();
+      if (timedOut || e?.name === 'AbortError' || e?.name === 'TimeoutError') throw tooSlow();
+      const err = new Error(e?.message || 'Gemini request failed'); err.status = 502; throw err;
+    } finally {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    }
+  };
+
+  const post = async (body, retries = (retries429 == null ? 2 : retries429)) => {
+    const payload = JSON.stringify(body);
+    for (let attempt = 0; ; attempt++) {
+      if (signal && signal.aborted) throw gone();
+      const left = msLeft();
+      if (left <= 0) throw tooSlow();
+      const r = await doFetch(payload, Math.min(GEMINI_CALL_TIMEOUT_MS, left));
       if (r.status !== 429 || attempt >= retries) return r;
-      await sleep(4000 * (attempt + 1)); // 4s, then 8s
+      const wait = 4000 * (attempt + 1); // 4s, then 8s
+      // Never sleep out a quota window we have no time to use afterwards —
+      // hand the 429 back so the walk can hop instead.
+      if (msLeft() - wait < GEMINI_MIN_HOP_MS) return r;
+      await sleep(wait);
     }
   };
 
   const sqlRuns = [];
   let answer = '';
   for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
+    if (signal && signal.aborted) throw gone();
+    if (msLeft() <= 0) throw tooSlow();
     const body = {
       systemInstruction: { parts: [{ text: systemPrompt }] },
       contents, tools,
@@ -639,6 +843,7 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
       // retry once with our function tools only so the chat still works.
       if (tools.length > 1 && /(tool|search|grounding|function)/i.test(txt)) {
         tools = [{ function_declarations: functionDeclarations }];
+        if (noGrounding) noGrounding.add(model);   // remember for the next hop
         r = await post({ ...body, tools });
         if (!r.ok) { const t2 = await r.text().catch(() => ''); const e = new Error(t2 || `Gemini HTTP ${r.status}`); e.status = r.status; throw e; }
       } else {
@@ -708,9 +913,21 @@ router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
     try { res.write(' '); } catch (_) {}
   }, HEARTBEAT_MS);
   // If mam closes the chat panel mid-call, stop the heartbeat so it
-  // doesn't keep firing into a dead socket.
-  req.on('close', () => clearInterval(heartbeat));
+  // doesn't keep firing into a dead socket — AND abort the work itself.
+  // Clearing the interval alone left the awaited Gemini walk running to
+  // completion: up to 4 models x MAX_TOOL_ITER generateContent calls for an
+  // answer nobody will ever see, which on a free tier is what actually
+  // exhausts the daily allowance when mam gives up and re-asks (audit
+  // 2026-08-21). `finished` keeps the normal end-of-response 'close' from
+  // aborting work that already succeeded.
+  const clientGone = new AbortController();
+  let finished = false;
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    if (!finished) { try { clientGone.abort(); } catch (_) {} }
+  });
   const sendJson = (status, payload) => {
+    finished = true;
     clearInterval(heartbeat);
     if (!res.headersSent) res.status(status); // status only settable before first write... but we already wrote, so this is a no-op safety
     // For error payloads we still want a 502-style outcome — but we
@@ -860,18 +1077,117 @@ Guidance:
   const provider = (getSetting('ai_provider') || 'anthropic').toLowerCase();
   if (provider === 'gemini' || provider === 'google') {
     const gStart = Date.now();
+    const { AI_DEFAULTS, listGeminiModels, pickFreshGeminiModel, aiErrorMessage,
+            markQuotaCapped, isQuotaCapped, noteQuotaSwitch } = require('../lib/aiComplete');
     let gmodel = getSetting('ai_model');
-    if (!gmodel || !/gemini/i.test(gmodel)) gmodel = 'gemini-2.0-flash';
+    if (!gmodel || !/gemini/i.test(gmodel)) gmodel = AI_DEFAULTS.gemini;
+    // HER model, captured before any hop. Every "should this be persisted?"
+    // question below is answered against this, never against the current hop.
+    const chosen = gmodel;
+    const tried = [];                       // models excluded from further picks
+    const called = [];                      // models we ACTUALLY sent a question to (for the error text)
+    const deadlineAt = Date.now() + GEMINI_DEADLINE_MS;
+    const noGrounding = new Set();          // models that rejected Search grounding, this turn
     try {
-      const { answer, sqlRuns } = await runGeminiAgent({ apiKey, model: gmodel, systemPrompt, history: priorHistory, question, db });
+      let answer, sqlRuns;
+      // Model walk - mam 2026-08-21: after the market rates started working the
+      // chat STILL 429'd, because only lib/aiComplete knew how to step off a
+      // quota-capped model; this loop was 404-only. A chat turn is agentic
+      // (several generateContent calls per question), so it burns free-tier
+      // quota faster than anything else in the ERP and needs this most.
+      //   404 = the id is retired  -> switch AND persist (permanent) - but only
+      //         once the replacement has actually ANSWERED, and only when it was
+      //         HER model that 404'd. A 404 on a substitute we only reached
+      //         because of a 429 must never overwrite her choice.
+      //   429 = this model's free window is spent -> switch for THIS turn only,
+      //         remembered in the shared cooldown so the next question starts
+      //         on the model that answered, and Admin -> AI Settings keeps her
+      //         choice. Never persisted: the window reopens on its own.
+      // ListModels is fetched at most ONCE per question (the key's model list
+      // cannot change mid-question); the old code re-fetched it per hop.
+      let livePromise = null;
+      const live = () => (livePromise || (livePromise = listGeminiModels(
+        apiKey, Math.max(1000, Math.min(15000, deadlineAt - Date.now())))));
+      // quotaTrigger: we left HER model over quota (pre-flight or a 429 hop),
+      // so nothing in this turn may be written to app_settings.ai_model.
+      let quotaTrigger = false;
+      let firstFailure = 0;                 // status of the FIRST thing that went wrong
+      // Skip a model we already know is capped rather than spending a whole
+      // agentic turn rediscovering it - and pick the replacement with the
+      // quota-aware picker, so we don't warm-start onto a second capped model
+      // and pay hop 0's full 4s+8s back-off for nothing.
+      if (isQuotaCapped(gmodel)) {
+        const warm = pickFreshGeminiModel(await live(), [gmodel]);
+        if (warm && warm !== gmodel && !isQuotaCapped(warm)) {
+          console.warn(`[AI Agent /ask] '${gmodel}' quota-capped recently - starting on '${warm}'`);
+          tried.push(gmodel);               // never re-select the model we just skipped
+          gmodel = warm;
+          quotaTrigger = true;
+        }
+      }
+      for (let hop = 0; ; hop++) {
+        if (clientGone.signal.aborted) { const e = new Error('chat closed by the user'); e.status = 499; e.clientGone = true; throw e; }
+        tried.push(gmodel);
+        called.push(gmodel);
+        try {
+          ({ answer, sqlRuns } = await runGeminiAgent({
+            apiKey, model: gmodel, systemPrompt, history: priorHistory, question, db,
+            // First attempt keeps the normal 4s+8s back-off (a per-minute limit
+            // usually clears); once we're hopping - or once we already know the
+            // starting model was capped - fail fast. See post() above.
+            retries429: (hop === 0 && !quotaTrigger) ? undefined : 0,
+            signal: clientGone.signal, deadlineAt, noGrounding,
+          }));
+          break;
+        } catch (e1) {
+          const s = e1?.status;
+          // MARK FIRST, bail second: the old order threw on the last allowed hop
+          // before recording its 429, so the last model tried was never
+          // remembered as capped and the next question re-burned it. The raw
+          // body is passed so a per-MINUTE limit gets a ~1 min cooldown instead
+          // of parking every consumer off the model for 15.
+          if (s === 429) markQuotaCapped(gmodel, e1?.message);
+          if (!firstFailure && (s === 404 || s === 429)) firstFailure = s;
+          if (s === 429) quotaTrigger = true;
+          if (e1?.clientGone) throw e1;                       // nobody is waiting
+          if ((s !== 404 && s !== 429) || hop >= GEMINI_MAX_HOPS) throw e1;
+          if (deadlineAt - Date.now() < GEMINI_MIN_HOP_MS) throw e1;   // no time for another turn
+          const next = pickFreshGeminiModel(await live(), tried);
+          if (!next) throw e1;
+          console.warn(`[AI Agent /ask] gemini '${gmodel}' ${s === 429 ? 'quota exhausted' : 'not available'} - trying '${next}'`);
+          gmodel = next;
+        }
+      }
+      // ── Bookkeeping AFTER an answer exists (mirrors lib/aiComplete) ────────
+      // A retired id is gone for good, so persist the replacement - but only
+      // once it has answered, and only when the 404 was on HER model. A 429 is
+      // a rolling window: it lives in the shared in-memory cooldown, which also
+      // feeds lib/aiComplete so the rate/DPR features skip the capped model
+      // without burning a request of their own.
+      if (gmodel !== chosen && firstFailure === 404 && !quotaTrigger) {
+        setSetting('ai_model', gmodel);
+        noteQuotaSwitch(null, gmodel);
+        console.warn(`[AI Agent /ask] '${chosen}' is retired - saved '${gmodel}' as the model`);
+      } else {
+        noteQuotaSwitch(chosen, gmodel);
+      }
       console.log(`[AI Agent /ask] ok ${gmodel} (gemini) elapsed=${Date.now() - gStart}ms sqlRuns=${sqlRuns.length}`);
       return sendJson(200, { answer, sql_runs: sqlRuns, model: gmodel });
     } catch (e) {
-      console.error('[AI Agent /ask] Gemini call failed:', e.status, e.message);
-      let hint = '';
-      if (e.status === 401 || e.status === 403) hint = ' Check the Gemini API key in Admin → AI Settings.';
-      else if (e.status === 429) hint = ' Gemini free-tier quota hit (even after auto-retry). If this keeps happening you\'ve likely used the daily free limit — wait a while, slow down between questions, or switch to Anthropic Haiku in Admin → AI Settings.';
-      return sendJson(200, { error: `AI request failed (Gemini): ${String(e.message).slice(0, 300)}${hint}` });
+      // Client walked away: nothing to report to, just stop.
+      if (e?.clientGone || req.destroyed || res.writableEnded) {
+        clearInterval(heartbeat);
+        finished = true;
+        try { res.end(); } catch (_) {}
+        return;
+      }
+      console.error('[AI Agent /ask] Gemini call failed:', e.status, String(e.message).slice(0, 200));
+      // A readable sentence, not 300 chars of Google JSON. aiErrorMessage()
+      // already words every status (incl. the free-tier 429) for mam.
+      let msg = aiErrorMessage(e, 'gemini');
+      if (called.length > 1) msg += ` Models tried: ${called.join(', ')}.`;
+      if (e.status === 429) msg += " Google's free window reopens on its own - try again in a few minutes.";
+      return sendJson(200, { error: msg.slice(0, 500) });
     }
   }
 

@@ -53,6 +53,7 @@ const MODULE_LABELS = {
   'payment-required': 'Payment Required',
   'indent-fms': 'Indent FMS',
   procurement: 'Indent to Dispatch',
+  'sales-bill-receive': 'Sales Bill Receive',
   complaints: 'Complaints',
   leads: 'Leads / CRM',
   vendors: 'Vendors',

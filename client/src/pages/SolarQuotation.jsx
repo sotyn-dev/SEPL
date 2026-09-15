@@ -30,6 +30,7 @@ import {
   PROJECT_TYPES, MOUNTS, ARRAY_TYPES, PROPERTY_TYPES, typeLabel,
 } from '../lib/solar/engine';
 import { STATES } from '../data/indiaLocations';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const EMPTY_RB = { ui: { panel: {}, inverter: {}, structure: {}, cable: {} }, factors: { mount: {}, array: {}, state: {} }, settings: {}, inverterSizes: [], bos: {}, labour: {} };
 
@@ -41,8 +42,8 @@ export default function SolarQuotation() {
   const [rb, setRb] = useState(EMPTY_RB);
   const [leads, setLeads] = useState([]);
   const [leadId, setLeadId] = useState('');
-  const [view, setView] = useState('internal');     // internal | client
-  const [tab, setTab] = useState('build');           // build | saved
+  const [view, setView] = useUrlTab(['internal', 'client'], 'internal', 'view');     // internal | client
+  const [tab, setTab] = useUrlTab(['build', 'saved'], 'build');           // build | saved
   const [saved, setSaved] = useState([]);
   const [currentId, setCurrentId] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -359,7 +360,8 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
 
       {tab === 'saved' ? (
         <div className="card p-4">
-          <table className="w-full text-sm">
+          <div className="table-responsive">
+          <table className="w-full text-sm min-w-[700px]">
             <thead><tr className="bg-gray-50 text-left text-[10px] uppercase text-gray-500">
               <th className="p-2">Quote</th><th className="p-2">Client</th><th className="p-2">Type</th>
               <th className="p-2 text-right">kW</th><th className="p-2 text-right">Sell ₹</th><th className="p-2 text-right">Margin</th><th className="p-2">Updated</th><th></th></tr></thead>
@@ -378,6 +380,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
               {!saved.length && <tr><td colSpan={8} className="p-6 text-center text-gray-400">No saved solar quotations yet.</td></tr>}
             </tbody>
           </table>
+          </div>
         </div>
       ) : (
       <div className="grid grid-cols-1 xl:grid-cols-[360px_1fr] gap-4">
@@ -388,7 +391,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
             <label className="block"><span className="label">Lead (Sales Funnel)</span>
               <SearchableSelect options={leads} value={dealId} displayKey="_label" valueKey="id"
                 placeholder="Pick a lead…" onChange={pickFunnelDeal} /></label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {Tx('client', 'Client name')}
               {Tx('addr', 'Address')}
               {Se('state', 'State', STATES)}
@@ -403,7 +406,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
 
           <div className="card p-4 space-y-3">
             <p className="font-bold text-[11px] uppercase tracking-wide text-gray-700">2 · Sizing</p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {Nu('kw', 'Capacity (kW AC)')}{Nu('dcac', 'DC : AC ratio', { step: '0.01' })}
               {Nu('wp', 'Panel (Wp)')}{Tx('ptype', 'Panel type')}
               {Nu('voc', 'Voc (V)', { step: '0.1' })}{Nu('vmp', 'Vmp (V)', { step: '0.1' })}
@@ -413,7 +416,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
 
           <div className="card p-4 space-y-3">
             <p className="font-bold text-[11px] uppercase tracking-wide text-gray-700">2b · Equipment make &amp; grade <span className="text-rose-500 normal-case font-normal">(drives rate)</span></p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {Se('panelmake', 'Panel make', panelMakes.length ? panelMakes : [inp.panelmake])}
               {Se('dcr', 'Cell content', [{ v: '0', label: 'Non-DCR (import cell)' }, { v: '1', label: 'DCR (domestic)' }])}
               {Se('invmake', 'Inverter make', invMakes.length ? invMakes : [inp.invmake])}
@@ -425,7 +428,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
 
           <div className="card p-4 space-y-3">
             <p className="font-bold text-[11px] uppercase tracking-wide text-gray-700">3 · BOS &amp; electrical</p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {Nu('vdc', 'Inverter max DC (V)')}{Nu('mppt', 'MPPT min (V)')}
               {Nu('dcrun', 'DC run one-way (m)')}{Nu('acrun', 'AC run (m)')}
               {Nu('dcvd', 'DC volt-drop %', { step: '0.1' })}{Nu('acvd', 'AC volt-drop %', { step: '0.1' })}
@@ -436,7 +439,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
           {isBatt && (
             <div className="card p-4 space-y-3 ring-1 ring-amber-200">
               <p className="font-bold text-[11px] uppercase tracking-wide text-amber-700">🔋 Battery sizing ({inp.conn === 'offgrid' ? 'off-grid' : 'hybrid'})</p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {Nu('backupkw', 'Backup load (kW)')}{Nu('backuphrs', 'Backup hours')}
                 {Nu('dod', 'Depth of discharge %')}
                 {inp.conn === 'offgrid' && Nu('autonomy', 'Autonomy (days)')}
@@ -447,7 +450,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
 
           <div className="card p-4 space-y-3">
             <p className="font-bold text-[11px] uppercase tracking-wide text-gray-700">4 · Commercials &amp; throughput margin</p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {Nu('margin', 'Target margin %', { step: '0.5' })}{Nu('floor', 'Min-margin floor %', { step: '0.5' })}
               {Nu('gst', 'GST %', { step: '0.1' })}{Nu('netchg', 'Net-meter charge ₹')}
               {Nu('cont', 'Contingency %', { step: '0.5' })}
@@ -474,7 +477,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
 
           <div className="card p-4 space-y-3">
             <p className="font-bold text-[11px] uppercase tracking-wide text-gray-700">5 · Finance (EMI calculator)</p>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {Nu('loanPct', 'Financed %', { step: '5', min: '0', max: '100' })}
               {Nu('loanRate', 'Interest %/yr', { step: '0.1' })}
               {Nu('loanTenure', 'Tenure (yrs)', { step: '1' })}
@@ -486,18 +489,18 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
         {/* OUTPUT */}
         <div className="space-y-4">
           {/* actions */}
-          <div className="flex items-center justify-between gap-2 flex-wrap no-print">
-            <div className="flex gap-2">
-              <button onClick={() => setView('internal')} className={`px-3 py-2 rounded-full text-xs font-semibold border ${view === 'internal' ? 'bg-white text-gray-700 border-gray-200' : 'bg-white text-gray-400 border-gray-100'}`}>Internal (our rates)</button>
-              <button onClick={() => setView('client')} className={`px-3 py-2 rounded-full text-xs font-semibold border ${view === 'client' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-400 border-gray-100'}`}>Client (lumpsum)</button>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 no-print">
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
+              <button onClick={() => setView('internal')} className={`px-3 py-1.5 rounded-full text-xs font-semibold border whitespace-nowrap ${view === 'internal' ? 'bg-white text-gray-700 border-gray-200 shadow-sm' : 'bg-white text-gray-400 border-gray-100'}`}>Internal (our rates)</button>
+              <button onClick={() => setView('client')} className={`px-3 py-1.5 rounded-full text-xs font-semibold border whitespace-nowrap ${view === 'client' ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-white text-gray-400 border-gray-100'}`}>Client (lumpsum)</button>
             </div>
-            <div className="flex gap-2">
-              <button onClick={() => window.print()} className="btn btn-secondary text-sm flex items-center gap-1"><FiPrinter size={14} /> Print</button>
-              <button onClick={printPdf} className="btn btn-secondary text-sm flex items-center gap-1"><FiFileText size={14} /> PDF</button>
-              <button onClick={exportXlsx} className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Excel</button>
-              <button onClick={exportBoqForProcurement} title="BOQ as a procurement-ready CSV — description, make, unit, qty, purchase rate" className="btn btn-secondary text-sm flex items-center gap-1"><FiShoppingCart size={14} /> BOQ for Procurement</button>
-              {currentId && <button onClick={() => window.open(`/solar-quotations/${currentId}/design-report`, '_blank')} className="btn btn-secondary text-sm flex items-center gap-1"><FiFileText size={14} /> Design Report</button>}
-              <button onClick={save} disabled={busy} className="btn btn-primary text-sm flex items-center gap-1"><FiSave size={14} /> {currentId ? 'Update' : 'Save'}</button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => window.print()} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1"><FiPrinter size={14} /> Print</button>
+              <button onClick={printPdf} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1"><FiFileText size={14} /> PDF</button>
+              <button onClick={exportXlsx} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1"><FiDownload size={14} /> Excel</button>
+              <button onClick={exportBoqForProcurement} title="BOQ as a procurement-ready CSV — description, make, unit, qty, purchase rate" className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1"><FiShoppingCart size={14} /> BOQ for Procurement</button>
+              {currentId && <button onClick={() => window.open(`/solar-quotations/${currentId}/design-report`, '_blank')} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1"><FiFileText size={14} /> Design Report</button>}
+              <button onClick={save} disabled={busy} className="btn btn-primary text-xs sm:text-sm flex items-center gap-1 font-semibold"><FiSave size={14} /> {currentId ? 'Update' : 'Save'}</button>
             </div>
           </div>
 
@@ -562,7 +565,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
               <div>
                 <div className="px-5 pt-3 text-[11px] text-rose-600 font-semibold no-print">● INTERNAL working sheet — our purchase rates &amp; throughput margin. Never sent to client.</div>
                 <div className="p-4 overflow-x-auto">
-                  <table className="w-full text-xs">
+                  <table className="w-full text-xs min-w-[850px]">
                     <thead><tr className="bg-gray-50 text-left text-gray-600">
                       <th className="p-2">S.No</th><th className="p-2 min-w-[200px]">Description</th><th className="p-2">Unit</th>
                       <th className="p-2 text-right">Qty</th><th className="p-2 text-right">Purch ₹/u</th><th className="p-2 text-right">PP ₹</th>
@@ -597,7 +600,8 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
             ) : (
               <div className="p-5">
                 <div className="px-0 pb-2 text-[11px] text-emerald-600 font-semibold no-print">● CLIENT quotation — lumpsum per-kW price only. No rates, no breakup.</div>
-                <table className="w-full text-sm mb-5">
+                <div className="overflow-x-auto">
+                <table className="w-full text-sm mb-5 min-w-[550px]">
                   <thead><tr className="border-b-2 text-left text-gray-600"><th className="p-2 w-12">S.No</th><th className="p-2">Description</th><th className="p-2 text-right">Amount (₹)</th></tr></thead>
                   <tbody>
                     <tr className="border-b"><td className="p-2 align-top">1</td>
@@ -613,6 +617,7 @@ ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
                     </>)}
                   </tbody>
                 </table>
+                </div>
                 <div className="mb-4 p-3 bg-emerald-50 rounded-lg">
                   <p className="font-bold text-xs mb-1 text-emerald-800">Your savings at a glance</p>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">

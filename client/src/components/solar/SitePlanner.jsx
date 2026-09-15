@@ -51,13 +51,13 @@ export default function SitePlanner({
     const drawing = L.layerGroup().addTo(map);
 
     map.on('click', (e) => {
-      if (!modeRef.current) return;
-      setDraft((p) => [...p, [e.latlng.lat, e.latlng.lng]]);
+      if (modeRef.current) { setDraft((p) => [...p, [e.latlng.lat, e.latlng.lng]]); return; }
+      cbRef.current.onMoveCenter?.(e.latlng.lat, e.latlng.lng);   // plain click re-pins the site outside tracing
     });
     map.on('contextmenu', (e) => {
       L.DomEvent.preventDefault(e);
       if (modeRef.current) { setDraft((p) => p.slice(0, -1)); return; }
-      cbRef.current.onMoveCenter?.(e.latlng.lat, e.latlng.lng);   // right-click re-pins the site
+      cbRef.current.onMoveCenter?.(e.latlng.lat, e.latlng.lng);   // right-click also re-pins (kept for muscle memory)
     });
     map.on('dblclick', (e) => {
       if (!modeRef.current) return;
@@ -74,18 +74,29 @@ export default function SitePlanner({
     };
 
     M.current = { map, shapes, drawing, pin, lat, lng, finish };
-    setTimeout(() => map.invalidateSize(), 60);
+    // Cleared on unmount — React StrictMode's dev-only mount→cleanup→mount
+    // double-invoke otherwise lets this fire 60ms later on a map instance
+    // the cleanup already called .remove() on, throwing deep inside Leaflet
+    // (reading '_leaflet_pos' on a DOM node that no longer exists).
+    const invalidateTimer = setTimeout(() => map.invalidateSize(), 60);
 
-    return () => { map.remove(); M.current = {}; };
+    return () => { clearTimeout(invalidateTimer); map.remove(); M.current = {}; };
   }, []);          // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-centre when the site pin moves.
+  // Re-centre when the site pin moves. Guarded against no-op calls (the
+  // mount render fires this with the exact same [lat,lng] the map was just
+  // created with) and forced to skip Leaflet's animated pan/zoom — calling
+  // setView this early (before the deferred invalidateSize() above has run,
+  // so the container's measured size is still stale) sends the animated path
+  // into `_leaflet_pos` on an element that isn't positioned yet, crashing on
+  // every pin move including the very first page load.
   useEffect(() => {
     const { map, pin } = M.current;
     if (!map || lat == null) return;
+    if (M.current.lat === lat && M.current.lng === lng) return;
     M.current.lat = lat; M.current.lng = lng;
     pin.setLatLng([lat, lng]);
-    map.setView([lat, lng], Math.max(map.getZoom(), 18));
+    map.setView([lat, lng], Math.max(map.getZoom(), 18), { animate: false });
   }, [lat, lng]);
 
   // ── committed shapes ─────────────────────────────────────────────────────
@@ -179,7 +190,7 @@ export default function SitePlanner({
 
       {!drawMode && (
         <div className="absolute bottom-2 left-2 z-[1000] bg-slate-900/85 text-slate-200 rounded px-2 py-1 text-[10px] flex items-center gap-1">
-          <FiCrosshair size={11} /> Right-click the map to move the site pin
+          <FiCrosshair size={11} /> Click the map to move the site pin here
         </div>
       )}
     </div>

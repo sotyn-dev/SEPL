@@ -254,7 +254,7 @@ export default function AIAgentChat() {
       )}
 
       {open && (
-        <div className="fixed bottom-6 right-6 z-40 w-[min(90vw,400px)] h-[min(80vh,560px)] bg-white border border-gray-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+        <div className="fixed bottom-2 right-2 left-2 sm:left-auto sm:bottom-6 sm:right-6 sm:w-[400px] h-[min(85vh,560px)] z-40 bg-white border border-gray-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-blue-800 to-blue-950 text-white">
             <div>
               <div className="font-semibold text-sm">Ask SOTYN.AI</div>

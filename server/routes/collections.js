@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const {
@@ -612,7 +613,7 @@ router.post('/:id/collect', requirePermission('collections', 'edit'), (req, res)
   // Record collection (coerce optional fields to null so an omitted field
   // never throws an undefined-bind error).
   db.prepare('INSERT INTO collections (receivable_id, amount, collection_date, payment_mode, transaction_ref, notes, collected_by) VALUES (?,?,?,?,?,?,?)')
-    .run(req.params.id, amt, collection_date || new Date().toISOString().split('T')[0], payment_mode || null, transaction_ref || null, notes || null, req.user.id);
+    .run(req.params.id, amt, collection_date || istToday(), payment_mode || null, transaction_ref || null, notes || null, req.user.id);
 
   // Update receivable. Use the coerced number so we never string-concat money.
   const newReceived = (rec.received_amount || 0) + amt;
@@ -630,7 +631,7 @@ router.post('/:id/collect', requirePermission('collections', 'edit'), (req, res)
 
   // AUTO-LINK + A14 — Add to Cash Flow as inflow; ensureTodayCashFlowDaily
   // creates today's row with opening = yesterday closing if missing.
-  const today = collection_date || new Date().toISOString().split('T')[0];
+  const today = collection_date || istToday();
   const dailyRes = ensureTodayCashFlowDaily(db, today);
   const daily = { id: dailyRes.id };
   db.prepare('INSERT INTO cash_flow_entries (daily_id, date, type, category, description, amount, payment_mode, party_name, reference_type, reference_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)')

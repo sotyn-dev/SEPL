@@ -2,15 +2,28 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 
-// AI Settings (admin only). Pastes the Anthropic API key into the SOTYN.AI
-// itself — no SSH, no .env edit. Stored server-side in app_settings.
-// The key is never sent back to the browser; GET only returns a masked
-// version so the page can show "configured" vs "not configured".
+// AI Settings (admin only). Pastes the AI API key (Anthropic or Google Gemini)
+// into the SOTYN.AI itself — no SSH, no .env edit. Stored server-side in
+// app_settings. The key is never sent back to the browser; GET only returns a
+// masked version so the page can show "configured" vs "not configured".
 export default function AISettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState({ api_key_set: false });
   const [form, setForm] = useState({ provider: 'anthropic', model: 'claude-opus-4-7', api_key: '' });
+  // Model list comes from the SERVER, which asks the provider what this key can
+  // actually call (mam 2026-08-21: the old hardcoded Gemini options had all been
+  // retired by Google, so every choice 404'd and there was no way to type a live
+  // one). source==='live' means it came from the provider, 'static' is a fallback.
+  const [models, setModels] = useState({ source: 'static', list: [] });
+  const [modelsLoading, setModelsLoading] = useState(false);
+  // Bumped by save(). status.api_key_set is a BOOLEAN, so saving a new key
+  // over an existing one never changed it and the list was never refetched
+  // (audit 2026-08-21) — which is exactly mam's flow: an Anthropic key is
+  // already stored, so the first Gemini probe runs with the WRONG key, comes
+  // back empty, and the dropdown stayed on the static fallback until a remount.
+  const [keyRev, setKeyRev] = useState(0);
 
   useEffect(() => {
     api.get('/ai-agent/settings').then(r => {
@@ -19,6 +32,25 @@ export default function AISettings() {
     }).catch(e => toast.error(e.response?.data?.error || 'Failed to load'))
       .finally(() => setLoading(false));
   }, []);
+
+  // Refresh the list whenever the provider changes, and after every save —
+  // a freshly pasted key can offer a completely different set of models.
+  useEffect(() => {
+    let dead = false;
+    setModelsLoading(true);
+    api.get('/ai-agent/settings/models', { params: { provider: form.provider } })
+      .then(r => {
+        if (dead) return;
+        setModels({ source: r.data.source, list: r.data.models || [] });
+        // If the stored model isn't offered any more, move to the first live
+        // one so she isn't left staring at a dead selection.
+        setForm(f => (r.data.models?.length && !r.data.models.some(m => m.id === f.model)
+          ? { ...f, model: r.data.default || r.data.models[0].id } : f));
+      })
+      .catch(() => { if (!dead) setModels({ source: 'static', list: [] }); })
+      .finally(() => { if (!dead) setModelsLoading(false); });
+    return () => { dead = true; };
+  }, [form.provider, keyRev]);
 
   const save = async (e) => {
     e.preventDefault();
@@ -31,10 +63,28 @@ export default function AISettings() {
       const fresh = await api.get('/ai-agent/settings').then(r => r.data);
       setStatus(fresh);
       setForm(f => ({ ...f, api_key: '' }));
+      setKeyRev(v => v + 1);   // re-probe the provider with the key just saved
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // One-click probe (mam 2026-08-21) — tests the key currently TYPED when
+  // there is one, otherwise the stored one, so she never has to save a bad
+  // key to find out it's bad. The server never persists what's posted here.
+  const runTest = async () => {
+    setTesting(true);
+    try {
+      const payload = { provider: form.provider, model: form.model };
+      if (form.api_key.trim()) payload.api_key = form.api_key.trim();
+      const r = await api.post('/ai-agent/settings/test', payload);
+      toast.success(`${r.data.provider} · ${r.data.model} responded — key works`);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Test failed');
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -45,7 +95,8 @@ export default function AISettings() {
       <div className="card p-4 space-y-3">
         <h3 className="font-semibold text-gray-800">AI Agent — API Key</h3>
         <p className="text-sm text-gray-600">
-          Paste your API key here to enable the floating "Ask SOTYN.AI" chat bubble across the system.
+          Paste your API key here to enable the floating "Ask SOTYN.AI" chat bubble across the system,
+          and the AI market rates on Vendor Rates, DPR photo head-count, quotation matching and the procurement schedule.
           The key is stored in the SOTYN.AI database (not in any file), and never sent back to a browser.
           {form.provider === 'gemini'
             ? <> Get a <b>free</b> Gemini key at <a className="text-red-600 hover:underline" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">aistudio.google.com</a> → <b>Get API key</b>. (Free tier has rate limits and may use data to improve Google's products — avoid for highly sensitive queries.)</>
@@ -77,7 +128,7 @@ export default function AISettings() {
                 const p = e.target.value;
                 // Switch the model default to match the provider so a Claude
                 // model id isn't sent to Gemini (or vice-versa).
-                setForm(f => ({ ...f, provider: p, model: p === 'gemini' ? 'gemini-2.0-flash' : 'claude-opus-4-7' }));
+                setForm(f => ({ ...f, provider: p, model: '' }));
               }}>
                 <option value="anthropic">Anthropic (Claude) — most capable, paid</option>
                 <option value="gemini">Google Gemini — free tier</option>
@@ -85,20 +136,25 @@ export default function AISettings() {
             </div>
             <div>
               <label className="label">Model</label>
-              <select className="select" value={form.model} onChange={e => setForm({ ...form, model: e.target.value })}>
-                {form.provider === 'gemini' ? <>
-                  <option value="gemini-2.0-flash">Gemini 2.0 Flash (free, fast)</option>
-                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (free, newer)</option>
-                  <option value="gemini-1.5-flash">Gemini 1.5 Flash (free)</option>
-                </> : <>
-                  <option value="claude-opus-4-7">Claude Opus 4.7 (most capable)</option>
-                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (faster, cheaper)</option>
-                  <option value="claude-haiku-4-5">Claude Haiku 4.5 (fastest, cheapest)</option>
-                </>}
+              <select className="select" value={form.model} disabled={modelsLoading}
+                onChange={e => setForm({ ...form, model: e.target.value })}>
+                {modelsLoading && <option value="">Loading models…</option>}
+                {/* The stored model may no longer be offered — keep it listed so
+                    the box never renders blank while she reads the warning. */}
+                {!modelsLoading && form.model && !models.list.some(m => m.id === form.model) &&
+                  <option value={form.model}>{form.model} (not available)</option>}
+                {models.list.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
               </select>
+              <p className="text-[11px] text-gray-500 mt-1">
+                {modelsLoading ? 'Asking the provider which models your key can use…'
+                  : models.source === 'live' ? `${models.list.length} model(s) your key can use, newest first.`
+                  : status.api_key_set ? 'Could not reach the provider — showing known models.'
+                  : 'Save your API key to see the models it can use.'}
+              </p>
             </div>
           </div>
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn btn-secondary" disabled={testing} onClick={runTest}>{testing ? 'Testing…' : 'Test connection'}</button>
             <button type="submit" disabled={saving} className="btn btn-primary">{saving ? 'Saving…' : 'Save'}</button>
           </div>
         </form>

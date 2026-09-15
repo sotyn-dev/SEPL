@@ -20,6 +20,33 @@ const { authMiddleware, requirePermission, adminOnly } = require('../middleware/
 
 router.use(authMiddleware);
 
+// Due-date basis (mam 2026-09-05 "change to due date"): a task belongs to the
+// week its CURRENT due date falls in — after any approved extension or manual
+// re-date — so the scorecard agrees with the Delegations page's From/To filter
+// (which is on due_date). A task with no due date falls back to the week it
+// was created, so nothing ever disappears from every week. Replaces the
+// created_at cohort of 2026-06-29; snags keep raised_at (mam's verbatim
+// formula). Shared by the Scorecard engine, the Weekly team table and its
+// detail drill-down — one rule, one number per person on every surface.
+// Two boundary rules (pre-push review 2026-09-05):
+//  • undated rows fall back to the IST calendar day they were created —
+//    created_at is UTC, so a 00:00–05:29 IST creation would otherwise slide
+//    to the previous day (same '+330 minutes' shift the snag formula uses);
+//  • the scoring week is Mon–Sat, so a SUNDAY due day is folded into the
+//    Saturday before it: it belongs to the week that just ended, never to no
+//    week at all (it used to be Planned nowhere, then surface as next week's
+//    backlog).
+// Shared with db/schema.js so the expression INDEXES match these queries
+// exactly (hang audit 2026-09-05) — see lib/dueDay.js before editing.
+const { dueDay } = require('../lib/dueDay');
+const DUE_DELEG = dueDay('due_date'), DUE_PMS = dueDay('due_date'), DUE_TKT = dueDay('deadline_date');
+const DUE_FLOW = dueDay('target_date');   // ERP Management (System Flow) v1 (retired)
+const DUE_SYSFLOW = dueDay('st.planned_date');   // System Flow v2 steps
+// Snag List on the due-date basis too (mam 2026-09-14: "snag list scoring
+// evaluate according due date"): the Target Date Mon→Sat, undated snags not
+// counted — shared with the Snags page filter so both show the same total.
+const DUE_SNAG = require('../lib/dueDay').snagDue();
+
 // ---------- TEMPLATES & KPIs (admin manages) ----------
 
 // List all templates
@@ -273,13 +300,23 @@ router.put('/module-owners/:key', adminOnly, (req, res) => {
 // template targets. Extracted from the /scorecard route so the Champions
 // League gamification module can rank the very same scores without
 // duplicating any of the KPI math below.
-function computeScorecard(db, userId, weekStart) {
+// opts (all optional):
+//   templateId — score THIS template's KPIs for the user instead of the one
+//                assigned to them (the template editor previews a template
+//                before anyone is assigned, and needs `target_auto` per KPI)
+//   allKpis    — ignore the per-user enabled=0 switch (editor shows every row)
+function computeScorecard(db, userId, weekStart, opts = {}) {
     // Find user's template
-    const ut = db.prepare('SELECT template_id FROM score_user_template WHERE user_id=?').get(userId);
+    const ut = opts.templateId
+      ? { template_id: opts.templateId }
+      : db.prepare('SELECT template_id FROM score_user_template WHERE user_id=?').get(userId);
     if (!ut) {
       return { user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, total_weight: 0, activity: 0, message: 'No template assigned to this user yet' };
     }
     const tpl = db.prepare('SELECT * FROM score_templates WHERE id=?').get(ut.template_id);
+    if (!tpl) {
+      return { user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, total_weight: 0, activity: 0, message: 'Template not found' };
+    }
     const kpis = db.prepare('SELECT * FROM score_kpis WHERE template_id=? AND COALESCE(active,1)=1 ORDER BY display_order, id').all(ut.template_id);
 
     const lastWeekStart = shiftWeek(weekStart, -7);
@@ -321,25 +358,61 @@ function computeScorecard(db, userId, weekStart) {
       // Actual can never exceed Planned. The old logic counted ANY task completed
       // this week (including ones assigned in earlier weeks), which gave the
       // confusing 5-given / 11-done case on Monika's Delegation row.
+      // Due-date basis (2026-09-05): Planned = tasks DUE this week, Actual = of
+      // those, done. Same cohort both sides, so Actual <= Planned still holds.
       if (source === 'auto:delegations') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status='approved'`).get(userId, since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND ${DUE_DELEG} BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND ${DUE_DELEG} BETWEEN ? AND ? AND status='approved'`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:pms') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status='approved'`).get(userId, since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND ${DUE_PMS} BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND ${DUE_PMS} BETWEEN ? AND ? AND status='approved'`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:tickets') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(userId, since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND ${DUE_TKT} BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND ${DUE_TKT} BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(userId, sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:checklists') {
-        const cklAssigned = db.prepare(`SELECT COUNT(*) as c FROM checklists WHERE assigned_to=? AND COALESCE(active,1)=1`).get(userId).c;
-        const given = cklAssigned * 6;
+        // Frequency-aware planned (mam 2026-08-31: the old ×6 assumed every
+        // checklist is DAILY — a monthly task inflated the week's plan by 6).
+        // Planned = Σ per checklist of the days it actually fires Mon–Sat.
+        // Days the person was absent / on leave drop out of the plan too, so
+        // nobody is scored against a day they were not at work (mam 2026-09-12).
+        const { weeklyExpected, absenceSet, weekDates } = require('../lib/checklistFrequency');
+        const ckls = db.prepare(`SELECT assigned_to, frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
+                                   FROM checklists WHERE assigned_to=? AND COALESCE(active,1)=1`).all(userId);
+        const cklAway = absenceSet(db, weekDates(sinceDate));
+        const given = ckls.reduce((s, c) => s + weeklyExpected(c, sinceDate, cklAway), 0);
         const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        return { given, done };
+      }
+      // Snag List — SAME shape and SAME position as delegations (mam
+      // 2026-08-12: "u do snaglist same as delegation").  MUST stay above the
+      // site-scope gate further down: snags are per-assignee like delegations,
+      // not site-scoped, and when this block sat below the gate every user
+      // with no site mapping silently read 0/0.
+      // Formula: Plan = snags DUE this week (target_date) AND assigned = user;
+      // Actual = same + status='approved' (current status only, NO
+      // approved_at window — a later approval still counts toward the due
+      // week).  Due-date basis since 2026-09-14 (was raise date): Target
+      // Date Mon→Sat, snags with no Target Date not counted — the same
+      // window as the Snags page Due From/To filter (see DUE_SNAG).
+      // Tolerant assignee match (mam 2026-08-13 "ur calculation is wrong"):
+      // app-created rows link assigned_to = users.id, but imported/WhatsApp
+      // rows carry only the NAME (either in assigned_to_name with a NULL id,
+      // or the name string sitting in the id column itself) — match all three.
+      if (source === 'auto:snags') {
+        const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
+        const who = `(assigned_to=? OR (assigned_to IS NULL AND assigned_to_name=?) OR CAST(assigned_to AS TEXT)=?)`;
+        const given = db.prepare(
+          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND ${DUE_SNAG} BETWEEN ? AND ?`
+        ).get(userId, uname, uname, sinceDate, untilDate).c;
+        const done = db.prepare(
+          `SELECT COUNT(*) as c FROM snags WHERE ${who} AND ${DUE_SNAG} BETWEEN ? AND ? AND status='approved'`
+        ).get(userId, uname, uname, sinceDate, untilDate).c;
         return { given, done };
       }
 
@@ -347,18 +420,27 @@ function computeScorecard(db, userId, weekStart) {
       // WHOLE process, not just their own records (mam 2026-06-29: Sushila owns
       // ALL PMS). Same same-week cohort as the by-user versions, no assigned_to.
       if (source === 'auto:pms_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE created_at BETWEEN ? AND ? AND status='approved'`).get(since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE ${DUE_PMS} BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE ${DUE_PMS} BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:delegations_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE created_at BETWEEN ? AND ? AND status='approved'`).get(since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE ${DUE_DELEG} BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE ${DUE_DELEG} BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       if (source === 'auto:tickets_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(since, until).c;
+        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE ${DUE_TKT} BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE ${DUE_TKT} BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(sinceDate, untilDate).c;
+        return { given, done };
+      }
+      if (source === 'auto:snags_all') {
+        // Company-wide twin of auto:snags — same formula, no assignee filter.
+        // Kept beside the other *_all owner sources, above the site gate.
+        // Same due-day basis as auto:snags so both views bucket a snag into
+        // the same week.
+        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE ${DUE_SNAG} BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE ${DUE_SNAG} BETWEEN ? AND ? AND status='approved'`).get(sinceDate, untilDate).c;
         return { given, done };
       }
       // ERP module coverage — how many of the tracked modules had ANY activity
@@ -436,22 +518,55 @@ function computeScorecard(db, userId, weekStart) {
         } catch (e) { return { given: null, done: null }; }
       }
 
+      // Data completeness — QUALITY of data entry, not volume (mam 2026-09-03:
+      // "count this ... like data completion and want to take in data entry
+      // score"). auto:data_entry_all above counts how MANY records were touched;
+      // this scores how much of the required data is actually filled.
+      //
+      // Plan = every required field across every record (Item Master, Business
+      // Book, Employees, Users); Actual = the ones filled. So the score IS the
+      // completion percentage the bars on those pages show — same library, so
+      // the KPI can never disagree with the screen.
+      //
+      // Deliberately NOT week-scoped: it is a standing snapshot of the whole
+      // dataset, like auto:items_complete and auto:site_manpower. A week where
+      // nothing is fixed scores the same as the week before, which is the point
+      // — the backlog stays visible until it is actually cleared.
+      if (source === 'auto:data_completeness') {
+        try {
+          const { completionAll } = require('../lib/dataCompletion');
+          const all = completionAll(db);
+          return { given: all.required_total, done: all.filled_total };
+        } catch (e) { return { given: null, done: null }; }
+      }
+      // One module's completeness on its own — auto:data_completeness:<module>,
+      // e.g. auto:data_completeness:business_book, for scoring a person who owns
+      // just that register.
+      if (source.startsWith('auto:data_completeness:')) {
+        try {
+          const { completionFor } = require('../lib/dataCompletion');
+          const c = completionFor(db, source.slice('auto:data_completeness:'.length));
+          if (!c) return { given: null, done: null };
+          return { given: c.required_total, done: c.filled_total };
+        } catch (e) { return { given: null, done: null }; }
+      }
+
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
       // Steps where the user is the EXPLICIT RACI Responsible (per-record, else
       // whole-module default) across every module. Computed once per user, shared.
       if (source === 'auto:raci_steps_done' || source === 'auto:raci_ontime_pct') {
         if (_raciAgg === undefined) {
           try { _raciAgg = require('../utils/raciModules').raciUserWeek(db, userId, sinceDate, untilDate); }
-          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, stepsPlanned: 0 }; }
+          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, openBefore: 0, closedBefore: 0, stepsPlanned: 0 }; }
         }
         // Planned = steps on their plate this week (closed this week + still open
         // on them); Actual = steps they closed this week. So % = how much of the
         // RACI work assigned to this person they have finished (mam 2026-06-27).
-        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed };
+        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed, openBefore: _raciAgg.openBefore || 0, closedBefore: _raciAgg.closedBefore || 0 };
         // On-time %: only meaningful when the user closed SLA-bearing steps this
         // week. Otherwise stay neutral (planned 0 → 0%) so an idle week neither
         // tanks the score nor falsely qualifies for the activity gate.
-        if (_raciAgg.stepsClosed === 0 || _raciAgg.slaJudged === 0) return { given: 0, done: 0 };
+        if (_raciAgg.stepsClosed === 0 || _raciAgg.slaJudged === 0) return { given: 0, done: 0, typedTarget: true };
         return { given: null, done: Math.round((_raciAgg.onTime / _raciAgg.slaJudged) * 100) };
       }
 
@@ -471,25 +586,142 @@ function computeScorecard(db, userId, weekStart) {
         const mod = ci >= 0 ? rest.slice(0, ci) : rest;
         const stepKey = ci >= 0 ? rest.slice(ci + 1) : '';
         const row = _raciBreakdown.find(r => r.module === mod && r.step_key === stepKey);
-        return row ? { given: row.planned, done: row.actual } : { given: 0, done: 0 };
+        return row
+          ? { given: row.planned, done: row.actual, openBefore: row.pending_before || 0, closedBefore: row.closed_before || 0 }
+          : { given: 0, done: 0, openBefore: 0, closedBefore: 0 };
       }
 
-      // Site-scoped KPIs (Site Engineer / Supervisor templates) — need
-      // the list of sites this user manages first.
-      const siteIds = siteIdsForUser();
-      if (siteIds.length === 0) {
-        // No sites mapped to this user → can't aggregate. Return zero.
-        return { given: 0, done: 0 };
+      // ── ERP Management (System Flow) — the ERP build itself, per DEVELOPER ──
+      // mam 2026-09-07: "ERP Management also show here" … "not as RACI —
+      // according to developer": a person's System Flow KPI counts the steps
+      // where they are the DEVELOPER column (the one building it), never the
+      // RACI-style Owner/Responsible. Same due-date basis as Tasks & Tickets:
+      // a step is PLANNED in the week its target date falls (no target → the
+      // week it was created; a Sunday folds to the Saturday before), ACTUAL =
+      // of those, completed. Cancelled steps are out of both sides. Pending
+      // carry-over comes from CARRY_CFG below.
+      // ── ERP Management (System Flow) — v2 tables ──────────────────────
+      // Repointed 2026-09-08. These read sysflow_flows until the module was
+      // rebuilt; that table is now permanently empty, and an empty table is NOT
+      // neutral here — computeScore turns 0 planned + 0 actual into actualPct
+      // 100, so all seven rows were about to score full marks for everyone.
+      // Attribution stays per-person on the STEP OWNER (v2 has no separate
+      // developer column; the owner is who actually holds that step).
+      const SYS_FROM = `FROM sysflow_system_steps st
+                          JOIN sysflow_systems sy ON sy.id = st.system_id AND sy.active = 1`;
+
+      if (source === 'auto:sysflow_steps' || source === 'auto:sysflow_all') {
+        // Steps DUE in the window, and how many of those are done.
+        const who = source === 'auto:sysflow_steps' ? 'st.owner_id=? AND ' : '';
+        const args = who ? [userId] : [];
+        const given = db.prepare(`SELECT COUNT(*) c ${SYS_FROM}
+           WHERE ${who}st.planned_date IS NOT NULL AND ${DUE_SYSFLOW} BETWEEN ? AND ?`)
+          .get(...args, sinceDate, untilDate).c;
+        const done = db.prepare(`SELECT COUNT(*) c ${SYS_FROM}
+           WHERE ${who}st.actual_date IS NOT NULL AND st.planned_date IS NOT NULL
+             AND ${DUE_SYSFLOW} BETWEEN ? AND ?`)
+          .get(...args, sinceDate, untilDate).c;
+        return { given, done };
       }
-      const inSites = `(${siteIds.join(',')})`;
+
+      if (source === 'auto:sysflow_ontime_pct') {
+        // Of the steps the user COMPLETED this week, the % finished on or before
+        // their planned date. Nothing completed → neutral 0/0 with the typed target.
+        const r = db.prepare(`
+          SELECT COUNT(*) n,
+                 SUM(CASE WHEN date(st.actual_date) <= date(st.planned_date) THEN 1 ELSE 0 END) ok
+            ${SYS_FROM}
+           WHERE st.owner_id=? AND st.actual_date IS NOT NULL AND st.planned_date IS NOT NULL
+             AND date(st.actual_date) BETWEEN ? AND ?`).get(userId, sinceDate, shiftWeek(sinceDate, 6));
+        if (!r || !r.n) return { given: 0, done: 0, typedTarget: true };
+        return { given: null, done: Math.round((r.ok / r.n) * 100) };
+      }
+
+      if (source === 'auto:sysflow_overdue') {
+        // Steps the user holds that were overdue AT THE WEEK END, so a past week
+        // reads what it was. Pair with "↓ lower better".
+        const weekEnd = shiftWeek(sinceDate, 6);
+        const n = db.prepare(`SELECT COUNT(*) c ${SYS_FROM}
+           WHERE st.owner_id=? AND st.planned_date IS NOT NULL
+             AND date(st.planned_date) < ?
+             AND (st.actual_date IS NULL OR date(st.actual_date) > ?)`)
+          .get(userId, weekEnd, weekEnd).c;
+        return { given: null, done: n };
+      }
+
+      if (source === 'auto:sysflow_blocked') {
+        // v2 has no 'blocked' status. The honest equivalent is work the person
+        // CANNOT START: their step is open and the step in front of it is itself
+        // open and already past its planned date — they are held up by someone
+        // else's late step. Pair with "↓ lower better".
+        const weekEnd = shiftWeek(sinceDate, 6);
+        const n = db.prepare(`SELECT COUNT(*) c ${SYS_FROM}
+           WHERE st.owner_id=? AND st.actual_date IS NULL
+             AND EXISTS (SELECT 1 FROM sysflow_system_steps prev
+                          WHERE prev.system_id = st.system_id
+                            AND prev.step_no = st.step_no - 1
+                            AND prev.actual_date IS NULL
+                            AND prev.planned_date IS NOT NULL
+                            AND date(prev.planned_date) < ?)`)
+          .get(userId, weekEnd).c;
+        return { given: null, done: n };
+      }
+
+      if (source === 'auto:sysflow_updates') {
+        // Work the user logged this IST week. STEP_DONE and EDIT are work;
+        // CREATE / BULK_CREATE are planning and stay out, as in v1 — registering
+        // 20 systems from a sheet is not 20 updates.
+        const n = db.prepare(`
+          SELECT COUNT(*) c FROM sysflow_system_activity
+           WHERE user_id=? AND action IN ('STEP_DONE','EDIT')
+             AND date(created_at, '+330 minutes') BETWEEN ? AND ?`)
+          .get(userId, sinceDate, shiftWeek(sinceDate, 6)).c;
+        return { given: null, done: n };
+      }
+
+      if (source === 'auto:sysflow_progress_pct') {
+        // Company-wide ERP implementation progress at the week end: steps done
+        // on/before Sunday ÷ steps that existed by Sunday.
+        const weekEnd = shiftWeek(sinceDate, 6);
+        const r = db.prepare(`
+          SELECT COUNT(*) n,
+                 SUM(CASE WHEN st.actual_date IS NOT NULL AND date(st.actual_date) <= ? THEN 1 ELSE 0 END) done
+            ${SYS_FROM}
+           WHERE date(sy.created_at, '+330 minutes') <= ?`).get(weekEnd, weekEnd);
+        if (!r || !r.n) return { given: 0, done: 0, typedTarget: true };
+        return { given: null, done: Math.round((r.done / r.n) * 100) };
+      }
+
+      // Site-scoped KPIs (Site Engineer / Supervisor templates) need the list
+      // of sites this user manages. ONLY those ten sources are gated: this
+      // early return used to sit in front of EVERY source below it, so a user
+      // with no site mapping (HR, sales, accounts…) read 0/0 = "on plan" for
+      // candidates shortlisted, leads created, amount received — 57 sources
+      // silently scored 100% (found 2026-09-05 while wiring target_auto: every
+      // Actual on the HR Executive template showed 0).
+      const SITE_SCOPED = new Set([
+        'auto:dpr_count', 'auto:dpr_profit', 'auto:indent_vs_bill', 'auto:indents_in_week',
+        'auto:material_received', 'auto:mb_signed', 'auto:ra_bills',
+        'auto:stock_at_site', 'auto:stock_updates', 'auto:tools_list',
+      ]);
+      let siteIds = [], inSites = '(NULL)';
+      if (SITE_SCOPED.has(source)) {
+        siteIds = siteIdsForUser();
+        if (siteIds.length === 0) {
+          // No sites mapped to this user → can't aggregate. Return zero.
+          return { given: 0, done: 0 };
+        }
+        inSites = `(${siteIds.join(',')})`;
+      }
 
       if (source === 'auto:dpr_profit') {
-        // Sum of profit_loss across DPRs in the week. Planned = sum of
-        // grand_total_b (planned cost), Actual = sum of grand_total_a
-        // (actual revenue). Score = (a - b) / b × 100 → matches "DPR
-        // Profit" KPI on the Site Eng template.
+        // Planned = sum of grand_total_b (planned cost) × 1.5, Actual = sum
+        // of grand_total_a (actual revenue).  Mam 2026-08-13: "weekly dpr
+        // cost 1 plann cost (DPR table) if 1 than here calculate 1.5" — the
+        // revenue TARGET is 1.5× the planned cost, so a site is on plan only
+        // when it bills one-and-a-half times what it planned to spend.
         const r = db.prepare(`SELECT COALESCE(SUM(grand_total_b),0) as planned, COALESCE(SUM(grand_total_a),0) as actual FROM dpr WHERE site_id IN ${inSites} AND report_date BETWEEN ? AND ?`).get(sinceDate, untilDate);
-        return { given: r.planned, done: r.actual };
+        return { given: Math.round(r.planned * 1.5 * 100) / 100, done: r.actual };
       }
       if (source === 'auto:dpr_count') {
         // DPRs submitted this week (planned = 6 days, actual = count)
@@ -644,12 +876,39 @@ function computeScorecard(db, userId, weekStart) {
         const c = db.prepare(`SELECT COUNT(*) as c FROM meetings WHERE meeting_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
         return { given: null, done: c };
       }
-      // CRM Full Kitting — each checkpoint the user logs this week (mam
-      // 2026-07-04). crm_kitting_entry is append-only, so one row per dropdown
-      // change / photo upload = one unit of kitting work done by the user.
+      // CRM Full Kitting — mam 2026-09-07: "CRM -> only CRM Full kitting".
+      // Credits the person named in the tracker's CRM column, not whoever
+      // clicked the box: the checkpoints on Consern Pharma were ticked by the
+      // Admin login, so the CRM person scored 0 while the tracker showed real
+      // progress.
+      //   Actual  = checkpoints CURRENTLY complete on her projects — the
+      //             append-only history collapsed to the latest status per
+      //             (project_key, checkpoint_id), so two edits of one box stay
+      //             ONE unit, by the tracker's own rule;
+      //   Planned = every ACTIVE checkpoint on those same projects.
+      // BOTH sides come from lib/crmKittingProgress and both are standing
+      // totals with no week window, so the ratio is "how much of my kitting is
+      // finished" and is bounded by 100%. This RETIRES the typed weekly target
+      // (120) on purpose: a cumulative count divided by a weekly number has no
+      // ceiling, pinned the row above 100% forever and rewrote every past week
+      // with today's total. Ownership is crm_kitting_project_meta.crm_owner
+      // ONLY — a project with no owner typed counts for nobody, and a name
+      // that matches two user accounts counts for nobody either. All three
+      // stages roll up into the one number (the tracker's badge is per stage).
+      // Owns NO kitting project → null/null, NOT 0/0. The engine reads 0/0 as
+      // "nothing to judge, on plan" and scores it a weighted 100% (mam
+      // 2026-08-13), which would paint the whole company green the moment this
+      // shipped — worse than the 0 she complained about, and target_auto would
+      // hide the Target box so she could not type her way out of it. null hands
+      // the row back to the manual planned/actual it uses today.
       if (source === 'auto:crm_kitting') {
-        const c = db.prepare(`SELECT COUNT(*) as c FROM crm_kitting_entry WHERE uploaded_by=? AND uploaded_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        return { given: null, done: c };
+        try {
+          const { kittingProjectsForUser, kittingProgress } = require('../lib/crmKittingProgress');
+          const keys = kittingProjectsForUser(db, userId);
+          if (!keys.length) return { given: null, done: null };
+          const p = kittingProgress(db, keys);
+          return { given: p.given, done: p.done };
+        } catch (e) { return { given: null, done: null }; }
       }
       // Activity-log data entry — how many create/update/delete actions this
       // user recorded this week, from the live audit trail (mam 2026-07-04).
@@ -694,6 +953,76 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:dispatch_sent') {
         const c = db.prepare(`SELECT COUNT(*) as c FROM delivery_notes WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
         return { given: null, done: c };
+      }
+
+      // Purchase Bill — mam 2026-09-07: "every approved PO must have a bill".
+      // Replaces the RACI step 'indent_to_dispatch:purchase_bill' — the LAST
+      // step of that module (utils/raciModules.js:289-305) and therefore
+      // always 0: a record is pending at only the FIRST unstamped step, so
+      // every step in front of it absorbed the pipeline. Its rows are INDENTS
+      // and the bill stamp joins purchase_bills → vendor_pos → indent_id, so
+      // a PO with indent_id NULL was invisible to it anyway.
+      // This is a COMPLIANCE ratio, not a weekly throughput, because that is
+      // what mam's rule is: every approved PO must have a bill. Planned and
+      // Actual are therefore the SAME cohort, measured as at the week end:
+      //   Planned = every PO due a bill by the week end (approved, not cancelled);
+      //   Actual  = of those, the ones that HAVE a bill by the week end.
+      // Pending "up" is then Planned − Actual (computed further down), which is
+      // byte-for-byte the Procurement flow board's Purchase Bill count — the
+      // two screens cannot drift apart because they are the same subtraction.
+      //   closedBefore = backlog actually cleared this week (POs approved before
+      //                  the week whose FIRST bill landed inside it) → Pending "wk".
+      // Two cohorts was the earlier mistake: Planned = approved-this-week against
+      // Actual = billed-this-week meant a week spent clearing old bills scored
+      // Planned 0 / Actual 3, which the engine reads as 0% — clearing the backlog
+      // scored WORSE than doing nothing, and the leftover POs vanished from every
+      // column. One cohort makes the row monotone: uploading a bill can only ever
+      // move the number up. openBefore stays 0 for the same reason — the backlog
+      // is already inside Planned−Actual, and adding it again would double-count.
+      // Every query bounds the PO itself to "existed and was approved on or
+      // before the week end", not just the bill, so a past week cannot count
+      // POs that had not been raised yet.
+      // _all is the company-wide twin: no owner clause, so no untraceable PO
+      // can silently vanish from the total.
+      if (source === 'auto:po_bill_pending' || source === 'auto:po_bill_pending_all') {
+        const { PO_BILL_OWNER_SQL, PO_APPROVED_TS_IST, PO_APPROVED_DATE_IST } = require('../lib/poBill');
+        const mine = source === 'auto:po_bill_pending' ? ` AND (${PO_BILL_OWNER_SQL}) = @uid` : '';
+        // Week END = end of SUNDAY, the same bound the carry-over engine uses
+        // for done-timestamps, so a bill uploaded on Sunday lands in the week
+        // that just ended instead of the Sat 23:59:59 → Mon 00:00:00 gap.
+        const sundayDate = shiftWeek(sinceDate, 6);
+        const arg = (o) => (mine ? { ...o, uid: userId } : o);
+        const cut = `${sundayDate} 23:59:59`;
+        // The cohort: every PO that owed a bill as at the week end.
+        const planned = db.prepare(
+          `SELECT COUNT(*) c FROM vendor_pos vp
+            WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+              AND ${PO_APPROVED_TS_IST} <= @cut${mine}`
+        ).get(arg({ cut })).c;
+        // Of that same cohort, the ones that HAVE a bill by the week end.
+        // Planned − this = poMissingBillWhere('@cut') by construction, so the
+        // Pending figure and the flow board's tile are the same number.
+        const done = db.prepare(
+          `SELECT COUNT(*) c FROM vendor_pos vp
+            WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+              AND ${PO_APPROVED_TS_IST} <= @cut${mine}
+              AND EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id
+                           AND datetime(pb.created_at, '+330 minutes') <= @cut)`
+        ).get(arg({ cut })).c;
+        // Backlog cleared this week — Pending "wk". MIN(pb.created_at) so a PO
+        // with three bills counts ONCE, and created_at (server-set, +330 = IST)
+        // not bill_date: bill_date is the vendor's printed date, user-typed and
+        // freely back-datable, so scoring on it would let work move between weeks.
+        const clearedBacklog = db.prepare(
+          `SELECT COUNT(*) c FROM vendor_pos vp
+            WHERE COALESCE(vp.cancelled,0)=0 AND vp.po_approval='approved'
+              AND ${PO_APPROVED_DATE_IST} < @ws${mine}
+              AND date((SELECT MIN(pb.created_at) FROM purchase_bills pb WHERE pb.vendor_po_id=vp.id),
+                       '+330 minutes') BETWEEN @ws AND @we`
+        ).get(arg({ ws: sinceDate, we: sundayDate })).c;
+        // openBefore 0: the backlog is already Planned − Actual. Adding it here
+        // would show the same POs twice in the Pending column.
+        return { given: planned, done, openBefore: 0, closedBefore: clearedBacklog };
       }
 
       // ===== Inventory =====
@@ -810,37 +1139,19 @@ function computeScorecard(db, userId, weekStart) {
         return { given: null, done: c };
       }
 
-      // ===== Snag List =====
-      // auto:snags = a user scored on THEIR OWN assigned snags; auto:snags_all
-      // = a process owner scored on the WHOLE punch-list (company-wide).
-      // Plan = snags RAISED this week. Actual = of those, how many were also
-      // APPROVED this same week (mam 2026-08-10: "approved as per planning,
-      // that is complete") — unlike delegations/pms/tickets, this checks
-      // approved_at too, not just current status, so a late approval doesn't
-      // retroactively fix a past week's score once that week has closed.
-      // date(raised_at) instead of raw string BETWEEN — prod snag rows came in
-      // via a separate PR + imports, so timestamps may be 'T'-separated ISO or
-      // date-only; date() normalizes every ISO variant (raw compare missed them
-      // and the whole KPI silently read 0).
-      if (source === 'auto:snags') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE assigned_to=? AND date(raised_at) BETWEEN ? AND ? AND status='approved' AND date(approved_at) BETWEEN ? AND ?`).get(userId, sinceDate, untilDate, sinceDate, untilDate).c;
-        return { given, done };
-      }
-      if (source === 'auto:snags_all') {
-        const given = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM snags WHERE date(raised_at) BETWEEN ? AND ? AND status='approved' AND date(approved_at) BETWEEN ? AND ?`).get(sinceDate, untilDate, sinceDate, untilDate).c;
-        return { given, done };
-      }
-
       // ===== Complaints =====
-      if (source === 'auto:complaints_raised') {
-        const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
-        return { given: null, done: c };
-      }
-      if (source === 'auto:complaints_resolved') {
-        const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE status='resolved' AND created_at BETWEEN ? AND ?`).get(since, until).c;
-        return { given: null, done: c };
+      // Mam 2026-08-20: Plan is not a hand-typed target — it auto-fills from
+      // the complaints RAISED in the week, and Actual is how many of that same
+      // cohort are resolved ("plan 10 complaint but resolve 9" → 90%). Same
+      // given/done cohort shape as delegations/PMS/snags: current status only,
+      // no resolved-date window — a later resolution still counts toward the
+      // raised week. 'closed' counts as resolved, matching the Complaints
+      // page dashboard tiles. Both sources return the same pair so the KPI
+      // reads Plan=raised / Actual=resolved whichever one a row is bound to.
+      if (source === 'auto:complaints_raised' || source === 'auto:complaints_resolved') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(since, until).c;
+        return { given, done };
       }
 
       // ===== Customers / Vendors =====
@@ -915,7 +1226,7 @@ function computeScorecard(db, userId, weekStart) {
         // Collection efficiency = actual total cash inflow this week ÷ the AR/AP-
         // planned inflow for the week. AR/AP is stored in LAKHS, cash_flow in ₹, so
         // normalise both to lakhs. given=planned (from AR/AP), done=actual (cashflow).
-        const planned = db.prepare(`SELECT COALESCE(SUM(planned),0) s FROM arap_entries WHERE kind='AR' AND due_date BETWEEN ? AND ?`).get(sinceDate, untilDate).s;
+        const planned = db.prepare(`SELECT COALESCE(SUM(planned),0) s FROM arap_entries WHERE kind='AR' AND status <> 'cancelled' AND due_date BETWEEN ? AND ?`).get(sinceDate, untilDate).s;
         const inflow  = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM cash_flow_entries WHERE type='inflow' AND date BETWEEN ? AND ?`).get(sinceDate, untilDate).s;
         return { given: Math.round(planned * 100) / 100, done: Math.round((inflow / 100000) * 100) / 100 };
       }
@@ -923,12 +1234,134 @@ function computeScorecard(db, userId, weekStart) {
         // Overdue AR in ₹ Cr — AR entries past their due date not yet collected
         // (planned − actual), from the AR/AP tracker. lower_better; plan = target.
         const r = db.prepare(`SELECT COALESCE(SUM(CASE WHEN COALESCE(actual,0) < planned THEN planned - COALESCE(actual,0) ELSE 0 END),0) s
-          FROM arap_entries WHERE kind='AR' AND due_date < ?`).get(untilDate);
+          FROM arap_entries WHERE kind='AR' AND status <> 'cancelled' AND due_date < ?`).get(untilDate);
         return { given: null, done: Math.round((r.s / 100) * 100) / 100 };   // lakhs → Cr
       }
 
       return { given: null, done: null };
     };
+
+    // ── Cross-week carryover (mam 2026-08-25: "also add previous pendancy").
+    // For the task-cohort sources, the week's Planned = this week's cohort +
+    // the still-open BACKLOG from ALL previous weeks (not just last week),
+    // and Actual = cohort done + backlog items closed DURING this week. The
+    // backlog is reconstructed as-of the week start from each table's done
+    // timestamp (reviewed_at / resolved_at / approved_at) so a past week
+    // reads the way it actually stood, not the way things stand today. A
+    // done row with a NULL done-timestamp can't be placed in time, so it is
+    // treated as done before the week — excluded from BOTH sides, which
+    // keeps the mam-2026-06-29 invariant intact: Actual can never exceed
+    // Planned (every prev-done item is inside prevPending by construction).
+    // RACI sources are deliberately NOT here — mam rejected months-old open
+    // records inflating Planned there (2026-08-22, the 97-leads case).
+    // Due-date rule (mam 2026-09-05: "if due date change or forward then pick
+    // according to dates"): a still-open task only counts as PENDING when its
+    // CURRENT due date (after any approved extension / manual re-date) is on
+    // or before the week end. A task pushed to a future date is scheduled, not
+    // pending — so the backlog reads 5-6 real overdue items, not every open
+    // task ever assigned. No due date = always pending (nothing to defer to).
+    const CARRY_CFG = {
+      'auto:delegations':     { table: 'delegations',     who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at', dueCol: 'due_date' },
+      'auto:pms':             { table: 'pms_tasks',       who: 'assigned_to=?', doneCond: "status='approved'",                doneAt: 'reviewed_at', dueCol: 'due_date' },
+      'auto:tickets':         { table: 'support_tickets', who: 'assigned_to=?', doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at', dueCol: 'deadline_date' },
+      'auto:delegations_all': { table: 'delegations',     who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at', dueCol: 'due_date' },
+      'auto:pms_all':         { table: 'pms_tasks',       who: null,            doneCond: "status='approved'",                doneAt: 'reviewed_at', dueCol: 'due_date' },
+      'auto:tickets_all':     { table: 'support_tickets', who: null,            doneCond: "status IN ('resolved','closed')",  doneAt: 'resolved_at', dueCol: 'deadline_date' },
+      // ERP Management (System Flow), attributed by DEVELOPER (mam 2026-09-07:
+      // "not as RACI — according to developer"). `who` may carry extra filters;
+      // the number of '?' in it decides how many times userId is bound (whoArgs).
+      // v2 (2026-09-08): the steps live in sysflow_system_steps now. 'done' is
+      // simply having an actual date; there is no cancelled state to exclude.
+      'auto:sysflow_steps':     { table: 'sysflow_system_steps', who: 'owner_id=?', doneCond: 'actual_date IS NOT NULL', doneAt: 'actual_date', dueCol: 'planned_date' },
+      'auto:sysflow_all':       { table: 'sysflow_system_steps', who: null,         doneCond: 'actual_date IS NOT NULL', doneAt: 'actual_date', dueCol: 'planned_date' },
+    };
+    const computeCarry = (source, since, until) => {
+      // Snags keep their tolerant assignee match and IST approved_at dates
+      // (same rules as computeAutoCount above), but since 2026-09-14 the
+      // backlog is on the Target Date: "previous" = due before this week's
+      // Monday (undated snags never count), and a snag re-dated to a later
+      // week is scheduled, not pending.
+      if (source === 'auto:snags' || source === 'auto:snags_all') {
+        const sinceDate = since.slice(0, 10), untilDate = until.slice(0, 10);
+        // Approvals are counted through Sunday so a Sunday close-out is never
+        // lost between two weeks (next week's backlog starts from Monday).
+        const weekEndDate = shiftWeek(sinceDate, 6);
+        const uname = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
+        const who = source === 'auto:snags'
+          ? `(assigned_to=? OR (assigned_to IS NULL AND assigned_to_name=?) OR CAST(assigned_to AS TEXT)=?) AND `
+          : '';
+        const whoArgs = source === 'auto:snags' ? [userId, uname, uname] : [];
+        const approvedDay = `date(approved_at, '+330 minutes')`;
+        const prevPending = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}${DUE_SNAG} < ?
+             AND (status != 'approved' OR (approved_at IS NOT NULL AND ${approvedDay} >= ?))`
+        ).get(...whoArgs, sinceDate, sinceDate).c;
+        const prevDone = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}${DUE_SNAG} < ?
+             AND status = 'approved' AND ${approvedDay} BETWEEN ? AND ?`
+        ).get(...whoArgs, sinceDate, sinceDate, weekEndDate).c;
+        // Pending "up" halves: stillOpen = due before the week, not approved as
+        // of the week end; weekOpen = due this week, not approved.
+        const stillOpen = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}${DUE_SNAG} < ?
+             AND (status != 'approved' OR (approved_at IS NOT NULL AND ${approvedDay} > ?))`
+        ).get(...whoArgs, sinceDate, weekEndDate).c;
+        const weekOpen = db.prepare(
+          `SELECT COUNT(*) c FROM snags WHERE ${who}${DUE_SNAG} BETWEEN ? AND ?
+             AND status != 'approved'`
+        ).get(...whoArgs, sinceDate, untilDate).c;
+        return { prevPending, prevDone, stillOpen, weekOpen };
+      }
+      const cfg = CARRY_CFG[source];
+      if (!cfg) return null;
+      const who = cfg.who ? `${cfg.who} AND ` : '';
+      // Bind userId once per '?' in the who-clause (0 for company-wide filters
+      // like the System Flow "status<>'cancelled'" that carry no user at all).
+      const whoArgs = cfg.who ? Array((cfg.who.match(/\?/g) || []).length).fill(userId) : [];
+      // Same due-day basis as Planned/Actual (2026-09-05): "previous" = due
+      // before this week (or created before it when undated).
+      const sinceDate = since.slice(0, 10), untilDate = until.slice(0, 10);
+      const DUE = dueDay(cfg.dueCol);
+      // Week END for done-timestamps = end of SUNDAY: dueDay() folds a Sunday
+      // due day into this week, so a Sunday approval must land here too, not
+      // in the gap between Sat 23:59:59 and Mon 00:00:00. datetime() makes
+      // both timestamp shapes comparable (support.js writes resolved_at as
+      // ISO 'T…Z' on one path and CURRENT_TIMESTAMP on another).
+      const weekEndTs = `${shiftWeek(sinceDate, 6)} 23:59:59`;
+      const doneTs = `datetime(${cfg.doneAt})`;
+      const prevPending = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
+           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${doneTs} >= ?))`
+      ).get(...whoArgs, sinceDate, since).c;
+      const prevDone = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
+           AND (${cfg.doneCond}) AND ${doneTs} BETWEEN ? AND ?`
+      ).get(...whoArgs, sinceDate, since, weekEndTs).c;
+      // Pending "up" halves:
+      //   stillOpen = due before the week, not done as of the week END;
+      //   weekOpen  = due this week, not done.
+      // A task whose date moved to a later week is in neither: scheduled, not
+      // pending. Counted directly (not prevPending - prevDone) so nothing clamps.
+      const stillOpen = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} < ?
+           AND (NOT (${cfg.doneCond}) OR (${cfg.doneAt} IS NOT NULL AND ${doneTs} > ?))`
+      ).get(...whoArgs, sinceDate, weekEndTs).c;
+      const weekOpen = db.prepare(
+        `SELECT COUNT(*) c FROM ${cfg.table} WHERE ${who}${DUE} BETWEEN ? AND ?
+           AND NOT (${cfg.doneCond})`
+      ).get(...whoArgs, sinceDate, untilDate).c;
+      return { prevPending, prevDone, stillOpen, weekOpen };
+    };
+    // Sources with no cross-week backlog concept but where the Pending column
+    // should still auto-fill with the week's own leftover (planned − actual):
+    // checklists are day-scoped and RACI planned is week-scoped by decision.
+    // Purchase Bill is here too (mam 2026-09-07): planned − actual is the
+    // week's own unbilled leftover and openBefore carries the older backlog,
+    // which is exactly the pair this branch adds up. Without it the repointed
+    // row would lose its auto Pending figures and fall back to typed boxes.
+    const pendingWeekOnly = (source) =>
+      source === 'auto:checklists' || source === 'auto:raci_steps_done' || source.startsWith('auto:raci_step:')
+      || source === 'auto:po_bill_pending' || source === 'auto:po_bill_pending_all';
 
     // Load every per-user override row for this user in ONE query so the
     // per-KPI loop below doesn't fan out to 20 small SELECTs.  Indexed by
@@ -944,6 +1377,7 @@ function computeScorecard(db, userId, weekStart) {
     // suppress display — also pull from the score calculation so total
     // weight doesn't include disabled rows).
     const activeKpis = kpis.filter(k => {
+      if (opts.allKpis) return true;
       const o = userOverrides[k.id];
       return !o || o.enabled !== 0;
     });
@@ -972,14 +1406,67 @@ function computeScorecard(db, userId, weekStart) {
       // - If `given` is non-null, override Planned (e.g. 6 days for DPR count)
       // - If `given` is null, keep template default_planned and only set Actual
       //   (e.g. DPR profit Actual = sum from DPR rows, target stays as 30000)
+      // Auto Pending (mam 2026-08-25 "use this column to pending"):
+      //   wk = this week's own leftover (cohort given − cohort done)
+      //   up = total still-open as of the week end (backlog + this week)
+      let pendingUp = null, pendingWk = null, pendingAuto = false;
+      // Does the ERP know the GIVEN side for this source? (tasks due, snags
+      // raised, RACI steps reached → yes; candidates shortlisted, amount
+      // received, lead conversion → no, the ERP only records the outcome and
+      // the target is a management goal typed in the template.) Reported to
+      // the UI as target_auto so the Target cell locks or opens accordingly —
+      // mam 2026-09-05: "some place I need to enter plan and some place
+      // automatically pick plan, how I can justify".
+      let targetAuto = false;
+      let carryPrevPending = 0, carryPrevDone = 0;
       if (k.data_source && k.data_source.startsWith('auto:')) {
         try {
-          const { given, done } = computeAutoCount(k.data_source, startTs, endTs);
-          if (given !== null) {
+          const autoRes = computeAutoCount(k.data_source, startTs, endTs);
+          const { given, done } = autoRes;
+          if (given !== null && given !== undefined) {
             planned = given;
+            // A %-type source that had nothing to judge this week returns a
+            // neutral 0/0 WITH typedTarget: the target is still the one typed
+            // in the template, so the Target cell must not lock as "counted
+            // live" (review 2026-09-07 — RACI on-time, System Flow on-time,
+            // ERP progress).
+            targetAuto = !autoRes.typedTarget;
           }
           if (done !== null && done !== undefined) {
             actual = done;
+          }
+          // Previous pendency shows in the PENDING column ONLY — mam saw the
+          // first cut live (2026-08-26) and said the "incl N prev" additions
+          // in Planned/Actual should go: Planned/Actual stay this week's
+          // cohort; the backlog lives in Pending "up".
+          const carry = computeCarry(k.data_source, startTs, endTs);
+          if (carry) {
+            carryPrevPending = carry.prevPending;
+            carryPrevDone = carry.prevDone;
+            // Pending pair (mam 2026-08-26, "19/4" question): first = ALL still
+            // open as of the week end (uncleared backlog + this week's
+            // leftover); second = of the PREVIOUS tasks, how many were
+            // completed during this week. This week's own leftover is already
+            // visible as Planned − Actual.
+            // Due-date rule (2026-09-05): both halves come from computeCarry
+            // already filtered to tasks due on/before the week end, so a task
+            // whose date was extended into the future is not "pending" yet.
+            // mam 2026-09-14: Pending = PREVIOUS pendency only — tasks due
+            // before this week still not done at the week end. This week's own
+            // leftover already reads as Planned − Actual, so it is not re-added.
+            pendingUp = carry.stillOpen || 0;
+            pendingWk = carry.prevDone;
+            pendingAuto = true;
+          } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
+            // RACI: same pair — openBefore joins the outstanding total (never
+            // Planned, 2026-08-22 rule) and closedBefore = backlog steps the
+            // user closed this week. Checklists have neither → 0s.
+            // Previous pendency only (mam 2026-09-14) — same rule as above.
+            pendingUp = autoRes.openBefore || 0;
+            pendingWk = autoRes.closedBefore || 0;
+            carryPrevPending = autoRes.openBefore || 0;
+            carryPrevDone = autoRes.closedBefore || 0;
+            pendingAuto = true;
           }
         } catch (e) {
           console.warn(`auto-fetch failed for ${k.data_source}:`, e.message);
@@ -995,7 +1482,15 @@ function computeScorecard(db, userId, weekStart) {
       //                  you overshoot (planned/actual×100).
       // Always floored at 0 — a scorecard % must never read negative.
       let actualPct = 0;
-      if (planned > 0) {
+      // Mam 2026-08-13: "if plan 0 actual 0 then actual % will be 0" — an
+      // empty cohort (nothing planned, nothing done) is ON PLAN, not a
+      // failure.  Engine achievement = 100 so the page's variance display
+      // (which subtracts 100) reads 0%.  Before this, 0/0 rows read as 0
+      // achievement → a wall of −100% red and weighted scores tanked for
+      // people who simply had nothing assigned that week.
+      if (+planned === 0 && +actual === 0) {
+        actualPct = 100;
+      } else if (planned > 0) {
         if (k.direction === 'lower_better') {
           actualPct = actual <= planned ? 100 : Math.round((planned / actual) * 100);
         } else {
@@ -1026,20 +1521,33 @@ function computeScorecard(db, userId, weekStart) {
         data_source: k.data_source,
         default_planned: k.default_planned || 0,
         is_auto: k.data_source && k.data_source.startsWith('auto:'),
+        target_auto: targetAuto,            // true = Planned counted live; false = Planned is the typed target
         planned,
         actual,
         actual_pct: actualPct,
         last_week_pct: lastEntry?.actual_pct ?? null,
         total_uptodate: entry?.total_uptodate ?? null,
-        pending_uptodate: entry?.pending_uptodate ?? null,
-        pending_work: entry?.pending_work ?? null,
+        // Auto rows compute Pending live (backlog-aware); manual rows keep
+        // whatever was typed into the up/wk boxes.
+        pending_uptodate: pendingAuto ? pendingUp : (entry?.pending_uptodate ?? null),
+        pending_work: pendingAuto ? pendingWk : (entry?.pending_work ?? null),
+        pending_auto: pendingAuto,
+        carry_prev_pending: carryPrevPending,
+        carry_prev_done: carryPrevDone,
         pending_pct: entry?.pending_pct ?? null,
         commitment: entry?.commitment ?? null,
+        commitment_prev: entry?.commitment_prev ?? null,
         notes: entry?.notes ?? null,
       };
     });
 
-    const score = totalWeight > 0 ? Math.round((totalScore / totalWeight) * 100) / 100 : 0;
+    // Zero-weight template (audit 2026-08-17: prod's 'Everyone' template has
+    // 0% weight on every KPI): score = plain unweighted average of the KPI
+    // achievement %s, instead of a constant 0 (which displayed as an eternal
+    // -100% and made Champions treat the whole template as unscoreable).
+    const score = totalWeight > 0
+      ? Math.round((totalScore / totalWeight) * 100) / 100
+      : (result.length ? Math.round((result.reduce((s, r) => s + (r.actual_pct || 0), 0) / result.length) * 100) / 100 : 0);
 
     // Total auto work units this week — the Champions League min-activity gate
     // uses this to decide whether a week counts toward a player's score (so a
@@ -1066,9 +1574,103 @@ router.get('/scorecard', (req, res) => {
     const weekStart = req.query.week_start && /^\d{4}-\d{2}-\d{2}$/.test(req.query.week_start)
       ? req.query.week_start
       : defaultWeekStart();
-    res.json(computeScorecard(getDb(), userId, weekStart));
+    const db = getDb();
+    // template_id (admin only): preview a template that may not be assigned to
+    // anyone yet — the template editor uses it for live Actuals + target_auto.
+    const templateId = req.user.role === 'admin' ? (parseInt(req.query.template_id, 10) || null) : null;
+    const card = computeScorecard(db, userId, weekStart, templateId ? { templateId, allKpis: true } : {});
+    // Whose card this is — the page needs the name for the export filename and
+    // the printed letterhead (admin switches between employees, and every file
+    // was downloading as "scorecard-user-...").
+    card.user = { id: userId, name: db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '' };
+    res.json(card);
   } catch (err) {
     console.error('scorecard get error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET the WHOLE scorecard aggregated over a From→To period (mam 2026-08-17:
+// "if i apply this value not changed" — Apply must recalculate the table, not
+// just the banner tile). Runs the normal weekly compute for every week in the
+// range — every hard-won weekly rule (IST bucketing, cohorts, 0/0=on-plan,
+// per-user overrides) applies unchanged — then sums Planned/Actual per KPI
+// and recomputes % and the weighted score from the summed values.
+router.get('/scorecard-range', (req, res) => {
+  try {
+    const userId = parseInt(req.query.user_id, 10) || req.user.id;
+    const ok = (s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+    if (!ok(req.query.from) || !ok(req.query.to)) {
+      return res.status(400).json({ error: 'from and to (yyyy-mm-dd) required' });
+    }
+    // Snap both ends to their week's Monday (scoring weeks are Mon-Sat).
+    const monday = (s) => {
+      const d = new Date(`${s}T00:00:00Z`);
+      const dow = d.getUTCDay();
+      d.setUTCDate(d.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
+      return d.toISOString().slice(0, 10);
+    };
+    let from = monday(req.query.from), to = monday(req.query.to);
+    if (from > to) [from, to] = [to, from];
+    const nWeeks = Math.min(53, Math.round((new Date(to) - new Date(from)) / (7 * 864e5)) + 1);
+
+    const db = getDb();
+    const byKpi = new Map();   // kpi_id → aggregated row
+    let template = null, weeksCounted = 0;
+    for (let i = 0; i < nWeeks; i++) {
+      const w = shiftWeek(from, 7 * i);
+      const sc = computeScorecard(db, userId, w);
+      if (!sc || !sc.template) continue;
+      template = sc.template;
+      weeksCounted++;
+      for (const k of sc.kpis) {
+        const agg = byKpi.get(k.kpi_id);
+        if (!agg) {
+          byKpi.set(k.kpi_id, { ...k, planned: +k.planned || 0, actual: +k.actual || 0,
+            last_week_pct: null, total_uptodate: null, pending_uptodate: null,
+            pending_work: null, pending_pct: null, commitment: null, commitment_prev: null, notes: null,
+            pending_auto: false, carry_prev_pending: 0, carry_prev_done: 0 });
+        } else {
+          agg.planned += +k.planned || 0;
+          agg.actual += +k.actual || 0;
+          // keep the latest week's definition (name/weight/direction may evolve)
+          agg.group_name = k.group_name; agg.metric_name = k.metric_name;
+          agg.weightage = k.weightage; agg.direction = k.direction;
+        }
+      }
+    }
+
+    // Same % + weighted-score math as the weekly compute, on the summed values.
+    let totalScore = 0, totalWeight = 0;
+    const kpis = [...byKpi.values()].map(k => {
+      let pct = 0;
+      if (+k.planned === 0 && +k.actual === 0) pct = 100;
+      else if (k.planned > 0) {
+        pct = k.direction === 'lower_better'
+          ? (k.actual <= k.planned ? 100 : Math.round((k.planned / k.actual) * 100))
+          : Math.round((k.actual / k.planned) * 100);
+        if (pct < 0) pct = 0;
+      }
+      k.actual_pct = pct;
+      totalWeight += k.weightage || 0;
+      totalScore += (k.weightage || 0) * pct;
+      return k;
+    });
+    // Same zero-weight-template rule as the weekly compute above.
+    const score = totalWeight > 0
+      ? Math.round((totalScore / totalWeight) * 100) / 100
+      : (kpis.length ? Math.round((kpis.reduce((s, r) => s + (r.actual_pct || 0), 0) / kpis.length) * 100) / 100 : 0);
+
+    res.json({
+      user_id: userId, period: true, from, to,
+      // Same name payload as /scorecard — the period export filename and the
+      // print letterhead read it.
+      user: { id: userId, name: db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '' },
+      week_end: shiftWeek(to, 5), weeks_counted: weeksCounted,
+      template, kpis, score, total_weight: totalWeight,
+    });
+  } catch (err) {
+    console.error('scorecard-range get error', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1087,9 +1689,15 @@ router.get('/raci-breakdown', (req, res) => {
     const sinceDate = weekStart;
     const untilDate = shiftWeek(weekStart, 5);
     const rows = require('../utils/raciModules').raciUserWeekBreakdown(getDb(), userId, sinceDate, untilDate);
+    // totals.pending mirrors the scorecard row's Pending pair (mam 2026-08-27
+    // audit): total outstanding includes the pre-week backlog (pending_before),
+    // and prev_done = backlog steps closed this week — else the drill-down
+    // would contradict the row it expands (502 vs 297).
     const totals = rows.reduce(
-      (t, r) => ({ planned: t.planned + r.planned, actual: t.actual + r.actual, pending: t.pending + r.pending }),
-      { planned: 0, actual: 0, pending: 0 }
+      (t, r) => ({ planned: t.planned + r.planned, actual: t.actual + r.actual,
+                   pending: t.pending + r.pending + (r.pending_before || 0),
+                   prev_done: t.prev_done + (r.closed_before || 0) }),
+      { planned: 0, actual: 0, pending: 0, prev_done: 0 }
     );
     res.json({ user_id: userId, week_start: weekStart, week_end: untilDate, rows, totals });
   } catch (err) {
@@ -1101,7 +1709,7 @@ router.get('/raci-breakdown', (req, res) => {
 // PUT save a single KPI entry (planned / actual / pending counts / notes)
 router.put('/scorecard/entry', (req, res) => {
   try {
-    const { user_id, kpi_id, week_start, planned, actual, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes } = req.body;
+    const { user_id, kpi_id, week_start, planned, actual, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes } = req.body;
     if (!kpi_id || !week_start) return res.status(400).json({ error: 'kpi_id and week_start required' });
     const targetUser = parseInt(user_id, 10) || req.user.id;
     // Only admin or the target user themselves can edit
@@ -1121,8 +1729,8 @@ router.put('/scorecard/entry', (req, res) => {
       if (actualPct < 0) actualPct = 0;
     }
     db.prepare(`
-      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes, updated_by, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, commitment_prev, notes, updated_by, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
       ON CONFLICT(user_id, kpi_id, week_start) DO UPDATE SET
         planned=excluded.planned,
         actual=excluded.actual,
@@ -1132,10 +1740,11 @@ router.put('/scorecard/entry', (req, res) => {
         pending_work=excluded.pending_work,
         pending_pct=excluded.pending_pct,
         commitment=excluded.commitment,
+        commitment_prev=excluded.commitment_prev,
         notes=excluded.notes,
         updated_by=excluded.updated_by,
         updated_at=CURRENT_TIMESTAMP
-    `).run(targetUser, kpi_id, week_start, planned || 0, actual || 0, actualPct, total_uptodate || null, pending_uptodate || null, pending_work || null, pending_pct || null, commitment || null, notes || null, req.user.id);
+    `).run(targetUser, kpi_id, week_start, planned || 0, actual || 0, actualPct, total_uptodate || null, pending_uptodate || null, pending_work || null, pending_pct || null, commitment || null, commitment_prev || null, notes || null, req.user.id);
     res.json({ message: 'Saved', actual_pct: actualPct });
   } catch (err) {
     console.error('scorecard save error', err);
@@ -1169,7 +1778,9 @@ router.get('/commitments', (req, res) => {
       ? req.query.week_start
       : defaultWeekStart();
     let weeks = parseInt(req.query.weeks, 10) || 8;
-    weeks = Math.max(4, Math.min(16, weeks));
+    // Cap 53 = one full year: covers the "Last 6 Months" graph range AND the
+    // manual From→To period score (both mam 2026-08-17).
+    weeks = Math.max(1, Math.min(53, weeks));
     const db = getDb();
 
     // Oldest → newest; newest = the viewed week (so the graph reads left→right).
@@ -1311,34 +1922,37 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
 
     const result = users.map(u => {
       // Delegations
+      // Due-date basis (mam 2026-09-05) — same rule as the Scorecard page so
+      // both surfaces read one number per person.
       const delGiven = db.prepare(
         `SELECT COUNT(*) as c FROM delegations
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ?`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_DELEG} BETWEEN ? AND ?`
+      ).get(u.id, start, end).c;
       const delDone = db.prepare(
         `SELECT COUNT(*) as c FROM delegations
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status = 'approved'`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_DELEG} BETWEEN ? AND ? AND status = 'approved'`
+      ).get(u.id, start, end).c;
 
       // PMS Tasks
       const pmsGiven = db.prepare(
         `SELECT COUNT(*) as c FROM pms_tasks
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ?`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_PMS} BETWEEN ? AND ?`
+      ).get(u.id, start, end).c;
       const pmsDone = db.prepare(
         `SELECT COUNT(*) as c FROM pms_tasks
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status = 'approved'`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_PMS} BETWEEN ? AND ? AND status = 'approved'`
+      ).get(u.id, start, end).c;
 
-      // Checklists — assigned daily checklists (one per weekday active days)
-      // Given = number of (active checklist × weekday-in-range) the user owns.
-      // For simplicity we count active checklists assigned to this user × 6
-      // weekdays (Mon-Sat). Done = unique completion rows in range.
-      const checklistsAssigned = db.prepare(
-        `SELECT COUNT(*) as c FROM checklists
-         WHERE assigned_to = ? AND COALESCE(active, 1) = 1`
-      ).get(u.id).c;
-      const cklGiven = checklistsAssigned * 6; // Mon-Sat
+      // Checklists — frequency-aware (mam 2026-08-31): planned = the days
+      // each checklist actually fires within the Mon–Sat week, not ×6 flat.
+      const { weeklyExpected, absenceSet, weekDates } = require('../lib/checklistFrequency');
+      const cklRows = db.prepare(
+        `SELECT assigned_to, frequency, due_date, fortnight_days, recurrence_start_date, recurrence_end_date, created_at
+           FROM checklists WHERE assigned_to = ? AND COALESCE(active, 1) = 1`
+      ).all(u.id);
+      // Absent / leave days are not expected of anyone (mam 2026-09-12).
+      const cklAway = absenceSet(db, weekDates(start));
+      const cklGiven = cklRows.reduce((s, c) => s + weeklyExpected(c, start, cklAway), 0);
       const cklDone = db.prepare(
         `SELECT COUNT(*) as c FROM checklist_completions cc
          JOIN checklists c ON c.id = cc.checklist_id
@@ -1348,12 +1962,12 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
       // Help Tickets — only count tickets ASSIGNED to this user (not raised by)
       const tktGiven = db.prepare(
         `SELECT COUNT(*) as c FROM support_tickets
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ?`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_TKT} BETWEEN ? AND ?`
+      ).get(u.id, start, end).c;
       const tktDone = db.prepare(
         `SELECT COUNT(*) as c FROM support_tickets
-         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status IN ('resolved', 'closed')`
-      ).get(u.id, startTs, endTs).c;
+         WHERE assigned_to = ? AND ${DUE_TKT} BETWEEN ? AND ? AND status IN ('resolved', 'closed')`
+      ).get(u.id, start, end).c;
 
       const totalGiven = delGiven + pmsGiven + cklGiven + tktGiven;
       const totalDone = delDone + pmsDone + cklDone + tktDone;
@@ -1425,9 +2039,9 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
                 d.submitted_at, d.reviewed_at, ab.name as assigned_by_name
          FROM delegations d
          LEFT JOIN users ab ON ab.id = d.assigned_by
-         WHERE d.assigned_to = ? AND d.created_at BETWEEN ? AND ?
-         ORDER BY d.created_at DESC`
-      ).all(userId, startTs, endTs);
+         WHERE d.assigned_to = ? AND ${dueDay('due_date', 'd.')} BETWEEN ? AND ?
+         ORDER BY d.due_date DESC, d.created_at DESC`
+      ).all(userId, start, end);
     } else if (moduleName === 'pms') {
       rows = db.prepare(
         `SELECT p.id, p.title, p.description, p.status, p.due_date, p.created_at,
@@ -1435,9 +2049,9 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
                 p.project_name_snapshot as project_name
          FROM pms_tasks p
          LEFT JOIN users ab ON ab.id = p.assigned_by
-         WHERE p.assigned_to = ? AND p.created_at BETWEEN ? AND ?
-         ORDER BY p.created_at DESC`
-      ).all(userId, startTs, endTs);
+         WHERE p.assigned_to = ? AND ${dueDay('due_date', 'p.')} BETWEEN ? AND ?
+         ORDER BY p.due_date DESC, p.created_at DESC`
+      ).all(userId, start, end);
     } else if (moduleName === 'checklists') {
       rows = db.prepare(
         `SELECT cc.id, c.title, c.description, cc.completion_date as date,
@@ -1450,12 +2064,12 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
     } else if (moduleName === 'tickets') {
       rows = db.prepare(
         `SELECT t.id, t.ticket_no, t.subject, t.priority, t.status, t.category,
-                t.created_at, t.resolved_at, ru.name as raised_by_name
+                t.created_at, t.resolved_at, t.deadline_date, ru.name as raised_by_name
          FROM support_tickets t
          LEFT JOIN users ru ON ru.id = t.user_id
-         WHERE t.assigned_to = ? AND t.created_at BETWEEN ? AND ?
-         ORDER BY t.created_at DESC`
-      ).all(userId, startTs, endTs);
+         WHERE t.assigned_to = ? AND ${dueDay('deadline_date', 't.')} BETWEEN ? AND ?
+         ORDER BY t.deadline_date DESC, t.created_at DESC`
+      ).all(userId, start, end);
     } else {
       return res.status(400).json({ error: 'Unknown module' });
     }

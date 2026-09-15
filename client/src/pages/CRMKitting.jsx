@@ -21,6 +21,7 @@
 // columns.
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
@@ -68,12 +69,14 @@ const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 const CRM_OWNERS = ['Sushila', 'Lovely'];
 
 export default function CRMKitting() {
-  const { user, isAdmin, canEdit } = useAuth();
+  const { user, isAdmin, canEdit, canCreate, canDelete } = useAuth();
 
   const [matrix, setMatrix] = useState({ projects: [], checkpoints: [], meta: {}, entries: {} });
   const [loading, setLoading] = useState(false);
   const [activeStage, setActiveStage] = useState(1);
   const [filter, setFilter] = useState('');
+  // Projects removed from the tracker (handed over etc.) — shown only on demand.
+  const [showRemoved, setShowRemoved] = useState(false);
 
   // Update modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -103,6 +106,15 @@ export default function CRMKitting() {
   const [metaDraft, setMetaDraft] = useState({});
 
   const editAllowed = canEdit ? canEdit('crm_kitting') : true;
+  // Manage Checkpoints follows the ROLE MATRIX, not the admin role: mam grants
+  // CRM Full Kitting create/edit/delete to a role and expects that role to be
+  // able to manage checkpoints (2026-08-19). Admin still passes because can()
+  // returns true for admins on every module. Each individual action stays
+  // gated server-side by its own permission.
+  const canManageCps = (isAdmin && isAdmin())
+    || (canCreate && canCreate('crm_kitting'))
+    || (canEdit && canEdit('crm_kitting'))
+    || (canDelete && canDelete('crm_kitting'));
 
   // ── Fetch matrix ───────────────────────────────────────────────
   const loadMatrix = useCallback(() => {
@@ -137,20 +149,47 @@ export default function CRMKitting() {
   }), [stageColumns]);
 
   // ── Filtered project rows ──────────────────────────────────────
+  const removedCount = useMemo(
+    () => matrix.projects.filter(p => matrix.meta[p.project_key]?.removed_at).length,
+    [matrix.projects, matrix.meta]
+  );
   const filteredProjects = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return matrix.projects;
-    return matrix.projects.filter(p =>
+    // Active grid by default; the "Removed" toggle swaps in removed projects.
+    const base = matrix.projects.filter(p => !!matrix.meta[p.project_key]?.removed_at === showRemoved);
+    if (!q) return base;
+    return base.filter(p =>
       (p.project_name || '').toLowerCase().includes(q) ||
       (p.client_name || '').toLowerCase().includes(q) ||
       (p.lead_no || '').toLowerCase().includes(q) ||
       (matrix.meta[p.project_key]?.pm_owner || '').toLowerCase().includes(q) ||
       (matrix.meta[p.project_key]?.crm_owner || '').toLowerCase().includes(q)
     );
-  }, [matrix.projects, matrix.meta, filter]);
+  }, [matrix.projects, matrix.meta, filter, showRemoved]);
 
   // ── Cell helpers ───────────────────────────────────────────────
   const getEntry = (projectKey, cpId) => matrix.entries[`${projectKey}::${cpId}`];
+
+  // ── Remove / restore a project (mam 2026-09-10: "projects can delete bcs
+  // like some are handover"). Takes it off this tracker only — Business Book,
+  // checkpoint history and photos stay, and Restore brings the row back as-is.
+  const canRemoveProjects = (isAdmin && isAdmin()) || (canDelete && canDelete('crm_kitting'));
+  const removeProject = async (p) => {
+    if (!window.confirm(`Remove "${p.project_name}" from Full Kitting?\n\nIts checkpoints and photos are kept, and you can bring it back from "Removed".`)) return;
+    try {
+      await api.post('/crm-kitting/project-remove', { project_key: p.project_key });
+      toast.success('Project removed from Full Kitting');
+      loadMatrix();
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not remove the project'); }
+  };
+  const restoreProject = async (p) => {
+    try {
+      await api.post('/crm-kitting/project-restore', { project_key: p.project_key });
+      toast.success('Project restored to Full Kitting');
+      if (removedCount <= 1) setShowRemoved(false);   // last one back — don't leave an empty list
+      loadMatrix();
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not restore the project'); }
+  };
 
   const openCell = (project, cp) => {
     if (!editAllowed) return;
@@ -168,7 +207,9 @@ export default function CRMKitting() {
     if (!modalCp || !modalProject) return;
     if (modalObsDate > todayISO()) { toast.error('Observation date cannot be in the future'); return; }
     if (modalObsDate < minObsISO()) { toast.error('Observation date cannot be more than 5 days in the past'); return; }
-    if (!modalPhoto) { toast.error('Please upload a file (photo or PDF) as evidence'); return; }
+    // Evidence file is OPTIONAL (mam 2026-08-22). A checkpoint can be recorded
+    // from a phone call or a site confirmation with nothing to attach; blocking
+    // the save on a file just stopped the status being logged at all.
     setSaving(true);
     // Snapshot the projectKey + cpId BEFORE the modal closes so the
     // optimistic update below can still address the right cell.
@@ -347,7 +388,7 @@ export default function CRMKitting() {
             >
               <FiRefreshCw /> Refresh
             </button>
-            {isAdmin && isAdmin() && (
+            {canManageCps && (
               <button
                 onClick={openManage}
                 className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs flex items-center gap-1.5"
@@ -373,7 +414,7 @@ export default function CRMKitting() {
               className={`btn ${active ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
               title={`Stage ${sn} — ${STAGE_META[sn].title}`}
             >
-              Stage {sn} — {STAGE_META[sn].title}
+              {flowStepLabel('/crm-kitting', `Stage ${sn} — ${STAGE_META[sn].title}`)}
               <span
                 className={`px-1.5 rounded-full text-[10px] font-bold min-w-[22px] text-center ${
                   active ? 'bg-white/30 text-white' : `text-white ${STAGE_META[sn].tabBadge}`
@@ -384,7 +425,16 @@ export default function CRMKitting() {
             </button>
           );
         })}
-        <div className="relative ml-auto">
+        {(removedCount > 0 || showRemoved) && (
+          <button
+            onClick={() => setShowRemoved(v => !v)}
+            className={`btn ${showRemoved ? 'btn-primary' : 'btn-secondary'} ml-auto flex items-center gap-1.5 text-sm`}
+            title="Projects removed from the tracker (handed over etc.)"
+          >
+            <FiTrash2 size={13} /> {showRemoved ? 'Back to active projects' : `Removed (${removedCount})`}
+          </button>
+        )}
+        <div className={`relative ${(removedCount > 0 || showRemoved) ? '' : 'ml-auto'}`}>
           <FiSearch className="absolute left-2.5 top-2 text-gray-400" size={14} />
           <input
             value={filter}
@@ -401,7 +451,7 @@ export default function CRMKitting() {
       <div className="text-[11px] text-gray-500 mb-1.5 px-1">
         {loading
           ? 'Loading…'
-          : `${matrix.projects.length} projects · ${matrix.checkpoints.length} checkpoints loaded · showing ${filteredProjects.length} on Stage ${activeStage}`}
+          : `${matrix.projects.length - removedCount} projects${removedCount ? ` · ${removedCount} removed` : ''} · ${matrix.checkpoints.length} checkpoints loaded · showing ${filteredProjects.length}${showRemoved ? ' removed' : ''} on Stage ${activeStage}`}
       </div>
 
       {/* Matrix — single table with `table-layout: fixed` + explicit
@@ -501,7 +551,18 @@ export default function CRMKitting() {
                     <tr key={p.project_key} className="hover:bg-blue-50/40" style={{ height: 44 }}>
                       <td className="sticky z-10 bg-white border-r border-b text-center text-gray-500 text-[10px]" style={{ left: L.sr, position: 'sticky' }}>{idx + 1}</td>
                       <td className="sticky z-10 bg-white border-r border-b px-2 overflow-hidden" style={{ left: L.name, position: 'sticky' }}>
-                        <div className="font-medium text-gray-900 text-[11px] truncate" title={p.project_name}>{p.project_name}</div>
+                        <div className="flex items-center gap-1">
+                          <div className="font-medium text-gray-900 text-[11px] truncate flex-1 min-w-0" title={p.project_name}>{p.project_name}</div>
+                          {canRemoveProjects && (showRemoved ? (
+                            <button type="button" onClick={() => restoreProject(p)} className="shrink-0 text-emerald-600 hover:text-emerald-800" title="Restore to Full Kitting" aria-label={`Restore ${p.project_name}`}>
+                              <FiRefreshCw size={11} />
+                            </button>
+                          ) : (
+                            <button type="button" onClick={() => removeProject(p)} className="shrink-0 text-gray-300 hover:text-rose-600" title="Remove from Full Kitting (handed over etc.)" aria-label={`Remove ${p.project_name}`}>
+                              <FiTrash2 size={11} />
+                            </button>
+                          ))}
+                        </div>
                         <div className="text-[9px] text-gray-500 flex items-center gap-1 truncate">
                           {p.lead_no && <span className="font-mono">{p.lead_no}</span>}
                           {p.bb_entry_count > 1 && <span className="text-amber-700">· {p.bb_entry_count} BB</span>}
@@ -606,16 +667,15 @@ export default function CRMKitting() {
                 <p className="text-[10px] text-gray-500 mt-0.5">Today or up to 5 days back</p>
               </div>
               <div>
-                <label className="text-xs font-semibold text-gray-700">Upload File <span className="text-red-600">*</span></label>
+                <label className="text-xs font-semibold text-gray-700">Upload File (optional)</label>
                 <input
                   type="file"
                   accept="image/*,application/pdf"
                   capture="environment"
-                  required
                   onChange={e => setModalPhoto(e.target.files?.[0] || null)}
                   className="w-full mt-1 text-xs"
                 />
-                <p className="text-[10px] text-gray-500 mt-0.5">Photo or PDF — required as evidence</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Photo or PDF — attach evidence if you have it</p>
               </div>
             </div>
 

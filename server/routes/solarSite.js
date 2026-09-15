@@ -42,6 +42,65 @@ function parseCoords(q) {
   return { lat, lng };
 }
 
+// A pasted Google Maps link doesn't always carry raw @lat,lng — two shapes
+// that don't:
+//   1. A phone "Share → Copy link" link, e.g. https://maps.app.goo.gl/AbC123 —
+//      that's a redirector with no coordinates in the URL at all; the real
+//      link only exists after following the 302.
+//   2. A desktop /maps/place/<Name>/ link with no zoom segment yet, or an
+//      old-style search link like /maps?q=<Name> — these carry the PLACE the
+//      user meant, as text, not coordinates.
+// Previously neither case was handled: parseCoords found nothing, and the
+// *entire raw URL string* got sent to the geocoders as the search query —
+// which never finds anything, since none of them can geocode a URL. Resolve
+// case 1 server-side (the browser can't — it's cross-origin) and pull the
+// place text out for case 2, so the search actually runs on something a
+// geocoder can use.
+function isShortMapsLink(s) {
+  try { return new URL(s).hostname.toLowerCase() === 'maps.app.goo.gl'; } catch { return false; }
+}
+
+async function resolveShortLink(s) {
+  const r = await fetch(s, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(7000) });
+  return r.url || null;
+}
+
+// A /maps/dir/ (Directions) link's @lat,lng segment is the map's last pan/
+// zoom VIEWPORT at the moment the link was generated — NOT the destination's
+// real coordinates. Trusting it (as a plain @lat,lng regex match would)
+// silently pins the wrong spot: confirmed against a real business address,
+// where it landed off the actual building. A /maps/place/ link doesn't have
+// this problem — Google always centers that page exactly on the place — so
+// only /dir/ needs its destination re-geocoded from text instead.
+function isDirectionsLink(s) {
+  try { return new URL(s).pathname.includes('/dir/'); } catch { return false; }
+}
+
+function extractPlaceFromMapsUrl(s) {
+  let u;
+  try { u = new URL(s); } catch { return null; }
+  const host = u.hostname.toLowerCase();
+  if (!host.includes('google.') && host !== 'maps.app.goo.gl') return null;
+
+  const parts = u.pathname.split('/').filter(Boolean);
+  const placeIdx = parts.indexOf('place');
+  if (placeIdx !== -1 && parts[placeIdx + 1]) return decodeURIComponent(parts[placeIdx + 1].replace(/\+/g, ' '));
+
+  // /maps/dir/<origin>/<destination>/@viewport,z/data=... — origin is often
+  // empty (a bare "directions to X" link). Take the last segment that isn't
+  // the viewport or the data blob; that's the destination as typed/resolved.
+  const dirIdx = parts.indexOf('dir');
+  if (dirIdx !== -1) {
+    const rest = parts.slice(dirIdx + 1).filter((p) => p && !p.startsWith('@') && !p.startsWith('data='));
+    const dest = rest[rest.length - 1];
+    if (dest && !/^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$/.test(dest)) return decodeURIComponent(dest.replace(/\+/g, ' '));
+  }
+
+  const qParam = u.searchParams.get('q');
+  if (qParam && !/^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(qParam.trim())) return qParam;
+  return null;
+}
+
 // Three geocoders, tried in order, cheapest-configured first:
 //   1. Google Geocoding API — real street/building-level accuracy for India,
 //      IF a Maps Platform key is set (same GOOGLE_SOLAR_API_KEY as the LiDAR
@@ -75,11 +134,51 @@ async function geocodeGoogle(q) {
   }));
 }
 
+// Business names ("Secured Engineers Pvt Ltd") are a different problem from
+// addresses: the Geocoding API and both free tiers index PLACES, not
+// businesses, so a company name draws a blank everywhere (confirmed live —
+// the user typed exactly that and got "No match"). Places Text Search is the
+// Google API built for name lookups, and it runs off the same key. It sits
+// after the Geocoding tier so it only spends a (pricier) Places call when the
+// query isn't a resolvable address.
+async function geocodeGooglePlaces(q) {
+  const key = process.env.GOOGLE_SOLAR_API_KEY;
+  if (!key) return null;
+  const r = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    signal: AbortSignal.timeout(7000),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': 'places.location,places.formattedAddress,places.displayName',
+    },
+    body: JSON.stringify({ textQuery: q, regionCode: 'IN', pageSize: 5 }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    // Key not enabled for Places API — a configuration gap, not "no results";
+    // fall through to the free tiers like the Geocoding tier does.
+    console.warn('[solar-site] Google Places search:', r.status, j.error?.message || '');
+    return null;
+  }
+  return (j.places || []).map((p) => ({
+    lat: p.location.latitude, lng: p.location.longitude, altitude: 0,
+    name: [p.displayName?.text, p.formattedAddress].filter(Boolean).join(', '),
+    country: 'IN', source: 'google-places',
+  }));
+}
+
 async function geocodeNominatim(q) {
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=in&format=jsonv2&addressdetails=1&limit=6`;
   // Nominatim's usage policy requires an identifying User-Agent — a generic
   // browser UA gets silently rate-limited/blocked.
   const r = await fetch(url, { signal: AbortSignal.timeout(7000), headers: { 'User-Agent': 'SEPL-SOTYN-Solar/1.0 (internal solar design tool)' } });
+  // A rate-limit/block (e.g. 429/403 during a burst) still resolves fetch()
+  // normally — without this check it fails downstream as an opaque "j.map is
+  // not a function" (the error body is an object, not the expected array),
+  // which reads no differently from "found nothing" once geocodeAllTiers'
+  // try/catch swallows it. Surface it explicitly instead.
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const j = await r.json();
   return (j || []).map((x) => ({
     lat: +x.lat, lng: +x.lon, altitude: 0,
@@ -94,6 +193,7 @@ async function geocodeOpenMeteo(q) {
   const place = q.split(',')[0].trim();
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=8&language=en&format=json`;
   const r = await fetch(url, { signal: AbortSignal.timeout(7000) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const j = await r.json();
   const rest = q.slice(place.length).toLowerCase();
   return (j?.results || [])
@@ -110,52 +210,132 @@ async function geocodeOpenMeteo(q) {
 // Run every tier against one query string; returns [] if none find anything,
 // throws only if EVERY tier hard-errored (vs. genuinely found nothing).
 async function geocodeAllTiers(q) {
-  const tiers = [geocodeGoogle, geocodeNominatim, geocodeOpenMeteo];
+  const tiers = [geocodeGoogle, geocodeGooglePlaces, geocodeNominatim, geocodeOpenMeteo];
   const errors = [];
+  // Count tiers that actually ANSWERED (returned a real, possibly-empty
+  // result set). A keyless/misconfigured Google tier returns null — it never
+  // ran, so it must not dilute the all-failed check: with the old
+  // errors===tiers test, "no key + both free tiers down" read as a calm
+  // "No match" instead of the 502 that tells someone to check the server's
+  // internet access (reproduced locally under a blocked-network sandbox).
+  let answered = 0;
   for (const tier of tiers) {
     try {
       const results = await tier(q);
-      if (results && results.length) return results;
+      if (results === null) continue;
+      answered++;
+      if (results.length) return results;
     } catch (e) {
+      // A tier failing here used to be completely invisible — the caller only
+      // ever sees "No match", identical to a genuine not-found, whether one
+      // tier silently errored (a rate-limit, a timeout) or the place really
+      // doesn't exist. Log it so a real degradation shows up in `pm2 logs`
+      // instead of reading as a geocoder gap (confirmed cause of a live
+      // "Ludhiana gives no match" report that was actually a transient tier
+      // failure — direct curl calls right after found it instantly).
+      console.warn(`[solar-site] geocode tier ${tier.name} failed for "${q}":`, e.message);
       errors.push(`${tier.name}: ${e.message}`);
     }
   }
-  if (errors.length === tiers.length) { const err = new Error(errors.join('; ')); err.allFailed = true; throw err; }
+  if (errors.length && !answered) { const err = new Error(errors.join('; ')); err.allFailed = true; throw err; }
   return [];
 }
 
 router.get('/geocode', view, async (req, res) => {
-  const q = String(req.query.q || '').trim();
+  let q = String(req.query.q || '').trim();
+  // The state dropdown next to the Find button. It used to drive ONLY the
+  // specific-yield calibration, which reads as broken to anyone who selects
+  // "Punjab" and then watches the search ignore it — so it now also scopes
+  // the lookup when the typed query finds nothing on its own.
+  const state = String(req.query.state || '').trim();
   if (!q) return res.status(400).json({ error: 'Nothing to look up' });
 
-  const direct = parseCoords(q);
-  if (direct) return res.json({ results: [{ ...direct, name: `${direct.lat.toFixed(6)}, ${direct.lng.toFixed(6)}`, source: 'coordinates' }] });
+  // A short share link (maps.app.goo.gl/…) carries nothing usable until
+  // resolved to its real URL — do that first so everything below sees it.
+  if (isShortMapsLink(q)) {
+    const resolved = await resolveShortLink(q).catch(() => null);
+    if (resolved) q = resolved;
+  }
+
+  const isUrl = /^https?:\/\//i.test(q);
+  // See isDirectionsLink's comment — a /dir/ link's @lat,lng is a viewport,
+  // not the destination, so it's never trustworthy as a direct coordinate.
+  let direct = isUrl && isDirectionsLink(q) ? null : parseCoords(q);
+
+  // Pull a human-readable place/address out of the URL either way: it's the
+  // ONLY way to find the real spot on a /dir/ link, and even when the raw
+  // coordinate IS trustworthy (a /place/ link, a bare pin drop) it replaces
+  // "just show the numbers" with the actual address as the name.
+  const extractedName = isUrl ? extractPlaceFromMapsUrl(q) : null;
+  if (!direct && extractedName) q = extractedName;
+
+  if (direct) {
+    return res.json({ results: [{ ...direct, name: extractedName || `${direct.lat.toFixed(6)}, ${direct.lng.toFixed(6)}`, source: 'coordinates' }] });
+  }
 
   // Cache the full payload (results + any broadenedFrom/note), not just the
   // bare array — a repeat of the same broadened query must still explain
   // itself on a cache hit, not silently drop the "this is approximate" note.
-  if (GEO_CACHE.has(q)) return res.json({ ...GEO_CACHE.get(q), cached: true });
+  // Keyed on state too: the same words can resolve differently once the
+  // state-scoped retry below participates.
+  const cacheKey = state ? `${q} @@ ${state}` : q;
+  if (GEO_CACHE.has(cacheKey)) return res.json({ ...GEO_CACHE.get(cacheKey), cached: true });
 
   try {
     let results = await geocodeAllTiers(q);
     let broadenedFrom = null;
 
+    // Nothing as typed — retry with the selected state appended ("Secured
+    // Engineers Pvt Ltd" → "Secured Engineers Pvt Ltd, Punjab"). Geocoders do
+    // materially better with a region anchor, and it costs nothing when the
+    // user already typed one (skipped if the state is in the query).
+    let searched = q;
+    if (!results.length && state && !q.toLowerCase().includes(state.toLowerCase())) {
+      searched = `${q}, ${state}`;
+      results = await geocodeAllTiers(searched).catch(() => []);
+    }
+
     // Nothing found for the query as typed — no geocoder, free or paid, has
     // every small commercial building by name (confirmed against this exact
     // case: "B.K. Towers" genuinely isn't in OpenStreetMap's India dataset).
-    // Retry with the first comma-segment dropped — "B.K. Towers, Gill Road,
-    // Janta Nagar" → "Gill Road, Janta Nagar" — the same recovery a person
-    // would do by hand, so the salesperson doesn't have to realise it themselves.
-    const segments = q.split(',').map((s) => s.trim()).filter(Boolean);
+    // Retry with progressively more of the leading segments dropped —
+    // "B.K. Towers, Gill Road, Janta Nagar" → "Gill Road, Janta Nagar" → "Janta
+    // Nagar" — stopping at the first one that finds anything, the same
+    // recovery a person would do by hand. A single drop wasn't always enough
+    // (confirmed: a real "<Business>, <house>, <road>, near <Landmark>, <city>,
+    // <state>" address needed THREE segments gone before it matched). Also
+    // strip a leading landmark-reference word from every segment — "near X" /
+    // "opp X" phrasing, extremely common in Indian addresses, defeats
+    // Nominatim's matching completely even when X alone resolves fine
+    // (confirmed: "near Grewal Hospital, Ludhiana" → nothing, but "Grewal
+    // Hospital, Ludhiana" → resolves immediately).
+    // Broadening runs over the state-carrying variant so a bare single-segment
+    // business name (no commas as typed) still has somewhere to fall: "Secured
+    // Engineers Pvt Ltd, Punjab" → "Punjab" lands an area pin with the honest
+    // approximate-note instead of a dead "No match".
+    const stripLandmarkPrefix = (s) => s.replace(/^(near|opp\.?|opposite|behind|beside|next to|backside of|adjacent to)\s+/i, '').trim();
+    const segments = searched.split(',').map((s) => s.trim()).filter(Boolean);
     if (!results.length && segments.length > 1) {
-      const broader = segments.slice(1).join(', ');
-      const retry = await geocodeAllTiers(broader).catch(() => []);
-      if (retry.length) { results = retry; broadenedFrom = q; }
+      // Capped so a long address can't chain into an unbounded run of
+      // sequential network round-trips — each failed attempt still costs a
+      // real request per tier.
+      const maxDrops = Math.min(segments.length - 1, 4);
+      // Inclusive bound: the LAST segment alone must be tried too — with the
+      // exclusive `<`, a two-segment query ("<Business>, Punjab") only ever
+      // attempted drop=0 (the full string, skipped as already-searched) and
+      // never fell back to "Punjab" (confirmed against the live "Secured
+      // engineer Pvt Ltd" report).
+      for (let drop = 0; drop <= maxDrops && !results.length; drop++) {
+        const broader = segments.slice(drop).map(stripLandmarkPrefix).filter(Boolean).join(', ');
+        if (!broader || broader === q || broader === searched) continue;
+        const retry = await geocodeAllTiers(broader).catch(() => []);
+        if (retry.length) { results = retry; broadenedFrom = q; }
+      }
     }
 
     if (results.length) {
-      const payload = { results, ...(broadenedFrom ? { broadenedFrom, note: `No exact match for "${broadenedFrom}" — showing results for the area instead. Zoom in and right-click the map to pin the precise spot.` } : {}) };
-      GEO_CACHE.set(q, payload);
+      const payload = { results, ...(broadenedFrom ? { broadenedFrom, note: `No exact match for "${broadenedFrom}" — showing results for the area instead. Zoom in and click the map to pin the precise spot.` } : {}) };
+      GEO_CACHE.set(cacheKey, payload);
       return res.json(payload);
     }
   } catch (e) {

@@ -1,4 +1,5 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
@@ -88,7 +89,7 @@ try {
 // match by employee_assigned containing their name or first name.
 router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   const isAdmin = req.user.role === 'admin';
   // Bypass the CRM-name scope filter when the role has can_approve OR
   // can_see_all on cashflow — that's the explicit "see everyone's
@@ -404,7 +405,7 @@ router.get('/daily', (req, res) => {
 
 router.get('/today', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   let daily = db.prepare('SELECT * FROM cash_flow_daily WHERE date = ?').get(today);
   if (!daily) {
     const yesterday = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE date < ? ORDER BY date DESC LIMIT 1').get(today);
@@ -417,7 +418,7 @@ router.get('/today', (req, res) => {
 
 router.get('/summary', (req, res) => {
   const db = getDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = istToday();
   // Mam: "upper why not showing" — the top 4 cards used to be hard-wired
   // to today's row only and stayed at Rs 0 whenever the user picked a
   // different date. Now they reflect the date the client asks for
@@ -445,7 +446,7 @@ router.get('/summary', (req, res) => {
   });
 });
 
-router.post('/entry', (req, res) => {
+router.post('/entry', requirePermission('cashflow', 'edit'), (req, res) => {
   const { date, type, category, description, amount, payment_mode, party_name } = req.body;
   // Party name made mandatory 2026-05-16 — mam wants every cash entry
   // tied to a known counterparty so audits + future BB linking aren't
@@ -477,7 +478,7 @@ router.get('/entries/:date', (req, res) => {
   res.json(getDb().prepare('SELECT e.*, u.name as created_by_name FROM cash_flow_entries e LEFT JOIN users u ON e.created_by=u.id WHERE e.date = ? ORDER BY e.created_at DESC').all(req.params.date));
 });
 
-router.delete('/entry/:id', (req, res) => {
+router.delete('/entry/:id', requirePermission('cashflow', 'edit'), (req, res) => {
   const db = getDb();
   const entry = db.prepare('SELECT * FROM cash_flow_entries WHERE id = ?').get(req.params.id);
   if (!entry) return res.status(404).json({ error: 'Not found' });
@@ -491,7 +492,7 @@ router.delete('/entry/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-router.post('/opening-balance', (req, res) => {
+router.post('/opening-balance', requirePermission('cashflow', 'edit'), (req, res) => {
   const { date, opening_balance } = req.body;
   const db = getDb();
   if (!date) return res.status(400).json({ error: 'date required' });

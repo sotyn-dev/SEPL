@@ -12,7 +12,7 @@
 //           signature). Identity-gated: Ajmer uploads after photo; Lovely Sharma
 //           approves/rejects.
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -162,7 +162,18 @@ export default function ClientSnag() {
   // Modals
   const [createModal, setCreateModal] = useState(false);
   const [form, setForm] = useState({});
-  const [detail, setDetail] = useState(null);
+  const [detail, setDetail] = useState(null);        // full detail of the open snag
+  // Which snag id openDetail() was last called for — checked before its
+  // fetch is allowed to overwrite `detail` (mam 2026-08-24: "sometimes
+  // wrong upload"). Without this, uploading a photo on snag A, then opening
+  // snag B before A's post-upload refresh completes, snaps the panel back
+  // to snag A's stale data right after B was opened — and a subsequent
+  // action (submit/approve) would then silently apply to A, not B.
+  const detailIdRef = useRef(null);
+  // Same idea for the "New Client Snag" create form: bumped each time the
+  // create modal opens, so a photo upload started before a Cancel+reopen
+  // can't land in the fresh blank form.
+  const createAttemptRef = useRef(0);
   const [uploading, setUploading] = useState(false);
 
   // FMS Action Modals (Site Readiness)
@@ -252,12 +263,22 @@ export default function ClientSnag() {
     } finally { setUploading(false); }
   };
 
+  // field is 'before_photo_url' (open to whoever raises the snag) or
+  // 'photo_url' (the After Photo — convenience upload, Ajmer-only; the
+  // backend independently re-checks who's allowed to attach it).
   const uploadForCreate = async (field, file) => {
+    const attempt = createAttemptRef.current;
     const url = await upload(file);
-    if (url) setForm(f => ({ ...f, [field]: url, [`${field}_at_preview`]: new Date().toISOString() }));
+    if (!url) return;
+    if (createAttemptRef.current !== attempt) {
+      toast('That upload finished after you restarted this form — please upload again.', { icon: '⚠️' });
+      return;
+    }
+    setForm(f => ({ ...f, [field]: url, [`${field}_at_preview`]: new Date().toISOString() }));
   };
 
   const openCreate = () => {
+    createAttemptRef.current += 1;
     setForm({
       snag_type: activeTab,
       priority: 'medium',
@@ -302,8 +323,8 @@ export default function ClientSnag() {
       if (activeTab === 'billing_doc' && form.photo_url) {
         try { await api.post(`/client-snag/${r.data.id}/document`, { photo_url: form.photo_url }); } catch { }
       }
-
       toast.success(`Logged ${r.data.snag_no}`);
+      createAttemptRef.current += 1;
       setCreateModal(false);
       setForm({});
       load();
@@ -399,7 +420,14 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
   };
 
   const openDetail = (id) => {
-    api.get(`/client-snag/${id}`).then(r => setDetail(r.data)).catch(() => toast.error('Failed to load'));
+    detailIdRef.current = id;
+    api.get(`/client-snag/${id}`).then(r => {
+      // The user may have opened a DIFFERENT snag (or closed this panel)
+      // while this fetch was in flight — don't let a stale response snap
+      // the panel back to the wrong record.
+      if (detailIdRef.current !== id) return;
+      setDetail(r.data);
+    }).catch(() => toast.error('Failed to load'));
   };
 
   const remove = async (row) => {
@@ -416,8 +444,12 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
 
   // Legacy Billing Doc functions
   const uploadDocument = async (file) => {
+    const forId = detailIdRef.current;
     const url = await upload(file);
-    if (!url || !detail) return;
+    if (!url || !detail || detailIdRef.current !== forId) {
+      if (url && detailIdRef.current !== forId) toast('That upload finished after you switched snags — please upload again here.', { icon: '⚠️' });
+      return;
+    }
     try {
       await api.post(`/client-snag/${detail.id}/document`, { photo_url: url });
       toast.success('Photo uploaded');
@@ -824,178 +856,161 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
                     FMS Stage {renderSortIcon('fms_stage')}
                   </th>
                   <th>Clearance Photo</th>
-                  <th onClick={() => handleSort('raised_at')} className="cursor-pointer hover:text-indigo-600 select-none">
-                    Reported Date {renderSortIcon('raised_at')}
+                  <th onClick={() => handleSort('priority')} className="cursor-pointer hover:text-indigo-600 select-none">
+                    Priority {renderSortIcon('priority')}
                   </th>
-                  <th className="text-right pr-4 min-w-[220px]">Action</th>
+                  <th onClick={() => handleSort('raised_at')} className="cursor-pointer hover:text-indigo-600 select-none">
+                    Raised {renderSortIcon('raised_at')}
+                  </th>
+                  <th className="text-right">Action / FMS Next</th>
                 </tr>
               </thead>
               <tbody>
-                {loading && rows.length === 0 && (
+                {rows.length === 0 && (
                   <tr>
-                    <td colSpan="10" className="text-center py-12 text-gray-400">
-                      <div className="flex items-center justify-center gap-2">
-                        <FiRefreshCw className="animate-spin text-indigo-600" size={16} />
-                        <span>Querying database...</span>
+                    <td colSpan="11" className="text-center py-12 text-gray-400">
+                      <FiCheckCircle size={32} className="mx-auto mb-2 text-emerald-400 opacity-60" />
+                      No pending client civil snags found matching current filters.
+                    </td>
+                  </tr>
+                )}
+                {rows.map(r => (
+                  <tr key={r.id} className="hover:bg-indigo-50/30 transition">
+                    <td className="font-bold text-indigo-950 text-xs whitespace-nowrap">
+                      <span className="cursor-pointer hover:underline" onClick={() => openDetail(r.id)}>
+                        {r.snag_no}
+                      </span>
+                    </td>
+                    <td className="text-xs">
+                      <div className="font-semibold text-gray-900">{r.site_name || '—'}</div>
+                      <div className="text-[11px] text-gray-500">{r.client_name || '—'}</div>
+                    </td>
+                    <td className="text-xs font-medium text-gray-800">
+                      <div>{r.floor_zone || '—'}</div>
+                      {r.location && <div className="text-[10px] text-gray-500 font-normal">{r.location}</div>}
+                    </td>
+                    <td className="text-xs">
+                      <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-semibold border ${getScopeCategoryBadge(r.scope_category)}`}>
+                        {r.scope_category || 'Civil Work'}
+                      </span>
+                    </td>
+                    <td>
+                      {r.before_photo_url ? (
+                        <a href={r.before_photo_url} target="_blank" rel="noreferrer">
+                          <img
+                            src={r.before_photo_url}
+                            alt="Before"
+                            width="48"
+                            height="48"
+                            loading="lazy"
+                            decoding="async"
+                            className="w-12 h-12 object-cover rounded border hover:opacity-80 transition shadow-xs"
+                          />
+                        </a>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
+                    <td className="text-xs whitespace-nowrap">
+                      {r.client_promised_date ? (
+                        <div>
+                          <div className={r.days_overdue > 0 ? 'text-red-600 font-bold' : 'text-gray-900 font-medium'}>
+                            {fmtDate(r.client_promised_date)}
+                          </div>
+                          {r.days_overdue > 0 ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-red-100 text-red-700 border border-red-200 mt-0.5 inline-block">
+                              ⚠️ {r.days_overdue} d late
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-gray-500">On schedule</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-amber-600 font-semibold text-[11px]">Not Intimated</span>
+                      )}
+                    </td>
+
+                    <td className="whitespace-nowrap">
+                      {getFmsStagePill(r.fms_stage)}
+                    </td>
+
+                    <td>
+                      {r.cleared_photo_url ? (
+                        <a href={r.cleared_photo_url} target="_blank" rel="noreferrer" title="Clearance Photo Proof">
+                          <img
+                            src={r.cleared_photo_url}
+                            alt="Cleared"
+                            width="52"
+                            height="52"
+                            loading="lazy"
+                            className="w-12 h-12 object-cover rounded ring-2 ring-emerald-500 hover:scale-105 transition shadow-xs"
+                          />
+                        </a>
+                      ) : (
+                        <span className="text-gray-400 text-xs italic">Pending</span>
+                      )}
+                    </td>
+
+                    <td>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${PRIORITY_PILL[r.priority] || ''}`}>
+                        {r.priority}
+                      </span>
+                    </td>
+
+                    <td className="text-xs text-gray-500 whitespace-nowrap">
+                      {r.raised_at ? fmtDate(r.raised_at) : '—'}
+                    </td>
+
+                    <td className="whitespace-nowrap text-right pr-4 min-w-[220px]">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {/* Step 2: Intimate / Set Client Target */}
+                        {r.fms_stage !== 'cleared' && (
+                          <button
+                            onClick={() => openIntimate(r)}
+                            className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1 shadow-xs hover:bg-blue-50 hover:text-blue-700 hover:border-blue-300 transition"
+                            title="Intimate to Client / Update Promised Date"
+                          >
+                            <FiCalendar size={12} /> Intimate
+                          </button>
+                        )}
+
+                        {/* Step 4: Mark Cleared */}
+                        {r.fms_stage !== 'cleared' && (
+                          <button
+                            onClick={() => openClearance(r)}
+                            className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 shadow-xs transition"
+                            title="Upload Finished Civil Work Photo & Mark Cleared"
+                          >
+                            <FiCheckCircle size={12} /> Clear
+                          </button>
+                        )}
+
+                        {/* Formal Notice generator */}
+                        <button
+                          onClick={() => openNotice(r)}
+                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded border border-indigo-200 transition"
+                          title="Generate Formal Client Notice (WhatsApp/Print)"
+                        >
+                          <FiShare2 size={13} />
+                        </button>
+
+                        {/* Details */}
+                        <button
+                          onClick={() => openDetail(r.id)}
+                          className="btn btn-secondary text-[11px] px-2 py-1 transition"
+                        >
+                          View
+                        </button>
+
+                        {canDelete('client_snag') && (
+                          <button onClick={() => remove(r)} className="p-1.5 text-gray-400 hover:text-red-600 transition" title="Delete">
+                            <FiTrash2 size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
-                )}
-                {!loading && rows.length === 0 && (
-                  <tr>
-                    <td colSpan="10" className="text-center py-12 text-gray-400">
-                      No pending client civil work found. Click "Log Civil Work Left" or reset filters.
-                    </td>
-                  </tr>
-                )}
-                {rows.map(r => {
-                  const scopeMeta = SCOPE_CATEGORIES.find(c => c.id === r.scope_category) || { icon: '📌', badge: 'bg-gray-100 text-gray-800' };
-                  const fmsMeta = FMS_STAGES[r.fms_stage] || { label: r.fms_stage || 'Reported', pill: 'bg-gray-100 text-gray-800' };
-                  const isOverdue = r.days_overdue > 0;
-
-                  return (
-                    <tr key={r.id} className="hover:bg-gray-50/80 transition">
-                      <td className="font-bold text-indigo-700 text-xs whitespace-nowrap">
-                        {r.snag_no}
-                      </td>
-
-                      <td className="text-xs">
-                        <div className="font-semibold text-gray-900">{r.site_name || '—'}</div>
-                        {r.client_name && r.client_name.trim().toLowerCase() !== (r.site_name || '').trim().toLowerCase() && (
-                          <div className="text-[11px] text-gray-500">{r.client_name}</div>
-                        )}
-                      </td>
-
-                      <td className="text-xs whitespace-nowrap">
-                        <span className="font-medium text-gray-800">{r.floor_zone || '—'}</span>
-                        {r.location && <div className="text-[10px] text-gray-500">{r.location}</div>}
-                      </td>
-
-                      <td className="text-xs">
-                        <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded font-semibold border ${scopeMeta.badge}`}>
-                          <span>{scopeMeta.icon}</span>
-                          <span>{r.scope_category || 'Civil Work'}</span>
-                        </span>
-                        <div className="line-clamp-2 text-[11px] text-gray-600 mt-1 max-w-xs" title={r.description}>
-                          {r.description}
-                        </div>
-                      </td>
-
-                      <td>
-                        {r.before_photo_url ? (
-                          <a href={r.before_photo_url} target="_blank" rel="noreferrer" title="Click to view full photo">
-                            <img
-                              src={r.before_photo_url}
-                              alt="Before"
-                              width="52"
-                              height="52"
-                              loading="lazy"
-                              className="w-12 h-12 object-cover rounded border hover:scale-105 transition shadow-xs ring-1 ring-black/5"
-                            />
-                          </a>
-                        ) : (
-                          <span className="text-gray-300 text-xs">—</span>
-                        )}
-                      </td>
-
-                      <td className="text-xs whitespace-nowrap">
-                        {r.client_promised_date ? (
-                          <div>
-                            <div className="font-medium text-gray-900 flex items-center gap-1">
-                              <FiCalendar size={12} className="text-gray-400" />
-                              {fmtDate(r.client_promised_date)}
-                            </div>
-                            {isOverdue ? (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-red-100 text-red-700 border border-red-200 mt-0.5 inline-block animate-pulse">
-                                ⚠️ {r.days_overdue} d late
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-gray-500">On schedule</span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-amber-600 font-semibold text-[11px]">Not Intimated</span>
-                        )}
-                      </td>
-
-                      <td className="whitespace-nowrap">
-                        <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${fmsMeta.pill}`}>
-                          {fmsMeta.label}
-                        </span>
-                      </td>
-
-                      <td>
-                        {r.cleared_photo_url ? (
-                          <a href={r.cleared_photo_url} target="_blank" rel="noreferrer" title="Clearance Photo Proof">
-                            <img
-                              src={r.cleared_photo_url}
-                              alt="Cleared"
-                              width="52"
-                              height="52"
-                              loading="lazy"
-                              className="w-12 h-12 object-cover rounded ring-2 ring-emerald-500 hover:scale-105 transition shadow-xs"
-                            />
-                          </a>
-                        ) : (
-                          <span className="text-gray-400 text-xs italic">Pending</span>
-                        )}
-                      </td>
-
-                      <td className="text-xs text-gray-500 whitespace-nowrap">
-                        {r.raised_at ? fmtDate(r.raised_at) : '—'}
-                      </td>
-
-                      <td className="whitespace-nowrap text-right pr-4 min-w-[220px]">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* Step 2: Intimate / Set Client Target */}
-                          {r.fms_stage !== 'cleared' && (
-                            <button
-                              onClick={() => openIntimate(r)}
-                              className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1 shadow-xs hover:bg-blue-50 hover:text-blue-700 hover:border-blue-300 transition"
-                              title="Intimate to Client / Update Promised Date"
-                            >
-                              <FiCalendar size={12} /> Intimate
-                            </button>
-                          )}
-
-                          {/* Step 4: Mark Cleared */}
-                          {r.fms_stage !== 'cleared' && (
-                            <button
-                              onClick={() => openClearance(r)}
-                              className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 shadow-xs transition"
-                              title="Upload Finished Civil Work Photo & Mark Cleared"
-                            >
-                              <FiCheckCircle size={12} /> Clear
-                            </button>
-                          )}
-
-                          {/* Formal Notice generator */}
-                          <button
-                            onClick={() => openNotice(r)}
-                            className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded border border-indigo-200 transition"
-                            title="Generate Formal Client Notice (WhatsApp/Print)"
-                          >
-                            <FiShare2 size={13} />
-                          </button>
-
-                          {/* Details */}
-                          <button
-                            onClick={() => openDetail(r.id)}
-                            className="btn btn-secondary text-[11px] px-2 py-1 transition"
-                          >
-                            View
-                          </button>
-
-                          {canDelete('client_snag') && (
-                            <button onClick={() => remove(r)} className="p-1.5 text-gray-400 hover:text-red-600 transition" title="Delete">
-                              <FiTrash2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           ) : (
@@ -1115,7 +1130,7 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
       {/* CREATE MODAL */}
       <Modal
         isOpen={createModal}
-        onClose={() => { setCreateModal(false); setForm({}); }}
+        onClose={() => { createAttemptRef.current += 1; setCreateModal(false); setForm({}); }}
         title={activeTab === 'site_readiness' ? '🏗️ Log Pending Client Civil Work (Plaster / Tiles / etc.)' : '📄 New Client Snag (Billing / Document)'}
         wide
       >
@@ -1543,10 +1558,10 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
       </Modal>
 
       {/* DETAIL MODAL */}
-      <Modal isOpen={!!detail} onClose={() => setDetail(null)} title={detail ? `${detail.snag_no}` : ''} wide>
+      <Modal isOpen={!!detail} onClose={() => { setDetail(null); detailIdRef.current = null; }} title={detail ? `${detail.snag_no}` : ''} wide>
         {detail && (
           <div className="space-y-4">
-            <div className="bg-gray-50 p-3 rounded text-sm grid grid-cols-2 gap-2 border">
+            <div className="bg-gray-50 p-3 rounded text-sm grid grid-cols-1 sm:grid-cols-2 gap-2 border">
               <div><span className="text-gray-500">Client:</span> <span className="font-medium">{detail.client_name || '—'}</span></div>
               <div><span className="text-gray-500">Site:</span> <span className="font-medium">{detail.site_name || '—'}</span></div>
               <div><span className="text-gray-500">Floor / Zone:</span> <span className="font-medium">{detail.floor_zone || detail.location || '—'}</span></div>
@@ -1559,8 +1574,8 @@ Please note that our installation piping, brackets, and fixtures cannot proceed 
               {detail.days_overdue > 0 && (
                 <div><span className="text-red-600 font-bold">⚠️ Overdue by {detail.days_overdue} days</span></div>
               )}
-              <div className="col-span-2"><span className="text-gray-500">Description:</span> {detail.description}</div>
-              <div className="col-span-2 text-xs text-gray-400">Raised: {detail.raised_at ? fmtDateTime(detail.raised_at) : '—'} {detail.raised_by_name ? `by ${detail.raised_by_name}` : ''}</div>
+              <div className="col-span-1 sm:col-span-2"><span className="text-gray-500">Description:</span> {detail.description}</div>
+              <div className="col-span-1 sm:col-span-2 text-xs text-gray-400">Raised: {detail.raised_at ? fmtDateTime(detail.raised_at) : '—'} {detail.raised_by_name ? `by ${detail.raised_by_name}` : ''}</div>
             </div>
 
             {/* Photos */}
