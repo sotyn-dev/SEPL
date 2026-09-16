@@ -12,10 +12,12 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtDateTime } from '../utils/datetime';
 import { useUrlTab } from '../hooks/useUrlTab';
+import ExecutionGanttSchedule from '../components/ExecutionGanttSchedule';
 import {
   FiCalendar, FiRefreshCw, FiSettings, FiChevronDown, FiChevronRight,
   FiAlertTriangle, FiClock, FiFlag, FiX, FiCpu, FiCheck,
   FiUpload, FiPaperclip, FiSave, FiFileText, FiArchive, FiDownload, FiEye, FiTrash2,
+  FiGitBranch,
 } from 'react-icons/fi';
 
 const PHASES = ['indent', 'quotes', 'po', 'dispatch', 'receive', 'install'];
@@ -50,7 +52,7 @@ const daysBetween = (a, b) => {
 
 export default function ProcurementSchedule() {
   const { isAdmin, canEdit } = useAuth();
-  const [tab, setTab] = useUrlTab('gantt');                 // gantt | records | holidays
+  const [tab, setTab] = useUrlTab('execution');                 // execution | gantt | records | holidays
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useUrlTab('', 'project'); // ?project=42 persists across reloads
   const [data, setData] = useState(null);
@@ -180,17 +182,33 @@ export default function ProcurementSchedule() {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h1 className="text-xl font-bold flex items-center gap-2"><FiCalendar className="text-red-600" /> Procurement Schedule</h1>
-          <p className="text-xs text-gray-500">AI generates lead times from your BOQ; you review and approve; the Gantt then surfaces the date you MUST raise each indent so the project finishes on time.</p>
+          <h1 className="text-xl font-bold flex items-center gap-2"><FiCalendar className="text-red-600" /> Project Schedule & Procurement</h1>
+          <p className="text-xs text-gray-500">Google Gantter compatible WBS project execution scheduling with milestones & dependencies, plus AI-driven procurement lead-time schedules.</p>
         </div>
+      </div>
+
+      {/* Project picker — shared across all schedule tabs */}
+      <div className="card p-3">
+        <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Project</label>
+        <SearchableSelect
+          options={projects.map(p => ({
+            id: p.id,
+            label: `${p.company_name}${p.client_name ? ' · ' + p.client_name : ''} — completes ${fmtDate(p.completion_date)}${p.scheduled_rows > 0 ? ' · scheduled' : ''}`,
+          }))}
+          value={projectId ? +projectId : null}
+          valueKey="id" displayKey="label"
+          placeholder="Pick a project…"
+          onChange={v => setProjectId(v?.id ? String(v.id) : '')}
+        />
       </div>
 
       {/* Tab bar — scrollable on mobile without cutting off tabs */}
       <div className="flex items-center gap-1 border-b border-gray-200 overflow-x-auto scrollbar-none pb-0.5 sm:flex-wrap">
         {[
-          { id: 'gantt',    label: 'Schedule (Gantt)', icon: FiCalendar },
-          { id: 'records',  label: 'Records (saved)',  icon: FiArchive },
-          { id: 'holidays', label: 'Holidays',         icon: FiFlag },
+          { id: 'execution', label: 'Project Execution (Gantter)', icon: FiGitBranch },
+          { id: 'gantt',     label: 'Procurement (BOQ)',          icon: FiCalendar },
+          { id: 'records',   label: 'Records (saved)',            icon: FiArchive },
+          { id: 'holidays',  label: 'Holidays',                   icon: FiFlag },
         ].map(t => {
           const active = tab === t.id;
           return (
@@ -204,22 +222,15 @@ export default function ProcurementSchedule() {
         })}
       </div>
 
+      {tab === 'execution' && (
+        <ExecutionGanttSchedule
+          projectId={projectId}
+          canEdit={canEdit('procurement_schedule')}
+        />
+      )}
+
       {tab === 'gantt' && (
         <>
-          {/* Project picker */}
-          <div className="card p-3">
-            <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Project</label>
-            <SearchableSelect
-              options={projects.map(p => ({
-                id: p.id,
-                label: `${p.company_name}${p.client_name ? ' · ' + p.client_name : ''} — completes ${fmtDate(p.completion_date)}${p.scheduled_rows > 0 ? ' · scheduled' : ''}`,
-              }))}
-              value={projectId ? +projectId : null}
-              valueKey="id" displayKey="label"
-              placeholder="Pick a project…"
-              onChange={v => setProjectId(v?.id ? String(v.id) : '')}
-            />
-          </div>
 
           {/* SETUP CARD — Bundle A inputs that flow into the AI prompt
               (mam 2026-05-28). Start/end default from business_book's

@@ -416,6 +416,9 @@ function initializeDatabase() {
       state TEXT,
       billing_address TEXT,
       shipping_address TEXT,
+      site_location_url TEXT,
+      site_latitude REAL,
+      site_longitude REAL,
       guarantee_required TEXT DEFAULT 'No',
       guarantee_percentage TEXT,
       sale_amount_without_gst REAL DEFAULT 0,
@@ -1304,6 +1307,9 @@ function initializeDatabase() {
       name TEXT NOT NULL,
       address TEXT,
       client_name TEXT,
+      location_url TEXT,
+      latitude REAL,
+      longitude REAL,
       po_id INTEGER REFERENCES purchase_orders(id),
       business_book_id INTEGER REFERENCES business_book(id),
       site_engineer_id INTEGER REFERENCES users(id),
@@ -2812,6 +2818,27 @@ function initializeDatabase() {
       UNIQUE(checklist_id, user_id, completion_date)
     );
 
+    -- Project Schedule Tasks (Google Gantter / WBS interactive schedule)
+    CREATE TABLE IF NOT EXISTS project_schedule_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id) ON DELETE CASCADE,
+      wbs_code TEXT,
+      task_name TEXT NOT NULL,
+      parent_id INTEGER,
+      outline_level INTEGER DEFAULT 1,
+      start_date DATE,
+      end_date DATE,
+      duration_days INTEGER DEFAULT 1,
+      progress_pct INTEGER DEFAULT 0,
+      dependencies TEXT,
+      is_milestone INTEGER DEFAULT 0,
+      assigned_to TEXT,
+      status TEXT DEFAULT 'planned',
+      sort_order INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_proj_tasks_project ON project_schedule_tasks(project_id, sort_order);
     -- ============================================
     -- TALLY BILL → PMS TASK → APPROVAL → PAYMENT
     -- ============================================
@@ -4181,6 +4208,13 @@ function initializeDatabase() {
     ['proj_work_orders', 'routed_by INTEGER'],
     ['proj_work_orders', 'routed_by_name TEXT'],
     ['proj_work_orders', 'routed_at DATETIME'],
+    // Business Book & Sites: Project / site map location & GPS directions
+    ['business_book', 'site_location_url TEXT'],
+    ['business_book', 'site_latitude REAL'],
+    ['business_book', 'site_longitude REAL'],
+    ['sites', 'location_url TEXT'],
+    ['sites', 'latitude REAL'],
+    ['sites', 'longitude REAL'],
   ];
   // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
   // coexist (the app always compares LOWER(username); the old case-sensitive index
@@ -4245,7 +4279,7 @@ function initializeDatabase() {
       // inside a transaction, so set it before BEGIN and restore after COMMIT.
       // Matches the payment_requests / indents rebuilds elsewhere in this file.
       db.pragma('foreign_keys = OFF');
-      try { db.exec('DROP TABLE IF EXISTS support_tickets_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS support_tickets_new'); } catch (_) { }
       const newSql = row.sql
         .replace(/CREATE TABLE\s+"?support_tickets"?/i, 'CREATE TABLE support_tickets_new')
         .replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
@@ -4261,8 +4295,8 @@ function initializeDatabase() {
       console.log('[migration] support_tickets rebuilt — category CHECK relaxed (manpower/material/payment now allowed)');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
-    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
+    try { db.pragma('foreign_keys = ON'); } catch (_) { }
     console.error('[migration] support_tickets category CHECK relax FAILED:', e.message);
   }
 
@@ -4284,7 +4318,7 @@ function initializeDatabase() {
     const checkClause = row && (row.sql.match(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i) || [])[0];
     if (checkClause && !/submitted/i.test(checkClause)) {
       db.pragma('foreign_keys = OFF');       // see the category rebuild above
-      try { db.exec('DROP TABLE IF EXISTS support_tickets_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS support_tickets_new'); } catch (_) { }
       const newSql = row.sql
         .replace(/CREATE TABLE\s+"?support_tickets"?/i, 'CREATE TABLE support_tickets_new')
         .replace(/,?\s*CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i, '');
@@ -4299,8 +4333,8 @@ function initializeDatabase() {
       console.log('[migration] support_tickets rebuilt — status CHECK relaxed (submitted/rejected now allowed)');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
-    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
+    try { db.pragma('foreign_keys = ON'); } catch (_) { }
     console.error('[migration] support_tickets status CHECK relax FAILED:', e.message);
   }
 
@@ -4321,7 +4355,7 @@ function initializeDatabase() {
       db.pragma('foreign_keys = OFF');
 
       // Clean up any orphan from a prior failed run.
-      try { db.exec('DROP TABLE IF EXISTS payment_requests_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS payment_requests_new'); } catch (_) { }
 
       // Build the new CREATE statement.  Handles BOTH `CREATE TABLE`
       // and `CREATE TABLE IF NOT EXISTS` shapes, and any inline CHECK
@@ -4362,8 +4396,8 @@ function initializeDatabase() {
       console.log('[migration] payment_requests CHECK already gone — skipping');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (_) {}
-    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    try { db.exec('ROLLBACK'); } catch (_) { }
+    try { db.pragma('foreign_keys = ON'); } catch (_) { }
     console.error('[migration] ✗ payment_requests CHECK drop FAILED:', e.message);
     console.error(e.stack);
   }
@@ -4682,7 +4716,7 @@ function initializeDatabase() {
       console.log('[migration] ════════════════════════════════════════════');
       console.log('[migration] indents.status CHECK detected — rebuilding to drop CHECK');
       db.pragma('foreign_keys = OFF');
-      try { db.exec('DROP TABLE IF EXISTS indents_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS indents_new'); } catch (_) { }
 
       // Handle both `CREATE TABLE indents` and `CREATE TABLE "indents"`
       // shapes — SQLite normalises to the quoted form after a prior
@@ -4715,8 +4749,8 @@ function initializeDatabase() {
       console.log('[migration] indents.status CHECK already gone — skipping');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (_) {}
-    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    try { db.exec('ROLLBACK'); } catch (_) { }
+    try { db.pragma('foreign_keys = ON'); } catch (_) { }
     console.error('[migration] ✗ indents.status CHECK drop FAILED:', e.message);
     console.error(e.stack);
   }
@@ -4729,13 +4763,13 @@ function initializeDatabase() {
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='attendance'").get();
     if (row && !/short_day/.test(row.sql)) {
-      try { db.exec('DROP TABLE IF EXISTS attendance_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS attendance_new'); } catch (_) { }
       db.exec('BEGIN');
       const newSql = row.sql
         // Same IF-NOT-EXISTS fix as payment_requests above.
         .replace(/CREATE TABLE(\s+IF NOT EXISTS)?\s+attendance/i, 'CREATE TABLE attendance_new')
         .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
-                 "CHECK(status IN ('present','half_day','short_day','absent','late','leave','holiday'))");
+          "CHECK(status IN ('present','half_day','short_day','absent','late','leave','holiday'))");
       db.exec(newSql);
       db.exec('INSERT INTO attendance_new SELECT * FROM attendance');
       db.exec('DROP TABLE attendance');
@@ -4744,7 +4778,7 @@ function initializeDatabase() {
       console.log('[migration] attendance.status CHECK relaxed to allow short_day');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
     console.error('[migration] attendance CHECK relax failed:', e.message);
   }
 
@@ -4757,13 +4791,13 @@ function initializeDatabase() {
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='leave_requests'").get();
     if (row && !/short_leave/.test(row.sql)) {
-      try { db.exec('DROP TABLE IF EXISTS leave_requests_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS leave_requests_new'); } catch (_) { }
       db.exec('BEGIN');
       const newSql = row.sql
         // Same IF-NOT-EXISTS fix as the migrations above.
         .replace(/CREATE TABLE(\s+IF NOT EXISTS)?\s+leave_requests/i, 'CREATE TABLE leave_requests_new')
         .replace(/CHECK\s*\(\s*leave_type\s+IN\s*\([^)]*\)\s*\)/i,
-                 "CHECK(leave_type IN ('casual','sick','earned','half_day','short_leave','comp_off'))");
+          "CHECK(leave_type IN ('casual','sick','earned','half_day','short_leave','comp_off'))");
       db.exec(newSql);
       // Copy ONLY the columns that exist in the OLD table to be safe.
       const oldCols = db.prepare("PRAGMA table_info(leave_requests)").all().map(c => c.name);
@@ -4776,7 +4810,7 @@ function initializeDatabase() {
       console.log('[migration] leave_requests.leave_type CHECK relaxed to allow short_leave');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
     console.error('[migration] leave_requests CHECK relax failed:', e.message);
   }
 
@@ -4797,7 +4831,7 @@ function initializeDatabase() {
       const newSql = row.sql
         .replace(/CREATE TABLE\s+indents/i, 'CREATE TABLE indents_new')
         .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
-                 "CHECK(status IN ('draft','submitted','l1_approved','approved','rejected','po_sent','dispatched','received'))");
+          "CHECK(status IN ('draft','submitted','l1_approved','approved','rejected','po_sent','dispatched','received'))");
       db.exec(newSql);
       const oldCols = db.prepare("PRAGMA table_info(indents)").all().map(c => c.name);
       const newCols = db.prepare("PRAGMA table_info(indents_new)").all().map(c => c.name);
@@ -4809,7 +4843,7 @@ function initializeDatabase() {
       console.log('[migration] indents.status CHECK relaxed to allow l1_approved (2-level approval)');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
     console.error('[migration] indents CHECK relax failed:', e.message);
   }
 
@@ -4824,7 +4858,7 @@ function initializeDatabase() {
       const newSql = row.sql
         .replace(/CREATE TABLE\s+proj_contractor_ra_bills/i, 'CREATE TABLE proj_contractor_ra_bills_new')
         .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
-                 "CHECK(status IN ('raised','payment','paid','cancelled','on_hold'))");
+          "CHECK(status IN ('raised','payment','paid','cancelled','on_hold'))");
       db.exec(newSql);
       const oldCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills)").all().map(c => c.name);
       const newCols = db.prepare("PRAGMA table_info(proj_contractor_ra_bills_new)").all().map(c => c.name);
@@ -4836,7 +4870,7 @@ function initializeDatabase() {
       console.log('[migration] proj_contractor_ra_bills.status CHECK relaxed to allow on_hold');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
     console.error('[migration] proj_contractor_ra_bills CHECK relax failed:', e.message);
   }
 
@@ -4861,7 +4895,7 @@ function initializeDatabase() {
       // step below fails under foreign_keys=ON with rows like that present.
       // Matches the support_tickets/payment_requests rebuilds elsewhere.
       db.pragma('foreign_keys = OFF');
-      try { db.exec('DROP TABLE IF EXISTS proj_contractor_ra_bills_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS proj_contractor_ra_bills_new'); } catch (_) { }
       db.exec('BEGIN');
       const newSql = row.sql
         .replace(/CREATE TABLE\s+"?proj_contractor_ra_bills"?/i, 'CREATE TABLE proj_contractor_ra_bills_new')
@@ -4880,8 +4914,8 @@ function initializeDatabase() {
       console.log('[migration] proj_contractor_ra_bills.project_id FK to business_book removed (mismatched with Bill Verification chain usage)');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
-    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
+    try { db.pragma('foreign_keys = ON'); } catch (_) { }
     console.error('[migration] proj_contractor_ra_bills project_id FK fix failed:', e.message);
   }
 
@@ -4895,7 +4929,7 @@ function initializeDatabase() {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='proj_mb_sheets'").get();
     if (row && /project_id\s+INTEGER\s+NOT\s+NULL\s+REFERENCES\s+business_book/i.test(row.sql)) {
       db.pragma('foreign_keys = OFF');
-      try { db.exec('DROP TABLE IF EXISTS proj_mb_sheets_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS proj_mb_sheets_new'); } catch (_) { }
       db.exec('BEGIN');
       const newSql = row.sql
         .replace(/CREATE TABLE\s+"?proj_mb_sheets"?/i, 'CREATE TABLE proj_mb_sheets_new')
@@ -4913,8 +4947,8 @@ function initializeDatabase() {
       console.log('[migration] proj_mb_sheets.project_id FK to business_book removed (mismatched with MB/CDPR usage)');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
-    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
+    try { db.pragma('foreign_keys = ON'); } catch (_) { }
     console.error('[migration] proj_mb_sheets project_id FK fix failed:', e.message);
   }
 
@@ -4930,7 +4964,7 @@ function initializeDatabase() {
       const newSql = row.sql
         .replace(/CREATE TABLE\s+proj_work_orders/i, 'CREATE TABLE proj_work_orders_new')
         .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
-                 "CHECK(status IN ('draft','submitted','approved','work_started','in_progress','completed','active','closed','cancelled'))");
+          "CHECK(status IN ('draft','submitted','approved','work_started','in_progress','completed','active','closed','cancelled'))");
       db.exec(newSql);
       const oldCols = db.prepare("PRAGMA table_info(proj_work_orders)").all().map(c => c.name);
       const newCols = db.prepare("PRAGMA table_info(proj_work_orders_new)").all().map(c => c.name);
@@ -4944,7 +4978,7 @@ function initializeDatabase() {
       console.log('[migration] proj_work_orders.status CHECK expanded to the full lifecycle');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
     console.error('[migration] proj_work_orders CHECK expand failed:', e.message);
   }
 
@@ -4955,7 +4989,7 @@ function initializeDatabase() {
       const newSql = row.sql
         .replace(/CREATE TABLE\s+proj_bill_stage_log/i, 'CREATE TABLE proj_bill_stage_log_new')
         .replace(/CHECK\s*\(\s*action\s+IN\s*\([^)]*\)\s*\)/i,
-                 "CHECK(action IN ('verified','rejected','sent_back','held','resumed'))");
+          "CHECK(action IN ('verified','rejected','sent_back','held','resumed'))");
       db.exec(newSql);
       const oldCols = db.prepare("PRAGMA table_info(proj_bill_stage_log)").all().map(c => c.name);
       const newCols = db.prepare("PRAGMA table_info(proj_bill_stage_log_new)").all().map(c => c.name);
@@ -4971,12 +5005,12 @@ function initializeDatabase() {
       console.log('[migration] proj_bill_stage_log.action CHECK relaxed to allow held/resumed');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
+    try { db.exec('ROLLBACK'); } catch (e2) { }
     console.error('[migration] proj_bill_stage_log CHECK relax failed:', e.message);
   }
 
   for (const [table, col] of migrations) {
-    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) { }
   }
 
   // Manpower Plan — admin override of the auto (value-slab) required manpower
@@ -5008,7 +5042,7 @@ function initializeDatabase() {
                SELECT project_key, required FROM manpower_required_overrides`);
     } catch (_) { /* old table may not exist */ }
     // Mam (2026-06-12): "Old" category renamed to "Hold".
-    try { db.exec(`UPDATE manpower_project_settings SET category='Hold' WHERE category='Old'`); } catch (_) {}
+    try { db.exec(`UPDATE manpower_project_settings SET category='Hold' WHERE category='Old'`); } catch (_) { }
     // Mam (2026-06-13): also plan Site Engineers / Jr. Site Engineers per
     // project — required comes from a value slab, but allow an admin override
     // of each, same as required manpower.
@@ -5018,7 +5052,7 @@ function initializeDatabase() {
     // Employee self-fill standing link (mam 2026-08-17 "if new person join he
     // will fill data"): multi_use=1 links are shared ONCE with all new joiners
     // and never consumed by a submission. Guarded for DBs created before this.
-    try { db.exec(`ALTER TABLE employee_fill_links ADD COLUMN multi_use INTEGER DEFAULT 0`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employee_fill_links ADD COLUMN multi_use INTEGER DEFAULT 0`); } catch (_) { }
     // ── Session revocation (2026-08-24 security incident) ────────────────────
     // Epoch SECONDS. Any JWT whose `iat` is older than this value is refused by
     // authMiddleware, so a session can actually be ENDED. Until this existed the
@@ -5027,44 +5061,44 @@ function initializeDatabase() {
     // session fully working (with whatever role was baked into the token) until
     // it expired — and the sliding refresh meant it never expired. NULL = never
     // revoked, which is every existing row, so adding this logs nobody out.
-    try { db.exec(`ALTER TABLE users ADD COLUMN token_revoked_at INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE users ADD COLUMN token_revoked_at INTEGER`); } catch (_) { }
     // Candidate detail fields (mam 2026-08-17 "yes" to DOB/address/emergency/
     // bank): filled by the joiner on the public form, editable by HR after.
-    try { db.exec(`ALTER TABLE employees ADD COLUMN date_of_birth TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE employees ADD COLUMN address TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_name TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_phone TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE employees ADD COLUMN bank_account_no TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE employees ADD COLUMN bank_ifsc TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE employees ADD COLUMN date_of_birth TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE employees ADD COLUMN address TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_name TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE employees ADD COLUMN emergency_contact_phone TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE employees ADD COLUMN bank_account_no TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE employees ADD COLUMN bank_ifsc TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) { }
     // Labour quotation supporting document (2026-08): the raiser can attach a
     // PDF/photo of the client's BOQ, contractor's rate card, or site photo —
     // same upload endpoint AnnouncementBell already uses, just a new column.
-    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN attachment_url TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN attachment_url TEXT`); } catch (_) { }
     // Work Order — contractor contact, site location, and who approved it
     // (2026-08). approved_by is a fixed name picklist, not a users(id) FK —
     // the approvers here are managers who may not all hold ERP logins.
-    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contact_number TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN location TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN approved_by TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contact_number TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN location TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN approved_by TEXT`); } catch (_) { }
     // Contractor's own document (ID proof / registration / agreement) —
     // separate from work_order_file_url, which is the WO document itself.
-    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contractor_document_url TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE proj_work_orders ADD COLUMN contractor_document_url TEXT`); } catch (_) { }
     // Labour Master — type of manpower (2026-08): distinguishes contractor
     // manpower from SEPL's own team and daily-wage hires, since wage
     // register and cost rollups treat each differently.
-    try { db.exec(`ALTER TABLE labour_master ADD COLUMN manpower_type TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE labour_master ADD COLUMN manpower_type TEXT`); } catch (_) { }
     // Worker's own document (ID proof / Aadhaar card / photo) — 2026-08.
-    try { db.exec(`ALTER TABLE labour_master ADD COLUMN document_url TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE labour_master ADD COLUMN document_url TEXT`); } catch (_) { }
     // Labour quotation — contractor is now free text (2026-08), no longer
     // forced through the Sub-Contractors master, plus their Aadhaar.
-    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN contractor_aadhaar TEXT`); } catch (_) {}
-    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
-    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
-    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE labour_quotations ADD COLUMN contractor_aadhaar TEXT`); } catch (_) { }
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) { }
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) { }
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) { }
     // mam 2026-06-30: when the approver edits a line's UOM at approval, mark it so
     // downstream views show THAT unit (Vendor Rates etc.) instead of the master UOM.
-    try { db.exec(`ALTER TABLE indent_items ADD COLUMN unit_overridden INTEGER DEFAULT 0`); } catch (_) {}
+    try { db.exec(`ALTER TABLE indent_items ADD COLUMN unit_overridden INTEGER DEFAULT 0`); } catch (_) { }
     // One-time backfill: existing rows whose line UOM already differs from the
     // master UOM were edited deliberately (e.g. IND-0172 mtr→KG), so flag them so
     // the edit shows immediately. Guarded so it runs exactly once.
@@ -5104,13 +5138,13 @@ function initializeDatabase() {
         if (r.changes) console.log(`[schema] unit_overridden backfill v2: flagged ${r.changes} indent line(s)`);
         db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('unit_overridden_backfill_v2','done')").run();
       }
-    } catch (_) {}
+    } catch (_) { }
   } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
 
   // Retention: GPS pings accumulate every 30s per user and were never purged
   // (audit 2026-06-12).  Drop pings older than 60 days on each boot so the
   // table — and the admin live-map self-join over it — stays fast.
-  try { db.exec(`DELETE FROM location_tracking WHERE date < date('now','-60 days')`); } catch (_) {}
+  try { db.exec(`DELETE FROM location_tracking WHERE date < date('now','-60 days')`); } catch (_) { }
 
   // ─── KPI scorecards for the 5 team leads (mam 2026-07-01, from kpi.pdf) ───
   // Each was showing "no template" (0%) on the Scorecard. Build one template per
@@ -5130,58 +5164,68 @@ function initializeDatabase() {
     const kdone = db.prepare("SELECT value FROM app_settings WHERE key='kpi_cards_seed_v1'").get();
     if (!kdone) {
       const BASIC = [
-        { m: 'Checklist',   w: 5, dir: 'higher_better', src: 'auto:checklists' },
-        { m: 'PMS',         w: 5, dir: 'higher_better', src: 'auto:pms' },
+        { m: 'Checklist', w: 5, dir: 'higher_better', src: 'auto:checklists' },
+        { m: 'PMS', w: 5, dir: 'higher_better', src: 'auto:pms' },
         { m: 'Help Ticket', w: 5, dir: 'higher_better', src: 'auto:tickets' },
       ];
       const RACI = { m: 'RACI Steps (All Modules)', w: 0, dir: 'higher_better', src: 'auto:raci_steps_done' };
       const PEOPLE = [
-        { user: 'Rajat Sharma', tpl: 'Rajat Sharma — Sales Head', desc: 'Owns: turning leads into orders',
+        {
+          user: 'Rajat Sharma', tpl: 'Rajat Sharma — Sales Head', desc: 'Owns: turning leads into orders',
           basic: BASIC, weekly: [
-            { m: 'Lead → quote conversion',              w: 17, dir: 'higher_better', src: 'manual' },
-            { m: 'Quote → order win rate',               w: 17, dir: 'higher_better', src: 'manual' },
-            { m: 'Pipeline value live in CRM',           w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Lead → quote conversion', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Quote → order win rate', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Pipeline value live in CRM', w: 17, dir: 'higher_better', src: 'manual' },
             { m: 'Every quote followed up within 48 hrs', w: 17, dir: 'higher_better', src: 'manual' },
-            { m: 'New orders booked (₹)',                w: 17, dir: 'higher_better', src: 'manual' },
-          ] },
-        { user: 'Shubham Sharma', tpl: 'Shubham Sharma — Costing / Estimation', desc: 'Owns: accurate quotes, fast',
+            { m: 'New orders booked (₹)', w: 17, dir: 'higher_better', src: 'manual' },
+          ]
+        },
+        {
+          user: 'Shubham Sharma', tpl: 'Shubham Sharma — Costing / Estimation', desc: 'Owns: accurate quotes, fast',
           basic: BASIC, weekly: [
-            { m: 'Time-to-quote (enquiry → quote)',      w: 17, dir: 'lower_better',  src: 'manual' },
-            { m: 'Quotes delivered on time',             w: 17, dir: 'higher_better', src: 'manual' },
-            { m: 'Quote backlog older than 72 hrs',      w: 17, dir: 'lower_better',  src: 'manual' },
+            { m: 'Time-to-quote (enquiry → quote)', w: 17, dir: 'lower_better', src: 'manual' },
+            { m: 'Quotes delivered on time', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Quote backlog older than 72 hrs', w: 17, dir: 'lower_better', src: 'manual' },
             { m: 'Estimation accuracy (quoted vs actual)', w: 17, dir: 'higher_better', src: 'manual' },
-            { m: 'Win rate on quotes submitted',         w: 17, dir: 'higher_better', src: 'manual' },
-          ] },
-        { user: 'Nitin Jain', tpl: 'Nitin Jain — Operations · Purchase · Store', desc: 'Owns: on-time, on-budget delivery',
+            { m: 'Win rate on quotes submitted', w: 17, dir: 'higher_better', src: 'manual' },
+          ]
+        },
+        {
+          user: 'Nitin Jain', tpl: 'Nitin Jain — Operations · Purchase · Store', desc: 'Owns: on-time, on-budget delivery',
           basic: [BASIC[0], BASIC[1]],   // tickets is a main KPI below — don't double-count
           weekly: [
-            { m: 'Project milestones delivered on time',   w: 18, dir: 'higher_better', src: 'manual' },
+            { m: 'Project milestones delivered on time', w: 18, dir: 'higher_better', src: 'manual' },
             { m: 'Material on site — zero stockout delays', w: 18, dir: 'higher_better', src: 'manual' },
-            { m: 'PO cycle time (indent → PO)',            w: 18, dir: 'lower_better',  src: 'manual' },
-            { m: 'Purchase price vs estimate variance',    w: 18, dir: 'lower_better',  src: 'manual' },
-            { m: 'ERP tickets closed (not left open)',     w: 18, dir: 'higher_better', src: 'auto:tickets' },
-          ] },
-        { user: 'Parul Goyal', tpl: 'Parul Goyal — Billing Engineer', desc: 'Owns: turning work into invoices',
+            { m: 'PO cycle time (indent → PO)', w: 18, dir: 'lower_better', src: 'manual' },
+            { m: 'Purchase price vs estimate variance', w: 18, dir: 'lower_better', src: 'manual' },
+            { m: 'ERP tickets closed (not left open)', w: 18, dir: 'higher_better', src: 'auto:tickets' },
+          ]
+        },
+        {
+          user: 'Parul Goyal', tpl: 'Parul Goyal — Billing Engineer', desc: 'Owns: turning work into invoices',
           basic: BASIC, weekly: [
-            { m: 'Billing cycle (work done → invoice)', w: 22, dir: 'lower_better',  src: 'manual' },
-            { m: 'RA bills raised on time',             w: 21, dir: 'higher_better', src: 'auto:ra_bills' },
-            { m: 'Unbilled work-in-progress (₹)',       w: 21, dir: 'lower_better',  src: 'manual' },
-            { m: 'Invoice dispute / rejection rate',    w: 21, dir: 'lower_better',  src: 'manual' },
-          ] },
-        { user: 'Aanchal', tpl: 'Aanchal — Collections Executive', desc: 'Owns: money in the bank',
+            { m: 'Billing cycle (work done → invoice)', w: 22, dir: 'lower_better', src: 'manual' },
+            { m: 'RA bills raised on time', w: 21, dir: 'higher_better', src: 'auto:ra_bills' },
+            { m: 'Unbilled work-in-progress (₹)', w: 21, dir: 'lower_better', src: 'manual' },
+            { m: 'Invoice dispute / rejection rate', w: 21, dir: 'lower_better', src: 'manual' },
+          ]
+        },
+        {
+          user: 'Aanchal', tpl: 'Aanchal — Collections Executive', desc: 'Owns: money in the bank',
           basic: BASIC, weekly: [
-            { m: 'DSO (days to get paid)',                 w: 22, dir: 'lower_better',  src: 'manual' },
+            { m: 'DSO (days to get paid)', w: 22, dir: 'lower_better', src: 'manual' },
             { m: 'Collection efficiency (collected ÷ due)', w: 21, dir: 'higher_better', src: 'manual' },
-            { m: 'Overdue > 90 days (₹)',                  w: 21, dir: 'lower_better',  src: 'manual' },
-            { m: 'Every overdue account followed up',      w: 21, dir: 'higher_better', src: 'manual' },
-          ] },
+            { m: 'Overdue > 90 days (₹)', w: 21, dir: 'lower_better', src: 'manual' },
+            { m: 'Every overdue account followed up', w: 21, dir: 'higher_better', src: 'manual' },
+          ]
+        },
       ];
-      const findTpl  = db.prepare('SELECT id FROM score_templates WHERE name = ?');
-      const insTpl   = db.prepare('INSERT INTO score_templates (name, description, active) VALUES (?, ?, 1)');
-      const insKpi   = db.prepare('INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)');
+      const findTpl = db.prepare('SELECT id FROM score_templates WHERE name = ?');
+      const insTpl = db.prepare('INSERT INTO score_templates (name, description, active) VALUES (?, ?, 1)');
+      const insKpi = db.prepare('INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign   = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
+      const assign = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
       let made = 0, assigned = 0;
       for (const p of PEOPLE) {
         let t = findTpl.get(p.tpl);
@@ -5190,7 +5234,7 @@ function initializeDatabase() {
         else {
           tid = insTpl.run(p.tpl, p.desc).lastInsertRowid;
           let ord = 0;
-          for (const k of p.basic)  insKpi.run(tid, 'Basic', k.m, k.w, k.dir, k.src, ord++);
+          for (const k of p.basic) insKpi.run(tid, 'Basic', k.m, k.w, k.dir, k.src, ord++);
           for (const k of p.weekly) insKpi.run(tid, 'Weekly', k.m, k.w, k.dir, k.src, ord++);
           insKpi.run(tid, 'Responsibility', RACI.m, RACI.w, RACI.dir, RACI.src, ord++);
           made++;
@@ -5218,48 +5262,60 @@ function initializeDatabase() {
     const k2done = db.prepare("SELECT value FROM app_settings WHERE key='kpi_cards_seed_v2'").get();
     if (!k2done) {
       const BASIC = [
-        { m: 'Checklist',   w: 5, dir: 'higher_better', src: 'auto:checklists' },
-        { m: 'PMS',         w: 5, dir: 'higher_better', src: 'auto:pms' },
+        { m: 'Checklist', w: 5, dir: 'higher_better', src: 'auto:checklists' },
+        { m: 'PMS', w: 5, dir: 'higher_better', src: 'auto:pms' },
         { m: 'Help Ticket', w: 5, dir: 'higher_better', src: 'auto:tickets' },
       ];
       const RACI = { m: 'RACI Steps (All Modules)', w: 0, dir: 'higher_better', src: 'auto:raci_steps_done' };
       // (a) two brand-new people — full templates like v1
       const NEW_PEOPLE = [
-        { user: 'Durgesh Sharma', tpl: 'Durgesh Sharma — AI Marketing Head', desc: 'Fills the funnel', weekly: [
-          { m: 'Qualified leads generated',             w: 17, dir: 'higher_better', src: 'manual' },
-          { m: 'Cost per qualified lead',               w: 17, dir: 'lower_better',  src: 'manual' },
-          { m: 'Lead response time',                    w: 17, dir: 'lower_better',  src: 'manual' },
-          { m: 'Calculator → enquiry conversion',       w: 17, dir: 'higher_better', src: 'manual' },
-          { m: 'Maintain live sales pipeline (₹45 Cr)', w: 17, dir: 'higher_better', src: 'manual' },
-        ] },
-        { user: 'Prabhdeep Singh', tpl: 'Prabhdeep Singh — HR Head', desc: 'Keeps the engine staffed', weekly: [
-          { m: 'Critical roles filled (time-to-hire)',  w: 17, dir: 'lower_better',  src: 'manual' },
-          { m: 'Site manpower fill vs plan',            w: 17, dir: 'higher_better', src: 'manual' },
-          { m: 'Weekly scorecard reviews done',         w: 17, dir: 'higher_better', src: 'manual' },
-          { m: 'Attrition (site talent)',               w: 17, dir: 'lower_better',  src: 'manual' },
-          { m: 'Daily DPR profit + DPR collection',     w: 17, dir: 'higher_better', src: 'manual' },
-        ] },
+        {
+          user: 'Durgesh Sharma', tpl: 'Durgesh Sharma — AI Marketing Head', desc: 'Fills the funnel', weekly: [
+            { m: 'Qualified leads generated', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Cost per qualified lead', w: 17, dir: 'lower_better', src: 'manual' },
+            { m: 'Lead response time', w: 17, dir: 'lower_better', src: 'manual' },
+            { m: 'Calculator → enquiry conversion', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Maintain live sales pipeline (₹45 Cr)', w: 17, dir: 'higher_better', src: 'manual' },
+          ]
+        },
+        {
+          user: 'Prabhdeep Singh', tpl: 'Prabhdeep Singh — HR Head', desc: 'Keeps the engine staffed', weekly: [
+            { m: 'Critical roles filled (time-to-hire)', w: 17, dir: 'lower_better', src: 'manual' },
+            { m: 'Site manpower fill vs plan', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Weekly scorecard reviews done', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Attrition (site talent)', w: 17, dir: 'lower_better', src: 'manual' },
+            { m: 'Daily DPR profit + DPR collection', w: 17, dir: 'higher_better', src: 'manual' },
+          ]
+        },
       ];
       // (b) extra KPIs appended to existing v1 templates
       const ADD = [
-        { tpl: 'Rajat Sharma — Sales Head', kpis: [
-          { m: 'Throughput margin maintained', w: 15, dir: 'higher_better', src: 'manual' } ] },
-        { tpl: 'Nitin Jain — Operations · Purchase · Store', kpis: [
-          { m: 'Full kitting before site start',    w: 15, dir: 'higher_better', src: 'manual' },
-          { m: 'Weekly planning (bar chart) → DPR', w: 15, dir: 'higher_better', src: 'manual' } ] },
-        { tpl: 'Parul Goyal — Billing Engineer', kpis: [
-          { m: 'DPR → billing on time', w: 15, dir: 'higher_better', src: 'manual' } ] },
-        { tpl: 'Aanchal — Collections Executive', kpis: [
-          { m: 'Expense control + cash-flow sheet', w: 15, dir: 'higher_better', src: 'manual' } ] },
+        {
+          tpl: 'Rajat Sharma — Sales Head', kpis: [
+            { m: 'Throughput margin maintained', w: 15, dir: 'higher_better', src: 'manual' }]
+        },
+        {
+          tpl: 'Nitin Jain — Operations · Purchase · Store', kpis: [
+            { m: 'Full kitting before site start', w: 15, dir: 'higher_better', src: 'manual' },
+            { m: 'Weekly planning (bar chart) → DPR', w: 15, dir: 'higher_better', src: 'manual' }]
+        },
+        {
+          tpl: 'Parul Goyal — Billing Engineer', kpis: [
+            { m: 'DPR → billing on time', w: 15, dir: 'higher_better', src: 'manual' }]
+        },
+        {
+          tpl: 'Aanchal — Collections Executive', kpis: [
+            { m: 'Expense control + cash-flow sheet', w: 15, dir: 'higher_better', src: 'manual' }]
+        },
       ];
-      const findTpl  = db.prepare('SELECT id FROM score_templates WHERE name = ?');
-      const insTpl   = db.prepare('INSERT INTO score_templates (name, description, active) VALUES (?, ?, 1)');
-      const insKpi   = db.prepare('INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)');
-      const maxOrd   = db.prepare('SELECT COALESCE(MAX(display_order), -1) AS m FROM score_kpis WHERE template_id = ?');
-      const hasKpi   = db.prepare('SELECT 1 FROM score_kpis WHERE template_id = ? AND metric_name = ?');
+      const findTpl = db.prepare('SELECT id FROM score_templates WHERE name = ?');
+      const insTpl = db.prepare('INSERT INTO score_templates (name, description, active) VALUES (?, ?, 1)');
+      const insKpi = db.prepare('INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)');
+      const maxOrd = db.prepare('SELECT COALESCE(MAX(display_order), -1) AS m FROM score_kpis WHERE template_id = ?');
+      const hasKpi = db.prepare('SELECT 1 FROM score_kpis WHERE template_id = ? AND metric_name = ?');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign   = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
+      const assign = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
       let made = 0, appended = 0, assigned = 0;
       for (const p of NEW_PEOPLE) {
         let t = findTpl.get(p.tpl); let tid;
@@ -5267,7 +5323,7 @@ function initializeDatabase() {
         else {
           tid = insTpl.run(p.tpl, p.desc).lastInsertRowid;
           let ord = 0;
-          for (const k of BASIC)    insKpi.run(tid, 'Basic', k.m, k.w, k.dir, k.src, ord++);
+          for (const k of BASIC) insKpi.run(tid, 'Basic', k.m, k.w, k.dir, k.src, ord++);
           for (const k of p.weekly) insKpi.run(tid, 'Weekly', k.m, k.w, k.dir, k.src, ord++);
           insKpi.run(tid, 'Responsibility', RACI.m, RACI.w, RACI.dir, RACI.src, ord++);
           made++;
@@ -5308,13 +5364,13 @@ function initializeDatabase() {
     const k3done = db.prepare("SELECT value FROM app_settings WHERE key='kpi_auto_sources_v3'").get();
     if (!k3done) {
       const AUTO = [
-        ['Rajat Sharma — Sales Head',                'New orders booked (₹)',                  'auto:bb_sale_amount'],
-        ['Durgesh Sharma — AI Marketing Head',       'Qualified leads generated',              'auto:leads_qualified'],
-        ['Prabhdeep Singh — HR Head',                'Critical roles filled (time-to-hire)',   'auto:candidates_onboarded'],
-        ['Aanchal — Collections Executive',          'Collection efficiency (collected ÷ due)', 'auto:amount_received_lakh'],
-        ['Aanchal — Collections Executive',          'Overdue > 90 days (₹)',                  'auto:receivables_outstanding_cr'],
-        ['Aanchal — Collections Executive',          'Every overdue account followed up',      'auto:collections_count'],
-        ['Nitin Jain — Operations · Purchase · Store', 'Full kitting before site start',       'auto:items_complete'],
+        ['Rajat Sharma — Sales Head', 'New orders booked (₹)', 'auto:bb_sale_amount'],
+        ['Durgesh Sharma — AI Marketing Head', 'Qualified leads generated', 'auto:leads_qualified'],
+        ['Prabhdeep Singh — HR Head', 'Critical roles filled (time-to-hire)', 'auto:candidates_onboarded'],
+        ['Aanchal — Collections Executive', 'Collection efficiency (collected ÷ due)', 'auto:amount_received_lakh'],
+        ['Aanchal — Collections Executive', 'Overdue > 90 days (₹)', 'auto:receivables_outstanding_cr'],
+        ['Aanchal — Collections Executive', 'Every overdue account followed up', 'auto:collections_count'],
+        ['Nitin Jain — Operations · Purchase · Store', 'Full kitting before site start', 'auto:items_complete'],
       ];
       const upd = db.prepare(
         `UPDATE score_kpis SET data_source = ?
@@ -5341,18 +5397,18 @@ function initializeDatabase() {
     const rdone = db.prepare("SELECT value FROM app_settings WHERE key='kpi_cards_reassign_v1'").get();
     if (!rdone) {
       const MAP = [
-        ['Rajat Sharma',    'Rajat Sharma — Sales Head'],
-        ['Shubham Sharma',  'Shubham Sharma — Costing / Estimation'],
-        ['Nitin Jain',      'Nitin Jain — Operations · Purchase · Store'],
-        ['Parul Goyal',     'Parul Goyal — Billing Engineer'],
-        ['Aanchal',         'Aanchal — Collections Executive'],
-        ['Durgesh Sharma',  'Durgesh Sharma — AI Marketing Head'],
+        ['Rajat Sharma', 'Rajat Sharma — Sales Head'],
+        ['Shubham Sharma', 'Shubham Sharma — Costing / Estimation'],
+        ['Nitin Jain', 'Nitin Jain — Operations · Purchase · Store'],
+        ['Parul Goyal', 'Parul Goyal — Billing Engineer'],
+        ['Aanchal', 'Aanchal — Collections Executive'],
+        ['Durgesh Sharma', 'Durgesh Sharma — AI Marketing Head'],
         ['Prabhdeep Singh', 'Prabhdeep Singh — HR Head'],
       ];
-      const findTpl  = db.prepare('SELECT id FROM score_templates WHERE name = ?');
+      const findTpl = db.prepare('SELECT id FROM score_templates WHERE name = ?');
       const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
       const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
-      const assign   = db.prepare(
+      const assign = db.prepare(
         `INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1)
          ON CONFLICT(user_id) DO UPDATE SET template_id=excluded.template_id, assigned_at=CURRENT_TIMESTAMP, assigned_by=excluded.assigned_by`
       );
@@ -6211,14 +6267,14 @@ function initializeDatabase() {
     const migrated = db.prepare("SELECT value FROM app_settings WHERE key='sf_stages_v2'").get();
     if (!migrated) {
       const remap = [
-        ['new_lead',         'lead_capture'],
-        ['qualified',        'qualification'],
+        ['new_lead', 'lead_capture'],
+        ['qualified', 'qualification'],
         ['meeting_assigned', 'site_survey'],
-        ['mom_uploaded',     'site_survey'],
+        ['mom_uploaded', 'site_survey'],
         ['drawing_uploaded', 'concept_design'],
-        ['boq_created',      'boq_costing'],
-        ['quotation_sent',   'quote_submitted'],
-        ['won',              'contract_signed'],
+        ['boq_created', 'boq_costing'],
+        ['quotation_sent', 'quote_submitted'],
+        ['won', 'contract_signed'],
         // 'lost' stays 'lost'
       ];
       let total = 0;
@@ -6272,7 +6328,7 @@ function initializeDatabase() {
           section: 'founder', order_index: 0, content_type: 'text',
           title: 'Welcome from the Managing Director',
           content_text:
-`Dear new colleague,
+            `Dear new colleague,
 
 Welcome to Secured Engineers Pvt. Ltd. — and welcome to the team.
 
@@ -6295,7 +6351,7 @@ I look forward to seeing what you build with us.
           section: 'culture', order_index: 0, content_type: 'text',
           title: 'How We Work — Four Operating Principles',
           content_text:
-`1. OWN THE OUTCOME, NOT THE TASK
+            `1. OWN THE OUTCOME, NOT THE TASK
    Your job is not "I finished my part." It is "the customer got
    what they were promised, on time, at the right quality."
 
@@ -6320,7 +6376,7 @@ I look forward to seeing what you build with us.
           section: 'hr_policies', order_index: 0, content_type: 'text',
           title: 'HR Policies — Overview',
           content_text:
-`Your detailed HR handbook covers the following areas. Ask your HR
+            `Your detailed HR handbook covers the following areas. Ask your HR
 business partner for the current version of any specific policy:
 
   • Working hours, leave policy and holiday calendar
@@ -6338,7 +6394,7 @@ your second stop is HR (hr@securedengineers.com).`,
           section: 'it_security', order_index: 0, content_type: 'text',
           title: 'IT &amp; Security — Do / Don\'t',
           content_text:
-`DO
+            `DO
   ✓ Use your SEPL ERP login only on company-approved devices
   ✓ Lock your laptop / phone screen when you step away
   ✓ Report a lost device to IT within 30 minutes
@@ -6359,7 +6415,7 @@ DON'T
           section: 'sop', order_index: 0, content_type: 'text',
           title: 'SOPs — Where to Find Them',
           content_text:
-`Standard Operating Procedures (SOPs) live in the ERP itself, not in
+            `Standard Operating Procedures (SOPs) live in the ERP itself, not in
 a separate document folder. The most-used ones during your first
 weeks:
 
@@ -6381,7 +6437,7 @@ in your first week. If a process feels broken, raise a Help Ticket
       let n = 0;
       for (const it of ITEMS) {
         try { ins.run(it.section, it.title, it.content_type, it.content_url || null, it.content_text || null, it.order_index); n++; }
-        catch (_) {}
+        catch (_) { }
       }
       db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_induction_items_v1', '1')").run();
       console.log(`[seed] induction_items: inserted ${n} starter items`);
@@ -6401,42 +6457,42 @@ in your first week. If a process feels broken, raise a Help Ticket
     if (!seeded) {
       const FRQ = [
         // Leadership
-        ['Leadership','Describe a time you led a team through significant change. How did you keep people aligned?','Manager','medium','Look for: setting context, listening to concerns, decisive moves, follow-through'],
-        ['Leadership','Tell us about a time you had to make an unpopular decision. How did you handle the pushback?','Manager','hard','Look for: principled reasoning, transparency, owning the call'],
-        ['Leadership','How do you develop the people who report to you?','Manager','medium','Look for: structured 1:1s, growth plans, specific examples of someone they helped grow'],
-        ['Leadership','When you took over a struggling team, what was your first 30 days?','Manager','hard','Look for: diagnostic mindset, listening before acting'],
-        ['Leadership','How do you set vision for your team in a way they actually feel?','Manager','medium','Look for: simple language, repeatable narrative, connection to individual work'],
+        ['Leadership', 'Describe a time you led a team through significant change. How did you keep people aligned?', 'Manager', 'medium', 'Look for: setting context, listening to concerns, decisive moves, follow-through'],
+        ['Leadership', 'Tell us about a time you had to make an unpopular decision. How did you handle the pushback?', 'Manager', 'hard', 'Look for: principled reasoning, transparency, owning the call'],
+        ['Leadership', 'How do you develop the people who report to you?', 'Manager', 'medium', 'Look for: structured 1:1s, growth plans, specific examples of someone they helped grow'],
+        ['Leadership', 'When you took over a struggling team, what was your first 30 days?', 'Manager', 'hard', 'Look for: diagnostic mindset, listening before acting'],
+        ['Leadership', 'How do you set vision for your team in a way they actually feel?', 'Manager', 'medium', 'Look for: simple language, repeatable narrative, connection to individual work'],
         // Ownership
-        ['Ownership','Tell us about a failure that was clearly yours. What did you do?','Any','medium','Look for: blame-free language, specific lessons, behaviour change after'],
-        ['Ownership','When was the last time you went beyond your job description?','Any','easy','Look for: initiative without being asked, clear impact'],
-        ['Ownership','Describe a project no one asked you to do but you did anyway.','Any','medium','Look for: spotted a gap, made the case, shipped it'],
-        ['Ownership','A critical task is yours. You realise the budget is half what you need. What do you do?','Any','medium','Look for: re-scoping, surfacing risk early, not just suffering in silence'],
-        ['Ownership','Tell us about a time you missed a deadline. What happened next?','Any','medium','Look for: early signalling, recovery plan, prevention for next time'],
+        ['Ownership', 'Tell us about a failure that was clearly yours. What did you do?', 'Any', 'medium', 'Look for: blame-free language, specific lessons, behaviour change after'],
+        ['Ownership', 'When was the last time you went beyond your job description?', 'Any', 'easy', 'Look for: initiative without being asked, clear impact'],
+        ['Ownership', 'Describe a project no one asked you to do but you did anyway.', 'Any', 'medium', 'Look for: spotted a gap, made the case, shipped it'],
+        ['Ownership', 'A critical task is yours. You realise the budget is half what you need. What do you do?', 'Any', 'medium', 'Look for: re-scoping, surfacing risk early, not just suffering in silence'],
+        ['Ownership', 'Tell us about a time you missed a deadline. What happened next?', 'Any', 'medium', 'Look for: early signalling, recovery plan, prevention for next time'],
         // Decision Making
-        ['Decision Making','Walk us through the hardest decision you have made in the last 12 months.','Any','hard','Look for: trade-offs, who they consulted, how they communicated it'],
-        ['Decision Making','When data is incomplete, how do you decide?','Any','medium','Look for: framing assumptions, reversibility, risk appetite'],
-        ['Decision Making','Tell us about a time you had to choose between two equally good options.','Any','medium','Look for: structured comparison, clarity on what mattered most'],
-        ['Decision Making','When was the last time you changed your mind on something important? Why?','Any','medium','Look for: intellectual honesty, willingness to update'],
-        ['Decision Making','You have to choose between launching now vs polishing for 2 more weeks. How do you decide?','Any','medium','Look for: customer impact, learning vs. risk, who else is consulted'],
+        ['Decision Making', 'Walk us through the hardest decision you have made in the last 12 months.', 'Any', 'hard', 'Look for: trade-offs, who they consulted, how they communicated it'],
+        ['Decision Making', 'When data is incomplete, how do you decide?', 'Any', 'medium', 'Look for: framing assumptions, reversibility, risk appetite'],
+        ['Decision Making', 'Tell us about a time you had to choose between two equally good options.', 'Any', 'medium', 'Look for: structured comparison, clarity on what mattered most'],
+        ['Decision Making', 'When was the last time you changed your mind on something important? Why?', 'Any', 'medium', 'Look for: intellectual honesty, willingness to update'],
+        ['Decision Making', 'You have to choose between launching now vs polishing for 2 more weeks. How do you decide?', 'Any', 'medium', 'Look for: customer impact, learning vs. risk, who else is consulted'],
         // Conflict Management
-        ['Conflict Management','Tell us about a conflict you had with a peer. How was it resolved?','Any','medium','Look for: directness, listening to other side, durable resolution'],
-        ['Conflict Management','When have you disagreed with your manager? What did you do?','Any','medium','Look for: respectful pushback, escalation path, accepting the call after'],
-        ['Conflict Management','How do you handle a teammate who consistently misses commitments?','Manager','hard','Look for: direct feedback first, structured plan, escalation only after'],
-        ['Conflict Management','A senior leader publicly criticises your work in a meeting. What do you do?','Any','hard','Look for: composure, clarification, follow-up in private'],
-        ['Conflict Management','Two of your reports are not getting along. How do you intervene?','Manager','hard','Look for: hearing both sides, focus on behaviours not personalities, clear expectations'],
+        ['Conflict Management', 'Tell us about a conflict you had with a peer. How was it resolved?', 'Any', 'medium', 'Look for: directness, listening to other side, durable resolution'],
+        ['Conflict Management', 'When have you disagreed with your manager? What did you do?', 'Any', 'medium', 'Look for: respectful pushback, escalation path, accepting the call after'],
+        ['Conflict Management', 'How do you handle a teammate who consistently misses commitments?', 'Manager', 'hard', 'Look for: direct feedback first, structured plan, escalation only after'],
+        ['Conflict Management', 'A senior leader publicly criticises your work in a meeting. What do you do?', 'Any', 'hard', 'Look for: composure, clarification, follow-up in private'],
+        ['Conflict Management', 'Two of your reports are not getting along. How do you intervene?', 'Manager', 'hard', 'Look for: hearing both sides, focus on behaviours not personalities, clear expectations'],
         // Team Handling
-        ['Team Handling','How do you onboard a new hire in your team?','Manager','easy','Look for: structured plan, early wins, regular check-ins'],
-        ['Team Handling','When did you last give someone tough feedback? Walk us through it.','Manager','medium','Look for: timeliness, specificity, framing for growth'],
-        ['Team Handling','How do you handle a high performer who is becoming hard to work with?','Manager','hard','Look for: directness, raising the bar on behaviour, willingness to lose them'],
-        ['Team Handling','Tell us about a time you had to let someone go. How did you handle it?','Manager','hard','Look for: respectful process, clarity, learnings about hiring'],
-        ['Team Handling','How do you run an effective 1:1?','Manager','easy','Look for: agenda owned by report, growth + obstacles + personal, follow-up'],
+        ['Team Handling', 'How do you onboard a new hire in your team?', 'Manager', 'easy', 'Look for: structured plan, early wins, regular check-ins'],
+        ['Team Handling', 'When did you last give someone tough feedback? Walk us through it.', 'Manager', 'medium', 'Look for: timeliness, specificity, framing for growth'],
+        ['Team Handling', 'How do you handle a high performer who is becoming hard to work with?', 'Manager', 'hard', 'Look for: directness, raising the bar on behaviour, willingness to lose them'],
+        ['Team Handling', 'Tell us about a time you had to let someone go. How did you handle it?', 'Manager', 'hard', 'Look for: respectful process, clarity, learnings about hiring'],
+        ['Team Handling', 'How do you run an effective 1:1?', 'Manager', 'easy', 'Look for: agenda owned by report, growth + obstacles + personal, follow-up'],
       ];
       const stmt = db.prepare(`INSERT INTO final_round_questions
         (category, question_text, for_role, difficulty, notes, is_active)
         VALUES (?,?,?,?,?,1)`);
       let count = 0;
       for (const [cat, q, role, diff, notes] of FRQ) {
-        try { stmt.run(cat, q, role, diff, notes); count++; } catch (_) {}
+        try { stmt.run(cat, q, role, diff, notes); count++; } catch (_) { }
       }
       db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_final_round_questions_v1', '1')").run();
       console.log(`[seed] final_round_questions: inserted ${count} starter questions`);
@@ -6465,7 +6521,7 @@ in your first week. If a process feels broken, raise a Help Ticket
         throw new Error('regex did not rewrite checklists CREATE — CHECK shape unexpected');
       }
       db.pragma('foreign_keys = OFF');
-      try { db.exec('DROP TABLE IF EXISTS checklists_new'); } catch (_) {}
+      try { db.exec('DROP TABLE IF EXISTS checklists_new'); } catch (_) { }
       const cols = db.prepare('PRAGMA table_info(checklists)').all().map(c => `"${c.name}"`).join(', ');
       db.exec('BEGIN');
       db.exec(newSql);
@@ -6477,8 +6533,8 @@ in your first week. If a process feels broken, raise a Help Ticket
       console.log('[migration] checklists CHECK rebuilt to allow fortnightly');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (_) {}
-    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    try { db.exec('ROLLBACK'); } catch (_) { }
+    try { db.pragma('foreign_keys = ON'); } catch (_) { }
     console.warn('[migration] checklist freq fortnightly CHECK rebuild failed:', e.message);
   }
 
@@ -6511,7 +6567,7 @@ in your first week. If a process feels broken, raise a Help Ticket
             'UPDATE sales_funnel SET category = ? WHERE LOWER(TRIM(category)) = LOWER(?) AND category != ?'
           ).run(c, c, c);
           total += r.changes;
-        } catch (_) {}
+        } catch (_) { }
       }
       db.prepare("INSERT INTO app_settings (key, value) VALUES ('sales_funnel_category_canonical_v1', '1')").run();
       if (total > 0) console.log(`[migration] sales_funnel.category: ${total} rows normalised to canonical capitalisation`);
@@ -6536,12 +6592,12 @@ in your first week. If a process feels broken, raise a Help Ticket
         try {
           const r = db.prepare('UPDATE crm_funnel SET source=? WHERE source=?').run(newV, oldV);
           total += r.changes;
-        } catch (_) {}
+        } catch (_) { }
       }
       try {
         const r = db.prepare("UPDATE crm_funnel SET source=NULL WHERE source='Other'").run();
         total += r.changes;
-      } catch (_) {}
+      } catch (_) { }
       db.prepare("INSERT INTO app_settings (key, value) VALUES ('crm_funnel_canonical_sources_v1', '1')").run();
       if (total > 0) console.log(`[migration] crm_funnel sources normalized: ${total} rows mapped to canonical 5`);
     }
@@ -6569,7 +6625,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   try {
     const seeded = db.prepare("SELECT value FROM app_settings WHERE key='seed_auto_mark_v1'").get();
     if (!seeded) {
-      const seedNames = ['admin','rajat sharma','nitin jain','pooja kaplesh','ankur kaplesh','parul kaplesh','backup admin'];
+      const seedNames = ['admin', 'rajat sharma', 'nitin jain', 'pooja kaplesh', 'ankur kaplesh', 'parul kaplesh', 'backup admin'];
       const placeholders = seedNames.map(() => '?').join(',');
       db.prepare(
         `UPDATE users SET auto_mark_present=1
@@ -6602,9 +6658,9 @@ in your first week. If a process feels broken, raise a Help Ticket
   ];
 
   const ALL_MODULES = [
-    'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
-    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets',
-    'sub_contractors','ai_agent','crm_funnel','cheques','fire_noc','rental_tools','influencers','crm_kitting',
+    'dashboard', 'leads', 'quotations', 'orders', 'business_book', 'item_master', 'vendors', 'customers', 'procurement', 'cashflow', 'collections', 'payment_required', 'attendance', 'indent_fms', 'dpr',
+    'installation', 'billing', 'complaints', 'hr', 'employees', 'expenses', 'checklists', 'users', 'delegations', 'pms_tasks', 'inventory', 'snags', 'company_assets', 'help_tickets',
+    'sub_contractors', 'ai_agent', 'crm_funnel', 'cheques', 'fire_noc', 'rental_tools', 'influencers', 'crm_kitting',
     // Drawing Tracker (2026-08) — project drawings + permanent revision history.
     'drawing_tracker',
     // Mam (2026-05-21): "add all module in roles& permission" — the
@@ -6612,7 +6668,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     // checks but were missing from the server's seed list, so newly
     // created roles never got role_permissions rows for them.  Now
     // included so the top-up loop covers every module the UI exposes.
-    'payroll','scoring','gamification','tools','rentals',
+    'payroll', 'scoring', 'gamification', 'tools', 'rentals',
     // Mam (2026-05-22): HR System Phase 1 — recruitment / ATS /
     // interviews / offers / onboarding.  Gated behind one permission
     // string so individual roles can be tuned (HR Manager full, Hiring
@@ -6667,7 +6723,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     //   hr_team.can_view         → HR-team member: gates hiring-request actions
     //                              and the HR-alert recipient group (cron).
     //   attendance_grid.can_view → view the Attendance Monthly Grid tab (marking needs attendance.can_approve).
-    'employee_salary','hr_team','attendance_grid',
+    'employee_salary', 'hr_team', 'attendance_grid',
     // Director (2026-08-13): Tally Bill → PMS Task → Approval → Payment.
     // One key gates the whole lifecycle; the per-stage actor comes from the
     // action verb, so the roles stay configurable rather than name-bound (§2):
@@ -6738,53 +6794,53 @@ in your first week. If a process feels broken, raise a Help Ticket
       const deRole = db.prepare("SELECT id FROM roles WHERE name='Data Entry'").get();
       if (deRole) {
         for (const m of ['dashboard']) insertPerm.run(deRole.id, m, 1, 0, 0, 0, 0);
-        for (const m of ['business_book','orders']) insertPerm.run(deRole.id, m, 1, 1, 1, 1, 0);
-        for (const m of ['leads','quotations','vendors','procurement','cashflow','collections','indent_fms','dpr','installation','billing','complaints','hr','employees','expenses','checklists']) insertPerm.run(deRole.id, m, 1, 0, 0, 0, 0);
+        for (const m of ['business_book', 'orders']) insertPerm.run(deRole.id, m, 1, 1, 1, 1, 0);
+        for (const m of ['leads', 'quotations', 'vendors', 'procurement', 'cashflow', 'collections', 'indent_fms', 'dpr', 'installation', 'billing', 'complaints', 'hr', 'employees', 'expenses', 'checklists']) insertPerm.run(deRole.id, m, 1, 0, 0, 0, 0);
       }
 
       // Sales Manager
       const smRole = db.prepare("SELECT id FROM roles WHERE name='Sales Manager'").get();
       if (smRole) {
-        for (const m of ['dashboard','leads','quotations','orders']) insertPerm.run(smRole.id, m, 1, 1, 1, 1, 1);
+        for (const m of ['dashboard', 'leads', 'quotations', 'orders']) insertPerm.run(smRole.id, m, 1, 1, 1, 1, 1);
         for (const m of ['business_book']) insertPerm.run(smRole.id, m, 1, 0, 0, 0, 0);
-        for (const m of ['vendors','procurement','installation','billing','complaints']) insertPerm.run(smRole.id, m, 1, 0, 0, 0, 0);
+        for (const m of ['vendors', 'procurement', 'installation', 'billing', 'complaints']) insertPerm.run(smRole.id, m, 1, 0, 0, 0, 0);
       }
 
       // Sales Executive
       const seRole = db.prepare("SELECT id FROM roles WHERE name='Sales Executive'").get();
       if (seRole) {
-        for (const m of ['dashboard','leads','quotations']) insertPerm.run(seRole.id, m, 1, 1, 1, 0, 0);
-        for (const m of ['orders','business_book']) insertPerm.run(seRole.id, m, 1, 0, 0, 0, 0);
+        for (const m of ['dashboard', 'leads', 'quotations']) insertPerm.run(seRole.id, m, 1, 1, 1, 0, 0);
+        for (const m of ['orders', 'business_book']) insertPerm.run(seRole.id, m, 1, 0, 0, 0, 0);
       }
 
       // Purchase Manager
       const pmRole = db.prepare("SELECT id FROM roles WHERE name='Purchase Manager'").get();
       if (pmRole) {
-        for (const m of ['dashboard','vendors','procurement']) insertPerm.run(pmRole.id, m, 1, 1, 1, 1, 1);
-        for (const m of ['orders','billing']) insertPerm.run(pmRole.id, m, 1, 1, 1, 0, 0);
+        for (const m of ['dashboard', 'vendors', 'procurement']) insertPerm.run(pmRole.id, m, 1, 1, 1, 1, 1);
+        for (const m of ['orders', 'billing']) insertPerm.run(pmRole.id, m, 1, 1, 1, 0, 0);
         for (const m of ['business_book']) insertPerm.run(pmRole.id, m, 1, 0, 0, 0, 0);
       }
 
       // Site Engineer
       const engRole = db.prepare("SELECT id FROM roles WHERE name='Site Engineer'").get();
       if (engRole) {
-        for (const m of ['dashboard','installation','complaints']) insertPerm.run(engRole.id, m, 1, 1, 1, 0, 0);
+        for (const m of ['dashboard', 'installation', 'complaints']) insertPerm.run(engRole.id, m, 1, 1, 1, 0, 0);
         for (const m of ['billing']) insertPerm.run(engRole.id, m, 1, 1, 0, 0, 0);
-        for (const m of ['orders','business_book']) insertPerm.run(engRole.id, m, 1, 0, 0, 0, 0);
+        for (const m of ['orders', 'business_book']) insertPerm.run(engRole.id, m, 1, 0, 0, 0, 0);
       }
 
       // HR Manager
       const hrRole = db.prepare("SELECT id FROM roles WHERE name='HR Manager'").get();
       if (hrRole) {
-        for (const m of ['dashboard','hr','employees','expenses','checklists']) insertPerm.run(hrRole.id, m, 1, 1, 1, 1, 1);
+        for (const m of ['dashboard', 'hr', 'employees', 'expenses', 'checklists']) insertPerm.run(hrRole.id, m, 1, 1, 1, 1, 1);
         for (const m of ['business_book']) insertPerm.run(hrRole.id, m, 1, 0, 0, 0, 0);
       }
 
       // Accountant
       const accRole = db.prepare("SELECT id FROM roles WHERE name='Accountant'").get();
       if (accRole) {
-        for (const m of ['dashboard','billing','expenses']) insertPerm.run(accRole.id, m, 1, 1, 1, 0, 1);
-        for (const m of ['orders','procurement','vendors','business_book']) insertPerm.run(accRole.id, m, 1, 0, 0, 0, 0);
+        for (const m of ['dashboard', 'billing', 'expenses']) insertPerm.run(accRole.id, m, 1, 1, 1, 0, 1);
+        for (const m of ['orders', 'procurement', 'vendors', 'business_book']) insertPerm.run(accRole.id, m, 1, 0, 0, 0, 0);
       }
 
       // Viewer
@@ -6837,7 +6893,7 @@ in your first week. If a process feels broken, raise a Help Ticket
       `UPDATE role_permissions SET can_view=1, can_create=1
        WHERE module='procurement' AND (can_view=0 OR can_create=0) AND role_id != ?`
     ).run(viewer ? viewer.id : -1);
-  } catch (e) {}
+  } catch (e) { }
 
   // One-time upgrade (mam 2026-07-07: "some users can't raise enquiry"):
   // raising a rental-tool enquiry mirrors raising an indent — every
@@ -6856,7 +6912,7 @@ in your first week. If a process feels broken, raise a Help Ticket
        WHERE module='rental_tools' AND can_edit=0
          AND role_id IN (SELECT id FROM roles WHERE name='Site Engineer')`
     ).run();
-  } catch (e) {}
+  } catch (e) { }
 
   // One-time seed for the Tally Bill workflow (Director 2026-08-13).  The
   // per-role loops above only run on a virgin DB (existingPerms.c === 0), so a
@@ -6937,7 +6993,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   } else {
     // Backfill username for the pre-existing admin row if empty
-    try { db.prepare("UPDATE users SET username='admin' WHERE email='admin@erp.com' AND (username IS NULL OR username='')").run(); } catch (e) {}
+    try { db.prepare("UPDATE users SET username='admin' WHERE email='admin@erp.com' AND (username IS NULL OR username='')").run(); } catch (e) { }
   }
 
   // Seed a SECOND admin so a single forgotten password doesn't lock the
@@ -7134,16 +7190,16 @@ in your first week. If a process feels broken, raise a Help Ticket
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`);
 
     const seedData = [
-      ['SEPL20001','Private','Seema mahajan','CONSERN PHARMA','9872655005','CRR','LUDHIANA','Punjab','LUDHIANA',222000,'SITC','No','2026-01-31','2026-02-06','2026-01-10','MD SIR','Fire Fighting','Seema mahajan','9872655005','SEPLCC1341','CRR','https://drive.google.com/open?id=1N5d0ug3iobuS_v3JGvB1ie0KCFp86u4y','https://drive.google.com/open?id=1vi7Mu5mAiSS_qh7VIlc0tF8ZwDl0uVfg','https://drive.google.com/open?id=1SLLt9c0fZjwHIbu73jBz9kQEZnf3e7FH','https://drive.google.com/open?id=1n6hS884Q69rmDZVQF4dSOYcRmnaIK7SA','booked'],
-      ['SEPL20002','Private','Seema mahajan','CONSERN PHARMA','9872655005','CRR','ludhiana','punjab','ludhiana',553105,'SITC','No','2026-02-02','2026-02-09','2026-02-13','MD SIR','Fire Fighting','Seema mahajan','9872655005','SEPLCC1351','CRR','https://drive.google.com/open?id=18DHkuCx7lRYPIvXwkwnh4JcLP-nt2vFA','https://drive.google.com/open?id=1TWwwaAhK6FJAHG7iVaaRFaqHnwZp6hpl','https://drive.google.com/open?id=1bbo4nUybZ1Qbw_g97ZJUmuH-PeiQtzYY','https://drive.google.com/open?id=1jACzRXmfCA7G4Uq228gBMv3SOCU3Bv1W','booked'],
-      ['SEPL20003','Private','Gurpreet Sodi','V-GUARD INDUSTRIES LTD','9899900489','CRR','HARIDWAR','HARIDWAR','HARIDWAR',129537,'SITC','No','2026-02-02','2026-02-09','2026-02-13','Lovely Sharma','Fire Fighting','Gurpreet Sodi','9899900489','SEPLCC1076','CRR','https://drive.google.com/open?id=17KedC2fesfiuXaic3loCXk4aDQCPUdUv','https://drive.google.com/open?id=14alGn10sS4bXScYJL7I7xwIwckLiCLWN','https://drive.google.com/open?id=1sXE9BHLAeYZSZH6KcFOh1TqV3udKQ3Kh','https://drive.google.com/open?id=1bAwn6P1Uum8IYuVsABuI-MjXDj8_UzqE','booked'],
-      ['SEPL20004','Private','Seema mahajan','CONSERN PHARMA','9872655005','CRR','LUDHIANA','PUNJAB','LUDHIANA',450000,'SITC','No','2026-02-18','2026-02-25','2026-02-28','MD Sir','Water Tank','Seema mahajan','9872655005','SEPLCC1341','CRR','https://drive.google.com/open?id=151CXGmPlvxIraatRZktdi14_6L_C4UZM','https://drive.google.com/open?id=1Ius-YG-t60UNtLS3IhsNxu_vCRKRKvp5','https://drive.google.com/open?id=16a5R9FUraZwsowphPgKbFMrnj2RSePnV','https://drive.google.com/open?id=10-J4hi8qA2_peBwBgrE_navCi83DnOk2','booked'],
-      ['SEPL20005','Private','Seema mahajan','CONSERN PHARMA','9872655005','CRR','LUDHIANA','PUNJAB','LUDHIANA',825150,'SITC','Yes','2026-02-26','2026-02-28','2026-03-05','MD Sir','Electrical','Seema mahajan','9872655005','SEPLCC1351','CRR','https://drive.google.com/open?id=1EMyfEpIjbdjy_YyqCU9snSkYqLAUs64z','https://drive.google.com/open?id=1fKH-EYr9jvpEx5BmkZ200kZ9f2Pz-Ilx','https://drive.google.com/open?id=1sdr872lipYaPt_cLPbk1yXaWcd9gW9jj','https://drive.google.com/open?id=1MC6rXQ_18eFETPMGmh1yYgm5wEhOp_7l','booked'],
-      ['SEPL20006','Private','Shivam Porwal','Emerald land india pvt ltd (Imperial Golf)','7906673064','Inbound','ludhiana','punjab','ludhiana',350000,'SITC','No','2026-03-06','2026-03-13','2026-03-17','Ankur sir','Fire Fighting','Shivam Porwal','7906673064','SEPLCC1380','NBD','','','','','booked'],
-      ['SEPL20007','Private','Harvinder Singh','Harvinder Singh','9501106700','Inbound','LUDHIANA','PUNJAB','LUDHIANA',85000,'Supply','No','2026-03-07','2026-03-09','2026-03-12','Lovely Sharma','Fire Fighting','Harvinder Singh','9501106700','SEPLCC1381','NBD','','','','','booked'],
-      ['SEPL20008','Private','Robby Ji Team','Ramana Machine','9876792561','Inbound','Ludhiana','Punjab','Punjab',1221036,'SITC','No','2026-03-18','2026-03-23','2026-03-27','Ankur sir','Solar','Robby Ji Team','9876792561','SEPLCC1379','NBD','https://drive.google.com/open?id=1BKFKpZwilobNawHsQVExISUMKJyjArNH','https://drive.google.com/open?id=1XGDf-q70qDKSaLBO1FKuq8WkliVutSzb','https://drive.google.com/open?id=1QywIKR4VCMmYqeuv0xQ1lftmmaAXN83a','https://drive.google.com/open?id=178ejMW-nUG_hVUzXRpPCq64_mzup5xYY','booked'],
-      ['SEPL20009','Private','Mayank','sbj (Nirmal Products)','9877669049','Inbound','PUNJAB','Ludhiana','Ludhiana',365000,'SITC','No','2026-03-25','2026-03-30','2026-04-02','lovely sharma','Water Tank','Mayank','9877669049','SEPLCC1373','CRR','https://drive.google.com/open?id=1348oaE5eSAkDHlPqUopG8CTP-hK56cls','https://drive.google.com/open?id=1DM7NdEdvD6A22RPtjcCr20-nl0Ta24_i','https://drive.google.com/open?id=1DKovp3s0kA2I4rrW_-_IB7JQMrMyMOJK','https://drive.google.com/open?id=1OXQI4Q5Ti5Jet5PWeVE2UEJRTGrywDBx','booked'],
-      ['SEPL20010','Private','Seema mahajan','CONSERN PHARMA','9872655005','CRR','LUdhiana','Punjab','LUdhiana',157500,'SITC','No','2026-04-06','2026-04-13','2026-04-16','LOVELY SHARMA','Electrical','Seema mahajan','9872655005','SEPLCC1351','CRR','https://drive.google.com/open?id=1IiI2ETQRFvdAeQNkUAEe5luvUt4sQ7PI','https://drive.google.com/open?id=1d11zaDrp6pWKjo44Y23dPV0IB_M50_2w','https://drive.google.com/open?id=1ek_Rzv1bzliP9deihSjadltH6nXF0k4T','https://drive.google.com/open?id=1lOgP_SsqFJFK--tDjbZSjkQ-mE9QILZw','booked'],
+      ['SEPL20001', 'Private', 'Seema mahajan', 'CONSERN PHARMA', '9872655005', 'CRR', 'LUDHIANA', 'Punjab', 'LUDHIANA', 222000, 'SITC', 'No', '2026-01-31', '2026-02-06', '2026-01-10', 'MD SIR', 'Fire Fighting', 'Seema mahajan', '9872655005', 'SEPLCC1341', 'CRR', 'https://drive.google.com/open?id=1N5d0ug3iobuS_v3JGvB1ie0KCFp86u4y', 'https://drive.google.com/open?id=1vi7Mu5mAiSS_qh7VIlc0tF8ZwDl0uVfg', 'https://drive.google.com/open?id=1SLLt9c0fZjwHIbu73jBz9kQEZnf3e7FH', 'https://drive.google.com/open?id=1n6hS884Q69rmDZVQF4dSOYcRmnaIK7SA', 'booked'],
+      ['SEPL20002', 'Private', 'Seema mahajan', 'CONSERN PHARMA', '9872655005', 'CRR', 'ludhiana', 'punjab', 'ludhiana', 553105, 'SITC', 'No', '2026-02-02', '2026-02-09', '2026-02-13', 'MD SIR', 'Fire Fighting', 'Seema mahajan', '9872655005', 'SEPLCC1351', 'CRR', 'https://drive.google.com/open?id=18DHkuCx7lRYPIvXwkwnh4JcLP-nt2vFA', 'https://drive.google.com/open?id=1TWwwaAhK6FJAHG7iVaaRFaqHnwZp6hpl', 'https://drive.google.com/open?id=1bbo4nUybZ1Qbw_g97ZJUmuH-PeiQtzYY', 'https://drive.google.com/open?id=1jACzRXmfCA7G4Uq228gBMv3SOCU3Bv1W', 'booked'],
+      ['SEPL20003', 'Private', 'Gurpreet Sodi', 'V-GUARD INDUSTRIES LTD', '9899900489', 'CRR', 'HARIDWAR', 'HARIDWAR', 'HARIDWAR', 129537, 'SITC', 'No', '2026-02-02', '2026-02-09', '2026-02-13', 'Lovely Sharma', 'Fire Fighting', 'Gurpreet Sodi', '9899900489', 'SEPLCC1076', 'CRR', 'https://drive.google.com/open?id=17KedC2fesfiuXaic3loCXk4aDQCPUdUv', 'https://drive.google.com/open?id=14alGn10sS4bXScYJL7I7xwIwckLiCLWN', 'https://drive.google.com/open?id=1sXE9BHLAeYZSZH6KcFOh1TqV3udKQ3Kh', 'https://drive.google.com/open?id=1bAwn6P1Uum8IYuVsABuI-MjXDj8_UzqE', 'booked'],
+      ['SEPL20004', 'Private', 'Seema mahajan', 'CONSERN PHARMA', '9872655005', 'CRR', 'LUDHIANA', 'PUNJAB', 'LUDHIANA', 450000, 'SITC', 'No', '2026-02-18', '2026-02-25', '2026-02-28', 'MD Sir', 'Water Tank', 'Seema mahajan', '9872655005', 'SEPLCC1341', 'CRR', 'https://drive.google.com/open?id=151CXGmPlvxIraatRZktdi14_6L_C4UZM', 'https://drive.google.com/open?id=1Ius-YG-t60UNtLS3IhsNxu_vCRKRKvp5', 'https://drive.google.com/open?id=16a5R9FUraZwsowphPgKbFMrnj2RSePnV', 'https://drive.google.com/open?id=10-J4hi8qA2_peBwBgrE_navCi83DnOk2', 'booked'],
+      ['SEPL20005', 'Private', 'Seema mahajan', 'CONSERN PHARMA', '9872655005', 'CRR', 'LUDHIANA', 'PUNJAB', 'LUDHIANA', 825150, 'SITC', 'Yes', '2026-02-26', '2026-02-28', '2026-03-05', 'MD Sir', 'Electrical', 'Seema mahajan', '9872655005', 'SEPLCC1351', 'CRR', 'https://drive.google.com/open?id=1EMyfEpIjbdjy_YyqCU9snSkYqLAUs64z', 'https://drive.google.com/open?id=1fKH-EYr9jvpEx5BmkZ200kZ9f2Pz-Ilx', 'https://drive.google.com/open?id=1sdr872lipYaPt_cLPbk1yXaWcd9gW9jj', 'https://drive.google.com/open?id=1MC6rXQ_18eFETPMGmh1yYgm5wEhOp_7l', 'booked'],
+      ['SEPL20006', 'Private', 'Shivam Porwal', 'Emerald land india pvt ltd (Imperial Golf)', '7906673064', 'Inbound', 'ludhiana', 'punjab', 'ludhiana', 350000, 'SITC', 'No', '2026-03-06', '2026-03-13', '2026-03-17', 'Ankur sir', 'Fire Fighting', 'Shivam Porwal', '7906673064', 'SEPLCC1380', 'NBD', '', '', '', '', 'booked'],
+      ['SEPL20007', 'Private', 'Harvinder Singh', 'Harvinder Singh', '9501106700', 'Inbound', 'LUDHIANA', 'PUNJAB', 'LUDHIANA', 85000, 'Supply', 'No', '2026-03-07', '2026-03-09', '2026-03-12', 'Lovely Sharma', 'Fire Fighting', 'Harvinder Singh', '9501106700', 'SEPLCC1381', 'NBD', '', '', '', '', 'booked'],
+      ['SEPL20008', 'Private', 'Robby Ji Team', 'Ramana Machine', '9876792561', 'Inbound', 'Ludhiana', 'Punjab', 'Punjab', 1221036, 'SITC', 'No', '2026-03-18', '2026-03-23', '2026-03-27', 'Ankur sir', 'Solar', 'Robby Ji Team', '9876792561', 'SEPLCC1379', 'NBD', 'https://drive.google.com/open?id=1BKFKpZwilobNawHsQVExISUMKJyjArNH', 'https://drive.google.com/open?id=1XGDf-q70qDKSaLBO1FKuq8WkliVutSzb', 'https://drive.google.com/open?id=1QywIKR4VCMmYqeuv0xQ1lftmmaAXN83a', 'https://drive.google.com/open?id=178ejMW-nUG_hVUzXRpPCq64_mzup5xYY', 'booked'],
+      ['SEPL20009', 'Private', 'Mayank', 'sbj (Nirmal Products)', '9877669049', 'Inbound', 'PUNJAB', 'Ludhiana', 'Ludhiana', 365000, 'SITC', 'No', '2026-03-25', '2026-03-30', '2026-04-02', 'lovely sharma', 'Water Tank', 'Mayank', '9877669049', 'SEPLCC1373', 'CRR', 'https://drive.google.com/open?id=1348oaE5eSAkDHlPqUopG8CTP-hK56cls', 'https://drive.google.com/open?id=1DM7NdEdvD6A22RPtjcCr20-nl0Ta24_i', 'https://drive.google.com/open?id=1DKovp3s0kA2I4rrW_-_IB7JQMrMyMOJK', 'https://drive.google.com/open?id=1OXQI4Q5Ti5Jet5PWeVE2UEJRTGrywDBx', 'booked'],
+      ['SEPL20010', 'Private', 'Seema mahajan', 'CONSERN PHARMA', '9872655005', 'CRR', 'LUdhiana', 'Punjab', 'LUdhiana', 157500, 'SITC', 'No', '2026-04-06', '2026-04-13', '2026-04-16', 'LOVELY SHARMA', 'Electrical', 'Seema mahajan', '9872655005', 'SEPLCC1351', 'CRR', 'https://drive.google.com/open?id=1IiI2ETQRFvdAeQNkUAEe5luvUt4sQ7PI', 'https://drive.google.com/open?id=1d11zaDrp6pWKjo44Y23dPV0IB_M50_2w', 'https://drive.google.com/open?id=1ek_Rzv1bzliP9deihSjadltH6nXF0k4T', 'https://drive.google.com/open?id=1lOgP_SsqFJFK--tDjbZSjkQ-mE9QILZw', 'booked'],
     ];
 
     for (const d of seedData) {
