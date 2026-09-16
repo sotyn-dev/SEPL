@@ -1,13 +1,14 @@
+import EmployeeProfessionalTax from './EmployeeProfessionalTax';
 import { STATES } from '../data/indiaLocations';
 
 const MONEY_FIELDS = [
   ['tds_estimated_annual', 'TDS Estimated Annual (Rs/year)'],
   ['ctc_annual', 'CTC Annual (Rs/year)'], ['variable_bonus', 'Variable / Bonus (Rs/year)'],
-  ['basic_salary', 'Basic (Rs/month)'], ['hra', 'HRA (Rs/month)'],
+  ['basic_salary', 'Basic (Rs/month)'], ['hra', 'HRA (Rs/month)'], ['special_allowance', 'Special Allowance (Rs/month)'],
   ['pf_deduction', 'PF Deduction (Rs/month)'], ['esi_deduction', 'ESI Deduction (Rs/month)'],
 ];
 
-export default function EmployeeDetailsFields({ form, setForm, canSeeSalary }) {
+export default function EmployeeDetailsFields({ form, setForm, canSeeSalary, scorecard, optionsLoaded }) {
   const change = (key, value) => setForm(previous => {
     const next = { ...previous, [key]: value };
     if (next.same_as_permanent) {
@@ -81,13 +82,37 @@ export default function EmployeeDetailsFields({ form, setForm, canSeeSalary }) {
           <input id="last-increment-date" type="date" className="input" value={form.last_increment_date || ''}
             onChange={e => change('last_increment_date', e.target.value || null)} />
         </div>
+        <div><label className="label" htmlFor="salary-review-cycle">Salary Review Cycle</label>
+          <select id="salary-review-cycle" className="select" value={form.salary_review_cycle || ''} onChange={e => change('salary_review_cycle', e.target.value || null)}>
+            <option value="">Select review cycle</option><option value="apr_mar">Apr–Mar</option><option value="joining_anniversary">Joining Anniversary</option>
+          </select>
+        </div>
         {MONEY_FIELDS.map(([key, label]) => <div key={key}>
           <label className="label" htmlFor={key}>{label}</label>
-          <input id={key} type="number" min="0" step="0.01" className="input" value={form[key] ?? ''}
+          <input id={key} type="number" min="0" step="0.01" className="input" readOnly={key === 'ctc_annual'} value={key === 'ctc_annual' ? (form.salary === '' || form.salary == null ? '' : Math.round(Number(form.salary) * 1200) / 100) : form[key] ?? ''}
             onChange={e => change(key, e.target.value === '' ? null : Number(e.target.value))} />
+          {key === 'ctc_annual' && <p className="text-xs text-gray-500 mt-1">Calculated automatically: Salary (Rs) × 12.</p>}
+          {key === 'variable_bonus' && <div className="mt-3">
+            <label className="label" htmlFor="bonus-target-pct">Bonus / Variable Target (%)</label>
+            <input id="bonus-target-pct" className="input" type="number" min="0" max="100" step="0.01" value={form.bonus_target_pct ?? ''}
+              onChange={e => change('bonus_target_pct', e.target.value === '' ? null : Number(e.target.value))} />
+            <p className="text-xs text-gray-500 mt-1">{!optionsLoaded ? 'Scorecard information unavailable or loading.' : scorecard ? `Linked scorecard: ${scorecard.name}` : 'Link a login user with an assigned scorecard before setting a positive target.'}</p>
+            <p className="text-xs text-gray-500 mt-1">Target for the assigned scorecard; entering it does not trigger a payment.</p>
+          </div>}
+        </div>)}
+        <EmployeeProfessionalTax state={form.pt_state} salary={form.salary} />
+      </div>
+      <p className="text-xs text-gray-500 mt-3">CTC is calculated from Salary × 12. Bonus and estimated TDS are annual; basic, HRA, special allowance and deductions are monthly.</p>
+    </fieldset>}
+    {canSeeSalary && <fieldset className="rounded-xl border border-gray-200 p-4">
+      <legend className="px-1 text-sm font-semibold text-gray-800">Reimbursements — Annual Entitlements</legend>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {[['reimbursement_lta_annual', 'LTA'], ['reimbursement_medical_annual', 'Medical'], ['reimbursement_phone_annual', 'Phone']].map(([key, label]) => <div key={key}>
+          <label className="label" htmlFor={key}>{label} (Rs/year)</label>
+          <input id={key} type="number" min="0" step="0.01" className="input" value={form[key] ?? ''} onChange={e => change(key, e.target.value === '' ? null : Number(e.target.value))} />
         </div>)}
       </div>
-      <p className="text-xs text-gray-500 mt-3">Annual CTC, bonus and estimated TDS; monthly basic, HRA and deductions. Amounts are entered manually.</p>
+      <p className="text-xs text-gray-500 mt-2">Annual entitlement limits. Claims and payments are recorded separately.</p>
     </fieldset>}
   </>;
 }

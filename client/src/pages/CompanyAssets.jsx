@@ -15,7 +15,7 @@ import { fmtDateTime } from '../utils/datetime';
 import Pagination, { usePagination } from '../components/PaginationBar';
 
 const CATEGORIES = [
-  'Laptop', 'Desktop', 'Mobile', 'Tablet', 'SIM Card',
+  'Laptop', 'Desktop', 'Mobile', 'Tablet', 'SIM Card', 'Vehicle',
   'Headset', 'Monitor', 'Keyboard', 'Mouse', 'Charger',
   'Printer', 'Router', 'Hard Drive', 'USB Drive', 'Camera',
   'Projector', 'Speaker', 'ID Card', 'Other'

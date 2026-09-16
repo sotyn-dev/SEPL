@@ -158,11 +158,11 @@ function sessionState(userId) {
   try {
     const row = getDb().prepare(
       `SELECT id, role, COALESCE(active, 1) AS active, COALESCE(archived, 0) AS archived,
-              token_revoked_at
+              token_revoked_at, must_change_password
          FROM users WHERE id = ?`
     ).get(userId);
     state = row
-      ? { ok: true, role: row.role, active: row.active, archived: row.archived, revokedAt: row.token_revoked_at || 0 }
+      ? { ok: true, role: row.role, active: row.active, archived: row.archived, revokedAt: row.token_revoked_at || 0, mustChangePassword: !!row.must_change_password }
       : { ok: true, missing: true };
   } catch (_) {
     state = null;   // unknown → fail open (see note above); don't cache a failure
@@ -227,6 +227,11 @@ function authMiddleware(req, res, next) {
       // from admin now takes effect on the next request instead of surviving
       // for the 90-day life of an already-issued token.
       req.user.role = st.role;
+      if (st.mustChangePassword) {
+        const endpoint = String(req.originalUrl || req.url).split('?')[0].replace(/\/$/, '');
+        const allowed = (req.method === 'GET' && endpoint === '/api/auth/me') || (req.method === 'POST' && endpoint === '/api/auth/change-password');
+        if (!allowed) return res.status(403).json({ error: 'Change your initial password before using the ERP', code: 'PASSWORD_CHANGE_REQUIRED' });
+      }
     }
 
     // Destructive-action circuit breaker (2026-08-22/24 mass-delete incident).

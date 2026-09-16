@@ -1,4 +1,9 @@
-const { employeeTerms } = require('../lib/employeeTerms');
+const employeeMaster = require('../lib/employeeMaster');
+const { provisionEmployeeLogin } = require('../lib/employeeLogin');
+const { employeeTerms, FIELDS, SALARY_FIELDS } = require('../lib/employeeTerms');
+const { assignVehicle, assignEquipment } = require('../lib/employeeVehicle');
+const pt = require('../lib/employeeProfessionalTax');
+const PT_STATES = require('../../shared/employeePtStates.json');
 const express = require('express');
 const { istToday } = require('../lib/istDate');
 const path = require('path');
@@ -6,12 +11,50 @@ const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission, getUserPermissions } = require('../middleware/auth');
+const { authMiddleware, requirePermission, getUserPermissions, adminOnly } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 const { parseResume } = require('../utils/resumeParser');
 const { normalizeRoster } = require('../lib/roster');
 const router = express.Router();
 router.use(authMiddleware);
+
+router.get('/employee-options', requirePermission('employees', 'view'), (req, res) => {
+  const db = getDb();
+  const permissions = getUserPermissions(req.user.id);
+  res.json({
+    equipment: db.prepare("SELECT id,asset_no,name,category,serial_no,mobile_number,carrier,status,current_user_id FROM company_assets WHERE COALESCE(category,'') <> 'Vehicle' ORDER BY category,asset_no").all(),
+    vehicles: db.prepare("SELECT id,asset_no,name,status,current_user_id FROM company_assets WHERE category='Vehicle' ORDER BY asset_no").all(),
+    scorecards: permissions['employee_salary']?.can_view ? db.prepare(`SELECT ut.user_id, t.id, t.name
+      FROM score_user_template ut JOIN score_templates t ON t.id=ut.template_id WHERE COALESCE(t.active,1)=1`).all() : [],
+  });
+});
+
+router.get('/professional-tax-preview', requirePermission('employee_salary', 'view'), (req, res) => {
+  try {
+    const rules = getDb().prepare('SELECT * FROM employee_pt_rules').all();
+    res.json(pt.calculate(rules, req.query.state, req.query.salary, req.query.month));
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+router.get('/professional-tax-rules', adminOnly, (req, res) => {
+  res.json(getDb().prepare('SELECT * FROM employee_pt_rules ORDER BY state, effective_from, month, min_salary').all());
+});
+
+router.put('/professional-tax-rules', adminOnly, (req, res) => {
+  try {
+    const rules = pt.validateRules(req.body.rules, PT_STATES);
+    const db = getDb();
+    db.transaction(() => {
+      db.prepare('DELETE FROM employee_pt_rules').run();
+      const insert = db.prepare('INSERT INTO employee_pt_rules (state,min_salary,max_salary,amount,month,effective_from,effective_to) VALUES (?,?,?,?,?,?,?)');
+      for (const r of rules) insert.run(r.state,r.min_salary,r.max_salary,r.amount,r.month,r.effective_from,r.effective_to);
+    })();
+    logAuditEvent({ user: req.user, action: 'UPDATE', entity_type: 'employee_pt_rules',
+      entity_label: 'Employee professional tax slabs', method: 'PUT', path: req.originalUrl,
+      body: { rules } });
+    res.json({ message: 'Professional tax slabs saved' });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
 
 // ── Project-wise manpower plan (mam 2026-06-12) ─────────────────────
 // For each UNIQUE project (business_book grouped by project / company
@@ -709,13 +752,8 @@ router.get('/employees', (req, res) => {
     `SELECT e.*, u.name as linked_user_name, u.username as linked_username
      FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
   ).all();
-  if (getUserPermissions(req.user.id)['employee_salary']?.can_view) return res.json(rows);
-  // Redact salary for everyone else
-  res.json(rows.map(row => {
-    const safe = { ...row };
-    for (const field of ['salary', ...["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual","last_increment_date"]]) delete safe[field];
-    return safe;
-  }));
+  const access = employeeMaster.access(req, getUserPermissions(req.user.id));
+  res.json(rows.map(row => ({ ...employeeMaster.redact(row, access), profile_completion: employeeMaster.completion(row, access) })));
 });
 
 // Roster audit (read-only) — surfaces the two categories of active logins that
@@ -863,41 +901,60 @@ router.post('/employees', requirePermission('employees', 'create'), (req, res) =
           aadhar_file, pan_file, qualification_file, roster } = req.body;
   let { user_id } = req.body;
   const db = getDb();
+  const access = employeeMaster.access(req, getUserPermissions(req.user.id));
+  const errors = employeeMaster.validateInput(req.body, null, access, !!db.prepare('SELECT id FROM employees LIMIT 1').get());
+  if (typeof name !== 'string' || !name.trim()) errors.name = 'Enter the employee name';
+  if (Object.keys(errors).length) return res.status(400).json({ error: Object.values(errors)[0], fields: errors });
   const bad = validateEmployeeMaster(req.body);
   if (bad) return res.status(400).json({ error: bad });
   const m = masterValues(req.body);
   const termsBody = { ...req.body };
-  if (!getUserPermissions(req.user.id)['employee_salary']?.can_view) {
-    for (const field of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual","last_increment_date"]) delete termsBody[field];
+  if (!access.salaryEdit) {
+    for (const field of SALARY_FIELDS) delete termsBody[field];
+    delete termsBody.salary;
   }
-  let terms;
-  try { terms = employeeTerms(termsBody, db, req.params.id); }
-  catch (error) { return res.status(400).json({ error: error.message }); }
   // Auto-link by email if user_id wasn't explicitly set
   if (!user_id && email) {
     const u = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
     if (u) user_id = u.id;
   }
+  if (user_id && !db.prepare('SELECT id FROM users WHERE id=?').get(user_id)) return res.status(400).json({ error: 'Linked login user does not exist' });
+  termsBody.user_id = user_id || null;
+  let terms;
+  try { terms = employeeTerms(termsBody, db, req.params.id); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
   // Mandatory documents for NEW employees (not enforced on bulk import or
   // legacy edits — those keep working without docs).
-  if (!aadhar_file)        return res.status(400).json({ error: 'Aadhar card is required' });
-  if (!pan_file)           return res.status(400).json({ error: 'PAN card is required' });
-  if (!qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
-  const r = db.prepare(`
-    INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
-                           aadhar_file, pan_file, qualification_file, roster,
-                           date_of_birth, gender, guardian_title, guardian_relation, guardian_name,
-                           pan_number, aadhaar_last4,
-                           bank_name, bank_branch, bank_account_no, bank_ifsc,
-                           emergency_contact_name, emergency_contact_phone, reports_to, employment_type, employment_status, notice_period_days, probation_end_date, uan_number, uan_verified, permanent_address, permanent_pin, current_address, current_pin, same_as_permanent, pf_number, esi_number, pt_state, form11_file, form_f_file, ctc_annual, variable_bonus, basic_salary, hra, pf_deduction, esi_deduction, blood_group, tds_estimated_annual, last_increment_date)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
-        aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
-        m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
-        m.pan_number, m.aadhaar_last4,
-        m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
-        m.emergency_contact_name, m.emergency_contact_phone, terms.reports_to ?? null, terms.employment_type ?? null, terms.employment_status ?? null, terms.notice_period_days ?? null, terms.probation_end_date ?? null, terms.uan_number ?? null, terms.uan_verified ?? 0, terms.permanent_address ?? null, terms.permanent_pin ?? null, terms.current_address ?? null, terms.current_pin ?? null, terms.same_as_permanent ?? 0, terms.pf_number ?? null, terms.esi_number ?? null, terms.pt_state ?? null, terms.form11_file ?? null, terms.form_f_file ?? null, terms.ctc_annual ?? null, terms.variable_bonus ?? null, terms.basic_salary ?? null, terms.hra ?? null, terms.pf_deduction ?? null, terms.esi_deduction ?? null, terms.blood_group ?? null, terms.tds_estimated_annual ?? null, terms.last_increment_date ?? null);
-  res.status(201).json({ id: r.lastInsertRowid, linked_user_id: user_id || null });
+  if (req.body.quick_onboarding !== true && !aadhar_file)        return res.status(400).json({ error: 'Aadhar card is required' });
+  if (req.body.quick_onboarding !== true && !pan_file)           return res.status(400).json({ error: 'PAN card is required' });
+  if (req.body.quick_onboarding !== true && !qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
+  let r;
+  let loginDetails;
+  try {
+    r = db.transaction(() => {
+      loginDetails = provisionEmployeeLogin(db, { name, email, phone, department, userId: user_id });
+      user_id = loginDetails.userId;
+      const r = db.prepare(`
+        INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
+                               aadhar_file, pan_file, qualification_file, roster,
+                               date_of_birth, gender, guardian_title, guardian_relation, guardian_name,
+                               pan_number, aadhaar_last4,
+                               bank_name, bank_branch, bank_account_no, bank_ifsc,
+                               emergency_contact_name, emergency_contact_phone, ${FIELDS.join(', ')})
+        VALUES (${Array(25 + FIELDS.length).fill('?').join(',')})
+      `).run(user_id || null, name, phone, email, designation, department, join_date, access.salaryEdit ? salary ?? null : null,
+            aadhar_file || null, pan_file || null, qualification_file || null, normalizeRoster(roster),
+            m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
+            m.pan_number, m.aadhaar_last4,
+            m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
+            m.emergency_contact_name, m.emergency_contact_phone, ...FIELDS.map(key => terms[key] ?? (key === 'uan_verified' || key === 'same_as_permanent' ? 0 : null)));
+      assignVehicle(db, { userId: user_id, assetId: req.body.vehicle_asset_id, actorId: req.user.id, canEditAssets: !!getUserPermissions(req.user.id)['company_assets']?.can_edit });
+      assignEquipment(db, { userId: user_id, assetIds: req.body.equipment_asset_ids, actorId: req.user.id, canEditAssets: !!getUserPermissions(req.user.id)['company_assets']?.can_edit });
+      return r;
+    })();
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+  const employee = db.prepare('SELECT * FROM employees WHERE id=?').get(r.lastInsertRowid);
+  res.status(201).json({ login_details: loginDetails, id: r.lastInsertRowid, linked_user_id: user_id || null, employee: { ...employeeMaster.redact(employee, access), profile_completion: employeeMaster.completion(employee, access) } });
 });
 
 // Auto-link existing employees to users by matching email (case-insensitive).
@@ -988,100 +1045,49 @@ function canOffboard(db, req) {
 }
 
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
-  const { name, phone, email, designation, department, salary, status, user_id,
-          aadhar_file, pan_file, qualification_file, roster, join_date } = req.body;
   const db = getDb();
-  const bad = validateEmployeeMaster(req.body);
+  const existing = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Employee not found' });
+  const access = employeeMaster.access(req, getUserPermissions(req.user.id));
+  const input = { ...req.body };
+  const errors = employeeMaster.validateInput(input, existing, access);
+  if (Object.keys(errors).length) return res.status(400).json({ error: Object.values(errors)[0], fields: errors });
+  const has = key => Object.prototype.hasOwnProperty.call(input, key);
+  // Validate only supplied values; legacy incomplete records remain editable.
+  const bad = validateEmployeeMaster({ ...input, phone: has('phone') ? input.phone : existing.phone });
   if (bad) return res.status(400).json({ error: bad });
-  const m = masterValues(req.body);
-  const termsBody = { ...req.body };
-  if (!getUserPermissions(req.user.id)['employee_salary']?.can_view) {
-    for (const field of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual","last_increment_date"]) delete termsBody[field];
+  if (!access.salaryEdit) for (const key of ['salary', ...SALARY_FIELDS]) delete input[key];
+  const user_id = has('user_id') ? input.user_id || null : existing.user_id;
+  const status = has('status') ? input.status : existing.status;
+  if (Number(existing.user_id || 0) !== Number(user_id || 0) && existing.user_id &&
+      db.prepare("SELECT id FROM company_assets WHERE status='issued' AND current_user_id=?").get(existing.user_id)) {
+    return res.status(400).json({ error: 'Return the currently assigned assets before changing the linked login user', fields: { user_id: 'Return assigned assets before changing login user' } });
+  }
+  if (user_id && !db.prepare('SELECT id FROM users WHERE id=?').get(user_id)) return res.status(400).json({ error: 'Linked login user does not exist', fields: { user_id: 'Choose an existing login user' } });
+  const newStatus = String(status || '').toLowerCase();
+  if (['terminated','inactive'].includes(newStatus) && existing.status !== newStatus) {
+    if (!canOffboard(db, req)) return res.status(403).json({ error: 'Offboarding requires employees approve permission or admin', fields: { status: 'Offboarding approval permission required' } });
+    require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'hr_status_offboard');
   }
   let terms;
-  try { terms = employeeTerms(termsBody, db, req.params.id); }
+  try { terms = employeeTerms(input, db, req.params.id); }
   catch (error) { return res.status(400).json({ error: error.message }); }
-
-  // Status transition INTO terminated/inactive is gated separately from the
-  // ordinary edit (see canOffboard above) and scored on the breaker. A save
-  // that keeps the status unchanged — or moves it back to active/training —
-  // stays a plain edit: HR fixing a phone number must never hit this.
-  const newStatus = String(status || '').toLowerCase();
-  if (['terminated', 'inactive'].includes(newStatus)) {
-    const cur = db.prepare('SELECT status FROM employees WHERE id=?').get(req.params.id);
-    if (cur && String(cur.status || '').toLowerCase() !== newStatus) {
-      if (!canOffboard(db, req)) {
-        return res.status(403).json({
-          error: 'Setting an employee to terminated/inactive needs off-boarding authority (employees approve permission or admin). Other edits are unaffected.',
-        });
-      }
-      require('../lib/destructiveBreaker').addScore(req.user.id, 1, 'hr_status_offboard');
-    }
+  const normalized = masterValues(input);
+  const values = { ...terms };
+  for (const key of Object.keys(normalized)) if (has(key)) values[key] = normalized[key];
+  for (const key of ['name','phone','email','designation','department','join_date','salary','status','user_id',...employeeMaster.DOCUMENT_FIELDS]) {
+    if (has(key)) values[key] = input[key] === '' ? null : input[key];
   }
-  // COALESCE so passing undefined for a doc field doesn't wipe the existing
-  // upload — frontend can edit other fields without re-uploading docs.
-  db.prepare(`
-    UPDATE employees
-       SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?,
-           -- join_date was MISSING from this UPDATE (found 2026-09-04): the Edit
-           -- modal showed a Join Date input whose value was silently discarded,
-           -- so an employee saved without one could never be corrected. COALESCE
-           -- so an edit that doesn't send it can't blank an existing date.
-           join_date = COALESCE(?, join_date),
-           roster = COALESCE(?, roster),
-           aadhar_file        = COALESCE(?, aadhar_file),
-           pan_file           = COALESCE(?, pan_file),
-           qualification_file = COALESCE(?, qualification_file),
-           date_of_birth           = COALESCE(?, date_of_birth),
-           gender                  = COALESCE(?, gender),
-           guardian_title          = COALESCE(?, guardian_title),
-           guardian_relation       = COALESCE(?, guardian_relation),
-           guardian_name           = COALESCE(?, guardian_name),
-           pan_number              = COALESCE(?, pan_number),
-           aadhaar_last4           = COALESCE(?, aadhaar_last4),
-           bank_name               = COALESCE(?, bank_name),
-           bank_branch             = COALESCE(?, bank_branch),
-           bank_account_no         = COALESCE(?, bank_account_no),
-           bank_ifsc               = COALESCE(?, bank_ifsc),
-           emergency_contact_name  = COALESCE(?, emergency_contact_name),
-           emergency_contact_phone = COALESCE(?, emergency_contact_phone),
-           reports_to = CASE WHEN ? THEN ? ELSE reports_to END,
-           employment_type = CASE WHEN ? THEN ? ELSE employment_type END,
-           employment_status = CASE WHEN ? THEN ? ELSE employment_status END,
-           notice_period_days = CASE WHEN ? THEN ? ELSE notice_period_days END,
-           probation_end_date = CASE WHEN ? THEN ? ELSE probation_end_date END,
-           uan_number = CASE WHEN ? THEN ? ELSE uan_number END,
-           uan_verified = CASE WHEN ? THEN ? ELSE uan_verified END,
-           permanent_address = CASE WHEN ? THEN ? ELSE permanent_address END,
-           permanent_pin = CASE WHEN ? THEN ? ELSE permanent_pin END,
-           current_address = CASE WHEN ? THEN ? ELSE current_address END,
-           current_pin = CASE WHEN ? THEN ? ELSE current_pin END,
-           same_as_permanent = CASE WHEN ? THEN ? ELSE same_as_permanent END,
-           pf_number = CASE WHEN ? THEN ? ELSE pf_number END,
-           esi_number = CASE WHEN ? THEN ? ELSE esi_number END,
-           pt_state = CASE WHEN ? THEN ? ELSE pt_state END,
-           form11_file = CASE WHEN ? THEN ? ELSE form11_file END,
-           form_f_file = CASE WHEN ? THEN ? ELSE form_f_file END,
-           ctc_annual = CASE WHEN ? THEN ? ELSE ctc_annual END,
-           variable_bonus = CASE WHEN ? THEN ? ELSE variable_bonus END,
-           basic_salary = CASE WHEN ? THEN ? ELSE basic_salary END,
-           hra = CASE WHEN ? THEN ? ELSE hra END,
-           pf_deduction = CASE WHEN ? THEN ? ELSE pf_deduction END,
-           esi_deduction = CASE WHEN ? THEN ? ELSE esi_deduction END,
-           blood_group = CASE WHEN ? THEN ? ELSE blood_group END,
-           tds_estimated_annual = CASE WHEN ? THEN ? ELSE tds_estimated_annual END,
-           last_increment_date = CASE WHEN ? THEN ? ELSE last_increment_date END
-     WHERE id=?
-  `).run(name, phone, email, designation, department, salary, status, user_id || null,
-        join_date || null,
-        roster ? normalizeRoster(roster) : null,
-        aadhar_file || null, pan_file || null, qualification_file || null,
-        m.date_of_birth, m.gender, m.guardian_title, m.guardian_relation, m.guardian_name,
-        m.pan_number, m.aadhaar_last4,
-        m.bank_name, m.bank_branch, m.bank_account_no, m.bank_ifsc,
-        m.emergency_contact_name, m.emergency_contact_phone,
-        ...['reports_to', 'employment_type', 'employment_status', 'notice_period_days', 'probation_end_date', 'uan_number', 'uan_verified', 'permanent_address', 'permanent_pin', 'current_address', 'current_pin', 'same_as_permanent', 'pf_number', 'esi_number', 'pt_state', 'form11_file', 'form_f_file', 'ctc_annual', 'variable_bonus', 'basic_salary', 'hra', 'pf_deduction', 'esi_deduction', 'blood_group', 'tds_estimated_annual', 'last_increment_date'].flatMap(key => [Object.prototype.hasOwnProperty.call(terms, key) ? 1 : 0, terms[key] ?? null]), req.params.id);
-
+  if (has('name')) values.name = input.name.trim();
+  if (has('roster')) values.roster = normalizeRoster(input.roster);
+  try {
+    db.transaction(() => {
+      const keys = Object.keys(values);
+      if (keys.length) db.prepare(`UPDATE employees SET ${keys.map(key => `${key}=?`).join(',')} WHERE id=?`).run(...keys.map(key => values[key] ?? null), req.params.id);
+      assignVehicle(db, { userId: user_id, assetId: input.vehicle_asset_id, actorId: req.user.id, canEditAssets: !!getUserPermissions(req.user.id)['company_assets']?.can_edit });
+      assignEquipment(db, { userId: user_id, assetIds: input.equipment_asset_ids, actorId: req.user.id, canEditAssets: !!getUserPermissions(req.user.id)['company_assets']?.can_edit });
+    })();
+  } catch (error) { return res.status(400).json({ error: error.message }); }
   // Sync the linked login's `active` flag to the employee's on-roll status.
   // Attendance strength counts users.active, but HR only edits employees.status —
   // the two used to drift, so terminated staff kept inflating the count (mgmt:
@@ -1112,7 +1118,8 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
     } catch (e) { console.error('[hr] login active-sync failed:', e.message); }
   }
 
-  res.json({ message: 'Updated' });
+  const employee = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.id);
+  res.json({ message: 'Updated', employee: { ...employeeMaster.redact(employee, access), profile_completion: employeeMaster.completion(employee, access) } });
 });
 
 // The ONE legitimate mass-offboarding path (e.g. a site demobilises and 20
