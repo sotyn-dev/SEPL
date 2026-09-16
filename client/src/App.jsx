@@ -27,6 +27,7 @@ const PoFocPrint = lazy(() => import('./pages/PoFocPrint'));
 const LabourRate = lazy(() => import('./pages/LabourRate'));
 const Orders = lazy(() => import('./pages/Orders'));
 const DispatchReceiving = lazy(() => import('./pages/DispatchReceiving'));
+const ProjectProfit = lazy(() => import('./pages/ProjectProfit'));
 const BusinessBook = lazy(() => import('./pages/BusinessBook'));
 const ItemMaster = lazy(() => import('./pages/ItemMaster'));
 const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
@@ -275,6 +276,7 @@ export default function App() {
           <Route path="solar-rate-master" element={<ModuleRoute module="solar_quotation"><SolarRateMaster /></ModuleRoute>} />
           <Route path="po-foc-stripped" element={<ModuleRoute module="quotations"><PoFocStripped /></ModuleRoute>} />
           <Route path="labour-rate" element={<ModuleRoute module="labour_rates"><LabourRate /></ModuleRoute>} />
+          <Route path="project-profit" element={<ModuleRoute module="project_profit"><ProjectProfit /></ModuleRoute>} />
           <Route path="business-book" element={<ModuleRoute module="business_book"><BusinessBook /></ModuleRoute>} />
           <Route path="item-master" element={<ModuleRoute module="item_master"><ItemMaster /></ModuleRoute>} />
           <Route path="orders" element={<ModuleRoute module="orders"><Orders /></ModuleRoute>} />
