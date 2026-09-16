@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiSearch, FiFilter, FiDownload, FiEdit2, FiTrash2, FiEye,
   FiX, FiBook, FiTrendingUp, FiClock, FiUpload, FiList, FiGrid,
-  FiChevronRight, FiChevronDown, FiUsers, FiMapPin
+  FiChevronRight, FiChevronDown, FiUsers, FiMapPin, FiCompass, FiNavigation, FiExternalLink
 } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import SearchableSelect from '../components/SearchableSelect';
@@ -24,10 +24,53 @@ const ORDER_TYPES = ['Supply', 'SITC', 'AMC', 'Service'];
 const LEAD_TYPES = ['Private', 'Government'];
 const SOURCES = ['Inbound Enquiry', 'Indiamart Enquiry', 'WhatsApp', 'LinkedIn', 'Reference', 'Tender', 'Other'];
 
+// Build Google Maps turn-by-turn directions URL
+export const getDirectionsUrl = (item) => {
+  if (!item) return null;
+  const lat = item.site_latitude || item.latitude;
+  const lng = item.site_longitude || item.longitude;
+  if (lat && lng && !isNaN(Number(lat)) && !isNaN(Number(lng))) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${Number(lat)},${Number(lng)}`;
+  }
+  const url = (item.site_location_url || item.location_url || '').trim();
+  if (url) {
+    if (/google\.[a-z.]+\/maps\/dir/i.test(url)) return url;
+    const coordMatch = url.match(/([-+]?\d{1,2}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)/);
+    if (coordMatch) {
+      return `https://www.google.com/maps/dir/?api=1&destination=${coordMatch[1]},${coordMatch[2]}`;
+    }
+    if (/goo\.gl\/maps|maps\.app\.goo\.gl|google\.[a-z.]+\/maps/i.test(url)) {
+      return url;
+    }
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(url)}`;
+  }
+  const addr = [item.shipping_address, item.billing_address, item.district, item.state].filter(Boolean).join(', ');
+  if (addr) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addr)}`;
+  }
+  if (item.project_name || item.company_name) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent([item.project_name || item.company_name, item.district, item.state].filter(Boolean).join(', '))}`;
+  }
+  return null;
+};
+
+// Parse coordinates from string (handles "lat, lng" or Google Maps URLs containing @lat,lng or q=lat,lng)
+export const parseCoordinatesFromText = (text) => {
+  if (!text || typeof text !== 'string') return null;
+  const atMatch = text.match(/@([-+]?\d{1,2}\.\d+),([-+]?\d{1,3}\.\d+)/);
+  if (atMatch) return { lat: parseFloat(atMatch[1]), lng: parseFloat(atMatch[2]) };
+  const qMatch = text.match(/[?&]q=([-+]?\d{1,2}\.\d+),([-+]?\d{1,3}\.\d+)/);
+  if (qMatch) return { lat: parseFloat(qMatch[1]), lng: parseFloat(qMatch[2]) };
+  const plainMatch = text.match(/^\s*([-+]?\d{1,2}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)\s*$/);
+  if (plainMatch) return { lat: parseFloat(plainMatch[1]), lng: parseFloat(plainMatch[2]) };
+  return null;
+};
+
 const emptyForm = {
   lead_type: 'Private', client_name: '', company_name: '', project_name: '',
   client_contact: '', client_email: '', email_address: '',
   source_of_enquiry: '', district: '', state: '', state_code: '', gstin: '', billing_address: '', shipping_address: '',
+  site_location_url: '', site_latitude: '', site_longitude: '',
   guarantee_required: 'No', guarantee_percentage: '', sale_amount_without_gst: 0, po_amount: 0,
   management_discount_pct: 0, management_discount_amount: 0, net_sale_amount: 0,
   order_type: 'Supply', penalty_clause: 'No', penalty_clause_date: '',
@@ -53,11 +96,12 @@ const emptyForm = {
 // when adding ANOTHER lead for the same client so it isn't re-typed; every
 // financial / PO / date / amount field starts fresh (mam 2026-06-25
 // "new lead generation button + basic old data fetch").
-const NEW_LEAD_BASIC = ['lead_type', 'client_name', 'company_name', 'project_name', 'client_contact', 'client_email', 'email_address', 'source_of_enquiry', 'district', 'state', 'state_code', 'gstin', 'billing_address', 'shipping_address', 'category', 'customer_type', 'client_type', 'customer_code', 'employee_assigned', 'employee_id', 'lead_by', 'management_person_name', 'management_person_contact', 'operations_person_name', 'operations_person_contact', 'pmc_person_name', 'pmc_person_contact', 'architect_person_name', 'architect_person_contact', 'accounts_person_name', 'accounts_person_contact', 'payment_advance', 'payment_against_delivery', 'payment_against_installation', 'payment_against_commissioning', 'payment_retention', 'payment_credit', 'credit_days', 'order_type'];
+const NEW_LEAD_BASIC = ['lead_type', 'client_name', 'company_name', 'project_name', 'client_contact', 'client_email', 'email_address', 'source_of_enquiry', 'district', 'state', 'state_code', 'gstin', 'billing_address', 'shipping_address', 'site_location_url', 'site_latitude', 'site_longitude', 'category', 'customer_type', 'client_type', 'customer_code', 'employee_assigned', 'employee_id', 'lead_by', 'management_person_name', 'management_person_contact', 'operations_person_name', 'operations_person_contact', 'pmc_person_name', 'pmc_person_contact', 'architect_person_name', 'architect_person_contact', 'accounts_person_name', 'accounts_person_contact', 'payment_advance', 'payment_against_delivery', 'payment_against_installation', 'payment_against_commissioning', 'payment_retention', 'payment_credit', 'credit_days', 'order_type'];
 
 export default function BusinessBook() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [entries, setEntries] = useState([]);
+  const [detectingGps, setDetectingGps] = useState(false);
   // Active employees for the "Employee Name" dropdown (mam 2026-06-25:
   // pick the assigned employee from a list instead of free text). Inactive
   // / dropped staff are filtered out so the picker stays clean.
@@ -106,9 +150,38 @@ export default function BusinessBook() {
     const textFields = ['client_name', 'company_name', 'project_name', 'lead_type',
       'district', 'state', 'state_code', 'gstin', 'po_number', 'category', 'order_type', 'employee_assigned',
       'client_contact', 'client_email', 'email_address', 'source_of_enquiry',
-      'customer_type', 'client_type', 'customer_code'];
+      'customer_type', 'client_type', 'customer_code', 'site_location_url'];
     for (const k of textFields) if (typeof out[k] === 'string') out[k] = cleanText(out[k]);
     return out;
+  };
+
+  const handleDetectLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error('Geolocation is not supported by your browser');
+      return;
+    }
+    setDetectingGps(true);
+    const toastId = toast.loading('Detecting exact GPS location...');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = Math.round(pos.coords.latitude * 1e6) / 1e6;
+        const lng = Math.round(pos.coords.longitude * 1e6) / 1e6;
+        const accuracy = Math.round(pos.coords.accuracy);
+        setForm(f => ({
+          ...f,
+          site_latitude: lat,
+          site_longitude: lng,
+          site_location_url: f.site_location_url || `https://www.google.com/maps?q=${lat},${lng}`,
+        }));
+        setDetectingGps(false);
+        toast.success(`Location captured! (±${accuracy}m accuracy)`, { id: toastId });
+      },
+      (err) => {
+        setDetectingGps(false);
+        toast.error(`GPS error: ${err.message || 'Permission denied'}`, { id: toastId });
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
   };
 
   const handleSave = async (e) => {
@@ -210,14 +283,15 @@ export default function BusinessBook() {
   const exportCSV = () => {
     if (entries.length === 0) return toast.error('No data');
     const headers = ['Lead No','Lead Type','Client','Company','Project','Category','Order Type','PO Number',
-      'Sale Amount','Discount %','Discount Amount','Net Sale','PO Amount','Advance','Balance','Start','Delivery','Completion','District','State',
+      'Sale Amount','Discount %','Discount Amount','Net Sale','PO Amount','Advance','Balance','Start','Delivery','Completion','District','State','Site Location',
       'Customer Type','Employee','Status','Remarks'];
     const rows = entries.map(e => [e.lead_no, e.lead_type, e.client_name, e.company_name, e.project_name,
       e.category, e.order_type, e.po_number, e.sale_amount_without_gst,
       e.management_discount_pct, e.management_discount_amount, e.net_sale_amount,
       e.po_amount, e.advance_received,
       e.balance_amount, e.committed_start_date, e.committed_delivery_date, e.committed_completion_date,
-      e.district, e.state, e.customer_type, e.employee_assigned, e.status, e.remarks]);
+      e.district, e.state, e.site_location_url || (e.site_latitude && e.site_longitude ? `${e.site_latitude}, ${e.site_longitude}` : ''),
+      e.customer_type, e.employee_assigned, e.status, e.remarks]);
     const csv = [headers, ...rows].map(r => r.map(c => `"${(c ?? '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -427,6 +501,20 @@ export default function BusinessBook() {
         <div className="font-medium text-[13px] text-gray-800 leading-snug">{cleanText(b.project_name) || cleanText(b.company_name) || '-'}</div>
         {locationOf(b) && <div className="text-[11px] text-gray-500 leading-snug">📍 {locationOf(b)}</div>}
         {b.po_number && <div className="text-[10px] text-gray-400">PO: {b.po_number}</div>}
+        {getDirectionsUrl(b) && (
+          <div className="mt-1">
+            <a
+              href={getDirectionsUrl(b)}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200 transition-colors shadow-2xs"
+              title="Open exact site location & navigation directions in Google Maps"
+            >
+              <FiCompass size={12} className="text-emerald-600" /> Directions
+            </a>
+          </div>
+        )}
       </td>
       {/* Category */}
       <td className="px-3 py-1.5 align-top">
@@ -647,7 +735,25 @@ export default function BusinessBook() {
                       <td className="px-3 py-1.5 align-top text-[13px] font-medium">{g.client}</td>
                       <td className="px-3 py-1.5 align-top">
                         <div className="font-semibold text-[13px] text-gray-900 flex items-start gap-1 leading-snug"><FiMapPin size={12} className="text-blue-600 mt-0.5 shrink-0" /> {g.label}</div>
-                        <div className="text-[10px] text-blue-700/80 ml-4">{g.leads.length} lead{g.leads.length > 1 ? 's' : ''} · tap to {open ? 'collapse' : 'expand'}</div>
+                        <div className="flex items-center gap-2 ml-4 mt-0.5">
+                          <span className="text-[10px] text-blue-700/80">{g.leads.length} lead{g.leads.length > 1 ? 's' : ''} · tap to {open ? 'collapse' : 'expand'}</span>
+                          {(() => {
+                            const leadWithMap = g.leads.find(l => l.site_location_url || (l.site_latitude && l.site_longitude)) || g.leads[0];
+                            const dirUrl = getDirectionsUrl(leadWithMap);
+                            return dirUrl ? (
+                              <a
+                                href={dirUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200"
+                                title="Open exact site location directions in Google Maps"
+                              >
+                                <FiCompass size={10} className="text-emerald-600" /> Direction
+                              </a>
+                            ) : null;
+                          })()}
+                        </div>
                       </td>
                       <td className="px-3 py-1.5" />
                       <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px]">{fmt(g.sale)}<div className="text-[9px] text-gray-400 font-normal uppercase">total sales</div></td>
@@ -792,7 +898,25 @@ export default function BusinessBook() {
                         </td>
                         <td className="px-3 py-3">
                           <div className="text-sm text-gray-800 flex items-center gap-1.5"><FiMapPin size={13} className="text-gray-400" /> {g.site_name || '-'}</div>
-                          {g.district && <div className="text-xs text-gray-500 ml-5">{[g.district, g.state].filter(Boolean).join(', ')}</div>}
+                          <div className="flex items-center gap-2 ml-5 mt-0.5">
+                            {g.district && <span className="text-xs text-gray-500">{[g.district, g.state].filter(Boolean).join(', ')}</span>}
+                            {(() => {
+                              const ord = g.orders.find(o => o.site_location_url || (o.site_latitude && o.site_longitude)) || g.orders[0];
+                              const dirUrl = getDirectionsUrl(ord);
+                              return dirUrl ? (
+                                <a
+                                  href={dirUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200"
+                                  title="Open site directions in Google Maps"
+                                >
+                                  <FiCompass size={10} className="text-emerald-600" /> Direction
+                                </a>
+                              ) : null;
+                            })()}
+                          </div>
                         </td>
                         <td className="px-3 py-3 text-center">
                           <span className={`inline-flex items-center justify-center min-w-[24px] px-2 py-0.5 rounded-full text-xs font-bold ${multi ? 'bg-amber-200 text-amber-800' : 'bg-gray-100 text-gray-600'}`}>{g.orders.length}</span>
@@ -875,6 +999,45 @@ export default function BusinessBook() {
             )}
             <DSection title="Client & Company" items={[['Client', viewEntry.client_name], ['Company/Dept', viewEntry.company_name], ['Contact', viewEntry.client_contact], ['Client Email', viewEntry.client_email], ['Email', viewEntry.email_address], ['Source', viewEntry.source_of_enquiry], ['Customer Type', viewEntry.customer_type], ['Client Type', viewEntry.client_type], ['Customer Code', viewEntry.customer_code]]} />
             <DSection title="Location" items={[['District', viewEntry.district], ['State', viewEntry.state], ['State Code', viewEntry.state_code], ['GSTIN', viewEntry.gstin], ['Billing Address', viewEntry.billing_address], ['Shipping Address', viewEntry.shipping_address]]} />
+
+            {/* Site Projection / Map Directions Card */}
+            {getDirectionsUrl(viewEntry) && (
+              <div className="border border-emerald-200 bg-gradient-to-r from-emerald-50/70 to-teal-50/50 rounded-lg p-3 space-y-2">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                  <div>
+                    <h4 className="font-bold text-sm text-emerald-900 flex items-center gap-1.5">
+                      <FiMapPin className="text-emerald-600" /> Site Projection / Exact Map Location
+                    </h4>
+                    <p className="text-xs text-emerald-800 font-medium mt-0.5">
+                      {viewEntry.site_latitude && viewEntry.site_longitude
+                        ? `GPS Coordinates: ${viewEntry.site_latitude}, ${viewEntry.site_longitude}`
+                        : (viewEntry.site_location_url || [viewEntry.shipping_address, viewEntry.district, viewEntry.state].filter(Boolean).join(', '))}
+                    </p>
+                  </div>
+                  <a
+                    href={getDirectionsUrl(viewEntry)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all shrink-0"
+                  >
+                    <FiCompass size={14} /> Get Directions on Google Maps <FiExternalLink size={12} />
+                  </a>
+                </div>
+                {/* Embedded preview */}
+                <div className="mt-2 rounded-lg overflow-hidden border border-emerald-200 shadow-2xs">
+                  <iframe
+                    title="site-projection-map"
+                    className="w-full h-44 border-0"
+                    loading="lazy"
+                    src={`https://maps.google.com/maps?q=${encodeURIComponent(
+                      (viewEntry.site_latitude && viewEntry.site_longitude)
+                        ? `${viewEntry.site_latitude},${viewEntry.site_longitude}`
+                        : (viewEntry.site_location_url || [viewEntry.shipping_address, viewEntry.district, viewEntry.state].filter(Boolean).join(', '))
+                    )}&z=15&output=embed`}
+                  />
+                </div>
+              </div>
+            )}
             <DSection title="Project & Order" items={[['Project', viewEntry.project_name], ['Category', viewEntry.category], ['Order Type', viewEntry.order_type], ['PO Number', viewEntry.po_number], ['PO Date', viewEntry.po_date], ['Guarantee', viewEntry.guarantee_required], ['Guarantee %', viewEntry.guarantee_percentage], ['Penalty Clause', viewEntry.penalty_clause], ['Penalty Date', viewEntry.penalty_clause_date], ['Freight Extra', viewEntry.freight_extra]]} />
             <DSection title="Committed Dates" items={[['Start', viewEntry.committed_start_date], ['Delivery', viewEntry.committed_delivery_date], ['Completion', viewEntry.committed_completion_date]]} />
             <DSection title="People" items={[['Employee', viewEntry.employee_assigned], ['Lead By', viewEntry.lead_by], ['Management Person', viewEntry.management_person_name], ['Mgmt Contact', viewEntry.management_person_contact], ['Operations Person', viewEntry.operations_person_name], ['Ops Contact', viewEntry.operations_person_contact], ['PMC Person', viewEntry.pmc_person_name], ['PMC Contact', viewEntry.pmc_person_contact], ['Architect', viewEntry.architect_person_name], ['Architect Contact', viewEntry.architect_person_contact], ['Accounts Person', viewEntry.accounts_person_name], ['Accounts Contact', viewEntry.accounts_person_contact]]} />
@@ -930,13 +1093,95 @@ export default function BusinessBook() {
                 />
               </div>
               <Inp label="State Code" value={form.state_code} onChange={v => F('state_code', v)} placeholder="auto from State (e.g. 03)" required />
-              {/* GSTIN feeds into the auto-generated Sales Bill / Tax
-                  Invoice. Punjab GSTINs start with 03; verify the format
-                  is 15 chars (2 digit state + 10 char PAN + entity code +
-                  Z + checksum). */}
               <Inp label="Client GSTIN" value={form.gstin} onChange={v => F('gstin', v)} placeholder="e.g. 03AABCS1234A1Z5" required />
               <Inp label="Billing Address" value={form.billing_address} onChange={v => F('billing_address', v)} required />
               <div className="col-span-2"><Inp label="Shipping / Site Address" value={form.shipping_address} onChange={v => F('shipping_address', v)} required /></div>
+            </div>
+
+            {/* Site Projection / Map Location Sub-Card */}
+            <div className="mt-3 p-3 bg-white rounded-lg border border-emerald-200 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="text-xs font-bold text-gray-700 uppercase tracking-wide flex items-center gap-1.5">
+                  <FiMapPin className="text-emerald-600" /> Site Projection / Exact Map Location
+                  <span className="text-[10px] font-normal text-gray-500 normal-case">(Google Maps Link or GPS Coordinates)</span>
+                </label>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleDetectLocation}
+                    disabled={detectingGps}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors disabled:opacity-50"
+                    title="Capture current device GPS coordinates"
+                  >
+                    <FiCompass className={detectingGps ? 'animate-spin text-emerald-600' : 'text-emerald-600'} size={13} />
+                    {detectingGps ? 'Detecting GPS...' : '📍 Detect GPS'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const q = [form.shipping_address, form.project_name, form.district, form.state].filter(Boolean).join(', ');
+                      if (!q) return toast.error('Enter Site Address or Project Name first');
+                      window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`, '_blank');
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition-colors"
+                    title="Search address on Google Maps to pinpoint and copy the share link"
+                  >
+                    <FiSearch size={12} /> Search on Maps
+                  </button>
+                  {getDirectionsUrl(form) && (
+                    <a
+                      href={getDirectionsUrl(form)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-md transition-colors"
+                      title="Test Google Maps direction navigation"
+                    >
+                      <FiNavigation size={12} /> Test Direction
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="sm:col-span-2">
+                  <input
+                    type="text"
+                    className="input text-xs w-full"
+                    placeholder="Paste Google Maps link (e.g. https://maps.app.goo.gl/... or 30.7333, 76.7794)"
+                    value={form.site_location_url || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const parsed = parseCoordinatesFromText(val);
+                      setForm(f => ({
+                        ...f,
+                        site_location_url: val,
+                        ...(parsed ? { site_latitude: parsed.lat, site_longitude: parsed.lng } : {})
+                      }));
+                    }}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <input
+                    type="number"
+                    step="any"
+                    className="input text-xs"
+                    placeholder="Latitude"
+                    value={form.site_latitude || ''}
+                    onChange={(e) => F('site_latitude', e.target.value)}
+                  />
+                  <input
+                    type="number"
+                    step="any"
+                    className="input text-xs"
+                    placeholder="Longitude"
+                    value={form.site_longitude || ''}
+                    onChange={(e) => F('site_longitude', e.target.value)}
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-400 leading-tight">
+                💡 Paste a Google Maps share link, enter Latitude/Longitude, or click &apos;Detect GPS&apos; when at the site. Anyone can click this to navigate directly with live directions.
+              </p>
             </div>
           </FSection>
 

@@ -13,7 +13,7 @@ import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw, FiLoader } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
 // fmtDateIST: CSV date cells must read as IST like the screen, not raw UTC
@@ -301,23 +301,31 @@ export default function Procurement() {
   // ⚙ Workflow Settings popup — approval gate config (who may act + on/off).
   const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
   const [indents, setIndents] = useState([]);
+  const [indTotal, setIndTotal] = useState(0);
+  const [indLoading, setIndLoading] = useState(false);
+  const [indKpis, setIndKpis] = useState(null);
+  const [indApprovalMeta, setIndApprovalMeta] = useState(null);
+  const [indL2Enabled, setIndL2Enabled] = useState(false);
+  const [indentLookup, setIndentLookup] = useState([]);
   // Row-INVARIANT approval context. The L1/L2 approvers and the L2 switch are a
   // whole-module setting, so every indent row carries the SAME values — they were
   // being recomputed per row, in two separate render paths (desktop table and
   // mobile cards), which read as if approvers could differ per indent. Derived
-  // once here from the first row instead.
+  // once here from server approval_meta or the first row instead.
   // Row-DEPENDENT checks (isCreator, blockSelfL2, isAssignedCrm) stay in the maps.
   const approvalCtx = useMemo(() => {
     const r = indents[0] || {};
     // Prefer the ids LIST (a gate may name several approvers); fall back to the
     // pre-2026-07-23 single id so a stale cached bundle still gates correctly.
     const idsFor = (gate) => {
+      const metaList = indApprovalMeta?.[`${gate}_approver_ids`];
+      if (Array.isArray(metaList) && metaList.length) return metaList;
       const list = r[`${gate}_approver_ids`];
       if (Array.isArray(list) && list.length) return list;
       const single = r[`${gate}_approver_id`];
       return single != null ? [single] : [];
     };
-    const l2On = !!r.l2_enabled;
+    const l2On = indL2Enabled || !!r.l2_enabled;
     const canActL1 = isAdmin() || idsFor('l1').includes(user?.id);
     const canActL2 = isAdmin() || idsFor('l2').includes(user?.id);
     return {
@@ -332,15 +340,15 @@ export default function Procurement() {
       // CRM approvers named in ⚙ Workflow Settings — an ADDITIONAL allow on top
       // of the existing rule, not a replacement. Pure membership; the rest of the
       // CRM chain stays in the maps.
-      crmNamed: (r.crm_approver_ids || []).includes(user?.id),
+      crmNamed: (indApprovalMeta?.crm_approver_ids || r.crm_approver_ids || []).includes(user?.id),
     };
-  }, [indents, user?.id]);
+  }, [indents, indApprovalMeta, indL2Enabled, user?.id]);
   // L2 approval on/off switch (mam 2026-07-21). The toggle button itself lives
   // in the ⚙ Responsible tab (next to the L1/L2 approver names). Here we just
-  // DERIVE the current state from the loaded indents (every row carries
+  // DERIVE the current state from the loaded metadata or indents (every row carries
   // i.l2_enabled) — so the tiles, filter and buttons reflect it, and it auto-
   // refreshes whenever the indent list reloads (e.g. on tab switch).
-  const l2Enabled = indents.some(i => !!i.l2_enabled);
+  const l2Enabled = indL2Enabled || indents.some(i => !!i.l2_enabled);
   const [vendorPos, setVendorPos] = useState([]);
   // Indent raising window (mam 2026-06-16): { isSaturday, emergencyActive,
   // allowed }. Saturday-only raising with an admin one-day emergency override.
@@ -690,10 +698,19 @@ export default function Procurement() {
   const [tallySearch, setTallySearch] = useState('');
   const [tallyPage, setTallyPage] = useState(1);
   const [tallyPerPage, setTallyPerPage] = useState(15);
-  const [indFilterFrom, setIndFilterFrom] = useState('');
-  const [indFilterTo, setIndFilterTo] = useState('');
-  const [indSearch, setIndSearch] = useState('');
-  const [indPage, setIndPage] = useState(1);
+  const [indFilterFrom, setIndFilterFrom]         = useState('');
+  const [indFilterTo, setIndFilterTo]             = useState('');
+  const [indSearch, setIndSearch]                 = useState('');
+  const [indSearchInput, setIndSearchInput]       = useState('');
+  const [indPage, setIndPage]                     = useState(1);
+
+  // Debounce indSearchInput -> indSearch so search requests don't fire on every keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIndSearch(indSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [indSearchInput]);
   // Vendor Rates
   const [ratesSearch, setRatesSearch] = useState('');
   const [ratesPage, setRatesPage] = useState(1);
@@ -706,18 +723,41 @@ export default function Procurement() {
     _setVpoSubTab(st);
     setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
   };
-  const [vpoPendingSearch, setVpoPendingSearch] = useState('');
+  const [vpoPendingSearch, setVpoPendingSearch]           = useState('');
+  const [vpoPendingSearchInput, setVpoPendingSearchInput] = useState('');
+  const [vpoPendingTotal, setVpoPendingTotal]             = useState(0);
+  const [vpoPendingReadyCount, setVpoPendingReadyCount]   = useState(0);
+  const [vpoPendingLoading, setVpoPendingLoading]         = useState(false);
   // Default to 'finalized' — mam (2026-05-25): "I WANT SHOW HERE AFTER
   // RATE FINIALISE".  Only finalized rates are ready for a Vendor PO;
   // pending/quoted items still need purchase team to negotiate.  Mam can
   // flip the dropdown to "All" to see everything if she wants.
-  const [vpoPendingStatus, setVpoPendingStatus] = useState('finalized');
-  const [vpoPendingPage, setVpoPendingPage] = useState(1);
-  const [vpoListSearch, setVpoListSearch] = useState('');
-  const [vpoListStatus, setVpoListStatus] = useState('all');
-  const [vpoListFrom, setVpoListFrom] = useState('');
-  const [vpoListTo, setVpoListTo] = useState('');
-  const [vpoListPage, setVpoListPage] = useState(1);
+  const [vpoPendingStatus, setVpoPendingStatus]           = useState('finalized');
+  const [vpoPendingPage, setVpoPendingPage]               = useState(1);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setVpoPendingSearch(vpoPendingSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [vpoPendingSearchInput]);
+
+  const [vpoListSearch, setVpoListSearch]                 = useState('');
+  const [vpoListSearchInput, setVpoListSearchInput]       = useState('');
+  const [vpoListTotal, setVpoListTotal]                   = useState(0);
+  const [vpoListLoading, setVpoListLoading]               = useState(false);
+  const [vpoListKpis, setVpoListKpis]                     = useState(null);
+  const [vpoListStatus, setVpoListStatus]                 = useState('all');
+  const [vpoListFrom, setVpoListFrom]                     = useState('');
+  const [vpoListTo, setVpoListTo]                         = useState('');
+  const [vpoListPage, setVpoListPage]                     = useState(1);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setVpoListSearch(vpoListSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [vpoListSearchInput]);
   // Purchase Bills sub-tabs (followup | bills) — URL-synced
   const [billsSubTab, _setBillsSubTab] = useState(
     urlTab === 'bills' && ['followup', 'bills'].includes(urlSubTab) ? urlSubTab : 'followup'
@@ -726,19 +766,44 @@ export default function Procurement() {
     _setBillsSubTab(st);
     setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
   };
-  const [billsFuSearch, setBillsFuSearch] = useState('');
-  const [billsFuExpFrom, setBillsFuExpFrom] = useState('');
-  const [billsFuExpTo, setBillsFuExpTo] = useState('');
-  const [billsFuPage, setBillsFuPage] = useState(1);
+  const [billsFuSearch, setBillsFuSearch]             = useState('');
+  const [billsFuSearchInput, setBillsFuSearchInput]   = useState('');
+  const [billsFuExpFrom, setBillsFuExpFrom]           = useState('');
+  const [billsFuExpTo, setBillsFuExpTo]               = useState('');
+  const [billsFuPage, setBillsFuPage]                 = useState(1);
+  const [billsFuTotal, setBillsFuTotal]               = useState(0);
+  const [billsFuBlockedCount, setBillsFuBlockedCount] = useState(0);
+  const [billsFuLoading, setBillsFuLoading]           = useState(false);
+  const [billsFuRows, setBillsFuRows]                 = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setBillsFuSearch(billsFuSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [billsFuSearchInput]);
+
   // ─── Payment tab state (mam 2026-05-27) ───
   // Top-level Payment tab between Vendor PO and Purchase Bills.
   // 3 pill segments: all / urgent (pending advance/old dues) / cleared (done).
-  const [paymentPill, setPaymentPill] = useState('urgent');
-  const [paymentSearch, setPaymentSearch] = useState('');
-  const [billsListSearch, setBillsListSearch] = useState('');
-  const [billsListFrom, setBillsListFrom] = useState('');
-  const [billsListTo, setBillsListTo] = useState('');
-  const [billsListPage, setBillsListPage] = useState(1);
+  const [paymentPill, setPaymentPill]                 = useState('urgent');
+  const [paymentSearch, setPaymentSearch]             = useState('');
+
+  const [billsListSearch, setBillsListSearch]         = useState('');
+  const [billsListSearchInput, setBillsListSearchInput] = useState('');
+  const [billsListFrom, setBillsListFrom]             = useState('');
+  const [billsListTo, setBillsListTo]                 = useState('');
+  const [billsListPage, setBillsListPage]             = useState(1);
+  const [billsListTotal, setBillsListTotal]           = useState(0);
+  const [billsListLoading, setBillsListLoading]       = useState(false);
+  const [billsListRows, setBillsListRows]             = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setBillsListSearch(billsListSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [billsListSearchInput]);
   // Dispatch sub-tabs (ready | list) — URL-synced
   const [dispatchSubTab, _setDispatchSubTab] = useState(
     urlTab === 'delivery' && ['ready', 'list'].includes(urlSubTab) ? urlSubTab : 'ready'
@@ -747,23 +812,53 @@ export default function Procurement() {
     _setDispatchSubTab(st);
     setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
   };
-  const [dispReadySearch, setDispReadySearch] = useState('');
-  const [dispReadyPage, setDispReadyPage] = useState(1);
-  const [dispListSearch, setDispListSearch] = useState('');
+  const [dispReadySearch, setDispReadySearch]           = useState('');
+  const [dispReadySearchInput, setDispReadySearchInput] = useState('');
+  const [dispReadyPage, setDispReadyPage]               = useState(1);
+  const [dispReadyTotal, setDispReadyTotal]             = useState(0);
+  const [dispReadyLoading, setDispReadyLoading]         = useState(false);
+  const [dispReadyRows, setDispReadyRows]               = useState([]);
+  const [dispReadySbPending, setDispReadySbPending]     = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDispReadySearch(dispReadySearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [dispReadySearchInput]);
+
+  const [dispListSearch, setDispListSearch]             = useState('');
+  const [dispListSearchInput, setDispListSearchInput]   = useState('');
   // Deep link from the flow boards (mam 2026-08-28: "click → open only that
   // thing"): ?q=<record no> pre-fills every tab's search box so the opened
   // tab shows JUST the clicked record, with its action in front.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search).get('q');
     if (!q) return;
-    setIndSearch(q); setRatesSearch(q); setVpoListSearch(q); setVpoPendingSearch(q);
-    setBillsListSearch(q); setBillsFuSearch(q); setDispReadySearch(q); setDispListSearch(q);
+    setIndSearch(q); setIndSearchInput(q);
+    setRatesSearch(q);
+    setVpoListSearch(q); setVpoListSearchInput(q);
+    setVpoPendingSearch(q); setVpoPendingSearchInput(q);
+    setBillsListSearch(q); setBillsListSearchInput(q);
+    setBillsFuSearch(q); setBillsFuSearchInput(q);
+    setDispReadySearch(q); setDispReadySearchInput(q);
+    setDispListSearch(q); setDispListSearchInput(q);
     setPaymentSearch(q);
   }, []);
-  const [dispListStatus, setDispListStatus] = useState('all');
-  const [dispListFrom, setDispListFrom] = useState('');
-  const [dispListTo, setDispListTo] = useState('');
-  const [dispListPage, setDispListPage] = useState(1);
+  const [dispListStatus, setDispListStatus]             = useState('all');
+  const [dispListFrom, setDispListFrom]                 = useState('');
+  const [dispListTo, setDispListTo]                     = useState('');
+  const [dispListPage, setDispListPage]                 = useState(1);
+  const [dispListTotal, setDispListTotal]               = useState(0);
+  const [dispListLoading, setDispListLoading]           = useState(false);
+  const [dispListRows, setDispListRows]                 = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDispListSearch(dispListSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [dispListSearchInput]);
   const [expandedIndents, setExpandedIndents] = useState(() => new Set());
   const toggleIndentRow = (id) => setExpandedIndents(prev => {
     const next = new Set(prev);
@@ -801,6 +896,233 @@ export default function Procurement() {
     api.get('/hr/employees').then(r => setEmployees((r.data || []).filter(e => !e.status || e.status === 'active'))).catch(() => setEmployees([]));
     // Warehouses · 403 for non-inventory users → silently empty list.
     api.get('/inventory/warehouses').then(r => setWarehouses(r.data || [])).catch(() => setWarehouses([]));
+    api.get('/procurement/indents/lookup').then(r => setIndentLookup(r.data || [])).catch(() => setIndentLookup([]));
+  };
+
+  // Central paginated loader for indents
+  const fetchIndentsPage = async () => {
+    setIndLoading(true);
+    try {
+      const res = await api.get('/procurement/indents', {
+        params: {
+          page: indPage,
+          limit: indPerPage,
+          status: indFilterStatus !== 'all' ? indFilterStatus : undefined,
+          category: indFilterCategory !== 'all' ? indFilterCategory : undefined,
+          from: indFilterFrom || undefined,
+          to: indFilterTo || undefined,
+          q: indSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setIndents(res.data.rows);
+        setIndTotal(res.data.total || 0);
+        if (res.data.kpis) setIndKpis(res.data.kpis);
+        if (res.data.approval_meta) setIndApprovalMeta(res.data.approval_meta);
+        if (res.data.l2_enabled !== undefined) setIndL2Enabled(!!res.data.l2_enabled);
+      } else if (Array.isArray(res.data)) {
+        setIndents(res.data);
+        setIndTotal(res.data.length);
+      }
+    } catch (err) {
+      console.error('[fetchIndentsPage] failed:', err);
+      setIndents([]);
+      setIndTotal(0);
+    } finally {
+      setIndLoading(false);
+    }
+  };
+
+  // Central paginated loader for Vendor PO list
+  const fetchVpoListPage = async () => {
+    setVpoListLoading(true);
+    try {
+      const res = await api.get('/procurement/vendor-po', {
+        params: {
+          page: vpoListPage,
+          limit: vpoListPerPage,
+          status: vpoListStatus !== 'all' ? vpoListStatus : undefined,
+          from: vpoListFrom || undefined,
+          to: vpoListTo || undefined,
+          q: vpoListSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setVendorPos(res.data.rows);
+        setVpoListTotal(res.data.total || 0);
+        if (res.data.kpis) setVpoListKpis(res.data.kpis);
+      } else if (Array.isArray(res.data)) {
+        setVendorPos(res.data);
+        setVpoListTotal(res.data.length);
+      }
+    } catch (err) {
+      console.error('[fetchVpoListPage] failed:', err);
+      setVendorPos([]);
+      setVpoListTotal(0);
+    } finally {
+      setVpoListLoading(false);
+    }
+  };
+
+  // Central paginated loader for Pending PO Items
+  const fetchVpoPendingPage = async () => {
+    setVpoPendingLoading(true);
+    try {
+      const res = await api.get('/procurement/pending-po-items', {
+        params: {
+          page: vpoPendingPage,
+          limit: vpoPendingPerPage,
+          status: vpoPendingStatus !== 'all' ? vpoPendingStatus : undefined,
+          q: vpoPendingSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setPendingPoItems(res.data.rows);
+        setVpoPendingTotal(res.data.total || 0);
+        setVpoPendingReadyCount(res.data.ready_count || 0);
+      } else if (Array.isArray(res.data)) {
+        setPendingPoItems(res.data);
+        setVpoPendingTotal(res.data.length);
+        setVpoPendingReadyCount(res.data.filter(p => (p.rate_status || 'pending') === 'finalized').length);
+      }
+    } catch (err) {
+      console.error('[fetchVpoPendingPage] failed:', err);
+      setPendingPoItems([]);
+      setVpoPendingTotal(0);
+    } finally {
+      setVpoPendingLoading(false);
+    }
+  };
+
+  // Central paginated loader for POs awaiting Purchase Bill (Follow-up)
+  const fetchBillsFuPage = async () => {
+    setBillsFuLoading(true);
+    try {
+      const res = await api.get('/procurement/purchase-bills/followup', {
+        params: {
+          page: billsFuPage,
+          limit: billsFuPerPage,
+          from: billsFuExpFrom || undefined,
+          to: billsFuExpTo || undefined,
+          q: billsFuSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setBillsFuRows(res.data.rows);
+        setBillsFuTotal(res.data.total || 0);
+        setBillsFuBlockedCount(res.data.blocked_count || 0);
+      } else if (Array.isArray(res.data)) {
+        setBillsFuRows(res.data);
+        setBillsFuTotal(res.data.length);
+        setBillsFuBlockedCount(0);
+      }
+    } catch (err) {
+      console.error('[fetchBillsFuPage] failed:', err);
+      setBillsFuRows([]);
+      setBillsFuTotal(0);
+      setBillsFuBlockedCount(0);
+    } finally {
+      setBillsFuLoading(false);
+    }
+  };
+
+  // Central paginated loader for Purchase Bills
+  const fetchBillsListPage = async () => {
+    setBillsListLoading(true);
+    try {
+      const res = await api.get('/procurement/purchase-bills', {
+        params: {
+          page: billsListPage,
+          limit: billsListPerPage,
+          from: billsListFrom || undefined,
+          to: billsListTo || undefined,
+          q: billsListSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setPurchaseBills(res.data.rows);
+        setBillsListRows(res.data.rows);
+        setBillsListTotal(res.data.total || 0);
+      } else if (Array.isArray(res.data)) {
+        setPurchaseBills(res.data);
+        setBillsListRows(res.data);
+        setBillsListTotal(res.data.length);
+      }
+    } catch (err) {
+      console.error('[fetchBillsListPage] failed:', err);
+      setPurchaseBills([]);
+      setBillsListRows([]);
+      setBillsListTotal(0);
+    } finally {
+      setBillsListLoading(false);
+    }
+  };
+
+  // Per-tab loaders.  Each returns a Promise that resolves when all of
+  // that tab's required data is in state.  Tabs declare their full
+  // dependency set so an indirect tab switch (e.g. Bills uses vendorPos
+  // too) still works.
+  // Central paginated loader for Ready to Dispatch POs
+  const fetchDispReadyPage = async () => {
+    setDispReadyLoading(true);
+    try {
+      const res = await api.get('/procurement/delivery-notes/ready', {
+        params: {
+          page: dispReadyPage,
+          limit: dispReadyPerPage,
+          q: dispReadySearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setDispReadyRows(res.data.rows);
+        setDispReadyTotal(res.data.total || 0);
+        setDispReadySbPending(res.data.from_store || []);
+      } else if (Array.isArray(res.data)) {
+        setDispReadyRows(res.data);
+        setDispReadyTotal(res.data.length);
+        setDispReadySbPending([]);
+      }
+    } catch (err) {
+      console.error('[fetchDispReadyPage] failed:', err);
+      setDispReadyRows([]);
+      setDispReadyTotal(0);
+      setDispReadySbPending([]);
+    } finally {
+      setDispReadyLoading(false);
+    }
+  };
+
+  // Central paginated loader for Dispatch & Receiving Notes
+  const fetchDispListPage = async () => {
+    setDispListLoading(true);
+    try {
+      const res = await api.get('/procurement/delivery-notes', {
+        params: {
+          page: dispListPage,
+          limit: dispListPerPage,
+          status: dispListStatus !== 'all' ? dispListStatus : undefined,
+          from: dispListFrom || undefined,
+          to: dispListTo || undefined,
+          q: dispListSearch.trim() || undefined,
+        }
+      });
+      if (res.data && Array.isArray(res.data.rows)) {
+        setDeliveryNotes(res.data.rows);
+        setDispListRows(res.data.rows);
+        setDispListTotal(res.data.total || 0);
+      } else if (Array.isArray(res.data)) {
+        setDeliveryNotes(res.data);
+        setDispListRows(res.data);
+        setDispListTotal(res.data.length);
+      }
+    } catch (err) {
+      console.error('[fetchDispListPage] failed:', err);
+      setDeliveryNotes([]);
+      setDispListRows([]);
+      setDispListTotal(0);
+    } finally {
+      setDispListLoading(false);
+    }
   };
 
   // Per-tab loaders.  Each returns a Promise that resolves when all of
@@ -809,20 +1131,17 @@ export default function Procurement() {
   // too) still works.
   const TAB_FETCHERS = {
     indents: () => Promise.all([
-      api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
-      // Also pull Vendor POs so the Raise-Indent KPI strip can show the
-      // real "PO Generate" count + "Payment Required" total (mam 2026-06-12).
-      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
+      fetchIndentsPage(),
+      api.get('/procurement/indents/lookup').then(r => setIndentLookup(r.data || [])).catch(() => setIndentLookup([])),
       // Is raising open today? (Saturday-only + admin emergency override.)
       api.get('/procurement/indent-raise-window').then(r => setRaiseWindow(r.data)).catch(() => setRaiseWindow(null)),
     ]),
     rates: () => Promise.all([
-      api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
       api.get('/procurement/item-rates').then(r => setItemRates(r.data || [])).catch(() => setItemRates([])),
     ]),
     vendorpo: () => Promise.all([
-      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
-      api.get('/procurement/pending-po-items').then(r => setPendingPoItems(r.data || [])).catch(() => setPendingPoItems([])),
+      fetchVpoListPage(),
+      fetchVpoPendingPage(),
     ]),
     // Payment tab reads vendorPos only. It had NO fetcher, so opening or
     // refreshing on ?tab=payment showed 0 / 0 and "Mark cleared" never
@@ -831,8 +1150,8 @@ export default function Procurement() {
     // Reads the indent list (delivery_bill_amount rides along with it).
     tallybill: () => api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
     bills: () => Promise.all([
-      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
-      api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
+      fetchBillsFuPage(),
+      fetchBillsListPage(),
     ]),
     // Mam (2026-06-15) "auto generated, no Dispatch click": opening this tab
     // first sweeps every Ready-to-Dispatch PO and auto-creates its client
@@ -843,7 +1162,9 @@ export default function Procurement() {
         const n = r.data?.generated_count || 0;
         if (n > 0) toast.success(`${n} Sales Bill${n > 1 ? 's' : ''} auto-generated`, { duration: 5000 });
       })
-      .catch(() => { }).then(() => Promise.all([
+      .catch(() => {}).then(() => Promise.all([
+        fetchDispReadyPage(),
+        fetchDispListPage(),
         api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
         api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
         api.get('/procurement/delivery-notes').then(r => setDeliveryNotes(r.data)).catch(() => setDeliveryNotes([])),
@@ -900,6 +1221,90 @@ export default function Procurement() {
     loadTab(tab, { force: tab === 'indents' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  // When indent filters or page change while on the indents tab, re-fetch the page
+  const isFirstIndentsLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'indents') return;
+    if (isFirstIndentsLoad.current) {
+      isFirstIndentsLoad.current = false;
+      return;
+    }
+    fetchIndentsPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indPage, indPerPage, indFilterStatus, indFilterCategory, indFilterFrom, indFilterTo, indSearch]);
+
+  // When Vendor PO list pagination / filters / search change while on the vendorpo tab:
+  const isFirstVpoListLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'vendorpo' || vpoSubTab !== 'list') return;
+    if (isFirstVpoListLoad.current) {
+      isFirstVpoListLoad.current = false;
+      return;
+    }
+    fetchVpoListPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, vpoSubTab, vpoListPage, vpoListPerPage, vpoListStatus, vpoListFrom, vpoListTo, vpoListSearch]);
+
+  // When Pending PO items pagination / filters / search change while on the vendorpo tab:
+  const isFirstVpoPendingLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'vendorpo' || vpoSubTab !== 'pending') return;
+    if (isFirstVpoPendingLoad.current) {
+      isFirstVpoPendingLoad.current = false;
+      return;
+    }
+    fetchVpoPendingPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, vpoSubTab, vpoPendingPage, vpoPendingPerPage, vpoPendingStatus, vpoPendingSearch]);
+
+  // When Bills Follow-up pagination / filters / search change while on the bills tab:
+  const isFirstBillsFuLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'bills' || billsSubTab !== 'followup') return;
+    if (isFirstBillsFuLoad.current) {
+      isFirstBillsFuLoad.current = false;
+      return;
+    }
+    fetchBillsFuPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, billsSubTab, billsFuPage, billsFuPerPage, billsFuExpFrom, billsFuExpTo, billsFuSearch]);
+
+  // When Bills List pagination / filters / search change while on the bills tab:
+  const isFirstBillsListLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'bills' || billsSubTab !== 'bills') return;
+    if (isFirstBillsListLoad.current) {
+      isFirstBillsListLoad.current = false;
+      return;
+    }
+    fetchBillsListPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, billsSubTab, billsListPage, billsListPerPage, billsListFrom, billsListTo, billsListSearch]);
+
+  // When Ready to Dispatch pagination / search change while on the delivery tab:
+  const isFirstDispReadyLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'delivery' || dispatchSubTab !== 'ready') return;
+    if (isFirstDispReadyLoad.current) {
+      isFirstDispReadyLoad.current = false;
+      return;
+    }
+    fetchDispReadyPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, dispatchSubTab, dispReadyPage, dispReadyPerPage, dispReadySearch]);
+
+  // When Dispatch List pagination / filters / search change while on the delivery tab:
+  const isFirstDispListLoad = useRef(true);
+  useEffect(() => {
+    if (tab !== 'delivery' || dispatchSubTab !== 'list') return;
+    if (isFirstDispListLoad.current) {
+      isFirstDispListLoad.current = false;
+      return;
+    }
+    fetchDispListPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, dispatchSubTab, dispListPage, dispListPerPage, dispListStatus, dispListFrom, dispListTo, dispListSearch]);
 
   // Deep-link from the War Room "My Approvals" inbox: ?approve=<indentId>
   // opens that indent's FULL qty-wise approval modal (mam 2026-06-24: dashboard
@@ -2388,49 +2793,88 @@ export default function Procurement() {
               );
             })}
           </nav>
-          <div role="group" aria-label="Procurement tools" className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3 sm:justify-end">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {/* One Export button — exports current tab's data */}
             <button onClick={() => {
               if (tab === 'indents') {
-                // Mirror the tab's filteredIndents (status + category + date
-                // range + search) — the export used the raw indents array, so a
-                // filtered 12-row table still produced a CSV of every indent.
-                const q = indSearch.trim().toLowerCase();
-                const rows = indents.filter(i => {
-                  if (indFilterStatus !== 'all') {
-                    const inBucket = i.status === indFilterStatus
-                      || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
-                    if (!inBucket) return false;
+                const toastId = toast.loading('Fetching matching indents for export...');
+                api.get('/procurement/indents', {
+                  params: {
+                    export: 1,
+                    status: indFilterStatus !== 'all' ? indFilterStatus : undefined,
+                    category: indFilterCategory !== 'all' ? indFilterCategory : undefined,
+                    from: indFilterFrom || undefined,
+                    to: indFilterTo || undefined,
+                    q: indSearch.trim() || undefined,
                   }
-                  if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
-                  const d = (i.created_at || i.indent_date || '').slice(0, 10);
-                  if (indFilterFrom && d && d < indFilterFrom) return false;
-                  if (indFilterTo && d && d > indFilterTo) return false;
-                  if (!q) return true;
-                  // Same search text as the tab's table and KPI tiles (category words included).
-                  return `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''} ${(i.indent_category || 'material').replace(/_/g, ' ')}`.toLowerCase().includes(q);
+                }).then(res => {
+                  toast.dismiss(toastId);
+                  const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                  exportCsv('indents', ['Indent No', 'Site', 'Category', 'Raised By', 'Date', 'Status', 'Items Count', 'Budget Amount'], rows.map(i => [i.indent_number, i.site_name, i.category, i.raised_by_name, i.created_at ? i.created_at.slice(0, 10) : '', i.status, (i.items || []).length, i.budget_amount]));
+                }).catch(err => {
+                  toast.dismiss(toastId);
+                  toast.error('Export failed: ' + (err.response?.data?.error || err.message));
                 });
-                exportCsv('indents', ['Indent No', 'Date', 'Site', 'Raised By', 'Status', 'Items', 'Budget', 'Delivery Bill', 'Delivery %'],
-                  rows.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items || []).length, Math.round(i.budget_amount || 0), Math.round(i.delivery_bill_amount || 0), i.delivery_pct || 0]));
+                return;
               }
-              // Tab ids MUST match allTabs above. 'pos'/'dispatch' were stale ids
-              // (real ones: 'vendorpo'/'delivery'), so Export Excel silently did
-              // NOTHING on those tabs — mam 2026-09-03 "excel isnot exporting".
-              // Each case now reproduces its tab's on-screen filters so the file
-              // matches the visible table, and unsupported tabs say so instead of
-              // failing silently.
               if (tab === 'vendorpo') {
-                const q = vpoListSearch.trim().toLowerCase();
-                const rows = vendorPos.filter(v => {
-                  if (vpoListStatus !== 'all' && (v.cancelled ? 'cancelled' : v.status) !== vpoListStatus) return false;
-                  if (vpoListFrom && v.po_date && v.po_date < vpoListFrom) return false;
-                  if (vpoListTo && v.po_date && v.po_date > vpoListTo) return false;
-                  if (!q) return true;
-                  return `${v.po_number || ''} ${v.indent_number || ''} ${v.vendor_name || ''} ${v.indent_site_name || ''}`.toLowerCase().includes(q);
+                const toastId = toast.loading('Fetching matching Vendor POs for export...');
+                api.get('/procurement/vendor-po', {
+                  params: {
+                    export: 1,
+                    status: vpoListStatus !== 'all' ? vpoListStatus : undefined,
+                    from: vpoListFrom || undefined,
+                    to: vpoListTo || undefined,
+                    q: vpoListSearch.trim() || undefined,
+                  }
+                }).then(res => {
+                  toast.dismiss(toastId);
+                  const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                  exportCsv('vendor-pos', ['PO Number', 'PO Date', 'Vendor', 'Indent', 'Site', 'Status', 'Expected Receipt', 'Total Amount', 'Display Total'], rows.map(v => [v.po_number, v.po_date, v.vendor_name, v.indent_number, v.indent_site_name, v.cancelled ? 'cancelled' : v.status, v.expected_receipt_date, v.total_amount, v.display_total]));
+                }).catch(err => {
+                  toast.dismiss(toastId);
+                  toast.error('Export failed: ' + (err.response?.data?.error || err.message));
                 });
-                exportCsv('vendor-pos', ['PO Number', 'PO Date', 'Indent', 'Site', 'Vendor', 'Amount', 'Status'],
-                  rows.map(v => [v.po_number, v.po_date, v.indent_number || '', v.indent_site_name || '', v.vendor_name,
-                  Math.round(+v.display_total || +v.total_amount || 0), v.cancelled ? 'cancelled' : v.status]));
+                return;
+              }
+              if (tab === 'bills') {
+                const toastId = toast.loading('Fetching matching bills for export...');
+                api.get('/procurement/purchase-bills', {
+                  params: {
+                    export: 1,
+                    from: billsListFrom || undefined,
+                    to: billsListTo || undefined,
+                    q: billsListSearch.trim() || undefined,
+                  }
+                }).then(res => {
+                  toast.dismiss(toastId);
+                  const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                  exportCsv('purchase-bills', ['Bill No', 'Vendor', 'Date', 'Amount', 'GST', 'Total', 'Payment Status'], rows.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
+                }).catch(err => {
+                  toast.dismiss(toastId);
+                  toast.error('Export failed: ' + (err.response?.data?.error || err.message));
+                });
+                return;
+              }
+              if (tab === 'delivery') {
+                const toastId = toast.loading('Fetching matching dispatches for export...');
+                api.get('/procurement/delivery-notes', {
+                  params: {
+                    export: 1,
+                    status: dispListStatus !== 'all' ? dispListStatus : undefined,
+                    from: dispListFrom || undefined,
+                    to: dispListTo || undefined,
+                    q: dispListSearch.trim() || undefined,
+                  }
+                }).then(res => {
+                  toast.dismiss(toastId);
+                  const rows = Array.isArray(res.data) ? res.data : (res.data?.rows || []);
+                  exportCsv('dispatch', ['ID', 'Type', 'Doc No', 'PO', 'Site', 'Indent By', 'Date', 'Received By', 'Received On', 'Status'], rows.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
+                }).catch(err => {
+                  toast.dismiss(toastId);
+                  toast.error('Export failed: ' + (err.response?.data?.error || err.message));
+                });
+                return;
               }
               if (tab === 'payment') {
                 const rows = (vendorPos || []).filter(v => !v.cancelled && v.payment_block_type);
@@ -2451,39 +2895,7 @@ export default function Procurement() {
                   p2.delay_days ?? '', p2.delay_reason || '', p2.grn_count ?? 0, p2.debit_count ?? 0, p2.bill_payment_status || '']));
               }
               if (tab === 'responsible') toast('Nothing to export on the Responsible board — pick a data tab.');
-              if (tab === 'bills') {
-                // Mirror the Bills list's filteredBills (date range + search).
-                const blq = billsListSearch.trim().toLowerCase();
-                const rows = purchaseBills.filter(b => {
-                  if (billsListFrom && b.bill_date && b.bill_date < billsListFrom) return false;
-                  if (billsListTo && b.bill_date && b.bill_date > billsListTo) return false;
-                  if (!blq) return true;
-                  return `${b.bill_number || ''} ${b.vendor_name || ''}`.toLowerCase().includes(blq);
-                });
-                exportCsv('purchase-bills', ['Bill No', 'Vendor', 'Date', 'Amount', 'GST', 'Total', 'Payment'],
-                  rows.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
-              }
-              if (tab === 'delivery') {
-                const q = dispListSearch.trim().toLowerCase();
-                const rows = deliveryNotes.filter(d => {
-                  if (dispListStatus !== 'all' && d.status !== dispListStatus) return false;
-                  if (dispListFrom && d.received_on && d.received_on.slice(0, 10) < dispListFrom) return false;
-                  if (dispListTo && d.received_on && d.received_on.slice(0, 10) > dispListTo) return false;
-                  if (!q) return true;
-                  return `${d.po_number || ''} ${d.vendor_po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''} ${d.raised_by_name || ''}`.toLowerCase().includes(q);
-                });
-                exportCsv('dispatch', ['ID', 'Type', 'Doc No', 'PO', 'Site', 'Indent By', 'Date', 'Received By', 'Received On', 'Status'],
-                  rows.map(d => [d.id, d.document_type, d.document_number,
-                  d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name,
-                  d.delivery_date, d.received_by_name,
-                  d.received_at ? fmtDateIST(d.received_at) : '', d.status]));
-              }
-              // r.item_description never existed on the API rows (GET item-rates
-              // returns ii.description) — the Item column exported blank for every
-              // row until 2026-09-03. mergedRates is what the table actually shows.
               if (tab === 'rates') {
-                // Mirror the tab's filteredRates (status chip + search) on top of
-                // mergedRates — the export ignored both chips and the search box.
                 const rq = ratesSearch.trim().toLowerCase();
                 const rows = mergedRates
                   .filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter)
@@ -2500,9 +2912,6 @@ export default function Procurement() {
               title="Live SOP-07 pipeline: indent → PO → dispatch → GRN → bill">
               📊 Flow Board
             </a>
-            {/* Training video button moved to the shared Layout header
-              (mam 2026-08-26: "every where") — same "procurement" module
-              key, so previously added videos still show. */}
             {/* Approval flow control — who may act at each gate (L1 / L2 / CRM /
               PO L1 / PO L2 / Revoke) and which optional gates are on. Separate
               from ⚙ Responsible: that tab is per-record RACI reporting, this is
@@ -2667,56 +3076,22 @@ export default function Procurement() {
       })()}
 
       {tab === 'indents' && (() => {
-        // ── Filtering / search ─────────────────────────────────────────
-        // mam (2026-05-25): filter by date range + status + search by
-        // indent id / site.  All client-side off the already-loaded
-        // indents array — no extra API calls.
-        //
-        // Two scopes:
-        //   kpiScope        — indents matching date+search ONLY (no status
-        //                     filter, so KPI tiles can still show all 5
-        //                     status breakdowns within the date range).
-        //   filteredIndents — kpiScope further filtered by status (drives
-        //                     the table + pagination).
-        // Mam (2026-05-25 follow-up): "data filter also from to according
-        // to that amounts count change" — tiles now respect from/to + search.
-        const q = indSearch.trim().toLowerCase();
-        // ONE match for the KPI tiles, the table and the CSV export (audit
-        // 2026-09-10): the tiles used to ignore the Category filter and also
-        // matched category words in search, so "Total Indents" disagreed with
-        // "Showing X of Y" under the same filters. Category applies here too;
-        // only the status bucket is left to the table (the tiles ARE the
-        // per-status breakdown).
-        const matchesDateAndSearch = (i) => {
-          if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
-          if (indFilterFrom) {
-            const d = (i.created_at || i.indent_date || '').slice(0, 10);
-            if (d && d < indFilterFrom) return false;
-          }
-          if (indFilterTo) {
-            const d = (i.created_at || i.indent_date || '').slice(0, 10);
-            if (d && d > indFilterTo) return false;
-          }
-          if (q) {
-            const hay = `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''} ${(i.indent_category || 'material').replace(/_/g, ' ')}`.toLowerCase();
-            if (!hay.includes(q)) return false;
-          }
-          return true;
+        // ── Database-driven pagination & filtering ─────────────────────
+        const indTotalPages = Math.max(1, Math.ceil(indTotal / indPerPage));
+        const indFrom = indTotal > 0 ? (indPage - 1) * indPerPage : 0;
+        const indTo = Math.min(indFrom + indPerPage, indTotal);
+        const indPg = {
+          page: indPage,
+          pages: indTotalPages,
+          perPage: indPerPage,
+          total: indTotal,
+          from: indFrom,
+          to: indTo,
+          setPage: setIndPage,
+          rows: indents,
+          hasPrev: indPage > 1,
+          hasNext: indPage < indTotalPages,
         };
-        const kpiScope = indents.filter(matchesDateAndSearch);
-        const filteredIndents = kpiScope.filter(i => {
-          // 'submitted' (Pending L1) ALSO matches crm_approved — after the CRM
-          // step an EXTRA-NON indent still awaits L1, so it belongs in the same
-          // bucket (server treats crm_approved like submitted for L1). It was
-          // hidden from the Pending-L1 filter before (mam 2026-07-04).
-          if (indFilterStatus !== 'all') {
-            const inBucket = i.status === indFilterStatus
-              || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
-            if (!inBucket) return false;
-          }
-          return true;
-        });
-        const indPg = usePagination(filteredIndents, indPerPage, indPage, setIndPage);
         return (
           <>
             <div className="flex justify-between items-center flex-wrap gap-2">
@@ -2781,140 +3156,167 @@ export default function Procurement() {
               Mam (2026-05-25 follow-up): "data filter also from to according
               to that amounts count change" — tiles now react to date+search
               filters so the totals always match what's in the table below. */}
-            {(() => {
-              const sum = (arr) => arr.reduce((s, i) => s + (+i.budget_amount || 0), 0);
-              const byStatus = (s) => kpiScope.filter(i => i.status === s);
-              // Pending L1 = 'submitted' + 'crm_approved'. After the CRM step an
-              // EXTRA-NON indent sits in crm_approved but still awaits L1 sign-off
-              // (server treats it exactly like 'submitted' for L1), so it must
-              // count here — it was silently missing before (mam 2026-07-04).
-              const submitted = kpiScope.filter(i => i.status === 'submitted' || i.status === 'crm_approved');
-              const l1Approved = byStatus('l1_approved');   // Pending L2 (only when L2 switch is ON)
-              const approved = byStatus('approved');
-              const rejected = byStatus('rejected');
-              const poSent = byStatus('po_sent');
-              const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim() || indFilterCategory !== 'all');
-              // Billable booked once an indent clears approval (mam 2026-06-16):
-              // total BOQ sale value of every indent that has PASSED approval —
-              // approved or anything beyond it (PO sent / dispatched / received).
-              // Sums the same billable_amount shown in the list's Billable column.
-              const billableSum = (arr) => arr.reduce((s, i) => s + (+i.billable_amount || 0), 0);
-              const postApproval = kpiScope.filter(i => ['approved', 'po_sent', 'dispatched', 'received'].includes(i.status));
-              // PO Generate + Payment Required (mam 2026-06-12) — sourced from
-              // the Vendor PO list, not the indents, so the count matches the
-              // "View by PO" tab exactly.  Payment Required = POs still pending
-              // an advance / old-dues clearance (same filter as the Payment tab).
-              const poGenCount = (vendorPos || []).length;
-              const poGenAmount = (vendorPos || []).reduce((s, p) => s + (+p.total_amount || 0), 0);
-              const urgentPos = (vendorPos || []).filter(p => !p.cancelled && p.payment_block_status === 'pending');
-              const payReqCount = urgentPos.length;
-              const payReqAmount = urgentPos.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
-              // Clicking a tile sets the status filter to that bucket so mam
-              // can drill from the dashboard view into the matching rows
-              // without typing in the toolbar.
-              // statusKey drives the indent-status filter on click; pass an
-              // onClick override instead (e.g. for tiles that jump to another
-              // tab like PO Generate / Payment Required).
-              const tile = (label, count, amount, color, statusKey, onClick) => {
-                const isActive = !!statusKey && indFilterStatus === statusKey;
-                const handle = onClick || (() => { setIndFilterStatus(statusKey); setIndPage(1); });
-                return (
-                  <button
-                    type="button"
-                    onClick={handle}
-                    className={`min-w-0 rounded-lg border ${color.border} ${color.bg} px-2.5 py-1.5 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
-                    <div className={`text-[10px] font-semibold uppercase tracking-wide ${color.text} truncate`}>{label}</div>
-                    <div className="flex items-baseline justify-between mt-0.5 gap-1 flex-wrap">
-                      <div className={`text-lg font-bold leading-none ${color.text}`}>{count}</div>
-                      <div className={`text-[11px] font-medium ${color.text} opacity-80 whitespace-nowrap`}>
-                        {amount > 0 ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '—'}
-                      </div>
-                    </div>
-                  </button>
-                );
-              };
+          {(() => {
+            const urgentPos = (vendorPos || []).filter(p => !p.cancelled && p.payment_block_status === 'pending');
+            const kpis = indKpis || {
+              total_count: indTotal,
+              total_budget: 0,
+              submitted_count: 0,
+              submitted_budget: 0,
+              l1_approved_count: 0,
+              l1_approved_budget: 0,
+              approved_count: 0,
+              approved_budget: 0,
+              rejected_count: 0,
+              rejected_budget: 0,
+              po_sent_count: 0,
+              po_sent_budget: 0,
+              post_approval_count: 0,
+              po_gen_count: (vendorPos || []).length,
+              po_gen_amount: (vendorPos || []).reduce((s, p) => s + (+p.total_amount || 0), 0),
+              pay_req_count: urgentPos.length,
+              pay_req_amount: urgentPos.reduce((s, p) => s + (+p.payment_block_amount || 0), 0),
+            };
+            const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim());
+            const tile = (label, count, amount, color, statusKey, onClick) => {
+              const isActive = !!statusKey && indFilterStatus === statusKey;
+              const handle = onClick || (() => { setIndFilterStatus(statusKey); setIndPage(1); });
               return (
-                <>
-                  {filterActive && (
-                    <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 flex items-center gap-2">
-                      📊 Showing totals for the current filter ({kpiScope.length} of {indents.length} indents).
+                <button
+                  type="button"
+                  onClick={handle}
+                  className={`min-w-0 rounded-lg border ${color.border} ${color.bg} px-2.5 py-1.5 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
+                  <div className={`text-[10px] font-semibold uppercase tracking-wide ${color.text} truncate`}>{label}</div>
+                  <div className="flex items-baseline justify-between mt-0.5 gap-1 flex-wrap">
+                    <div className={`text-lg font-bold leading-none ${color.text}`}>{count}</div>
+                    <div className={`text-[11px] font-medium ${color.text} opacity-80 whitespace-nowrap`}>
+                      {amount > 0 ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '—'}
                     </div>
-                  )}
-                  {/* KPI tiles auto-fit one row on large screens (mam 2026-06-12):
-                    2-up on phones, 4-up on tablets, 7/8-up on desktop. A Pending
-                    L2 tile is added only when the L2 switch is ON. PO Generate +
-                    Payment Required jump to their own tabs on click. */}
-                  <div className={`grid grid-cols-2 sm:grid-cols-4 ${l2Enabled ? 'lg:grid-cols-8' : 'lg:grid-cols-7'} gap-2`}>
-                    {tile('Total Indents', kpiScope.length, sum(kpiScope), { border: 'border-gray-300', bg: 'bg-gray-50', text: 'text-gray-700', ring: 'ring-gray-400' }, 'all')}
-                    {tile(l2Enabled ? 'Pending L1' : 'Pending Approval', submitted.length, sum(submitted), { border: 'border-amber-300', bg: 'bg-amber-50', text: 'text-amber-700', ring: 'ring-amber-400' }, 'submitted')}
-                    {l2Enabled && tile('Pending L2', l1Approved.length, sum(l1Approved), { border: 'border-purple-300', bg: 'bg-purple-50', text: 'text-purple-700', ring: 'ring-purple-400' }, 'l1_approved')}
-                    {tile('Approved', approved.length, sum(approved), { border: 'border-emerald-300', bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
-                    {/* Billable · Approved (mam 2026-06-16): BOQ sale value booked
-                      once indents clear approval. Clicking jumps to the Approved
-                      bucket — closest single-status filter to "post-approval". */}
-                    {tile('Billable · Approved', postApproval.length, billableSum(postApproval), { border: 'border-indigo-300', bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-400' }, 'approved')}
-                    {tile('Rejected', rejected.length, sum(rejected), { border: 'border-red-300', bg: 'bg-red-50', text: 'text-red-700', ring: 'ring-red-400' }, 'rejected')}
-                    {tile('PO Generate', poGenCount, poGenAmount, { border: 'border-blue-300', bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-400' }, null, () => { setTab('vendorpo'); setVpoSubTab('list'); })}
-                    {tile('Payment Required', payReqCount, payReqAmount, { border: 'border-rose-300', bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-400' }, null, () => setTab('payment'))}
                   </div>
-                </>
-              );
-            })()}
-
-            {/* Filter toolbar — date range + status + search (mam 2026-05-25) */}
-            <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
-              <div className="flex-1 min-w-[180px]">
-                <label className="label text-[10px] mb-0.5">Search · indent no / site / raised by</label>
-                <input className="input text-xs" placeholder="e.g. IND-0070 or Jeewan Mala"
-                  value={indSearch} onChange={e => { setIndSearch(e.target.value); setIndPage(1); }} />
-              </div>
-              <div>
-                <label className="label text-[10px] mb-0.5">Status</label>
-                <select className="select text-xs" value={indFilterStatus}
-                  onChange={e => { setIndFilterStatus(e.target.value); setIndPage(1); }}>
-                  <option value="all">All ({indents.length})</option>
-                  <option value="submitted">{l2Enabled ? 'Pending L1' : 'Pending Approval'}</option>
-                  {l2Enabled && <option value="l1_approved">Pending L2</option>}
-                  <option value="approved">Approved</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="po_sent">PO Sent</option>
-                  <option value="dispatched">Dispatched</option>
-                  <option value="received">Received</option>
-                </select>
-              </div>
-              <div>
-                <label className="label text-[10px] mb-0.5">Category</label>
-                <select className="select text-xs" value={indFilterCategory}
-                  onChange={e => { setIndFilterCategory(e.target.value); setIndPage(1); }}>
-                  <option value="all">All</option>
-                  <option value="material">Material</option>
-                  <option value="rgp">RGP</option>
-                  <option value="extra_schedule">Extra · Schedule</option>
-                  <option value="extra_non_schedule">Extra · Non-Schedule</option>
-                  <option value="rental">Rental</option>
-                  <option value="ppe_kit">PPE Kit</option>
-                </select>
-              </div>
-              <div>
-                <label className="label text-[10px] mb-0.5">From</label>
-                <input className="input text-xs" type="date" value={indFilterFrom}
-                  onChange={e => { setIndFilterFrom(e.target.value); setIndPage(1); }} />
-              </div>
-              <div>
-                <label className="label text-[10px] mb-0.5">To</label>
-                <input className="input text-xs" type="date" value={indFilterTo}
-                  onChange={e => { setIndFilterTo(e.target.value); setIndPage(1); }} />
-              </div>
-              {(indSearch || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo) && (
-                <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                  onClick={() => { setIndSearch(''); setIndFilterStatus('all'); setIndFilterCategory('all'); setIndFilterFrom(''); setIndFilterTo(''); setIndPage(1); }}>
-                  Reset
                 </button>
-              )}
-              <div className="ml-auto text-[11px] text-gray-500">
-                Showing <span className="font-semibold text-gray-700">{filteredIndents.length}</span> of {indents.length}
-              </div>
+              );
+            };
+
+            const payReqCount = urgentPos.length;
+            const payReqAmount = urgentPos.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
+            const poGenCount = (vendorPos || []).length;
+            const poGenAmount = (vendorPos || []).reduce((s, p) => s + (+p.total_amount || 0), 0);
+
+            return (
+              <>
+                {/* Status KPI strip — responsive 2/4/7-col dashboard grid. */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                  {tile(
+                    filterActive ? 'Matching' : 'Total Indents',
+                    kpis.total_count,
+                    kpis.total_budget,
+                    { border: 'border-gray-200', bg: 'bg-white', text: 'text-gray-800', ring: 'ring-gray-400' },
+                    'all'
+                  )}
+                  {tile(
+                    l2Enabled ? 'Pending L1' : 'Pending Approval',
+                    kpis.submitted_count,
+                    kpis.submitted_budget,
+                    { border: 'border-amber-300', bg: 'bg-amber-50', text: 'text-amber-800', ring: 'ring-amber-400' },
+                    'submitted'
+                  )}
+                  {l2Enabled && tile(
+                    'Pending L2',
+                    kpis.l1_approved_count,
+                    kpis.l1_approved_budget,
+                    { border: 'border-orange-300', bg: 'bg-orange-50', text: 'text-orange-800', ring: 'ring-orange-400' },
+                    'l1_approved'
+                  )}
+                  {tile(
+                    'Approved',
+                    kpis.approved_count,
+                    kpis.approved_budget,
+                    { border: 'border-emerald-300', bg: 'bg-emerald-50', text: 'text-emerald-800', ring: 'ring-emerald-400' },
+                    'approved'
+                  )}
+                  {tile(
+                    'Rejected',
+                    kpis.rejected_count,
+                    kpis.rejected_budget,
+                    { border: 'border-red-300', bg: 'bg-red-50', text: 'text-red-700', ring: 'ring-red-400' },
+                    'rejected'
+                  )}
+                  {tile(
+                    'PO Generate',
+                    poGenCount,
+                    poGenAmount,
+                    { border: 'border-blue-300', bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-400' },
+                    null,
+                    () => { setTab('vendorpo'); setVpoSubTab('list'); }
+                  )}
+                  {tile(
+                    'Payment Required',
+                    payReqCount,
+                    payReqAmount,
+                    { border: 'border-rose-300', bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-400' },
+                    null,
+                    () => setTab('payment')
+                  )}
+                </div>
+              </>
+            );
+          })()}
+
+          {/* Filter toolbar — date range + status + search (mam 2026-05-25) */}
+          <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+            <div className="flex-1 min-w-[180px]">
+              <label className="label text-[10px] mb-0.5">Search · indent no / site / raised by</label>
+              <input className="input text-xs" placeholder="e.g. IND-0070 or Jeewan Mala"
+                value={indSearchInput} onChange={e => { setIndSearchInput(e.target.value); setIndPage(1); }} />
             </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">Status</label>
+              <select className="select text-xs" value={indFilterStatus}
+                onChange={e => { setIndFilterStatus(e.target.value); setIndPage(1); }}>
+                <option value="all">All {indKpis ? `(${indKpis.total_count})` : ''}</option>
+                <option value="submitted">{l2Enabled ? 'Pending L1' : 'Pending Approval'}</option>
+                {l2Enabled && <option value="l1_approved">Pending L2</option>}
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="po_sent">PO Sent</option>
+                <option value="dispatched">Dispatched</option>
+                <option value="received">Received</option>
+              </select>
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">Category</label>
+              <select className="select text-xs" value={indFilterCategory}
+                onChange={e => { setIndFilterCategory(e.target.value); setIndPage(1); }}>
+                <option value="all">All</option>
+                <option value="material">Material</option>
+                <option value="rgp">RGP</option>
+                <option value="extra_schedule">Extra · Schedule</option>
+                <option value="extra_non_schedule">Extra · Non-Schedule</option>
+                <option value="rental">Rental</option>
+                <option value="ppe_kit">PPE Kit</option>
+              </select>
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">From</label>
+              <input className="input text-xs" type="date" value={indFilterFrom}
+                onChange={e => { setIndFilterFrom(e.target.value); setIndPage(1); }} />
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">To</label>
+              <input className="input text-xs" type="date" value={indFilterTo}
+                onChange={e => { setIndFilterTo(e.target.value); setIndPage(1); }} />
+            </div>
+            {(indSearchInput || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo) && (
+              <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                onClick={() => { setIndSearchInput(''); setIndSearch(''); setIndFilterStatus('all'); setIndFilterCategory('all'); setIndFilterFrom(''); setIndFilterTo(''); setIndPage(1); }}>
+                Reset
+              </button>
+            )}
+            <div className="ml-auto text-[11px] text-gray-500 flex items-center gap-2">
+              {indLoading && <FiRefreshCw className="animate-spin text-blue-500" size={12} />}
+              Showing <span className="font-semibold text-gray-700">{indTotal > 0 ? `${indPg.from + 1}–${indPg.to}` : 0}</span> of {indTotal}
+            </div>
+          </div>
 
             {/* ─── MOBILE CARD VIEW ─────────────────────────────────────
               Mam (2026-06-02): on phones the freeze-head table reads as
@@ -2923,23 +3325,24 @@ export default function Procurement() {
               window · view-details link · optional progress bar).
               Hidden ≥ md so desktop keeps the full table with every
               column intact. */}
-            <div className="md:hidden space-y-3">
-              {indents.length === 0 && (
-                <div className="card p-6 text-center text-gray-400 text-sm">No indents yet</div>
-              )}
-              {indents.length > 0 && filteredIndents.length === 0 && (
-                <div className="card p-6 text-center text-gray-400 text-sm">No indents match the current filters — try Reset</div>
-              )}
-              {indPg.rows.map(i => {
-                const items = i.items || [];
-                // Mam (2026-06-02 follow-up): items now visible BY DEFAULT
-                // (no longer hidden behind View Details).  Auto-show first
-                // 3; expander reveals the rest.
-                const expanded = expandedIndents.has(i.id);
-                const visibleItems = expanded ? items : items.slice(0, 3);
-                const raisedClean = i.raised_by_name && !/^\d+(\.\d+)?$/.test(String(i.raised_by_name).trim())
-                  ? i.raised_by_name
-                  : null;
+          <div className="md:hidden space-y-3">
+            {indLoading && indents.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">Loading indents...</div>
+            )}
+            {!indLoading && indents.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">
+                {(indSearch || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo)
+                  ? 'No indents match the current filters — try Reset'
+                  : 'No indents yet'}
+              </div>
+            )}
+            {indPg.rows.map(i => {
+              const items = i.items || [];
+              const expanded = expandedIndents.has(i.id);
+              const visibleItems = expanded ? items : items.slice(0, 3);
+              const raisedClean = i.raised_by_name && !/^\d+(\.\d+)?$/.test(String(i.raised_by_name).trim())
+                ? i.raised_by_name
+                : null;
 
                 // Mam's reference = desktop table.  Mirror its action logic
                 // exactly so the L1 / L2 / single-approval / Re-reject flow
@@ -3736,43 +4139,47 @@ export default function Procurement() {
                                     </td>
                                     {/* PO Pending (mam 2026-06-23): indent qty − qty already on a
                                   Vendor PO. Store lines and FOC/RGP don't go on a PO. */}
-                                    <td className="py-1 pr-3 text-right">
-                                      {(() => {
-                                        if (it.source === 'store' || it.item_type === 'FOC' || it.item_type === 'RGP')
-                                          return <span className="text-gray-300" title="Not procured via Vendor PO">—</span>;
-                                        const qty = +it.quantity || 0;
-                                        const poQty = +it.po_qty || 0;
-                                        const pending = Math.max(0, qty - poQty);
-                                        if (qty > 0 && pending <= 0)
-                                          return <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300" title={`Full qty (${qty}${it.unit ? ' ' + it.unit : ''}) on PO`}>✓ PO done</span>;
-                                        return (
-                                          <span className="font-semibold text-amber-700"
-                                            title={poQty > 0 ? `${poQty} of ${qty}${it.unit ? ' ' + it.unit : ''} already on a PO` : 'Nothing on a Vendor PO yet'}>
-                                            {pending}{it.unit ? ` ${it.unit}` : ''}
-                                          </span>
-                                        );
-                                      })()}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-                {indents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
-                {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
-              </tbody>
-            </table>
-            </div>
-            {/* Pager OUTSIDE the 70vh scroll box — inside it, Prev/Next only
-                appeared after scrolling the box to its very bottom, so users
-                saw "only 15 indents" (pagination audit 2026-09-10). */}
-            <div className="hidden md:block card p-0"><Pagination pg={indPg} setPerPage={setIndPerPage} /></div>
-          </>
+                              <td className="py-1 pr-3 text-right">
+                                {(() => {
+                                  if (it.source === 'store' || it.item_type === 'FOC' || it.item_type === 'RGP')
+                                    return <span className="text-gray-300" title="Not procured via Vendor PO">—</span>;
+                                  const qty = +it.quantity || 0;
+                                  const poQty = +it.po_qty || 0;
+                                  const pending = Math.max(0, qty - poQty);
+                                  if (qty > 0 && pending <= 0)
+                                    return <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300" title={`Full qty (${qty}${it.unit ? ' ' + it.unit : ''}) on PO`}>✓ PO done</span>;
+                                  return (
+                                    <span className="font-semibold text-amber-700"
+                                      title={poQty > 0 ? `${poQty} of ${qty}${it.unit ? ' ' + it.unit : ''} already on a PO` : 'Nothing on a Vendor PO yet'}>
+                                      {pending}{it.unit ? ` ${it.unit}` : ''}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+              );
+              })}
+              {indLoading && indents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">Loading indents...</td></tr>}
+              {!indLoading && indents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">
+                {(indSearch || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo)
+                  ? 'No indents match the current filters — try Reset'
+                  : 'No indents yet'}
+              </td></tr>}
+            </tbody>
+          </table>
+          </div>
+          {/* Pager OUTSIDE the 70vh scroll box — inside it, Prev/Next only
+              appeared after scrolling the box to its very bottom, so users
+              saw "only 15 indents" (pagination audit 2026-09-10). */}
+          <div className="hidden md:block card p-0"><Pagination pg={indPg} setPerPage={setIndPerPage} /></div>
+        </>
         );
       })()}
 
@@ -4304,475 +4711,494 @@ export default function Procurement() {
         //   pending  → "Pending for Vendor PO" (yellow highlight, items waiting)
         //   list     → "View by PO"            (the full vendor_pos table)
         // Each sub-tab has its own search + filter + pagination state.
-        const pSearch = vpoPendingSearch.trim().toLowerCase();
-        const filteredPending = pendingPoItems.filter(p => {
-          if (vpoPendingStatus !== 'all' && (p.rate_status || 'pending') !== vpoPendingStatus) return false;
-          if (!pSearch) return true;
-          const hay = `${p.indent_number || ''} ${p.site_name || ''} ${p.master_name || ''} ${p.description || ''}`.toLowerCase();
-          return hay.includes(pSearch);
-        });
-        const pendingPg = usePagination(filteredPending, vpoPendingPerPage, vpoPendingPage, setVpoPendingPage);
+        const vpoPendingTotalPages = Math.max(1, Math.ceil(vpoPendingTotal / vpoPendingPerPage));
+        const pendingPg = {
+          page: vpoPendingPage,
+          pages: vpoPendingTotalPages,
+          perPage: vpoPendingPerPage,
+          total: vpoPendingTotal,
+          from: vpoPendingTotal > 0 ? (vpoPendingPage - 1) * vpoPendingPerPage : 0,
+          to: Math.min((vpoPendingPage - 1) * vpoPendingPerPage + vpoPendingPerPage, vpoPendingTotal),
+          setPage: setVpoPendingPage,
+          rows: pendingPoItems,
+          hasPrev: vpoPendingPage > 1,
+          hasNext: vpoPendingPage < vpoPendingTotalPages,
+        };
 
-        const lSearch = vpoListSearch.trim().toLowerCase();
-        const filteredList = vendorPos.filter(v => {
-          if (vpoListStatus !== 'all' && (v.cancelled ? 'cancelled' : v.status) !== vpoListStatus) return false;
-          if (vpoListFrom && v.po_date && v.po_date < vpoListFrom) return false;
-          if (vpoListTo && v.po_date && v.po_date > vpoListTo) return false;
-          if (!lSearch) return true;
-          const hay = `${v.po_number || ''} ${v.indent_number || ''} ${v.vendor_name || ''} ${v.indent_site_name || ''}`.toLowerCase();
-          return hay.includes(lSearch);
-        });
-        const listPg = usePagination(filteredList, vpoListPerPage, vpoListPage, setVpoListPage);
+        const vpoListTotalPages = Math.max(1, Math.ceil(vpoListTotal / vpoListPerPage));
+        const listPg = {
+          page: vpoListPage,
+          pages: vpoListTotalPages,
+          perPage: vpoListPerPage,
+          total: vpoListTotal,
+          from: vpoListTotal > 0 ? (vpoListPage - 1) * vpoListPerPage : 0,
+          to: Math.min((vpoListPage - 1) * vpoListPerPage + vpoListPerPage, vpoListTotal),
+          setPage: setVpoListPage,
+          rows: vendorPos,
+          hasPrev: vpoListPage > 1,
+          hasNext: vpoListPage < vpoListTotalPages,
+        };
         return (
-          <>
-            <div className="flex justify-between items-center flex-wrap gap-2">
-              <h3 className="font-semibold">Vendor Purchase Orders</h3>
-              <button onClick={() => openCreateVendorPo('')} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Vendor PO</button>
-            </div>
+        <>
+          <div className="flex justify-between items-center flex-wrap gap-2">
+            <h3 className="font-semibold">Vendor Purchase Orders</h3>
+            <button onClick={() => openCreateVendorPo('')} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Vendor PO</button>
+          </div>
 
-            {/* Sub-tabs (mam 2026-05-25) — yellow tinted for the Pending tab
+          {/* Sub-tabs (mam 2026-05-25) — yellow tinted for the Pending tab
               since those are urgent waiting items, neutral for the full list. */}
-            <div className="flex gap-1 border-b border-gray-200">
-              <button onClick={() => setVpoSubTab('pending')}
-                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${vpoSubTab === 'pending' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Pending for Vendor PO <span className="ml-1 text-[10px] opacity-80">({pendingPoItems.length})</span>
-              </button>
-              <button onClick={() => setVpoSubTab('list')}
-                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${vpoSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                View by PO <span className="ml-1 text-[10px] opacity-80">({vendorPos.length})</span>
-              </button>
+          <div className="flex gap-1 border-b border-gray-200">
+            <button onClick={() => setVpoSubTab('pending')}
+              className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${vpoSubTab === 'pending' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              Pending for Vendor PO <span className="ml-1 text-[10px] opacity-80">({vpoPendingTotal})</span>
+            </button>
+            <button onClick={() => setVpoSubTab('list')}
+              className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${vpoSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              View by PO <span className="ml-1 text-[10px] opacity-80">({vpoListTotal})</span>
+            </button>
+          </div>
+
+          {/* ===== Sub-tab 1: Pending for Vendor PO ===== */}
+          {vpoSubTab === 'pending' && !vpoPendingLoading && vpoPendingTotal === 0 && (
+            <div className="card text-center py-8 text-gray-400 text-xs">
+              {(vpoPendingSearch || vpoPendingStatus !== 'all') ? 'No pending items match the current filters — try Reset.' : 'All finalized rates are already on a Vendor PO. 🎉'}
             </div>
+          )}
+          {vpoSubTab === 'pending' && (vpoPendingTotal > 0 || vpoPendingLoading) && (
+            <div className="card p-3 bg-amber-50 border border-amber-200">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <h4 className="font-semibold text-amber-800 text-sm">
+                  Pending for Vendor PO
+                  <span className="text-xs font-normal text-amber-600 ml-2">
+                    ({vpoPendingReadyCount} ready · {vpoPendingTotal} total)
+                  </span>
+                </h4>
+                <span className="text-[11px] text-amber-700">Showing finalized-rate items by default — flip the Rate Status filter to see still-quoting / pending items.</span>
+              </div>
+              {/* Search + status filter strip (mam 2026-05-25) */}
+              <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-amber-200">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Search · indent no / item</label>
+                  <input className="input text-xs" placeholder="e.g. IND-0070 or CHECK NUT"
+                    value={vpoPendingSearchInput} onChange={e => { setVpoPendingSearchInput(e.target.value); setVpoPendingPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Rate Status</label>
+                  <select className="select text-xs" value={vpoPendingStatus}
+                    onChange={e => { setVpoPendingStatus(e.target.value); setVpoPendingPage(1); }}>
+                    <option value="finalized">Finalized (ready for PO)</option>
+                    <option value="quoted">Quoted</option>
+                    <option value="pending">Pending</option>
+                    <option value="all">All (show everything)</option>
+                  </select>
+                </div>
+                {(vpoPendingSearchInput || vpoPendingStatus !== 'all') && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setVpoPendingSearchInput(''); setVpoPendingSearch(''); setVpoPendingStatus('all'); setVpoPendingPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-amber-900 flex items-center gap-2">
+                  {vpoPendingLoading && <FiRefreshCw className="animate-spin text-amber-600" size={12} />}
+                  Showing <span className="font-semibold">{vpoPendingTotal > 0 ? `${pendingPg.from + 1}–${pendingPg.to}` : 0}</span> of {vpoPendingTotal}
+                </div>
+              </div>
+              <div className="hidden md:block overflow-auto max-h-[70vh]">
+                <table className="text-xs freeze-head">
+                  <thead><tr className="bg-amber-100/50">
+                    <th className="px-2 py-1 text-left">Indent</th>
+                    <th className="px-2 py-1 text-left">Item</th>
+                    <th className="px-2 py-1">Qty</th>
+                    <th className="px-2 py-1">Final Rate</th>
+                    <th className="px-2 py-1">Final Vendor</th>
+                    <th className="px-2 py-1">Status</th>
+                    <th className="px-2 py-1"></th>
+                  </tr></thead>
+                  <tbody>
+                    {vpoPendingLoading && (
+                      <tr><td colSpan="7" className="text-center py-6 text-amber-700">
+                        <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading pending items...
+                      </td></tr>
+                    )}
+                    {!vpoPendingLoading && pendingPg.rows.map(p => {
+                      // Prefer Item Master values for display (what mam picked in the indent)
+                      const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
+                      return (
+                        <tr key={p.indent_item_id} className="border-b border-amber-100">
+                          <td className="px-2 py-1.5 whitespace-nowrap"><b className="text-red-700">{p.indent_number}</b><div className="text-[10px] text-gray-500">{p.site_name}</div></td>
+                          <td className="px-2 py-1.5 max-w-[320px]">
+                            {p.item_code && <div className="text-[10px] font-mono text-gray-500">[{p.item_code}]</div>}
+                            <div className="whitespace-normal leading-snug font-medium">{displayName}</div>
+                            <div className="text-[10px] text-gray-400 flex gap-2">
+                              {p.make && <span>Make: {p.make}</span>}
+                              {p.item_type && <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>{p.item_type}</span>}
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5 text-center">{p.quantity} {p.unit || p.uom}</td>
+                          <td className="px-2 py-1.5 text-right">{p.final_rate ? `Rs ${p.final_rate}` : <span className="text-gray-400">—</span>}</td>
+                          <td className="px-2 py-1.5">{p.final_vendor_name || <span className="text-gray-400">—</span>}</td>
+                          <td className="px-2 py-1.5">
+                            <span className={`badge ${p.rate_status === 'finalized' ? 'badge-green' : 'badge-yellow'}`}>{p.rate_status || 'pending'}</span>
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <button onClick={() => openCreateVendorPo(p.indent_id)} className="btn btn-primary text-[10px] px-2 py-1">Create PO</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!vpoPendingLoading && vpoPendingTotal === 0 && (
+                      <tr><td colSpan="7" className="text-center py-6 text-amber-700">No items match the current filters.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
-            {/* ===== Sub-tab 1: Pending for Vendor PO ===== */}
-            {vpoSubTab === 'pending' && pendingPoItems.length === 0 && (
-              <div className="card text-center py-8 text-gray-400 text-xs">All finalized rates are already on a Vendor PO. 🎉</div>
-            )}
-            {vpoSubTab === 'pending' && pendingPoItems.length > 0 && (
-              <div className="card p-3 bg-amber-50 border border-amber-200">
-                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                  <h4 className="font-semibold text-amber-800 text-sm">
-                    Pending for Vendor PO
-                    <span className="text-xs font-normal text-amber-600 ml-2">
-                      ({(() => {
-                        const finalisedCount = pendingPoItems.filter(p => (p.rate_status || 'pending') === 'finalized').length;
-                        return `${finalisedCount} ready · ${pendingPoItems.length} total`;
-                      })()})
-                    </span>
-                  </h4>
-                  <span className="text-[11px] text-amber-700">Showing finalized-rate items by default — flip the Rate Status filter to see still-quoting / pending items.</span>
-                </div>
-                {/* Search + status filter strip (mam 2026-05-25) */}
-                <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-amber-200">
-                  <div className="flex-1 min-w-[200px]">
-                    <label className="label text-[10px] mb-0.5 text-amber-900">Search · indent no / item</label>
-                    <input className="input text-xs" placeholder="e.g. IND-0070 or CHECK NUT"
-                      value={vpoPendingSearch} onChange={e => { setVpoPendingSearch(e.target.value); setVpoPendingPage(1); }} />
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5 text-amber-900">Rate Status</label>
-                    <select className="select text-xs" value={vpoPendingStatus}
-                      onChange={e => { setVpoPendingStatus(e.target.value); setVpoPendingPage(1); }}>
-                      <option value="finalized">Finalized (ready for PO)</option>
-                      <option value="quoted">Quoted</option>
-                      <option value="pending">Pending</option>
-                      <option value="all">All (show everything)</option>
-                    </select>
-                  </div>
-                  {(vpoPendingSearch || vpoPendingStatus !== 'all') && (
-                    <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                      onClick={() => { setVpoPendingSearch(''); setVpoPendingStatus('all'); setVpoPendingPage(1); }}>Reset</button>
-                  )}
-                  <div className="ml-auto text-[11px] text-amber-900">
-                    Showing <span className="font-semibold">{filteredPending.length}</span> of {pendingPoItems.length}
-                  </div>
-                </div>
-                <div className="hidden md:block overflow-auto max-h-[70vh]">
-                  <table className="text-xs freeze-head">
-                    <thead><tr className="bg-amber-100/50">
-                      <th className="px-2 py-1 text-left">Indent</th>
-                      <th className="px-2 py-1 text-left">Item</th>
-                      <th className="px-2 py-1">Qty</th>
-                      <th className="px-2 py-1">Final Rate</th>
-                      <th className="px-2 py-1">Final Vendor</th>
-                      <th className="px-2 py-1">Status</th>
-                      <th className="px-2 py-1"></th>
-                    </tr></thead>
-                    <tbody>
-                      {pendingPg.rows.map(p => {
-                        // Prefer Item Master values for display (what mam picked in the indent)
-                        const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
-                        return (
-                          <tr key={p.indent_item_id} className="border-b border-amber-100">
-                            <td className="px-2 py-1.5 whitespace-nowrap"><b className="text-red-700">{p.indent_number}</b><div className="text-[10px] text-gray-500">{p.site_name}</div></td>
-                            <td className="px-2 py-1.5 max-w-[320px]">
-                              {p.item_code && <div className="text-[10px] font-mono text-gray-500">[{p.item_code}]</div>}
-                              <div className="whitespace-normal leading-snug font-medium">{displayName}</div>
-                              <div className="text-[10px] text-gray-400 flex gap-2">
-                                {p.make && <span>Make: {p.make}</span>}
-                                {p.item_type && <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>{p.item_type}</span>}
-                              </div>
-                            </td>
-                            <td className="px-2 py-1.5 text-center">{p.quantity} {p.unit || p.uom}</td>
-                            <td className="px-2 py-1.5 text-right">{p.final_rate ? `Rs ${p.final_rate}` : <span className="text-gray-400">—</span>}</td>
-                            <td className="px-2 py-1.5">{p.final_vendor_name || <span className="text-gray-400">—</span>}</td>
-                            <td className="px-2 py-1.5">
-                              <span className={`badge ${p.rate_status === 'finalized' ? 'badge-green' : 'badge-yellow'}`}>{p.rate_status || 'pending'}</span>
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <button onClick={() => openCreateVendorPo(p.indent_id)} className="btn btn-primary text-[10px] px-2 py-1">Create PO</button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {filteredPending.length === 0 && (
-                        <tr><td colSpan="7" className="text-center py-6 text-amber-700">No items match the current filters.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Mobile cards — mam (2026-06-02): "i want mobile view
+              {/* Mobile cards — mam (2026-06-02): "i want mobile view
                   changes like this type cards in all steps in indent
                   to dispatch".  Same visual language as the Indents
                   card: small "LABEL" header, big bold ID, status pill
                   on right, site row with pin, 3-col info grid, links
                   row with border-top, big full-width action button. */}
-                <div className="md:hidden space-y-3">
-                  {pendingPg.rows.map(p => {
-                    const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
-                    const stat = p.rate_status || 'pending';
-                    return (
-                      <div key={p.indent_item_id} className="card p-3 space-y-2">
-                        {/* Header: indent # · status */}
-                        <div className="flex justify-between items-start gap-2">
-                          <div className="flex-1 min-w-0">
-                            <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Indent No</div>
-                            <div className="text-lg font-bold text-gray-900 truncate">{p.indent_number}</div>
-                          </div>
-                          <StatusBadge status={stat} />
-                        </div>
-                        {/* Site */}
-                        {p.site_name && (
-                          <div className="flex items-start gap-1.5 text-xs">
-                            <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
-                            <div className="min-w-0">
-                              <div className="text-[10px] uppercase text-gray-400">Site</div>
-                              <div className="font-medium text-gray-800">{p.site_name}</div>
-                            </div>
-                          </div>
-                        )}
-                        {/* Sub-item description */}
-                        <div className="pt-1 border-t border-gray-100">
-                          <div className="text-[10px] uppercase text-gray-400 mb-0.5">Sub-Item</div>
-                          {p.item_code && <div className="text-[10px] font-mono text-gray-500">[{p.item_code}]</div>}
-                          <div className="text-sm font-medium text-gray-800 leading-snug">{displayName || '—'}</div>
-                          <div className="text-[10px] text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
-                            {p.make && <span>Make: <b className="text-gray-700">{p.make}</b></span>}
-                            {p.item_type && (
-                              <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>
-                                {p.item_type}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {/* 3-col info grid: Qty · Rate · Vendor */}
-                        <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
-                          <div>
-                            <div className="text-[9px] uppercase text-gray-400">Qty</div>
-                            <div className="font-semibold text-gray-800">{p.quantity} {p.unit || p.uom || ''}</div>
-                          </div>
-                          <div>
-                            <div className="text-[9px] uppercase text-gray-400">Final Rate</div>
-                            <div className="font-semibold text-gray-800">{p.final_rate ? `Rs ${p.final_rate}` : <span className="text-gray-300">—</span>}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[9px] uppercase text-gray-400">Vendor</div>
-                            <div className="font-medium text-gray-700 truncate" title={p.final_vendor_name}>{p.final_vendor_name || <span className="text-gray-300">—</span>}</div>
-                          </div>
-                        </div>
-                        {/* Action — same green primary as Approve buttons */}
-                        <button
-                          onClick={() => openCreateVendorPo(p.indent_id)}
-                          disabled={stat !== 'finalized'}
-                          className="btn btn-primary text-sm py-2 px-3 w-full mt-1 disabled:opacity-50"
-                        >
-                          + Create Vendor PO
-                        </button>
-                      </div>
-                    );
-                  })}
-                  {filteredPending.length === 0 && (
-                    <div className="card p-6 text-center text-gray-400 text-sm">No items match the current filters.</div>
-                  )}
-                </div>
-                <Pagination pg={pendingPg} setPerPage={setVpoPendingPerPage} className="border-t border-amber-200 pt-2" />
-              </div>
-            )}
-
-            {/* ===== Sub-tab 2: View by PO ===== */}
-            {vpoSubTab === 'list' && (
-              <>
-                <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
-                  <div className="flex-1 min-w-[200px]">
-                    <label className="label text-[10px] mb-0.5">Search · PO no / indent / vendor / site</label>
-                    <input className="input text-xs" placeholder="e.g. VPO-0042 or IND-0070"
-                      value={vpoListSearch} onChange={e => { setVpoListSearch(e.target.value); setVpoListPage(1); }} />
+              <div className="md:hidden space-y-3">
+                {vpoPendingLoading && (
+                  <div className="card p-6 text-center text-gray-400 text-sm">
+                    <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading pending items...
                   </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5">Status</label>
-                    <select className="select text-xs" value={vpoListStatus}
-                      onChange={e => { setVpoListStatus(e.target.value); setVpoListPage(1); }}>
-                      <option value="all">All</option>
-                      <option value="open">Open</option>
-                      <option value="received">Received</option>
-                      <option value="cancelled">Cancelled</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5">PO Date From</label>
-                    <input className="input text-xs" type="date" value={vpoListFrom}
-                      onChange={e => { setVpoListFrom(e.target.value); setVpoListPage(1); }} />
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5">PO Date To</label>
-                    <input className="input text-xs" type="date" value={vpoListTo}
-                      onChange={e => { setVpoListTo(e.target.value); setVpoListPage(1); }} />
-                  </div>
-                  {(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) && (
-                    <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                      onClick={() => { setVpoListSearch(''); setVpoListStatus('all'); setVpoListFrom(''); setVpoListTo(''); setVpoListPage(1); }}>Reset</button>
-                  )}
-                  <div className="ml-auto text-[11px] text-gray-500">
-                    Showing <span className="font-semibold text-gray-700">{filteredList.length}</span> of {vendorPos.length}
-                  </div>
-                </div>
-
-                <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
-                  <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
-                  <tbody>
-                    {listPg.rows.map(v => (
-                      <tr key={v.id}>
-                        <td className="font-medium">
-                          {v.po_number}
-                          <PaymentBlockChip v={v} />
-                        </td>
-                        {/* Indent column (mam, 2026-05-20). */}
-                        <td className="text-xs">
-                          <div className="font-mono font-semibold text-blue-800">{v.indent_number || <span className="text-gray-300">—</span>}</div>
-                          {v.indent_site_name && <div className="text-[10px] text-gray-500 truncate max-w-[140px]" title={v.indent_site_name}>{v.indent_site_name}</div>}
-                        </td>
-                        <td>{v.po_date || <span className="text-gray-300">—</span>}</td>
-                        <td>{v.vendor_name}</td>
-                        <td>Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</td>
-                        <td>
-                          <div className="flex flex-col gap-1">
-                            <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-xs flex items-center gap-1">
-                              <FiPrinter size={11} /> View / Print
-                            </a>
-                            {/* Mam (2026-05-22): "show here also delivery
-                          note" — DN link on every PO row across the
-                          procurement views. */}
-                            <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:text-emerald-900 underline text-xs flex items-center gap-1">
-                              🚚 Delivery Note
-                            </a>
-                            {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">attached PDF</a>}
-                          </div>
-                        </td>
-                        <td>
-                          {v.cancelled
-                            ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
-                            : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
-                              ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}</span>
-                              : v.po_approval === 'rejected'
-                                ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
-                                : <StatusBadge status={v.status} />}
-                        </td>
-                        <td>
-                          {/* Three actions: Cancel (soft-delete, reverses), Restore
-                        (only when already cancelled), Delete (hard, only when
-                        no bills / delivery notes block it). */}
-                          <div className="flex items-center gap-1">
-                            {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur
-                          Kaplesh. Approve/Reject show only to the pending-level
-                          approver (or admin / COO). */}
-                            {!v.cancelled && canApprovePo(v) && (
-                              <>
-                                <button onClick={() => approvePo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700" title={`Approve ${v.po_approval === 'pending_l1' ? 'L1' : 'L2'}`}>✓ Approve</button>
-                                <button onClick={() => rejectPo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 hover:bg-red-600 hover:text-white" title="Reject PO">✕</button>
-                              </>
-                            )}
-                            {/* Mark Payment Cleared (mam 2026-05-27) — internal
-                          one-click unblock when the advance / old payment
-                          has been settled. Only shows when a block is
-                          pending. Tiny green button so it doesn't dominate. */}
-                            {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
-                              <button onClick={() => markPaymentCleared(v.id)}
-                                className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 hover:bg-emerald-600 hover:text-white transition"
-                                title="Mark advance / old payment as cleared (internal)">
-                                ✓ Clear pmt
-                              </button>
-                            )}
-                            {/* Edit (pencil) — mam (2026-05-20): "how can i
-                          edit po after creation because some time
-                          need".  Opens a modal with the safe-to-edit
-                          header fields.  Hidden once cancelled
-                          (restore first). */}
-                            {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
-                              <button onClick={() => openEditVendorPo(v)}
-                                className="p-1 text-gray-400 hover:text-blue-700"
-                                title="Edit PO (date / amount / advance / remarks)">
-                                <FiEdit2 size={14} />
-                              </button>
-                            )}
-                            {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
-                              <button onClick={async () => {
-                                const reason = prompt(`Cancel Vendor PO "${v.po_number}"?\n\nThe PO + linked bills/notes stay visible for audit, but it disappears from active follow-ups. Items go back to "Pending for PO".\n\nReason (optional):`);
-                                if (reason === null) return;
-                                try { await api.post(`/procurement/vendor-po/${v.id}/cancel`, { reason }); toast.success('PO cancelled'); load(); }
-                                catch (err) { toast.error(err.response?.data?.error || 'Cancel failed'); }
-                              }} className="p-1 text-gray-400 hover:text-amber-600" title="Cancel PO (soft delete)"><FiX size={14} /></button>
-                            )}
-                            {v.cancelled && (canApprove('procurement') || isAdmin()) && (
-                              <button onClick={async () => {
-                                if (!confirm(`Restore Vendor PO "${v.po_number}" from cancelled?`)) return;
-                                try { await api.post(`/procurement/vendor-po/${v.id}/uncancel`); toast.success('PO restored'); load(); }
-                                catch (err) { toast.error(err.response?.data?.error || 'Restore failed'); }
-                              }} className="p-1 text-gray-400 hover:text-emerald-600" title="Restore PO"><FiCheck size={14} /></button>
-                            )}
-                            {canDelete('procurement') && (
-                              <button onClick={async () => {
-                                if (!confirm(`Permanently delete vendor PO "${v.po_number}"?\n\nWill fail if bills or delivery notes reference it — use Cancel instead in that case.`)) return;
-                                try { await api.delete(`/procurement/vendor-po/${v.id}`); toast.success('Deleted'); load(); }
-                                catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                              }} className="p-1 text-gray-400 hover:text-red-600" title="Delete (hard)"><FiTrash2 size={14} /></button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
-                    {vendorPos.length > 0 && filteredList.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No POs match the current filters.</td></tr>}
-                  </tbody>
-                </table></div>
-                {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
-                <div className="hidden md:block card p-0"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></div>
-
-                {/* Mobile cards — polished pattern matching Indents card. */}
-                <div className="md:hidden space-y-3">
-                  {listPg.rows.map(v => (
-                    <div key={v.id} className={`card p-3 space-y-2 ${v.cancelled ? 'opacity-60' : ''}`}>
-                      {/* Header: PO # · status */}
+                )}
+                {!vpoPendingLoading && pendingPg.rows.map(p => {
+                  const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
+                  const stat = p.rate_status || 'pending';
+                  return (
+                    <div key={p.indent_item_id} className="card p-3 space-y-2">
+                      {/* Header: indent # · status */}
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1 min-w-0">
-                          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Vendor PO No</div>
-                          <div className="text-lg font-bold text-gray-900 truncate">{v.po_number}</div>
-                          <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                            <FiCalendar size={10} className="text-gray-400" />
-                            {v.po_date || '—'}
-                          </div>
-                          <PaymentBlockChip v={v} />
+                          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Indent No</div>
+                          <div className="text-lg font-bold text-gray-900 truncate">{p.indent_number}</div>
                         </div>
-                        {v.cancelled
-                          ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border border-gray-300 text-gray-600 bg-gray-50" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
-                          : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
-                            ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</span>
-                            : v.po_approval === 'rejected'
-                              ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
-                              : <StatusBadge status={v.status} />}
+                        <StatusBadge status={stat} />
                       </div>
                       {/* Site */}
-                      {v.indent_site_name && (
+                      {p.site_name && (
                         <div className="flex items-start gap-1.5 text-xs">
                           <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
                           <div className="min-w-0">
                             <div className="text-[10px] uppercase text-gray-400">Site</div>
-                            <div className="font-medium text-gray-800">{v.indent_site_name}</div>
+                            <div className="font-medium text-gray-800">{p.site_name}</div>
                           </div>
                         </div>
                       )}
-                      {/* 3-col info: Indent · Vendor · Amount */}
+                      {/* Sub-item description */}
+                      <div className="pt-1 border-t border-gray-100">
+                        <div className="text-[10px] uppercase text-gray-400 mb-0.5">Sub-Item</div>
+                        {p.item_code && <div className="text-[10px] font-mono text-gray-500">[{p.item_code}]</div>}
+                        <div className="text-sm font-medium text-gray-800 leading-snug">{displayName || '—'}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
+                          {p.make && <span>Make: <b className="text-gray-700">{p.make}</b></span>}
+                          {p.item_type && (
+                            <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>{p.item_type}</span>
+                          )}
+                        </div>
+                      </div>
+                      {/* 3-col info grid: Qty · Rate · Vendor */}
                       <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
                         <div>
-                          <div className="text-[9px] uppercase text-gray-400">Indent</div>
-                          <div className="font-mono font-semibold text-blue-800 truncate">{v.indent_number || '—'}</div>
+                          <div className="text-[9px] uppercase text-gray-400">Qty</div>
+                          <div className="font-semibold text-gray-800">{p.quantity} {p.unit || p.uom || ''}</div>
                         </div>
                         <div>
-                          <div className="text-[9px] uppercase text-gray-400">Vendor</div>
-                          <div className="font-medium text-gray-700 truncate" title={v.vendor_name}>{v.vendor_name || '—'}</div>
+                          <div className="text-[9px] uppercase text-gray-400">Final Rate</div>
+                          <div className="font-semibold text-gray-800">{p.final_rate ? `Rs ${p.final_rate}` : <span className="text-gray-300">—</span>}</div>
                         </div>
                         <div className="text-right">
-                          <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                          <div className="font-semibold text-emerald-700">Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                          <div className="font-medium text-gray-700 truncate" title={p.final_vendor_name}>{p.final_vendor_name || <span className="text-gray-300">—</span>}</div>
                         </div>
                       </div>
-                      {/* Links row */}
-                      <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
-                        <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                          <FiPrinter size={11} /> Print PO
-                        </a>
-                        <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
-                          🚚 Delivery Note
-                        </a>
-                        {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 PDF</a>}
-                      </div>
-                      {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur Kaplesh */}
+                      {/* Action — same green primary as Approve buttons */}
+                      <button
+                        onClick={() => openCreateVendorPo(p.indent_id)}
+                        disabled={stat !== 'finalized'}
+                        className="btn btn-primary text-sm py-2 px-3 w-full mt-1 disabled:opacity-50"
+                      >
+                        + Create Vendor PO
+                      </button>
+                    </div>
+                  );
+                })}
+                {!vpoPendingLoading && vpoPendingTotal === 0 && (
+                  <div className="card p-6 text-center text-gray-400 text-sm">No items match the current filters.</div>
+                )}
+              </div>
+              <Pagination pg={pendingPg} setPerPage={setVpoPendingPerPage} className="border-t border-amber-200 pt-2" />
+            </div>
+          )}
+
+          {/* ===== Sub-tab 2: View by PO ===== */}
+          {vpoSubTab === 'list' && (
+            <>
+              <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5">Search · PO no / indent / vendor / site</label>
+                  <input className="input text-xs" placeholder="e.g. VPO-0042 or IND-0070"
+                    value={vpoListSearchInput} onChange={e => { setVpoListSearchInput(e.target.value); setVpoListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Status</label>
+                  <select className="select text-xs" value={vpoListStatus}
+                    onChange={e => { setVpoListStatus(e.target.value); setVpoListPage(1); }}>
+                    <option value="all">All</option>
+                    <option value="open">Open</option>
+                    <option value="received">Received</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">PO Date From</label>
+                  <input className="input text-xs" type="date" value={vpoListFrom}
+                    onChange={e => { setVpoListFrom(e.target.value); setVpoListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">PO Date To</label>
+                  <input className="input text-xs" type="date" value={vpoListTo}
+                    onChange={e => { setVpoListTo(e.target.value); setVpoListPage(1); }} />
+                </div>
+                {(vpoListSearchInput || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setVpoListSearchInput(''); setVpoListSearch(''); setVpoListStatus('all'); setVpoListFrom(''); setVpoListTo(''); setVpoListPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-gray-500 flex items-center gap-2">
+                  {vpoListLoading && <FiRefreshCw className="animate-spin text-blue-500" size={12} />}
+                  Showing <span className="font-semibold text-gray-700">{vpoListTotal > 0 ? `${listPg.from + 1}–${listPg.to}` : 0}</span> of {vpoListTotal}
+                </div>
+              </div>
+
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
+            <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              {listPg.rows.map(v => (
+                <tr key={v.id}>
+                  <td className="font-medium">
+                    {v.po_number}
+                    <PaymentBlockChip v={v} />
+                  </td>
+                  {/* Indent column (mam, 2026-05-20). */}
+                  <td className="text-xs">
+                    <div className="font-mono font-semibold text-blue-800">{v.indent_number || <span className="text-gray-300">—</span>}</div>
+                    {v.indent_site_name && <div className="text-[10px] text-gray-500 truncate max-w-[140px]" title={v.indent_site_name}>{v.indent_site_name}</div>}
+                  </td>
+                  <td>{v.po_date || <span className="text-gray-300">—</span>}</td>
+                  <td>{v.vendor_name}</td>
+                  <td>Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</td>
+                  <td>
+                    <div className="flex flex-col gap-1">
+                      <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-xs flex items-center gap-1">
+                        <FiPrinter size={11} /> View / Print
+                      </a>
+                      {/* Mam (2026-05-22): "show here also delivery
+                          note" — DN link on every PO row across the
+                          procurement views. */}
+                      <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:text-emerald-900 underline text-xs flex items-center gap-1">
+                        🚚 Delivery Note
+                      </a>
+                      {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">attached PDF</a>}
+                    </div>
+                  </td>
+                  <td>
+                    {v.cancelled
+                      ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
+                      : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
+                        ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}</span>
+                        : v.po_approval === 'rejected'
+                          ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
+                          : <StatusBadge status={v.status} />}
+                  </td>
+                  <td>
+                    {/* Three actions: Cancel (soft-delete, reverses), Restore
+                        (only when already cancelled), Delete (hard, only when
+                        no bills / delivery notes block it). */}
+                    <div className="flex items-center gap-1">
+                      {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur
+                          Kaplesh. Approve/Reject show only to the pending-level
+                          approver (or admin / COO). */}
                       {!v.cancelled && canApprovePo(v) && (
-                        <div className="flex gap-2 mt-1">
-                          <button onClick={() => approvePo(v)} className="btn btn-success text-sm py-2 px-3 flex-1">✓ Approve {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</button>
-                          <button onClick={() => rejectPo(v)} className="text-sm py-2 px-3 rounded bg-red-100 text-red-700 border border-red-300 font-semibold">Reject</button>
-                        </div>
+                        <>
+                          <button onClick={() => approvePo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700" title={`Approve ${v.po_approval === 'pending_l1' ? 'L1' : 'L2'}`}>✓ Approve</button>
+                          <button onClick={() => rejectPo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 hover:bg-red-600 hover:text-white" title="Reject PO">✕</button>
+                        </>
                       )}
-                      {/* Primary action — Mark Cleared (when payment pending) */}
+                      {/* Mark Payment Cleared (mam 2026-05-27) — internal
+                          one-click unblock when the advance / old payment
+                          has been settled. Only shows when a block is
+                          pending. Tiny green button so it doesn't dominate. */}
                       {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
-                        <button onClick={() => markPaymentCleared(v.id)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">
-                          ✓ Mark Payment Cleared
+                        <button onClick={() => markPaymentCleared(v.id)}
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 hover:bg-emerald-600 hover:text-white transition"
+                                title="Mark advance / old payment as cleared (internal)">
+                          ✓ Clear pmt
                         </button>
                       )}
-                      {/* Secondary actions: Edit / Cancel / Restore / Delete */}
-                      <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-                        {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
-                          <button onClick={() => openEditVendorPo(v)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
-                            <FiEdit2 size={11} /> Edit
-                          </button>
-                        )}
-                        {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
-                          <button onClick={async () => {
-                            const reason = prompt(`Cancel Vendor PO "${v.po_number}"?\n\nReason (optional):`);
-                            if (reason === null) return;
-                            try { await api.post(`/procurement/vendor-po/${v.id}/cancel`, { reason }); toast.success('PO cancelled'); load(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Cancel failed'); }
-                          }} className="text-amber-600 hover:underline flex items-center gap-1 font-semibold">
-                            <FiX size={11} /> Cancel
-                          </button>
-                        )}
-                        {v.cancelled && (canApprove('procurement') || isAdmin()) && (
-                          <button onClick={async () => {
-                            if (!confirm(`Restore Vendor PO "${v.po_number}" from cancelled?`)) return;
-                            try { await api.post(`/procurement/vendor-po/${v.id}/uncancel`); toast.success('PO restored'); load(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Restore failed'); }
-                          }} className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
-                            <FiCheck size={11} /> Restore
-                          </button>
-                        )}
-                        {canDelete('procurement') && (
-                          <button onClick={async () => {
-                            if (!confirm(`Permanently delete vendor PO "${v.po_number}"?`)) return;
-                            try { await api.delete(`/procurement/vendor-po/${v.id}`); toast.success('Deleted'); load(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                          }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                            <FiTrash2 size={11} /> Delete
-                          </button>
-                        )}
-                      </div>
+                      {/* Edit (pencil) — mam (2026-05-20): "how can i
+                          edit po after creation because some time
+                          need".  Opens a modal with the safe-to-edit
+                          header fields.  Hidden once cancelled
+                          (restore first). */}
+                      {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                        <button onClick={() => openEditVendorPo(v)}
+                                className="p-1 text-gray-400 hover:text-blue-700"
+                                title="Edit PO (date / amount / advance / remarks)">
+                          <FiEdit2 size={14} />
+                        </button>
+                      )}
+                      {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                        <button onClick={async () => {
+                          const reason = prompt(`Cancel Vendor PO "${v.po_number}"?\n\nThe PO + linked bills/notes stay visible for audit, but it disappears from active follow-ups. Items go back to "Pending for PO".\n\nReason (optional):`);
+                          if (reason === null) return;
+                          try { await api.post(`/procurement/vendor-po/${v.id}/cancel`, { reason }); toast.success('PO cancelled'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Cancel failed'); }
+                        }} className="p-1 text-gray-400 hover:text-amber-600" title="Cancel PO (soft delete)"><FiX size={14} /></button>
+                      )}
+                      {v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                        <button onClick={async () => {
+                          if (!confirm(`Restore Vendor PO "${v.po_number}" from cancelled?`)) return;
+                          try { await api.post(`/procurement/vendor-po/${v.id}/uncancel`); toast.success('PO restored'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Restore failed'); }
+                        }} className="p-1 text-gray-400 hover:text-emerald-600" title="Restore PO"><FiCheck size={14} /></button>
+                      )}
+                      {canDelete('procurement') && (
+                        <button onClick={async () => {
+                          if (!confirm(`Permanently delete vendor PO "${v.po_number}"?\n\nWill fail if bills or delivery notes reference it — use Cancel instead in that case.`)) return;
+                          try { await api.delete(`/procurement/vendor-po/${v.id}`); toast.success('Deleted'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                        }} className="p-1 text-gray-400 hover:text-red-600" title="Delete (hard)"><FiTrash2 size={14} /></button>
+                      )}
                     </div>
-                  ))}
-                  {vendorPos.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No vendor POs yet — click "Create Vendor PO"</div>}
-                  {vendorPos.length > 0 && filteredList.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No POs match the current filters.</div>}
-                  <Pagination pg={listPg} setPerPage={setVpoListPerPage} />
+                  </td>
+                </tr>
+              ))}
+              {vpoListLoading && vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">Loading vendor POs...</td></tr>}
+              {!vpoListLoading && vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">
+                {(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) ? 'No POs match the current filters — try Reset' : 'No vendor POs yet — click "Create Vendor PO"'}
+              </td></tr>}
+            </tbody>
+            </table></div>
+          {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
+          <div className="hidden md:block card p-0"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></div>
+
+          {/* Mobile cards — polished pattern matching Indents card. */}
+          <div className="md:hidden space-y-3">
+            {listPg.rows.map(v => (
+              <div key={v.id} className={`card p-3 space-y-2 ${v.cancelled ? 'opacity-60' : ''}`}>
+                {/* Header: PO # · status */}
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Vendor PO No</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{v.po_number}</div>
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                      <FiCalendar size={10} className="text-gray-400" />
+                      {v.po_date || '—'}
+                    </div>
+                    <PaymentBlockChip v={v} />
+                  </div>
+                  {v.cancelled
+                    ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border border-gray-300 text-gray-600 bg-gray-50" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
+                    : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
+                      ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</span>
+                      : v.po_approval === 'rejected'
+                        ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
+                        : <StatusBadge status={v.status} />}
                 </div>
-              </>
-            )}
-          </>
+                {/* Site */}
+                {v.indent_site_name && (
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Site</div>
+                      <div className="font-medium text-gray-800">{v.indent_site_name}</div>
+                    </div>
+                  </div>
+                )}
+                {/* 3-col info: Indent · Vendor · Amount */}
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Indent</div>
+                    <div className="font-mono font-semibold text-blue-800 truncate">{v.indent_number || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                    <div className="font-medium text-gray-700 truncate" title={v.vendor_name}>{v.vendor_name || '—'}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">Amount</div>
+                    <div className="font-semibold text-emerald-700">Rs {(+v.display_total || +v.total_amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
+                </div>
+                {/* Links row */}
+                <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
+                  <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                    <FiPrinter size={11} /> Print PO
+                  </a>
+                  <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
+                    🚚 Delivery Note
+                  </a>
+                  {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 PDF</a>}
+                </div>
+                {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur Kaplesh */}
+                {!v.cancelled && canApprovePo(v) && (
+                  <div className="flex gap-2 mt-1">
+                    <button onClick={() => approvePo(v)} className="btn btn-success text-sm py-2 px-3 flex-1">✓ Approve {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</button>
+                    <button onClick={() => rejectPo(v)} className="text-sm py-2 px-3 rounded bg-red-100 text-red-700 border border-red-300 font-semibold">Reject</button>
+                  </div>
+                )}
+                {/* Primary action — Mark Cleared (when payment pending) */}
+                {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
+                  <button onClick={() => markPaymentCleared(v.id)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">
+                    ✓ Mark Payment Cleared
+                  </button>
+                )}
+                {/* Secondary actions: Edit / Cancel / Restore / Delete */}
+                <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
+                  {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={() => openEditVendorPo(v)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiEdit2 size={11} /> Edit
+                    </button>
+                  )}
+                  {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={async () => {
+                      const reason = prompt(`Cancel Vendor PO "${v.po_number}"?\n\nReason (optional):`);
+                      if (reason === null) return;
+                      try { await api.post(`/procurement/vendor-po/${v.id}/cancel`, { reason }); toast.success('PO cancelled'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Cancel failed'); }
+                    }} className="text-amber-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiX size={11} /> Cancel
+                    </button>
+                  )}
+                  {v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={async () => {
+                      if (!confirm(`Restore Vendor PO "${v.po_number}" from cancelled?`)) return;
+                      try { await api.post(`/procurement/vendor-po/${v.id}/uncancel`); toast.success('PO restored'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Restore failed'); }
+                    }} className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
+                      <FiCheck size={11} /> Restore
+                    </button>
+                  )}
+                  {canDelete('procurement') && (
+                    <button onClick={async () => {
+                      if (!confirm(`Permanently delete vendor PO "${v.po_number}"?`)) return;
+                      try { await api.delete(`/procurement/vendor-po/${v.id}`); toast.success('Deleted'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiTrash2 size={11} /> Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {vpoListLoading && vendorPos.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">Loading vendor POs...</div>}
+            {!vpoListLoading && vendorPos.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">{(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) ? 'No POs match the current filters — try Reset' : 'No vendor POs yet — click "Create Vendor PO"'}</div>}
+            <Pagination pg={listPg} setPerPage={setVpoListPerPage} />
+          </div>
+            </>
+          )}
+        </>
         );
       })()}
 
@@ -5059,45 +5485,42 @@ export default function Procurement() {
       })()}
 
       {tab === 'bills' && (() => {
-        // POs that don't have a bill yet — sorted by Expected Receipt Date
-        // so the purchase team chases the oldest first. Uses client-side
-        // filtering off the already-loaded vendorPos + purchaseBills.
-        const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
         const today = new Date().toISOString().slice(0, 10);
-        const pendingPos = vendorPos
-          // Skip cancelled POs — they're not waiting for a bill anymore.
-          .filter(po => !billedPoIds.has(po.id) && !po.cancelled)
-          // Payment gate (mam 2026-05-27): POs still blocked on advance /
-          // old dues do NOT appear in Purchase Bill follow-up — Accounts
-          // handles them in the Payment tab first. Once cleared (or if no
-          // payment block at all), they land here for the bill chase.
-          .filter(po => po.payment_block_status !== 'pending')
-          .sort((a, b) => {
-            const ax = a.expected_receipt_date || '9999-12-31';
-            const bx = b.expected_receipt_date || '9999-12-31';
-            return ax.localeCompare(bx);
-          });
 
-        // Sub-tab filtering (mam 2026-05-25)
-        const fSearch = billsFuSearch.trim().toLowerCase();
-        const filteredFu = pendingPos.filter(po => {
-          if (billsFuExpFrom && po.expected_receipt_date && po.expected_receipt_date < billsFuExpFrom) return false;
-          if (billsFuExpTo && po.expected_receipt_date && po.expected_receipt_date > billsFuExpTo) return false;
-          if (!fSearch) return true;
-          const hay = `${po.po_number || ''} ${po.indent_number || ''} ${po.vendor_name || ''} ${po.indent_site_name || ''}`.toLowerCase();
-          return hay.includes(fSearch);
-        });
-        const fuPg = usePagination(filteredFu, billsFuPerPage, billsFuPage, setBillsFuPage);
+        // Server-driven pagination & filtering for Follow-up (POs awaiting bill)
+        const fuTotalPages = Math.max(1, Math.ceil(billsFuTotal / billsFuPerPage));
+        const fuFrom = billsFuTotal > 0 ? (billsFuPage - 1) * billsFuPerPage : 0;
+        const fuTo = Math.min(fuFrom + billsFuPerPage, billsFuTotal);
+        const fuPg = {
+          page: billsFuPage,
+          pages: fuTotalPages,
+          perPage: billsFuPerPage,
+          total: billsFuTotal,
+          from: fuFrom,
+          to: fuTo,
+          setPage: setBillsFuPage,
+          rows: billsFuRows,
+          hasPrev: billsFuPage > 1,
+          hasNext: billsFuPage < fuTotalPages,
+        };
 
-        const blSearch = billsListSearch.trim().toLowerCase();
-        const filteredBills = purchaseBills.filter(b => {
-          if (billsListFrom && b.bill_date && b.bill_date < billsListFrom) return false;
-          if (billsListTo && b.bill_date && b.bill_date > billsListTo) return false;
-          if (!blSearch) return true;
-          const hay = `${b.bill_number || ''} ${b.vendor_name || ''}`.toLowerCase();
-          return hay.includes(blSearch);
-        });
-        const billsListPg = usePagination(filteredBills, billsListPerPage, billsListPage, setBillsListPage);
+        // Server-driven pagination & filtering for Purchase Bills list
+        const billsListTotalPages = Math.max(1, Math.ceil(billsListTotal / billsListPerPage));
+        const billsListFromIdx = billsListTotal > 0 ? (billsListPage - 1) * billsListPerPage : 0;
+        const billsListToIdx = Math.min(billsListFromIdx + billsListPerPage, billsListTotal);
+        const billsListPg = {
+          page: billsListPage,
+          pages: billsListTotalPages,
+          perPage: billsListPerPage,
+          total: billsListTotal,
+          from: billsListFromIdx,
+          to: billsListToIdx,
+          setPage: setBillsListPage,
+          rows: billsListRows,
+          hasPrev: billsListPage > 1,
+          hasNext: billsListPage < billsListTotalPages,
+        };
+
         const daysDiff = (d) => {
           if (!d) return null;
           const dt = new Date(d); const tdt = new Date(today);
@@ -5130,411 +5553,393 @@ export default function Procurement() {
           }).catch(() => setBillItems({ items: [], ordered_total: 0, any_receipt: false }));
         };
         return (
-          <>
-            {/* Sub-tabs (mam 2026-05-25) */}
-            <div className="flex justify-between items-center flex-wrap gap-2">
-              <div className="flex gap-1 border-b border-gray-200 -mb-px">
-                <button onClick={() => setBillsSubTab('followup')}
-                  className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${billsSubTab === 'followup' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                  Follow-up <span className="ml-1 text-[10px] opacity-80">({pendingPos.length})</span>
-                </button>
-                <button onClick={() => setBillsSubTab('bills')}
-                  className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${billsSubTab === 'bills' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                  Purchase Bills <span className="ml-1 text-[10px] opacity-80">({purchaseBills.length})</span>
-                </button>
-              </div>
-              {billsSubTab === 'bills' && (
-                <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0, material_status: 'approved' }); setBillItems(null); setBillRecv({}); setModal('bill'); }} className="btn btn-primary flex items-center gap-2 text-xs"><FiPlus /> Add Bill</button>
-              )}
+        <>
+          {/* Sub-tabs (mam 2026-05-25) */}
+          <div className="flex justify-between items-center flex-wrap gap-2">
+            <div className="flex gap-1 border-b border-gray-200 -mb-px">
+              <button onClick={() => setBillsSubTab('followup')}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${billsSubTab === 'followup' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                Follow-up <span className="ml-1 text-[10px] opacity-80">({billsFuTotal})</span>
+              </button>
+              <button onClick={() => setBillsSubTab('bills')}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${billsSubTab === 'bills' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                Purchase Bills <span className="ml-1 text-[10px] opacity-80">({billsListTotal})</span>
+              </button>
             </div>
-
-            {/* ===== Sub-tab 1: Follow-up ===== */}
-            {/* Heads-up banner when POs are hidden behind the payment gate.
-              Tells the purchase team where those POs went so they don't
-              wonder why a PO they just created isn't showing up here. */}
-            {billsSubTab === 'followup' && (() => {
-              const blockedCount = (vendorPos || []).filter(po =>
-                !po.cancelled && !billedPoIds.has(po.id) && po.payment_block_status === 'pending'
-              ).length;
-              if (blockedCount === 0) return null;
-              return (
-                <div className="card p-2.5 bg-red-50 border border-red-200 text-[11px] text-red-800 flex items-center gap-2 flex-wrap">
-                  <span>🚨 <b>{blockedCount}</b> PO{blockedCount === 1 ? '' : 's'} hidden — blocked on payment.</span>
-                  <button type="button" onClick={() => setTab('payment')} className="text-red-700 underline font-semibold hover:text-red-900">
-                    Go to Payment tab →
-                  </button>
-                  <span className="opacity-70">Accounts clears them first, then they appear here automatically.</span>
-                </div>
-              );
-            })()}
-            {billsSubTab === 'followup' && pendingPos.length === 0 && (
-              <div className="card text-center py-8 text-gray-400 text-xs">No POs awaiting a Purchase Bill. 🎉</div>
-            )}
-            {billsSubTab === 'followup' && pendingPos.length > 0 && (
-              <div className="card p-3 bg-amber-50 border border-amber-200">
-                <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
-                  <h4 className="font-semibold text-amber-800 text-sm">
-                    Follow-up: POs awaiting Purchase Bill
-                    <span className="text-xs font-normal text-amber-600 ml-2">({pendingPos.length} PO{pendingPos.length === 1 ? '' : 's'})</span>
-                  </h4>
-                  <span className="text-[11px] text-amber-700">Sorted by Expected Receipt Date — chase the oldest first</span>
-                </div>
-
-                {/* Search + expected-date filter (mam 2026-05-25) */}
-                <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-amber-200">
-                  <div className="flex-1 min-w-[200px]">
-                    <label className="label text-[10px] mb-0.5 text-amber-900">Search · PO no / indent no / vendor</label>
-                    <input className="input text-xs" placeholder="e.g. VPO-0042 or IND-0070"
-                      value={billsFuSearch} onChange={e => { setBillsFuSearch(e.target.value); setBillsFuPage(1); }} />
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5 text-amber-900">Expected From</label>
-                    <input className="input text-xs" type="date" value={billsFuExpFrom}
-                      onChange={e => { setBillsFuExpFrom(e.target.value); setBillsFuPage(1); }} />
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5 text-amber-900">Expected To</label>
-                    <input className="input text-xs" type="date" value={billsFuExpTo}
-                      onChange={e => { setBillsFuExpTo(e.target.value); setBillsFuPage(1); }} />
-                  </div>
-                  {(billsFuSearch || billsFuExpFrom || billsFuExpTo) && (
-                    <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                      onClick={() => { setBillsFuSearch(''); setBillsFuExpFrom(''); setBillsFuExpTo(''); setBillsFuPage(1); }}>Reset</button>
-                  )}
-                  <div className="ml-auto text-[11px] text-amber-900">
-                    Showing <span className="font-semibold">{filteredFu.length}</span> of {pendingPos.length}
-                  </div>
-                </div>
-                <div className="hidden md:block overflow-auto max-h-[70vh]">
-                  <table className="text-xs freeze-head">
-                    <thead><tr className="bg-amber-100/50">
-                      <th className="px-2 py-1 text-left">PO Number</th>
-                      {/* Indent column added (mam, 2026-05-20: "show here
-                        also indent number").  Carries indent_number +
-                        site sub-text so mam can trace a PO back to its
-                        raising indent without opening the row. */}
-                      <th className="px-2 py-1 text-left">Indent</th>
-                      <th className="px-2 py-1 text-left">Vendor</th>
-                      <th className="px-2 py-1">PO Date</th>
-                      <th className="px-2 py-1">Expected Receipt</th>
-                      <th className="px-2 py-1">Status</th>
-                      <th className="px-2 py-1 text-right">Amount</th>
-                      <th className="px-2 py-1">File</th>
-                      <th className="px-2 py-1"></th>
-                    </tr></thead>
-                    <tbody>
-                      {fuPg.rows.map(po => {
-                        const d = daysDiff(po.expected_receipt_date);
-                        let chip;
-                        if (!po.expected_receipt_date) chip = <span className="text-gray-400">— no date —</span>;
-                        else if (d < 0) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">OVERDUE by {-d}d</span>;
-                        else if (d === 0) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300">DUE TODAY</span>;
-                        else if (d <= 3) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-200">in {d}d</span>;
-                        else chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">in {d}d</span>;
-                        return (
-                          <tr key={po.id} className="border-b border-amber-100">
-                            <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">{po.po_number}</td>
-                            <td className="px-2 py-1.5 max-w-[160px] whitespace-nowrap">
-                              <div className="font-mono text-[11px] font-semibold text-blue-800">{po.indent_number || <span className="text-gray-300">—</span>}</div>
-                              {po.indent_site_name && (
-                                <div className="text-[10px] text-gray-500 truncate" title={po.indent_site_name}>{po.indent_site_name}</div>
-                              )}
-                            </td>
-                            <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
-                            <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
-                            <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
-                            <td className="px-2 py-1.5 text-center">{chip}</td>
-                            {/* Show the LIVE computed total (items + the PO's GST %)
-                              from display_total — matches what the PO print
-                              shows.  Mam, 2026-05-16: header total drifted from
-                              the line items.  Drift chip warns when the stored
-                              total disagrees with the items sum. */}
-                            <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
-                              Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
-                              {+po.total_amount_drift > 1 && (
-                                <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
-                                  ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-2 py-1.5 text-center">
-                              {/* Always show "View PO" — opens the SOTYN.AI-generated
-                                print page (PDF-able). If a Tally / signed scan
-                                was also uploaded, show a second link below. */}
-                              <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-[11px] font-semibold whitespace-nowrap">📄 View PO</a>
-                              {/* Mam (2026-05-22): auto-generated Delivery Note
-                                per PO — opens print-ready page, no DN row
-                                needed.  Uses the SEPL template format mam
-                                shared. */}
-                              <div><a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:text-emerald-900 underline text-[11px] font-semibold whitespace-nowrap">🚚 Delivery Note</a></div>
-                              {po.file_path && (
-                                <div><a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">📎 attached file</a></div>
-                              )}
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <button onClick={() => openUploadBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Upload Bill</button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Mobile cards — polished pattern matching Indents (mam). */}
-                <div className="md:hidden space-y-3">
-                  {fuPg.rows.map(po => {
-                    const d = daysDiff(po.expected_receipt_date);
-                    let chip;
-                    if (!po.expected_receipt_date) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-500 uppercase">no date</span>;
-                    else if (d < 0) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-300 bg-red-50 text-red-700 uppercase">Overdue {-d}d</span>;
-                    else if (d === 0) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-700 uppercase">Due Today</span>;
-                    else if (d <= 3) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-orange-300 bg-orange-50 text-orange-700 uppercase">In {d}d</span>;
-                    else chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-300 bg-gray-50 text-gray-600 uppercase">In {d}d</span>;
-                    return (
-                      <div key={po.id} className="card p-3 space-y-2">
-                        <div className="flex justify-between items-start gap-2">
-                          <div className="flex-1 min-w-0">
-                            <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
-                            <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
-                            <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                              <FiCalendar size={10} className="text-gray-400" />
-                              {po.po_date || '—'}
-                            </div>
-                          </div>
-                          {chip}
-                        </div>
-                        {po.indent_site_name && (
-                          <div className="flex items-start gap-1.5 text-xs">
-                            <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
-                            <div className="min-w-0">
-                              <div className="text-[10px] uppercase text-gray-400">Site</div>
-                              <div className="font-medium text-gray-800">{po.indent_site_name}</div>
-                            </div>
-                          </div>
-                        )}
-                        <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
-                          <div>
-                            <div className="text-[9px] uppercase text-gray-400">Indent</div>
-                            <div className="font-mono font-semibold text-blue-800 truncate">{po.indent_number || '—'}</div>
-                          </div>
-                          <div>
-                            <div className="text-[9px] uppercase text-gray-400">Vendor</div>
-                            <div className="font-medium text-gray-700 truncate" title={po.vendor_name}>{po.vendor_name}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                            <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
-                            {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
-                          </div>
-                        </div>
-                        <div className="text-[11px] text-gray-500 pt-1 border-t border-gray-100">
-                          <span className="text-gray-400">Expected receipt:</span> <b className="text-gray-700">{po.expected_receipt_date || '—'}</b>
-                        </div>
-                        <div className="flex items-center gap-3 text-xs flex-wrap">
-                          <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                            <FiPrinter size={11} /> Print PO
-                          </a>
-                          <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
-                            🚚 Delivery Note
-                          </a>
-                          {po.file_path && <a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 File</a>}
-                        </div>
-                        <button onClick={() => openUploadBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">+ Upload Bill</button>
-                      </div>
-                    );
-                  })}
-                  {filteredFu.length === 0 && (
-                    <div className="card p-6 text-center text-amber-700 text-sm">No POs match the current filters.</div>
-                  )}
-                </div>
-                <Pagination pg={fuPg} setPerPage={setBillsFuPerPage} className="border-t border-amber-200 pt-2" />
-              </div>
-            )}
-
-            {/* ===== Sub-tab 2: Purchase Bills ===== */}
             {billsSubTab === 'bills' && (
-              <>
-                <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
-                  <div className="flex-1 min-w-[200px]">
-                    <label className="label text-[10px] mb-0.5">Search · bill no / vendor</label>
-                    <input className="input text-xs" placeholder="e.g. PB-0042 or vendor name"
-                      value={billsListSearch} onChange={e => { setBillsListSearch(e.target.value); setBillsListPage(1); }} />
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5">Bill Date From</label>
-                    <input className="input text-xs" type="date" value={billsListFrom}
-                      onChange={e => { setBillsListFrom(e.target.value); setBillsListPage(1); }} />
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5">Bill Date To</label>
-                    <input className="input text-xs" type="date" value={billsListTo}
-                      onChange={e => { setBillsListTo(e.target.value); setBillsListPage(1); }} />
-                  </div>
-                  {(billsListSearch || billsListFrom || billsListTo) && (
-                    <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                      onClick={() => { setBillsListSearch(''); setBillsListFrom(''); setBillsListTo(''); setBillsListPage(1); }}>Reset</button>
-                  )}
-                  <div className="ml-auto text-[11px] text-gray-500">
-                    Showing <span className="font-semibold text-gray-700">{filteredBills.length}</span> of {purchaseBills.length}
-                  </div>
-                </div>
-                <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
-                  <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
-                  <tbody>
-                    {billsListPg.rows.map(b => (
-                      <tr key={b.id}>
-                        <td className="font-medium">{b.bill_number}</td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
-                        <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
-                        <td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td>
-                        <td>
-                          {+b.debit_total > 0 ? (
-                            <div className="leading-tight" title="Debit notes on this PO are deducted from the payable">
-                              <div className="text-red-600 text-[11px]">− Rs {Math.round(+b.debit_total).toLocaleString('en-IN')}</div>
-                              <div className="font-semibold text-emerald-700 text-[11px]">Net Rs {Math.round((+b.total_amount || 0) - (+b.debit_total || 0)).toLocaleString('en-IN')}</div>
-                            </div>
-                          ) : <span className="text-gray-300 text-xs">—</span>}
-                        </td>
-                        <td>
-                          {b.file_path
-                            ? <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View Bill</a>
-                            : <span className="text-gray-300 text-xs">—</span>}
-                        </td>
-                        <td><StatusBadge status={b.payment_status} /></td>
-                        <td className="whitespace-nowrap">
-                          {b.vendor_po_id && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
-                          {canDelete('procurement') && <button onClick={async () => {
-                            if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
-                            try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                          }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
-                        </td>
-                      </tr>
-                    ))}
-                    {purchaseBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
-                    {purchaseBills.length > 0 && filteredBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills match the current filters.</td></tr>}
-                  </tbody>
-                </table></div>
-                {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
-                <div className="hidden md:block card p-0"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></div>
+              <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0, material_status: 'approved' }); setBillItems(null); setBillRecv({}); setModal('bill'); }} className="btn btn-primary flex items-center gap-2 text-xs"><FiPlus /> Add Bill</button>
+            )}
+          </div>
 
-                {/* Mobile cards — polished pattern matching Indents (mam). */}
-                <div className="md:hidden space-y-3">
-                  {billsListPg.rows.map(b => (
-                    <div key={b.id} className="card p-3 space-y-2">
+          {/* ===== Sub-tab 1: Follow-up ===== */}
+          {/* Heads-up banner when POs are hidden behind the payment gate. */}
+          {billsSubTab === 'followup' && billsFuBlockedCount > 0 && (
+            <div className="card p-2.5 bg-red-50 border border-red-200 text-[11px] text-red-800 flex items-center gap-2 flex-wrap">
+              <span>🚨 <b>{billsFuBlockedCount}</b> PO{billsFuBlockedCount === 1 ? '' : 's'} hidden — blocked on payment.</span>
+              <button type="button" onClick={() => setTab('payment')} className="text-red-700 underline font-semibold hover:text-red-900">
+                Go to Payment tab →
+              </button>
+              <span className="opacity-70">Accounts clears them first, then they appear here automatically.</span>
+            </div>
+          )}
+          {billsSubTab === 'followup' && billsFuTotal === 0 && !billsFuLoading && (
+            <div className="card text-center py-8 text-gray-400 text-xs">
+              {(billsFuSearch || billsFuExpFrom || billsFuExpTo) ? 'No POs match the current filters.' : 'No POs awaiting a Purchase Bill. 🎉'}
+            </div>
+          )}
+          {billsSubTab === 'followup' && (billsFuTotal > 0 || billsFuLoading) && (
+            <div className="card p-3 bg-amber-50 border border-amber-200">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                <h4 className="font-semibold text-amber-800 text-sm">
+                  Follow-up: POs awaiting Purchase Bill
+                  <span className="text-xs font-normal text-amber-600 ml-2">({billsFuTotal} PO{billsFuTotal === 1 ? '' : 's'})</span>
+                </h4>
+                <span className="text-[11px] text-amber-700">Sorted by Expected Receipt Date — chase the oldest first</span>
+              </div>
+
+              {/* Search + expected-date filter (mam 2026-05-25) */}
+              <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-amber-200">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Search · PO no / indent no / vendor</label>
+                  <input className="input text-xs" placeholder="e.g. VPO-0042 or IND-0070"
+                    value={billsFuSearchInput} onChange={e => { setBillsFuSearchInput(e.target.value); setBillsFuPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Expected From</label>
+                  <input className="input text-xs" type="date" value={billsFuExpFrom}
+                    onChange={e => { setBillsFuExpFrom(e.target.value); setBillsFuPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Expected To</label>
+                  <input className="input text-xs" type="date" value={billsFuExpTo}
+                    onChange={e => { setBillsFuExpTo(e.target.value); setBillsFuPage(1); }} />
+                </div>
+                {(billsFuSearchInput || billsFuSearch || billsFuExpFrom || billsFuExpTo) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setBillsFuSearchInput(''); setBillsFuSearch(''); setBillsFuExpFrom(''); setBillsFuExpTo(''); setBillsFuPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-amber-900">
+                  Showing <span className="font-semibold">{billsFuTotal > 0 ? `${fuPg.from + 1}–${fuPg.to}` : 0}</span> of {billsFuTotal}
+                </div>
+              </div>
+              <div className="hidden md:block overflow-auto max-h-[70vh]">
+                <table className="text-xs freeze-head">
+                  <thead><tr className="bg-amber-100/50">
+                    <th className="px-2 py-1 text-left">PO Number</th>
+                    <th className="px-2 py-1 text-left">Indent</th>
+                    <th className="px-2 py-1 text-left">Vendor</th>
+                    <th className="px-2 py-1">PO Date</th>
+                    <th className="px-2 py-1">Expected Receipt</th>
+                    <th className="px-2 py-1">Status</th>
+                    <th className="px-2 py-1 text-right">Amount</th>
+                    <th className="px-2 py-1">File</th>
+                    <th className="px-2 py-1"></th>
+                  </tr></thead>
+                  <tbody>
+                    {billsFuLoading && (
+                      <tr><td colSpan="9" className="text-center py-8 text-amber-700">
+                        <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading follow-up POs...
+                      </td></tr>
+                    )}
+                    {!billsFuLoading && fuPg.rows.map(po => {
+                      const d = daysDiff(po.expected_receipt_date);
+                      let chip;
+                      if (!po.expected_receipt_date) chip = <span className="text-gray-400">— no date —</span>;
+                      else if (d < 0) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">OVERDUE by {-d}d</span>;
+                      else if (d === 0) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300">DUE TODAY</span>;
+                      else if (d <= 3) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-200">in {d}d</span>;
+                      else chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">in {d}d</span>;
+                      return (
+                        <tr key={po.id} className="border-b border-amber-100">
+                          <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">{po.po_number}</td>
+                          <td className="px-2 py-1.5 max-w-[160px] whitespace-nowrap">
+                            <div className="font-mono text-[11px] font-semibold text-blue-800">{po.indent_number || <span className="text-gray-300">—</span>}</div>
+                            {po.indent_site_name && (
+                              <div className="text-[10px] text-gray-500 truncate" title={po.indent_site_name}>{po.indent_site_name}</div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
+                          <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
+                          <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
+                          <td className="px-2 py-1.5 text-center">{chip}</td>
+                          <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
+                            Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
+                            {+po.total_amount_drift > 1 && (
+                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                                ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-[11px] font-semibold whitespace-nowrap">📄 View PO</a>
+                            <div><a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:text-emerald-900 underline text-[11px] font-semibold whitespace-nowrap">🚚 Delivery Note</a></div>
+                            {po.file_path && (
+                              <div><a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">📎 attached file</a></div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <button onClick={() => openUploadBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Upload Bill</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile cards — polished pattern matching Indents (mam). */}
+              <div className="md:hidden space-y-3">
+                {billsFuLoading && (
+                  <div className="card p-6 text-center text-amber-700 text-sm">
+                    <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
+                  </div>
+                )}
+                {!billsFuLoading && fuPg.rows.map(po => {
+                  const d = daysDiff(po.expected_receipt_date);
+                  let chip;
+                  if (!po.expected_receipt_date) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-500 uppercase">no date</span>;
+                  else if (d < 0)  chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-300 bg-red-50 text-red-700 uppercase">Overdue {-d}d</span>;
+                  else if (d === 0) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-700 uppercase">Due Today</span>;
+                  else if (d <= 3)  chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-orange-300 bg-orange-50 text-orange-700 uppercase">In {d}d</span>;
+                  else              chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-300 bg-gray-50 text-gray-600 uppercase">In {d}d</span>;
+                  return (
+                    <div key={po.id} className="card p-3 space-y-2">
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1 min-w-0">
-                          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Bill No</div>
-                          <div className="text-lg font-bold text-gray-900 truncate">{b.bill_number || '—'}</div>
+                          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
+                          <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
                           <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
                             <FiCalendar size={10} className="text-gray-400" />
-                            {b.bill_date || '—'}
+                            {po.po_date || '—'}
                           </div>
                         </div>
-                        <StatusBadge status={b.payment_status} />
+                        {chip}
                       </div>
-                      {b.vendor_name && (
-                        <div className="text-xs">
-                          <div className="text-[10px] uppercase text-gray-400">Vendor</div>
-                          <div className="font-medium text-gray-800 truncate" title={b.vendor_name}>{b.vendor_name}</div>
+                      {po.indent_site_name && (
+                        <div className="flex items-start gap-1.5 text-xs">
+                          <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-[10px] uppercase text-gray-400">Site</div>
+                            <div className="font-medium text-gray-800">{po.indent_site_name}</div>
+                          </div>
                         </div>
                       )}
                       <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
                         <div>
-                          <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                          <div className="font-semibold text-gray-800">Rs {(+b.amount || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-[9px] uppercase text-gray-400">Indent</div>
+                          <div className="font-mono font-semibold text-blue-800 truncate">{po.indent_number || '—'}</div>
                         </div>
                         <div>
-                          <div className="text-[9px] uppercase text-gray-400">GST</div>
-                          <div className="font-semibold text-gray-800">Rs {(+b.gst_amount || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                          <div className="font-medium text-gray-700 truncate" title={po.vendor_name}>{po.vendor_name}</div>
                         </div>
                         <div className="text-right">
-                          <div className="text-[9px] uppercase text-gray-400">Total</div>
-                          <div className="font-semibold text-emerald-700">Rs {(+b.total_amount || 0).toLocaleString('en-IN')}</div>
+                          <div className="text-[9px] uppercase text-gray-400">Amount</div>
+                          <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
+                          {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
                         </div>
                       </div>
-                      {b.file_path && (
-                        <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100">
-                          <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
-                            📄 View Bill
-                          </a>
-                        </div>
-                      )}
-                      {(b.vendor_po_id || canDelete('procurement')) && (
-                        <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-                          {/* Edit received qty — desktop-table action, now on mobile too
-                        (mam 2026-07-06: edit options must show on the phone). */}
-                          {b.vendor_po_id && (
-                            <button onClick={() => openEditQty(b)} title="Edit received qty (updates the challan)"
-                              className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit qty</button>
-                          )}
-                          {canDelete('procurement') && (
-                            <button onClick={async () => {
-                              if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
-                              try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
-                              catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                            }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                              <FiTrash2 size={11} /> Delete
-                            </button>
-                          )}
-                        </div>
-                      )}
+                      <div className="text-[11px] text-gray-500 pt-1 border-t border-gray-100">
+                        <span className="text-gray-400">Expected receipt:</span> <b className="text-gray-700">{po.expected_receipt_date || '—'}</b>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs flex-wrap">
+                        <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                          <FiPrinter size={11} /> Print PO
+                        </a>
+                        <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
+                          🚚 Delivery Note
+                        </a>
+                        {po.file_path && <a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 File</a>}
+                      </div>
+                      <button onClick={() => openUploadBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">+ Upload Bill</button>
                     </div>
-                  ))}
-                  {purchaseBills.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No bills yet</div>}
-                  {purchaseBills.length > 0 && filteredBills.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No bills match the current filters.</div>}
-                  <Pagination pg={billsListPg} setPerPage={setBillsListPerPage} />
+                  );
+                })}
+              </div>
+              <Pagination pg={fuPg} setPerPage={setBillsFuPerPage} className="border-t border-amber-200 pt-2" />
+            </div>
+          )}
+
+          {/* ===== Sub-tab 2: Purchase Bills ===== */}
+          {billsSubTab === 'bills' && (
+            <>
+              <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5">Search · bill no / vendor</label>
+                  <input className="input text-xs" placeholder="e.g. PB-0042 or vendor name"
+                    value={billsListSearchInput} onChange={e => { setBillsListSearchInput(e.target.value); setBillsListPage(1); }} />
                 </div>
-              </>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Bill Date From</label>
+                  <input className="input text-xs" type="date" value={billsListFrom}
+                    onChange={e => { setBillsListFrom(e.target.value); setBillsListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Bill Date To</label>
+                  <input className="input text-xs" type="date" value={billsListTo}
+                    onChange={e => { setBillsListTo(e.target.value); setBillsListPage(1); }} />
+                </div>
+                {(billsListSearchInput || billsListSearch || billsListFrom || billsListTo) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setBillsListSearchInput(''); setBillsListSearch(''); setBillsListFrom(''); setBillsListTo(''); setBillsListPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{billsListTotal > 0 ? `${billsListPg.from + 1}–${billsListPg.to}` : 0}</span> of {billsListTotal}
+                </div>
+              </div>
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
+            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
+            <tbody>
+              {billsListLoading && <tr><td colSpan="10" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading bills...</td></tr>}
+              {!billsListLoading && billsListPg.rows.map(b => (
+                <tr key={b.id}>
+                  <td className="font-medium">{b.bill_number}</td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
+                  <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
+                  <td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td>
+                  <td>
+                    {+b.debit_total > 0 ? (
+                      <div className="leading-tight" title="Debit notes on this PO are deducted from the payable">
+                        <div className="text-red-600 text-[11px]">− Rs {Math.round(+b.debit_total).toLocaleString('en-IN')}</div>
+                        <div className="font-semibold text-emerald-700 text-[11px]">Net Rs {Math.round((+b.total_amount || 0) - (+b.debit_total || 0)).toLocaleString('en-IN')}</div>
+                      </div>
+                    ) : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td>
+                    {b.file_path
+                      ? <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View Bill</a>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td><StatusBadge status={b.payment_status} /></td>
+                  <td className="whitespace-nowrap">
+                    {b.vendor_po_id && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
+                    {canDelete('procurement') && <button onClick={async () => {
+                    if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
+                    try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); fetchBillsListPage(); }
+                    catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                  }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                  </td>
+                </tr>
+              ))}
+              {!billsListLoading && billsListTotal === 0 && (
+                <tr><td colSpan="10" className="text-center py-8 text-gray-400">
+                  {(billsListSearch || billsListFrom || billsListTo) ? 'No bills match the current filters.' : 'No bills yet'}
+                </td></tr>
+              )}
+            </tbody>
+            </table></div>
+          {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
+          <div className="hidden md:block card p-0"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></div>
+
+          {/* Mobile cards — polished pattern matching Indents (mam). */}
+          <div className="md:hidden space-y-3">
+            {billsListLoading && <div className="card p-6 text-center text-gray-500 text-sm"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...</div>}
+            {!billsListLoading && billsListPg.rows.map(b => (
+              <div key={b.id} className="card p-3 space-y-2">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Bill No</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{b.bill_number || '—'}</div>
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                      <FiCalendar size={10} className="text-gray-400" />
+                      {b.bill_date || '—'}
+                    </div>
+                  </div>
+                  <StatusBadge status={b.payment_status} />
+                </div>
+                {b.vendor_name && (
+                  <div className="text-xs">
+                    <div className="text-[10px] uppercase text-gray-400">Vendor</div>
+                    <div className="font-medium text-gray-800 truncate" title={b.vendor_name}>{b.vendor_name}</div>
+                  </div>
+                )}
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Amount</div>
+                    <div className="font-semibold text-gray-800">Rs {(+b.amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">GST</div>
+                    <div className="font-semibold text-gray-800">Rs {(+b.gst_amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">Total</div>
+                    <div className="font-semibold text-emerald-700">Rs {(+b.total_amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
+                </div>
+                {b.file_path && (
+                  <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100">
+                    <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                      📄 View Bill
+                    </a>
+                  </div>
+                )}
+                {(b.vendor_po_id || canDelete('procurement')) && (
+                  <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
+                    {b.vendor_po_id && (
+                      <button onClick={() => openEditQty(b)} title="Edit received qty (updates the challan)"
+                        className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit qty</button>
+                    )}
+                    {canDelete('procurement') && (
+                      <button onClick={async () => {
+                        if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
+                        try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); fetchBillsListPage(); }
+                        catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                      }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                        <FiTrash2 size={11} /> Delete
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+            {!billsListLoading && billsListTotal === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">
+                {(billsListSearch || billsListFrom || billsListTo) ? 'No bills match the current filters.' : 'No bills yet'}
+              </div>
             )}
-          </>
+            <Pagination pg={billsListPg} setPerPage={setBillsListPerPage} />
+          </div>
+            </>
+          )}
+        </>
         );
       })()}
 
       {tab === 'delivery' && (() => {
-        // "Ready to Dispatch" — billed POs that still need a client SALES
-        // BILL.  mam (2026-06-04): uploading a bill now auto-creates a
-        // challan (a receiving doc), so the old "billed but no delivery
-        // note" rule always came up empty.  The remaining action is the
-        // Sales Bill, so list POs that have a bill but NO sales bill yet.
-        const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
-        // A PO counts as sales-billed when it has a sales_bill delivery note
-        // OR its challan carries a sales_bill_number. The auto-challan from
-        // a Purchase Bill does NOT count.
-        const salesBilledPoIds = new Set(
-          deliveryNotes.filter(d => d.document_type === 'sales_bill' || d.sales_bill_number).map(d => d.vendor_po_id).filter(Boolean)
-        );
-        const readyToDispatch = vendorPos.filter(po =>
-          billedPoIds.has(po.id) && !salesBilledPoIds.has(po.id) && !po.cancelled
-        );
-        // Sales-Bill-pending challans with NO Vendor PO (i.e. from-store
-        // challans) — they can't ride the PO list above, so surface them
-        // here too (mam 2026-06-04: "if SB pending, also show in Ready to
-        // Dispatch").  PO challans that are SB-pending are already covered
-        // by readyToDispatch (billed PO, not yet sales-billed).
-        const sbPendingDNs = deliveryNotes.filter(d =>
-          d.sales_bill_pending === 1 && !d.sales_bill_number && d.document_type === 'challan' && !d.vendor_po_id
-        );
+        // Server-driven pagination & filtering for Ready to Dispatch
+        const readyTotalPages = Math.max(1, Math.ceil(dispReadyTotal / dispReadyPerPage));
+        const readyFromIdx = dispReadyTotal > 0 ? (dispReadyPage - 1) * dispReadyPerPage : 0;
+        const readyToIdx = Math.min(readyFromIdx + dispReadyPerPage, dispReadyTotal);
+        const readyPg = {
+          page: dispReadyPage,
+          pages: readyTotalPages,
+          perPage: dispReadyPerPage,
+          total: dispReadyTotal,
+          from: readyFromIdx,
+          to: readyToIdx,
+          setPage: setDispReadyPage,
+          rows: dispReadyRows,
+          hasPrev: dispReadyPage > 1,
+          hasNext: dispReadyPage < readyTotalPages,
+        };
+        const sbPendingDNs = dispReadySbPending || [];
 
-        // Sub-tab filtering (mam 2026-05-25)
-        const rSearch = dispReadySearch.trim().toLowerCase();
-        const filteredReady = readyToDispatch.filter(po => {
-          if (!rSearch) return true;
-          const hay = `${po.po_number || ''} ${po.vendor_name || ''} ${po.indent_number || ''}`.toLowerCase();
-          return hay.includes(rSearch);
-        });
-        const readyPg = usePagination(filteredReady, dispReadyPerPage, dispReadyPage, setDispReadyPage);
-
-        const dSearch = dispListSearch.trim().toLowerCase();
-        const filteredDispatch = deliveryNotes.filter(d => {
-          if (dispListStatus !== 'all' && d.status !== dispListStatus) return false;
-          if (dispListFrom && d.received_on && d.received_on.slice(0, 10) < dispListFrom) return false;
-          if (dispListTo && d.received_on && d.received_on.slice(0, 10) > dispListTo) return false;
-          if (!dSearch) return true;
-          const hay = `${d.po_number || ''} ${d.vendor_po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''} ${d.raised_by_name || ''}`.toLowerCase();
-          return hay.includes(dSearch);
-        });
-        const dispListPg = usePagination(filteredDispatch, dispListPerPage, dispListPage, setDispListPage);
+        // Server-driven pagination & filtering for Dispatch & Receiving Notes
+        const dispListTotalPages = Math.max(1, Math.ceil(dispListTotal / dispListPerPage));
+        const dispListFromIdx = dispListTotal > 0 ? (dispListPage - 1) * dispListPerPage : 0;
+        const dispListToIdx = Math.min(dispListFromIdx + dispListPerPage, dispListTotal);
+        const dispListPg = {
+          page: dispListPage,
+          pages: dispListTotalPages,
+          perPage: dispListPerPage,
+          total: dispListTotal,
+          from: dispListFromIdx,
+          to: dispListToIdx,
+          setPage: setDispListPage,
+          rows: dispListRows,
+          hasPrev: dispListPage > 1,
+          hasNext: dispListPage < dispListTotalPages,
+        };
         // Detect item-type hint for each PO (if any indent_item linked is type=PO,
         // suggest Sales Bill; else suggest Challan). We don't have per-item info
         // on the client, so the dropdown defaults to Sales Bill and user can switch.
@@ -5625,7 +6030,7 @@ export default function Procurement() {
           if (!po?.id) return;
           // Park the PDF tab synchronously so the popup blocker can't eat it.
           const printWin = window.open('', '_blank');
-          const closeWin = () => { try { if (printWin) printWin.close(); } catch (_) { } };
+          const closeWin = () => { try { if (printWin) printWin.close(); } catch (_) {} };
           try {
             const [itemsRes, billRes] = await Promise.all([
               api.get(`/procurement/vendor-pos/${po.id}/client-po-items`, { params: { doc_type: 'sales_bill' } }).catch(() => ({ data: { items: [], source: 'empty' } })),
@@ -5759,7 +6164,7 @@ export default function Procurement() {
         // ({description, qty|quantity, unit, rate, ...}).
         const loadReceiveItemsFromJson = (itemsJson) => {
           let arr = [];
-          try { arr = JSON.parse(itemsJson || '[]') || []; } catch (_) { }
+          try { arr = JSON.parse(itemsJson || '[]') || []; } catch (_) {}
           if (!Array.isArray(arr) || arr.length === 0) { setReceiveItems([blankManualRow()]); return; }
           setReceiveItems(arr.map(it => {
             const qty = +it.qty || +it.quantity || 0;
@@ -5812,225 +6217,237 @@ export default function Procurement() {
           setModal('receive');
         };
         return (
-          <>
-            {/* Sub-tabs (mam 2026-05-25) */}
-            <div className="flex justify-between items-center flex-wrap gap-2">
-              <div className="flex gap-1 border-b border-gray-200 -mb-px">
-                <button onClick={() => setDispatchSubTab('ready')}
-                  className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'ready' ? 'border-indigo-500 text-indigo-700 bg-indigo-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                  Ready to Dispatch <span className="ml-1 text-[10px] opacity-80">({readyToDispatch.length + sbPendingDNs.length})</span>
-                </button>
-                <button onClick={() => setDispatchSubTab('list')}
-                  className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                  Dispatch &amp; Receiving <span className="ml-1 text-[10px] opacity-80">({deliveryNotes.length})</span>
-                </button>
+        <>
+          {/* Sub-tabs (mam 2026-05-25) */}
+          <div className="flex justify-between items-center flex-wrap gap-2">
+            <div className="flex gap-1 border-b border-gray-200 -mb-px">
+              <button onClick={() => setDispatchSubTab('ready')}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'ready' ? 'border-indigo-500 text-indigo-700 bg-indigo-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                Ready to Dispatch <span className="ml-1 text-[10px] opacity-80">({dispReadyTotal + (sbPendingDNs.length)})</span>
+              </button>
+              <button onClick={() => setDispatchSubTab('list')}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                Dispatch &amp; Receiving <span className="ml-1 text-[10px] opacity-80">({dispListTotal})</span>
+              </button>
+            </div>
+          </div>
+
+          {/* ===== Sub-tab 1: Ready to dispatch ===== */}
+          {dispatchSubTab === 'ready' && dispReadyTotal === 0 && sbPendingDNs.length === 0 && !dispReadyLoading && (
+            <div className="card text-center py-8 text-gray-400 text-xs">
+              {(dispReadySearchInput || dispReadySearch) ? 'No POs match the current search.' : 'Nothing awaiting a Sales Bill / dispatch. 🎉'}
+            </div>
+          )}
+          {/* From-store (no-PO) challans awaiting a Sales Bill — mam 2026-06-04. */}
+          {dispatchSubTab === 'ready' && sbPendingDNs.length > 0 && (
+            <div className="card p-3 bg-amber-50 border border-amber-200 mb-3">
+              <h4 className="font-semibold text-amber-800 text-sm mb-2">
+                From-Store · Sales Bill pending
+                <span className="text-xs font-normal text-amber-700 ml-2">({sbPendingDNs.length})</span>
+              </h4>
+              <div className="overflow-auto max-h-[40vh]">
+                <table className="text-xs w-full">
+                  <thead><tr className="bg-amber-100/50">
+                    <th className="px-2 py-1 text-left">Challan No</th>
+                    <th className="px-2 py-1 text-left">Site / Company</th>
+                    <th className="px-2 py-1">Date</th>
+                    <th className="px-2 py-1 text-right">Actions</th>
+                  </tr></thead>
+                  <tbody>
+                    {sbPendingDNs.map(d => (
+                      <tr key={d.id} className="border-b border-amber-100">
+                        <td className="px-2 py-1.5 font-semibold text-blue-800 whitespace-nowrap">{d.document_number}<span className="ml-1 text-[9px] text-indigo-600">📦 FROM STORE</span></td>
+                        <td className="px-2 py-1.5 max-w-[260px] truncate">{d.site_name || '—'}</td>
+                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{d.delivery_date || '—'}</td>
+                        <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                          <button onClick={async () => { const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' }); const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html' })); window.open(url, '_blank'); }} className="text-[10px] px-2 py-1 mr-1 rounded border border-gray-300 hover:bg-gray-50">Print</button>
+                          <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">Add Sales Bill</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
-
-            {/* ===== Sub-tab 1: Ready to dispatch ===== */}
-            {dispatchSubTab === 'ready' && readyToDispatch.length === 0 && sbPendingDNs.length === 0 && (
-              <div className="card text-center py-8 text-gray-400 text-xs">Nothing awaiting a Sales Bill / dispatch. 🎉</div>
-            )}
-            {/* From-store (no-PO) challans awaiting a Sales Bill — mam 2026-06-04. */}
-            {dispatchSubTab === 'ready' && sbPendingDNs.length > 0 && (
-              <div className="card p-3 bg-amber-50 border border-amber-200 mb-3">
-                <h4 className="font-semibold text-amber-800 text-sm mb-2">
-                  From-Store · Sales Bill pending
-                  <span className="text-xs font-normal text-amber-700 ml-2">({sbPendingDNs.length})</span>
+          )}
+          {dispatchSubTab === 'ready' && (dispReadyTotal > 0 || dispReadyLoading) && (
+            <div className="card p-3 bg-indigo-50 border border-indigo-200">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                <h4 className="font-semibold text-indigo-800 text-sm">
+                  Ready to Dispatch
+                  <span className="text-xs font-normal text-indigo-600 ml-2">({dispReadyTotal} PO{dispReadyTotal === 1 ? '' : 's'})</span>
                 </h4>
-                <div className="overflow-auto max-h-[40vh]">
-                  <table className="text-xs w-full">
-                    <thead><tr className="bg-amber-100/50">
-                      <th className="px-2 py-1 text-left">Challan No</th>
-                      <th className="px-2 py-1 text-left">Site / Company</th>
-                      <th className="px-2 py-1">Date</th>
-                      <th className="px-2 py-1 text-right">Actions</th>
-                    </tr></thead>
-                    <tbody>
-                      {sbPendingDNs.map(d => (
-                        <tr key={d.id} className="border-b border-amber-100">
-                          <td className="px-2 py-1.5 font-semibold text-blue-800 whitespace-nowrap">{d.document_number}<span className="ml-1 text-[9px] text-indigo-600">📦 FROM STORE</span></td>
-                          <td className="px-2 py-1.5 max-w-[260px] truncate">{d.site_name || '—'}</td>
-                          <td className="px-2 py-1.5 text-center whitespace-nowrap">{d.delivery_date || '—'}</td>
-                          <td className="px-2 py-1.5 text-right whitespace-nowrap">
-                            <button onClick={async () => { const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' }); const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html' })); window.open(url, '_blank'); }} className="text-[10px] px-2 py-1 mr-1 rounded border border-gray-300 hover:bg-gray-50">Print</button>
-                            <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">Add Sales Bill</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <span className="text-[11px] text-indigo-700">POs with Purchase Bill uploaded but no Dispatch yet — Sales Bill for PO items, Challan for FOC/RGP</span>
+              </div>
+              {/* Search strip (mam 2026-05-25) */}
+              <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-indigo-200">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5 text-indigo-900">Search · PO no / vendor / indent</label>
+                  <input className="input text-xs" placeholder="e.g. VPO-0042"
+                    value={dispReadySearchInput} onChange={e => { setDispReadySearchInput(e.target.value); setDispReadyPage(1); }} />
+                </div>
+                {(dispReadySearchInput || dispReadySearch) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setDispReadySearchInput(''); setDispReadySearch(''); setDispReadyPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-indigo-900">
+                  Showing <span className="font-semibold">{dispReadyTotal > 0 ? `${readyPg.from + 1}–${readyPg.to}` : 0}</span> of {dispReadyTotal}
                 </div>
               </div>
-            )}
-            {dispatchSubTab === 'ready' && readyToDispatch.length > 0 && (
-              <div className="card p-3 bg-indigo-50 border border-indigo-200">
-                <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
-                  <h4 className="font-semibold text-indigo-800 text-sm">
-                    Ready to Dispatch
-                    <span className="text-xs font-normal text-indigo-600 ml-2">({readyToDispatch.length} PO{readyToDispatch.length === 1 ? '' : 's'})</span>
-                  </h4>
-                  <span className="text-[11px] text-indigo-700">POs with Purchase Bill uploaded but no Dispatch yet — Sales Bill for PO items, Challan for FOC/RGP</span>
-                </div>
-                {/* Search strip (mam 2026-05-25) */}
-                <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-indigo-200">
-                  <div className="flex-1 min-w-[200px]">
-                    <label className="label text-[10px] mb-0.5 text-indigo-900">Search · PO no / vendor / indent</label>
-                    <input className="input text-xs" placeholder="e.g. VPO-0042"
-                      value={dispReadySearch} onChange={e => { setDispReadySearch(e.target.value); setDispReadyPage(1); }} />
-                  </div>
-                  {dispReadySearch && (
-                    <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                      onClick={() => { setDispReadySearch(''); setDispReadyPage(1); }}>Reset</button>
-                  )}
-                  <div className="ml-auto text-[11px] text-indigo-900">
-                    Showing <span className="font-semibold">{filteredReady.length}</span> of {readyToDispatch.length}
-                  </div>
-                </div>
-                <div className="hidden md:block overflow-auto max-h-[70vh]">
-                  <table className="text-xs freeze-head">
-                    <thead><tr className="bg-indigo-100/50">
-                      <th className="px-2 py-1 text-left">PO Number</th>
-                      <th className="px-2 py-1 text-left">Vendor</th>
-                      <th className="px-2 py-1">PO Date</th>
-                      <th className="px-2 py-1">Expected Receipt</th>
-                      <th className="px-2 py-1 text-right">Amount</th>
-                      <th className="px-2 py-1"></th>
-                    </tr></thead>
-                    <tbody>
-                      {readyPg.rows.map(po => (
-                        <tr key={po.id} className="border-b border-indigo-100">
-                          <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">
-                            {po.po_number}
-                            <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-red-600 hover:text-red-800 underline font-normal">📄 View PO</a>
-                            <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-emerald-700 hover:text-emerald-900 underline font-normal">🚚 Delivery Note</a>
-                          </td>
-                          <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
-                          <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
-                          <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
-                          <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
-                            Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
-                            {+po.total_amount_drift > 1 && (
-                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
-                                ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap" title="Auto-generate the Sales Bill PDF (BOQ×delivery% rates + client GST) and open it — no form to fill. The PO then moves to Dispatch & Receiving for the site engineer to upload the signed receipt.">Dispatch</button>
-                          </td>
-                        </tr>
-                      ))}
-                      {filteredReady.length === 0 && (
-                        <tr><td colSpan="6" className="text-center py-6 text-indigo-700">No POs match the current filters.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="hidden md:block overflow-auto max-h-[70vh]">
+                <table className="text-xs freeze-head">
+                  <thead><tr className="bg-indigo-100/50">
+                    <th className="px-2 py-1 text-left">PO Number</th>
+                    <th className="px-2 py-1 text-left">Vendor</th>
+                    <th className="px-2 py-1">PO Date</th>
+                    <th className="px-2 py-1">Expected Receipt</th>
+                    <th className="px-2 py-1 text-right">Amount</th>
+                    <th className="px-2 py-1"></th>
+                  </tr></thead>
+                  <tbody>
+                    {dispReadyLoading && (
+                      <tr><td colSpan="6" className="text-center py-8 text-indigo-700">
+                        <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading ready to dispatch POs...
+                      </td></tr>
+                    )}
+                    {!dispReadyLoading && readyPg.rows.map(po => (
+                      <tr key={po.id} className="border-b border-indigo-100">
+                        <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">
+                          {po.po_number}
+                          <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-red-600 hover:text-red-800 underline font-normal">📄 View PO</a>
+                          <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-emerald-700 hover:text-emerald-900 underline font-normal">🚚 Delivery Note</a>
+                        </td>
+                        <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
+                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
+                          Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
+                          {+po.total_amount_drift > 1 && (
+                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + ${po.gst_pct ?? 18}% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                              ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap" title="Auto-generate the Sales Bill PDF (BOQ×delivery% rates + client GST) and open it — no form to fill. The PO then moves to Dispatch & Receiving for the site engineer to upload the signed receipt.">Dispatch</button>
+                        </td>
+                      </tr>
+                    ))}
+                    {!dispReadyLoading && dispReadyTotal === 0 && (
+                      <tr><td colSpan="6" className="text-center py-6 text-indigo-700">No POs match the current search.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
-                {/* Mobile cards — polished pattern matching Indents (mam). */}
-                <div className="md:hidden space-y-3">
-                  {readyPg.rows.map(po => (
-                    <div key={po.id} className="card p-3 space-y-2">
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
-                          <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
-                          <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                            <FiCalendar size={10} className="text-gray-400" />
-                            {po.po_date || '—'}
-                          </div>
-                        </div>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-indigo-300 bg-indigo-50 text-indigo-700 uppercase">Ready</span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
-                        <div>
-                          <div className="text-[9px] uppercase text-gray-400">Vendor</div>
-                          <div className="font-medium text-gray-700 truncate" title={po.vendor_name}>{po.vendor_name || '—'}</div>
-                        </div>
-                        <div>
-                          <div className="text-[9px] uppercase text-gray-400">Expected</div>
-                          <div className="font-medium text-gray-700">{po.expected_receipt_date || '—'}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-[9px] uppercase text-gray-400">Amount</div>
-                          <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
-                          {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
+              {/* Mobile cards — polished pattern matching Indents (mam). */}
+              <div className="md:hidden space-y-3">
+                {dispReadyLoading && (
+                  <div className="card p-6 text-center text-indigo-700 text-sm">
+                    <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
+                  </div>
+                )}
+                {!dispReadyLoading && readyPg.rows.map(po => (
+                  <div key={po.id} className="card p-3 space-y-2">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
+                        <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
+                        <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                          <FiCalendar size={10} className="text-gray-400" />
+                          {po.po_date || '—'}
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
-                        <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                          <FiPrinter size={11} /> Print PO
-                        </a>
-                        <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
-                          🚚 Delivery Note
-                        </a>
-                      </div>
-                      <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-indigo-300 bg-indigo-50 text-indigo-700 uppercase">Ready</span>
                     </div>
-                  ))}
-                  {filteredReady.length === 0 && (
-                    <div className="card p-6 text-center text-indigo-700 text-sm">No POs match the current filters.</div>
-                  )}
-                </div>
-                <Pagination pg={readyPg} setPerPage={setDispReadyPerPage} className="border-t border-indigo-200 pt-2" />
+                    <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                      <div>
+                        <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                        <div className="font-medium text-gray-700 truncate" title={po.vendor_name}>{po.vendor_name || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] uppercase text-gray-400">Expected</div>
+                        <div className="font-medium text-gray-700">{po.expected_receipt_date || '—'}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[9px] uppercase text-gray-400">Amount</div>
+                        <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
+                        {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
+                      <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                        <FiPrinter size={11} /> Print PO
+                      </a>
+                      <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
+                        🚚 Delivery Note
+                      </a>
+                    </div>
+                    <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
+                  </div>
+                ))}
+                {!dispReadyLoading && dispReadyTotal === 0 && (
+                  <div className="card p-6 text-center text-indigo-700 text-sm">No POs match the current search.</div>
+                )}
               </div>
-            )}
+              <Pagination pg={readyPg} setPerPage={setDispReadyPerPage} className="border-t border-indigo-200 pt-2" />
+            </div>
+          )}
 
-            {/* ===== Sub-tab 2: Main dispatch list ===== */}
-            {dispatchSubTab === 'list' && (
-              <>
-                <div className="flex justify-between items-center flex-wrap gap-2">
-                  <h3 className="font-semibold">Dispatch & Receiving</h3>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {/* Add Delivery Note · mam (2026-05-25): "here also add
+          {/* ===== Sub-tab 2: Main dispatch list ===== */}
+          {dispatchSubTab === 'list' && (
+            <>
+              <div className="flex justify-between items-center flex-wrap gap-2">
+                <h3 className="font-semibold">Dispatch & Receiving</h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Add Delivery Note · mam (2026-05-25): "here also add
                       delivery note for rec".  Opens the same modal but
                       pre-set to document_type='challan' — used for FOC
                       / RGP / receipt-only goods where no Sales Bill is
                       issued. */}
-                    <button onClick={() => openAddDispatch(null, 'challan')} className="btn btn-secondary flex items-center gap-2 text-sm">
-                      <FiPlus /> Add Delivery Note
-                    </button>
-                    <button onClick={() => openAddDispatch(null, 'sales_bill')} className="btn btn-primary flex items-center gap-2">
-                      <FiPlus /> Add Sales Bill
-                    </button>
-                  </div>
+                  <button onClick={() => openAddDispatch(null, 'challan')} className="btn btn-secondary flex items-center gap-2 text-sm">
+                    <FiPlus /> Add Delivery Note
+                  </button>
+                  <button onClick={() => openAddDispatch(null, 'sales_bill')} className="btn btn-primary flex items-center gap-2">
+                    <FiPlus /> Add Sales Bill
+                  </button>
                 </div>
-                <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
-                  <div className="flex-1 min-w-[200px]">
-                    <label className="label text-[10px] mb-0.5">Search · PO no / doc no / received by</label>
-                    <input className="input text-xs" placeholder="e.g. VPO-0042"
-                      value={dispListSearch} onChange={e => { setDispListSearch(e.target.value); setDispListPage(1); }} />
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5">Status</label>
-                    <select className="select text-xs" value={dispListStatus}
-                      onChange={e => { setDispListStatus(e.target.value); setDispListPage(1); }}>
-                      <option value="all">All</option>
-                      <option value="dispatched">Dispatched</option>
-                      <option value="received">Received</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5">Received From</label>
-                    <input className="input text-xs" type="date" value={dispListFrom}
-                      onChange={e => { setDispListFrom(e.target.value); setDispListPage(1); }} />
-                  </div>
-                  <div>
-                    <label className="label text-[10px] mb-0.5">Received To</label>
-                    <input className="input text-xs" type="date" value={dispListTo}
-                      onChange={e => { setDispListTo(e.target.value); setDispListPage(1); }} />
-                  </div>
-                  {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) && (
-                    <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                      onClick={() => { setDispListSearch(''); setDispListStatus('all'); setDispListFrom(''); setDispListTo(''); setDispListPage(1); }}>Reset</button>
-                  )}
-                  <div className="ml-auto text-[11px] text-gray-500">
-                    Showing <span className="font-semibold text-gray-700">{filteredDispatch.length}</span> of {deliveryNotes.length}
-                  </div>
+              </div>
+              <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5">Search · PO no / doc no / received by</label>
+                  <input className="input text-xs" placeholder="e.g. VPO-0042"
+                    value={dispListSearchInput} onChange={e => { setDispListSearchInput(e.target.value); setDispListPage(1); }} />
                 </div>
-                <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
-                  {/* Mam (2026-06-02): "site name also show here delivery note
+                <div>
+                  <label className="label text-[10px] mb-0.5">Status</label>
+                  <select className="select text-xs" value={dispListStatus}
+                    onChange={e => { setDispListStatus(e.target.value); setDispListPage(1); }}>
+                    <option value="all">All</option>
+                    <option value="dispatched">Dispatched</option>
+                    <option value="received">Received</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Received From</label>
+                  <input className="input text-xs" type="date" value={dispListFrom}
+                    onChange={e => { setDispListFrom(e.target.value); setDispListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Received To</label>
+                  <input className="input text-xs" type="date" value={dispListTo}
+                    onChange={e => { setDispListTo(e.target.value); setDispListPage(1); }} />
+                </div>
+                {(dispListSearchInput || dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setDispListSearchInput(''); setDispListSearch(''); setDispListStatus('all'); setDispListFrom(''); setDispListTo(''); setDispListPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{dispListTotal > 0 ? `${dispListPg.from + 1}–${dispListPg.to}` : 0}</span> of {dispListTotal}
+                </div>
+              </div>
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
+            {/* Mam (2026-06-02): "site name also show here delivery note
                 number and against it we will upload receiving".  Bill-
                 upload now auto-creates the DN row (commit c7e86ac).
                 For legacy billed POs that don't have a DN yet (the
@@ -6038,9 +6455,9 @@ export default function Procurement() {
                 we ALSO render synthetic "AWAITING" rows below — so
                 mam always sees the data and can still Upload Receiving
                 which creates the DN inline. */}
-                  <thead><tr><th>Delivery Note No</th><th>Type</th><th>PO</th><th>Site / Company</th><th>Indent By</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
-                  <tbody>
-                    {/* Receiving (signed receipt) is only against CLIENT delivery
+            <thead><tr><th>Delivery Note No</th><th>Type</th><th>PO</th><th>Site / Company</th><th>Indent By</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              {/* Receiving (signed receipt) is only against CLIENT delivery
                   notes — NOT vendor POs (mam 2026-06-06: "this vendor wise not
                   required rec; rec is only against client for delivery note").
                   The old synthetic "auto on receive / Upload Receiving" rows for
@@ -6048,227 +6465,238 @@ export default function Procurement() {
                   "Ready to Dispatch" sub-tab where the client Sales Bill /
                   Delivery Note is created; once created, the real DN shows here
                   for the client's signed receipt. */}
-                    {dispListPg.rows.map(d => (
-                      <tr key={d.id}>
-                        <td className="font-mono font-semibold text-blue-800">
-                          {d.document_number || <span className="text-gray-300 font-sans">—</span>}
-                          <div className="text-[10px] text-gray-400 font-sans font-normal">#{d.id}</div>
-                        </td>
-                        <td>
-                          <div className="flex flex-col gap-1 items-start">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
-                              {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
-                            </span>
-                            {d.source === 'store' && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-300" title="Material issued from store — no Vendor PO">📦 FROM STORE</span>
-                            )}
-                            {d.is_draft === 1 && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-300" title="Auto-generated Sales Bill — needs client GSTIN / selling rates before sending">✏️ DRAFT</span>
-                            )}
-                            {/* Sales Bill pending chip — mam (2026-05-25): when
+              {dispListLoading && <tr><td colSpan="12" className="text-center py-8 text-gray-500"><FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading dispatches...</td></tr>}
+              {!dispListLoading && dispListPg.rows.map(d => (
+                <tr key={d.id}>
+                  <td className="font-mono font-semibold text-blue-800">
+                    {d.document_number || <span className="text-gray-300 font-sans">—</span>}
+                    <div className="text-[10px] text-gray-400 font-sans font-normal">#{d.id}</div>
+                  </td>
+                  <td>
+                    <div className="flex flex-col gap-1 items-start">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                        {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
+                      </span>
+                      {d.source === 'store' && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-300" title="Material issued from store — no Vendor PO">📦 FROM STORE</span>
+                      )}
+                      {d.is_draft === 1 && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-300" title="Auto-generated Sales Bill — needs client GSTIN / selling rates before sending">✏️ DRAFT</span>
+                      )}
+                      {/* Sales Bill pending chip — mam (2026-05-25): when
                           dispatched with Challan only and SB will follow
                           later, this amber chip lingers until SB is
                           uploaded via the Add Sales Bill button below. */}
-                            {d.sales_bill_pending === 1 && !d.sales_bill_number && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300" title="Goods delivered on a Challan only — formal Sales Bill is still pending. Click 'Add Sales Bill' in actions to upload when it arrives.">
-                                📋 SB PENDING
-                              </span>
-                            )}
-                            {d.sales_bill_number && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200" title={`Sales Bill ${d.sales_bill_number} uploaded`}>
-                                ✓ SB {d.sales_bill_number}
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="text-xs">{d.vendor_po_number || (d.source === 'store' ? <span className="text-indigo-600 text-[10px] font-semibold">From Store</span> : <span className="text-gray-300">—</span>)}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
-                        {/* Site (mam 2026-06-02) — pulled from indents.site_id via the GET /delivery-notes JOIN */}
-                        <td className="text-xs">{d.site_name || <span className="text-gray-300">—</span>}</td>
-                        {/* Indent By (mam 2026-06-29) — who raised the originating indent
+                      {d.sales_bill_pending === 1 && !d.sales_bill_number && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300" title="Goods delivered on a Challan only — formal Sales Bill is still pending. Click 'Add Sales Bill' in actions to upload when it arrives.">
+                          📋 SB PENDING
+                        </span>
+                      )}
+                      {d.sales_bill_number && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200" title={`Sales Bill ${d.sales_bill_number} uploaded`}>
+                          ✓ SB {d.sales_bill_number}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="text-xs">{d.vendor_po_number || (d.source === 'store' ? <span className="text-indigo-600 text-[10px] font-semibold">From Store</span> : <span className="text-gray-300">—</span>)}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
+                  {/* Site (mam 2026-06-02) — pulled from indents.site_id via the GET /delivery-notes JOIN */}
+                  <td className="text-xs">{d.site_name || <span className="text-gray-300">—</span>}</td>
+                  {/* Indent By (mam 2026-06-29) — who raised the originating indent
                       (indents.raised_by_name), resolved via the same JOIN. Blank for
                       dispatches with no linked indent. */}
-                        <td className="text-xs">{d.raised_by_name || <span className="text-gray-300">—</span>}</td>
-                        <td>{d.delivery_date}</td>
-                        <td>
-                          {d.file_path
-                            ? <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View</a>
-                            : <span className="text-gray-300 text-xs">—</span>}
-                        </td>
-                        <td>{d.received_by_name || <span className="text-gray-300 text-xs">—</span>}</td>
-                        <td className="text-xs">{d.received_at ? new Date(d.received_at).toLocaleDateString() : <span className="text-gray-300">—</span>}</td>
-                        <td>
-                          {d.receipt_file_path
-                            ? <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800 underline text-xs font-semibold">Signed ✓</a>
-                            : d.received_by_name
-                              ? <span className="text-amber-600 text-[11px]">No photo</span>
-                              : <span className="text-gray-300 text-xs">—</span>}
-                        </td>
-                        <td><StatusBadge status={d.status} /></td>
-                        <td className="whitespace-nowrap">
-                          {/* Print the auto-generated SEPL Delivery Note / Sales
+                  <td className="text-xs">{d.raised_by_name || <span className="text-gray-300">—</span>}</td>
+                  <td>{d.delivery_date}</td>
+                  <td>
+                    {d.file_path
+                      ? <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View</a>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td>{d.received_by_name || <span className="text-gray-300 text-xs">—</span>}</td>
+                  <td className="text-xs">{d.received_at ? new Date(d.received_at).toLocaleDateString() : <span className="text-gray-300">—</span>}</td>
+                  <td>
+                    {d.receipt_file_path
+                      ? <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800 underline text-xs font-semibold">Signed ✓</a>
+                      : d.received_by_name
+                        ? <span className="text-amber-600 text-[11px]">No photo</span>
+                        : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td><StatusBadge status={d.status} /></td>
+                  <td className="whitespace-nowrap">
+                    {/* Print the auto-generated SEPL Delivery Note / Sales
                         Bill PDF (mam's templates). Fetched via axios so the
                         Bearer token rides along, then opened as a Blob URL —
                         plain window.open with a header-auth API would 401. */}
-                          <button
-                            onClick={async () => {
-                              try {
-                                // arraybuffer + utf-8 blob so ₹ / em-dash /
-                                // 🖨 emoji don't render as Latin-1 mojibake.
-                                const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' });
-                                const blob = new Blob([res.data], { type: 'text/html;charset=utf-8' });
-                                window.open(URL.createObjectURL(blob), '_blank', 'noopener');
-                              } catch (err) {
-                                toast.error(err.response?.data?.error || 'Could not generate document');
-                              }
-                            }}
-                            className="btn btn-secondary text-[10px] px-2 py-1 mr-1"
-                            title={`Print SEPL ${d.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}`}
-                          >🖨 Print</button>
-                          {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
-                            <button onClick={() => openEditRate(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-indigo-100 text-indigo-800 border border-indigo-300 hover:bg-indigo-200 font-semibold" title="Edit the selling rate per line — fills the invoice amounts">✏️ Edit rate</button>
-                          )}
-                          {!d.received_by_name && (
-                            <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
-                          )}
-                          {/* Add Sales Bill — only when this dispatch was marked
+                    <button
+                      onClick={async () => {
+                        try {
+                          // arraybuffer + utf-8 blob so ₹ / em-dash /
+                          // 🖨 emoji don't render as Latin-1 mojibake.
+                          const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' });
+                          const blob = new Blob([res.data], { type: 'text/html;charset=utf-8' });
+                          window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+                        } catch (err) {
+                          toast.error(err.response?.data?.error || 'Could not generate document');
+                        }
+                      }}
+                      className="btn btn-secondary text-[10px] px-2 py-1 mr-1"
+                      title={`Print SEPL ${d.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}`}
+                    >🖨 Print</button>
+                    {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
+                      <button onClick={() => openEditRate(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-indigo-100 text-indigo-800 border border-indigo-300 hover:bg-indigo-200 font-semibold" title="Edit the selling rate per line — fills the invoice amounts">✏️ Edit rate</button>
+                    )}
+                    {!d.received_by_name && (
+                      <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
+                    )}
+                    {/* Add Sales Bill — only when this dispatch was marked
                         sales_bill_pending=1 AND no SB has been uploaded yet
                         (mam 2026-05-25). */}
-                          {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
-                            <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">
-                              Add Sales Bill
-                            </button>
-                          )}
-                          {canDelete('procurement') && <button onClick={async () => {
-                            if (!confirm(`Delete dispatch #${d.id}?`)) return;
-                            try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); load(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                          }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
-                        </td>
-                      </tr>
-                    ))}
-                    {deliveryNotes.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
-                    {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
-                  </tbody>
-                </table></div>
-                {/* Pager outside the 70vh scroll box (was a <tfoot> inside it — hidden until scrolled). */}
-                <div className="hidden md:block card p-0"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></div>
+                    {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
+                      <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">
+                        Add Sales Bill
+                      </button>
+                    )}
+                    {canDelete('procurement') && <button onClick={async () => {
+                      if (!confirm(`Delete dispatch #${d.id}?`)) return;
+                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); fetchDispListPage(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                  </td>
+                </tr>
+              ))}
+              {!dispListLoading && dispListTotal === 0 && (
+                <tr><td colSpan="12" className="text-center py-8 text-gray-400">
+                  {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) ? 'No dispatches match the current filters.' : 'No dispatches yet'}
+                </td></tr>
+              )}
+            </tbody>
+            <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
+          </table></div>
 
-                {/* Mobile cards.  Each card leads with the DN number (mam
+          {/* Mobile cards.  Each card leads with the DN number (mam
               2026-06-02: "delivery note number and against it we will
               upload receiving").  Synthetic AWAITING cards appear at
               the top as a fallback for billed POs that don't yet have
               a delivery_notes row — they still let mam Upload Receiving
               and SOTYN.AI will mint the real DN number on submit. */}
-                <div className="md:hidden space-y-3">
-                  {/* Vendor-PO "Upload Receiving" cards removed — receiving is only
+          <div className="md:hidden space-y-3">
+            {/* Vendor-PO "Upload Receiving" cards removed — receiving is only
                 against client delivery notes (mam 2026-06-06). */}
-                  {dispListPg.rows.map(d => (
-                    <div key={d.id} className="card p-3 space-y-2">
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 mb-0.5">
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
-                              {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
-                            </span>
-                            <span className="text-[10px] text-gray-400">#{d.id}</span>
-                          </div>
-                          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Delivery Note No</div>
-                          <div className="text-lg font-bold text-gray-900 truncate">{d.document_number || <span className="text-gray-300 text-sm">— pending —</span>}</div>
-                          <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                            <FiCalendar size={10} className="text-gray-400" />
-                            {d.delivery_date || '—'}
-                          </div>
-                        </div>
-                        <StatusBadge status={d.status} />
-                      </div>
-                      {/* Site (mam 2026-06-02) */}
-                      {d.site_name && (
-                        <div className="flex items-start gap-1.5 text-xs">
-                          <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
-                          <div className="min-w-0">
-                            <div className="text-[10px] uppercase text-gray-400">Site</div>
-                            <div className="font-medium text-gray-800">{d.site_name}</div>
-                          </div>
-                        </div>
-                      )}
-                      {/* Indent By (mam 2026-06-29) — who raised the originating indent */}
-                      {d.raised_by_name && (
-                        <div className="flex items-start gap-1.5 text-xs">
-                          <FiUser size={12} className="mt-0.5 text-gray-400 flex-shrink-0" />
-                          <div className="min-w-0">
-                            <div className="text-[10px] uppercase text-gray-400">Indent By</div>
-                            <div className="font-medium text-gray-800">{d.raised_by_name}</div>
-                          </div>
-                        </div>
-                      )}
-                      {(d.sales_bill_pending === 1 && !d.sales_bill_number) && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-300 inline-block">📋 SB Pending</span>
-                      )}
-                      {d.sales_bill_number && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 inline-block">✓ SB {d.sales_bill_number}</span>
-                      )}
-                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
-                        <div>
-                          <div className="text-[9px] uppercase text-gray-400">PO</div>
-                          <div className="font-mono font-semibold text-blue-800 truncate">{d.vendor_po_number || '—'}</div>
-                          {d.vendor_name && <div className="text-[10px] text-gray-500 truncate" title={d.vendor_name}>{d.vendor_name}</div>}
-                        </div>
-                        <div className="text-right">
-                          <div className="text-[9px] uppercase text-gray-400">Received By</div>
-                          <div className="font-medium text-gray-700 truncate">{d.received_by_name || <span className="text-gray-300">—</span>}</div>
-                          {d.received_at && <div className="text-[10px] text-gray-500">{new Date(d.received_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</div>}
-                        </div>
-                      </div>
-                      {(d.file_path || d.receipt_file_path) && (
-                        <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
-                          {d.file_path && <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">📄 Doc</a>}
-                          {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">✓ Signed Receipt</a>}
-                        </div>
-                      )}
-                      {/* Primary action — Mark Received (when not yet received) */}
-                      {!d.received_by_name && (
-                        <button onClick={() => openMarkReceived(d)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">Mark Received</button>
-                      )}
-                      {/* Secondary actions row */}
-                      <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs flex-wrap">
-                        <button
-                          onClick={async () => {
-                            try {
-                              const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' });
-                              const blob = new Blob([res.data], { type: 'text/html;charset=utf-8' });
-                              window.open(URL.createObjectURL(blob), '_blank', 'noopener');
-                            } catch (err) {
-                              toast.error(err.response?.data?.error || 'Could not generate document');
-                            }
-                          }}
-                          className="text-gray-600 hover:underline flex items-center gap-1 font-semibold"
-                        >🖨 Print</button>
-                        {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
-                          <button onClick={() => generateSalesBill(d)} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
-                        )}
-                        {/* Edit rate — desktop-table action, now on mobile too (mam 2026-07-06). */}
-                        {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
-                          <button onClick={() => openEditRate(d)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit rate</button>
-                        )}
-                        {canDelete('procurement') && (
-                          <button onClick={async () => {
-                            if (!confirm(`Delete dispatch #${d.id}?`)) return;
-                            try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); load(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                          }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                            <FiTrash2 size={11} /> Delete
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {deliveryNotes.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches yet</div>}
-                  {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches match the current filters.</div>}
-                  <Pagination pg={dispListPg} setPerPage={setDispListPerPage} />
-                </div>
-              </>
+            {dispListLoading && (
+              <div className="card p-6 text-center text-gray-500 text-sm">
+                <FiLoader className="animate-spin inline-block mr-2" size={16} /> Loading...
+              </div>
             )}
-          </>
+            {!dispListLoading && dispListPg.rows.map(d => (
+              <div key={d.id} className="card p-3 space-y-2">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                        {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
+                      </span>
+                      <span className="text-[10px] text-gray-400">#{d.id}</span>
+                    </div>
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Delivery Note No</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{d.document_number || <span className="text-gray-300 text-sm">— pending —</span>}</div>
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                      <FiCalendar size={10} className="text-gray-400" />
+                      {d.delivery_date || '—'}
+                    </div>
+                  </div>
+                  <StatusBadge status={d.status} />
+                </div>
+                {/* Site (mam 2026-06-02) */}
+                {d.site_name && (
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Site</div>
+                      <div className="font-medium text-gray-800">{d.site_name}</div>
+                    </div>
+                  </div>
+                )}
+                {/* Indent By (mam 2026-06-29) — who raised the originating indent */}
+                {d.raised_by_name && (
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiUser size={12} className="mt-0.5 text-gray-400 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Indent By</div>
+                      <div className="font-medium text-gray-800">{d.raised_by_name}</div>
+                    </div>
+                  </div>
+                )}
+                {(d.sales_bill_pending === 1 && !d.sales_bill_number) && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-300 inline-block">📋 SB Pending</span>
+                )}
+                {d.sales_bill_number && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 inline-block">✓ SB {d.sales_bill_number}</span>
+                )}
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">PO</div>
+                    <div className="font-mono font-semibold text-blue-800 truncate">{d.vendor_po_number || '—'}</div>
+                    {d.vendor_name && <div className="text-[10px] text-gray-500 truncate" title={d.vendor_name}>{d.vendor_name}</div>}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">Received By</div>
+                    <div className="font-medium text-gray-700 truncate">{d.received_by_name || <span className="text-gray-300">—</span>}</div>
+                    {d.received_at && <div className="text-[10px] text-gray-500">{new Date(d.received_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</div>}
+                  </div>
+                </div>
+                {(d.file_path || d.receipt_file_path) && (
+                  <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
+                    {d.file_path && <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">📄 Doc</a>}
+                    {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">✓ Signed Receipt</a>}
+                  </div>
+                )}
+                {/* Primary action — Mark Received (when not yet received) */}
+                {!d.received_by_name && (
+                  <button onClick={() => openMarkReceived(d)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">Mark Received</button>
+                )}
+                {/* Secondary actions row */}
+                <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs flex-wrap">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' });
+                        const blob = new Blob([res.data], { type: 'text/html;charset=utf-8' });
+                        window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+                      } catch (err) {
+                        toast.error(err.response?.data?.error || 'Could not generate document');
+                      }
+                    }}
+                    className="text-gray-600 hover:underline flex items-center gap-1 font-semibold"
+                  >🖨 Print</button>
+                  {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={() => generateSalesBill(d)} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
+                  )}
+                  {/* Edit rate — desktop-table action, now on mobile too (mam 2026-07-06). */}
+                  {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={() => openEditRate(d)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit rate</button>
+                  )}
+                  {canDelete('procurement') && (
+                    <button onClick={async () => {
+                      if (!confirm(`Delete dispatch #${d.id}?`)) return;
+                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); fetchDispListPage(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiTrash2 size={11} /> Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {!dispListLoading && dispListTotal === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">
+                {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) ? 'No dispatches match the current filters.' : 'No dispatches yet'}
+              </div>
+            )}
+            <Pagination pg={dispListPg} setPerPage={setDispListPerPage} />
+          </div>
+            </>
+          )}
+        </>
         );
       })()}
 
@@ -7352,7 +7780,7 @@ export default function Procurement() {
               <label className="label">Link to Indent <span className="text-gray-400 font-normal">(optional)</span></label>
               <select className="select" value={form.indent_id || ''} onChange={e => pickIndentForPo(e.target.value)}>
                 <option value="">— No indent link —</option>
-                {indents.map(i => <option key={i.id} value={i.id}>{i.indent_number} — {i.site_name}</option>)}
+                {(indentLookup.length ? indentLookup : indents).map(i => <option key={i.id} value={i.id}>{i.indent_number} — {i.site_name}</option>)}
               </select>
               <p className="text-[10px] text-gray-400 mt-0.5">Picking an indent auto-fills the vendor + loads its items below for selection.</p>
             </div>
