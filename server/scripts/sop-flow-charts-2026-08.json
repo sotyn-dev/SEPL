@@ -1,0 +1,1226 @@
+[
+  {
+    "sop": "SOP-01",
+    "name": "Lead to first check",
+    "owner_role": "Sales Head — Rajat Sharma",
+    "owner": "Rajat Sharma",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "New enquiry gets entered in the system on its own. System gives it to one salesperson.",
+        "designation": "ERP",
+        "person": "Nancy",
+        "when": "An enquiry comes in (call / website / reference) → 1 sec",
+        "how": "From website form / phone call. Thank-you message goes to client on its own",
+        "sop": "SOP-01.1 · Lead entry format",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Quick check of the client — who they are, project size, old payment record. Lead gets GO or NO-GO.",
+        "designation": "Sales Coordinator",
+        "person": "Rajat sir",
+        "when": "After S1 → 5 min",
+        "how": "Simple 5-point checklist. NO-GO leads never reach seniors",
+        "sop": "SOP-01.2 · 5-point lead check-list",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "Phone call to the client — only for GO leads.",
+        "designation": "Sales Executive",
+        "person": "Rajat sir",
+        "when": "After S2 → 30 min",
+        "how": "Fixed set of questions",
+        "sop": "SOP-01.3 · Qualification call script",
+        "erp": false
+      },
+      {
+        "s": "S4",
+        "what": "Site meeting. Meeting notes made in a fixed format and mailed to client within 2 hours.",
+        "designation": "Sales Executive",
+        "person": "Rajat sir",
+        "when": "After S3 → 2 hrs",
+        "how": "Standard note format",
+        "sop": "SOP-01.4 · Meeting note (MOM) format",
+        "erp": false
+      },
+      {
+        "s": "S5",
+        "what": "Upload BOQ / drawings. Estimation work starts on its own.",
+        "designation": "Sales Coordinator",
+        "person": "Rajat sir",
+        "when": "After S4 → 1 sec",
+        "how": "System starts the next flow itself",
+        "sop": "SOP-01.5 · BOQ upload check-list",
+        "erp": false
+      }
+    ]
+  },
+  {
+    "sop": "SOP-02",
+    "name": "BOQ to quotation",
+    "owner_role": "Estimation Head",
+    "owner": "Estimation Head",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Match client's BOQ items with our own item list.",
+        "designation": "Estimator",
+        "person": "Md. Asad Ali",
+        "when": "BOQ uploaded by sales → 1-2 hrs",
+        "how": "Pick from dropdown list",
+        "sop": "SOP-02.1 · Item matching work instruction",
+        "erp": false
+      },
+      {
+        "s": "S2",
+        "what": "Only the items that don't match need a manual look.",
+        "designation": "Estimator",
+        "person": "Naveen",
+        "when": "After S1 → 1 hr",
+        "how": "Check doubtful items only, not the whole BOQ",
+        "sop": "SOP-02.2 · Doubtful-item check-list",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "System puts rates on its own from our Rate Master — last 90 days' actual rates + labour rates.",
+        "designation": "ERP",
+        "person": "Asad./Naveen",
+        "when": "After S2 → 1 sec",
+        "how": "No asking vendors again for known items",
+        "sop": "SOP-02.3 · Rate Master rule card",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Ask vendors for rates only where we have no rate, or the rate is old.",
+        "designation": "ERP",
+        "person": "Anmol",
+        "when": "After S3 → 8 hrs",
+        "how": "System sends and compares vendor rates",
+        "sop": "SOP-02.4 · Vendor rate enquiry format",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "Estimator checks the doubtful items and adds margin from the fixed margin chart.",
+        "designation": "Estimator",
+        "person": "Naveen",
+        "when": "After S4 → 2 hrs",
+        "how": "Margin chart, not guesswork",
+        "sop": "SOP-02.5 · Margin chart",
+        "erp": false
+      },
+      {
+        "s": "S6",
+        "what": "Margin above the floor — quote approved on its own. Below — Sales Head decides.",
+        "designation": "ERP / Sales Head",
+        "person": "Rajat Sharma",
+        "when": "After S5 → 1 sec",
+        "how": "Simple rule",
+        "sop": "SOP-02.6 · Margin floor rule card",
+        "erp": true
+      },
+      {
+        "s": "S7",
+        "what": "Quotation made in client's format and mailed, with a last date.",
+        "designation": "ERP",
+        "person": "Naveen",
+        "when": "After S6 → 1 sec",
+        "how": "Ready template",
+        "sop": "SOP-02.7 · Quotation template",
+        "erp": true
+      },
+      {
+        "s": "S8",
+        "what": "Reminder goes to client on day 3, 7 and 14 on its own.",
+        "designation": "ERP",
+        "person": "ERP",
+        "when": "After S7 → auto",
+        "how": "System sends reminders",
+        "sop": "SOP-02.8 · Reminder schedule card",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-03",
+    "name": "Negotiation & order booking",
+    "owner_role": "Sales Head — Rajat Sharma",
+    "owner": "Rajat Sharma",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Every negotiation runs on two clocks — days we waited for the client, days the client waited for us.",
+        "designation": "ERP",
+        "person": "Rajat sir",
+        "when": "Client responds to the quotation → auto",
+        "how": "Two dates in the system",
+        "sop": "SOP-03.1 · Two-clock entry rule card",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Client wants a change in the quote? Estimation redoes it within 4 hours.",
+        "designation": "Estimator",
+        "person": "Md. Asad Ali",
+        "when": "After S1 → 4 hrs",
+        "how": "Same day, always",
+        "sop": "SOP-03.2 · Re-quote work instruction",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "Discount within the fixed chart — done. More — Sales Head. Even more — MD sir.",
+        "designation": "ERP / Sales Head / MD",
+        "person": "Rajat Sharma / Ankur Kaplesh",
+        "when": "After S2 → 1 sec",
+        "how": "Discount chart",
+        "sop": "SOP-03.3 · Discount chart",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Order mila! System makes ONE project record — scope, rates, payment stages, retention, credit days.",
+        "designation": "ERP",
+        "person": "Nancy",
+        "when": "After S3 → 1 sec",
+        "how": "One record the whole company uses",
+        "sop": "SOP-03.4 · Project record check-list",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "System sends the full project file to the PM on its own — BOQ, drawings, notes, payment terms, dates.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S4 → 1 sec",
+        "how": "PM, Purchase and Accounts all informed together",
+        "sop": "SOP-03.5 · Handover pack check-list",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-04",
+    "name": "Project kickoff & planning",
+    "owner_role": "Project Manager — Adarsh Kumar",
+    "owner": "Adarsh Kumar",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "PM is assigned. If the PM already has 3 running projects, system stops the 4th.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "Order booked (project record made) → 1 sec",
+        "how": "Finish one first",
+        "sop": "SOP-04.1 · PM loading rule card (max 3)",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Kickoff meeting — scope, dates, risks, what we need from the client — all noted in the system.",
+        "designation": "Project Manager",
+        "person": "Ambuj",
+        "when": "After S1 → 2 hrs",
+        "how": "Fixed agenda",
+        "sop": "SOP-04.2 · Kickoff meeting agenda",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "Project plan made with realistic dates — extra padding removed from each task.",
+        "designation": "PM + Planning Engineer",
+        "person": "Ambuj",
+        "when": "After S2 → 1 day",
+        "how": "One honest plan",
+        "sop": "SOP-04.3 · Project planning work instruction",
+        "erp": false
+      },
+      {
+        "s": "S4",
+        "what": "Safety buffer kept at project level — 25% at the end, 50% on side chains.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S3 → 1 sec",
+        "how": "Company rule 50 / 25",
+        "sop": "SOP-04.4 · Buffer rule card (50/25)",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "Material plan made from BOQ — which material is needed by which date.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S4 → 1 sec",
+        "how": "Buying is planned, not last-minute",
+        "sop": "SOP-04.5 · Material plan format",
+        "erp": true
+      },
+      {
+        "s": "S6",
+        "what": "Ready-checklist made for every work area — drawing, material, space, men, tools, safety, client OK.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S5 → 1 sec",
+        "how": "Work starts only when the list is complete",
+        "sop": "SOP-04.6 · Ready-check-list master",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-05",
+    "name": "Vendor & rates fixed BEFORE indent",
+    "owner_role": "Purchase Head — awdesh sharma",
+    "owner": "awdesh sharma",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "BOQ is split into material packages, each with the date the site will first need it.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "Order booked (project record made) → 1 sec",
+        "how": "Nearest-date packages first",
+        "sop": "SOP-05.1 · Package list format",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Rate enquiry goes to our vendors for the FULL project quantity — not small lots.",
+        "designation": "ERP",
+        "person": "Anmol",
+        "when": "After S1 → 1 sec",
+        "how": "Big quantity = better rate",
+        "sop": "SOP-05.2 · Rate enquiry format (full qty)",
+        "erp": true
+      },
+      {
+        "s": "S3",
+        "what": "Rates come back and get compared with our estimate on their own.",
+        "designation": "ERP",
+        "person": "Avadesh sharma",
+        "when": "After S2 → 3 days",
+        "how": "Comparison sheet ready-made",
+        "sop": "SOP-05.3 · Rate comparison sheet",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Purchase Head finalises the vendor for each package — rate, credit days, delivery time, old record.",
+        "designation": "Purchase Head",
+        "person": "Avadesh sharma",
+        "when": "After S3 → 1 day",
+        "how": "One negotiation for the whole project — not at every indent",
+        "sop": "SOP-05.4 · Vendor score card",
+        "erp": false
+      },
+      {
+        "s": "S5",
+        "what": "Rate within estimate — locked on its own. Above estimate — only that package goes to MD sir.",
+        "designation": "ERP / MD",
+        "person": "Ankur Kaplesh",
+        "when": "After S4 → 1 sec",
+        "how": "MD sees only the costly ones",
+        "sop": "SOP-05.5 · Rate lock rule card",
+        "erp": true
+      },
+      {
+        "s": "S6",
+        "what": "Rate Contract locked in the system — vendor, rate, credit days, delivery time. Valid for the project.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S5 → 1 sec",
+        "how": "After this, no rate talk at indent time",
+        "sop": "SOP-05.6 · Rate Contract format",
+        "erp": true
+      },
+      {
+        "s": "S7",
+        "what": "Items with long delivery time get flagged — order them today.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S6 → 1 sec",
+        "how": "List shows on PM and Purchase screens",
+        "sop": "SOP-05.7 · Long-delivery item rule card",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-06",
+    "name": "Drawing approval",
+    "owner_role": "Design Head",
+    "owner": "Design Head",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Drawing list made, with by-when-needed dates.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "Ready-check-list shows drawing pending → 1 sec",
+        "how": "Dates come from the project plan",
+        "sop": "SOP-06.1 · Drawing register format",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Drawing made, or taken from the vendor.",
+        "designation": "Design Engineer",
+        "person": "MD Asad",
+        "when": "After S1 → as per plan",
+        "how": "Fixed format",
+        "sop": "SOP-06.2 · Drawing standard format",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "Our senior checks the drawing BEFORE it goes to the client.",
+        "designation": "Senior Engineer",
+        "person": "Ambuj",
+        "when": "After S2 → 4 hrs",
+        "how": "Mistakes caught in-house",
+        "sop": "SOP-06.3 · Pre-submission check-list",
+        "erp": false
+      },
+      {
+        "s": "S4",
+        "what": "Drawing sent to the client — the clock starts.",
+        "designation": "ERP",
+        "person": "Lovely",
+        "when": "After S3 → 1 sec",
+        "how": "Date recorded",
+        "sop": "SOP-06.4 · Submission log rule",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "Reminders at half time and 80% time — before the date, not after.",
+        "designation": "ERP",
+        "person": "Rajat sir",
+        "when": "After S4 → auto",
+        "how": "PM → Head → MD",
+        "sop": "SOP-06.5 · Reminder rule card (50% / 80%)",
+        "erp": true
+      },
+      {
+        "s": "S6",
+        "what": "Approved drawing goes to site; ready-checklist gets ticked.",
+        "designation": "ERP",
+        "person": "Ambuj",
+        "when": "After S5 → 1 sec",
+        "how": "As per the SOP document below",
+        "sop": "SOP-06.6 · Drawing release note",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-07",
+    "name": "Indent to material at site",
+    "owner_role": "Purchase Head — awdesh sharma",
+    "owner": "awdesh sharma",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Site raises indent ANY day — only for BOQ items. Extra items are blocked.",
+        "designation": "Site Engineer",
+        "person": "As per requirement",
+        "when": "Material plan date arrives, or site raises need → when needed",
+        "how": "No more Wednesday-Saturday waiting",
+        "sop": "SOP-07.1 · Indent format (BOQ-locked)",
+        "erp": false
+      },
+      {
+        "s": "S2",
+        "what": "System first uses stock lying in store or other sites; only the balance goes to the vendor.",
+        "designation": "ERP",
+        "person": "Birender",
+        "when": "After S1 → 1 sec",
+        "how": "Use what we already have",
+        "sop": "SOP-07.2 · Stock-first rule card",
+        "erp": true
+      },
+      {
+        "s": "S3",
+        "what": "Item in Rate Contract + quantity within BOQ = PO goes out SAME DAY, on its own. No approval.",
+        "designation": "ERP",
+        "person": "Anmol",
+        "when": "After S2 → 1 sec",
+        "how": "The rate was already approved earlier",
+        "sop": "SOP-07.3 · Auto-PO rule card",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Only odd cases go to a person — a new item, or extra quantity.",
+        "designation": "Purchase Head",
+        "person": "Avadesh sharma",
+        "when": "After S3 → 4 hrs",
+        "how": "The only manual case left",
+        "sop": "SOP-07.4 · Exception check-list",
+        "erp": false
+      },
+      {
+        "s": "S5",
+        "what": "PO goes only with a written delivery date.",
+        "designation": "ERP",
+        "person": "Anmol",
+        "when": "After S4 → 1 sec",
+        "how": "No date, no PO",
+        "sop": "SOP-07.5 · Delivery-date rule card",
+        "erp": true
+      },
+      {
+        "s": "S6",
+        "what": "Vendor confirms dispatch and fills truck details himself on the portal.",
+        "designation": "Vendor",
+        "person": "Ajmer",
+        "when": "After S5 → at dispatch",
+        "how": "We don't chase on phone",
+        "sop": "SOP-07.6 · Vendor portal guide",
+        "erp": true
+      },
+      {
+        "s": "S7",
+        "what": "System alerts the Site Engineer 12 hours before the truck arrives.",
+        "designation": "ERP",
+        "person": "Ajmer",
+        "when": "After S6 → auto",
+        "how": "Unloading team ready before the truck",
+        "sop": "SOP-07.7 · Truck alert rule",
+        "erp": true
+      },
+      {
+        "s": "S8",
+        "what": "Store Keeper receives material on mobile — quantity, photo, test certificate.",
+        "designation": "Store Keeper",
+        "person": "Ajmer",
+        "when": "After S7 → 10 min",
+        "how": "Proof with every receipt",
+        "sop": "SOP-07.8 · Receiving check-list (photo + certificate)",
+        "erp": false
+      },
+      {
+        "s": "S9",
+        "what": "System tallies PO, bill and receipt. All three match = bill booked on its own.",
+        "designation": "ERP",
+        "person": "Ishaan",
+        "when": "After S8 → 1 sec",
+        "how": "No matching, no booking",
+        "sop": "SOP-07.9 · Three-way tally rule card",
+        "erp": true
+      },
+      {
+        "s": "S10",
+        "what": "Short or bad material — debit note made, vendor informed, bill blocked, return arranged.",
+        "designation": "ERP",
+        "person": "Avadesh sharma",
+        "when": "After S9 → 1 sec",
+        "how": "All on its own",
+        "sop": "SOP-07.10 · Short/damage work instruction",
+        "erp": true
+      },
+      {
+        "s": "S11",
+        "what": "Vendor's report card updates on every delivery — used for the next project's rates.",
+        "designation": "ERP",
+        "person": "AutomMatic",
+        "when": "After S10 → 1 sec",
+        "how": "Good vendors win more work",
+        "sop": "SOP-07.11 · Vendor report card format",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-08",
+    "name": "Tools & RGP",
+    "owner_role": "Purchase Head — awdesh sharma",
+    "owner": "awdesh sharma",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Tool needed? Raise it with a from-date and a till-date. Both compulsory.",
+        "designation": "Site Engineer",
+        "person": "Site Engineer",
+        "when": "Site needs a tool → on need",
+        "how": "Return date decided on day one",
+        "sop": "SOP-08.1 · Tool request format (two dates)",
+        "erp": false
+      },
+      {
+        "s": "S2",
+        "what": "System checks store and all sites first. Available anywhere — transfer it, don't rent.",
+        "designation": "ERP",
+        "person": "Auto/Ajmer",
+        "when": "After S1 → 1 sec",
+        "how": "Don't rent what we own",
+        "sop": "SOP-08.2 · Stock-first rule card",
+        "erp": true
+      },
+      {
+        "s": "S3",
+        "what": "Not available? System compares rent vs buy for those days and suggests.",
+        "designation": "ERP",
+        "person": "Anmol",
+        "when": "After S2 → 1 sec",
+        "how": "Simple comparison",
+        "sop": "SOP-08.3 · Rent-vs-buy comparison card",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Small amount — approved on its own. Bigger — Purchase Head. HR approval removed.",
+        "designation": "ERP / Purchase Head",
+        "person": "Avadesh sharma",
+        "when": "After S3 → 1 hr",
+        "how": "HR was checking nothing",
+        "sop": "SOP-08.4 · Approval limit card",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "Tool not back by the till-date — alert goes to the PM.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S4 → daily",
+        "how": "System closes the return gate",
+        "sop": "SOP-08.5 · Return alert rule",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-09",
+    "name": "Site work & daily report",
+    "owner_role": "Project Manager — Adarsh Kumar",
+    "owner": "Adarsh Kumar",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Work starts ONLY when the ready-checklist is complete — drawing, material, space, men, tools, safety, client OK.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "Work area passes the ready-check-list → 1 sec",
+        "how": "Half-ready = no start",
+        "sop": "SOP-09.1 · Ready-check-list master",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Site Engineer fills the daily report on mobile — work done, men, photos, problems. 5 minutes.",
+        "designation": "Site Engineer",
+        "person": "Site eng",
+        "when": "After S1 → daily",
+        "how": "Photos are proof",
+        "sop": "SOP-09.2 · Daily report format (mobile)",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "Every problem written becomes a task — one name, one date. Not just a note.",
+        "designation": "ERP",
+        "person": "CRM",
+        "when": "After S2 → 1 sec",
+        "how": "Problems can't hide",
+        "sop": "SOP-09.3 · Problem-to-task rule card",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "System compares actual work with the plan and updates the buffer.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S3 → 1 sec",
+        "how": "Early warning, automatic",
+        "sop": "SOP-09.4 · Buffer update rule",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "GREEN — fine. YELLOW — PM makes a plan. RED — Head acts today.",
+        "designation": "PM → Department Head",
+        "person": "Ambuj",
+        "when": "After S4 → auto",
+        "how": "Daily 15-minute meeting — only reds",
+        "sop": "SOP-09.5 · Colour rule card (green/yellow/red)",
+        "erp": false
+      },
+      {
+        "s": "S6",
+        "what": "Before closing a work area — quality & safety checklist with photos.",
+        "designation": "Site Engineer",
+        "person": "",
+        "when": "After S5 → at finish",
+        "how": "No photo, no closure",
+        "sop": "SOP-09.6 · Closing check-list (quality + safety)",
+        "erp": false
+      }
+    ]
+  },
+  {
+    "sop": "SOP-10",
+    "name": "Material use at site",
+    "owner_role": "Project Manager — Adarsh Kumar",
+    "owner": "Adarsh Kumar",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Material issued from store against the work area — mobile slip.",
+        "designation": "Store Keeper",
+        "person": "Ajmer",
+        "when": "Material issued from site store → at issue",
+        "how": "Area-wise, not project-wise",
+        "sop": "SOP-10.1 · Issue slip format (area-wise)",
+        "erp": false
+      },
+      {
+        "s": "S2",
+        "what": "Daily report shows how much got installed in that area.",
+        "designation": "Site Engineer",
+        "person": "Site Engineer",
+        "when": "After S1 → daily",
+        "how": "Same report, no extra work",
+        "sop": "SOP-10.2 · Daily report format",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "System compares issued vs installed vs BOQ. Difference too big = flag the SAME day.",
+        "designation": "ERP",
+        "person": "Automatic",
+        "when": "After S2 → 1 sec",
+        "how": "Leakage visible daily, not at project end",
+        "sop": "SOP-10.3 · Difference flag rule card",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Monthly physical counting at site; tally with the system.",
+        "designation": "Store Keeper + PM",
+        "person": "Ajmer/Site supervisour",
+        "when": "After S3 → monthly",
+        "how": "Count sheet in system",
+        "sop": "SOP-10.4 · Monthly count sheet",
+        "erp": false
+      },
+      {
+        "s": "S5",
+        "what": "Left-over material goes back to store or to another site — never wasted.",
+        "designation": "ERP",
+        "person": "Ajmer",
+        "when": "After S4 → when found",
+        "how": "Transfer note",
+        "sop": "SOP-10.5 · Return / transfer note",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-11",
+    "name": "Labour / thekedar",
+    "owner_role": "Project Manager — Adarsh Kumar",
+    "owner": "Adarsh Kumar",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Labour plan made from BOQ and dates — how many men, from when.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "Labour plan date arrives → 1 sec",
+        "how": "No last-minute calls",
+        "sop": "SOP-11.1 · Labour plan format",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Written work order to the thekedar — rate, scope, stages, retention, safety.",
+        "designation": "HR Executive",
+        "person": "Ruksana",
+        "when": "After S1 → as per plan",
+        "how": "Everything in writing",
+        "sop": "SOP-11.2 · Work order format",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "Daily labour count goes into the daily report.",
+        "designation": "Site Engineer",
+        "person": "Site Engineer",
+        "when": "After S2 → daily",
+        "how": "Thekedar-wise count",
+        "sop": "SOP-11.3 · Daily report format",
+        "erp": false
+      },
+      {
+        "s": "S4",
+        "what": "Work measured jointly with the thekedar at each stage; entered in the system.",
+        "designation": "Site Engineer + Thekedar",
+        "person": "Site Engineer",
+        "when": "After S3 → at each stage",
+        "how": "Joint measurement — no dispute later",
+        "sop": "SOP-11.4 · Joint measurement sheet",
+        "erp": false
+      },
+      {
+        "s": "S5",
+        "what": "Thekedar's bill calculated by the system — measured quantity × rate. No monthly bargaining.",
+        "designation": "ERP",
+        "person": "Ishaan",
+        "when": "After S4 → 1 sec",
+        "how": "Calculated, not negotiated",
+        "sop": "SOP-11.5 · Bill calculation rule card",
+        "erp": true
+      },
+      {
+        "s": "S6",
+        "what": "Payment after retention, safety and quality check.",
+        "designation": "Accounts Executive",
+        "person": "Aanchal",
+        "when": "After S5 → as per terms",
+        "how": "Three checks, then pay",
+        "sop": "SOP-11.6 · Payment check-list (3 checks)",
+        "erp": false
+      }
+    ]
+  },
+  {
+    "sop": "SOP-12",
+    "name": "Extra work / change order",
+    "owner_role": "Project Manager — Adarsh Kumar",
+    "owner": "Adarsh Kumar",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Any work outside the BOQ shows up — system raises a change request on its own.",
+        "designation": "ERP",
+        "person": "Auto/CRM",
+        "when": "Any work outside BOQ appears → 1 sec",
+        "how": "Nothing extra slips through",
+        "sop": "SOP-12.1 · Change request rule card",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "System sorts it — extra quantity (rate exists) or new item (rate to be made).",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S1 → 1 sec",
+        "how": "Simple sorting",
+        "sop": "SOP-12.2 · Sorting rule card",
+        "erp": true
+      },
+      {
+        "s": "S3",
+        "what": "Extra quantity priced at the booked rate. New item priced by Estimation.",
+        "designation": "Estimator",
+        "person": "Md. Asad Ali",
+        "when": "After S2 → 4 hrs",
+        "how": "Margin chart again",
+        "sop": "SOP-12.3 · Pricing work instruction",
+        "erp": false
+      },
+      {
+        "s": "S4",
+        "what": "Quote goes to the client with a last date; reminders on day 2 and day 5.",
+        "designation": "ERP",
+        "person": "Lovely",
+        "when": "After S3 → 1 sec",
+        "how": "System follows up",
+        "sop": "SOP-12.4 · Client quote format + reminder card",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "Till the client approves — no material, no work on that item. System blocks it.",
+        "designation": "ERP",
+        "person": "Lovely",
+        "when": "After S4 → always",
+        "how": "No approval, no work",
+        "sop": "SOP-12.5 · Block rule card (no approval, no work)",
+        "erp": true
+      },
+      {
+        "s": "S6",
+        "what": "Client approved — BOQ, dates and indent get updated on their own.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S5 → 1 sec",
+        "how": "System updates all three together",
+        "sop": "SOP-12.6 · Update check-list",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-13",
+    "name": "RA bill & sales bill",
+    "owner_role": "Project Control Manager",
+    "owner": "Project Control Manager",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Work done shows up daily as a 'work done but not billed' amount.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "Work recorded in the daily report → live",
+        "how": "Visible every day, not every 15 days",
+        "sop": "SOP-13.1 · Unbilled amount rule card",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "RA bill is made when 15 days pass OR the unbilled amount crosses the limit — whichever is FIRST.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S1 → auto",
+        "how": "Big amounts don't wait for the calendar",
+        "sop": "SOP-13.2 · Bill trigger rule card (15 days OR limit)",
+        "erp": true
+      },
+      {
+        "s": "S3",
+        "what": "Bill goes to the client with measurement sheet, report and photos attached.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S2 → 1 sec",
+        "how": "No excuse left to sit on it",
+        "sop": "SOP-13.3 · Bill pack check-list (proofs attached)",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Not signed in 3 days? Reminder day 3, PM day 5, Head day 7.",
+        "designation": "ERP → PM → Head",
+        "person": "Adarsh Kumar / Nitin Jain",
+        "when": "After S3 → auto",
+        "how": "Fixed ladder",
+        "sop": "SOP-13.4 · Follow-up ladder card (3/5/7)",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "Signed bill uploaded. The money clock starts from bill SUBMISSION.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S4 → 1 sec",
+        "how": "Upload signed copy; date auto-recorded",
+        "sop": "SOP-13.5 · Bill submission log rule",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-14",
+    "name": "Testing & commissioning",
+    "owner_role": "Project Manager — Adarsh Kumar",
+    "owner": "Adarsh Kumar",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Work 100%? System checks readiness — snags closed, drawings ready, approvals in hand.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "A work area reaches 100% → 1 sec",
+        "how": "Ready first, then test",
+        "sop": "SOP-14.1 · Readiness check-list",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Testing date fixed with the client WITHIN 7 days — not 30.",
+        "designation": "Project Manager",
+        "person": "Adarsh Kumar",
+        "when": "After S1 → 7 days",
+        "how": "Cash comes 23 days earlier",
+        "sop": "SOP-14.2 · 7-day scheduling rule card",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "Test done on a fixed format — readings and photos on mobile.",
+        "designation": "Site Engineer",
+        "person": "Samsad",
+        "when": "After S2 → as per format",
+        "how": "Fixed test format on mobile",
+        "sop": "SOP-14.3 · Test format (readings + photos)",
+        "erp": false
+      },
+      {
+        "s": "S4",
+        "what": "Fail — re-test with a name and a date. Pass — report made on its own.",
+        "designation": "Site Engineer",
+        "person": "Samsad",
+        "when": "After S3 → 1 sec",
+        "how": "Failure also has a path",
+        "sop": "SOP-14.4 · Re-test work instruction",
+        "erp": false
+      },
+      {
+        "s": "S5",
+        "what": "Client accepts — testing bill and payment demand raised on their own.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S4 → 1 sec",
+        "how": "Bill follows the test",
+        "sop": "SOP-14.5 · Test bill rule card",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-15",
+    "name": "Handover & snags",
+    "owner_role": "Project Manager — Adarsh Kumar",
+    "owner": "Adarsh Kumar",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Work 100% — handover starts on its own; no new cost booking allowed.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "Project work reaches 100% → 1 sec",
+        "how": "Costs locked",
+        "sop": "SOP-15.1 · Handover start rule card",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Snag walk WITH the client. Every snag noted separately — name, date, photo.",
+        "designation": "Site Engineer + Client",
+        "person": "Site Eng",
+        "when": "After S1 → 1 day",
+        "how": "Client's list, not only ours",
+        "sop": "SOP-15.2 · Snag walk format (with client)",
+        "erp": false
+      },
+      {
+        "s": "S3",
+        "what": "Every snag is a task with a clock. Late — PM, then Head.",
+        "designation": "ERP",
+        "person": "Automatic",
+        "when": "After S2 → daily",
+        "how": "Snags can't sleep",
+        "sop": "SOP-15.3 · Snag clock rule card",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Snag closed with photo; client ticks each one himself.",
+        "designation": "Site Engineer / Client",
+        "person": "Sushila",
+        "when": "After S3 → per date",
+        "how": "Tick by tick, no email chains",
+        "sop": "SOP-15.4 · Snag closing check-list (photo + client tick)",
+        "erp": false
+      },
+      {
+        "s": "S5",
+        "what": "All snags closed — handover certificate made and sent for sign.",
+        "designation": "ERP",
+        "person": "Sushila/CRM",
+        "when": "After S4 → 1 sec",
+        "how": "Certificate from ready format",
+        "sop": "SOP-15.5 · Handover certificate format",
+        "erp": true
+      },
+      {
+        "s": "S6",
+        "what": "Signed handover starts the final bill, retention schedule and warranty period.",
+        "designation": "ERP",
+        "person": "CRM",
+        "when": "After S5 → 1 sec",
+        "how": "System opens the retention flow itself",
+        "sop": "SOP-15.6 · Closure trigger check-list",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-16",
+    "name": "Collection",
+    "owner_role": "Collection Engineer",
+    "owner": "Collection Engineer",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Payment stages — advance / material / testing / handover — are written in the project record on day one.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "A payment stage completes / bill submitted → 1 sec",
+        "how": "Part of the contract",
+        "sop": "SOP-16.1 · Payment stages format (in contract)",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "A stage completes — the system asks for payment ITSELF. No one has to remember.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S1 → 1 sec",
+        "how": "Demand on event",
+        "sop": "SOP-16.2 · Auto-demand rule card",
+        "erp": true
+      },
+      {
+        "s": "S3",
+        "what": "Screen shows who owes what — 0-30 / 31-60 / 61-90 / 90+ days.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S2 → live",
+        "how": "Project-wise and client-wise",
+        "sop": "SOP-16.3 · Ageing screen guide",
+        "erp": true
+      },
+      {
+        "s": "S4",
+        "what": "Fixed ladder — reminder, then Collection Engineer's call, then PM, Head, MD. Each on a fixed day.",
+        "designation": "Collection Engineer → PM → Head → MD",
+        "person": "— / Adarsh Kumar / Nitin Jain / Ankur Kaplesh",
+        "when": "After S3 → fixed days",
+        "how": "A ladder, not memory",
+        "sop": "SOP-16.4 · Follow-up ladder card (fixed days)",
+        "erp": false
+      },
+      {
+        "s": "S5",
+        "what": "Client 60 days late — new material for his project stops. Head can allow if needed.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S4 → always",
+        "how": "We stop funding late payers",
+        "sop": "SOP-16.5 · 60-day stop rule card",
+        "erp": true
+      },
+      {
+        "s": "S6",
+        "what": "Payment matched with the bank on its own; thank-you receipt goes to the client.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S5 → 1 sec",
+        "how": "Receipt goes on its own after bank match",
+        "sop": "SOP-16.6 · Bank matching rule",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-17",
+    "name": "Final account & retention",
+    "owner_role": "Finance Head — Parul Goyal",
+    "owner": "Parul Goyal",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "Final account made — booked value vs actual cost vs actual money received.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "Handover certificate signed → 1 sec",
+        "how": "Real profit finally visible",
+        "sop": "SOP-17.1 · Final account format",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Retention schedule made at handover, with due dates. It is tracked money now.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S1 → 1 sec",
+        "how": "Not forgotten money",
+        "sop": "SOP-17.2 · Retention schedule format",
+        "erp": true
+      },
+      {
+        "s": "S3",
+        "what": "Warranty period tracked; complaints closed before claiming retention.",
+        "designation": "Site Engineer",
+        "person": "Site Engineer",
+        "when": "After S2 → warranty period",
+        "how": "Complaint register with dates",
+        "sop": "SOP-17.3 · Warranty log format",
+        "erp": false
+      },
+      {
+        "s": "S4",
+        "what": "Retention due — claim raised on its own, same follow-up ladder as collection.",
+        "designation": "ERP + Collection Engineer",
+        "person": "—",
+        "when": "After S3 → on due date",
+        "how": "Same ladder as collection follow-up",
+        "sop": "SOP-17.4 · Retention claim rule card",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "Project's actual rates and usage go back into the Rate Master — next quote gets sharper.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S4 → at close",
+        "how": "The company learns from every project",
+        "sop": "SOP-17.5 · Rate Master update rule",
+        "erp": true
+      }
+    ]
+  },
+  {
+    "sop": "SOP-18",
+    "name": "Payments & cheques",
+    "owner_role": "Finance Head — Parul Goyal",
+    "owner": "Parul Goyal",
+    "steps": [
+      {
+        "s": "S1",
+        "what": "A payable is created only from a matched bill or an approved claim — no manual raising.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "A bill is matched or a claim approved → 1 sec",
+        "how": "System makes it; nobody types it",
+        "sop": "SOP-18.1 · Payable creation rule card",
+        "erp": true
+      },
+      {
+        "s": "S2",
+        "what": "Bill matched + within PO terms = approved on its own. TA/DA within policy = auto.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S1 → 1 sec",
+        "how": "Simple rules",
+        "sop": "SOP-18.2 · Auto-approval rule card",
+        "erp": true
+      },
+      {
+        "s": "S3",
+        "what": "Only odd cases go to Finance. The one who approves and the one who pays are DIFFERENT people.",
+        "designation": "Finance Approver / Finance Executive",
+        "person": "— / Aanchal",
+        "when": "After S2 → 4 hrs",
+        "how": "Two hands, not one",
+        "sop": "SOP-18.3 · Exception check-list + two-person rule",
+        "erp": false
+      },
+      {
+        "s": "S4",
+        "what": "ONE payment day per week — by credit terms and cash position, not by who asked first.",
+        "designation": "ERP + Finance Head",
+        "person": "Parul Goyal",
+        "when": "After S3 → weekly",
+        "how": "Cash-wise, not queue-wise",
+        "sop": "SOP-18.4 · Weekly payment day rule card",
+        "erp": true
+      },
+      {
+        "s": "S5",
+        "what": "Cheque / NEFT status updates from the bank. A hold needs a written reason and lapses in 7 days.",
+        "designation": "ERP",
+        "person": "—",
+        "when": "After S4 → auto",
+        "how": "Bank feed updates it daily",
+        "sop": "SOP-18.5 · Bank status + hold rule card",
+        "erp": true
+      }
+    ]
+  }
+]

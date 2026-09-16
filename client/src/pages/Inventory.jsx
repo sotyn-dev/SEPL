@@ -12,6 +12,7 @@ import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import { useAuth } from '../context/AuthContext';
 import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera, FiDownload, FiCalendar } from 'react-icons/fi';
@@ -53,6 +54,12 @@ export default function Inventory() {
   // Filters
   const [stockFilter, setStockFilter] = useState({ warehouse_id: '', search: '', low_only: false });
   const [mvmtFilter, setMvmtFilter] = useState({ warehouse_id: '', type: '', date_from: '', date_to: '' });
+  // Type (PO / FOC / RGP) and Condition are StockTab's CLIENT-side filters, but
+  // they live here — not inside StockTab — so the header's Export Excel can see
+  // them. Kept out of `stockFilter` on purpose: that object drives the server
+  // refetch, and these two need no round-trip.
+  const [typeFilter, setTypeFilter] = useState('');
+  const [condFilter, setCondFilter] = useState('');
 
   const loadCommon = async () => {
     try {
@@ -103,6 +110,28 @@ export default function Inventory() {
   useEffect(() => { if (tab === 'stock') loadStock(); /* eslint-disable-next-line */ }, [tab, stockFilter]);
   useEffect(() => { if (tab === 'movements') loadMovements(); /* eslint-disable-next-line */ }, [tab, mvmtFilter]);
 
+  // The EXACT row list the Stock table renders: server-side filters
+  // (warehouse / search / low_only) already applied by loadStock, plus the two
+  // client-side ones. Defensive warehouse re-filter: even if the server
+  // response lags behind the dropdown change (network glitch, caching, race
+  // condition), rows shown will ALWAYS match the currently-selected warehouse.
+  // Without this mam was seeing CHOUDHERY rows under a CONSERN PHARMA filter
+  // when the stock state was momentarily stale between fetches.
+  const flatStock = useMemo(() => {
+    let rows = stock;
+    if (stockFilter.warehouse_id) {
+      const wid = +stockFilter.warehouse_id;
+      rows = rows.filter(r => +r.warehouse_id === wid);
+    }
+    if (typeFilter) {
+      rows = rows.filter(r => String(r.item_type || '').toUpperCase() === typeFilter);
+    }
+    if (condFilter) {
+      rows = rows.filter(r => (r.latest_condition || '') === condFilter);
+    }
+    return rows;
+  }, [stock, stockFilter.warehouse_id, typeFilter, condFilter]);
+
   // Aggregate for header cards
   const totals = useMemo(() => {
     const valueByWh = summary.reduce((s, w) => s + (+w.total_value || 0), 0);
@@ -122,24 +151,24 @@ export default function Inventory() {
             Stock per warehouse · receive material in · issue to site or transfer between stores · full movement history.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 w-full sm:w-auto">
           <button onClick={() => {
-            // Export the currently-loaded stock rows. (Earlier this referenced
-            // `flatStock`, which only exists inside StockTab — so the click
-            // threw and nothing downloaded. Use the parent's own `stock`, with
-            // the real field names: quantity / effective_rate / value.)
-            if (!stock.length) { toast.error('No stock to export — open the Stock tab / pick a warehouse first'); return; }
+            // Export exactly what the Stock table shows — `flatStock` is the
+            // full filtered list (warehouse / search / low_only from the server
+            // PLUS the Type and Condition chips), NOT the current page: the
+            // pager inside StockTab windows rendering only.
+            if (!flatStock.length) { toast.error('No stock to export — open the Stock tab / pick a warehouse first'); return; }
             exportCsv('inventory-stock',
               ['Code','Site','Item','Size','Spec','Make','Type','UoM','Qty','Condition','Rate','Value','Reorder Level'],
-              stock.map(s => {
+              flatStock.map(s => {
                 const rate = (+s.effective_rate > 0) ? +s.effective_rate : ((+s.avg_rate > 0) ? +s.avg_rate : (+s.master_price || 0));
                 const value = (+s.value > 0) ? +s.value : rate * (+s.quantity || 0);
                 return [s.item_code, s.warehouse_name, s.item_name, s.size, s.specification, s.make, s.item_type, s.uom, s.quantity, s.latest_condition, rate, value, s.reorder_level];
               }));
           }}
-            className="btn btn-secondary flex items-center gap-2"><FiDownload size={14} /> Export Excel</button>
+            className="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-initial justify-center flex items-center gap-1.5 sm:gap-2"><FiDownload size={14} /> Export Excel</button>
           <button onClick={() => { loadSummary(); if (tab === 'stock') loadStock(); if (tab === 'movements') loadMovements(); }}
-            className="btn btn-secondary flex items-center gap-2"><FiRefreshCw size={14} /> Refresh</button>
+            className="btn btn-secondary text-xs sm:text-sm flex-1 sm:flex-initial justify-center flex items-center gap-1.5 sm:gap-2"><FiRefreshCw size={14} /> Refresh</button>
         </div>
       </div>
 
@@ -171,7 +200,7 @@ export default function Inventory() {
           (mam 2026-06-25), not as one global date here. */}
 
       {/* Tabs */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none sm:flex-wrap">
         {[
           ['stock', 'Stock'],
           ['opening', 'Opening Stock (item-wise)', canCreate('inventory')],
@@ -189,7 +218,7 @@ export default function Inventory() {
         ))}
       </div>
 
-      {tab === 'stock' && <StockTab stock={stock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} reload={() => { loadStock(); loadSummary(); }} canEdit={canEdit('inventory') || isAdmin()} canDelete={canDelete('inventory') || isAdmin()} />}
+      {tab === 'stock' && <StockTab stock={stock} flatStock={flatStock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} typeFilter={typeFilter} setTypeFilter={setTypeFilter} condFilter={condFilter} setCondFilter={setCondFilter} reload={() => { loadStock(); loadSummary(); }} canEdit={canEdit('inventory') || isAdmin()} canDelete={canDelete('inventory') || isAdmin()} />}
       {tab === 'opening' && <OpeningStockTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'receive' && <ReceiveTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'issue' && <IssueTab warehouses={warehouses} sites={sites} items={items} reload={() => { loadStock(); loadSummary(); }} />}
@@ -202,7 +231,7 @@ export default function Inventory() {
 }
 
 // ---------- STOCK TAB ----------
-function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDelete }) {
+function StockTab({ stock, flatStock, warehouses, filter, setFilter, typeFilter, setTypeFilter, condFilter, setCondFilter, reload, canEdit, canDelete }) {
   // Inline edit: click a "Reorder" cell to set the threshold per (item × warehouse).
   // Saves on blur / Enter; Esc cancels. Optimistic UI with rollback on error.
   const [editing, setEditing] = useState(null); // { warehouse_id, item_master_id, value }
@@ -213,12 +242,11 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   const [editRow, setEditRow] = useState(null); // { id, item_name, quantity, avg_rate, notes }
   const [savingRow, setSavingRow] = useState(false);
   // Type filter (PO / FOC / RGP) — mam (2026-06-04): "if i filter rgp show
-  // all tools". Purely client-side so it's instant and needs no refetch.
-  const [typeFilter, setTypeFilter] = useState('');
-  // Condition filter (Unused / Used / Scrap / Free to use) — client-side like
-  // typeFilter. Lets mam isolate e.g. all "Free to use" spare stock, and with
-  // the warehouse picker, see what's free at a given site (mam 2026-07-15).
-  const [condFilter, setCondFilter] = useState('');
+  // all tools" — and Condition filter (Unused / Used / Scrap / Free to use),
+  // which lets mam isolate e.g. all "Free to use" spare stock at a given site
+  // (mam 2026-07-15). Both are purely client-side so they're instant and need
+  // no refetch; their state (and the `flatStock` they produce) lives in the
+  // parent so the header's Export Excel exports the same rows this table shows.
   // Ageing date picker. `agingRow` is the stock row whose calendar is open;
   // `agingDraft` holds the picked date UNSAVED until OK is pressed, which is
   // the whole point — Cancel/close must leave the DB untouched.
@@ -317,29 +345,13 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
     } finally { setAgingSaving(false); }
   };
 
-  // Flat list — mam's spec is one row per (site, item) with Site Name as
-  // its own column. The old per-warehouse cards hid the site name in a
-  // header above the table; bringing it inline makes filtering + scanning
-  // a 50-site deployment much easier.
-  // Defensive client-side filter: even if the server response lags behind
-  // the dropdown change (network glitch, caching, race condition), rows
-  // shown will ALWAYS match the currently-selected warehouse. Without this
-  // mam was seeing CHOUDHERY rows under a CONSERN PHARMA filter when the
-  // stock state was momentarily stale between fetches.
-  const flatStock = useMemo(() => {
-    let rows = stock;
-    if (filter.warehouse_id) {
-      const wid = +filter.warehouse_id;
-      rows = rows.filter(r => +r.warehouse_id === wid);
-    }
-    if (typeFilter) {
-      rows = rows.filter(r => String(r.item_type || '').toUpperCase() === typeFilter);
-    }
-    if (condFilter) {
-      rows = rows.filter(r => (r.latest_condition || '') === condFilter);
-    }
-    return rows;
-  }, [stock, filter.warehouse_id, typeFilter, condFilter]);
+  // `flatStock` (the flat one-row-per-(site, item) list mam asked for, with
+  // Site Name as its own column) is computed in the parent and passed in, so
+  // the table and the header's Export Excel can never disagree.
+  //
+  // Windows the RENDERED rows only — banner totals, row counts and the
+  // parent's CSV export all keep using the full filtered list.
+  const stockPager = usePagination(flatStock, { resetKey: [filter.warehouse_id, filter.search, filter.low_only, typeFilter, condFilter] });
 
   // Total value across whatever's currently filtered. Used in the
   // summary banner — especially useful when mam picks a single site
@@ -446,7 +458,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
           interactions are too cramped on a phone. */}
       {flatStock.length > 0 && (
         <div className="md:hidden space-y-2">
-          {flatStock.map(r => {
+          {stockPager.pageItems.map(r => {
             const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
             const cond = r.latest_condition || '';
             const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -570,12 +582,8 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
       {/* ─── DESKTOP TABLE (md+) ───────────────────────────────────── */}
       {flatStock.length > 0 && (
         <div className="hidden md:block card p-0">
-          {/* No overflow-hidden on the card above — it would create an
-              intervening scroll container that breaks the sticky
-              `freeze-head` thead. mam (2026-06-04): "freeze like excel
-              headers". Header sticks to the app's main scroll area. */}
-          <div>
-            <table className="text-sm w-full freeze-head">
+          <div className="table-responsive">
+            <table className="text-sm w-full freeze-head min-w-[850px]">
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Code</th>
@@ -593,7 +601,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                 </tr>
               </thead>
               <tbody>
-                {flatStock.map(r => {
+                {stockPager.pageItems.map(r => {
                   const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
                   const cond = r.latest_condition || '';
                   const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -787,6 +795,12 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
             </table>
           </div>
         </div>
+      )}
+
+      {/* ONE shared pagination bar for both renders — the mobile cards and
+          the desktop table window the same pageItems (mobile↔desktop parity). */}
+      {flatStock.length > 0 && (
+        <div className="card p-0"><Pagination {...stockPager} /></div>
       )}
 
       {/* Edit qty / rate modal — records an ADJUST IN or OUT movement
@@ -1372,8 +1386,8 @@ function OpeningItemwiseEntry({ warehouses, items, reload }) {
               <h4 className="font-semibold text-gray-700 text-sm">Quantity per warehouse</h4>
               <span className="text-[11px] text-gray-500">{filledCount} warehouse(s) · total {fmtNum(totalQty)} {selectedItem.uom || 'units'}</span>
             </div>
-            <div className="overflow-x-auto">
-              <table className="text-sm w-full">
+            <div className="table-responsive">
+              <table className="text-sm w-full min-w-[550px]">
                 <thead className="bg-gray-50/60">
                   <tr>
                     <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -1557,8 +1571,40 @@ function ReceiveTab({ warehouses, items, reload }) {
         </div>
         <div className="space-y-3">
           {lines.map((l, i) => (
-            <div key={i} className="border rounded-lg p-2 space-y-2 bg-gray-50/40">
-              <div className="grid grid-cols-12 gap-2 items-start">
+            <div key={i} className="border rounded-lg p-2.5 sm:p-3 space-y-2 bg-gray-50/40">
+              {/* Mobile layout (< sm) */}
+              <div className="flex sm:hidden flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <SearchableSelect
+                      options={items}
+                      value={l.item_master_id || null}
+                      valueKey="id" displayKey="label"
+                      placeholder="Search item by name / code…"
+                      onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                    />
+                  </div>
+                  <button type="button" onClick={() => setScanFor(i)} className="btn btn-secondary text-xs px-2.5 py-2 flex items-center justify-center shrink-0" title="Scan barcode to pick item">
+                    <FiCamera size={14} />
+                  </button>
+                  <button type="button" onClick={() => rmLine(i)} className="p-1.5 text-gray-400 hover:text-red-600 shrink-0" title="Remove">
+                    <FiTrash2 size={16} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-medium text-gray-500 block mb-0.5">Quantity *</label>
+                    <input className="input w-full" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-gray-500 block mb-0.5">Rate ₹ (optional)</label>
+                    <input className="input w-full" type="number" step="any" min="0" placeholder="Rate ₹" value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Desktop layout (sm+) */}
+              <div className="hidden sm:grid sm:grid-cols-12 gap-2 items-start">
                 <div className="col-span-5">
                   <SearchableSelect
                     options={items}
@@ -1575,23 +1621,24 @@ function ReceiveTab({ warehouses, items, reload }) {
                 <input className="input col-span-3" type="number" step="any" min="0" placeholder="Rate ₹ (optional)" value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} />
                 <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
               </div>
-              {/* Optional photo per line — useful for opening balance proof */}
-              <div className="grid grid-cols-12 gap-2 items-center pl-1">
-                <label className="col-span-3 text-[11px] text-gray-500 flex items-center gap-1">
+
+              {/* Photo attachment per line */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2 pt-1 border-t border-gray-100 text-xs">
+                <label className="text-[11px] text-gray-500 flex items-center gap-1 shrink-0">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
                   Photo (optional)
                 </label>
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                                    disabled={l.uploading}
-                  onChange={e => uploadPhoto(i, e.target.files?.[0])}
-                  className="col-span-7 text-[11px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100"
-                />
-                <div className="col-span-2">
-                  {l.uploading && <span className="text-[10px] text-amber-600">uploading…</span>}
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <input
+                    type="file"
+                    accept="image/*,.pdf"
+                    disabled={l.uploading}
+                    onChange={e => uploadPhoto(i, e.target.files?.[0])}
+                    className="text-[11px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100 min-w-0 flex-1"
+                  />
+                  {l.uploading && <span className="text-[10px] text-amber-600 shrink-0">uploading…</span>}
                   {l.photo_url && !l.uploading && (
-                    <a href={l.photo_url} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline">✓ photo attached</a>
+                    <a href={l.photo_url} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline shrink-0">✓ photo attached</a>
                   )}
                 </div>
               </div>
@@ -1606,7 +1653,7 @@ function ReceiveTab({ warehouses, items, reload }) {
       </div>
 
       <div className="flex justify-end">
-        <button type="submit" disabled={saving} className="btn btn-primary flex items-center gap-2">
+        <button type="submit" disabled={saving} className="btn btn-primary w-full sm:w-auto flex items-center justify-center gap-2">
           <FiArrowDown size={14} /> {saving ? 'Saving…' : 'Receive Stock'}
         </button>
       </div>
@@ -1700,21 +1747,49 @@ function IssueTab({ warehouses, sites, items, reload }) {
         </div>
         <div className="space-y-2">
           {lines.map((l, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 items-start">
-              <div className="col-span-8">
-                <SearchableSelect
-                  options={items}
-                  value={l.item_master_id || null}
-                  valueKey="id" displayKey="label"
-                  placeholder="Search item by name / code…"
-                  onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
-                />
+            <div key={i} className="border sm:border-0 rounded-lg sm:rounded-none p-2 sm:p-0 bg-gray-50/40 sm:bg-transparent space-y-2 sm:space-y-0">
+              {/* Mobile (< sm) */}
+              <div className="flex sm:hidden flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <SearchableSelect
+                      options={items}
+                      value={l.item_master_id || null}
+                      valueKey="id" displayKey="label"
+                      placeholder="Search item by name / code…"
+                      onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                    />
+                  </div>
+                  <button type="button" onClick={() => setScanFor(i)} className="btn btn-secondary text-xs px-2.5 py-2 flex items-center justify-center shrink-0" title="Scan barcode">
+                    <FiCamera size={14} />
+                  </button>
+                  <button type="button" onClick={() => rmLine(i)} className="p-1.5 text-gray-400 hover:text-red-600 shrink-0" title="Remove">
+                    <FiTrash2 size={16} />
+                  </button>
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-gray-500 block mb-0.5">Quantity *</label>
+                  <input className="input w-full" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+                </div>
               </div>
-              <button type="button" onClick={() => setScanFor(i)} className="col-span-1 btn btn-secondary text-xs flex items-center justify-center" title="Scan barcode">
-                <FiCamera size={14} />
-              </button>
-              <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
-              <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
+
+              {/* Desktop (sm+) */}
+              <div className="hidden sm:grid sm:grid-cols-12 gap-2 items-start">
+                <div className="col-span-8">
+                  <SearchableSelect
+                    options={items}
+                    value={l.item_master_id || null}
+                    valueKey="id" displayKey="label"
+                    placeholder="Search item by name / code…"
+                    onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                  />
+                </div>
+                <button type="button" onClick={() => setScanFor(i)} className="col-span-1 btn btn-secondary text-xs flex items-center justify-center" title="Scan barcode">
+                  <FiCamera size={14} />
+                </button>
+                <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+                <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
+              </div>
             </div>
           ))}
         </div>
@@ -1727,12 +1802,12 @@ function IssueTab({ warehouses, sites, items, reload }) {
         </div>
         <div>
           <label className="label">Notes</label>
-          <input className="input" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Issued by / received by / purpose" />
+          <input className="input" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="e.g. For Phase 1 civil works" />
         </div>
       </div>
 
       <div className="flex justify-end">
-        <button type="submit" disabled={saving} className="btn btn-primary flex items-center gap-2">
+        <button type="submit" disabled={saving} className="btn btn-primary w-full sm:w-auto flex items-center justify-center gap-2">
           <FiArrowUp size={14} /> {saving ? 'Saving…' : (form.destination_type === 'warehouse' ? 'Transfer Stock' : 'Issue to Site')}
         </button>
       </div>
@@ -1754,6 +1829,9 @@ function EquationTab({ warehouses }) {
   const [to, setTo] = useState(istToday());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  // Item-wise equation rows can run into the hundreds for a busy warehouse.
+  // Hook is unconditional (handles data === null) — required by React rules.
+  const eqPager = usePagination(data?.rows, { resetKey: [whId, from, to] });
   const load = async (w = whId, f = from, t = to) => {
     if (!w) { setData(null); return; }
     setLoading(true);
@@ -1784,9 +1862,9 @@ function EquationTab({ warehouses }) {
       {loading ? <div className="text-sm text-gray-400 py-6 text-center">Loading…</div>
         : !data ? <div className="text-sm text-gray-400 py-6 text-center">Warehouse chuno — equation live dikhega.</div>
         : data.rows.length === 0 ? <div className="text-sm text-gray-400 py-6 text-center">Is warehouse mein koi movement nahi hai.</div>
-        : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+        : (<>
+        <div className="table-responsive">
+          <table className="w-full text-xs min-w-[750px]">
             <thead><tr className="text-gray-500 border-b text-left">
               <th className="py-1.5 pr-2">Material</th>
               <th className="py-1.5 px-2 text-right">Opening</th>
@@ -1799,7 +1877,7 @@ function EquationTab({ warehouses }) {
               <th className="py-1.5 pl-2 text-right">Live</th>
             </tr></thead>
             <tbody>
-              {data.rows.map(r => (
+              {eqPager.pageItems.map(r => (
                 <tr key={r.item_master_id} className="border-b hover:bg-gray-50">
                   <td className="py-1.5 pr-2">{r.material_name} <span className="text-gray-400">({r.uom || 'nos'})</span></td>
                   <td className="py-1.5 px-2 text-right tabular-nums">{r.opening}</td>
@@ -1819,12 +1897,15 @@ function EquationTab({ warehouses }) {
             </tbody>
           </table>
         </div>
-      )}
+        <Pagination {...eqPager} />
+      </>)}
     </div>
   );
 }
 
 function MovementsTab({ movements, warehouses, filter, setFilter }) {
+  // The journal is append-only and grows forever — window what's rendered.
+  const mvmtPager = usePagination(movements, { resetKey: [filter.warehouse_id, filter.type, filter.date_from, filter.date_to] });
   return (
     <>
       <div className="card p-4 grid grid-cols-1 sm:grid-cols-5 gap-3">
@@ -1854,8 +1935,8 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
         <div className="self-end text-xs text-gray-500">{movements.length} movements</div>
       </div>
 
-      <div className="card p-0">
-        <table className="text-sm w-full freeze-head">
+      <div className="card p-0 table-responsive">
+        <table className="text-sm w-full freeze-head min-w-[850px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
@@ -1870,7 +1951,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
           </thead>
           <tbody>
             {movements.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No movements yet</td></tr>}
-            {movements.map(m => (
+            {mvmtPager.pageItems.map(m => (
               <tr key={m.id} className="border-t hover:bg-gray-50">
                 <td className="px-3 py-1.5 text-[11px] text-gray-500 font-mono whitespace-nowrap">{fmtDateTime(m.created_at, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
                 <td className="px-3 py-1.5">
@@ -1904,6 +1985,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
           </tbody>
         </table>
       </div>
+      <Pagination {...mvmtPager} />
     </>
   );
 }
@@ -1947,8 +2029,8 @@ function ReportsTab({ summary, warehouses }) {
         <div className="px-4 py-3 border-b bg-gray-50">
           <h4 className="font-semibold text-gray-700 flex items-center gap-2"><FiBarChart2 size={14} className="text-red-600" /> Stock Value by Warehouse</h4>
         </div>
-        <div className="overflow-x-auto">
-          <table className="text-sm w-full">
+        <div className="table-responsive">
+          <table className="text-sm w-full min-w-[650px]">
             <thead className="bg-gray-50/60">
               <tr>
                 <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -1993,8 +2075,8 @@ function ReportsTab({ summary, warehouses }) {
           </h4>
           <span className="text-[11px] text-amber-700">items at or below their reorder level</span>
         </div>
-        <div className="overflow-x-auto">
-          <table className="text-sm w-full">
+        <div className="table-responsive">
+          <table className="text-sm w-full min-w-[600px]">
             <thead className="bg-gray-50/60">
               <tr>
                 <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
@@ -2057,8 +2139,8 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
       <div className="flex justify-end">
         {canCreate && <button onClick={() => open()} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Add Warehouse</button>}
       </div>
-      <div className="card p-0">
-        <table className="text-sm w-full freeze-head">
+      <div className="card p-0 table-responsive">
+        <table className="text-sm w-full freeze-head min-w-[800px]">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Name</th>
@@ -2109,7 +2191,7 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
         {modal && (
           <form onSubmit={save} className="space-y-3">
             <div><label className="label">Name *</label><input className="input" required value={modal.name} onChange={e => setModal({ ...modal, name: e.target.value })} /></div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Type</label>
                 <select className="select" value={modal.type} onChange={e => setModal({ ...modal, type: e.target.value })} disabled={!!modal.id}>

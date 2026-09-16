@@ -159,6 +159,19 @@ export default function ProcurementSchedule() {
     } catch (e) { toast.error(e.response?.data?.error || 'Upload failed'); }
   };
 
+  // The stream route sits behind requirePermission + authMiddleware, and the token
+  // only ever travels in the Authorization header — a plain <a href> would 401.
+  // Fetch the bytes through api, then open the blob (server sends it inline).
+  const openDrawing = async (d) => {
+    try {
+      const r = await api.get(`/procurement-schedule/drawing/${d.id}`, { responseType: 'blob' });
+      const blob = r.data instanceof Blob ? r.data : new Blob([r.data]);
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch { toast.error('Could not open file'); }
+  };
+
   const deleteDrawing = async (id) => {
     if (!confirm('Remove this drawing?')) return;
     try { await api.delete(`/procurement-schedule/drawing/${id}`); toast.success('Removed'); loadMeta(); }
@@ -189,8 +202,8 @@ export default function ProcurementSchedule() {
         />
       </div>
 
-      {/* Tab bar */}
-      <div className="flex gap-1 border-b border-gray-200">
+      {/* Tab bar — scrollable on mobile without cutting off tabs */}
+      <div className="flex items-center gap-1 border-b border-gray-200 overflow-x-auto scrollbar-none pb-0.5 sm:flex-wrap">
         {[
           { id: 'execution', label: 'Project Execution (Gantter)', icon: FiGitBranch },
           { id: 'gantt',     label: 'Procurement (BOQ)',          icon: FiCalendar },
@@ -200,7 +213,7 @@ export default function ProcurementSchedule() {
           const active = tab === t.id;
           return (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-2 px-4 py-2 text-sm border-b-2 -mb-px transition ${
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs sm:text-sm border-b-2 -mb-px transition whitespace-nowrap shrink-0 ${
                 active ? 'border-red-600 text-red-700 font-semibold' : 'border-transparent text-gray-600 hover:text-red-700'
               }`}>
               <t.icon size={14} /> {t.label}
@@ -272,7 +285,7 @@ export default function ProcurementSchedule() {
                     {meta.drawings.map(d => (
                       <span key={d.id} className="inline-flex items-center gap-1 text-xs bg-white border border-blue-200 rounded px-2 py-1">
                         <FiFileText size={11} className="text-blue-600" />
-                        <a href={`/api/procurement-schedule/drawing/${d.id}`} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline truncate max-w-[220px]">{d.filename}</a>
+                        <button type="button" onClick={() => openDrawing(d)} className="text-blue-700 hover:underline truncate max-w-[220px]">{d.filename}</button>
                         <span className="text-[9px] text-gray-400">{(d.file_size/1024).toFixed(0)} KB</span>
                         {canEdit('procurement_schedule') && (
                           <button onClick={() => deleteDrawing(d.id)} className="text-gray-400 hover:text-red-600"><FiX size={11} /></button>
@@ -406,8 +419,8 @@ function AiDraftReview({ draft, onApprove, onCancel, approving, canEdit }) {
           </button>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+      <div className="table-responsive">
+        <table className="w-full text-xs min-w-[600px]">
           <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
             <tr>
               <th className="text-left p-2">Item</th>
@@ -793,8 +806,8 @@ function RecordsTab({ projects, canDelete }) {
       )}
 
       {pickedProjectId && !loading && list.length > 0 && (
-        <div className="card p-0 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="card p-0 table-responsive">
+          <table className="w-full text-sm min-w-[650px]">
             <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
               <tr>
                 <th className="text-left p-2">When generated</th>

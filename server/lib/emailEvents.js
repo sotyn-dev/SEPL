@@ -16,6 +16,22 @@
 // *_email people.  The UI and engine pick it up automatically.
 
 const EVENTS = {
+  'receiving.approved': {
+    label: 'Dispatch Receiving — approved',
+    group: 'Dispatch & Receiving',
+    live: true,
+    vars: ['site', 'indent_no', 'bill_no', 'approved_by', 'recorded_by', 'date'],
+    people: [
+      { key: 'customer_email', label: 'Customer — Email ID' },
+      { key: 'customer_cc_email', label: 'Customer — CC Email' },
+      { key: 'recorded_by_email', label: 'Who recorded the receiving' },
+      { key: 'director_email', label: 'Director (default recipient)' },
+    ],
+    fields: ['site', 'bill_no', 'indent_no'],
+    // The approved receiving document can ride along — tick "Attach the
+    // record's file" on the rule (mam 2026-09-12).
+    attachable: 'the approved receiving document',
+  },
   'indent.raised': {
     label: 'Indent raised',
     group: 'Indent',
@@ -249,6 +265,115 @@ const EVENTS = {
     listOnly: true,
     vars: [], people: [], fields: [],
   },
+
+  // ── Tally Bill lifecycle (Director CR 2026-08-13 §8) ──────────────────
+  // Every stage transition + every SLA breach is mailable. Recipients are the
+  // configurable stage seats from Admin → Tally Bills Settings, so retargeting
+  // "who gets told" never needs a code change.
+  'tally_bill.uploaded': {
+    label: 'Tally Bill — uploaded (T0)',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'category', 'amount', 'status', 'date'],
+    people: [
+      { key: 'coordinator_email', label: 'PMS Coordinator' },
+      { key: 'site_engineer_email', label: 'Site Engineer' },
+      { key: 'director_email', label: 'Director' },
+    ],
+    fields: ['category', 'project', 'amount', 'vendor'],
+  },
+  'tally_bill.tasks_created': {
+    label: 'Tally Bill — PMS tasks created (T1)',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'category', 'amount', 'task_count', 'date'],
+    people: [
+      { key: 'executor_email', label: 'PMS Executor' },
+      { key: 'coordinator_email', label: 'PMS Coordinator' },
+      { key: 'director_email', label: 'Director' },
+    ],
+    fields: ['category', 'project', 'amount'],
+  },
+  'tally_bill.tasks_completed': {
+    label: 'Tally Bill — tasks completed, awaiting approval (T2)',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'category', 'amount', 'date'],
+    people: [
+      { key: 'coordinator_email', label: 'PMS Coordinator' },
+      { key: 'director_email', label: 'Director' },
+    ],
+    fields: ['category', 'project', 'amount'],
+  },
+  'tally_bill.second_approval_required': {
+    label: 'Tally Bill — Director approval needed (over bill amount)',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'amount', 'approved_amount', 'date'],
+    people: [
+      { key: 'director_email', label: 'Director' },
+      { key: 'coordinator_email', label: 'PMS Coordinator' },
+    ],
+    fields: ['project', 'amount'],
+  },
+  'tally_bill.approved': {
+    label: 'Tally Bill — approved, payment pending (T3)',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'category', 'amount', 'approved_amount', 'expected_date', 'date'],
+    people: [
+      { key: 'site_engineer_email', label: 'Site Engineer' },
+      { key: 'coordinator_email', label: 'PMS Coordinator' },
+      { key: 'director_email', label: 'Director' },
+    ],
+    fields: ['category', 'project', 'amount'],
+  },
+  'tally_bill.held': {
+    label: 'Tally Bill — put on hold',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'amount', 'reason', 'date'],
+    people: [
+      { key: 'site_engineer_email', label: 'Site Engineer' },
+      { key: 'director_email', label: 'Director' },
+    ],
+    fields: ['project', 'amount'],
+  },
+  'tally_bill.rejected': {
+    label: 'Tally Bill — rejected',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'amount', 'reason', 'date'],
+    people: [
+      { key: 'site_engineer_email', label: 'Site Engineer' },
+      { key: 'director_email', label: 'Director' },
+    ],
+    fields: ['project', 'amount'],
+  },
+  'tally_bill.closed': {
+    label: 'Tally Bill — fully paid / closed (T4)',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'category', 'approved_amount', 'date'],
+    people: [
+      { key: 'coordinator_email', label: 'PMS Coordinator' },
+      { key: 'director_email', label: 'Director' },
+    ],
+    fields: ['category', 'project'],
+  },
+  'tally_bill.sla_breach': {
+    label: 'Tally Bill — SLA reminder / breach (80 / 100 / 150%)',
+    group: 'Tally Bills',
+    live: true,
+    vars: ['register_no', 'bill_no', 'vendor', 'project', 'amount', 'stage', 'level', 'pct', 'due_at', 'delay', 'date'],
+    people: [
+      { key: 'owner_email', label: 'Stage owner' },
+      { key: 'director_email', label: 'Director' },
+    ],
+    // `level` lets one rule mail the owner at 80 and another mail the Director
+    // at 150, instead of one blanket rule for every breach.
+    fields: ['level', 'stage', 'project', 'amount'],
+  },
 };
 
 // Sample values so "Send test" renders a realistic preview without needing
@@ -298,6 +423,23 @@ const SAMPLE_CONTEXT = {
   project: 'Hero Homes',
   due_date: '2026-06-07',
   assigned_by: 'Manager',
+  // Tally Bills
+  register_no: 'TB-2026-0007',
+  bill_no: 'INV-4471',
+  approved_amount: '11,800',
+  expected_date: '2026-08-20',
+  task_count: '3',
+  stage: 'Approval + Release',
+  level: '100',
+  pct: '112',
+  due_at: '2026-08-14 13:00:00',
+  delay: '0.6',
+  reason: 'Awaiting vendor GST correction',
+  // Dispatch Receiving
+  bill_no_receiving: 'GST/25-26/2026',
+  recorded_by: 'Admin',
+  customer_email: 'client@example.com',
+  customer_cc_email: 'accounts@example.com',
 };
 
 function listEvents() {

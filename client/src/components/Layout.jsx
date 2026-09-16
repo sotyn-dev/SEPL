@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
+import { FiArrowDownCircle } from 'react-icons/fi';
+import { flowLabel } from '../utils/moduleFlows';
 import AnnouncementBell from './AnnouncementBell';
 // Mam (2026-05-22): standalone NotificationsBell removed — its
 // functionality is now merged into AnnouncementBell as a second tab,
 // so there's a single bell icon in the header (was confusing with 3).
 import EnablePushButton from './EnablePushButton';
+import TrainingVideoButton from './TrainingVideoButton';
 import AIAgentChat from './AIAgentChat';
 import { CallProvider } from '../context/CallContext';
 import Modal from './Modal';
@@ -15,7 +18,7 @@ import { useAppSocket } from '../context/SocketProvider';
 import { useModuleFlags } from '../context/ModuleFlagsContext';
 import {
   // Navigation + UI controls (kept as-is)
-  FiHome, FiMenu, FiX, FiLogOut, FiChevronRight, FiChevronDown, FiKey,
+  FiHome, FiMenu, FiX, FiLogOut, FiChevronRight, FiChevronDown, FiKey, FiSmartphone,
   // ─── No-duplicate icon set (mam 2026-05-27: "icon dont have duplicates") ───
   // 64 distinct icons for 64 sidebar entries. Every one used exactly once.
   // Group headers + standalone Dashboard + Settings group
@@ -30,7 +33,7 @@ import {
   // Projects children
   FiBarChart2, FiAlertCircle, FiZap, FiTool,
   // Finance children
-  FiFile, FiCreditCard, FiSend, FiList, FiRefreshCw,
+  FiFile, FiCreditCard, FiSend, FiList,
   // People children
   FiUserPlus, FiHelpCircle, FiBookOpen, FiCalendar, FiDollarSign, FiAtSign,
   // Inventory children
@@ -50,6 +53,8 @@ import {
   // Drawing Tracker (2026-08) — verified unused elsewhere in this file, so the
   // no-duplicate-icons rule above still holds.
   FiPenTool, FiLayout,
+  // Sales Bill Receive — unused elsewhere in this file (no-duplicate-icons).
+  FiDownload,
   // Labour Management System group + its children (mam 2026-08).
   // All three verified unused elsewhere in this file — the
   // no-duplicate-icons rule above still holds.
@@ -58,6 +63,10 @@ import {
   FiTrello,
   // Client Snag · bill missing client signature (2026-08-11)
   FiCamera,
+  // ERP Management · System Flow single-click entry (mam 2026-09-01).
+  FiCpu,
+  // Sotyn Leads · sotyn.ai website enquiry inbox (mam 2026-09-07).
+  FiRss,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -92,6 +101,9 @@ const SIDEBAR_GROUPS = [
     // (the legacy Sales Funnel) — this is the modern phase-A funnel.
     { path: '/crm-funnel',    label: 'CRM Sales Funnel',  icon: FiTrendingUp, module: 'crm_funnel' },
     { path: '/leads',         label: 'Sales Funnel',      icon: FiFilter,     module: 'leads' },
+    // Mam (2026-09-07): sotyn.ai website enquiries land here by themselves
+    // (public webhook) and are pushed into the Sales Funnel with Convert.
+    { path: '/sotyn-leads',   label: 'Sotyn Leads',       icon: FiRss,        module: 'sotyn_leads' },
     { path: '/business-book', label: 'Business Book',     icon: FiBook,       module: 'business_book' },
     { path: '/customers',     label: 'Customers',         icon: FiUser,       module: 'customers' },
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
@@ -132,7 +144,9 @@ const SIDEBAR_GROUPS = [
     { path: '/price-required',       label: 'RFQ Queue',          icon: FiInbox,        module: null, open: true },
     { path: '/vendors',              label: 'Vendors',            icon: FiTag,          module: 'vendors' },
     { path: '/procurement',          label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
+    { path: '/sales-bill-receive',   label: 'Sales Bill Receive', icon: FiDownload,     module: 'sales_bill_receive' },
     { path: '/orders',               label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
+    { path: '/dispatch-receiving', label: 'Dispatch Receiving', icon: FiArrowDownCircle, module: 'procurement' },
     // Mam (2026-05-28): backward-pass Gantt per project — surfaces
     // 'must raise indent by' date for every BOQ item.
     { path: '/procurement-schedule', label: 'Schedule (Gantt)',   icon: FiGitBranch,    module: 'procurement_schedule' },
@@ -144,9 +158,13 @@ const SIDEBAR_GROUPS = [
     // there is only one place in the sidebar that owns Work Orders.
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
+    { path: '/client-snag',  label: 'Site Readiness & Snags', icon: FiCamera, module: 'client_snag' },
     // WhatsApp moved OUT of this group → pinned at the bottom of the sidebar,
     // just above Change Password (mam 2026-06-19). See SIDEBAR footer render.
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
+    // Director CR 2026-08-13: Tally bill → PMS task → approval → payment
+    // lifecycle with SLA clocks (11.5-working-day target).
+    { path: '/tally-bills',  label: 'Tally Bills',      icon: FiFileText,    module: 'tally_bills' },
     { path: '/installation', label: 'Sales Billing',     icon: FiTool,        module: 'installation' },
   ]},
   // Drawing Tracker (2026-08) — sits between Projects and Finance per spec.
@@ -156,14 +174,36 @@ const SIDEBAR_GROUPS = [
     { path: '/drawing-tracker',              label: 'Drawings', icon: FiLayout,   module: 'drawing_tracker' },
     { path: '/drawing-tracker?tab=reports',  label: 'Reports',  icon: FiFileText, module: 'drawing_tracker' },
   ]},
+  // Finance restructured to FOUR entries (mam 2026-09-03): "keep cheques, keep
+  // payables and collections, link cash flow tracker with collections and
+  // payables, delete cash, rename AR/AP as Cash Flow Tracker."
+  //
+  //   • Cash Flow (the old daily-ledger + project-finance page) — DELETED.
+  //   • AR/AP Tracker — renamed Cash Flow Tracker, and it no longer needs
+  //     hand-keying: its AR side is fed from Collections and its AP side from
+  //     Payables (server/lib/arapSync.js).
+  //   • Invoices / Client Snag — off the menu per mam's "only the four",
+  //     but kept in this list as `hidden` rather than deleted: their routes are
+  //     still live, and staying in the nav data is what keeps their breadcrumb
+  //     ("Finance › Invoices") and their per-page training-video module working.
+  //     Dropping a `hidden: true` puts any of them straight back on the menu.
+  //   • Bank — VISIBLE. It was swept into the `hidden` batch above by the
+  //     consolidation commit (1ecba3fe) a few hours after it was registered
+  //     (a1ce9b80), so it appeared on the menu one morning and was gone that
+  //     afternoon. That was collateral, not a decision: "only the four" was
+  //     about the OLD Cash Flow / Invoices pages, and mam (2026-09-04) asked
+  //     for Bank back under Finance — it's where the bank statement is
+  //     uploaded and credits/debits are matched. Do NOT re-add `hidden` here.
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
-    { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
-    { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag' },
-    { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
-    { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
+    { path: '/cash-flow-tracker', label: 'Cash Flow Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
+    { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing',      hidden: true },
+    { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag',  hidden: true },
+    // Bank module (mam 2026-08-31): payment received / paid out from PNB & HDFC
+    // in one place — statement import + reconciliation; AA sync is Phase 2.
+    { path: '/bank',             label: 'Bank',        icon: LuIndianRupee, module: 'cashflow' },
     // Expenses module removed from the menu (mam 2026-07-03). Route + page kept
     // dormant in App.jsx so it's reversible and existing links don't 404.
   ]},
@@ -209,6 +249,11 @@ const SIDEBAR_GROUPS = [
     { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null, open: true },
     { path: '/system-requirements', label: 'System Requirements', icon: FiClipboard, module: null, open: true, flag: 'system_requirements' },
   ]},
+  // ERP MANAGEMENT — System Flow & Implementation Control. Mam 2026-09-01:
+  // "if all things in one then why side bar write erp management steps" —
+  // the page carries its own tabs, so the sidebar entry is a single-click
+  // LINK GROUP (path + no items) straight to /system-flow.
+  { id: 'erp_management', label: 'ERP Management', icon: FiCpu, path: '/system-flow', module: 'system_flow', items: [] },
   // Executive group — 3 dashboards (mam 2026-05-27).
   { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [
     { path: '/dashboard/war-room', label: 'War Room',           icon: FiCrosshair, module: 'users' },
@@ -231,6 +276,7 @@ const SIDEBAR_SETTINGS = { id: 'settings', label: 'Settings', icon: FiSettings, 
   { path: '/admin/users',          label: 'Users',               icon: FiUserCheck, module: 'users' },
   { path: '/admin/roles',          label: 'Roles & Permissions', icon: FiShield,    module: 'users' },
   { path: '/admin/audit',          label: 'Audit Log',           icon: FiSearch,    module: 'users' },
+  { path: '/admin/performance',    label: 'Performance',         icon: FiActivity,  module: 'users' },
 ]};
 
 export default function Layout() {
@@ -239,13 +285,20 @@ export default function Layout() {
   const [pwdModal, setPwdModal] = useState(false);
   const [pwdForm, setPwdForm] = useState({ current_password: '', new_password: '', confirm: '' });
   const [pwdSaving, setPwdSaving] = useState(false);
+  const [totpModal, setTotpModal] = useState(false);
+  const [totpStep, setTotpStep] = useState('password'); // password | qr
+  const [totpPwd, setTotpPwd] = useState('');
+  const [totpCode, setTotpCode] = useState('');
+  const [totpQr, setTotpQr] = useState(null);
+  const [totpSecret, setTotpSecret] = useState('');
+  const [totpSaving, setTotpSaving] = useState(false);
   // Header user-avatar menu (mam 2026-06-17 header freeze): identity +
   // Change Password + Logout reachable from the top bar even when the
   // sidebar is collapsed — the footer copy stays as-is for the open state.
   const [userMenu, setUserMenu] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, logout, canView, isAdmin, userRoles } = useAuth();
+  const { user, logout, canView, isAdmin, userRoles, markTotpEnabled } = useAuth();
   const { subscribe } = useAppSocket();
 
   // Admin bypasses mandatory fields everywhere (mam 2026-06-19: "admin can
@@ -363,12 +416,59 @@ export default function Layout() {
     setPwdSaving(false);
   };
 
+  const openTotp = () => {
+    setUserMenu(false);
+    setTotpStep('password');
+    setTotpPwd('');
+    setTotpCode('');
+    setTotpQr(null);
+    setTotpSecret('');
+    setTotpModal(true);
+  };
+
+  const startTotpSetup = async (e) => {
+    e.preventDefault();
+    setTotpSaving(true);
+    try {
+      const r = await api.post('/auth/totp/setup', { current_password: totpPwd });
+      setTotpQr(r.data.qr);
+      setTotpSecret(r.data.secret || '');
+      setTotpStep('qr');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not start 2FA');
+    }
+    setTotpSaving(false);
+  };
+
+  const confirmTotp = async (e) => {
+    e.preventDefault();
+    if (totpCode.length !== 6) return;
+    setTotpSaving(true);
+    try {
+      await api.post('/auth/totp/confirm', { code: totpCode });
+      markTotpEnabled();
+      toast.success('2FA is on. Next login will ask for a code.');
+      setTotpModal(false);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Invalid authenticator code');
+    }
+    setTotpSaving(false);
+  };
+
   useEffect(() => {
+    // Only touch sidebarOpen when the mobile/desktop BREAKPOINT actually
+    // changes — not on every resize. On phones the on-screen keyboard fires
+    // a window resize, and the old unconditional `setSidebarOpen(false)`
+    // slammed the sidebar shut the moment you tapped the menu-search box
+    // (mam 2026-08-26: "unable to type, side bar hide").
+    let prevMobile = null;
     const check = () => {
       const mobile = window.innerWidth < 768;
       setIsMobile(mobile);
-      if (!mobile) setSidebarOpen(true);
-      else setSidebarOpen(false);
+      if (prevMobile !== mobile) {
+        setSidebarOpen(!mobile);
+        prevMobile = mobile;
+      }
     };
     check();
     window.addEventListener('resize', check);
@@ -385,6 +485,27 @@ export default function Layout() {
     if (isMobile) setSidebarOpen(false);
     setUserMenu(false);   // also dismiss the header avatar menu on navigation
   }, [location.pathname, isMobile]);
+
+  // WHOLE-ERP online file view (mam 2026-08-27: "which we download file if
+  // want to view... need to open online like next tab"). Browsers render
+  // PDFs/images inline, but Excel/Word/CSV links force a download — this
+  // one interceptor catches every such /uploads link on ANY page and opens
+  // the /file-view tab instead. Links with an explicit `download` attribute
+  // keep downloading; the viewer itself still offers a Download button.
+  useEffect(() => {
+    const handler = (e) => {
+      const a = e.target.closest && e.target.closest('a[href]');
+      if (!a || a.hasAttribute('download')) return;
+      const href = a.getAttribute('href') || '';
+      if (!href.includes('/uploads/')) return;
+      if (!/\.(xlsx|xls|csv|docx)(\?|$)/i.test(href)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.open(`/file-view?src=${encodeURIComponent(href)}`, '_blank');
+    };
+    document.addEventListener('click', handler, true);
+    return () => document.removeEventListener('click', handler, true);
+  }, []);
 
   // GLOBAL LOCATION TRACKING — was Attendance-page-only before, but mam's
   // team often closes that tab and just uses Leads / Procurement / etc.
@@ -455,7 +576,7 @@ export default function Layout() {
   // accordion state untouched.
   const [navSearch, setNavSearch] = useState('');
   const navQuery = navSearch.trim().toLowerCase();
-  const itemMatches = (item) => !navQuery || item.label.toLowerCase().includes(navQuery);
+  const itemMatches = (item) => !navQuery || flowLabel(item.path, item.label).toLowerCase().includes(navQuery);
 
   // ─── Sidebar accordion state ───────────────────────────────────────
   // Each group is collapsible, INITIALLY CLOSED, expand independently
@@ -525,6 +646,9 @@ export default function Layout() {
   // routes folded into Executive) don't count.
   const groupVisible = (g) => {
     if (g.adminOnly && !isAdmin()) return false;
+    // Link group (path, no items): the header itself is the destination —
+    // visibility follows its own module/search match (ERP Management).
+    if (g.path) return itemVisible(g) && itemMatches(g);
     return g.items.some(it => !it.hidden && itemVisible(it) && itemMatches(it));
   };
   const visibleGroups = SIDEBAR_GROUPS.filter(groupVisible);
@@ -540,15 +664,26 @@ export default function Layout() {
   // "Finance › Cash Flow" instead of a context-free "Cash Flow".
   // Dashboard is standalone (no group); unknown routes fall back to the
   // app name with no crumb.
+  // Also resolves the page's `module` key — it scopes the header's per-page
+  // training-video button (mam 2026-08-26: "add video of youtube link button
+  // every where"), so one button in the shared header covers every page
+  // instead of hand-placing it in 80 toolbars.
   const crumb = (() => {
-    if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label };
+    if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label, module: SIDEBAR_DASHBOARD.module };
     for (const g of SIDEBAR_GROUPS) {
+      if (g.path === location.pathname) return { group: null, label: g.label, module: g.module };
       const it = g.items.find(m => m.path === location.pathname);
-      if (it) return { group: g.label, label: it.label };
+      if (it) return { group: g.label, label: it.label, module: it.module };
     }
     const s = SIDEBAR_SETTINGS.items.find(m => m.path === location.pathname);
-    if (s) return { group: SIDEBAR_SETTINGS.label, label: s.label };
-    return { group: null, label: 'SOTYN.AI' };
+    if (s) return { group: SIDEBAR_SETTINGS.label, label: s.label, module: s.module };
+    // Detail routes (/some-page/123): reuse the parent page's module so its
+    // training videos follow onto the detail view.
+    for (const g of SIDEBAR_GROUPS) {
+      const it = g.items.find(m => m.path !== '/' && location.pathname.startsWith(m.path + '/'));
+      if (it) return { group: g.label, label: it.label, module: it.module };
+    }
+    return { group: null, label: 'SOTYN.AI', module: location.pathname.split('/')[1] || 'dashboard' };
   })();
 
   // Avatar initials from the user's name (fallback to username), max 2 chars.
@@ -647,7 +782,7 @@ export default function Layout() {
             <Link to={SIDEBAR_DASHBOARD.path}
               className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === SIDEBAR_DASHBOARD.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
               <SIDEBAR_DASHBOARD.icon size={16} />
-              <span className="truncate">{SIDEBAR_DASHBOARD.label}</span>
+              <span className="truncate">{flowLabel(SIDEBAR_DASHBOARD.path, SIDEBAR_DASHBOARD.label)}</span>
             </Link>
           )}
 
@@ -660,6 +795,15 @@ export default function Layout() {
           {/* Collapsible accordion groups — initially closed, each opens
               independently. The chevron rotates to indicate state. */}
           {visibleGroups.map(g => {
+            // Link group — a group-styled header that IS the link (one click,
+            // no accordion): ERP Management → /system-flow (mam 2026-09-01).
+            if (g.path) return (
+              <Link key={g.id} to={g.path}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === g.path ? 'bg-white/15 text-white font-semibold' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+                <g.icon size={16} />
+                <span className="truncate flex-1 text-left">{flowLabel(g.path, g.label)}</span>
+              </Link>
+            );
             const isOpen = isGroupOpen(g.id);
             const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it));
             const hasActiveChild = childItems.some(it => location.pathname === it.path);
@@ -681,7 +825,7 @@ export default function Layout() {
                       <Link key={item.path} to={item.path}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
                         <item.icon size={14} />
-                        <span className="truncate">{item.label}</span>
+                        <span className="min-w-0 whitespace-normal leading-5" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
                       </Link>
                     ))}
                   </div>
@@ -714,7 +858,7 @@ export default function Layout() {
                       <Link key={item.path} to={item.path}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
                         <item.icon size={14} />
-                        <span className="truncate">{item.label}</span>
+                        <span className="min-w-0 whitespace-normal leading-5" title={flowLabel(item.path, item.label)}>{flowLabel(item.path, item.label)}</span>
                       </Link>
                     ))}
                   </div>
@@ -736,7 +880,7 @@ export default function Layout() {
           <Link to="/site-chat"
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <BiMessageRoundedCheck size={17} className="text-white" />
-            <span className="truncate flex-1">SOTYN Chat</span>
+            <span className="truncate flex-1">{flowLabel('/site-chat', 'SOTYN Chat')}</span>
             {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
           </Link>
           )}
@@ -746,7 +890,7 @@ export default function Layout() {
           <Link to="/sotyn-flow"
             className={`${chatOn ? 'mt-0.5 ' : ''}flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${location.pathname.startsWith('/sotyn-flow') ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <FiTrello size={17} className="text-white" />
-            <span className="truncate flex-1">SOTYN Flow</span>
+            <span className="truncate flex-1">{flowLabel('/sotyn-flow', 'SOTYN Flow')}</span>
           </Link>
           )}
         </div>
@@ -800,6 +944,42 @@ export default function Layout() {
         </form>
       </Modal>
 
+      <Modal isOpen={totpModal} onClose={() => setTotpModal(false)} title={totpStep === 'qr' ? 'Scan authenticator QR' : 'Set up 2FA'}>
+        {totpStep === 'password' ? (
+          <form onSubmit={startTotpSetup} className="space-y-4">
+            <p className="text-sm text-gray-600">Confirm your current password, then scan a QR with Google or Microsoft Authenticator.</p>
+            <div>
+              <label className="label">Current Password</label>
+              <input className="input" type="password" autoComplete="current-password" value={totpPwd} onChange={e => setTotpPwd(e.target.value)} required autoFocus />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setTotpModal(false)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={totpSaving} className="btn btn-primary">{totpSaving ? 'Checking…' : 'Continue'}</button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={confirmTotp} className="space-y-4">
+            <p className="text-sm text-gray-600 text-center">Scan this QR once, then enter the 6-digit code.</p>
+            {totpQr && <img src={totpQr} alt="Authenticator QR" className="mx-auto w-[220px] h-[220px] rounded-lg border border-gray-200 bg-white" />}
+            {totpSecret && <p className="text-[11px] text-gray-500 break-all font-mono text-center">Key: {totpSecret}</p>}
+            <input
+              autoFocus
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              value={totpCode}
+              onChange={e => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              className="input text-center text-2xl tracking-[0.4em] font-mono"
+              placeholder="000000"
+            />
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setTotpModal(false)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={totpSaving || totpCode.length !== 6} className="btn btn-primary">{totpSaving ? 'Verifying…' : 'Turn on 2FA'}</button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
       {/* Floating "expand sidebar" tab — only when sidebar is collapsed
           on desktop. Mam: 'if I hide sidebar then show expand'. Sticky
           to the left edge so it's impossible to miss. */}
@@ -826,7 +1006,7 @@ export default function Layout() {
             CSS min() keeps a sane minimum 10px on devices without an
             inset. */}
         <header
-          className="bg-white shadow-sm border-b border-gray-200 px-3 md:px-6 pb-2.5 flex items-center gap-2"
+          className="relative z-20 bg-white shadow-sm border-b border-gray-200 px-2.5 sm:px-4 md:px-6 pb-2.5 flex items-center gap-1.5 sm:gap-2"
           style={{ paddingTop: 'max(0.625rem, env(safe-area-inset-top))' }}
         >
           <button
@@ -876,6 +1056,12 @@ export default function Layout() {
               {crumb.label}
             </h2>
           </div>
+          {/* Per-page training video (mam 2026-08-26: "every where") —
+              keyed by the page's module, remounted on route change so the
+              video list always belongs to the page being viewed. Admin
+              sees it on every page to add links; users only when a video
+              exists (the component returns null otherwise). */}
+          <TrainingVideoButton key={crumb.module} module={crumb.module} />
           {/* Push notification toggle — phone / laptop / desktop each
               need to be enabled separately. Mam's MD requirement. */}
           <EnablePushButton />
@@ -910,7 +1096,7 @@ export default function Layout() {
             {userMenu && (
               <>
                 <div className="fixed inset-0 z-30" onClick={() => setUserMenu(false)} />
-                <div className="absolute right-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg z-40 overflow-hidden">
+                <div className="absolute right-0 mt-1 w-60 max-w-[calc(100vw-1rem)] bg-white border border-gray-200 rounded-lg shadow-lg z-40 overflow-hidden">
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="text-sm font-semibold text-gray-800 truncate">{user?.name}</div>
                     {user?.username && <div className="text-[11px] text-gray-500 font-mono truncate">@{user.username}</div>}
@@ -929,6 +1115,18 @@ export default function Layout() {
                   >
                     <FiKey size={15} /> Change Password
                   </button>
+                  {user?.totp_enabled ? (
+                    <div className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-emerald-700">
+                      <FiSmartphone size={15} /> 2FA is on
+                    </div>
+                  ) : (
+                    <button
+                      onClick={openTotp}
+                      className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <FiSmartphone size={15} /> Set up 2FA
+                    </button>
+                  )}
                   <button
                     onClick={logout}
                     className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 border-t border-gray-100"
@@ -949,7 +1147,7 @@ export default function Layout() {
         {/* iOS home-indicator padding so content doesn't hide behind the
             bottom safe-area on iPhone X+ (mam 2026-06-02). */}
         <main
-          className="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50"
+          className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 p-2 md:p-6 bg-slate-50"
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
         >
           <Outlet />

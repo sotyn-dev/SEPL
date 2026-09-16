@@ -346,9 +346,9 @@ router.get('/reports/dashboard', canRead, (req, res) => {
       transfers_this_month: one(`SELECT COUNT(*) c FROM labour_transfers WHERE strftime('%Y-%m', transfer_date) = strftime('%Y-%m','now','localtime')`).c,
     },
     by_trade: db.prepare(`SELECT COALESCE(NULLIF(TRIM(trade),''),'(none)') AS name, COUNT(*) AS workers
-      FROM labour_master WHERE status='active' GROUP BY name ORDER BY workers DESC`).all(),
+      FROM labour_master WHERE status='active' GROUP BY 1 ORDER BY workers DESC`).all(),
     by_site: db.prepare(`SELECT COALESCE(s.name,'(unassigned)') AS name, COUNT(*) AS workers
-      FROM labour_master lm LEFT JOIN sites s ON s.id=lm.site_id WHERE lm.status='active' GROUP BY name ORDER BY workers DESC`).all(),
+      FROM labour_master lm LEFT JOIN sites s ON s.id=lm.site_id WHERE lm.status='active' GROUP BY 1 ORDER BY workers DESC`).all(),
   });
 });
 

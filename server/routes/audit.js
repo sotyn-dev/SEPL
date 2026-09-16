@@ -84,6 +84,58 @@ router.get('/meta', (req, res) => {
   res.json(data);
 });
 
+// GET /api/admin/audit/suspicious — identity-mismatch detector (mam
+// 2026-08-17: "users not use but changes show from their id").
+// Flags mutations recorded under a user's id when:
+//   - the request's DEVICE (user-agent, version numbers stripped so a
+//     browser update doesn't false-flag) was never seen on any LOGIN
+//     by that user, OR
+//   - the user has no LOGIN row at all / none in the last 30 days.
+// IP mismatch alone does NOT flag (mobile-data IPs rotate daily) but is
+// appended as supporting context on already-flagged rows.
+// MUST stay registered before '/:id' or Express eats it as an id.
+router.get('/suspicious', (req, res) => {
+  const db = getDb();
+  const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 30));
+  const normUA = (ua) => String(ua || '').replace(/[\d.]+/g, '').slice(0, 200);
+
+  const loginRows = db.prepare(
+    `SELECT user_id, ip, user_agent, at FROM audit_log
+      WHERE action = 'LOGIN' AND user_id IS NOT NULL`
+  ).all();
+  const knownIPs = new Set(), knownUAs = new Set(), lastLogin = new Map();
+  for (const l of loginRows) {
+    if (l.ip) knownIPs.add(l.user_id + '|' + l.ip);
+    if (l.user_agent) knownUAs.add(l.user_id + '|' + normUA(l.user_agent));
+    const prev = lastLogin.get(l.user_id);
+    if (!prev || l.at > prev) lastLogin.set(l.user_id, l.at);
+  }
+
+  const cutoff30 = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 19).replace('T', ' ');
+  const rows = db.prepare(
+    `SELECT * FROM audit_log
+      WHERE at >= datetime('now', ?)
+        AND user_id IS NOT NULL
+        AND action NOT IN ('LOGIN', 'LOGIN_FAIL')
+      ORDER BY at DESC LIMIT 3000`
+  ).all(`-${days} days`);
+
+  const flagged = [];
+  for (const r of rows) {
+    const reasons = [];
+    if (r.user_agent && !knownUAs.has(r.user_id + '|' + normUA(r.user_agent)))
+      reasons.push('device never seen at this user’s login');
+    const ll = lastLogin.get(r.user_id);
+    if (!ll) reasons.push('user has NO login on record');
+    else if (ll < cutoff30) reasons.push('no login in the last 30 days');
+    if (reasons.length) {
+      if (r.ip && !knownIPs.has(r.user_id + '|' + r.ip)) reasons.push('IP also never seen at login');
+      flagged.push({ ...r, suspect_reasons: reasons.join(' + ') });
+    }
+  }
+  res.json({ days, scanned: rows.length, flagged: flagged.length, rows: flagged.slice(0, 500) });
+});
+
 // Single entry with the full before/after JSON (for a detail popover).
 router.get('/:id', (req, res) => {
   const row = getDb().prepare('SELECT * FROM audit_log WHERE id=?').get(req.params.id);

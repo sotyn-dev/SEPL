@@ -156,6 +156,44 @@ export default function Rentals() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // The Payments Log merges paid rent_requests (the primary workflow) with
+  // legacy rental_payments. Both the tab and its Export Excel read from this
+  // one builder so the CSV always matches what's on screen.
+  const buildPaymentRows = () => {
+    const all = [];
+    for (const r of (requests || []).filter(r => r.status === 'paid')) {
+      all.push({
+        id: `req-${r.id}`,
+        month: r.rent_month,
+        property: r.site_name || r.site_name_live || '—',
+        landlord: r.owner_name,
+        amount: r.rent_amount,
+        paid_date: r.paid_at ? r.paid_at.slice(0, 10) : null,
+        paid_via: r.paid_via,
+        ref: r.transaction_ref,
+        receipt: r.receipt_url,
+        notes: r.notes,
+        request_no: r.request_no,
+        arrange_for: r.arrange_for,
+      });
+    }
+    for (const p of (payments || [])) {
+      all.push({
+        id: `pay-${p.id}`,
+        month: p.period_month,
+        property: p.property_name || '—',
+        landlord: p.landlord_name,
+        amount: p.amount_paid,
+        paid_date: p.paid_date,
+        paid_via: p.paid_via,
+        ref: p.transaction_ref,
+        receipt: p.receipt_url,
+        notes: p.notes,
+      });
+    }
+    return all;
+  };
+
   const savePayment = async (e) => {
     e.preventDefault();
     try {
@@ -175,9 +213,12 @@ export default function Rentals() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => {
-            if (tab === 'payments') exportCsv('rental-payments', ['Period','Property','Occupant','Amount','Paid Via','Date'], payments.map(p => [p.period_month, p.property_name, p.occupant_name, p.amount, p.paid_via, p.paid_on]));
-            else if (tab === 'bookings') exportCsv('rental-bookings', ['Status','Occupant','Property','City','Site','Check-in','Check-out','Rent Share'], bookings.map(b => [b.status, b.occupant_name || b.occupant_user_name, b.property_name, b.city, b.site_name, b.check_in, b.check_out, b.rent_share]));
-            else exportCsv('rental-requests', ['Req #','Month','Site','Arrange For','Owner','Pay Mode','Amount','Status'], requests.map(r => [r.request_no, r.rent_month, r.site_name, r.arrange_for, r.owner_name, r.payment_mode, r.amount, r.status]));
+            if (tab === 'payments') {
+              const rows = buildPaymentRows().sort((a, b) => String(b.month || '').localeCompare(String(a.month || '')));
+              exportCsv('rental-payments', ['Period','Req No','Property','Landlord','Amount','Paid Via','Date'], rows.map(p => [p.month, p.request_no, p.property, p.landlord, p.amount, p.paid_via, p.paid_date]));
+            }
+            else if (tab === 'bookings') exportCsv('rental-bookings', ['Status','Occupant','Property','City','Site','Check-in','Check-out','Rent Share'], bookings.map(b => [b.status, b.occupant_name || b.occupant_user_name, b.property_name, b.city, b.site_name, b.check_in_date, b.actual_checkout_date || b.check_out_date || '', b.rent_share]));
+            else exportCsv('rental-requests', ['Req #','Month','Site','Arrange For','Owner','Pay Mode','Amount','Status'], requests.map(r => [r.request_no, r.rent_month, r.site_name, r.arrange_for, r.owner_name, r.payment_mode, r.rent_amount, r.status]));
           }} className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
           {canCreate('rentals') && tab === 'payments' && (
             <button onClick={() => { setPaymentForm({ period_month: monthNow(), paid_via: 'Bank' }); setPaymentModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Record Payment</button>
@@ -227,12 +268,13 @@ export default function Rentals() {
               </select>
             </div>
           </div>
-          <div className="card p-0">
-            <table className="freeze-head">
+          <div className="card p-0 overflow-hidden">
+            <div className="table-responsive">
+            <table className="freeze-head min-w-[850px]">
               <thead>
                 <tr>
                   <th>Req No</th><th>Month / Due By</th><th>Site</th><th>Arrange For</th>
-                  <th>Owner</th><th>Aadhar</th><th>Photo</th>
+                  <th>Owner</th><th>Aadhar</th><th>Deed</th><th>Photo</th>
                   <th>Pay Mode</th>
                   <th className="text-right">Amount</th><th>Status</th><th>Actions</th>
                 </tr>
@@ -279,6 +321,7 @@ export default function Rentals() {
                     </td>
                     <td className="text-xs"><div className="font-medium">{r.owner_name}</div>{r.owner_phone && <div className="text-[10px] text-gray-500">{r.owner_phone}</div>}</td>
                     <td>{r.owner_aadhar_url ? <a href={r.owner_aadhar_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 view</a> : <span className="text-gray-300 text-xs">—</span>}</td>
+                    <td>{r.rent_deed_url ? <a href={r.rent_deed_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 deed</a> : <span className="text-amber-500 text-xs" title="Rent deed missing - request predates the mandatory deed rule">⚠</span>}</td>
                     <td>
                       {r.room_photo_url ? (
                         <a href={r.room_photo_url} target="_blank" rel="noreferrer">
@@ -370,6 +413,7 @@ export default function Rentals() {
                 );})}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}
@@ -457,8 +501,9 @@ export default function Rentals() {
 
       {/* BOOKINGS */}
       {tab === 'bookings' && (
-        <div className="card p-0">
-          <table className="freeze-head">
+        <div className="card p-0 overflow-hidden">
+          <div className="table-responsive">
+          <table className="freeze-head min-w-[800px]">
             <thead><tr><th>Status</th><th>Occupant</th><th>Property / Room</th><th>City</th><th>Site</th><th>Check-in</th><th>Check-out</th><th>Rent Share</th><th>Actions</th></tr></thead>
             <tbody>
               {bookings.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bookings yet</td></tr>}
@@ -481,6 +526,7 @@ export default function Rentals() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -489,37 +535,7 @@ export default function Rentals() {
           rental_payments into a single chronological view. */}
       {tab === 'payments' && (() => {
         // Build a unified row list from both sources
-        const all = [];
-        for (const r of (requests || []).filter(r => r.status === 'paid')) {
-          all.push({
-            id: `req-${r.id}`,
-            month: r.rent_month,
-            property: r.site_name || r.site_name_live || '—',
-            landlord: r.owner_name,
-            amount: r.rent_amount,
-            paid_date: r.paid_at ? r.paid_at.slice(0, 10) : null,
-            paid_via: r.paid_via,
-            ref: r.transaction_ref,
-            receipt: r.receipt_url,
-            notes: r.notes,
-            request_no: r.request_no,
-            arrange_for: r.arrange_for,
-          });
-        }
-        for (const p of (payments || [])) {
-          all.push({
-            id: `pay-${p.id}`,
-            month: p.period_month,
-            property: p.property_name || '—',
-            landlord: p.landlord_name,
-            amount: p.amount_paid,
-            paid_date: p.paid_date,
-            paid_via: p.paid_via,
-            ref: p.transaction_ref,
-            receipt: p.receipt_url,
-            notes: p.notes,
-          });
-        }
+        const all = buildPaymentRows();
         // Group by month (descending)
         const byMonth = {};
         for (const r of all) {
@@ -612,7 +628,7 @@ export default function Rentals() {
       {/* PROPERTY DETAIL MODAL */}
       <Modal isOpen={!!propDetail} onClose={() => setPropDetail(null)} title={propDetail?.name || 'Property'} wide>
         {propDetail && (
-          <div className="space-y-4 max-h-[75vh] overflow-y-auto">
+          <div className="space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
               <div className="card p-2"><p className="text-[10px] text-gray-500">Monthly Rent</p><p className="font-bold text-red-700">{fmtRs(propDetail.monthly_rent)}</p></div>
               <div className="card p-2"><p className="text-[10px] text-gray-500">Deposit</p><p className="font-bold">{fmtRs(propDetail.deposit_paid)}</p></div>
@@ -689,9 +705,9 @@ export default function Rentals() {
       {/* PROPERTY ADD/EDIT MODAL */}
       <Modal isOpen={!!propModal} onClose={() => { setPropModal(null); setPropForm({}); }} title={propForm.id ? 'Edit Property' : 'Add Property'} wide>
         <form onSubmit={saveProp} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2"><label className="label">Name *</label><input className="input" required value={propForm.name || ''} onChange={e => setPropForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Andheri Mumbai 3BHK Flat" /></div>
-            <div className="col-span-2"><label className="label">Address</label><input className="input" value={propForm.address || ''} onChange={e => setPropForm(f => ({ ...f, address: e.target.value }))} /></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="col-span-1 sm:col-span-2"><label className="label">Name *</label><input className="input" required value={propForm.name || ''} onChange={e => setPropForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Andheri Mumbai 3BHK Flat" /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Address</label><input className="input" value={propForm.address || ''} onChange={e => setPropForm(f => ({ ...f, address: e.target.value }))} /></div>
             <div><label className="label">City</label><input className="input" value={propForm.city || ''} onChange={e => setPropForm(f => ({ ...f, city: e.target.value }))} /></div>
             <div><label className="label">State</label>
               <select className="select" value={propForm.state || ''} onChange={e => setPropForm(f => ({ ...f, state: e.target.value }))}>
@@ -704,26 +720,26 @@ export default function Rentals() {
               <label className="label">Linked Site (optional)</label>
               <SearchableSelect options={sites} value={propForm.site_id || null} valueKey="id" displayKey="name" placeholder="Pick site…" onChange={(s) => setPropForm(f => ({ ...f, site_id: s?.id || '' }))} />
             </div>
-            <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Landlord</h5></div>
+            <div className="col-span-1 sm:col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Landlord</h5></div>
             <div><label className="label">Name</label><input className="input" value={propForm.landlord_name || ''} onChange={e => setPropForm(f => ({ ...f, landlord_name: e.target.value }))} /></div>
             <div><label className="label">Phone</label><input className="input" value={propForm.landlord_phone || ''} onChange={e => setPropForm(f => ({ ...f, landlord_phone: e.target.value }))} /></div>
-            <div className="col-span-2"><label className="label">Email</label><input className="input" type="email" value={propForm.landlord_email || ''} onChange={e => setPropForm(f => ({ ...f, landlord_email: e.target.value }))} /></div>
-            <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Agreement</h5></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Email</label><input className="input" type="email" value={propForm.landlord_email || ''} onChange={e => setPropForm(f => ({ ...f, landlord_email: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Agreement</h5></div>
             <div><label className="label">Monthly Rent (Rs)</label><input type="number" className="input" value={propForm.monthly_rent || 0} onChange={e => setPropForm(f => ({ ...f, monthly_rent: +e.target.value }))} /></div>
             <div><label className="label">Deposit Paid (Rs)</label><input type="number" className="input" value={propForm.deposit_paid || 0} onChange={e => setPropForm(f => ({ ...f, deposit_paid: +e.target.value }))} /></div>
             <div><label className="label">Start Date</label><input type="date" className="input" value={propForm.agreement_start_date || ''} onChange={e => setPropForm(f => ({ ...f, agreement_start_date: e.target.value }))} /></div>
             <div><label className="label">End Date</label><input type="date" className="input" value={propForm.agreement_end_date || ''} onChange={e => setPropForm(f => ({ ...f, agreement_end_date: e.target.value }))} /></div>
             <div><label className="label">Bedrooms</label><input type="number" className="input" value={propForm.bedrooms || 1} onChange={e => setPropForm(f => ({ ...f, bedrooms: +e.target.value }))} /></div>
             <div><label className="label">Total Capacity (beds)</label><input type="number" className="input" value={propForm.total_capacity || 1} onChange={e => setPropForm(f => ({ ...f, total_capacity: +e.target.value }))} /></div>
-            <div className="col-span-2"><label className="label">Amenities</label><input className="input" value={propForm.amenities || ''} onChange={e => setPropForm(f => ({ ...f, amenities: e.target.value }))} placeholder="AC, Wifi, Geyser, Furnished…" /></div>
-            <div className="col-span-2"><label className="label">Agreement file URL</label><input className="input" value={propForm.agreement_file_url || ''} onChange={e => setPropForm(f => ({ ...f, agreement_file_url: e.target.value }))} placeholder="https://… (upload separately and paste link)" /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Amenities</label><input className="input" value={propForm.amenities || ''} onChange={e => setPropForm(f => ({ ...f, amenities: e.target.value }))} placeholder="AC, Wifi, Geyser, Furnished…" /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Agreement file URL</label><input className="input" value={propForm.agreement_file_url || ''} onChange={e => setPropForm(f => ({ ...f, agreement_file_url: e.target.value }))} placeholder="https://… (upload separately and paste link)" /></div>
             <div>
               <label className="label">Status</label>
               <select className="select" value={propForm.status || 'active'} onChange={e => setPropForm(f => ({ ...f, status: e.target.value }))}>
                 <option>active</option><option>expired</option><option>terminated</option>
               </select>
             </div>
-            <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={propForm.notes || ''} onChange={e => setPropForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={propForm.notes || ''} onChange={e => setPropForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2 pt-3 border-t">
             <button type="button" onClick={() => { setPropModal(null); setPropForm({}); }} className="btn btn-secondary">Cancel</button>
@@ -750,9 +766,9 @@ export default function Rentals() {
       {/* BOOKING MODAL */}
       <Modal isOpen={bookingModal} onClose={() => { setBookingModal(false); setBookingForm({}); }} title="New Booking" wide>
         <form onSubmit={saveBooking} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {!bookingForm.room_id && (
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Pick Room *</label>
                 <select className="select" required value={bookingForm.room_id || ''} onChange={e => setBookingForm(f => ({ ...f, room_id: +e.target.value }))}>
                   <option value="">— pick a room —</option>
@@ -782,7 +798,7 @@ export default function Rentals() {
             <div><label className="label">Planned Check-out</label><input type="date" className="input" value={bookingForm.check_out_date || ''} onChange={e => setBookingForm(f => ({ ...f, check_out_date: e.target.value }))} /></div>
             <div><label className="label">Rent Share (Rs)</label><input type="number" className="input" value={bookingForm.rent_share || 0} onChange={e => setBookingForm(f => ({ ...f, rent_share: +e.target.value }))} /></div>
             <div><label className="label">Deposit Collected</label><input type="number" className="input" value={bookingForm.deposit_collected || 0} onChange={e => setBookingForm(f => ({ ...f, deposit_collected: +e.target.value }))} /></div>
-            <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={bookingForm.notes || ''} onChange={e => setBookingForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={bookingForm.notes || ''} onChange={e => setBookingForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2"><button type="button" onClick={() => setBookingModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Book</button></div>
         </form>
@@ -795,7 +811,7 @@ export default function Rentals() {
             <label className="label">Property *</label>
             <SearchableSelect options={properties.filter(p => p.status === 'active').map(p => ({ ...p, label: `${p.name} — ${fmtRs(p.monthly_rent)}/mo` }))} value={paymentForm.property_id || null} valueKey="id" displayKey="label" placeholder="Pick property…" onChange={(p) => setPaymentForm(f => ({ ...f, property_id: p?.id || '', amount_paid: f.amount_paid || p?.monthly_rent || 0 }))} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Period (YYYY-MM) *</label><input className="input" required value={paymentForm.period_month} onChange={e => setPaymentForm(f => ({ ...f, period_month: e.target.value }))} placeholder="2026-05" /></div>
             <div><label className="label">Amount Paid *</label><input type="number" required className="input" value={paymentForm.amount_paid || 0} onChange={e => setPaymentForm(f => ({ ...f, amount_paid: +e.target.value }))} /></div>
             <div><label className="label">Paid Date</label><input type="date" className="input" value={paymentForm.paid_date || ''} onChange={e => setPaymentForm(f => ({ ...f, paid_date: e.target.value }))} /></div>
@@ -805,9 +821,9 @@ export default function Rentals() {
                 <option>Bank</option><option>UPI</option><option>Cash</option><option>Cheque</option>
               </select>
             </div>
-            <div className="col-span-2"><label className="label">Transaction Ref</label><input className="input" value={paymentForm.transaction_ref || ''} onChange={e => setPaymentForm(f => ({ ...f, transaction_ref: e.target.value }))} /></div>
-            <div className="col-span-2"><label className="label">Receipt URL</label><input className="input" value={paymentForm.receipt_url || ''} onChange={e => setPaymentForm(f => ({ ...f, receipt_url: e.target.value }))} placeholder="https://… (upload separately and paste link)" /></div>
-            <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={paymentForm.notes || ''} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Transaction Ref</label><input className="input" value={paymentForm.transaction_ref || ''} onChange={e => setPaymentForm(f => ({ ...f, transaction_ref: e.target.value }))} /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Receipt URL</label><input className="input" value={paymentForm.receipt_url || ''} onChange={e => setPaymentForm(f => ({ ...f, receipt_url: e.target.value }))} placeholder="https://… (upload separately and paste link)" /></div>
+            <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={paymentForm.notes || ''} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2"><button type="button" onClick={() => setPaymentModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
@@ -828,6 +844,14 @@ export default function Rentals() {
             // PIN is mandatory (mam 2026-06-23). Must be a 6-digit code.
             if (!/^\d{6}$/.test(String(requestForm.pincode || ''))) {
               return toast.error('Room PIN code is required (6 digits)');
+            }
+            // Rent deed is mandatory (mam 2026-09-03). Checked here as well as
+            // on the server so the message is immediate and names the field —
+            // and so it still applies for admins, whose forms skip HTML
+            // validation. Only on CREATE: rent requests raised before this
+            // shipped have no deed and must stay editable.
+            if (!requestForm.id && !String(requestForm.rent_deed_url || '').trim()) {
+              return toast.error('Rent deed is required — upload the signed rent deed / agreement');
             }
             // If the user typed a PIN but didn't click "Verify PIN", classify
             // it now so metro_type is always saved.
@@ -1036,6 +1060,30 @@ function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
               const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, owner_aadhar_url: url }));
               e.target.value = '';
             }} />
+          )}
+        </div>
+
+        <div className="col-span-2">
+          {/* Rent deed - MANDATORY (mam 2026-09-03): no rent request without the
+              signed agreement on file. The server rejects a missing deed too,
+              because admins run the app with HTML validation disabled. */}
+          <label className="label">
+            Rent Deed / Agreement <span className="text-red-600">*</span>
+            <span className="text-gray-400 font-normal text-[10px]"> (image / PDF)</span>
+          </label>
+          {form.rent_deed_url ? (
+            <div className="flex items-center gap-2">
+              <a href={form.rent_deed_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-sm">📎 Rent deed uploaded</a>
+              <button type="button" onClick={() => setForm(f => ({ ...f, rent_deed_url: '' }))} className="text-red-500 text-xs">Remove</button>
+            </div>
+          ) : (
+            <>
+              <input type="file" accept="image/*,.pdf" className="text-xs" onChange={async e => {
+                const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, rent_deed_url: url }));
+                e.target.value = '';
+              }} />
+              <div className="text-[10px] text-red-600 mt-1">Required - upload the signed rent deed before raising this request.</div>
+            </>
           )}
         </div>
 

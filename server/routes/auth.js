@@ -1,10 +1,39 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../db/schema');
-const { generateToken, authMiddleware, adminOnly, getUserPermissions } = require('../middleware/auth');
+const jwt = require('jsonwebtoken');
+const { generateToken, generatePendingToken, getSecret, authMiddleware, adminOnly, getUserPermissions,
+        revokeUserSessions, clearSessionCache } = require('../middleware/auth');
+const totp = require('../db/userTotp');
 const router = express.Router();
 
-router.post('/login', (req, res) => {
+function finishLogin(res, user, db, ip, ua) {
+  const { logAuditEvent } = require('../middleware/audit');
+  const token = generateToken(user);
+  const permissions = getUserPermissions(user.id);
+  const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(user.id);
+  logAuditEvent({
+    user: { id: user.id, name: user.name, role: user.role },
+    action: 'LOGIN', entity_type: 'auth', entity_id: user.id, entity_label: user.name,
+    method: 'POST', path: '/api/auth/login', status_code: 200, ip, user_agent: ua,
+  });
+  res.json({
+    token,
+    user: {
+      id: user.id, name: user.name, email: user.email, username: user.username,
+      role: user.role, department: user.department, phone: user.phone,
+      approval_role: user.approval_role || null,
+      avatar_url: user.avatar_url || null,
+      has_recovery_code: !!user.recovery_code_hash,
+      totp_enabled: !!(totp.get(db, user.id) || {}).enabled,
+    },
+    permissions,
+    userRoles: userRoles.map(r => r.name)
+  });
+}
+
+router.post('/login', async (req, res) => {
   // Accept either `username` or `email` as the identifier. Historical clients
   // send `email`; the new login UI sends `username` which may actually be a
   // username OR an email — we match against both columns.
@@ -47,32 +76,46 @@ router.post('/login', (req, res) => {
     });
     return res.status(401).json({ error: 'Invalid credentials' });
   }
-  const token = generateToken(user);
-  const permissions = getUserPermissions(user.id);
-  const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(user.id);
-  // Successful login — record user + ip + UA for session tracking.
-  logAuditEvent({
-    user: { id: user.id, name: user.name, role: user.role },
-    action: 'LOGIN', entity_type: 'auth', entity_id: user.id, entity_label: user.name,
-    method: 'POST', path: '/api/auth/login', status_code: 200, ip, user_agent: ua,
-  });
-  res.json({
-    token,
-    user: {
-      id: user.id, name: user.name, email: user.email, username: user.username,
-      role: user.role, department: user.department, phone: user.phone,
-      // L1/L2 indent approval role (mam's 2026-05-26 spec). 'l1' = Nitin
-      // Jain ji, 'l2' = Nitin Sir, NULL = ordinary user. Procurement UI
-      // uses this to decide whether to show Approve L1 / L2 buttons.
-      approval_role: user.approval_role || null,
-      avatar_url: user.avatar_url || null,
-      // Frontend uses this to force a "set recovery code" modal on first
-      // login, guaranteeing every user can self-recover later.
-      has_recovery_code: !!user.recovery_code_hash,
-    },
-    permissions,
-    userRoles: userRoles.map(r => r.name)
-  });
+  const totpRow = totp.get(db, user.id);
+  if (totp.needsTotp(totpRow)) {
+    const temp_token = generatePendingToken(user);
+    if (totpRow.enabled && totpRow.secret) {
+      return res.json({ totp_required: true, temp_token });
+    }
+    const setup = await totp.beginSetup(db, user);
+    return res.json({ totp_setup_required: true, temp_token, qr: setup.qr, secret: setup.secret });
+  }
+
+  finishLogin(res, user, db, ip, ua);
+});
+
+router.post('/login/totp', (req, res) => {
+  const { token: tempToken, code } = req.body || {};
+  const { logAuditEvent } = require('../middleware/audit');
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null;
+  const ua = req.headers['user-agent'] || null;
+  if (!tempToken || !code) return res.status(400).json({ error: 'Authenticator code required' });
+  let pending;
+  try {
+    pending = jwt.verify(tempToken, getSecret());
+  } catch {
+    return res.status(401).json({ error: 'This sign-in expired. Enter your password again.' });
+  }
+  if (!pending.totp_pending || !pending.id) return res.status(401).json({ error: 'Authenticator code required' });
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(pending.id);
+  if (!user || user.active === 0) return res.status(403).json({ error: 'Your account is disabled. Please contact admin.' });
+  const row = totp.get(db, user.id);
+  if (!row || !row.secret) return res.status(400).json({ error: 'Set up authenticator first' });
+  if (!totp.verifyCode(user, row.secret, code)) {
+    logAuditEvent({
+      action: 'LOGIN_FAIL', entity_type: 'auth', entity_label: user.username || user.email,
+      method: 'POST', path: '/api/auth/login/totp', status_code: 401, ip, user_agent: ua,
+    });
+    return res.status(401).json({ error: 'Invalid authenticator code' });
+  }
+  if (!row.enabled) totp.confirm(db, user.id);
+  finishLogin(res, user, db, ip, ua);
 });
 
 router.post('/register', authMiddleware, adminOnly, (req, res) => {
@@ -120,7 +163,39 @@ router.get('/me', authMiddleware, (req, res) => {
   delete user.recovery_code_hash;
   const permissions = getUserPermissions(req.user.id);
   const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(req.user.id);
-  res.json({ ...user, has_recovery_code, permissions, userRoles: userRoles.map(r => r.name) });
+  const totpRow = totp.get(db, user.id);
+  res.json({
+    ...user, has_recovery_code, permissions, userRoles: userRoles.map(r => r.name),
+    totp_enabled: !!(totpRow && totpRow.enabled),
+    totp_required: !!(totpRow && totpRow.required),
+  });
+});
+
+router.post('/totp/setup', authMiddleware, async (req, res) => {
+  const password = req.body?.current_password;
+  if (!password) return res.status(400).json({ error: 'Current password required' });
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  if (!user || !user.password || !bcrypt.compareSync(password, user.password)) {
+    return res.status(401).json({ error: 'Current password is wrong' });
+  }
+  const row = totp.get(db, user.id);
+  if (row && row.enabled) return res.status(400).json({ error: '2FA is already on' });
+  totp.optIn(db, user.id);
+  const setup = await totp.beginSetup(db, user);
+  res.json({ qr: setup.qr, secret: setup.secret });
+});
+
+router.post('/totp/confirm', authMiddleware, (req, res) => {
+  const code = req.body?.code;
+  const db = getDb();
+  const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const row = totp.get(db, user.id);
+  if (!row || !row.secret) return res.status(400).json({ error: 'Start 2FA setup first' });
+  if (!totp.verifyCode(user, row.secret, code)) return res.status(401).json({ error: 'Invalid authenticator code' });
+  totp.confirm(db, user.id);
+  res.json({ message: '2FA is on. Next login will ask for a code.' });
 });
 
 // Set / clear the signed-in user's profile photo (WhatsApp-style avatar).
@@ -168,7 +243,7 @@ router.get('/users/export.xlsx', authMiddleware, adminOnly, (req, res) => {
     XLSX.utils.book_append_sheet(wb, ws, 'Active Users');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="active-users-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="active-users-${istToday()}.xlsx"`);
     res.send(buf);
   } catch (e) {
     console.error('[users export] failed:', e.message);
@@ -234,6 +309,8 @@ router.get('/users', authMiddleware, (req, res) => {
   const users = db.prepare(`
     SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active, u.avatar_url,
            COALESCE(u.track_location, 1) as track_location, COALESCE(u.archived, 0) as archived, u.created_at, u.approval_role,
+           COALESCE((SELECT enabled FROM user_totp WHERE user_id = u.id), 0) as totp_enabled,
+           COALESCE((SELECT required FROM user_totp WHERE user_id = u.id), 0) as totp_required,
     GROUP_CONCAT(r.name) as role_names,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = u.id) AS hr_department,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = u.id) AS hr_designation,
@@ -270,6 +347,10 @@ router.patch('/users/:id/archive', authMiddleware, adminOnly, (req, res) => {
   const arch = req.body?.archived ? 1 : 0;
   if (arch) db.prepare('UPDATE users SET archived=1, active=0 WHERE id=?').run(id);
   else db.prepare('UPDATE users SET archived=0 WHERE id=?').run(id);
+  // Archiving is meant to BLOCK login. Before session revocation existed it
+  // only blocked NEW logins — an already-open session sailed on. End it.
+  if (arch) revokeUserSessions(id, db);
+  clearSessionCache(id);
   res.json({ message: arch ? `"${target.name}" archived — hidden from lists, all data kept` : `"${target.name}" restored to the Inactive list`, archived: arch });
 });
 
@@ -277,6 +358,9 @@ router.patch('/users/:id/archive', authMiddleware, adminOnly, (req, res) => {
 router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
   const { name, email, username, department, phone, role, active, role_ids, password, approval_role, avatar_url } = req.body;
   const db = getDb();
+  // Pre-image, so we can tell a lockout / demotion apart from a phone-number
+  // edit and only end sessions when the edit actually removes access.
+  const prev = db.prepare('SELECT role, COALESCE(active,1) AS active FROM users WHERE id=?').get(req.params.id) || {};
 
   try {
     const uname = username !== undefined ? (username ? String(username).trim() : null) : undefined;
@@ -333,7 +417,77 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
     for (const rid of role_ids) insertUserRole.run(req.params.id, rid);
   }
 
+  // Did this edit take access AWAY? Deactivating, changing the password, or
+  // demoting out of admin all have to end the live session — otherwise the
+  // change is only cosmetic and the open tab keeps its old powers (that was
+  // the whole gap behind the 2026-08-24 incident). A harmless edit (phone,
+  // department, avatar, a PROMOTION) must not sign anyone out, so we only
+  // drop the cache in that case and the new role lands on the next request.
+  const nowActive = active ? 1 : 0;
+  const lockedOut = prev.active === 1 && nowActive === 0;
+  const demoted = prev.role === 'admin' && role && role !== 'admin';
+  if (lockedOut || demoted || password) revokeUserSessions(req.params.id, db);
+  else clearSessionCache(req.params.id);
+
   res.json({ message: 'User updated' });
+});
+
+// Force-logout: end every live session for one user, right now, without
+// touching their password or their account state (2026-08-24 incident — there
+// was no way to do this at all, so a suspected-compromised account could not
+// be cut off except by guessing that a password reset might help, which it
+// didn't either). Use when a token may be in the wrong hands.
+router.post('/users/:id/force-logout', authMiddleware, adminOnly, (req, res) => {
+  const db = getDb();
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const at = revokeUserSessions(target.id, db);
+  if (!at) return res.status(500).json({ error: 'Could not revoke sessions' });
+  const { logAuditEvent } = require('../middleware/audit');
+  logAuditEvent({
+    user: req.user, action: 'FORCE_LOGOUT', entity_type: 'auth',
+    entity_id: target.id, entity_label: target.name,
+    method: 'POST', path: `/api/auth/users/${target.id}/force-logout`, status_code: 200,
+    ip: (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null,
+    user_agent: req.headers['user-agent'] || null,
+    after: { token_revoked_at: at },
+  });
+  res.json({ message: `All sessions for "${target.name}" have been signed out.`, token_revoked_at: at });
+});
+
+router.post('/users/:id/totp/opt-in', authMiddleware, adminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  const db = getDb();
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  totp.optIn(db, id);
+  res.json({ message: `2FA on for "${target.name}". Next login they scan a QR (or enter a code if already set up).` });
+});
+
+router.post('/users/:id/totp/opt-out', authMiddleware, adminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  const db = getDb();
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  totp.optOut(db, id);
+  res.json({ message: `2FA off for "${target.name}". Password-only login again.` });
+});
+
+router.post('/users/:id/totp/reset', authMiddleware, adminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  if (id === req.user.id) return res.status(400).json({ error: 'Ask another admin to reset your authenticator.' });
+  const db = getDb();
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  totp.reset(db, id);
+  revokeUserSessions(id, db);
+  const { logAuditEvent } = require('../middleware/audit');
+  logAuditEvent({
+    user: req.user, action: 'TOTP_RESET', entity_type: 'auth',
+    entity_id: target.id, entity_label: target.name,
+    method: 'POST', path: `/api/auth/users/${id}/totp/reset`, status_code: 200,
+  });
+  res.json({ message: `Authenticator reset for "${target.name}". They stay on 2FA and scan a new QR next login.` });
 });
 
 // Self-service: change own password (any logged-in user)
@@ -347,6 +501,17 @@ router.post('/change-password', authMiddleware, (req, res) => {
     return res.status(401).json({ error: 'Current password is incorrect' });
   }
   db.prepare('UPDATE users SET password=? WHERE id=?').run(bcrypt.hashSync(new_password, 10), req.user.id);
+  // Changing your password signs out everywhere ELSE (the usual reason someone
+  // changes it is that they think somebody has their old one). The tab doing
+  // the change is kept alive by handing back a token minted AFTER the
+  // revocation stamp — the client already swaps X-Refresh-Token in, so the
+  // user is not bounced to the login screen for their own action.
+  revokeUserSessions(req.user.id, db);
+  try {
+    const fresh = generateToken({ id: req.user.id, email: req.user.email, role: req.user.role, name: req.user.name });
+    res.setHeader('X-Refresh-Token', fresh);
+    res.setHeader('Access-Control-Expose-Headers', 'X-Refresh-Token');
+  } catch (_) { /* best-effort; worst case this tab re-logs in once */ }
   res.json({ message: 'Password changed successfully' });
 });
 
@@ -401,6 +566,9 @@ router.post('/forgot-password', (req, res) => {
   // valid recovery code should also un-disable an accidentally deactivated
   // account, otherwise the user would still be locked out after the reset.
   db.prepare('UPDATE users SET password=?, active=1 WHERE id=?').run(bcrypt.hashSync(newPwd, 10), user.id);
+  // A recovery-code reset is the account-takeover recovery path: whoever else
+  // holds a live token for this account must be cut off.
+  revokeUserSessions(user.id, db);
   logAuditEvent({
     user: { id: user.id, name: user.name, role: emergencyOk ? 'emergency' : 'self' },
     action: emergencyOk ? 'FORGOT_PASSWORD_OK_EMERGENCY' : 'FORGOT_PASSWORD_OK',
@@ -431,6 +599,9 @@ router.post('/users/:id/reset-password', authMiddleware, adminOnly, (req, res) =
   }
 
   db.prepare('UPDATE users SET password=? WHERE id=?').run(bcrypt.hashSync(newPassword, 10), req.params.id);
+  // The point of an admin reset is usually to lock someone OUT. Kill the
+  // sessions too, or the old token keeps working with the old password.
+  revokeUserSessions(req.params.id, db);
   res.json({ message: 'Password reset', user: { id: user.id, name: user.name, username: user.username, email: user.email }, new_password: newPassword });
 });
 
@@ -438,6 +609,22 @@ router.post('/users/:id/reset-password', authMiddleware, adminOnly, (req, res) =
 // users(id).  Used by the force-delete path so we don't have to keep
 // a hard-coded list of tables in sync with the schema — SQLite tells
 // us dynamically.  Returns [{ table, column }].
+// `INTEGER PRIMARY KEY` on a single column makes SQLite treat that column as
+// the table's rowid alias. It reads as nullable in PRAGMA table_info (notnull
+// stays 0), but a rowid can never actually be NULL — `UPDATE ... SET col =
+// NULL` on such a column always fails, silently, since findUserFkReferences'
+// caller wraps the clear in try/catch. That's exactly what happened with
+// announcement_reads.user_id and score_user_template.user_id (both declared
+// `user_id INTEGER PRIMARY KEY REFERENCES users(id)`): force-delete tried to
+// null them, silently failed both passes, and reported them as un-clearable
+// blockers. Treat this shape like a NOT NULL column so the row gets DELETEd
+// instead — safe here since both tables hold nothing but a per-user pointer
+// that's meaningless once the user is gone (a "last seen" marker and a
+// template assignment), not audit data worth preserving.
+function isRowidAliasColumn(col, cols) {
+  return !!(col && col.pk === 1 && /INT/i.test(col.type || '') && cols.filter(c => c.pk > 0).length === 1);
+}
+
 function findUserFkReferences(db) {
   const refs = [];
   // Pull every user table (not views, not sqlite_master itself).
@@ -457,7 +644,8 @@ function findUserFkReferences(db) {
       const cols = db.prepare(`PRAGMA table_info("${name}")`).all();
       for (const fk of userFks) {
         const col = cols.find(c => c.name === fk.from);
-        refs.push({ table: name, column: fk.from, on_delete: fk.on_delete, notnull: !!(col && col.notnull) });
+        const notnull = !!(col && col.notnull) || isRowidAliasColumn(col, cols);
+        refs.push({ table: name, column: fk.from, on_delete: fk.on_delete, notnull });
       }
     } catch (_) { /* skip tables that can't be inspected */ }
   }
@@ -485,7 +673,8 @@ function usersStillReferencedBy(db, id) {
         const c = db.prepare(`SELECT COUNT(*) c FROM "${name}" WHERE "${fk.from}" = ?`).get(id).c;
         if (c > 0) {
           const col = cols.find(cc => cc.name === fk.from);
-          hits.push({ table: name, column: fk.from, notnull: !!(col && col.notnull), count: c });
+          const notnull = !!(col && col.notnull) || isRowidAliasColumn(col, cols);
+          hits.push({ table: name, column: fk.from, notnull, count: c });
         }
       } catch (_) { /* skip */ }
     }
@@ -633,6 +822,32 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
       hint: 'Try Deactivate (reversible, recommended), OR Force Delete (passes ?force=1, nulls all FK references first).',
     });
   }
+});
+
+// ===== DESTRUCTIVE-ACTION LOCKS (Admin Only) =====
+// The circuit breaker (lib/destructiveBreaker.js) refuses a user's
+// destructive calls after a rapid spray. These endpoints let an admin see
+// who is locked and clear a lock early — e.g. a genuine HR batch that
+// tripped it. Unlock emails the director (a stolen-admin unlocking itself
+// still leaves a trace mam sees).
+router.get('/breaker/locks', authMiddleware, adminOnly, (req, res) => {
+  try { res.json(require('../lib/destructiveBreaker').listLocks()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/breaker/unlock/:userId', authMiddleware, adminOnly, (req, res) => {
+  try {
+    const userId = +req.params.userId;
+    const cleared = require('../lib/destructiveBreaker').unlock(userId, req.user);
+    const { logAuditEvent } = require('../middleware/audit');
+    logAuditEvent({
+      user: req.user, action: 'BREAKER_UNLOCK', entity_type: 'users', entity_id: userId,
+      method: 'POST', path: `/api/auth/breaker/unlock/${userId}`,
+    });
+    res.json(cleared > 0
+      ? { message: 'Destructive actions unlocked' }
+      : { message: 'No active lock for that user' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== ROLES & PERMISSIONS (Admin Only) =====

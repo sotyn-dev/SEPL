@@ -1,17 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import ResponsibilityTab from '../components/ResponsibilityTab';
+// Tally Bill workflow surfaced as a tab here too (Director CR 2026-08-13 named
+// /collections as the location; the standalone /tally-bills page stays the
+// canonical home). Lazy so Collections' own chunk doesn't grow.
+const TallyBills = lazy(() => import('./TallyBills'));
 import { useUrlTab } from '../hooks/useUrlTab';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiPhoneCall, FiAlertTriangle, FiRefreshCw, FiTrash2, FiDownload, FiFileText } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import { LuIndianRupee } from 'react-icons/lu';
 
 export default function Collections() {
-  const { canDelete } = useAuth();
+  const { canDelete, canView } = useAuth();
   const [tab, setTab] = useUrlTab('list');
   const [receivables, setReceivables] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -38,6 +43,11 @@ export default function Collections() {
     api.get('/auth/users?active_only=1').then(r => setUsers(r.data));
   };
   useEffect(() => { load(); }, [filter]);
+
+  // Numbered pagination over the (status-filtered) receivables list.
+  // Must sit above the `if (!summary)` early return (hook order).
+  // Export keeps using the FULL `receivables` array.
+  const pager = usePagination(receivables, { resetKey: [filter] });
 
   const createReceivable = async (e) => {
     e.preventDefault();
@@ -167,10 +177,18 @@ export default function Collections() {
   return (
     <div className="space-y-6">
       <div className="flex gap-2 flex-wrap">
-        <button onClick={() => setTab('list')} className={`btn ${tab === 'responsible' ? 'btn-secondary' : 'btn-primary'}`}>Receivables</button>
+        <button onClick={() => setTab('list')} className={`btn ${tab === 'responsible' || tab === 'tally' ? 'btn-secondary' : 'btn-primary'}`}>Receivables</button>
+        {/* Only for users who can actually see the module — avoids 403 toasts */}
+        {canView('tally_bills') && (
+          <button onClick={() => setTab('tally')} className={`btn ${tab === 'tally' ? 'btn-primary' : 'btn-secondary'}`}>Tally Bills</button>
+        )}
         <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
       </div>
-      {tab === 'responsible' ? (
+      {tab === 'tally' && canView('tally_bills') ? (
+        <Suspense fallback={<div className="text-center py-10 text-gray-400">Loading Tally Bills…</div>}>
+          <TallyBills />
+        </Suspense>
+      ) : tab === 'responsible' ? (
         <ResponsibilityTab module="collections" title="Collections (Receivables)" />
       ) : (
       <>
@@ -279,8 +297,8 @@ export default function Collections() {
 
       {/* Receivables Table */}
       <div className="card p-0">
-        <div>
-          <table className="freeze-head">
+        <div className="table-responsive">
+          <table className="freeze-head min-w-[900px]">
             <thead>
               <tr>
                 <th>Site / Client</th>
@@ -297,7 +315,7 @@ export default function Collections() {
               </tr>
             </thead>
             <tbody>
-              {receivables.map(r => (
+              {pager.pageItems.map(r => (
                 <tr key={r.id}>
                   <td className="font-medium">
                     {/* Show business_book.project_name first (true site name),
@@ -355,6 +373,7 @@ export default function Collections() {
             </tbody>
           </table>
         </div>
+        <Pagination {...pager} />
       </div>
 
       {/* Edit Receivable Modal — v2 layout per mam's spec:
@@ -468,7 +487,7 @@ export default function Collections() {
                     {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                   </select>
                 </div>
-                <div className="col-span-2">
+                <div className="col-span-1 sm:col-span-2">
                   <label className="label">Last Discussion with Client</label>
                   <textarea className="input" rows="3" value={editForm.last_discussion || ''} onChange={e => setEditForm(f => ({ ...f, last_discussion: e.target.value }))} placeholder="What did the client say? When will they pay? Any escalation?" />
                 </div>
@@ -578,7 +597,7 @@ export default function Collections() {
                   onChange={(u) => setForm({ ...form, owner_id: u?.id || '' })}
                 />
               </div>
-              <div className="col-span-2">
+              <div className="col-span-1 sm:col-span-2">
                 <label className="label">Last Discussion with Client</label>
                 <textarea className="input" rows="2" value={form.last_discussion || ''} onChange={e => setForm({...form, last_discussion: e.target.value})} placeholder="What did the client say? When will they pay?" />
               </div>
@@ -608,12 +627,12 @@ export default function Collections() {
             </div>
           )}
           <form onSubmit={addFollowUp} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label className="label">Follow-up Date</label><input className="input" type="date" value={form.follow_up_date || ''} onChange={e => setForm({...form, follow_up_date: e.target.value})} /></div>
               <div><label className="label">Contact Method</label><select className="select" value={form.contact_method || ''} onChange={e => setForm({...form, contact_method: e.target.value})}><option value="call">Phone Call</option><option value="email">Email</option><option value="visit">Site Visit</option><option value="whatsapp">WhatsApp</option><option value="legal_notice">Legal Notice</option></select></div>
             </div>
             <div><label className="label">Response / Notes</label><textarea className="input" rows="2" value={form.response || ''} onChange={e => setForm({...form, response: e.target.value})} /></div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div><label className="label">Promised Date</label><input className="input" type="date" value={form.promised_date || ''} onChange={e => setForm({...form, promised_date: e.target.value})} /></div>
               <div><label className="label">Promised Amount</label><input className="input" type="number" min="0" step="0.01" value={form.promised_amount ?? ''} onChange={e => setForm({...form, promised_amount: e.target.value === '' ? '' : +e.target.value})} placeholder="Enter amount" /></div>
             </div>
@@ -626,7 +645,7 @@ export default function Collections() {
       <Modal isOpen={collectModal} onClose={() => setCollectModal(false)} title="Record Collection Payment">
         <form onSubmit={recordCollection} className="space-y-4">
           <p className="text-xs text-red-600 bg-red-50 p-2 rounded">This collection will auto-link to Cash Flow System as an inflow entry.</p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Amount *</label><input className="input" type="number" min="0" step="0.01" value={form.amount ?? ''} onChange={e => setForm({...form, amount: e.target.value === '' ? '' : +e.target.value})} placeholder="Enter amount" required /></div>
             <div><label className="label">Date</label><input className="input" type="date" value={form.collection_date || ''} onChange={e => setForm({...form, collection_date: e.target.value})} /></div>
             <div><label className="label">Payment Mode</label><select className="select" value={form.payment_mode || ''} onChange={e => setForm({...form, payment_mode: e.target.value})}><option value="">Select</option><option value="Cash">Cash</option><option value="Bank Transfer">Bank Transfer</option><option value="UPI">UPI</option><option value="Cheque">Cheque</option><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option></select></div>

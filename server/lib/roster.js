@@ -12,8 +12,8 @@
 // roster here later (offset only) and every consumer picks it up automatically.
 
 const ROSTERS = {
-  general: { key: 'general', label: '9:30 AM – 6:30 PM', start: '09:30', offsetMin: 0 },
-  early:   { key: 'early',   label: '9:00 AM – 6:00 PM', start: '09:00', offsetMin: -30 },
+  general: { key: 'general', label: '9:30 AM – 6:30 PM', start: '09:30', end: '18:30', offsetMin: 0 },
+  early:   { key: 'early',   label: '9:00 AM – 6:00 PM', start: '09:00', end: '18:00', offsetMin: -30 },
 };
 
 const DEFAULT_ROSTER = 'general';
@@ -41,6 +41,9 @@ function rosterCutoffs(settings, roster) {
     roster: r.key,
     roster_label: r.label,
     roster_start: r.start,
+    // The shift END. It was only ever in the human label; checklists need it to
+    // know when a day is over for someone who never punched in (mam 2026-09-12).
+    roster_end: r.end,
     late_after_time: shiftHHMM(s.late_after_time || '09:46', r.offsetMin),
     half_day_after_time: shiftHHMM(s.half_day_after_time || '10:00', r.offsetMin),
   };

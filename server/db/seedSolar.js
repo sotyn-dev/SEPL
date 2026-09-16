@@ -132,6 +132,11 @@ function ensureSolarSchema(db) {
   addCol(`ALTER TABLE solar_deals ADD COLUMN district TEXT`);
   addCol(`ALTER TABLE solar_deals ADD COLUMN pincode TEXT`);
   addCol(`ALTER TABLE solar_deals ADD COLUMN lat REAL`);
+  // Remarks are editable (mam 2026-09-04: "all stages remarks ... will be
+  // editable"). Stamp who changed a note and when, so the trail still shows
+  // that a line was altered even though the original text is replaced.
+  addCol(`ALTER TABLE solar_deal_events ADD COLUMN edited_at DATETIME`);
+  addCol(`ALTER TABLE solar_deal_events ADD COLUMN edited_by_name TEXT`);
   addCol(`ALTER TABLE solar_deals ADD COLUMN lng REAL`);
   addCol(`ALTER TABLE solar_quotations ADD COLUMN deal_id INTEGER`);
   addCol(`ALTER TABLE solar_quotations ADD COLUMN variant_label TEXT`);

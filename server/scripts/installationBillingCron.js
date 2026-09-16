@@ -44,6 +44,12 @@ function scheduleAt(hour, minute, fn, label) {
 }
 
 function scheduleInstallationBillingCron() {
+  // Automatic installation billing is disabled by default so users can select and review
+  // which DPRs to bill in the Sales Billing UI rather than picking all billable DPRs automatically.
+  if (process.env.ERP_AUTO_INSTALL_BILLING !== '1') {
+    console.log('[install-billing] automatic background DPR billing disabled — DPR billing is performed selectively via Sales Billing UI.');
+    return;
+  }
   if (process.env.ERP_DISABLE_INSTALL_BILLING === '1') {
     console.log('[install-billing] disabled via ERP_DISABLE_INSTALL_BILLING');
     return;

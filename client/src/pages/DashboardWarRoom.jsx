@@ -163,14 +163,15 @@ function bottlenecks(data) {
 
 // ─── Style helpers ────────────────────────────────────────────────
 const headerStyle = {
-  background: '#0E1116', color: '#fff', padding: '18px 28px',
+  background: '#0E1116', color: '#fff', padding: '14px 16px',
   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  flexWrap: 'wrap', gap: 12,
   borderBottom: `3px solid ${C.red}`,
 };
-const tabBarStyle = { display: 'flex', gap: 0, background: '#1a1d22', padding: '0 28px' };
+const tabBarStyle = { display: 'flex', gap: 0, background: '#1a1d22', padding: '0 8px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' };
 const tabStyle = (active) => ({
-  padding: '14px 24px', color: active ? '#fff' : '#bdbdbd', cursor: 'pointer',
-  fontSize: 13, fontWeight: 500,
+  padding: '10px 14px', color: active ? '#fff' : '#bdbdbd', cursor: 'pointer',
+  fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0,
   borderBottom: `3px solid ${active ? C.red : 'transparent'}`,
   background: active ? '#0E1116' : 'transparent',
 });
@@ -207,13 +208,13 @@ function TrafficCard({ title, light, evidence }) {
   const colorMap = { red: C.red, amber: C.amber, green: C.green };
   const label = light.toUpperCase();
   return (
-    <div style={cardStyle}>
+    <div style={cardStyle} className="p-3 sm:p-4">
       <h3 style={{ margin: '0 0 4px', fontSize: 11, letterSpacing: 1, color: C.ink2, textTransform: 'uppercase', fontWeight: 600 }}>{title}</h3>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
         <div style={dotStyle(colorMap[light])} />
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>{label}</div>
       </div>
-      <div style={{ fontSize: 12, color: C.ink2, marginTop: 6, lineHeight: 1.45 }}>{evidence}</div>
+      <div style={{ fontSize: 11, color: C.ink2, marginTop: 6, lineHeight: 1.4 }}>{evidence}</div>
     </div>
   );
 }
@@ -241,7 +242,7 @@ function DecisionCard({ q, optA, optB, recommend, owner, deadline }) {
 export default function DashboardWarRoom() {
   const [data, setData] = useState(null);
   const [days, setDays] = useState(90);
-  const [tab, setTab] = useUrlTab('cmd');
+  const [tab, setTab] = useUrlTab(['cmd', 'approvals', 'coo', 'hide', 'hierarchy', 'performance', 'posales'], 'cmd');
   const [loading, setLoading] = useState(false);
   const [approvals, setApprovals] = useState(null);   // consolidated pending-approvals inbox
   const [apprExpanded, setApprExpanded] = useState(null);  // which card's item list is open
@@ -365,16 +366,16 @@ export default function DashboardWarRoom() {
   ];
 
   return (
-    <div className="cmd-dark-table" style={{ background: C.bg, color: C.ink, margin: -8, minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif' }}>
-      <header style={headerStyle}>
+    <div className="cmd-dark-table -m-2 md:-m-6 min-h-screen overflow-x-hidden" style={{ background: C.bg, color: C.ink, fontFamily: 'Inter, -apple-system, sans-serif' }}>
+      <header className="bg-[#0E1116] text-white px-3.5 sm:px-4 py-3 sm:py-3.5 flex flex-col sm:flex-row justify-between sm:items-center gap-2.5 sm:gap-3 border-b-[3px] border-[#D33A2C]">
         <div>
-          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '.3px' }}>SOTYN.AI — Director's War Room</h1>
-          <div style={{ fontSize: 12, color: '#bdbdbd' }}>Secured Engineers Pvt Ltd · Path to ₹10,000 cr · Read in 30 sec / Decide in 5 min</div>
+          <h1 style={{ margin: 0, fontSize: 16, fontWeight: 600, letterSpacing: '.3px' }}>SOTYN.AI — Director's War Room</h1>
+          <div style={{ fontSize: 11.5, color: '#bdbdbd' }}>Secured Engineers Pvt Ltd · Path to ₹10,000 cr · Read in 30 sec / Decide in 5 min</div>
         </div>
-        <div style={{ fontSize: 12, color: '#bdbdbd' }}>
-          {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} IST · Auto-refresh 7:30 AM daily
+        <div style={{ fontSize: 11.5, color: '#bdbdbd' }} className="flex items-center flex-wrap gap-1.5 sm:gap-2">
+          <span>{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} IST · Auto-refresh 7:30 AM daily</span>
           <select value={days} onChange={e => { setDays(+e.target.value); load(+e.target.value); }}
-            style={{ marginLeft: 12, background: '#1a1d22', color: '#fff', border: 'none', padding: '4px 10px', borderRadius: 4, fontSize: 11 }}>
+            style={{ marginLeft: 6, background: '#1a1d22', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: 4, fontSize: 11 }}>
             <option value={30}>30d</option>
             <option value={90}>90d</option>
             <option value={180}>6mo</option>
@@ -383,10 +384,10 @@ export default function DashboardWarRoom() {
         </div>
       </header>
 
-      <div style={tabBarStyle}>
-        <div onClick={() => setTab('cmd')} style={tabStyle(tab === 'cmd')}>CMD VIEW (Director)</div>
-        <div onClick={() => setTab('coo')} style={tabStyle(tab === 'coo')}>COO VIEW (Operations)</div>
-        <div onClick={() => setTab('hide')} style={tabStyle(tab === 'hide')}>DO-NOT-SHOW LIST</div>
+      <div style={tabBarStyle} className="table-responsive">
+        <div onClick={() => setTab('cmd')} style={tabStyle(tab === 'cmd')}>CMD VIEW <span className="hidden sm:inline">(Director)</span></div>
+        <div onClick={() => setTab('coo')} style={tabStyle(tab === 'coo')}>COO VIEW <span className="hidden sm:inline">(Operations)</span></div>
+        <div onClick={() => setTab('hide')} style={tabStyle(tab === 'hide')}>DO-NOT-SHOW <span className="hidden sm:inline">LIST</span></div>
         <div onClick={() => setTab('approvals')} style={tabStyle(tab === 'approvals')}>
           MY APPROVALS
           {approvals?.total > 0 && <span style={{ background: '#E5484D', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 11, marginLeft: 6, fontWeight: 700 }}>{approvals.total}</span>}
@@ -396,14 +397,14 @@ export default function DashboardWarRoom() {
         <div onClick={() => setTab('performance')} style={tabStyle(tab === 'performance')}>⚡ PERFORMANCE</div>
       </div>
 
-      <main style={{ padding: 28, maxWidth: 1400, margin: '0 auto' }}>
+      <main className="p-3 sm:p-6" style={{ maxWidth: 1400, margin: '0 auto' }}>
 
         {/* ============== CMD VIEW ============== */}
         {tab === 'cmd' && (<>
 
           {/* Section 1 — Traffic Light */}
           <div style={{ ...sectionTitle, marginTop: 0 }}>Section 1 · Traffic Light (30-second read)</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 20, marginBottom: 24 }}>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-4 mb-5">
             <TrafficCard title="Cash"         {...lights.cash} />
             <TrafficCard title="Sales"        {...lights.sales} />
             <TrafficCard title="Delivery"     {...lights.delivery} />
@@ -424,29 +425,32 @@ export default function DashboardWarRoom() {
 
           {/* Section 2 — Top 3 Bottlenecks */}
           <div style={sectionTitle}>Section 2 · Top 3 Bottlenecks (₹/day cost)</div>
-          <div style={cardStyle}>
+          <div style={cardStyle} className="p-3 sm:p-4">
             {bn.length === 0 ? (
               <div style={{ textAlign: 'center', color: C.green, padding: 30 }}>No critical bottlenecks detected today. System is running clean.</div>
             ) : bn.map((b, i) => (
-              <div key={i} style={{
-                display: 'grid', gridTemplateColumns: '30px 1fr 110px 130px',
-                gap: 14, alignItems: 'start', padding: '14px 0',
-                borderBottom: i === bn.length - 1 ? 'none' : `1px solid ${C.line}`,
-              }}>
-                <div style={{ fontSize: 22, fontWeight: 700, color: C.red, lineHeight: 1 }}>{b.rank}</div>
-                <div>
+              <div key={i} className={`flex flex-col sm:grid sm:grid-cols-[30px_1fr_110px_130px] gap-2.5 sm:gap-3.5 items-start py-3 ${i === bn.length - 1 ? '' : 'border-b border-[#E5E2DA]'}`}>
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <div style={{ fontSize: 22, fontWeight: 700, color: C.red, lineHeight: 1 }}>{b.rank}</div>
+                  <div className="sm:hidden flex-1 flex justify-between items-center">
+                    <span style={badge(b.badgeColor)}>{b.badge}</span>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: C.red }}>{fmtINR(b.cost)}/day</span>
+                  </div>
+                </div>
+                <div className="w-full">
                   <strong style={{ display: 'block', fontSize: 13.5, marginBottom: 3 }}>{b.title}</strong>
                   <span style={{ fontSize: 12, color: C.ink2, lineHeight: 1.5 }}>
                     <strong>WHO:</strong> {b.who}.<br />
                     <strong>WHY:</strong> {b.why}<br />
                     <strong>EVIDENCE:</strong> {b.evidence}
                   </span>
+                  <div className="sm:hidden mt-2 text-xs text-gray-500">Owner: {b.owner}</div>
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: C.red, textAlign: 'right' }}>
+                <div className="hidden sm:block" style={{ fontSize: 18, fontWeight: 700, color: C.red, textAlign: 'right' }}>
                   {fmtINR(b.cost)}/day
                   <small style={{ display: 'block', fontSize: 10, fontWeight: 400, color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{b.costLabel}</small>
                 </div>
-                <div>
+                <div className="hidden sm:block">
                   <span style={badge(b.badgeColor)}>{b.badge}</span>
                   <div style={{ fontSize: 11, color: C.ink2, marginTop: 6 }}>Owner: {b.owner}</div>
                 </div>
@@ -463,7 +467,7 @@ export default function DashboardWarRoom() {
               fire, we fill the rest with a "all-clear" placeholder so
               the layout stays steady. */}
           <div style={sectionTitle}>Section 3 · Today's 3 Decisions</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
             {(() => {
               const tops = bn; // computed at top of render via bottlenecks(data)
               const cards = tops.map((b, i) => (
@@ -493,32 +497,32 @@ export default function DashboardWarRoom() {
 
           {/* Section 4 — Cash · Sales · Delivery */}
           <div style={sectionTitle}>Section 4 · Cash · Sales · Delivery (numbers, no fluff)</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
             <div style={cardStyle}>
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Cash position</h2>
-              <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', margin: '4px 0' }}>
+              <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-.5px', margin: '4px 0' }}>
                 {pulse.runway_days != null ? `${pulse.runway_days} days` : '—'}
               </div>
               <div style={{ fontSize: 11, color: C.red }}>runway · burn-rate based</div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginTop: 14 }}>
                 <tbody>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>Bank balance</td><td style={{ padding: '11px 8px', textAlign: 'right' }}><strong>{fmtINR(pulse.bank_balance)}</strong></td></tr>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>AR (total)</td><td style={{ padding: '11px 8px', textAlign: 'right' }}>{fmtINR(cash.ar_outstanding)}</td></tr>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>AR &gt; 90 days</td><td style={{ padding: '11px 8px', textAlign: 'right', color: C.red }}><strong>{fmtINR(cash.ar_aging.bucket_90_plus)}</strong></td></tr>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>AP outstanding</td><td style={{ padding: '11px 8px', textAlign: 'right' }}>{fmtINR(cash.ap_outstanding)}</td></tr>
-                  <tr><td style={{ padding: '11px 8px' }}>Free cash (deployable)</td><td style={{ padding: '11px 8px', textAlign: 'right' }}>{fmtINR(pulse.free_cash)}</td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Bank balance</td><td style={{ padding: '10px 6px', textAlign: 'right' }}><strong>{fmtINR(pulse.bank_balance)}</strong></td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>AR (total)</td><td style={{ padding: '10px 6px', textAlign: 'right' }}>{fmtINR(cash.ar_outstanding)}</td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>AR &gt; 90 days</td><td style={{ padding: '10px 6px', textAlign: 'right', color: C.red }}><strong>{fmtINR(cash.ar_aging.bucket_90_plus)}</strong></td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>AP outstanding</td><td style={{ padding: '10px 6px', textAlign: 'right' }}>{fmtINR(cash.ap_outstanding)}</td></tr>
+                  <tr><td style={{ padding: '10px 6px' }}>Free cash (deployable)</td><td style={{ padding: '10px 6px', textAlign: 'right' }}>{fmtINR(pulse.free_cash)}</td></tr>
                 </tbody>
               </table>
             </div>
 
             <div style={cardStyle}>
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Sales funnel (live)</h2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginTop: 8 }}>
+              <div className="grid grid-cols-5 gap-1 sm:gap-2 mt-2">
                 {funnelSteps.map((s, i) => (
-                  <div key={i} style={{ background: C.soft, padding: 10, borderRadius: 6, textAlign: 'center' }}>
-                    <div style={{ fontSize: 10.5, color: C.ink2, letterSpacing: '.5px', textTransform: 'uppercase', fontWeight: 600 }}>{s.lbl}</div>
-                    <div style={{ fontSize: 18, fontWeight: 700, marginTop: 3 }}>{s.val}</div>
-                    {s.drop && <div style={{ fontSize: 10, color: C.red, fontWeight: 600, marginTop: 2 }}>{s.drop}</div>}
+                  <div key={i} style={{ background: C.soft, padding: '8px 4px', borderRadius: 6, textAlign: 'center' }}>
+                    <div className="text-[9.5px] sm:text-[10.5px] text-gray-600 tracking-[.4px] uppercase font-semibold truncate">{s.lbl}</div>
+                    <div className="text-sm sm:text-lg font-bold mt-1">{s.val}</div>
+                    {s.drop && <div className="text-[8.5px] sm:text-[10px] text-red-600 font-semibold mt-0.5">{s.drop}</div>}
                   </div>
                 ))}
               </div>
@@ -531,12 +535,12 @@ export default function DashboardWarRoom() {
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Delivery health</h2>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <tbody>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>Active orders</td><td style={{ padding: '11px 8px', textAlign: 'right' }}><strong>{pulse.order_book_count}</strong></td></tr>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>Order value</td><td style={{ padding: '11px 8px', textAlign: 'right' }}><strong>{fmtINR(pulse.order_book)}</strong></td></tr>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>Installations done (MTD)</td><td style={{ padding: '11px 8px', textAlign: 'right', color: sales.funnel.collected > 0 ? C.ink : C.red }}><strong>{sales.funnel.collected}</strong></td></tr>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>DPR adherence (today)</td><td style={{ padding: '11px 8px', textAlign: 'right', color: (pulse.dpr_adherence_pct ?? 0) >= 80 ? C.green : C.red }}><strong>{pulse.dpr_adherence_pct ?? '—'}%</strong></td></tr>
-                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '11px 8px' }}>Open complaints</td><td style={{ padding: '11px 8px', textAlign: 'right' }}>{customer.complaints_by_priority.reduce((s, r) => s + r.cnt, 0)}</td></tr>
-                  <tr><td style={{ padding: '11px 8px' }}>Open snags</td><td style={{ padding: '11px 8px', textAlign: 'right' }}>{pulse.open_snags}</td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Active orders</td><td style={{ padding: '10px 6px', textAlign: 'right' }}><strong>{pulse.order_book_count}</strong></td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Order value</td><td style={{ padding: '10px 6px', textAlign: 'right' }}><strong>{fmtINR(pulse.order_book)}</strong></td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Installations done (MTD)</td><td style={{ padding: '10px 6px', textAlign: 'right', color: sales.funnel.collected > 0 ? C.ink : C.red }}><strong>{sales.funnel.collected}</strong></td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>DPR adherence (today)</td><td style={{ padding: '10px 6px', textAlign: 'right', color: (pulse.dpr_adherence_pct ?? 0) >= 80 ? C.green : C.red }}><strong>{pulse.dpr_adherence_pct ?? '—'}%</strong></td></tr>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}><td style={{ padding: '10px 6px' }}>Open complaints</td><td style={{ padding: '10px 6px', textAlign: 'right' }}>{customer.complaints_by_priority.reduce((s, r) => s + r.cnt, 0)}</td></tr>
+                  <tr><td style={{ padding: '10px 6px' }}>Open snags</td><td style={{ padding: '10px 6px', textAlign: 'right' }}>{pulse.open_snags}</td></tr>
                 </tbody>
               </table>
             </div>
@@ -544,7 +548,7 @@ export default function DashboardWarRoom() {
 
           {/* Section 5 — Pareto · Predictive · Exceptions */}
           <div style={sectionTitle}>Section 5 · Pareto · Predictive · Exceptions</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
             <div style={cardStyle}>
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>20% of customers = 80% revenue</h2>
               {sales.top_customers.length === 0 ? (
@@ -615,7 +619,7 @@ export default function DashboardWarRoom() {
 
           {/* Section 6 — Accountability */}
           <div style={sectionTitle}>Section 6 · Accountability — who shipped, who didn't</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20 }}>
+          <div className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-3 sm:gap-4">
             <div style={cardStyle}>
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Top / Bottom this week (Friday view)</h2>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginTop: 10 }}>
@@ -664,8 +668,9 @@ export default function DashboardWarRoom() {
 
           {/* Section 7 — IT Head Watchlist */}
           <div style={sectionTitle}>Section 7 · IT Head Watchlist (this week)</div>
-          <div style={cardStyle}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <div style={cardStyle} className="p-0 overflow-hidden">
+            <div className="table-responsive">
+              <table style={{ width: '100%', minWidth: 520, borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 <th style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase' }}>P</th>
                 <th style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase' }}>Item</th>
@@ -682,6 +687,7 @@ export default function DashboardWarRoom() {
                 <tr><td style={{ padding: '11px 8px' }}><span style={badge('amber')}>P1</span></td><td style={{ padding: '11px 8px' }}>Scorecard MIS: wire KPI feeds for top-10 roles</td><td style={{ padding: '11px 8px' }}>Day 14</td><td style={{ padding: '11px 8px', color: C.ink2 }}>Schema ready · KPI list needed</td></tr>
               </tbody>
             </table>
+            </div>
           </div>
 
           {/* Footer */}
@@ -709,16 +715,17 @@ export default function DashboardWarRoom() {
             );
             return (<>
               <div style={{ ...sectionTitle, marginTop: 0 }}>PO vs Sales Bill · Vendor cost vs Client billed (per Vendor PO)</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 20, marginBottom: 16 }}>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-4 mb-4">
                 {pill('Vendor PO cost', fmtINR(t.po_cost || 0))}
                 {pill('Sales Bill (budget)', fmtINR(t.sales_bill || 0), C.blue)}
                 {pill('Throughput (Sales − Purchase)', fmtINR(t.gap || 0), (t.gap || 0) >= 0 ? C.green : C.red)}
                 {pill('Cash positive %', t.cash_positive_pct != null ? `${t.cash_positive_pct}%` : '—', (t.cash_positive_pct || 0) >= 0 ? C.green : C.red)}
                 {pill('Billed', `${t.billed_count || 0}/${t.po_count || 0}`, (t.billed_count || 0) === (t.po_count || 0) && (t.po_count || 0) > 0 ? C.green : C.amber)}
               </div>
-              <div style={cardStyle}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                  <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
+              <div style={cardStyle} className="p-0 overflow-hidden">
+                <div className="table-responsive">
+                  <table style={{ width: '100%', minWidth: 850, borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead><tr style={{ borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>
                     {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Throughput', 'Cash +%', 'PDF', 'Status'].map((h, hi) =>
                       <th key={h} style={{ textAlign: hi >= 3 && hi <= 6 ? 'right' : 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
                     )}
@@ -756,6 +763,7 @@ export default function DashboardWarRoom() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             </>);
           })()}
@@ -764,7 +772,7 @@ export default function DashboardWarRoom() {
         {/* ============== COO VIEW ============== */}
         {tab === 'coo' && (<>
           <div style={{ ...sectionTitle, marginTop: 0 }}>COO Daily Operating Screen — execution-only, no narrative</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 20, marginBottom: 24 }}>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-4 mb-5">
             {[
               { lbl: 'DPR Adherence', val: pulse.dpr_adherence_pct != null ? `${pulse.dpr_adherence_pct}%` : '—', delta: `target 90% · ${operations.dpr.missed} sites missed`, bad: (pulse.dpr_adherence_pct ?? 0) < 80 },
               { lbl: 'Snags Open',    val: pulse.open_snags, delta: pulse.oldest_snag_days ? `oldest ${pulse.oldest_snag_days}d` : '—', bad: pulse.open_snags > 10 },
@@ -773,9 +781,9 @@ export default function DashboardWarRoom() {
               { lbl: 'Material in Transit', val: operations.materials_in_transit ?? 0, delta: 'indents po_sent / dispatched', bad: (operations.materials_in_transit ?? 0) > 10 },
               { lbl: 'Tools Out', val: operations.tools_out ?? 0, delta: 'tools.status=in_use', bad: false },
             ].map((k, i) => (
-              <div key={i} style={cardStyle}>
+              <div key={i} style={cardStyle} className="p-3 sm:p-4">
                 <h3 style={{ margin: 0, fontSize: 11, letterSpacing: 1, color: C.ink2, textTransform: 'uppercase', fontWeight: 600 }}>{k.lbl}</h3>
-                <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', margin: '4px 0', color: k.bad ? C.red : C.ink }}>{k.val}</div>
+                <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.5px', margin: '4px 0', color: k.bad ? C.red : C.ink }}>{k.val}</div>
                 <div style={{ fontSize: 11, color: k.bad ? C.red : C.ink2 }}>{k.delta}</div>
               </div>
             ))}
@@ -783,8 +791,9 @@ export default function DashboardWarRoom() {
 
           {/* Today's Site Map */}
           <div style={sectionTitle}>Today's Site Map (DPR + Snag + Risk)</div>
-          <div style={cardStyle}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <div style={cardStyle} className="p-0 overflow-hidden">
+            <div className="table-responsive">
+              <table style={{ width: '100%', minWidth: 500, borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 {['Project', 'Client', 'Slip days', 'Locked ₹', 'Risk'].map(h =>
                   <th key={h} style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
@@ -808,11 +817,12 @@ export default function DashboardWarRoom() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           {/* People */}
           <div style={sectionTitle}>People — Attendance · Behaviour · Performance</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
             <div style={cardStyle}>
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Attendance today</h2>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginTop: 10 }}>
@@ -849,7 +859,7 @@ export default function DashboardWarRoom() {
 
           {/* Procure-to-Pay */}
           <div style={sectionTitle}>Procure-to-Pay &amp; Inventory health</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
             <div style={cardStyle}>
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Top vendors by spend</h2>
               {procurement.top_vendors.length === 0 ? (
@@ -890,8 +900,9 @@ export default function DashboardWarRoom() {
 
           {/* Customer voice */}
           <div style={sectionTitle}>Customer voice — Complaints &amp; Tickets</div>
-          <div style={cardStyle}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <div style={cardStyle} className="p-0 overflow-hidden">
+            <div className="table-responsive">
+              <table style={{ width: '100%', minWidth: 300, borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 {['Priority', 'Open count'].map(h =>
                   <th key={h} style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
@@ -912,6 +923,7 @@ export default function DashboardWarRoom() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           <div style={{ marginTop: 30, padding: 18, background: '#0E1116', color: '#bdbdbd', borderRadius: 8, fontSize: 11, lineHeight: 1.6 }}>
@@ -925,7 +937,7 @@ export default function DashboardWarRoom() {
         {/* ============== DO NOT SHOW LIST ============== */}
         {tab === 'hide' && (<>
           <div style={{ ...sectionTitle, marginTop: 0 }}>What NOT to show — and to whom</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
             <div style={cardStyle}>
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Hide from Sales / Junior Ops (RBAC)</h2>
               <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
@@ -955,8 +967,9 @@ export default function DashboardWarRoom() {
           </div>
 
           <div style={sectionTitle}>RBAC build sheet (handover to IT Head)</div>
-          <div style={cardStyle}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <div style={cardStyle} className="p-0 overflow-hidden">
+            <div className="table-responsive">
+              <table style={{ width: '100%', minWidth: 600, borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
                 {['Module', 'CMD', 'COO', 'CFO', 'HR', 'Sales', 'Site Eng'].map(h =>
                   <th key={h} style={{ textAlign: 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
@@ -986,6 +999,7 @@ export default function DashboardWarRoom() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           <div style={{ marginTop: 30, padding: 18, background: '#0E1116', color: '#bdbdbd', borderRadius: 8, fontSize: 11, lineHeight: 1.6 }}>
@@ -1003,7 +1017,7 @@ export default function DashboardWarRoom() {
           ) : approvals.total === 0 ? (
             <div style={{ padding: 28, textAlign: 'center', color: '#46A758', fontWeight: 600, background: C.card, borderRadius: 10, border: '1px solid #d7e9d9' }}>✅ All clear — nothing is waiting on your approval right now.</div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-3.5">
               {approvals.items.map(it => (
                 <div key={it.key} onClick={() => toggleApprovalList(it.key, it.count)}
                   style={{
@@ -1060,31 +1074,35 @@ export default function DashboardWarRoom() {
               ) : (
                 <div style={{ maxHeight: 440, overflowY: 'auto' }}>
                   {(apprItems[apprExpanded] || []).map(item => (
-                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: '1px solid #f3f3f3' }}>
-                      {item.key === 'payment' && (
-                        <input type="checkbox" checked={apprSelected.has(item.id)}
-                          onChange={e => setApprSelected(prev => { const n = new Set(prev); if (e.target.checked) n.add(item.id); else n.delete(item.id); return n; })}
-                          style={{ cursor: 'pointer', width: 16, height: 16, flexShrink: 0 }} />
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
-                        <div style={{ fontSize: 11, color: C.ink2 }}>
-                          {item.subtitle}{item.amount ? ` · ₹${Number(item.amount).toLocaleString('en-IN')}` : ''}
-                          {item.meta ? <span style={{ marginLeft: 6, background: '#f1eee9', padding: '1px 6px', borderRadius: 8 }}>{item.meta}</span> : null}
+                    <div key={item.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 border-b border-gray-100">
+                      <div className="flex items-start sm:items-center gap-3 flex-1 min-w-0">
+                        {item.key === 'payment' && (
+                          <input type="checkbox" checked={apprSelected.has(item.id)}
+                            onChange={e => setApprSelected(prev => { const n = new Set(prev); if (e.target.checked) n.add(item.id); else n.delete(item.id); return n; })}
+                            style={{ cursor: 'pointer', width: 16, height: 16, flexShrink: 0, marginTop: 2 }} />
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
+                          <div style={{ fontSize: 11, color: C.ink2 }}>
+                            {item.subtitle}{item.amount ? ` · ₹${Number(item.amount).toLocaleString('en-IN')}` : ''}
+                            {item.meta ? <span style={{ marginLeft: 6, background: '#f1eee9', padding: '1px 6px', borderRadius: 8 }}>{item.meta}</span> : null}
+                          </div>
                         </div>
                       </div>
-                      {/* Vendor PO: PO PDF · Payment: proof attachment */}
-                      {item.pdf && (
-                        <a href={item.pdf} target="_blank" rel="noreferrer" title="Open the Vendor PO print" style={{ fontSize: 11, color: C.blue, fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>📄 PO</a>
-                      )}
-                      {item.proof && (
-                        <a href={item.proof} target="_blank" rel="noreferrer" title="Open the proof / attachment" style={{ fontSize: 11, color: C.violet, fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>📎 Proof</a>
-                      )}
-                      <button onClick={() => window.open(item.link, '_blank', 'noopener,noreferrer')} title="Open the actual record to verify / approve" style={{ fontSize: 11, color: '#4A4F57', background: 'none', border: '1px solid #ddd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>Open ↗</button>
-                      <button onClick={() => approveOne(item.key, item.id)} disabled={apprBusy === item.id}
-                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: apprBusy === item.id ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                        {apprBusy === item.id ? '…' : (item.key === 'indents' ? 'Review & Approve →' : 'Approve')}
-                      </button>
+                      <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+                        {/* Vendor PO: PO PDF · Payment: proof attachment */}
+                        {item.pdf && (
+                          <a href={item.pdf} target="_blank" rel="noreferrer" title="Open the Vendor PO print" style={{ fontSize: 11, color: C.blue, fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>📄 PO</a>
+                        )}
+                        {item.proof && (
+                          <a href={item.proof} target="_blank" rel="noreferrer" title="Open the proof / attachment" style={{ fontSize: 11, color: C.violet, fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>📎 Proof</a>
+                        )}
+                        <button onClick={() => window.open(item.link, '_blank', 'noopener,noreferrer')} title="Open the actual record to verify / approve" style={{ fontSize: 11, color: '#4A4F57', background: 'none', border: '1px solid #ddd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>Open ↗</button>
+                        <button onClick={() => approveOne(item.key, item.id)} disabled={apprBusy === item.id}
+                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: apprBusy === item.id ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          {apprBusy === item.id ? '…' : (item.key === 'indents' ? 'Review & Approve →' : 'Approve')}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

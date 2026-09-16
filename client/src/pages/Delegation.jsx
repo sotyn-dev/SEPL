@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -36,7 +38,9 @@ export default function Delegation() {
   const [view, setView] = useState('list'); // 'list' | 'dashboard'
   const [dashboard, setDashboard] = useState([]);
   const [scope, setScope] = useState(isEA ? 'all' : 'mine'); // mine | given | all
-  const [statusFilter, setStatusFilter] = useState('');
+  // Several statuses at once (mam 2026-09-12) — e.g. Pending + Rejected is
+  // "everything that still owes me proof". [] = all statuses.
+  const [statusFilter, setStatusFilter] = useState([]);
   const [healthFilter, setHealthFilter] = useState(''); // '' | green | yellow | red (deadline-slippage light: times the due date was pushed)
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
@@ -51,6 +55,12 @@ export default function Delegation() {
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
   const [submitModal, setSubmitModal] = useState(null); // task being submitted
+  // Which task's proof modal is actually open right now, checked before an
+  // in-flight upload is allowed to write into submitForm. Without this: open
+  // task A's modal, start uploading, cancel and open task B's modal before
+  // A's upload finishes — A's photo silently lands as B's "ready to submit"
+  // proof (mam 2026-08-24, reported as "sometimes wrong upload").
+  const submitModalIdRef = useRef(null);
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
@@ -77,7 +87,7 @@ export default function Delegation() {
 
   const load = () => {
     const params = new URLSearchParams({ scope });
-    if (statusFilter) params.set('status', statusFilter);
+    if (statusFilter.length) params.set('status', statusFilter.join(','));
     if (assigneeFilter) params.set('assignee_id', assigneeFilter);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
@@ -127,10 +137,13 @@ export default function Delegation() {
   // Deep-link from the War Room "Open ↗" button — highlight + scroll to a
   // specific delegation so the approver can verify its proof (mam 2026-06-24).
   const [highlightId] = useState(() => new URLSearchParams(window.location.search).get('open'));
+  // The deep link acts ONCE: after the row has been scrolled into view, later
+  // page changes / task reloads must not keep dragging the pager back to it.
+  const deepLinkDone = useRef(false);
   useEffect(() => {
-    if (!highlightId || !tasks.length) return;
+    if (deepLinkDone.current || !highlightId || !tasks.length) return;
     const el = document.getElementById(`deleg-row-${highlightId}`);
-    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); deepLinkDone.current = true; }
   }, [highlightId, tasks]);
 
   // Voice → description. Appends to existing text so user can combine typing + voice.
@@ -288,6 +301,12 @@ export default function Delegation() {
 
   // Upload proof file then submit
   const uploadProof = async (file) => {
+    // The task this upload was started for. Uploads take a few seconds
+    // (compress + send) — if the user closes this modal or opens a
+    // DIFFERENT task's proof modal before it finishes, submitModalIdRef
+    // will have moved on by the time we get here, and we must NOT let this
+    // stale result land in whatever's open now.
+    const forId = submitModalIdRef.current;
     setSubmitForm(s => ({ ...s, uploading: true }));
     setProofPct(0);
     try {
@@ -302,10 +321,15 @@ export default function Delegation() {
           if (ev.total) setProofPct(Math.round((ev.loaded / ev.total) * 100));
         },
       });
+      if (submitModalIdRef.current !== forId) {
+        toast('That upload finished after you switched tasks — please upload again here.', { icon: '⚠️' });
+        return;
+      }
       setSubmitForm(s => ({ ...s, proof_url: res.data.url, uploading: false }));
       setProofPct(100);
       toast.success('File uploaded — click Submit');
     } catch {
+      if (submitModalIdRef.current !== forId) return;
       toast.error('Upload failed');
       setSubmitForm(s => ({ ...s, uploading: false }));
     } finally {
@@ -323,7 +347,7 @@ export default function Delegation() {
         proof_remarks: submitForm.proof_remarks,
       });
       toast.success('Proof submitted — awaiting approval');
-      setSubmitModal(null); setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
+      setSubmitModal(null); submitModalIdRef.current = null; setSubmitForm({ proof_url: '', proof_remarks: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -410,6 +434,40 @@ export default function Delegation() {
     return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${cfg[0]}`} title={cfg[1]} />;
   };
 
+  // Final visible list (free-text search + slippage filter over the already
+  // server-filtered tasks) — computed here, not inside the JSX, so the
+  // pagination hook can window it at the top level of the component.
+  // The rows carry no task_id column — the visible code is derived from the id
+  // (same as the table / mobile card render), so search and export use it too.
+  const taskCode = (t) => `TSK-${String(t.id).padStart(4, '0')}`;
+  const q = search.trim().toLowerCase();
+  let visibleTasks = q
+    ? tasks.filter(t =>
+        taskCode(t).toLowerCase().includes(q) ||
+        (t.description || '').toLowerCase().includes(q))
+    : tasks;
+  if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
+  const tasksPager = usePagination(visibleTasks, { resetKey: [scope, statusFilter, healthFilter, search, assigneeFilter, dateFrom, dateTo] });
+
+  // Pagination can put the War-Room deep-linked row (?open=<id>) on a later
+  // page where the scroll-to-row above can't find it — jump the pager to the
+  // row's page first, then scroll once it is actually rendered. Only on first
+  // arrival (deepLinkDone above) — afterwards the user pages freely.
+  useEffect(() => {
+    if (deepLinkDone.current || !highlightId) return;
+    const i = visibleTasks.findIndex(t => String(t.id) === String(highlightId));
+    if (i < 0) return;
+    const target = Math.floor(i / tasksPager.perPage) + 1;
+    if (target !== tasksPager.page) tasksPager.setPage(target);
+    else {
+      const el = document.getElementById(`deleg-row-${highlightId}`);
+      if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); deepLinkDone.current = true; }
+    }
+    // visibleTasks is recomputed inline each render — depend on the inputs
+    // that change it (tasks + filters via page), not its identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, tasks, tasksPager.page, tasksPager.perPage]);
+
   return (
     <div className="space-y-4">
       {/* Header — only admin creates new tasks. Everyone else is a user who receives them. */}
@@ -418,7 +476,7 @@ export default function Delegation() {
           <h3 className="text-xl font-bold text-gray-800">Delegations</h3>
           <p className="text-sm text-gray-500">{isAdmin() ? 'Assign tasks, upload proof, approve or reject' : 'Upload proof for tasks assigned to you'}</p>
         </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           {/* View toggle — Dashboard is only meaningful for admin / EA who
               manages the team's workload. Regular users only see "List". */}
           {isEA && (
@@ -430,15 +488,30 @@ export default function Delegation() {
             </div>
           )}
           <button onClick={() => {
-            // Export respects the active search filter so admin can
-            // download exactly what's visible on screen.
-            const q = search.trim().toLowerCase();
-            const rows = q
-              ? tasks.filter(t => (t.task_id || '').toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
-              : tasks;
+            // Export the same list the table shows — visibleTasks already
+            // composes search + slippage filter over the server-filtered tasks
+            // — so admin downloads exactly what's visible on screen.
+            // Columns mirror the on-screen table. MD 2026-09-03: "when export
+            // excel remarks also field show in excel with data" — Followup
+            // Remarks (EA -> MD) was missing, and so were the other three
+            // columns the table shows to its right, which made the download
+            // useless for reviewing follow-ups away from the screen.
             exportCsv('delegations',
-              ['Task ID','Description','Project','Assigned To','Due','Status'],
-              rows.map(t => [t.task_id, t.description, t.project_name, t.assigned_to_name, t.due_date, t.status]));
+              ['Task ID','Description','Project','Assigned To','Due','Completed','Status','Extensions','Extension Date','Extension Reason','Proof','Followup Remarks (EA → MD)'],
+              visibleTasks.map(t => [
+                taskCode(t),
+                cleanDesc(t.description || t.title),
+                t.project_name,
+                t.assigned_to_name,
+                t.due_date,
+                t.reviewed_at ? fmtDate(t.reviewed_at) : '',
+                t.status,
+                +t.extension_count || 0,
+                t.requested_due_date || '',
+                t.extension_reason || '',
+                t.proof_url || '',
+                t.followup_remarks || '',
+              ]));
           }}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {isAdmin() && view === 'list' && (
@@ -456,8 +529,8 @@ export default function Delegation() {
           <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-500 text-xs text-gray-700">
             <b>Workload Dashboard</b> — one row per person with active tasks. WIP limit is <b>3 tasks/day</b>. <span className="text-red-600 font-semibold">Overloaded</span> = exceeding that limit. <span className="text-amber-700 font-semibold">Constraint</span> = ≥25% delayed or avg delay &gt; 5 days.
           </div>
-          <div className="card p-0 overflow-x-auto">
-            <table className="text-sm w-full">
+          <div className="card p-0 table-responsive">
+            <table className="text-sm w-full min-w-[750px]">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Person</th>
@@ -525,13 +598,20 @@ export default function Delegation() {
             {t.label}
           </button>
         ))}
-        <select className="select text-sm max-w-[180px]" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="pending">Pending</option>
-          <option value="submitted">Submitted</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-        </select>
+        {/* Status — tick as many as you like; the server gets a comma list. */}
+        <div className="w-[248px]">
+          <StatusMultiSelect
+            options={[
+              { id: 'pending', name: 'Pending' },
+              { id: 'submitted', name: 'Submitted' },
+              { id: 'approved', name: 'Approved' },
+              { id: 'rejected', name: 'Rejected' },
+            ]}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            placeholder="All statuses"
+          />
+        </div>
         {/* Deadline-slippage filter (mam 2026-07-06) — by how many times the due
             date was pushed. Composes with the status/assignee/date filters above. */}
         <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
@@ -594,8 +674,8 @@ export default function Delegation() {
           the parent scrolls horizontally so every column stays accessible. */}
       {/* Reverted to the original 10-column table per mam
           (2026-05-21: "not change delegation like previous"). */}
-      <div className="card p-0 overflow-auto max-h-[70vh]">
-        <table className="text-sm min-w-[1100px] lg:min-w-0 lg:w-full">
+      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto">
+        <table className="text-sm min-w-[1050px]">
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
               <th className="w-12 text-center">S.No.</th>
@@ -614,24 +694,15 @@ export default function Delegation() {
             </tr>
           </thead>
           <tbody>
-            {(() => {
-              const q = search.trim().toLowerCase();
-              let visibleTasks = q
-                ? tasks.filter(t =>
-                    (t.task_id || '').toLowerCase().includes(q) ||
-                    (t.description || '').toLowerCase().includes(q))
-                : tasks;
-              if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
-              return (<>
-                {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
-                {visibleTasks.map((t, idx) => {
+            {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
+            {tasksPager.pageItems.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               const canEditProject = isAdmin() || isAssigner;
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} id={`deleg-row-${t.id}`} className={`align-top ${t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}${String(t.id) === String(highlightId) ? ' ring-2 ring-amber-400 ring-inset' : ''}`}>
-                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
+                  <td className="text-center text-xs text-gray-500 font-medium">{(tasksPager.page - 1) * tasksPager.perPage + idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
                   <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>
                     <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
@@ -686,7 +757,7 @@ export default function Delegation() {
                         >{t.proof_remarks}</span>
                       )}
                       {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
+                        <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit whitespace-nowrap">
                           <FiUpload size={11} className="shrink-0" /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
@@ -695,22 +766,64 @@ export default function Delegation() {
                       )}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap">
-                    {t.extension_status === 'pending' && t.requested_due_date ? (
-                      <div className="flex flex-col gap-1">
-                        <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 inline-block">→ {t.requested_due_date}</span>
-                        {isAdmin() && (
-                          <div className="flex gap-1">
-                            <button onClick={() => approveExtension(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
-                            <button onClick={() => rejectExtension(t)} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
+                  {/* Extension — the new date AND the reason typed with it. The
+                      reason was stored all along (delegations.extension_reason) but
+                      never shown, so an extension looked like a bare date change
+                      (mam 2026-09-12: "extend date remarks not showing"). An
+                      approved / rejected extension keeps showing both. */}
+                  <td className="align-top">
+                    {(() => {
+                      const raw = String(t.extension_reason || '').trim();
+                      // Punctuation-only text ("," / ".") is not a reason — it used to
+                      // render as empty quotes (mam 2026-09-12).
+                      const reason = /[a-zA-Z0-9\u0900-\u097F]/.test(raw) ? raw : '';
+                      const reasonEl = reason
+                        ? <div className="text-[10px] text-gray-600 max-w-[170px] whitespace-normal" title={reason}>“{reason}”</div>
+                        : null;
+                      // "extended" only when a date was really pushed (extension_count)
+                      // or a reason was typed. Otherwise the row simply offers Request
+                      // (mam 2026-09-12: "if not extend than only show request").
+                      const reallyExtended = (+t.extension_count || 0) > 0 || !!reason;
+                      const askBtn = (label) => (
+                        <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }}
+                          className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> {label}</button>
+                      );
+                      if (t.extension_status === 'pending' && t.requested_due_date) {
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 inline-block whitespace-nowrap">→ {t.requested_due_date}</span>
+                            {reasonEl}
+                            {isAdmin() && (
+                              <div className="flex gap-1">
+                                <button onClick={() => approveExtension(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
+                                <button onClick={() => rejectExtension(t)} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    ) : isAssignee && t.status !== 'approved' ? (
-                      <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> Request</button>
-                    ) : t.extension_status === 'rejected' ? (
-                      <span className="text-[10px] text-gray-400">Rejected</span>
-                    ) : <span className="text-gray-300 text-xs">—</span>}
+                        );
+                      }
+                      if (t.extension_status === 'approved' && t.requested_due_date && reallyExtended) {
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block whitespace-nowrap">extended → {t.requested_due_date}</span>
+                            {reasonEl}
+                            {isAssignee && t.status !== 'approved' && askBtn('Request again')}
+                          </div>
+                        );
+                      }
+                      if (t.extension_status === 'rejected' && reason) {
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] text-gray-500">Rejected</span>
+                            {reasonEl}
+                            {isAssignee && t.status !== 'approved' && askBtn('Request again')}
+                          </div>
+                        );
+                      }
+                      return isAssignee && t.status !== 'approved'
+                        ? askBtn('Request')
+                        : <span className="text-gray-300 text-xs">—</span>;
+                    })()}
                   </td>
                   {/* Followup Remarks — EA writes a manual note for the MD;
                       read-only for everyone else. Does not affect task status. */}
@@ -749,11 +862,10 @@ export default function Delegation() {
                 </tr>
               );
             })}
-              </>);
-            })()}
           </tbody>
         </table>
       </div>
+      <Pagination {...tasksPager} />
 
       {/* Mobile-only card layout REMOVED — per mam's request, the desktop
           table is used on all screens now (horizontal scroll on phones).
@@ -813,8 +925,14 @@ export default function Delegation() {
               {t.status === 'rejected' && t.reject_reason && (
                 <div className="bg-red-50 border border-red-200 rounded px-2 py-1 text-[11px] text-red-700 mb-2 flex items-start gap-1"><FiAlertTriangle size={11} className="mt-0.5" /> {t.reject_reason}</div>
               )}
-              {t.extension_status === 'pending' && t.requested_due_date && (
-                <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-[11px] text-amber-800 mb-2 flex items-start gap-1"><FiCalendar size={11} className="mt-0.5" /> Extension → {t.requested_due_date}</div>
+              {t.requested_due_date && ['pending', 'approved', 'rejected'].includes(t.extension_status) && (
+                <div className={`rounded px-2 py-1 text-[11px] mb-2 flex items-start gap-1 border ${t.extension_status === 'pending' ? 'bg-amber-50 border-amber-200 text-amber-800' : t.extension_status === 'approved' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
+                  <FiCalendar size={11} className="mt-0.5" />
+                  <span>
+                    {t.extension_status === 'pending' ? 'Extension' : t.extension_status === 'approved' ? 'Extended' : 'Extension rejected'} → {t.requested_due_date}
+                    {String(t.extension_reason || '').trim() && <span className="block text-[10px] opacity-80">“{t.extension_reason.trim()}”</span>}
+                  </span>
+                </div>
               )}
               {t.proof_remarks && (
                 <div className="text-[11px] text-gray-600 italic mb-2">{t.proof_remarks}</div>
@@ -822,7 +940,7 @@ export default function Delegation() {
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                  <button onClick={() => { setSubmitModal(t); submitModalIdRef.current = t.id; setSubmitForm({ proof_url: '', proof_remarks: t.proof_remarks || '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
@@ -998,7 +1116,7 @@ export default function Delegation() {
                 {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` (${u.department})` : ''}</option>)}
               </select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Due Date</label>
                 <input type="date" className="input" value={editForm.due_date || ''} onChange={e => setEditForm(f => ({ ...f, due_date: e.target.value }))} />
@@ -1035,7 +1153,7 @@ export default function Delegation() {
       </Modal>
 
       {/* Submit Proof Modal */}
-      <Modal isOpen={!!submitModal} onClose={() => setSubmitModal(null)} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
+      <Modal isOpen={!!submitModal} onClose={() => { setSubmitModal(null); submitModalIdRef.current = null; }} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
         <form onSubmit={submitProof} className="space-y-3">
           {submitModal?.status === 'rejected' && submitModal.reject_reason && (
             <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-700">
@@ -1095,7 +1213,7 @@ export default function Delegation() {
             </p>
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setSubmitModal(null)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => { setSubmitModal(null); submitModalIdRef.current = null; }} className="btn btn-secondary">Cancel</button>
             <button type="submit" disabled={!submitForm.proof_url || submitForm.uploading} className="btn btn-primary disabled:opacity-50">Submit for Approval</button>
           </div>
         </form>

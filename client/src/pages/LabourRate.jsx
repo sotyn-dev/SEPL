@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiDownload, FiCopy } from 'react-icons/fi';
 
@@ -8,7 +9,6 @@ import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiDownload, FiCopy } from 'react-i
 // rates by UOM and category. Seeded from her uploaded sheet; add/edit here.
 const UOMS = ['Kg', 'PCS', 'Nos', 'Each', 'Per Ltr', 'mtrs', 'RMT', 'RFT', 'R mtr', 'Per Point'];
 const CATEGORIES = ['Low Voltage', 'ELECTRICAL', 'Fire Fighting','Mechanical','HVAC','Plumbing','SOLAR','CIVIL'];
-const RENDER_CAP = 200;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const blank = () => ({ id: null, item_name: '', specification: '', size: '', rate: '', uom: 'PCS', category: 'Low Voltage' });
 
@@ -61,6 +61,7 @@ export default function LabourRate() {
     if (q) { const toks = q.split(/\s+/).filter(Boolean); list = list.filter(r => toks.every(t => (r.item_name || '').toLowerCase().includes(t))); }
     return list;
   }, [rows, catFilter, search]);
+  const pager = usePagination(filtered, { resetKey: [catFilter, search] });
 
   const setF = (patch) => setForm(f => ({ ...f, ...patch }));
   const openAdd = () => { setForm(blank()); setModal(true); };
@@ -178,7 +179,7 @@ export default function LabourRate() {
             </tr>
           </thead>
           <tbody>
-            {filtered.slice(0, RENDER_CAP).map(r => (
+            {pager.pageItems.map(r => (
               <tr key={r.id} className="border-t border-gray-100 hover:bg-gray-50">
                 <td className="p-2 text-gray-400 font-mono text-xs">LR-{r.id}</td>
                 <td className="p-2 font-medium text-gray-800">{[r.item_name, r.specification, r.size].filter(Boolean).join(' / ')}</td>
@@ -196,8 +197,8 @@ export default function LabourRate() {
             {filtered.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-gray-400 text-sm">No labour rates. Click “Add Labour Item”.</td></tr>}
           </tbody>
         </table>
-        {filtered.length > RENDER_CAP && <div className="p-2 text-center text-xs text-gray-400">Showing {RENDER_CAP} of {filtered.length} — search or filter to narrow.</div>}
       </div>
+      <Pagination {...pager} />
       <div className="text-xs text-gray-400">{filtered.length} item(s){catFilter ? ` in ${catFilter}` : ''}.</div>
 
       {/* Add / Edit modal */}

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import Modal from '../components/Modal';
+import Pagination, { usePagination } from '../components/PaginationBar';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiEye, FiTrash2, FiExternalLink, FiTarget, FiDownload } from 'react-icons/fi';
@@ -8,8 +10,13 @@ import ResponsibilityTab from '../components/ResponsibilityTab';
 import { exportCsv } from '../utils/exportCsv';
 
 const fmt = (n) => 'Rs ' + Math.abs(Math.round(+n || 0)).toLocaleString('en-IN');
+// Readable name for an attached BOQ: the upload handler prefixes every stored
+// file with "<epoch>-", which is noise in the attachment list.
+const fileName = (link) => String(link || '').split('/').pop().replace(/^\d{10,}-/, '') || 'BOQ file';
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
+import { useUrlTab } from '../hooks/useUrlTab';
+import { fmtDate } from '../utils/datetime';
 
 // CRM Sales Funnel FMS — flat 3-step tracker. Step 1: Quotation submit.
 // Step 2: Negotiation. Step 3: Win/Loss. Mam's columns from her sheet:
@@ -35,7 +42,7 @@ const LEAD_TYPES = ['New', 'Extra Enquiry'];
 const blank = () => ({
   client_name: '', company_name: '', mobile: '', email: '', source: '',
   address: '', state: '', district: '', remarks: '', category: '', type: '',
-  lead_type: 'New', boq_file_link: '', boq_file: null,
+  lead_type: 'New', boq_file_link: '', boq_files: [],
   cust_boq_link: '', quotation_link: '', quotation_amount: 0, quotation_submitted: false,
   negotiation_status: '', negotiation_amount: 0, negotiation_remarks: '',
   final_status: '', loss_reason: '',
@@ -46,7 +53,7 @@ export default function CRMFunnel() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ q: '', step: 'all', state: '', type: '' });
-  const [view, setView] = useState('funnel');   // 'funnel' | 'responsible'
+  const [view, setView] = useUrlTab(['funnel', 'responsible'], 'funnel');   // 'funnel' | 'responsible'
   const [modal, setModal] = useState(false);
   // Read-only view modal (mam, 2026-05-16: "action as eye" on the
   // CRM funnel list).  Holds the row being inspected; null = closed.
@@ -131,12 +138,49 @@ export default function CRMFunnel() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [filter.q, filter.step, filter.state, filter.type]);
+  const pager = usePagination(rows, { resetKey: [filter.q, filter.step, filter.state, filter.type] });
 
-  const openAdd = () => { setEditing(null); setForm(blank()); setModal(true); };
+  // Every BOQ attached to the lead being edited (mam 2026-09-07: "more upload
+  // files ... which attached previous also"). Loaded from the history endpoint
+  // when the edit modal opens; empty for a brand-new lead, which still shows
+  // the picked files locally until it is saved.
+  const [boqs, setBoqs] = useState([]);
+  const loadBoqs = (id) => {
+    if (!id) { setBoqs([]); return; }
+    api.get(`/crm-funnel/${id}/boqs`).then(r => setBoqs(r.data || [])).catch(() => setBoqs([]));
+  };
+
+  const openAdd = () => { setEditing(null); setForm(blank()); setBoqs([]); setModal(true); };
   const openEdit = (row) => {
     setEditing(row);
-    setForm({ ...row, quotation_submitted: !!row.quotation_submitted });
+    setForm({ ...row, quotation_submitted: !!row.quotation_submitted, boq_files: [] });
+    setBoqs([]);          // clear FIRST — otherwise the previous lead's files
+    loadBoqs(row.id);     // show under this one until the fetch returns
     setModal(true);
+  };
+
+  // Detach one attached BOQ. The server repoints the lead's current file at
+  // the newest remaining one, so the list view's BOQ link never dangles.
+  const removeBoq = async (b) => {
+    if (!editing) return;
+    if (!confirm(`Remove "${fileName(b.boq_file_link)}" from this lead?`)) return;
+    try {
+      await api.delete(`/crm-funnel/${editing.id}/boqs/${b.id}`);
+      // Re-read the lead before anything else. The delete bumps the lead's
+      // updated_at (it repoints boq_file_link), and this modal is still holding
+      // the pre-delete copy — saving it would hit the lost-update guard and be
+      // rejected with "someone else edited this", throwing away everything typed
+      // in the form. Refresh the optimistic-lock token and the current-file
+      // pointer so the next Save is clean.
+      try {
+        const { data } = await api.get(`/crm-funnel/${editing.id}`);
+        setEditing(data);
+        setForm(f => ({ ...f, updated_at: data.updated_at, boq_file_link: data.boq_file_link || '' }));
+      } catch (_) { /* the removal itself succeeded; the list reload below still shows truth */ }
+      loadBoqs(editing.id);
+      load();
+      toast.success('Removed');
+    } catch (err) { toast.error(err.response?.data?.error || 'Remove failed'); }
   };
   const districtOptions = form.state ? (DISTRICTS_BY_STATE[form.state] || []) : [];
 
@@ -145,17 +189,19 @@ export default function CRMFunnel() {
     if (!form.client_name?.trim()) { toast.error('Client name is required'); return; }
     setSaving(true);
     try {
-      // Build a multipart form so the BOQ file can ride along when picked.
-      // Server accepts either multipart with `boq_file` or plain JSON for
+      // Build a multipart form so the BOQ files can ride along when picked.
+      // Server accepts either multipart with `boq_files` or plain JSON for
       // backwards compatibility — using multipart always keeps it simple.
       const fd = new FormData();
       Object.entries(form).forEach(([k, v]) => {
-        if (k === 'boq_file') return;                // file appended separately
+        if (k === 'boq_files') return;               // files appended separately
         if (v === null || v === undefined) return;
         if (typeof v === 'boolean') fd.append(k, v ? '1' : '0');
         else fd.append(k, v);
       });
-      if (form.boq_file instanceof File) fd.append('boq_file', form.boq_file);
+      // One append per file under the SAME field name — multer collects them
+      // into an array, and every one is kept as its own attachment.
+      (form.boq_files || []).forEach(f => { if (f instanceof File) fd.append('boq_files', f); });
       const opts = { headers: { 'Content-Type': 'multipart/form-data' } };
       if (editing) {
         await api.put(`/crm-funnel/${editing.id}`, fd, opts);
@@ -176,6 +222,38 @@ export default function CRMFunnel() {
       await api.delete(`/crm-funnel/${row.id}`);
       toast.success('Deleted'); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+  };
+
+  // Remove the leads that Indent-to-Dispatch used to create automatically
+  // (mam 2026-09-04). The automation itself is gone; this clears what it
+  // already wrote. Shows the real numbers BEFORE deleting anything, and holds
+  // back any lead the sales team has actually worked — there is no undo.
+  const cleanupIndentLeads = async () => {
+    let p;
+    try { p = (await api.get('/crm-funnel/indent-sourced/preview')).data; }
+    catch (err) { return toast.error(err.response?.data?.error || 'Could not check'); }
+
+    if (!p.indent_sourced) return toast.success('Nothing to clean up — no leads came from Indent-to-Dispatch.');
+    if (!confirm(
+      `${p.indent_sourced} of ${p.total_leads} leads came from Indent-to-Dispatch.\n\n`
+      + `• ${p.untouched} untouched — will be DELETED\n`
+      + `• ${p.worked} already worked by sales (quote / negotiation / win-loss) — will be KEPT\n\n`
+      + `This cannot be undone. Delete the ${p.untouched} untouched lead(s)?`
+    )) return;
+
+    try {
+      const r = (await api.delete('/crm-funnel/indent-sourced?confirm=true')).data;
+      toast.success(`Deleted ${r.deleted} lead(s)`);
+      load();
+      // Only offer the worked ones as a deliberate second decision.
+      if (r.kept_worked > 0 && confirm(
+        `${r.kept_worked} lead(s) from Indent-to-Dispatch were KEPT because sales has worked them.\n\n`
+        + `Delete those too? Any quotation, negotiation or win/loss recorded on them is lost.`
+      )) {
+        const r2 = (await api.delete('/crm-funnel/indent-sourced?confirm=true&include_worked=true')).data;
+        toast.success(`Deleted ${r2.deleted} more`); load();
+      }
+    } catch (err) { toast.error(err.response?.data?.error || 'Cleanup failed'); }
   };
 
   const stepBadge = (r) => {
@@ -200,8 +278,8 @@ export default function CRMFunnel() {
   const winRate = rows.length > 0 ? Math.round((won.length / rows.length) * 100) : 0;
   const stepCount = (key) => key === 'all' ? rows.length :
     key === '1' ? rows.filter(r => !r.quotation_submitted).length :
-    key === '2' ? rows.filter(r => r.quotation_submitted && !r.final_status).length :
-    rows.filter(r => r.final_status === 'win' || r.final_status === 'loss').length;
+      key === '2' ? rows.filter(r => r.quotation_submitted && !r.final_status).length :
+        rows.filter(r => r.final_status === 'win' || r.final_status === 'loss').length;
 
   return (
     <div className="space-y-4">
@@ -212,9 +290,14 @@ export default function CRMFunnel() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => exportCsv('crm-funnel',
-            ['Lead #','Client','Company','Mobile','Source','Type','Category','State','Stage','Quote Amount','Neg Status','Neg Amount','Final Status'],
+            ['Lead #', 'Client', 'Company', 'Mobile', 'Source', 'Type', 'Category', 'State', 'Stage', 'Quote Amount', 'Neg Status', 'Neg Amount', 'Final Status'],
             rows.map(r => [r.lead_no, r.client_name, r.company_name, r.mobile, r.source, r.type, r.category, r.state, r.final_status || (r.quotation_submitted ? 'Negotiation' : 'Quote'), r.quotation_amount, r.negotiation_status, r.negotiation_amount, r.final_status]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          {canDelete('crm_funnel') && (
+            <button onClick={cleanupIndentLeads} className="btn btn-secondary flex items-center gap-2 text-red-600">
+              <FiTrash2 /> Clean up indent leads
+            </button>
+          )}
           {canCreate('crm_funnel') && (
             <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Lead</button>
           )}
@@ -237,7 +320,7 @@ export default function CRMFunnel() {
               onClick={() => { setView('funnel'); setFilter(f => ({ ...f, step: s.key })); }}
               className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
             >
-              {s.label}
+              {flowStepLabel('/crm-funnel', s.label)}
               <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center text-white ${isActive ? 'bg-white/30' : s.chipCls}`}>
                 {stepCount(s.key)}
               </span>
@@ -249,111 +332,118 @@ export default function CRMFunnel() {
           onClick={() => setView('responsible')}
           className={`btn ${view === 'responsible' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
         >
-          ⚙ Responsible
+          {flowStepLabel('/crm-funnel', '⚙ Responsible')}
         </button>
       </div>
 
       {view === 'responsible' ? (
         <ResponsibilityTab module="crm_funnel" title="CRM Sales Funnel" />
       ) : (<>
-      {/* Metric cards — match the existing Sales Funnel dashboard 5-card
+        {/* Metric cards — match the existing Sales Funnel dashboard 5-card
           layout (Total / This Month / Won / Lost / Win Rate). */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Total Leads</p><p className="text-3xl font-extrabold text-red-600">{rows.length}</p></div>
-        <div className="card p-4 border-l-4 border-purple-500"><p className="text-[10px] text-gray-500 font-bold uppercase">This Month</p><p className="text-3xl font-extrabold text-purple-600">{thisMonth}</p></div>
-        <div className="card p-4 border-l-4 border-emerald-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Won Deals</p><p className="text-3xl font-extrabold text-emerald-600">{won.length}</p>{winAmount > 0 && <p className="text-xs text-emerald-500">{fmt(winAmount)}</p>}</div>
-        <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Lost</p><p className="text-3xl font-extrabold text-red-600">{lost.length}</p></div>
-        <div className="card p-4 border-l-4 border-amber-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Win Rate</p><p className="text-3xl font-extrabold text-amber-600">{winRate}%</p></div>
-      </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Total Leads</p><p className="text-3xl font-extrabold text-red-600">{rows.length}</p></div>
+          <div className="card p-4 border-l-4 border-purple-500"><p className="text-[10px] text-gray-500 font-bold uppercase">This Month</p><p className="text-3xl font-extrabold text-purple-600">{thisMonth}</p></div>
+          <div className="card p-4 border-l-4 border-emerald-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Won Deals</p><p className="text-3xl font-extrabold text-emerald-600">{won.length}</p>{winAmount > 0 && <p className="text-xs text-emerald-500">{fmt(winAmount)}</p>}</div>
+          <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Lost</p><p className="text-3xl font-extrabold text-red-600">{lost.length}</p></div>
+          <div className="card p-4 border-l-4 border-amber-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Win Rate</p><p className="text-3xl font-extrabold text-amber-600">{winRate}%</p></div>
+        </div>
 
-      <div className="card p-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
-        <input className="input text-sm" placeholder="Search client / company / mobile / lead#"
-          value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value }))} />
-        <select className="select text-sm" value={filter.state} onChange={e => setFilter(f => ({ ...f, state: e.target.value }))}>
-          <option value="">All states</option>
-          {STATES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="select text-sm" value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
-          <option value="">All types</option>
-          {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <select className="select text-sm" value={filter.step} onChange={e => setFilter(f => ({ ...f, step: e.target.value }))}>
-          <option value="all">All steps</option>
-          <option value="1">Step 1 — Quotation</option>
-          <option value="2">Step 2 — Negotiation</option>
-          <option value="3">Step 3 — Win/Loss</option>
-        </select>
-      </div>
+        <div className="card p-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <input className="input text-sm" placeholder="Search client / company / mobile / lead#"
+            value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value }))} />
+          <select className="select text-sm" value={filter.state} onChange={e => setFilter(f => ({ ...f, state: e.target.value }))}>
+            <option value="">All states</option>
+            {STATES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select className="select text-sm" value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
+            <option value="">All types</option>
+            {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select className="select text-sm" value={filter.step} onChange={e => setFilter(f => ({ ...f, step: e.target.value }))}>
+            <option value="all">All steps</option>
+            <option value="1">Step 1 — Quotation</option>
+            <option value="2">Step 2 — Negotiation</option>
+            <option value="3">Step 3 — Win/Loss</option>
+          </select>
+        </div>
 
-      <div className="card p-0">
-        <table className="freeze-head">
-          <thead>
-            <tr>
-              <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
-              <th>Type</th><th>Category</th><th>State</th>
-              <th>BOQ</th><th>Quote</th><th>Qty Amount</th>
-              <th>Neg Status</th><th>Neg Amount</th>
-              <th>Stage</th><th>Loss Reason</th><th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && <tr><td colSpan="16" className="text-center py-8 text-gray-400">Loading…</td></tr>}
-            {!loading && rows.length === 0 && (
-              <tr><td colSpan="16" className="text-center py-8 text-gray-400">
-                No leads yet. Click <b>+ Add Lead</b>.
-              </td></tr>
-            )}
-            {rows.map(r => (
-              <tr key={r.id}>
-                <td className="font-mono text-xs">{r.lead_no}</td>
-                <td className="font-medium">
-                  {r.client_name}
-                  {r.requirement_items && (
-                    <div className="text-[10px] text-gray-500 font-normal max-w-[220px] truncate" title={r.requirement_items}>🧾 {r.requirement_items}</div>
-                  )}
-                </td>
-                <td>{r.company_name || '-'}</td>
-                <td>{r.mobile || '-'}</td>
-                <td>{r.source || '-'}</td>
-                <td>{r.type || '-'}</td>
-                <td>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
-                <td>{r.state || '-'}</td>
-                <td>
-                  {r.cust_boq_link ? (
-                    <a className="text-red-600 hover:underline" href={r.cust_boq_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
-                  ) : r.source_indent_id ? (
-                    <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
-                  ) : '-'}
-                </td>
-                <td>
-                  {r.quotation_link ? (
-                    <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
-                  ) : (r.source_indent_id && r.category === 'extra_schedule') ? (
-                    <a href={`/quotation/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap font-semibold" title="Auto-priced quotation from previous BOQ rates"><FiExternalLink size={11} /> Make quotation</a>
-                  ) : '-'}
-                </td>
-                <td>{r.quotation_amount ? `Rs ${(+r.quotation_amount).toLocaleString('en-IN')}` : '-'}</td>
-                <td>{NEG_STATUSES.find(s => s.v === r.negotiation_status)?.l || '-'}</td>
-                <td>{r.negotiation_amount ? `Rs ${(+r.negotiation_amount).toLocaleString('en-IN')}` : '-'}</td>
-                <td>{stepBadge(r)}</td>
-                <td className="text-xs text-gray-600 max-w-[180px] truncate" title={r.loss_reason}>{r.loss_reason || '-'}</td>
-                <td>
-                  <div className="flex gap-1">
-                    {/* View (eye) — works for everyone with view
+        <div className="card p-0 overflow-hidden">
+          <div className="table-responsive">
+            <table className="freeze-head min-w-[900px] sm:min-w-full">
+              <thead>
+                <tr>
+                  <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
+                  <th>Type</th><th>Category</th><th>State</th>
+                  <th>BOQ</th><th>Quote</th><th>Qty Amount</th>
+                  <th>Neg Status</th><th>Neg Amount</th>
+                  <th>Stage</th><th>Loss Reason</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && <tr><td colSpan="16" className="text-center py-8 text-gray-400">Loading…</td></tr>}
+                {!loading && rows.length === 0 && (
+                  <tr><td colSpan="16" className="text-center py-8 text-gray-400">
+                    No leads yet. Click <b>+ Add Lead</b>.
+                  </td></tr>
+                )}
+                {pager.pageItems.map(r => (
+                  <tr key={r.id}>
+                    <td className="font-mono text-xs">{r.lead_no}</td>
+                    <td className="font-medium">
+                      {r.client_name}
+                      {r.requirement_items && (
+                        <div className="text-[10px] text-gray-500 font-normal max-w-[220px] truncate" title={r.requirement_items}>🧾 {r.requirement_items}</div>
+                      )}
+                    </td>
+                    <td>{r.company_name || '-'}</td>
+                    <td>{r.mobile || '-'}</td>
+                    <td>{r.source || '-'}</td>
+                    <td>{r.type || '-'}</td>
+                    <td>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
+                    <td>{r.state || '-'}</td>
+                    <td>
+                      {/* The uploaded "Customer BOQ File" counts as the BOQ too —
+                      this cell used to read only cust_boq_link, so a lead whose
+                      BOQ was UPLOADED showed "-" on the very page it was
+                      uploaded from (mam 2026-09-07). */}
+                      {(r.cust_boq_link || r.boq_file_link) ? (
+                        <a className="text-red-600 hover:underline" href={r.cust_boq_link || r.boq_file_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                      ) : r.source_indent_id ? (
+                        <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
+                      ) : '-'}
+                    </td>
+                    <td>
+                      {r.quotation_link ? (
+                        <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                      ) : (r.source_indent_id && r.category === 'extra_schedule') ? (
+                        <a href={`/quotation/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap font-semibold" title="Auto-priced quotation from previous BOQ rates"><FiExternalLink size={11} /> Make quotation</a>
+                      ) : '-'}
+                    </td>
+                    <td>{r.quotation_amount ? `Rs ${(+r.quotation_amount).toLocaleString('en-IN')}` : '-'}</td>
+                    <td>{NEG_STATUSES.find(s => s.v === r.negotiation_status)?.l || '-'}</td>
+                    <td>{r.negotiation_amount ? `Rs ${(+r.negotiation_amount).toLocaleString('en-IN')}` : '-'}</td>
+                    <td>{stepBadge(r)}</td>
+                    <td className="text-xs text-gray-600 max-w-[180px] truncate" title={r.loss_reason}>{r.loss_reason || '-'}</td>
+                    <td>
+                      <div className="flex gap-1">
+                        {/* View (eye) — works for everyone with view
                         access, including roles that can't edit.
                         Mam wanted a consistent eye-button shape
                         across CRM Funnel, Sales Funnel, BB,
                         Rental, etc. */}
-                    <button onClick={() => setViewRow(r)} className="p-1 text-gray-400 hover:text-red-600" title="View lead"><FiEye size={14} /></button>
-                    {canEdit('crm_funnel') && <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}
-                    {canDelete('crm_funnel') && <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                        <button onClick={() => setViewRow(r)} className="p-1 text-gray-400 hover:text-red-600" title="View lead"><FiEye size={14} /></button>
+                        {canEdit('crm_funnel') && <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}
+                        {canDelete('crm_funnel') && <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination {...pager} />
+        </div>
       </>)}
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? `Edit Lead — ${editing.lead_no}` : 'Add CRM Lead'} wide>
@@ -430,19 +520,55 @@ export default function CRMFunnel() {
                 onChange={(opt) => setForm({ ...form, district: opt?.value || '' })} />
             </div>
             {/* BOQ file upload — Excel / PDF / image at lead-capture time so
-                the client's BOQ stays attached from day one. Optional. */}
+                the client's BOQ stays attached from day one. Optional.
+                MULTIPLE since mam 2026-09-07 ("more upload files"): a client
+                re-sends a revised BOQ and every version has to stay, so the
+                picker takes several and the list below shows them all. */}
             <div className="sm:col-span-2">
-              <label className="label">Customer BOQ File <span className="text-gray-400 font-normal">(optional)</span></label>
+              <label className="label">Customer BOQ File <span className="text-gray-400 font-normal">(optional — you can pick more than one)</span></label>
               <input
                 className="input"
                 type="file"
+                multiple
                 accept=".xlsx,.xls,.pdf,.doc,.docx,.jpg,.jpeg,.png"
-                onChange={e => setForm({ ...form, boq_file: e.target.files?.[0] || null })}
+                onChange={e => {
+                  // APPEND, don't replace. Two revisions usually live in two
+                  // folders, so the natural gesture is to open the picker twice —
+                  // and replacing on the second pick is the exact "new upload
+                  // wipes the old one" behaviour this whole change removes.
+                  const picked = Array.from(e.target.files || []);
+                  setForm(f => {
+                    const seen = new Set((f.boq_files || []).map(x => `${x.name}|${x.size}`));
+                    return { ...f, boq_files: [...(f.boq_files || []), ...picked.filter(x => !seen.has(`${x.name}|${x.size}`))] };
+                  });
+                  e.target.value = '';   // so re-picking the same file fires onChange again
+                }}
               />
-              {form.boq_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.boq_file.name}</p>}
-              {!form.boq_file && form.boq_file_link && (
+              {(form.boq_files || []).length > 0 && (
+                <p className="text-[10px] text-emerald-600 mt-0.5">
+                  Selected: {form.boq_files.map(f => f.name).join(', ')}
+                </p>
+              )}
+              {/* Already attached — newest first, straight from the history
+                  table, so nothing an earlier upload replaced is lost. */}
+              {editing && boqs.length > 0 && (
+                <ul className="mt-1 space-y-0.5">
+                  {boqs.map(b => (
+                    <li key={b.id} className="text-[10px] text-gray-500 flex items-center gap-1.5">
+                      <a href={b.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 underline">{fileName(b.boq_file_link)}</a>
+                      <span className="text-gray-400">{fmtDate(b.created_at)}</span>
+                      {canEdit('crm_funnel') && (
+                        <button type="button" className="text-[10px] text-red-500 hover:underline" onClick={() => removeBoq(b)}>remove</button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* A new (unsaved) lead — and the moment before the history load
+                  returns — keeps the original single-link line. */}
+              {boqs.length === 0 && form.boq_file_link && (
                 <p className="text-[10px] text-gray-500 mt-0.5">
-                  Attached: <a href={form.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 underline">{form.boq_file_link.split('/').pop()}</a>
+                  Attached: <a href={form.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 underline">{fileName(form.boq_file_link)}</a>
                   {' '}<button type="button" className="text-[10px] text-red-500 hover:underline" onClick={() => setForm({ ...form, boq_file_link: '' })}>remove</button>
                 </p>
               )}
@@ -575,7 +701,7 @@ export default function CRMFunnel() {
 
                 {/* STEP 1 → STEP 2 · submit quotation */}
                 {currentStep(viewRow) === 'step1' && (
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <div className="space-y-1">
                       <label className="text-gray-600">Quotation Amount (₹)</label>
                       <input type="number" className="input w-full" value={stageForm.quotation_amount || ''}
@@ -598,7 +724,7 @@ export default function CRMFunnel() {
 
                 {/* STEP 2 · negotiation */}
                 {currentStep(viewRow) === 'step2' && (
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                     <div className="space-y-1">
                       <label className="text-gray-600">Negotiation status</label>
                       <select className="select w-full" value={stageForm.negotiation_status || ''}
@@ -646,7 +772,7 @@ export default function CRMFunnel() {
                         ? `Won — Rs ${(+viewRow.negotiation_amount || +viewRow.quotation_amount || 0).toLocaleString('en-IN')}`
                         : `Lost — ${viewRow.loss_reason || 'no reason given'}`}
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <select className="select" value={stageForm.final_status || ''}
                         onChange={e => setStageForm({ ...stageForm, final_status: e.target.value })}>
                         <option value="">Re-open (move back to Step 2)</option>

@@ -20,13 +20,16 @@ const OPS = [
 
 const emptyForm = () => ({
   name: '', event_key: '', enabled: true,
-  conditions: [], recipients: { people: [], roles: [], fixed: '' },
-  from_addr: '', subject_tpl: '', body_tpl: '',
+  conditions: [], recipients: { people: [], roles: [], fixed: '', cc_people: [], cc_fixed: '', attach: false },
+  from_addr: '', account_id: '', subject_tpl: '', body_tpl: '',
 });
 
 export default function EmailTriggers() {
   const [events, setEvents] = useState([]);
   const [roles, setRoles] = useState([]);
+  // Sending mailboxes from Email Settings → Mail accounts (mam 2026-09-12).
+  const [accounts, setAccounts] = useState([]);
+  useEffect(() => { api.get('/ai-agent/email-accounts').then(r => setAccounts(r.data || [])).catch(() => setAccounts([])); }, []);
   const [sample, setSample] = useState({});
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -62,8 +65,8 @@ export default function EmailTriggers() {
     setForm({
       name: r.name, event_key: r.event_key, enabled: !!r.enabled,
       conditions: Array.isArray(r.conditions) ? r.conditions : [],
-      recipients: { people: [], roles: [], fixed: '', ...(r.recipients || {}) },
-      from_addr: r.from_addr || '', subject_tpl: r.subject_tpl || '', body_tpl: r.body_tpl || '',
+      recipients: { people: [], roles: [], fixed: '', cc_people: [], cc_fixed: '', attach: false, ...(r.recipients || {}) },
+      from_addr: r.from_addr || '', account_id: r.account_id || '', subject_tpl: r.subject_tpl || '', body_tpl: r.body_tpl || '',
     });
     setModalOpen(true);
   };
@@ -105,6 +108,12 @@ export default function EmailTriggers() {
   const togglePerson = (key) => setForm(f => {
     const has = f.recipients.people.includes(key);
     return { ...f, recipients: { ...f.recipients, people: has ? f.recipients.people.filter(p => p !== key) : [...f.recipients.people, key] } };
+  });
+  // Cc works like the To list: tick people from the record, or type addresses.
+  const toggleCcPerson = (key) => setForm(f => {
+    const cc = f.recipients.cc_people || [];
+    const has = cc.includes(key);
+    return { ...f, recipients: { ...f.recipients, cc_people: has ? cc.filter(p => p !== key) : [...cc, key] } };
   });
   const toggleRole = (name) => setForm(f => {
     const has = f.recipients.roles.includes(name);
@@ -238,7 +247,7 @@ export default function EmailTriggers() {
             </div>
             <div>
               <label className="label">{ruleMode === 'reminder' ? 'Which reminder *' : 'When this event happens *'}</label>
-              <select className="select" value={form.event_key} onChange={e => setForm({ ...form, event_key: e.target.value, conditions: [], recipients: { people: [], roles: [], fixed: '' } })}>
+              <select className="select" value={form.event_key} onChange={e => setForm({ ...form, event_key: e.target.value, conditions: [], recipients: { people: [], roles: [], fixed: '', cc_people: [], cc_fixed: '', attach: false } })}>
                 <option value="">{ruleMode === 'reminder' ? 'Select reminder…' : 'Select event…'}</option>
                 {Object.entries(modeGroups).map(([g, evs]) => (
                   <optgroup key={g} label={g}>
@@ -322,6 +331,31 @@ export default function EmailTriggers() {
                     onChange={e => setForm({ ...form, recipients: { ...form.recipients, fixed: e.target.value } })}
                     placeholder="director@securedengineers.com, accounts@…" />
                 </div>
+
+                {/* Cc — same two sources as the To list (mam 2026-09-12) */}
+                <div className="border-t pt-3">
+                  <div className="text-xs font-semibold text-gray-600 mb-1">Cc (copy)</div>
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {(selectedEvent.people || []).map(p => (
+                      <button type="button" key={`cc-${p.key}`} onClick={() => toggleCcPerson(p.key)}
+                        className={`px-2 py-1 rounded text-xs border ${(form.recipients.cc_people || []).includes(p.key) ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300'}`}>
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  <textarea className="input text-sm" rows="1" value={form.recipients.cc_fixed || ''}
+                    onChange={e => setForm({ ...form, recipients: { ...form.recipients, cc_fixed: e.target.value } })}
+                    placeholder="Cc addresses (comma separated)" />
+                </div>
+
+                {/* The record's own file, when the event carries one */}
+                {selectedEvent.attachable && (
+                  <label className="flex items-center gap-2 text-xs cursor-pointer border-t pt-3">
+                    <input type="checkbox" checked={!!form.recipients.attach}
+                      onChange={e => setForm({ ...form, recipients: { ...form.recipients, attach: e.target.checked } })} />
+                    <span>Attach {selectedEvent.attachable}</span>
+                  </label>
+                )}
               </div>
 
               {/* Conditions */}
@@ -358,7 +392,20 @@ export default function EmailTriggers() {
                   ))}
                 </div>
                 <div>
-                  <label className="label">From address <span className="text-[10px] text-gray-400 font-normal normal-case">(optional — blank uses your SMTP default)</span></label>
+                  <label className="label">Send from <span className="text-[10px] text-gray-400 font-normal normal-case">(which mailbox actually sends it)</span></label>
+                  <select className="select" value={form.account_id || ''}
+                    onChange={e => setForm({ ...form, account_id: e.target.value ? +e.target.value : '' })}>
+                    <option value="">Default account (Email Settings)</option>
+                    {accounts.filter(a => a.active).map(a => (
+                      <option key={a.id} value={a.id}>{a.label} · {a.from_address}</option>
+                    ))}
+                  </select>
+                  <div className="text-[10px] text-gray-400 mt-0.5">
+                    Add mailboxes in Settings → Email → Mail accounts. The chosen mailbox's own From is used unless you type one below.
+                  </div>
+                </div>
+                <div>
+                  <label className="label">From address <span className="text-[10px] text-gray-400 font-normal normal-case">(optional — blank uses the mailbox's own From)</span></label>
                   <input className="input" value={form.from_addr} onChange={e => setForm({ ...form, from_addr: e.target.value })}
                     placeholder="e.g. alerts@securedengineers.com or {{crm_owner_email}}" />
                   <div className="text-[10px] text-gray-400 mt-0.5">Note: Gmail/most providers only send From the authenticated account or a verified alias.</div>

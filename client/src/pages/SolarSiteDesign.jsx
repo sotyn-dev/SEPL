@@ -26,6 +26,7 @@ import {
 } from '../lib/solar/shadow';
 import { STATES } from '../data/indiaLocations';
 import { num as fmt } from '../lib/solar/format';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const DEFAULT_LOC = { lat: 30.9010, lng: 75.8573, altitude: 247, name: 'Ludhiana, Punjab' };
 const VIEW_TABS = [
@@ -62,7 +63,7 @@ export default function SolarSiteDesign() {
   const [drawMode, setDrawMode] = useState(null);      // 'surface' | 'obstruction' | null
   const [newKind, setNewKind] = useState('tank');
   const [selectedId, setSelectedId] = useState(null);
-  const [tab, setTab] = useState('plan');              // 'plan' | '3d'
+  const [tab, setTab] = useUrlTab(['plan', '3d'], 'plan');              // 'plan' | '3d'
 
   // Sun state — kept as floats so dragging feels continuous.
   const [sunT, setSunT] = useState({ doy: dateToDoy(6, 21), minutes: 12 * 60 });
@@ -208,11 +209,13 @@ export default function SolarSiteDesign() {
     setSearching(true);
     setSearchStatus(null);
     try {
-      const { data } = await api.get('/solar-site/geocode', { params: { q } });
+      // The state dropdown scopes the lookup too (server appends it when the
+      // query alone finds nothing), not just the yield calibration.
+      const { data } = await api.get('/solar-site/geocode', { params: { q, state } });
       const hits = data.results || [];
       setResults(hits);
       if (!hits.length) {
-        const msg = `No match for "${q}" — try a nearby town, an area/landmark name, a pasted Google Maps link, or "lat, lng".`;
+        const msg = `No match for "${q}" — add the city after a business name (e.g. "${q}, Ludhiana"), or try an area/landmark name, a pasted Google Maps link, or "lat, lng".`;
         setSearchStatus({ type: 'empty', message: msg });
         toast.error('No location match — see the note below the search box');
       } else if (data.broadenedFrom) {
@@ -221,7 +224,7 @@ export default function SolarSiteDesign() {
         // always surface the results list here, even if there's only one,
         // rather than silently auto-pinning something the user didn't
         // actually type and may not realise is approximate.
-        setSearchStatus({ type: 'broadened', message: data.note || `Showing the area for "${data.broadenedFrom}" — zoom in and right-click the map to pin the exact spot.` });
+        setSearchStatus({ type: 'broadened', message: data.note || `Showing the area for "${data.broadenedFrom}" — zoom in and click the map to pin the exact spot.` });
       } else if (hits.length === 1) {
         pick(hits[0]);
       } else {

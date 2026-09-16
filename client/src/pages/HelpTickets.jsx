@@ -10,9 +10,11 @@ import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2, FiTrash2, FiSearch, FiUser, FiTag, FiDownload, FiUpload, FiExternalLink, FiRotateCcw } from 'react-icons/fi';
+import StatusMultiSelect from '../components/StatusMultiSelect';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDate } from '../utils/datetime';
 import { compressImage } from '../utils/compressImage';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 const STATUS_COLORS = {
   open: 'bg-red-100 text-red-700',
@@ -96,7 +98,7 @@ export default function HelpTickets() {
   // every ticket and triage them.
   const canFollowAll = isAdmin() || canSeeAll('help_tickets');
   const [scope, setScope] = useState('mine');     // mine | given | all
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState([]);
   const [search, setSearch] = useState('');
   const [nameFilter, setNameFilter] = useState('');   // raiser / assignee name
   const [tickets, setTickets] = useState([]);
@@ -133,7 +135,7 @@ export default function HelpTickets() {
 
   const load = () => {
     const params = new URLSearchParams({ scope });
-    if (statusFilter) params.set('status', statusFilter);
+    if (statusFilter.length) params.set('status', statusFilter.join(','));
     api.get('/support?' + params.toString()).then(r => setTickets(r.data || [])).catch(() => setTickets([]));
     // Every create / status change / delete already calls load(), so hanging
     // the stats refresh here keeps the cards in step with no extra wiring.
@@ -259,6 +261,10 @@ export default function HelpTickets() {
       || (t.assigned_to_name || '').toLowerCase().includes(q);
   });
 
+  // Numbered pagination over the final filtered list (scope + status are
+  // server-side; name + search compose above). Export keeps `filtered`.
+  const pager = usePagination(filtered, { resetKey: [scope, statusFilter, nameFilter, search] });
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
@@ -266,7 +272,7 @@ export default function HelpTickets() {
           <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FiHelpCircle className="text-red-600" /> Help Tickets</h3>
           <p className="text-sm text-gray-500">Raise a ticket, follow up on what you've raised, or work on what's been assigned to you.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={() => exportCsv('help-tickets',
             ['Ticket #','Subject','Raised By','Assigned To','Priority','Status','Deadline','When'],
             filtered.map(t => [t.ticket_no, t.subject, t.user_name, t.assigned_to_name, t.priority, t.status, t.deadline_date || '', t.created_at]))}
@@ -295,7 +301,7 @@ export default function HelpTickets() {
       )}
 
       {/* Tabs */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap">
         {[
           { id: 'mine',  label: 'Assigned to me',  count: counts.mine },
           { id: 'given', label: 'Raised by me',    count: counts.given },
@@ -306,15 +312,22 @@ export default function HelpTickets() {
             {t.label} <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded ${scope === t.id ? 'bg-white/20' : 'bg-gray-100 text-gray-500'}`}>{t.count}</span>
           </button>
         ))}
-        <select className="select w-44 text-sm" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="open">Open</option>
-          <option value="in_progress">In Progress</option>
-          <option value="submitted">Submitted (awaiting approval)</option>
-          <option value="resolved">Resolved</option>
-          <option value="rejected">Rejected</option>
-          <option value="closed">Closed</option>
-        </select>
+{/* Status - tick as many as you like (mam 2026-09-12). */}
+        <div className="w-[264px]">
+          <StatusMultiSelect
+            options={[
+              { id: 'open', name: 'Open' },
+              { id: 'in_progress', name: 'In Progress' },
+              { id: 'submitted', name: 'Submitted (awaiting approval)' },
+              { id: 'resolved', name: 'Resolved' },
+              { id: 'rejected', name: 'Rejected' },
+              { id: 'closed', name: 'Closed' },
+            ]}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            placeholder="All statuses"
+          />
+        </div>
         {/* Dedicated NAME filter — narrows by the raiser's or assignee's name
             only, so you can isolate one person's tickets without the free-text
             box also matching a subject or description. Composes with the scope
@@ -331,8 +344,8 @@ export default function HelpTickets() {
       </div>
 
       {/* Tickets list — bounded scroll + sticky thead.  Mam, 2026-05-13. */}
-      <div className="card p-0 overflow-auto max-h-[70vh]">
-        <table className="text-sm w-full">
+      <div className="card p-0 table-responsive max-h-[70vh] overflow-auto">
+        <table className="text-sm w-full min-w-[900px]">
           <thead className="sticky top-0 z-10 bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Ticket</th>
@@ -349,7 +362,7 @@ export default function HelpTickets() {
           </thead>
           <tbody>
             {filtered.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400 text-sm">No tickets {scope === 'mine' ? 'assigned to you' : scope === 'given' ? 'raised by you' : ''} yet.</td></tr>}
-            {filtered.map(t => {
+            {pager.pageItems.map(t => {
               const isRaiser = t.user_id === user?.id;
               const isAssignee = t.assigned_to === user?.id;
               const canClose = canFollowAll || isRaiser;
@@ -407,6 +420,7 @@ export default function HelpTickets() {
           </tbody>
         </table>
       </div>
+      <Pagination {...pager} />
 
       {/* Create Ticket Modal */}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Raise New Ticket">
@@ -419,7 +433,7 @@ export default function HelpTickets() {
             <label className="label">Description *</label>
             <textarea className="input" rows="4" required value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What happened, what you expected, what module you were on" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Category</label>
               <select className="select" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
@@ -432,16 +446,16 @@ export default function HelpTickets() {
                 {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Deadline <span className="text-gray-400 font-normal text-[10px]">(optional · target date)</span></label>
               <input type="date" className="input" value={form.deadline_date}
                 onChange={e => setForm({ ...form, deadline_date: e.target.value })} />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Module (optional)</label>
               <input className="input" value={form.module} onChange={e => setForm({ ...form, module: e.target.value })} placeholder="e.g. Procurement, Delegations, Inventory" />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Assign To (optional)</label>
               <SearchableSelect
                 options={employees.map(e => ({ ...e, label: e.name + (e.department ? ' (' + e.department + ')' : '') }))}
@@ -451,7 +465,7 @@ export default function HelpTickets() {
                 onChange={(emp) => setForm(f => ({ ...f, assigned_to: emp?.id || '' }))}
               />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="label">Attachment <span className="text-gray-400 font-normal text-[10px]">(optional · screenshot, log, PDF)</span></label>
               <input
                 className="input"
@@ -487,7 +501,7 @@ export default function HelpTickets() {
           const isWorking = !isSubmitted && !isClosedState;    // open / in_progress / rejected
           return (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                 <div><span className="text-gray-400 text-xs">Raised by:</span> <b>{viewModal.user_name}</b></div>
                 <div><span className="text-gray-400 text-xs">Assigned to:</span> <b>{viewModal.assigned_to_name || '—'}</b></div>
                 <div><span className="text-gray-400 text-xs">Category:</span> {viewModal.category?.replace('_', ' ')}</div>

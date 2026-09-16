@@ -1,6 +1,7 @@
 const express = require('express');
+const { istToday } = require('../lib/istDate');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -10,21 +11,21 @@ router.get('/', (req, res) => {
     LEFT JOIN purchase_orders po ON i.po_id=po.id LEFT JOIN users u ON i.assigned_to=u.id ORDER BY i.created_at DESC`).all());
 });
 
-router.post('/', (req, res) => {
+router.post('/', requirePermission('installation', 'create'), (req, res) => {
   const { po_id, site_address, start_date, end_date, assigned_to, notes } = req.body;
   const r = getDb().prepare('INSERT INTO installations (po_id,site_address,start_date,end_date,assigned_to,notes) VALUES (?,?,?,?,?,?)')
     .run(po_id, site_address, start_date, end_date, assigned_to, notes);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', requirePermission('installation', 'edit'), (req, res) => {
   const { status, start_date, end_date, assigned_to, notes } = req.body;
   getDb().prepare('UPDATE installations SET status=?,start_date=?,end_date=?,assigned_to=?,notes=? WHERE id=?')
     .run(status, start_date, end_date, assigned_to, notes, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', requirePermission('installation', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const ra = db.prepare('SELECT COUNT(*) as c FROM ra_bills WHERE installation_id=?').get(id).c;
@@ -40,19 +41,19 @@ router.get('/ra-bills', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM ra_bills ORDER BY created_at DESC').all());
 });
 
-router.post('/ra-bills', (req, res) => {
+router.post('/ra-bills', requirePermission('installation', 'create'), (req, res) => {
   const { installation_id, bill_number, bill_date, work_done_amount, previous_amount, current_amount } = req.body;
   const r = getDb().prepare('INSERT INTO ra_bills (installation_id,bill_number,bill_date,work_done_amount,previous_amount,current_amount) VALUES (?,?,?,?,?,?)')
     .run(installation_id, bill_number, bill_date, work_done_amount, previous_amount, current_amount);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/ra-bills/:id', (req, res) => {
+router.put('/ra-bills/:id', requirePermission('installation', 'edit'), (req, res) => {
   getDb().prepare('UPDATE ra_bills SET status=? WHERE id=?').run(req.body.status, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/ra-bills/:id', (req, res) => {
+router.delete('/ra-bills/:id', requirePermission('installation', 'delete'), (req, res) => {
   const mb = getDb().prepare('SELECT COUNT(*) as c FROM mb_bills WHERE ra_bill_id=?').get(req.params.id).c;
   if (mb > 0) return res.status(409).json({ error: 'Cannot delete: MB bills reference this RA bill' });
   getDb().prepare('DELETE FROM ra_bills WHERE id=?').run(req.params.id);
@@ -64,19 +65,19 @@ router.get('/mb-bills', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM mb_bills ORDER BY created_at DESC').all());
 });
 
-router.post('/mb-bills', (req, res) => {
+router.post('/mb-bills', requirePermission('installation', 'create'), (req, res) => {
   const { ra_bill_id, installation_id, bill_number, measurements, total_amount } = req.body;
   const r = getDb().prepare('INSERT INTO mb_bills (ra_bill_id,installation_id,bill_number,measurements,total_amount) VALUES (?,?,?,?,?)')
     .run(ra_bill_id, installation_id, bill_number, measurements, total_amount);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/mb-bills/:id', (req, res) => {
+router.put('/mb-bills/:id', requirePermission('installation', 'edit'), (req, res) => {
   getDb().prepare('UPDATE mb_bills SET status=? WHERE id=?').run(req.body.status, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/mb-bills/:id', (req, res) => {
+router.delete('/mb-bills/:id', requirePermission('installation', 'delete'), (req, res) => {
   const ib = getDb().prepare('SELECT COUNT(*) as c FROM installation_bills WHERE mb_bill_id=?').get(req.params.id).c;
   if (ib > 0) return res.status(409).json({ error: 'Cannot delete: Installation bills reference this MB bill' });
   getDb().prepare('DELETE FROM mb_bills WHERE id=?').run(req.params.id);
@@ -88,14 +89,14 @@ router.get('/inst-bills', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM installation_bills ORDER BY created_at DESC').all());
 });
 
-router.post('/inst-bills', (req, res) => {
+router.post('/inst-bills', requirePermission('installation', 'create'), (req, res) => {
   const { installation_id, mb_bill_id, bill_number, amount } = req.body;
   const r = getDb().prepare('INSERT INTO installation_bills (installation_id,mb_bill_id,bill_number,amount) VALUES (?,?,?,?)')
     .run(installation_id, mb_bill_id, bill_number, amount);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.delete('/inst-bills/:id', (req, res) => {
+router.delete('/inst-bills/:id', requirePermission('installation', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM installation_bills WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -106,7 +107,7 @@ router.get('/testing', (req, res) => {
     LEFT JOIN users u ON tc.tested_by=u.id ORDER BY tc.created_at DESC`).all());
 });
 
-router.post('/testing', (req, res) => {
+router.post('/testing', requirePermission('installation', 'create'), (req, res) => {
   const { installation_id, test_date, test_type, result, notes } = req.body;
   const r = getDb().prepare('INSERT INTO testing_commissioning (installation_id,test_date,test_type,result,notes,tested_by) VALUES (?,?,?,?,?,?)')
     .run(installation_id, test_date, test_type, result, notes, req.user.id);
@@ -114,12 +115,21 @@ router.post('/testing', (req, res) => {
 });
 
 // Complaints
-router.get('/complaints', (req, res) => {
-  res.json(getDb().prepare(`SELECT c.*, u1.name as created_by_name, u2.name as assigned_to_name FROM complaints c
-    LEFT JOIN users u1 ON c.created_by=u1.id LEFT JOIN users u2 ON c.assigned_to=u2.id ORDER BY c.created_at DESC`).all());
+// Served here as well as from /api/complaints, so it MUST honour the same rules:
+// it had no permission check at all and returned every complaint in the company
+// to any signed-in user, which quietly defeated the Complaints view scope
+// (mam 2026-08-20). Now gated by the complaints view permission and filtered by
+// the shared scope — "See All" still returns everything.
+router.get('/complaints', requirePermission('complaints', 'view'), (req, res) => {
+  const { complaintScope } = require('../lib/complaintScope');
+  const scope = complaintScope(req);
+  const sql = `SELECT c.*, u1.name as created_by_name, u2.name as assigned_to_name FROM complaints c
+    LEFT JOIN users u1 ON c.created_by=u1.id LEFT JOIN users u2 ON c.assigned_to=u2.id
+    WHERE 1=1${scope ? scope.sql : ''} ORDER BY c.created_at DESC`;
+  res.json(getDb().prepare(sql).all(...(scope ? scope.params : [])));
 });
 
-router.post('/complaints', (req, res) => {
+router.post('/complaints', requirePermission('complaints', 'create'), (req, res) => {
   const db = getDb();
   const { installation_id, po_id, description, priority, assigned_to } = req.body;
   const { nextSequence } = require('../db/nextSequence');
@@ -129,15 +139,15 @@ router.post('/complaints', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cNum });
 });
 
-router.put('/complaints/:id', (req, res) => {
+router.put('/complaints/:id', requirePermission('complaints', 'edit'), (req, res) => {
   const { status, resolution_notes } = req.body;
-  const resolved_date = status === 'resolved' ? new Date().toISOString().split('T')[0] : null;
+  const resolved_date = status === 'resolved' ? istToday() : null;
   getDb().prepare('UPDATE complaints SET status=?, resolution_notes=?, resolved_date=? WHERE id=?')
     .run(status, resolution_notes, resolved_date, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/testing/:id', (req, res) => {
+router.delete('/testing/:id', requirePermission('installation', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM testing_commissioning WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -147,7 +157,7 @@ router.get('/handover', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM handover_certificates ORDER BY created_at DESC').all());
 });
 
-router.post('/handover', (req, res) => {
+router.post('/handover', requirePermission('installation', 'create'), (req, res) => {
   const db = getDb();
   const { installation_id, po_id, handover_date, client_signatory, company_signatory, notes } = req.body;
   const { nextSequence } = require('../db/nextSequence');
@@ -157,12 +167,12 @@ router.post('/handover', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, certificate_number: certNum });
 });
 
-router.put('/handover/:id', (req, res) => {
+router.put('/handover/:id', requirePermission('installation', 'edit'), (req, res) => {
   getDb().prepare('UPDATE handover_certificates SET status=? WHERE id=?').run(req.body.status, req.params.id);
   res.json({ message: 'Updated' });
 });
 
-router.delete('/handover/:id', (req, res) => {
+router.delete('/handover/:id', requirePermission('installation', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM handover_certificates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -172,7 +182,7 @@ router.get('/payments', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM payments ORDER BY created_at DESC').all());
 });
 
-router.post('/payments', (req, res) => {
+router.post('/payments', requirePermission('installation', 'create'), (req, res) => {
   const { type, reference_type, reference_id, amount, payment_date, payment_mode, transaction_ref, notes } = req.body;
   const r = getDb().prepare('INSERT INTO payments (type,reference_type,reference_id,amount,payment_date,payment_mode,transaction_ref,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
     .run(type, reference_type, reference_id, amount, payment_date, payment_mode, transaction_ref, notes, req.user.id);

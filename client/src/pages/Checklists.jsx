@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload, FiCalendar, FiCheck, FiX, FiClock } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
+import Pagination, { usePagination } from '../components/PaginationBar';
 
 // Mam (2026-05-22): "department will on drop down :- Sales, Accounts,
 // Marketing, Finance, IT, MDO, Operations, Admin" + Purchase added
@@ -253,6 +254,36 @@ export default function Checklists() {
   }, {});
   const groupOrder = Object.keys(byPerson).sort((a, b) => a.localeCompare(b));
 
+  // Final filtered by-date rows — same predicate the row-count label uses.
+  // Hoisted to the top level so the pagination hook can window them.
+  const historyFiltered = historyRows.filter(r => {
+    if (deptFilter && r.department !== deptFilter) return false;
+    if (statusFilter === 'done')     return !!r.completion_id;
+    if (statusFilter === 'not_done') return !r.completion_id;
+    if (statusFilter === 'pending')  return r.approval_status === 'pending' && r.completion_id;
+    if (statusFilter === 'approved') return r.approval_status === 'approved';
+    if (statusFilter === 'rejected') return r.approval_status === 'rejected';
+    return true;
+  });
+  const historyPager = usePagination(historyFiltered, { resetKey: [historyDate, deptFilter, statusFilter] });
+
+  // Follow-up "List" instances (task × applicable date), flattened at the
+  // top level for the same reason — hooks can't live inside the JSX IIFE.
+  const followupInstances = (() => {
+    if (!followup) return [];
+    const instances = [];
+    for (const t of followup.rows) {
+      for (const c of t.cells) {
+        if (c.status === 'na' || c.status === 'future') continue;
+        instances.push({ task: t, cell: c });
+      }
+    }
+    // Most-recent first so today + recent days surface at top
+    instances.sort((a, b) => b.cell.date.localeCompare(a.cell.date));
+    return instances;
+  })();
+  const followupPager = usePagination(followupInstances, { resetKey: [followupBack, followupForward] });
+
   const save = async (e) => {
     e.preventDefault();
     if (editing) { await api.put(`/hr/checklists/${editing.id}`, form); }
@@ -263,13 +294,29 @@ export default function Checklists() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h3 className="font-semibold">Checklists & Recurring Tasks</h3>
-        <div className="flex gap-2">
-          <button onClick={() => exportCsv('checklists',
-            ['Description','Frequency','Due Date','Due Time','Assigned To','Status'],
-            checklists.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.status]))}
-            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+        <h3 className="font-semibold text-lg sm:text-xl">Checklists & Recurring Tasks</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Export follows the view on screen (mam: the CSV must match
+              what she is looking at).  By-date / Follow-up export the
+              INSTANCE rows with their real completion + approval state;
+              only Master Templates exports the template list — and each
+              uses the filtered dataset, not the raw fetch. */}
+          <button onClick={() => {
+            if (view === 'by-date') exportCsv(`checklists-${historyDate}`,
+              ['Person','Department','Task','Frequency','Done?','Proof','Approval','Approval Note','Approved By','Submitted'],
+              historyFiltered.map(r => [r.assigned_to_name, r.department, r.description || r.title, r.frequency,
+                r.completion_id ? 'Done' : 'Not done', r.proof_url,
+                r.approval_status || (r.completion_id ? 'pending' : ''), r.approval_note, r.approved_by_name,
+                r.submitted_at ? new Date(r.submitted_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '']));
+            if (view === 'followup') exportCsv('checklists-followup',
+              ['Person','Task ID','Frequency','Task','Planned Date','Status','Department','Proof'],
+              followupInstances.map(({ task: t, cell: c }) => [t.assigned_to_name, t.id, t.frequency, t.description,
+                c.date, c.status, t.department, c.proof_url]));
+            if (view === 'current') exportCsv('checklists',
+              ['Description','Frequency','Due Date','Due Time','Assigned To','Department'],
+              visible.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.department]));
+          }} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 shrink-0"><FiDownload /> Export Excel</button>
           {canManage() && (
             <button onClick={() => {
               // Mam (2026-05-22): "by default end date is 31/12/2026"
@@ -285,7 +332,7 @@ export default function Checklists() {
                 proof_type: 'photo',
               });
               setModal(true);
-            }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Checklist</button>
+            }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-1.5 shrink-0"><FiPlus /> Add Checklist</button>
           )}
           {/* Mam (2026-05-22): bulk add — paste many task lines that
               share the same frequency / assignee / dates / proof type. */}
@@ -301,7 +348,7 @@ export default function Checklists() {
                 proof_type: 'photo',
               });
               setBulkModal(true);
-            }} className="btn btn-secondary flex items-center gap-2"><FiPlus /> Bulk Add</button>
+            }} className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 shrink-0"><FiPlus /> Bulk Add</button>
           )}
         </div>
       </div>
@@ -314,31 +361,33 @@ export default function Checklists() {
       {/* Tab toggle — match mam's mental model from her Sheet:
           "By Date" = today's instance grid (default; her Sheet 2 view),
           "Master" = recurring-template editor (her Sheet 1 view). */}
-      <div className="flex gap-2 flex-wrap items-center">
-        <button onClick={() => { setView('by-date'); loadHistory(historyDate); }}
-                className={`btn ${view === 'by-date' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-          <FiCalendar size={13} /> Today / By Date
-        </button>
-        <button onClick={() => setView('current')}
-                className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-          Master Templates
-        </button>
-        {/* Mam (2026-05-22): "i need followup checklist where all
-            record mention previous, present, future" — per-task
-            timeline grid with past / today / upcoming cells. */}
-        <button onClick={() => { setView('followup'); if (!followup) loadFollowup(); }}
-                className={`btn ${view === 'followup' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-          <FiClock size={13} /> Follow-up Timeline
-        </button>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+        <div className="flex gap-1.5 sm:gap-2 flex-wrap items-center">
+          <button onClick={() => { setView('by-date'); loadHistory(historyDate); }}
+                  className={`btn ${view === 'by-date' ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
+            <FiCalendar size={13} /> Today / By Date
+          </button>
+          <button onClick={() => setView('current')}
+                  className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
+            Master Templates
+          </button>
+          {/* Mam (2026-05-22): "i need followup checklist where all
+              record mention previous, present, future" — per-task
+              timeline grid with past / today / upcoming cells. */}
+          <button onClick={() => { setView('followup'); if (!followup) loadFollowup(); }}
+                  className={`btn ${view === 'followup' ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
+            <FiClock size={13} /> Follow-up Timeline
+          </button>
+        </div>
         {view === 'by-date' && (
-          <>
-            <input type="date" className="input text-sm w-44" value={historyDate}
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+            <input type="date" className="input text-xs sm:text-sm py-1.5 px-2.5 w-36 sm:w-44" value={historyDate}
                    onChange={e => { setHistoryDate(e.target.value); loadHistory(e.target.value); }} />
             <button onClick={() => { const y = new Date(); y.setDate(y.getDate() - 1); const iso = y.toISOString().slice(0, 10); setHistoryDate(iso); loadHistory(iso); }}
-                    className="btn btn-secondary text-xs">Yesterday</button>
+                    className="btn btn-secondary text-xs px-2.5 py-1.5">Yesterday</button>
             <button onClick={() => { const iso = new Date().toISOString().slice(0, 10); setHistoryDate(iso); loadHistory(iso); }}
-                    className="btn btn-secondary text-xs">Today</button>
-          </>
+                    className="btn btn-secondary text-xs px-2.5 py-1.5">Today</button>
+          </div>
         )}
       </div>
 
@@ -399,10 +448,10 @@ export default function Checklists() {
       )}
 
       {/* ─── BY-DATE / APPROVAL view ─────────────────────────────── */}
-      {view === 'by-date' && (
-        <div className="card p-0 overflow-x-auto">
-          <table className="freeze-head">
-            <thead>
+      {view === 'by-date' && (<>
+        <div className="card p-0 table-responsive">
+          <table className="freeze-head w-full text-xs min-w-[800px]">
+            <thead className="whitespace-nowrap">
               <tr>
                 <th>Person</th>
                 <th>Department</th>
@@ -421,15 +470,7 @@ export default function Checklists() {
                   No checklists for this date.
                 </td></tr>
               )}
-              {historyRows.filter(r => {
-                if (deptFilter && r.department !== deptFilter) return false;
-                if (statusFilter === 'done')     return !!r.completion_id;
-                if (statusFilter === 'not_done') return !r.completion_id;
-                if (statusFilter === 'pending')  return r.approval_status === 'pending' && r.completion_id;
-                if (statusFilter === 'approved') return r.approval_status === 'approved';
-                if (statusFilter === 'rejected') return r.approval_status === 'rejected';
-                return true;
-              }).map(r => {
+              {historyPager.pageItems.map(r => {
                 const done = !!r.completion_id;
                 const apStat = r.approval_status || (done ? 'pending' : '—');
                 const apBadge = apStat === 'approved' ? 'bg-emerald-100 text-emerald-700'
@@ -508,7 +549,8 @@ export default function Checklists() {
             </tbody>
           </table>
         </div>
-      )}
+        <Pagination {...historyPager} />
+      </>)}
 
 
       {/* Admin-only filter by assignee (regular users only see their own anyway).
@@ -564,7 +606,7 @@ export default function Checklists() {
             </select>
             {/* Legend — only shown on the timeline grid */}
             {followupSubView === 'timeline' && (
-              <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-600">
+              <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-2 text-[10px] text-gray-600 flex-wrap">
                 <Cell s="done_approved" /> Approved
                 <Cell s="done_pending" /> Pending
                 <Cell s="done_rejected" /> Rejected
@@ -585,17 +627,9 @@ export default function Checklists() {
               has an Upload Proof button that calls /complete with
               the specific date. */}
           {followup && followupSubView === 'list' && followup.rows.length > 0 && (() => {
-            // Flatten cells → instance rows (skip na = out-of-window
-            // or wrong weekday; skip future = no point uploading yet).
-            const instances = [];
-            for (const t of followup.rows) {
-              for (const c of t.cells) {
-                if (c.status === 'na' || c.status === 'future') continue;
-                instances.push({ task: t, cell: c });
-              }
-            }
-            // Most-recent first so today + recent days surface at top
-            instances.sort((a, b) => b.cell.date.localeCompare(a.cell.date));
+            // Instance rows come pre-flattened from followupInstances at the
+            // top of the component (na/future skipped, most-recent first);
+            // followupPager windows them for the table below.
             const statusBadge = {
               done_approved: { label: '✓ Approved',     css: 'bg-emerald-100 text-emerald-700' },
               done_pending:  { label: '⏳ Pending Appr', css: 'bg-amber-100 text-amber-700' },
@@ -603,10 +637,10 @@ export default function Checklists() {
               missed:        { label: '✗ Missed',       css: 'bg-red-100 text-red-700' },
               today:         { label: '○ Today',        css: 'bg-blue-100 text-blue-700' },
             };
-            return (
-              <div className="card p-0 overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-amber-50 text-gray-700 text-[10px] uppercase">
+            return (<>
+              <div className="card p-0 table-responsive">
+                <table className="w-full text-xs min-w-[780px]">
+                  <thead className="bg-amber-50 text-gray-700 text-[10px] uppercase whitespace-nowrap">
                     <tr>
                       <th className="px-2 py-2 text-left">Name</th>
                       <th className="px-2 py-2 text-left">Task ID</th>
@@ -619,7 +653,7 @@ export default function Checklists() {
                     </tr>
                   </thead>
                   <tbody>
-                    {instances.map((row, idx) => {
+                    {followupPager.pageItems.map((row, idx) => {
                       const c = row.cell;
                       const t = row.task;
                       const badge = statusBadge[c.status] || { label: c.status, css: 'bg-gray-100 text-gray-700' };
@@ -675,23 +709,24 @@ export default function Checklists() {
                         </tr>
                       );
                     })}
-                    {instances.length === 0 && (
+                    {followupInstances.length === 0 && (
                       <tr><td colSpan="8" className="text-center py-8 text-gray-400">No instances in the selected window.</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
-            );
+              <Pagination {...followupPager} />
+            </>);
           })()}
 
           {/* ─── TIMELINE GRID view (toggle) ──────────────────────── */}
           {followup && followupSubView === 'timeline' && followup.rows.length > 0 && (
-            <div className="card p-0 overflow-x-auto">
-              <table className="text-xs border-collapse">
+            <div className="card p-0 table-responsive">
+              <table className="text-xs border-collapse min-w-[650px]">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="text-left px-2 py-2 sticky left-0 bg-gray-50 z-10 min-w-[200px]">Task</th>
-                    <th className="text-left px-2 py-2 sticky left-[200px] bg-gray-50 z-10">Person</th>
+                    <th className="text-left px-2 py-2 md:sticky md:left-0 bg-gray-50 z-10 min-w-[160px] sm:min-w-[200px]">Task</th>
+                    <th className="text-left px-2 py-2 md:sticky md:left-[200px] bg-gray-50 z-10">Person</th>
                     <th className="text-left px-2 py-2">Dept</th>
                     {followup.dates.map((d, i) => {
                       const dt = new Date(d);
@@ -708,11 +743,11 @@ export default function Checklists() {
                 <tbody>
                   {followup.rows.map(r => (
                     <tr key={r.id} className="border-t hover:bg-blue-50/30">
-                      <td className="px-2 py-1.5 sticky left-0 bg-white z-10 min-w-[200px]">
+                      <td className="px-2 py-1.5 md:sticky md:left-0 bg-white z-10 min-w-[160px] sm:min-w-[200px]">
                         <div className="font-medium text-gray-800 text-[12px] line-clamp-2" title={r.description}>{r.description}</div>
                         <div className="text-[9px] text-gray-500 capitalize">{r.frequency}</div>
                       </td>
-                      <td className="px-2 py-1.5 sticky left-[200px] bg-white z-10 text-[11px]">{r.assigned_to_name || '—'}</td>
+                      <td className="px-2 py-1.5 md:sticky md:left-[200px] bg-white z-10 text-[11px]">{r.assigned_to_name || '—'}</td>
                       <td className="px-2 py-1.5">
                         {r.department ? <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{r.department}</span> : <span className="text-gray-300 text-[10px]">—</span>}
                       </td>
@@ -736,7 +771,7 @@ export default function Checklists() {
         <div className="card text-center py-8 text-gray-400">No checklists yet</div>
       )}
       {view === 'current' && groupOrder.map(personName => (
-        <div key={personName} className="card p-0 overflow-x-auto">
+        <div key={personName} className="card p-0 table-responsive">
           <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
             <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2">
               <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-700 text-[10px] font-extrabold">{personName.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase()}</span>
@@ -744,8 +779,8 @@ export default function Checklists() {
               <span className="text-xs font-normal text-gray-400">({byPerson[personName].length})</span>
             </h4>
           </div>
-          <table className="freeze-head">
-            <thead><tr><th>Task</th><th>Department</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
+          <table className="freeze-head w-full text-xs min-w-[720px]">
+            <thead className="whitespace-nowrap"><tr><th>Task</th><th>Department</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {byPerson[personName].map(c => (
                 <tr key={c.id}>
@@ -812,10 +847,30 @@ export default function Checklists() {
                       })()
                     )}
                     {canManage() && <button onClick={() => { setEditing(c); setForm(c); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>}
+                    {/* Delete asks twice when proof already exists: the server
+                        answers 409 with the count, and only then do we offer to
+                        go ahead (mam 2026-09-12 — this used to surface a raw
+                        "FOREIGN KEY constraint failed"). The proof records are
+                        kept either way. */}
                     {canManage() && canDelete('checklists') && <button onClick={async () => {
                       if (!confirm(`Delete this checklist?`)) return;
-                      try { await api.delete(`/hr/checklists/${c.id}`); toast.success('Deleted'); load(); }
-                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                      const del = async (force) => {
+                        const r = await api.delete(`/hr/checklists/${c.id}${force ? '?force=1' : ''}`);
+                        toast.success(r.data?.message || 'Deleted');
+                        load();
+                      };
+                      try { await del(false); }
+                      catch (err) {
+                        const d = err.response?.data;
+                        if (err.response?.status === 409 && d?.can_force) {
+                          if (confirm(`${d.error}\n\nDelete it anyway?`)) {
+                            try { await del(true); }
+                            catch (e2) { toast.error(e2.response?.data?.error || 'Delete failed'); }
+                          }
+                          return;
+                        }
+                        toast.error(d?.error || 'Delete failed');
+                      }
                     }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
                   </div></td>
                 </tr>

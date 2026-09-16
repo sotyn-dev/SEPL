@@ -3,6 +3,8 @@
 // Built on existing Business Book orders; amounts typed manually; one GST %
 // per bill; numbering SEPL/SB/<FY>/NNN; Admin + Accounts (installation perm).
 const express = require('express');
+const { istToday } = require('../lib/istDate');
+const { resolveInstallationBillUnits } = require('../lib/installationBillUnits');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
@@ -28,6 +30,73 @@ function nextBillNumber(db, dateStr) {
     if (Number.isFinite(n) && n > max) max = n;
   }
   return prefix + String(max + 1).padStart(3, '0');
+}
+
+// Resolve DPR work items for a set of DPRs (or a sales_bill_id) with full BOQ SITC rates.
+// PO items carry the full SITC rate (po_items.rate). DPR work items carry an 11% labour rate
+// for internal costing, but client sales billing must always pick the FULL SITC rate.
+function getDprSitcWorkItems(db, { salesBillId = null, dprIds = null, businessBookId = null }) {
+  let wiRows = [];
+  if (salesBillId) {
+    wiRows = db.prepare(
+      `SELECT wi.po_item_id, wi.description, wi.unit, wi.rate AS dpr_rate,
+              COALESCE(SUM(wi.actual_qty), 0) AS qty
+         FROM dpr_work_items wi
+         JOIN dpr d ON d.id = wi.dpr_id
+        WHERE d.sales_bill_id = ?
+        GROUP BY COALESCE(wi.po_item_id, LOWER(TRIM(wi.description))), wi.unit
+        ORDER BY MIN(wi.id)`
+    ).all(salesBillId);
+  } else if (Array.isArray(dprIds) && dprIds.length > 0) {
+    wiRows = db.prepare(
+      `SELECT wi.po_item_id, wi.description, wi.unit, wi.rate AS dpr_rate,
+              COALESCE(SUM(wi.actual_qty), 0) AS qty
+         FROM dpr_work_items wi
+        WHERE wi.dpr_id IN (${dprIds.map(() => '?').join(',')})
+        GROUP BY COALESCE(wi.po_item_id, LOWER(TRIM(wi.description))), wi.unit
+        ORDER BY MIN(wi.id)`
+    ).all(...dprIds);
+  }
+
+  // Load PO items for full SITC rate resolution
+  const poById = new Map();
+  const poByDesc = new Map();
+  if (businessBookId) {
+    try {
+      const poList = db.prepare('SELECT id, description, rate, unit, hsn_code FROM po_items WHERE business_book_id = ?').all(businessBookId);
+      for (const p of poList) {
+        if (p.id) poById.set(p.id, p);
+        if (p.description) poByDesc.set(String(p.description).trim().toLowerCase(), p);
+      }
+    } catch (_) {}
+  }
+
+  let totalSitcVal = 0;
+  const poUnitById = db.prepare('SELECT unit FROM po_items WHERE id = ?');
+  const items = wiRows.map(x => {
+    const descKey = String(x.description || '').trim().toLowerCase();
+    const match = (x.po_item_id && poById.get(x.po_item_id)) || poByDesc.get(descKey);
+    let fullRate = 0;
+    if (match && +match.rate > 0) {
+      fullRate = +match.rate;
+    } else if (+x.dpr_rate > 0) {
+      fullRate = round2(+x.dpr_rate / 0.11);
+    }
+    const qty = +x.qty || 0;
+    const amount = round2(qty * fullRate);
+    totalSitcVal += amount;
+    return {
+      description: match?.description || x.description || '',
+      qty_ordered: qty,
+      qty_delivered: qty,
+      unit: (x.po_item_id && poUnitById.get(x.po_item_id)?.unit) || match?.unit || x.unit || 'nos',
+      hsn_code: match?.hsn_code || '',
+      rate: fullRate,
+      amount,
+    };
+  });
+
+  return { items, totalSitcVal: round2(totalSitcVal) };
 }
 
 // Business Book orders for the "new bill" picker — Order→Planning projects
@@ -114,14 +183,112 @@ router.get('/pending', requirePermission('installation', 'view'), (req, res) => 
   }));
   let dprReady = { count: 0, value: 0 };
   try {
-    dprReady = db.prepare(
-      `SELECT COUNT(*) AS count, COALESCE(SUM(COALESCE(d.grand_total_a,0)),0) AS value
+    const unbilledDprs = db.prepare(
+      `SELECT d.id, s.business_book_id
          FROM dpr d JOIN sites s ON s.id = d.site_id
         WHERE d.approval_status='approved' AND d.billing_ready=1
           AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL`
-    ).get();
+    ).all();
+    let totalVal = 0;
+    for (const d of unbilledDprs) {
+      const res = getDprSitcWorkItems(db, { dprIds: [d.id], businessBookId: d.business_book_id });
+      totalVal += res.totalSitcVal;
+    }
+    dprReady = { count: unbilledDprs.length, value: round2(totalVal) };
   } catch (e) { /* dpr.sales_bill_id may be absent on a stale DB */ }
   res.json({ orders_without_so: ordersWithoutSo, dpr_ready: dprReady });
+});
+
+// Get all approved, unbilled DPRs ready for billing, grouped by Business Book order.
+// Allows users to review and selectively pick which DPRs to generate bills for.
+router.get('/unbilled-dprs', requirePermission('installation', 'view'), (req, res) => {
+  const db = getDb();
+  try {
+    const rows = db.prepare(
+      `SELECT d.id AS dpr_id, d.report_date, d.shift, d.grand_total_a,
+              s.name AS site_name, s.business_book_id AS bb_id,
+              bb.lead_no, bb.client_name, bb.company_name, bb.project_name,
+              bb.payment_against_installation,
+              u.name AS submitted_by_name,
+              COALESCE((SELECT COUNT(*) FROM dpr_work_items wi WHERE wi.dpr_id = d.id), 0) AS work_items_count
+         FROM dpr d
+         JOIN sites s ON s.id = d.site_id
+         JOIN business_book bb ON bb.id = s.business_book_id
+         LEFT JOIN users u ON u.id = d.submitted_by
+        WHERE d.approval_status = 'approved' AND d.billing_ready = 1
+          AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL
+        ORDER BY s.business_book_id, d.report_date DESC`
+    ).all();
+
+    const poByOrder = new Map();
+    const getPoMaps = (bbId) => {
+      if (!poByOrder.has(bbId)) {
+        const byId = new Map(), byDesc = new Map();
+        try {
+          const list = db.prepare('SELECT id, description, rate, unit, hsn_code FROM po_items WHERE business_book_id=?').all(bbId);
+          for (const p of list) {
+            if (p.id) byId.set(p.id, p);
+            if (p.description) byDesc.set(String(p.description).trim().toLowerCase(), p);
+          }
+        } catch (_) {}
+        poByOrder.set(bbId, { byId, byDesc });
+      }
+      return poByOrder.get(bbId);
+    };
+
+    const groups = new Map();
+    for (const r of rows) {
+      const instPct = parseFloat(String(r.payment_against_installation || '').replace(/[^0-9.]/g, '')) || 0;
+      const { byId, byDesc } = getPoMaps(r.bb_id);
+      const wis = db.prepare('SELECT po_item_id, description, rate, actual_qty FROM dpr_work_items WHERE dpr_id=?').all(r.dpr_id);
+      let wVal = 0;
+      for (const w of wis) {
+        const match = (w.po_item_id && byId.get(w.po_item_id)) || byDesc.get(String(w.description || '').trim().toLowerCase());
+        let sitcRate = 0;
+        if (match && +match.rate > 0) sitcRate = +match.rate;
+        else if (+w.rate > 0) sitcRate = round2(+w.rate / 0.11);
+        wVal += (+w.actual_qty || 0) * sitcRate;
+      }
+      wVal = round2(wVal);
+      if (wVal <= 0 && +r.grand_total_a > 0) {
+        wVal = round2(+r.grand_total_a / 0.11);
+      }
+      const pctToUse = instPct > 0 ? instPct : 100;
+      const estDprBill = round2(wVal * pctToUse / 100);
+
+      if (!groups.has(r.bb_id)) {
+        groups.set(r.bb_id, {
+          business_book_id: r.bb_id,
+          lead_no: r.lead_no,
+          customer_name: (r.client_name || r.company_name || '').trim() || 'No Name',
+          project_name: r.project_name || '-',
+          payment_against_installation: r.payment_against_installation,
+          inst_pct: instPct,
+          total_work_value: 0,
+          estimated_bill_amount: 0,
+          dprs: []
+        });
+      }
+      const g = groups.get(r.bb_id);
+      g.total_work_value = round2(g.total_work_value + wVal);
+      g.estimated_bill_amount = round2(g.estimated_bill_amount + estDprBill);
+      g.dprs.push({
+        dpr_id: r.dpr_id,
+        report_date: r.report_date,
+        shift: r.shift,
+        site_name: r.site_name,
+        submitted_by_name: r.submitted_by_name,
+        work_value: wVal,
+        work_items_count: r.work_items_count,
+        estimated_bill: estDprBill
+      });
+    }
+
+    res.json(Array.from(groups.values()));
+  } catch (err) {
+    console.error('sales-billing unbilled-dprs error', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Material billing view (mam 2026-06-13): each material dispatch (delivery
@@ -231,6 +398,7 @@ router.get('/:id', requirePermission('installation', 'view'), (req, res) => {
   const bill = db.prepare('SELECT * FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
   bill.items = db.prepare('SELECT * FROM sales_bill_items WHERE sales_bill_id=? ORDER BY id').all(bill.id);
+  bill.items = resolveInstallationBillUnits(db, bill, bill.items);
   bill.log = db.prepare(
     `SELECT l.*, u.name AS by_name FROM sales_bill_status_log l LEFT JOIN users u ON u.id=l.changed_by
       WHERE l.sales_bill_id=? ORDER BY l.id`
@@ -266,49 +434,109 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
   const bill = db.prepare('SELECT * FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).send('Bill not found');
   let items = db.prepare('SELECT * FROM sales_bill_items WHERE sales_bill_id=? ORDER BY id').all(bill.id);
-  // Installation (Type 3) bills store only the total — pull the BOQ work items
-  // from the DPRs they were generated from, aggregated per BOQ line, and scaled
-  // so they sum to the bill's taxable value (mam 2026-06-24: "as per DPR BOQ
-  // item show"). Works for already-created bills, no migration needed.
+  // Installation (Type 3) bills: pull the BOQ work items from the DPRs they
+  // were generated from, using the FULL contracted BOQ SITC rates (po_items.rate).
   if (!items.length && bill.bill_type === 3) {
-    let wi = [];
-    try {
-      wi = db.prepare(
-        `SELECT wi.description, wi.unit, wi.rate,
-                COALESCE(SUM(wi.actual_qty), 0) AS qty, COALESCE(SUM(wi.amount), 0) AS amount
-           FROM dpr_work_items wi JOIN dpr d ON d.id = wi.dpr_id
-          WHERE d.sales_bill_id = ?
-          GROUP BY COALESCE(wi.po_item_id, wi.description), wi.rate, wi.unit
-          ORDER BY MIN(wi.id)`
-      ).all(bill.id);
-    } catch (_) { wi = []; }
-    const rawSum = wi.reduce((s, x) => s + (+x.amount || 0), 0);
-    const ratio = rawSum > 0 ? (+bill.amount || 0) / rawSum : 1;
-    items = wi.map(x => ({
-      description: x.description,
-      qty_ordered: +x.qty || 0,
-      unit: x.unit,
-      rate: round2((+x.rate || 0) * ratio),
-      amount: round2((+x.amount || 0) * ratio),
-    }));
+    const sitcRes = getDprSitcWorkItems(db, { salesBillId: bill.id, businessBookId: bill.business_book_id });
+    items = sitcRes.items;
   }
-  // mam 2026-06-30 ("rate pending"): fill any line whose rate is 0 from the
-  // order's CURRENT BOQ (po_items, matched by description), so pricing the order's
-  // BOQ flows into the invoice without recreating the bill. Only fills 0/blank
-  // rates — never overrides a rate already snapshotted on the bill.
-  if (bill.business_book_id && items.some(it => !(+it.rate > 0))) {
-    const byDesc = new Map();
-    for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bill.business_book_id)) {
-      if (+p.rate > 0 && p.description) byDesc.set(String(p.description).toLowerCase().trim(), +p.rate);
+  const unitItems = resolveInstallationBillUnits(db, bill, items);
+  items = unitItems;
+  // Ensure all lines have their FULL SITC rate from the order's BOQ (po_items).
+  //
+  // Matching is deliberately layered. sales_bill_items has NO po_item_id column,
+  // so an already-created bill can only be tied back to the order through its
+  // description — and a line written as "Point wiring with MS conduit (1st floor)"
+  // does not equal the BOQ's "Point wiring with MS conduit". Before this, such a
+  // line silently kept the 11% labour rate and printed on a CLIENT INVOICE at
+  // roughly a ninth of its value (mam 2026-09-09: "previous rate also correct in
+  // pdf in here"; reproduced with that exact suffix case).
+  if (bill.business_book_id) {
+    const poById = new Map();
+    const poByDesc = new Map();
+    const poList = [];
+    for (const p of db.prepare('SELECT id, description, rate, unit, hsn_code FROM po_items WHERE business_book_id=?').all(bill.business_book_id)) {
+      if (+p.rate > 0) {
+        poList.push(p);
+        if (p.id) poById.set(p.id, p);
+        if (p.description) poByDesc.set(String(p.description).toLowerCase().trim(), p);
+      }
     }
-    items = items.map(it => {
-      if (+it.rate > 0) return it;
-      const live = byDesc.get(String(it.description || '').toLowerCase().trim()) || 0;
-      if (!live) return it;
+
+    // The DPRs this bill was generated from DO carry po_item_id, which is the
+    // authoritative link. Use it to resolve lines whose text has drifted.
+    const dprRateByDesc = new Map();
+    try {
+      for (const w of db.prepare(
+        `SELECT wi.description, p.rate, p.description AS po_desc, p.unit, p.hsn_code
+           FROM dpr_work_items wi
+           JOIN dpr d ON d.id = wi.dpr_id
+           JOIN po_items p ON p.id = wi.po_item_id
+          WHERE d.sales_bill_id = ? AND p.rate > 0`
+      ).all(bill.id)) {
+        dprRateByDesc.set(String(w.description || '').toLowerCase().trim(), w);
+      }
+    } catch (_) { /* older bills may have no linked DPRs — fall through */ }
+
+    const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    // A BOQ line whose text is contained in the bill line (or vice versa), and
+    // ONLY when exactly one candidate matches — an ambiguous guess on an invoice
+    // is worse than leaving the number alone.
+    const looseMatch = (desc) => {
+      const d = norm(desc);
+      if (!d) return null;
+      const hits = poList.filter(p => {
+        const pd = norm(p.description);
+        return pd && (d.startsWith(pd) || pd.startsWith(d) || d.includes(pd));
+      });
+      return hits.length === 1 ? hits[0] : null;
+    };
+
+    const unresolved = [];
+    items = items.map((it, index) => {
+      const key = norm(it.description);
+      const match = (it.po_item_id && poById.get(it.po_item_id))
+        || poByDesc.get(key)
+        || dprRateByDesc.get(key)
+        || looseMatch(it.description);
+      const boqRate = match ? +match.rate : 0;
+      let r = boqRate > 0 ? boqRate : +it.rate;
+      if (!r && +it.rate > 0) r = round2(+it.rate / 0.11);
+      if (!boqRate && +it.rate > 0) unresolved.push(it.description);
       const qty = +it.qty_delivered || +it.qty_ordered || 0;
-      return { ...it, rate: live, amount: round2(qty * live) };
+      return {
+        ...it,
+        description: it.description || match?.description || '',
+        unit: bill.bill_type === 3 ? (unitItems[index].unit || 'nos') : (match?.unit || it.unit || 'nos'),
+        hsn_code: it.hsn_code || match?.hsn_code || '',
+        rate: r,
+        amount: round2(qty * r)
+      };
     });
+
+    // Say so loudly rather than printing a number nobody can account for. A line
+    // that never resolved keeps whatever rate it was stored with, which for an
+    // old Type 3 bill is the 11% labour rate.
+    if (unresolved.length) {
+      console.warn(`[sales-billing] bill ${bill.bill_number}: ${unresolved.length} line(s) have no matching BOQ item on order ${bill.business_book_id} `
+        + `and printed at their stored rate — ${unresolved.slice(0, 3).map(d => JSON.stringify(d)).join(', ')}`);
+    }
   }
+
+  const itemsSum = round2(items.reduce((s, it) => s + (+it.amount || 0), 0));
+  // If Type 3 bill was stored with 11% labour total or needs syncing, update sales_bills
+  if (bill.bill_type === 3 && itemsSum > 0 && Math.abs(+bill.amount - itemsSum) > 0.01) {
+    const gstPct = +bill.gst_rate || 18;
+    const newGst = round2(itemsSum * gstPct / 100);
+    const newTot = round2(itemsSum + newGst);
+    try {
+      db.prepare('UPDATE sales_bills SET amount=?, gst_amount=?, total_amount=? WHERE id=?').run(itemsSum, newGst, newTot, bill.id);
+      bill.amount = itemsSum;
+      bill.gst_amount = newGst;
+      bill.total_amount = newTot;
+    } catch (_) {}
+  }
+
   const bb = bill.business_book_id ? db.prepare('SELECT * FROM business_book WHERE id=?').get(bill.business_book_id) : null;
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(Buffer.from(installBillHTML({ bill, items, bb }), 'utf8'));
@@ -317,13 +545,10 @@ function installBillHTML({ bill, items, bb }) {
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const inr = (n) => (+n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const gstPct = +bill.gst_rate || 18;
-  // When the bill was created before the order was priced, its stored amount/gst
-  // are 0 — derive them from the (now live-filled) line items so the invoice shows
-  // real figures once the order BOQ is priced (mam 2026-06-30).
-  const itemsSum = items.reduce((s, it) => s + (+it.amount || 0), 0);
-  const sub = (+bill.amount > 0) ? +bill.amount : Math.round(itemsSum * 100) / 100;
-  const igst = (+bill.gst_amount > 0) ? +bill.gst_amount : Math.round(sub * gstPct) / 100;
-  const grand = (+bill.total_amount > 0) ? +bill.total_amount : Math.round((sub + igst) * 100) / 100;
+  const itemsSum = round2(items.reduce((s, it) => s + (+it.amount || 0), 0));
+  const sub = itemsSum > 0 ? itemsSum : ((+bill.amount > 0) ? +bill.amount : 0);
+  const igst = (+bill.gst_amount > 0 && Math.abs(sub - +bill.amount) < 1) ? +bill.gst_amount : Math.round(sub * gstPct) / 100;
+  const grand = Math.round((sub + igst) * 100) / 100;
   const roundOff = +(Math.round(grand) - (sub + igst)).toFixed(2);
   const billTo = esc(bill.customer_name || bb?.company_name || bb?.client_name || '');
   const billAddr = esc(bb?.billing_address || '');
@@ -441,7 +666,7 @@ router.post('/', requirePermission('installation', 'create'), (req, res) => {
     if (!Number.isFinite(gst_rate) || gst_rate < 0 || gst_rate > 100) return res.status(400).json({ error: 'GST % must be 0-100' });
     const gst_amount = round2(amount * gst_rate / 100);
     const total_amount = round2(amount + gst_amount);
-    const bill_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.bill_date) ? req.body.bill_date : new Date().toISOString().split('T')[0];
+    const bill_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.bill_date) ? req.body.bill_date : istToday();
     const customer_name = (bb.client_name || bb.company_name || '').trim();
     const items = Array.isArray(req.body.items) ? req.body.items : [];
 
@@ -528,7 +753,7 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
     if (bill.approval_status !== 'approved') return res.status(400).json({ error: 'Approve the Final bill before recording payment' });
     const amount = round2(req.body.amount);
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be a positive number' });
-    const payment_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.payment_date) ? req.body.payment_date : new Date().toISOString().split('T')[0];
+    const payment_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.payment_date) ? req.body.payment_date : istToday();
     const payment_mode = ['Cash', 'Bank', 'UPI', 'Cheque', 'NEFT/RTGS'].includes(req.body.payment_mode) ? req.body.payment_mode : 'Bank';
 
     const out = db.transaction(() => {
@@ -570,55 +795,61 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
   }
 });
 
-// Generate Type-3 Installation bills from DPRs (mam 2026-06-13: "installation
-// bill according to DPR every 15 days, auto"). Sums each project's DPR Table-A
-// value (grand_total_a = labour/installation billing value) for approved,
-// billing-ready, NOT-yet-billed DPRs, and raises one Type-3 bill per project.
+// Generate Type-3 Installation bills from DPRs.
+// Sums each project's DPR work-item value for approved, billing-ready, NOT-yet-billed DPRs,
+// and raises one Type-3 bill per project. Supports selective billing via dprIds.
 // Idempotent via dpr.sales_bill_id (a DPR is billed once). Returns a summary.
-// `draft=true` (default) creates the bills as DRAFT for review; the scheduled
-// fortnightly job calls this with draft=false to auto-approve.
-function generateInstallationBills(db, userId, { draft = true } = {}) {
-  // Bill value = the BOQ items × qty recorded in the DPR (mam 2026-06-13),
-  // i.e. the sum of that DPR's work-item amounts — not the labour-only total.
-  const rows = db.prepare(
-    `SELECT d.id AS dpr_id, d.report_date, s.business_book_id AS bb_id,
-            COALESCE((SELECT SUM(wi.amount) FROM dpr_work_items wi WHERE wi.dpr_id = d.id), 0) AS val
+function generateInstallationBills(db, userId, { draft = true, dprIds = null, billDate = null } = {}) {
+  let sql = `
+    SELECT d.id AS dpr_id, d.report_date, s.business_book_id AS bb_id
        FROM dpr d JOIN sites s ON s.id = d.site_id
       WHERE d.approval_status = 'approved' AND d.billing_ready = 1
-        AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL`
-  ).all();
+        AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL
+  `;
+  const params = [];
+  if (Array.isArray(dprIds) && dprIds.length > 0) {
+    sql += ` AND d.id IN (${dprIds.map(() => '?').join(',')})`;
+    params.push(...dprIds);
+  }
+  const rows = db.prepare(sql).all(...params);
   if (!rows.length) return { created: 0, bills: [] };
 
-  const groups = new Map();   // bb_id → { sum, dprIds, minDate, maxDate }
+  const groups = new Map();   // bb_id → { dprIds, minDate, maxDate }
   for (const r of rows) {
-    if (!groups.has(r.bb_id)) groups.set(r.bb_id, { sum: 0, dprIds: [], minDate: r.report_date, maxDate: r.report_date });
+    if (!groups.has(r.bb_id)) groups.set(r.bb_id, { dprIds: [], minDate: r.report_date, maxDate: r.report_date });
     const g = groups.get(r.bb_id);
-    g.sum += +r.val || 0;
     g.dprIds.push(r.dpr_id);
     if (r.report_date < g.minDate) g.minDate = r.report_date;
     if (r.report_date > g.maxDate) g.maxDate = r.report_date;
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const billDateToUse = /^\d{4}-\d{2}-\d{2}$/.test(billDate) ? billDate : istToday();
   const out = [];
   const tx = db.transaction(() => {
     for (const [bbId, g] of groups) {
-      if (round2(g.sum) <= 0) continue;          // no work recorded this window
       const bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbId);
       if (!bb) continue;
-      // Installation bill = work value × the "Against Installation" % from the
-      // order's Business Book payment terms (mam 2026-06-13).
+
+      const sitcRes = getDprSitcWorkItems(db, { dprIds: g.dprIds, businessBookId: bbId });
+      const workValue = round2(sitcRes.totalSitcVal);
+      if (workValue <= 0) continue;
+
       const instPct = parseFloat(String(bb.payment_against_installation || '').replace(/[^0-9.]/g, '')) || 0;
-      const workValue = round2(g.sum);
-      const amount = round2(workValue * instPct / 100);
-      if (amount <= 0) continue;                  // no installation % set on this order — skip
+      const pctToUse = instPct > 0 ? instPct : 100;
+      const amount = round2(workValue * pctToUse / 100);
+      if (amount <= 0) continue;
+
       const prior = db.prepare(
         `SELECT id FROM sales_bills WHERE business_book_id=? AND bill_type=1`
       ).get(bbId);
       const gst_rate = 18;                        // installation service GST
       const gst_amount = round2(amount * gst_rate / 100);
       const total_amount = round2(amount + gst_amount);
-      const bill_number = nextBillNumber(db, today);
+      const bill_number = nextBillNumber(db, billDateToUse);
+      const refDoc = instPct > 0
+        ? `DPRs ${g.minDate} → ${g.maxDate} · ${instPct}% of ₹${workValue}`
+        : `DPRs ${g.minDate} → ${g.maxDate} · ₹${workValue}`;
+
       const r = db.prepare(
         `INSERT INTO sales_bills
            (bill_number, bill_date, amount, gst_amount, total_amount, gst_rate,
@@ -626,14 +857,24 @@ function generateInstallationBills(db, userId, { draft = true } = {}) {
             previous_bill_id, reference_doc_type, reference_doc_no, approval_status,
             payment_status, created_by)
          VALUES (?,?,?,?,?,?,3,?,?,?,?,?, 'DPR', ?, ?, 'pending', ?)`
-      ).run(bill_number, today, amount, gst_amount, total_amount, gst_rate,
+      ).run(bill_number, billDateToUse, amount, gst_amount, total_amount, gst_rate,
         bbId, (bb.client_name || bb.company_name || '').trim(), bb.project_name || null, BILL_STATUS[3],
-        prior ? prior.id : null, `DPRs ${g.minDate} → ${g.maxDate} · ${instPct}% of ₹${workValue}`, draft ? 'draft' : 'approved', userId);
+        prior ? prior.id : null, refDoc, draft ? 'draft' : 'approved', userId);
       const billId = r.lastInsertRowid;
+
+      // Populate sales_bill_items with full SITC rates
+      const insItem = db.prepare(
+        `INSERT INTO sales_bill_items (sales_bill_id, description, qty_ordered, qty_delivered, unit, rate, amount)
+         VALUES (?,?,?,?,?,?,?)`
+      );
+      for (const it of sitcRes.items) {
+        insItem.run(billId, it.description || '', it.qty_ordered, it.qty_delivered, it.unit || '', it.rate, it.amount);
+      }
+
       const upd = db.prepare('UPDATE dpr SET sales_bill_id=? WHERE id=?');
       for (const dprId of g.dprIds) upd.run(billId, dprId);
       db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
-        .run(billId, draft ? 'draft' : 'approved', userId, `Auto installation bill from ${g.dprIds.length} DPR(s)`);
+        .run(billId, draft ? 'draft' : 'approved', userId, `Installation bill from ${g.dprIds.length} DPR(s)`);
       out.push({ bill_number, business_book_id: bbId, dprs: g.dprIds.length, amount, total_amount });
     }
   });
@@ -641,13 +882,25 @@ function generateInstallationBills(db, userId, { draft = true } = {}) {
   return { created: out.length, bills: out };
 }
 
-// Manual trigger — admin/accounts run it once to verify amounts before the
-// fortnightly job is switched on. Creates DRAFT bills.
+// Generate installation bills for selected DPRs (or all eligible unbilled DPRs if none specified).
 router.post('/generate-installation', requirePermission('installation', 'create'), (req, res) => {
   try {
     const db = getDb();
-    const result = generateInstallationBills(db, req.user.id, { draft: false });
-    res.json({ message: result.created ? `${result.created} installation bill(s) generated — review, then mark Sent to Client` : 'No unbilled DPRs ready to bill', ...result });
+    const dprIds = Array.isArray(req.body.dpr_ids) ? req.body.dpr_ids.map(Number).filter(Boolean) : null;
+    if (req.body.dpr_ids !== undefined && (!dprIds || dprIds.length === 0)) {
+      return res.status(400).json({ error: 'Please select at least one DPR to generate installation bills.' });
+    }
+    const result = generateInstallationBills(db, req.user.id, {
+      draft: false,
+      dprIds,
+      billDate: req.body.bill_date
+    });
+    res.json({
+      message: result.created
+        ? `${result.created} installation bill(s) generated — review, then mark Sent to Client`
+        : 'No eligible DPRs found to bill (ensure that selected DPRs have an installation % configured on their order)',
+      ...result
+    });
   } catch (err) {
     console.error('sales-billing generate-installation error', err);
     res.status(500).json({ error: err.message });

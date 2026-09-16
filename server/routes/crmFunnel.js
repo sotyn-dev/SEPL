@@ -18,6 +18,32 @@ router.use(authMiddleware);
 const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const boqUpload = multer({ dest: uploadDir, limits: { fileSize: 15 * 1024 * 1024 } });
+// mam 2026-09-07: "like this type more upload files". `.fields` rather than
+// `.single`/`.array` so the ORIGINAL single-file field name still works — an
+// old client (or a cached bundle) posting `boq_file` must keep saving — while
+// the new multi-select posts `boq_files`. Capped at 10 per save.
+const MAX_BOQ_FILES = 10;
+const boqFieldsRaw = boqUpload.fields([
+  { name: 'boq_file', maxCount: 1 },
+  { name: 'boq_files', maxCount: MAX_BOQ_FILES },
+]);
+// Over the cap (or over 15 MB) multer throws BEFORE the route body runs, and
+// without this the whole save dies as an opaque 500 "Unexpected field" — the
+// lead isn't created, the other edits in the same request are lost, and nothing
+// on screen says a limit exists. Same shape as routes/tallyBills.js.
+function boqFields(req, res, next) {
+  boqFieldsRaw(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Each BOQ file must be 15 MB or smaller' });
+      if (err.code === 'LIMIT_UNEXPECTED_FILE' || err.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ error: `Attach at most ${MAX_BOQ_FILES} BOQ files at a time — save these, then add the rest.` });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    return res.status(400).json({ error: err.message || 'Upload failed' });
+  });
+}
 
 const ALLOWED_LEAD_TYPES = ['New', 'Extra Enquiry'];
 
@@ -26,17 +52,44 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-// If an upload landed, rename it to a readable path and return /uploads/...
-function persistBoqFile(req) {
-  if (!req.file) return null;
+// Rename ONE landed upload to a readable path and return /uploads/...
+function persistOne(file) {
   try {
-    const safeName = (req.file.originalname || 'boq').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const safeName = (file.originalname || 'boq').replace(/[^a-zA-Z0-9._-]/g, '_');
     const newName = `${Date.now()}-${safeName}`;
-    fs.renameSync(req.file.path, path.join(uploadDir, newName));
+    fs.renameSync(file.path, path.join(uploadDir, newName));
     return `/uploads/${newName}`;
   } catch (_) {
-    return `/uploads/${req.file.filename}`;
+    return `/uploads/${file.filename}`;
   }
+}
+
+// Every BOQ file that arrived on this request, oldest-picked first, as
+// /uploads/... links. Reads BOTH field names (see boqFields) plus req.file,
+// so a caller still using boqUpload.single('boq_file') keeps working.
+// Returns [] when nothing was uploaded — callers fall back to the typed link.
+function persistBoqFiles(req) {
+  const files = [];
+  if (req.file) files.push(req.file);
+  if (req.files) {
+    // .fields gives an object keyed by field name; .array would give a plain
+    // array. Handle both so this never depends on which middleware ran.
+    if (Array.isArray(req.files)) files.push(...req.files);
+    else for (const k of ['boq_file', 'boq_files']) if (req.files[k]) files.push(...req.files[k]);
+  }
+  return files.map(persistOne).filter(Boolean);
+}
+
+// Record each uploaded file in the history table (mam 2026-09-07: the single
+// column used to be overwritten, so every earlier BOQ was lost). Best-effort:
+// a history failure must never fail the lead save itself.
+function recordBoqHistory(db, crmId, links, req, notes) {
+  if (!crmId || !links || !links.length) return;
+  try {
+    const ins = db.prepare(`INSERT INTO crm_funnel_boqs (crm_id, boq_file_link, notes, created_by)
+                            VALUES (?, ?, ?, ?)`);
+    for (const link of links) ins.run(crmId, link, notes || null, req.user?.name || null);
+  } catch (e) { console.error('[crm-funnel] BOQ history insert failed:', e.message); }
 }
 
 // GET list — filters: q (search), step (1|2|3|all|open), state, source, type
@@ -67,7 +120,7 @@ router.get('/:id', requirePermission('crm_funnel', 'view'), (req, res) => {
   res.json(row);
 });
 
-router.post('/', requirePermission('crm_funnel', 'create'), boqUpload.single('boq_file'), (req, res) => {
+router.post('/', requirePermission('crm_funnel', 'create'), boqFields, (req, res) => {
   const b = req.body || {};
   if (!b.client_name || !String(b.client_name).trim()) {
     return res.status(400).json({ error: 'Client name is required' });
@@ -79,7 +132,10 @@ router.post('/', requirePermission('crm_funnel', 'create'), boqUpload.single('bo
   const db = getDb();
   const leadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
   const leadType = ALLOWED_LEAD_TYPES.includes(b.lead_type) ? b.lead_type : null;
-  const boqFileLink = persistBoqFile(req) || b.boq_file_link || null;
+  // Every uploaded file is kept (below); the column holds the LATEST, which is
+  // what the list view, the quotations tab and the print paths already read.
+  const uploaded = persistBoqFiles(req);
+  const boqFileLink = uploaded[uploaded.length - 1] || b.boq_file_link || null;
   const r = db.prepare(`INSERT INTO crm_funnel
     (lead_no, client_name, company_name, mobile, email, source, address, state, district,
      remarks, category, type, lead_type, boq_file_link,
@@ -101,10 +157,11 @@ router.post('/', requirePermission('crm_funnel', 'create'), boqUpload.single('bo
     b.final_status ? (b.closed_at || new Date().toISOString()) : null,
     req.user.id,
   );
+  recordBoqHistory(db, r.lastInsertRowid, uploaded, req, b.boq_notes);
   res.status(201).json({ id: r.lastInsertRowid, lead_no: leadNo, boq_file_link: boqFileLink });
 });
 
-router.put('/:id', requirePermission('crm_funnel', 'edit'), boqUpload.single('boq_file'), (req, res) => {
+router.put('/:id', requirePermission('crm_funnel', 'edit'), boqFields, (req, res) => {
   const b = req.body || {};
   // Same source enforcement on edit so historical rows can't be saved
   // with a free-text source value.
@@ -116,6 +173,16 @@ router.put('/:id', requirePermission('crm_funnel', 'edit'), boqUpload.single('bo
   const existing = db.prepare('SELECT * FROM crm_funnel WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
+  // Lost-update guard (audit 2026-08-17): stale form → 409 instead of
+  // overwriting a colleague's in-between edit. Merge semantics below
+  // already preserve unsent fields.
+  if (b.updated_at && existing.updated_at && String(b.updated_at) !== String(existing.updated_at)) {
+    return res.status(409).json({
+      error: 'This lead was edited by someone else while you had it open. Please reload and re-apply your change.',
+      stale: true,
+    });
+  }
+
   // Stamp dates on the transition (Y/N → Y or final_status set the first time).
   const isSubmittedNow = b.quotation_submitted == '1' || b.quotation_submitted === true || b.quotation_submitted === 1;
   const becomingSubmitted = !existing.quotation_submitted && isSubmittedNow;
@@ -123,7 +190,12 @@ router.put('/:id', requirePermission('crm_funnel', 'edit'), boqUpload.single('bo
   const leadType = b.lead_type !== undefined
     ? (ALLOWED_LEAD_TYPES.includes(b.lead_type) ? b.lead_type : null)
     : existing.lead_type;
-  const boqFileLink = persistBoqFile(req) ||
+  // New uploads win over the posted/kept link, exactly as before — the only
+  // change is that ALL of them are kept, not just the last one. Clearing the
+  // column (boq_file_link='') detaches the "current" file but leaves the
+  // history intact; removing a file for good is DELETE /:id/boqs/:boqId.
+  const uploaded = persistBoqFiles(req);
+  const boqFileLink = uploaded[uploaded.length - 1] ||
     (b.boq_file_link !== undefined ? (b.boq_file_link || null) : existing.boq_file_link);
 
   db.prepare(`UPDATE crm_funnel SET
@@ -159,7 +231,141 @@ router.put('/:id', requirePermission('crm_funnel', 'edit'), boqUpload.single('bo
     becomingClosed ? (b.closed_at || new Date().toISOString()) : existing.closed_at,
     req.params.id,
   );
+  recordBoqHistory(db, +req.params.id, uploaded, req, b.boq_notes);
   res.json({ message: 'Updated', boq_file_link: boqFileLink });
+});
+
+// ===== BOQ HISTORY (mam 2026-09-07: "more upload files") ==================
+// Same shape as the Sales Funnel's /:id/boqs pair, minus the amount:
+// crm_funnel has no BOQ cost column.
+
+// GET every BOQ file attached to a lead (newest first).
+router.get('/:id/boqs', requirePermission('crm_funnel', 'view'), (req, res) => {
+  const rows = getDb().prepare(
+    `SELECT id, boq_file_link, notes, created_by, created_at
+       FROM crm_funnel_boqs WHERE crm_id=? ORDER BY created_at DESC, id DESC`
+  ).all(req.params.id);
+  res.json(rows);
+});
+
+// POST an ADDITIONAL BOQ onto an existing lead — multipart, same field names
+// as the lead form, so a re-sent BOQ can be attached without re-saving the
+// whole lead. Records history AND refreshes the lead's "latest" column.
+router.post('/:id/boq', requirePermission('crm_funnel', 'edit'), boqFields, (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const existing = db.prepare('SELECT id FROM crm_funnel WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  const uploaded = persistBoqFiles(req);
+  // A typed link is accepted too, so this route covers both ways a BOQ arrives.
+  const links = uploaded.length ? uploaded : (b.boq_file_link ? [b.boq_file_link] : []);
+  if (!links.length) return res.status(400).json({ error: 'Attach at least one BOQ file' });
+  try {
+    recordBoqHistory(db, +req.params.id, links, req, b.boq_notes);
+    db.prepare('UPDATE crm_funnel SET boq_file_link=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+      .run(links[links.length - 1], req.params.id);
+    res.json({ ok: true, added: links.length, boq_file_link: links[links.length - 1] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE one attached BOQ. If it was the lead's CURRENT file, the column is
+// repointed at the newest remaining one (or cleared) so the list view and the
+// /quotations tab never link at a file that is no longer attached.
+// 'delete', not 'edit': this permanently removes the record of a customer
+// document, and the module's other two DELETE routes are gated the same way.
+router.delete('/:id/boqs/:boqId', requirePermission('crm_funnel', 'delete'), (req, res) => {
+  const db = getDb();
+  const row = db.prepare('SELECT * FROM crm_funnel_boqs WHERE id=? AND crm_id=?')
+    .get(req.params.boqId, req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  try {
+    db.prepare('DELETE FROM crm_funnel_boqs WHERE id=?').run(req.params.boqId);
+    const lead = db.prepare('SELECT boq_file_link FROM crm_funnel WHERE id=?').get(req.params.id);
+    if (lead && lead.boq_file_link && lead.boq_file_link === row.boq_file_link) {
+      const next = db.prepare(
+        `SELECT boq_file_link FROM crm_funnel_boqs
+          WHERE crm_id=? AND COALESCE(boq_file_link,'') <> ''
+          ORDER BY created_at DESC, id DESC LIMIT 1`
+      ).get(req.params.id);
+      db.prepare('UPDATE crm_funnel SET boq_file_link=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+        .run(next ? next.boq_file_link : null, req.params.id);
+    }
+    res.json({ message: 'Deleted' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Clean up leads that came from Indent-to-Dispatch ─────────────────
+// mam (2026-09-04): "i want to delete that automation and previous data
+// which come from indent to dispatch". The automation is gone (see
+// routes/procurement.js), but the rows it already wrote are still here —
+// 100+ Extra-Item leads with no quote and no amount, crowding the funnel.
+//
+// Deliberately REVIEW-THEN-CONFIRM rather than a one-shot delete: some of
+// these leads may since have been worked by the sales team (a quotation
+// submitted, a negotiation opened, a win/loss recorded). Deleting those
+// would destroy real work, and crm_funnel has no undo. So the preview
+// separates untouched rows from worked ones, and worked rows are kept back
+// unless they are explicitly asked for.
+const INDENT_SOURCED = `(source_indent_id IS NOT NULL OR remarks LIKE '%[auto-indent:%')`;
+// "Worked" = a human moved it along one of the three funnel steps.
+const WORKED = `(
+  COALESCE(quotation_submitted,0) = 1
+  OR COALESCE(NULLIF(TRIM(negotiation_status),''), NULL) IS NOT NULL
+  OR COALESCE(NULLIF(TRIM(final_status),''), NULL) IS NOT NULL
+)`;
+
+router.get('/indent-sourced/preview', requirePermission('crm_funnel', 'view'), (req, res) => {
+  const db = getDb();
+  try {
+    const count = (w) => db.prepare(`SELECT COUNT(*) c FROM crm_funnel WHERE ${w}`).get().c;
+    const rows = db.prepare(
+      `SELECT id, lead_no, client_name, company_name, category, quotation_amount,
+              quotation_submitted, negotiation_status, final_status, source_indent_id, created_at
+         FROM crm_funnel WHERE ${INDENT_SOURCED} ORDER BY id`
+    ).all();
+    res.json({
+      total_leads: count('1=1'),
+      indent_sourced: rows.length,
+      untouched: count(`${INDENT_SOURCED} AND NOT ${WORKED}`),
+      worked: count(`${INDENT_SOURCED} AND ${WORKED}`),
+      // The worked ones listed in full — these are the judgement call.
+      worked_rows: rows.filter(r => r.quotation_submitted === 1 || r.negotiation_status || r.final_status),
+      sample: rows.slice(0, 10),
+    });
+  } catch (e) {
+    console.error('[crm-funnel] indent-sourced preview failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/indent-sourced', requirePermission('crm_funnel', 'delete'), (req, res) => {
+  const db = getDb();
+  // Explicit confirmation required — this is a bulk, irreversible delete.
+  if (String(req.query.confirm || req.body?.confirm) !== 'true') {
+    return res.status(400).json({ error: 'Add confirm=true — this permanently deletes leads and cannot be undone.' });
+  }
+  const includeWorked = String(req.query.include_worked || req.body?.include_worked) === 'true';
+  const where = includeWorked ? INDENT_SOURCED : `${INDENT_SOURCED} AND NOT ${WORKED}`;
+  try {
+    // Capture what goes, so the response is a record of it.
+    const going = db.prepare(`SELECT id, lead_no, client_name, source_indent_id FROM crm_funnel WHERE ${where}`).all();
+    const r = db.prepare(`DELETE FROM crm_funnel WHERE ${where}`).run();
+    console.log(`[crm-funnel] ${req.user?.name || 'user ' + req.user?.id} deleted ${r.changes} indent-sourced lead(s)`
+      + (includeWorked ? ' (including worked ones)' : ' (worked ones kept)'));
+    res.json({
+      deleted: r.changes,
+      included_worked: includeWorked,
+      kept_worked: includeWorked ? 0 : db.prepare(`SELECT COUNT(*) c FROM crm_funnel WHERE ${INDENT_SOURCED} AND ${WORKED}`).get().c,
+      lead_nos: going.map(g => g.lead_no),
+    });
+  } catch (e) {
+    console.error('[crm-funnel] indent-sourced delete failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.delete('/:id', requirePermission('crm_funnel', 'delete'), (req, res) => {

@@ -47,7 +47,14 @@ function summariseBody(body) {
     const safe = Array.isArray(body) ? body.slice() : { ...body };
     if (!Array.isArray(safe)) {
       for (const k of Object.keys(safe)) {
-        if (SECRET_KEYS.has(k.toLowerCase())) safe[k] = '[REDACTED]';
+        if (SECRET_KEYS.has(k.toLowerCase())) { safe[k] = '[REDACTED]'; continue; }
+        // Long free-text blobs are summarised, never stored. The audit log is
+        // for WHO did WHAT, not for keeping a second copy of the payload — and
+        // a pasted WhatsApp export or mailbox scan would otherwise write real
+        // visitors' names and phone numbers into audit_log on every click,
+        // including previews that store nothing at all (review 2026-09-07).
+        const v = safe[k];
+        if (typeof v === 'string' && v.length > 300) safe[k] = `[${v.length} characters omitted]`;
       }
     }
     const str = JSON.stringify(safe);
@@ -92,6 +99,13 @@ const dbg = (...args) => { if (AUDIT_DEBUG) console.log('[audit-debug]', ...args
 function auditMiddleware(req, res, next) {
   // Bulletproof: ANY exception inside here must NOT crash the request.
   // The audit log is an observability nice-to-have, never a critical path.
+  // Every mutating request drops the read-through cache (lib/readCache), so a
+  // read that follows a write is always fresh. Sits ABOVE every skip rule on
+  // purpose: a write is a write even when auditing is off or the path is
+  // un-audited.
+  if (req && METHOD_TO_ACTION[req.method]) {
+    try { require('../lib/readCache').invalidateAll(); } catch (_) {}
+  }
   try {
     // Opt-out flag in case audit starts causing issues in prod
     if (process.env.ERP_DISABLE_AUDIT === '1') { dbg('skip ENV flag'); return next(); }
@@ -129,6 +143,14 @@ function auditMiddleware(req, res, next) {
           (req.headers?.['user-agent'] || '').toString().slice(0, 200) || null,
         );
         dbg('insert OK rowid=', result.lastInsertRowid, req.method, pathOnly, 'user=', user.id);
+
+        // Real-time bulk-delete guard (2026-08-24 incident). Checked only on
+        // a successful DELETE — cheap on the hot path since almost every
+        // request here isn't one, and the count query itself is index-backed.
+        if ((req.method === 'DELETE') && res.statusCode >= 200 && res.statusCode < 300 && user.id) {
+          try { require('../lib/bulkDeleteAlert').checkBulkDelete(user.id, user.name); }
+          catch (e) { console.error('[audit] bulk-delete-alert check failed:', e.message); }
+        }
       } catch (e) {
         // Never let audit failures affect the real request flow
         console.error('[audit] insert failed:', e.message, 'path=', pathOnly);

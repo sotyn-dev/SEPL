@@ -187,14 +187,19 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
   .card:has(> div > div > table) {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-    padding: 0;
   }
   /* Keep the inner card padding for the head area when present (e.g. a
      filter row + table inside the same card). The table itself stays
      full-width and scrollable. */
   .card:has(> table) > *:not(table),
   .card:has(> div > table) > *:not(div):not(table) {
-    padding: 1rem;
+    padding: 0.75rem;
+  }
+
+  .table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* 2. Bump icon-only padding-1 buttons to a 32px tap target. Pages
@@ -401,3 +406,24 @@ tbody tr:hover {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .card { animation: fadeIn 0.3s ease-out; }
 .flow-fade { animation: fadeIn 0.25s ease-out; }
+
+/* Scorecard print (mam 2026-08-17: "add option for print this scoring also").
+   While body carries .print-scorecard (set by the Print button, removed on
+   afterprint), printing shows ONLY #scorecard-print-area — sidebar, tabs,
+   pickers and every other page element stay off the sheet. */
+@media print {
+  body.print-scorecard * { visibility: hidden; }
+  body.print-scorecard #scorecard-print-area,
+  body.print-scorecard #scorecard-print-area * { visibility: visible; }
+  body.print-scorecard #scorecard-print-area {
+    position: absolute; left: 0; top: 0; width: 100%; padding: 0 8px;
+  }
+  body.print-scorecard #scorecard-print-area .card {
+    box-shadow: none; border: 1px solid #d1d5db; animation: none;
+    break-inside: avoid;
+  }
+  /* Inputs inside the MIS table print as plain values, not boxes */
+  body.print-scorecard #scorecard-print-area input {
+    border: none; background: transparent; padding: 0; text-align: center;
+  }
+}

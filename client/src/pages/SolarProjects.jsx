@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { FiSun, FiX, FiAlertTriangle, FiCheckCircle, FiTrash2, FiTool, FiPlus, FiFileText, FiCalendar } from 'react-icons/fi';
 import api from '../api';
 import { num as fmt, inr } from '../lib/solar/format';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 const COMPONENT_CATEGORIES = ['panel', 'inverter', 'battery', 'structure', 'monitoring', 'other'];
 const DISCOM_STAGES = [
@@ -17,7 +18,7 @@ export default function SolarProjects() {
   const [stages, setStages] = useState([]);
   const [projects, setProjects] = useState([]);
   const [analytics, setAnalytics] = useState(null);
-  const [tab, setTab] = useState('pipeline');
+  const [tab, setTab] = useUrlTab(['pipeline', 'cash'], 'pipeline');
   const [modal, setModal] = useState(null);
 
   const load = () => {

@@ -191,7 +191,10 @@ export default function IndentPrint() {
                     </div>
                   )}
                 </td>
-                <td>{it.make || '—'}</td>
+                <td>
+                  {it.make || '—'}
+                  {it.remarks && <div style={{ fontSize: 9, color: '#b45309', marginTop: 2 }}>✎ {it.remarks}</div>}
+                </td>
                 <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{it.quantity}</td>
                 <td>{it.unit}</td>
                 <td>{it.item_type || '—'}</td>
