@@ -1,3 +1,4 @@
+import EmployeePtRules from '../components/EmployeePtRules';
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
@@ -874,6 +875,7 @@ export default function Payroll() {
             </div>
           ))}
 
+          <EmployeePtRules />
           {savedSettings?.updated_at && (
             <p className="text-[11px] text-gray-400 pt-2">Last updated: {savedSettings.updated_at}</p>
           )}

@@ -1,9 +1,7 @@
-import EmployeeDetailsFields from '../components/EmployeeDetailsFields';
-import { probationEndDate } from '../utils/probation';
+import EmployeeMaster from '../components/employee/EmployeeMaster';
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
-import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -16,26 +14,12 @@ export default function Employees() {
   // Salary is confidential — only admins and holders of employee_salary.can_view see it
   const canSeeSalary = isAdmin() || canView('employee_salary');
   const [employees, setEmployees] = useState([]);
+  const [employeesLoading, setEmployeesLoading] = useState(true);
+  const [employeesError, setEmployeesError] = useState('');
   const [users, setUsers] = useState([]);
   const [modal, setModal] = useState(false);
   const [bulkModal, setBulkModal] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({});
-  // IFSC → bank + branch (mam 2026-09-04). Fires once the code is a complete
-  // 11-character IFSC. The functional setForm means a slow reply for a code the
-  // user has since changed is ignored, rather than overwriting the newer one.
-  const [ifscLookup, setIfscLookup] = useState({ status: 'idle' });
-  const lookupIfsc = async (code) => {
-    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(code)) { setIfscLookup({ status: 'idle' }); return; }
-    setIfscLookup({ status: 'loading' });
-    try {
-      const r = (await api.get(`/hr/ifsc/${code}`)).data;
-      setForm(f => f.bank_ifsc === code ? { ...f, bank_name: r.bank || f.bank_name, bank_branch: r.branch || f.bank_branch } : f);
-      setIfscLookup({ status: 'ok', bank: r.bank, branch: r.branch });
-    } catch (e) {
-      setIfscLookup({ status: 'error', message: e.response?.data?.error || 'Lookup failed — type the bank and branch by hand' });
-    }
-  };
   const [search, setSearch] = useState('');
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
@@ -44,7 +28,7 @@ export default function Employees() {
   const fileRef = useRef(null);
 
   const load = () => {
-    api.get('/hr/employees').then(r => setEmployees(r.data));
+    api.get('/hr/employees').then(r => { setEmployees(r.data); setEmployeesError(''); }).catch(() => setEmployeesError('Employee records could not be loaded. Please retry.')).finally(() => setEmployeesLoading(false));
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => { });
     api.get('/hr/roster-audit').then(r => setRosterAudit(r.data || { backlog: [], guests: [] })).catch(() => { });
   };
@@ -115,74 +99,6 @@ export default function Employees() {
       toast.success(`Linked ${res.data.linked} employee${res.data.linked === 1 ? '' : 's'} by email`);
       load();
     } catch { toast.error('Auto-link failed'); }
-  };
-
-  const [uploading, setUploading] = useState(false);
-
-  // Generic file uploader — same pattern as HR.jsx / Inventory.jsx. Posts to
-  // /upload, returns the served URL we can stash on the form.
-  const uploadFile = async (file) => {
-    if (!file) return null;
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      return r.data?.url || null;
-    } catch {
-      toast.error('Upload failed');
-      return null;
-    } finally { setUploading(false); }
-  };
-
-  const save = async (e) => {
-    e.preventDefault();
-    // Upload any newly-attached document files first, then save the URLs
-    // alongside the rest of the employee fields. Existing URLs (when
-    // editing) stay untouched if no new file is picked.
-    const payload = { ...form };
-    for (const key of ['form11_file', 'form_f_file']) {
-      delete payload[`_${key}`];
-      const file = form[`_${key}`];
-      if (!file) continue;
-      if (file.size > 10 * 1024 * 1024) return toast.error('Document must be 10 MB or smaller');
-      if (!/\.(pdf|jpe?g|png)$/i.test(file.name)) return toast.error('Upload a PDF, JPG or PNG document');
-      const url = await uploadFile(file);
-      if (!url) return;
-      payload[key] = url;
-    }
-    if (payload.same_as_permanent) {
-      payload.current_address = payload.permanent_address || null;
-      payload.current_pin = payload.permanent_pin || null;
-    }
-    delete payload._aadhar_file;
-    delete payload._pan_file;
-    delete payload._qualification_file;
-    if (form._aadhar_file) {
-      const url = await uploadFile(form._aadhar_file); if (!url) return;
-      payload.aadhar_file = url;
-    }
-    if (form._pan_file) {
-      const url = await uploadFile(form._pan_file); if (!url) return;
-      payload.pan_file = url;
-    }
-    if (form._qualification_file) {
-      const url = await uploadFile(form._qualification_file); if (!url) return;
-      payload.qualification_file = url;
-    }
-    // Required-on-create — backend will also reject, but checking here lets
-    // mam see the error before the upload spinner spins.
-    if (!editing) {
-      if (!payload.aadhar_file) return toast.error('Upload Aadhar card');
-      if (!payload.pan_file) return toast.error('Upload PAN card');
-      if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
-    }
-    try {
-      if (editing) { await api.put(`/hr/employees/${editing.id}`, payload); }
-      else { await api.post('/hr/employees', payload); }
-      toast.success(editing ? 'Updated' : 'Created');
-      setModal(false); load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   // Export CSV — never include salary for non-HR/non-admin users
@@ -298,7 +214,7 @@ export default function Employees() {
               <FiLink size={15} /> Self-Fill Link
             </button>
           )}
-          <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', salary: 0, user_id: null, roster: 'general' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
+          <button disabled={employeesLoading || !!employeesError} onClick={() => { setEditing(null); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Employee</button>
         </div>
       </div>
 
@@ -354,7 +270,7 @@ export default function Employees() {
                   {canSeeSalary && <td className="font-medium">Rs {(e.salary || 0).toLocaleString('en-IN')}</td>}
                   <td><StatusBadge status={e.status} /></td>
                   <td><div className="flex gap-1">
-                    <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
+                    <button onClick={() => { setEditing(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
                     {canEdit('employees') && (
                       <button onClick={() => shareFillLink(e)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600"
                         title={`Share a self-fill link with ${e.name} — they update their own details, no login`}>
@@ -418,7 +334,7 @@ export default function Employees() {
                     : <span className="text-[11px] font-semibold text-red-600">Not linked — DPR Staff Cost won't include this employee</span>}
                 </div>
                 <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-                  <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                  <button onClick={() => { setEditing(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
                     <FiEdit2 size={11} /> Edit
                   </button>
                   {canEdit('employees') && (
@@ -496,232 +412,9 @@ export default function Employees() {
       )}
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={modal} onClose={() => { setModal(false); setIfscLookup({ status: 'idle' }); }} title={editing ? 'Edit Employee' : 'Add Employee'}>
-        <form onSubmit={save} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div><label className="label">Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({ ...form, name: e.target.value })} required /></div>
-            <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
-            <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
-            <div><label className="label">Designation</label><input className="input" list="empDesigDL" value={form.designation || ''} onChange={e => setForm({ ...form, designation: e.target.value })} placeholder="Pick or type" /><datalist id="empDesigDL">{[...new Set(employees.map(e => e.designation).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
-            <div><label className="label">Department</label><input className="input" list="empDeptDL" value={form.department || ''} onChange={e => setForm({ ...form, department: e.target.value })} placeholder="Pick or type" /><datalist id="empDeptDL">{[...new Set(employees.map(e => e.department).filter(Boolean))].map(d => <option key={d} value={d} />)}</datalist></div>
-            <div><label className="label">Join Date</label><input className="input" type="date" value={form.join_date || ''} onChange={e => setForm({ ...form, join_date: e.target.value })} /></div>
-            <div>
-              <label className="label">Reports To (Manager)</label>
-              <SearchableSelect options={employees.filter(employee => String(employee.id) !== String(editing?.id))}
-                value={form.reports_to || null} valueKey="id" displayKey="name" placeholder="Select manager"
-                onChange={manager => setForm({ ...form, reports_to: manager?.id ?? null })} />
-            </div>
-            {[
-              ['employment_type', 'Employment Type', [['permanent', 'Permanent'], ['contract', 'Contract'], ['intern', 'Intern']]],
-              ['employment_status', 'Employment Status', [['probation', 'Probation'], ['confirmed', 'Confirmed']]],
-              ['notice_period_days', 'Notice Period Days', [[30, '30'], [60, '60'], [90, '90']]],
-            ].map(([field, label, options]) => (
-              <div key={field}>
-                <label className="label" htmlFor={`employee-${field}`}>{label}</label>
-                <select id={`employee-${field}`} className="select" value={form[field] ?? ''}
-                  onChange={event => setForm({ ...form, [field]: event.target.value === '' ? null : field === 'notice_period_days' ? Number(event.target.value) : event.target.value })}>
-                  <option value="">Select {label.toLowerCase()}</option>
-                  {options.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
-                </select>
-              </div>
-            ))}
-            <div>
-              <label className="label" htmlFor="probation-end">Probation End Date</label>
-              <div className="flex gap-2 mb-2">
-                {[3, 6].map(months => <button key={months} type="button" disabled={!form.join_date}
-                  aria-pressed={!!form.probation_end_date && form.probation_end_date === probationEndDate(form.join_date, months)}
-                  onClick={() => setForm({ ...form, probation_end_date: probationEndDate(form.join_date, months) })}
-                  className={`rounded-lg border px-4 py-2 text-sm font-semibold disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-blue-500 ${months === 3 ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700'}`}>
-                  {months} M{form.probation_end_date && form.probation_end_date === probationEndDate(form.join_date, months) ? ' ✓' : ''}
-                </button>)}
-              </div>
-              <input id="probation-end" type="date" className="input" min={form.join_date || undefined} value={form.probation_end_date || ''}
-                onChange={event => setForm({ ...form, probation_end_date: event.target.value || null })} />
-              <p className="text-xs text-gray-500 mt-1">Calculated from join date. You can adjust the date.</p>
-            </div>
-            <div>
-              <label className="label" htmlFor="employee-uan">UAN Number</label>
-              <input id="employee-uan" className="input" inputMode="numeric" pattern="[0-9]{12}" maxLength={12} placeholder="12-digit UAN"
-                value={form.uan_number || ''} onChange={event => setForm({ ...form, uan_number: event.target.value.replace(/\D/g, ''), uan_verified: 0 })} />
-              <label className="flex items-center gap-2 text-sm mt-2">
-                <input type="checkbox" checked={!!form.uan_verified} disabled={!/^\d{12}$/.test(form.uan_number || '')}
-                  onChange={event => setForm({ ...form, uan_verified: event.target.checked ? 1 : 0 })} /> Verified by HR
-              </label>
-              <p className="text-xs text-gray-500 mt-1">Mark only after checking supporting records. No automatic EPFO verification.</p>
-            </div>
-            {canSeeSalary && <div><label className="label">Salary (Rs)</label><input className="input" type="number" value={form.salary || 0} onChange={e => setForm({ ...form, salary: +e.target.value })} /></div>}
-            {editing && <div><label className="label">Account Status</label><select className="select" value={form.status || ''} onChange={e => setForm({ ...form, status: e.target.value })}>{['active', 'training', 'inactive', 'terminated'].map(s => <option key={s} value={s}>{s}</option>)}</select></div>}
-            <div>
-              <label className="label">Roster / Shift</label>
-              <select className="select" value={form.roster || 'general'} onChange={e => setForm({ ...form, roster: e.target.value })}>
-                <option value="general">General — 9:30 AM to 6:30 PM</option>
-                <option value="early">Early — 9:00 AM to 6:00 PM</option>
-              </select>
-            </div>
-            {/* Personal details (mam 2026-09-04). Guardian is title + relation
-                + name, because "Sh. Ram Kumar (Father)" is how it has to read
-                on statutory paperwork. */}
-            <div>
-              <label className="label">Date of Birth</label>
-              <input className="input" type="date" value={form.date_of_birth || ''}
-                max={new Date(Date.now() - 18 * 365.25 * 86400000).toISOString().slice(0, 10)}
-                onChange={e => setForm({ ...form, date_of_birth: e.target.value })} />
-              <p className="text-[10px] text-gray-500 mt-0.5">Must be 18 or over.</p>
-            </div>
-            <div>
-              <label className="label">Gender</label>
-              <select className="select" value={form.gender || ''} onChange={e => setForm({ ...form, gender: e.target.value })}>
-                <option value="">— Select —</option>
-                {['Male', 'Female', 'Other'].map(g => <option key={g} value={g}>{g}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Emergency Contact Number</label>
-              <input className="input" value={form.emergency_contact_phone || ''} placeholder="10-digit mobile"
-                onChange={e => setForm({ ...form, emergency_contact_phone: e.target.value })} />
-            </div>
-            <div className="col-span-2">
-              <label className="label">Father / Spouse / Mother Name</label>
-              <div className="flex gap-2">
-                <select className="select w-24" value={form.guardian_title || ''} onChange={e => setForm({ ...form, guardian_title: e.target.value })}>
-                  <option value="">Title</option>
-                  {['Mr.', 'Mrs.', 'Sh.', 'Smt.'].map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-                <select className="select w-32" value={form.guardian_relation || ''} onChange={e => setForm({ ...form, guardian_relation: e.target.value })}>
-                  <option value="">Relation</option>
-                  {['Father', 'Spouse', 'Mother'].map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-                <input className="input flex-1" value={form.guardian_name || ''} placeholder="Full name as per ID"
-                  onChange={e => setForm({ ...form, guardian_name: e.target.value })} />
-              </div>
-            </div>
-            <div>
-              <label className="label">Emergency Contact Name</label>
-              <input className="input" value={form.emergency_contact_name || ''} placeholder="Who to call"
-                onChange={e => setForm({ ...form, emergency_contact_name: e.target.value })} />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="label flex items-center gap-1"><FiLink size={12} /> Linked Login User <span className="text-gray-400 font-normal">(required for DPR Staff Cost auto-calc)</span></label>
-              <SearchableSelect
-                options={users.map(u => ({ ...u, label: `${u.name} (${u.username || u.email})` }))}
-                value={form.user_id || null}
-                valueKey="id"
-                displayKey="label"
-                placeholder="Search by name, username or email…"
-                onChange={(u) => setForm({ ...form, user_id: u?.id || null })}
-              />
-              <p className="text-[10px] text-gray-500 mt-0.5">If left blank and email matches a user, it will auto-link on save.</p>
-            </div>
-          </div>
-
-          {/* Mandatory KYC docs for new employees. When editing, the inputs
-              show "Existing: view file" if a doc URL is already on file —
-              uploading a new one replaces it. Three docs: Aadhar, PAN,
-              Highest qualification certificate. */}
-          <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400 space-y-3">
-            <div className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Mandatory documents{editing ? '' : ' *'}</div>
-            {/* Each document can carry its NUMBER directly above the upload
-                (mam 2026-09-04) — the number is what reports and validation
-                need; the scan is only the proof behind it.
-                Aadhaar is LAST 4 DIGITS ONLY, deliberately: payroll runs off
-                UAN / PF number, so holding the full number is risk without
-                use. The card image on file covers the rare exception. */}
-            {[
-              {
-                key: 'aadhar_file', slot: '_aadhar_file', label: 'Aadhar Card *',
-                num: {
-                  k: 'aadhaar_last4', label: 'Aadhaar Number — last 4 digits only', ph: 'e.g. 4355', max: 4,
-                  hint: 'Only the last 4 digits are stored. The full number is never saved in the ERP.'
-                }
-              },
-              {
-                key: 'pan_file', slot: '_pan_file', label: 'PAN Card *',
-                num: {
-                  k: 'pan_number', label: 'PAN Number', ph: 'ABCDE1234F', max: 10,
-                  hint: '5 letters, 4 digits, 1 letter.', upper: true
-                }
-              },
-              { key: 'qualification_file', slot: '_qualification_file', label: 'Highest Qualification Certificate *' },
-            ].map(({ key, slot, label, num }) => (
-              <div key={key}>
-                {num && (
-                  <div className="mb-2">
-                    <label className="label">{num.label}</label>
-                    <input
-                      className="input" value={form[num.k] || ''} placeholder={num.ph} maxLength={num.max}
-                      onChange={e => setForm({ ...form, [num.k]: num.upper ? e.target.value.toUpperCase() : e.target.value })} />
-                    <p className="text-[10px] text-gray-500 mt-0.5">{num.hint}</p>
-                  </div>
-                )}
-                <label className="label">{label} <span className="text-gray-400 font-normal text-[10px]">(PDF / JPG / PNG, max 10 MB)</span></label>
-                <input
-                  className="input"
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  required={!editing && !form[key]}
-                  onChange={e => setForm({ ...form, [slot]: e.target.files?.[0] || null })}
-                />
-                {/* Existing URL link when editing */}
-                {editing && form[key] && !form[slot] && (
-                  <p className="text-[10px] text-emerald-600 mt-0.5">
-                    Existing: <a href={form[key]} target="_blank" rel="noreferrer" className="underline">view file</a> · upload to replace
-                  </p>
-                )}
-                {form[slot] && <p className="text-[10px] text-blue-600 mt-0.5">Selected: {form[slot].name}</p>}
-              </div>
-            ))}
-          </div>
-
-          <EmployeeDetailsFields form={form} setForm={setForm} canSeeSalary={canSeeSalary} />
-
-          {/* Salary bank account (mam 2026-09-04). The columns bank_account_no
-              and bank_ifsc have existed since 17 Aug but had no field anywhere
-              in the ERP — this is the first time they can actually be filled. */}
-          <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-400 space-y-3">
-            <div className="text-xs font-semibold text-blue-800 uppercase tracking-wide">Salary bank account</div>
-            <div className="grid grid-cols-2 gap-4">
-              {/* IFSC goes first because it drives the two fields after it. */}
-              <div>
-                <label className="label">IFSC Code</label>
-                <input className="input" value={form.bank_ifsc || ''} placeholder="PUNB0020510" maxLength={11}
-                  onChange={e => {
-                    const v = e.target.value.toUpperCase().replace(/\s/g, '');
-                    setForm({ ...form, bank_ifsc: v });
-                    lookupIfsc(v);
-                  }} />
-                <p className={`text-[10px] mt-0.5 ${ifscLookup.status === 'ok' ? 'text-emerald-600' : ifscLookup.status === 'error' ? 'text-amber-700' : 'text-gray-500'}`}>
-                  {ifscLookup.status === 'loading' ? 'Looking up bank & branch…'
-                    : ifscLookup.status === 'ok' ? `✓ ${ifscLookup.bank} — ${ifscLookup.branch}`
-                      : ifscLookup.status === 'error' ? ifscLookup.message
-                        : 'Bank name and branch fill in automatically from the IFSC.'}
-                </p>
-              </div>
-              <div>
-                <label className="label">Bank Name</label>
-                <input className="input" value={form.bank_name || ''} placeholder="Fills from IFSC"
-                  onChange={e => setForm({ ...form, bank_name: e.target.value })} />
-              </div>
-              <div>
-                <label className="label">Bank Branch</label>
-                <input className="input" value={form.bank_branch || ''} placeholder="Fills from IFSC"
-                  onChange={e => setForm({ ...form, bank_branch: e.target.value })} />
-              </div>
-              <div>
-                <label className="label">Bank Account Number</label>
-                <input className="input" value={form.bank_account_no || ''} placeholder="Account number as printed on the passbook / cheque"
-                  onChange={e => setForm({ ...form, bank_account_no: e.target.value.replace(/\s/g, '') })} />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" disabled={uploading} className="btn btn-primary">
-              {uploading ? 'Uploading…' : (editing ? 'Update' : 'Create')}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      {employeesLoading && <p role="status" className="text-sm text-slate-500">Loading employee records…</p>}
+      {employeesError && <p role="alert" className="text-sm text-red-700">{employeesError} <button className="underline" onClick={() => { setEmployeesLoading(true); setEmployeesError(''); load(); }}>Retry</button></p>}
+      {modal && <EmployeeMaster employee={editing} employees={employees} users={users} onClose={() => setModal(false)} onSaved={load} />}
 
       {/* Bulk Import Modal */}
       <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Import Employees" wide>

@@ -3420,6 +3420,13 @@ function initializeDatabase() {
     ['employees', 'blood_group TEXT'],
     ['employees', 'tds_estimated_annual REAL'],
     ['employees', 'last_increment_date TEXT'],
+    ['employees', 'grade_band TEXT'],
+    ['employees', 'special_allowance REAL'],
+    ['employees', 'reimbursement_lta_annual REAL'],
+    ['employees', 'reimbursement_medical_annual REAL'],
+    ['employees', 'reimbursement_phone_annual REAL'],
+    ['employees', 'bonus_target_pct REAL'],
+    ['employees', 'salary_review_cycle TEXT'],
     ['employees', 'ctc_annual REAL'],
     ['employees', 'variable_bonus REAL'],
     ['employees', 'basic_salary REAL'],
@@ -3456,6 +3463,7 @@ function initializeDatabase() {
     // (stored as bcrypt hash) which they can later use along with their
     // username to reset their password from the login page. No SMTP needed.
     ['users', 'recovery_code_hash TEXT'],
+    ['users', 'must_change_password INTEGER NOT NULL DEFAULT 0'],
     // Delegations — due-date extension request (assignee asks admin for more time)
     ['delegations', 'requested_due_date DATE'],
     ['delegations', 'extension_reason TEXT'],
@@ -7479,6 +7487,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   } catch (e) { console.error('[schema] installation unit sync failed:', e.message); }
 
+  require('../lib/employeeProfessionalTax').initialize(db);
   require('./userTotp').initialize(db);
   require('../lib/dispatchReceiving').initialize(db);
 
