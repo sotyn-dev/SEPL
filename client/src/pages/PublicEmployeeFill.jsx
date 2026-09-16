@@ -12,6 +12,10 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
+import employeeSchema from '../../../shared/employeeMaster.json';
+const PERSONAL_KEYS = ['date_of_birth', 'gender', 'blood_group', 'emergency_contact_name', 'emergency_contact_phone', 'guardian_title', 'guardian_relation', 'guardian_name'];
+const personalFields = employeeSchema.fields.filter(f => PERSONAL_KEYS.includes(f.key));
+const emptyPersonal = Object.fromEntries(PERSONAL_KEYS.map(key => [key, '']));
 
 const COMPANY = { name: 'Secured Engineers Pvt. Ltd.' };
 
@@ -26,7 +30,7 @@ export default function PublicEmployeeFill() {
   const [mode, setMode] = useState(null);          // 'create' | 'update'
   const [prefill, setPrefill] = useState(null);    // tied-link employee snapshot
   const [err, setErr] = useState(null);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', designation: '', department: '', join_date: '', permanent_address: '', permanent_pin: '', current_address: '', current_pin: '', same_as_permanent: false, aadhaar_last4: '', pan_number: '', bank_ifsc: '', bank_name: '', bank_branch: '', bank_account_no: '' });
+  const [form, setForm] = useState({ ...emptyPersonal, name: '', phone: '', email: '', designation: '', department: '', join_date: '', permanent_address: '', permanent_pin: '', current_address: '', current_pin: '', same_as_permanent: false, aadhaar_last4: '', pan_number: '', bank_ifsc: '', bank_name: '', bank_branch: '', bank_account_no: '' });
   const [files, setFiles] = useState({});          // key -> File
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -40,6 +44,7 @@ export default function PublicEmployeeFill() {
         const e = r.data.employee;
         setPrefill(e || null);
         if (e) setForm({
+          ...Object.fromEntries(PERSONAL_KEYS.map(key => [key, e[key] || ''])),
           name: e.name || '', phone: e.phone || '', email: e.email || '',
           designation: e.designation || '', department: e.department || '', join_date: e.join_date || '',
           permanent_address: e.permanent_address || '', permanent_pin: e.permanent_pin || '',
@@ -185,6 +190,19 @@ export default function PublicEmployeeFill() {
                 value={form.join_date} onChange={set('join_date')} type="date" />
             </label>
           </div>
+
+          <fieldset className="border-t border-gray-100 pt-4 space-y-3">
+            <legend className="text-sm font-bold text-gray-800 pt-4">Personal and emergency details</legend>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {personalFields.map(field => <label className="block" key={field.key}>
+                <span className="text-xs font-semibold text-gray-700">{field.label}</span>
+                {field.options ? <select className="input mt-1" value={form[field.key]} onChange={set(field.key)}>
+                  <option value="">Select…</option>
+                  {field.options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select> : <input className="input mt-1" type={field.type} value={form[field.key]} onChange={set(field.key)} maxLength={field.type === 'tel' ? 10 : 200} pattern={field.type === 'tel' ? '[0-9]{10}' : undefined} title={field.type === 'tel' ? 'Enter a 10-digit mobile number' : undefined} />}
+              </label>)}
+            </div>
+          </fieldset>
 
           <fieldset className="border-t border-gray-100 pt-4 space-y-3">
             <legend className="text-sm font-bold text-gray-800 pt-4">Address</legend>

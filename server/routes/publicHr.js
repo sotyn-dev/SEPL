@@ -23,6 +23,7 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const router = express.Router();
+const personalFields = require('../../shared/employeeMaster.json').fields.filter(f => ['date_of_birth', 'gender', 'blood_group', 'emergency_contact_name', 'emergency_contact_phone', 'guardian_title', 'guardian_relation', 'guardian_name'].includes(f.key));
 
 // ── GET /api/public/offer/:token ─────────────────────────────────
 // Returns just enough for the public offer page to render the
@@ -199,11 +200,12 @@ router.get('/employee-fill/:token', (req, res) => {
   let employee = null;
   if (link.employee_id) {
     const e = db.prepare(`SELECT name, phone, email, designation, department, join_date,
-                                 aadhar_file, pan_file, qualification_file, permanent_address, permanent_pin, current_address, current_pin, same_as_permanent, aadhaar_last4, pan_number, bank_account_no
+                                 date_of_birth, gender, blood_group, emergency_contact_name, emergency_contact_phone, guardian_title, guardian_relation, guardian_name, aadhar_file, pan_file, qualification_file, permanent_address, permanent_pin, current_address, current_pin, same_as_permanent, aadhaar_last4, pan_number, bank_account_no
                             FROM employees WHERE id=?`).get(link.employee_id);
     if (!e) return res.status(404).json({ error: 'This link is no longer valid' });
     // Prefill basics; docs only as has-flags (never leak stored file URLs publicly)
     employee = {
+      ...Object.fromEntries(personalFields.map(f => [f.key, e[f.key]])),
       name: e.name, phone: e.phone, email: e.email,
       designation: e.designation, department: e.department, join_date: e.join_date,
       permanent_address: e.permanent_address, permanent_pin: e.permanent_pin, current_address: e.current_address, current_pin: e.current_pin, same_as_permanent: e.same_as_permanent,
@@ -260,6 +262,21 @@ router.post('/employee-fill/:token', (req, res) => {
     if (!value) continue;
     if (formats[key] && !formats[key][0].test(value)) return res.status(400).json({error:formats[key][1]});
     address[key] = value;
+  }
+  for (const field of personalFields) {
+    const raw = b[field.key];
+    if (raw == null || raw === '') continue;
+    if (typeof raw !== 'string' || raw.length > 200) return res.status(400).json({error: `Enter a valid ${field.label}`});
+    const value = raw.trim();
+    if (!value) continue;
+    if (field.options && !field.options.some(([option]) => option === value)) return res.status(400).json({error: `Select a valid ${field.label}`});
+    if (field.key === 'emergency_contact_phone' && !/^[0-9]{10}$/.test(value)) return res.status(400).json({error:'Emergency contact phone must contain 10 digits'});
+    if (field.key === 'date_of_birth') {
+      const date = new Date(value + 'T00:00:00Z');
+      const today = require('../lib/istDate').istToday();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0,10) !== value || value > today) return res.status(400).json({error:'Enter a valid date of birth'});
+    }
+    address[field.key] = value;
   }
   let employeeId = link.employee_id;
   try {
