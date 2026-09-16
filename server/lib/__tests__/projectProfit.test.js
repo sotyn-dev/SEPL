@@ -18,7 +18,7 @@ function fixture(){
  CREATE TABLE payment_requests(id INTEGER PRIMARY KEY,site_id INTEGER,request_no TEXT,status TEXT,category TEXT,amount REAL,created_at TEXT);
  CREATE TABLE dpr(id INTEGER PRIMARY KEY,site_id INTEGER,approval_status TEXT,submission_time TEXT,is_planned_template INTEGER,grand_total_a REAL,grand_total_b REAL,report_date TEXT);
  CREATE TABLE project_profit_adjustments(id INTEGER PRIMARY KEY,project_id INTEGER,basis TEXT,kind TEXT,category TEXT,entry_date TEXT,amount REAL,reason TEXT,created_by INTEGER,voided_by INTEGER,voided_at TEXT,void_reason TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
- INSERT INTO business_book VALUES(1,'BB1','Same project','Client','A','execution',1000,100),(2,'BB2','Same project','Client','A','execution',2000,0);
+ INSERT INTO business_book VALUES(1,'BB1','Same project','Client','A','execution',1000,100),(2,'BB2','Different project','Client','A','execution',2000,0);
  INSERT INTO purchase_orders VALUES(1,1);INSERT INTO sites VALUES(1,1,1,'Site one'),(2,1,1,'Site two');
  INSERT INTO sales_bills VALUES(1,1,1,'DEL1','approved',2,500,'2026-09-01'),(2,1,1,'INST1','approved',3,100,'2026-09-02'),(3,1,1,'FINAL','approved',4,900,'2026-09-02'),(4,1,1,'ORDER','approved',1,900,'2026-09-02'),(5,1,1,'DRAFT','draft',2,700,'2026-09-02'),(6,NULL,NULL,'UNLINKED','approved',2,50,NULL);
  INSERT INTO order_planning VALUES(1,1,1);INSERT INTO indents VALUES(1,1);INSERT INTO vendor_pos VALUES(1,1);INSERT INTO purchase_bills VALUES(1,1,'PB1',200,'2026-09-01');
@@ -62,3 +62,10 @@ test('API enforces view/create/delete permissions and retains void history',asyn
  }finally{await new Promise(r=>server.close(r));db.close();}
 });
 
+
+test('same project names combine across orders with summed amounts and weighted margin',()=>{
+ const db=fixture();try{
+  db.exec("UPDATE business_book SET project_name=' SAME   PROJECT ' WHERE id=2; INSERT INTO sales_bills VALUES(7,2,NULL,'DEL2','approved',2,400,'2026-09-01'); INSERT INTO project_profit_adjustments(id,project_id,basis,kind,category,entry_date,amount,reason) VALUES(4,2,'sales','cost','Overhead','2026-09-01',50,'Second order cost')");
+  const r=report(db);assert.equal(r.rows.length,1);const p=r.rows[0];assert.equal(p.order_count,2);assert.equal(p.contract_value,2900);assert.equal(p.revenue,1000);assert.equal(p.cost,400);assert.equal(p.profit,600);assert.equal(p.margin,60);assert.equal(p.manual_count,2);assert.equal(p.orders.length,2);assert.ok(p.ledger.some(e=>e.order_reference==='BB2'));assert.equal(report(db,{from:'2026-09-02',to:'2026-09-02'}).rows[0].revenue,100);
+ }finally{db.close();}
+});

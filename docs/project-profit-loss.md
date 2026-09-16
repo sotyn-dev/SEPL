@@ -1,6 +1,6 @@
 # Project profit and loss
 
-Finance > Project Profit & Loss (`/project-profit`). A provisional management report, not a statutory financial statement. One Business Book order is one project row; no project-name or client-name fuzzy grouping.
+Finance > Project Profit & Loss (`/project-profit`). A provisional management report, not a statutory financial statement. Matching project names are consolidated across Business Book orders (Unicode normalization, case-insensitive, trimmed/collapsed whitespace). Company name is used only when project name is blank. No fuzzy matching. Amounts sum across orders; margin is recalculated from combined revenue and cost. Review retains each original order, and manual entries must be assigned to an included order.
 
 ## Calculation basis
 

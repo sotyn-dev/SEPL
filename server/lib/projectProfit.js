@@ -50,14 +50,34 @@ function report(db, {basis='sales', from='', to=''} = {}) {
   const unlinked = entries.filter(e=>!known.has(e.project_id));
   const undated = entries.filter(e=>!validDate(e.entry_date));
   const filtered = entries.filter(e=>(!from && !to) || (validDate(e.entry_date) && (!from || e.entry_date>=from) && (!to || e.entry_date<=to)));
-  const rows = projects.map(p=>{
+  const orderRows = projects.map(p=>{
     const ledger=filtered.filter(e=>e.project_id===p.id);
     const sum=(kind,manual)=>round(ledger.filter(e=>e.kind===kind && e.manual===manual).reduce((n,e)=>n+e.amount,0));
     const auto_revenue=sum('revenue',false),auto_cost=sum('cost',false),manual_revenue=sum('revenue',true),manual_cost=sum('cost',true);
     const revenue=round(auto_revenue+manual_revenue),cost=round(auto_cost+manual_cost),profit=round(revenue-cost);
-    return {...p,name:p.project_name || p.company_name || `Project ${p.id}`,auto_revenue,auto_cost,manual_revenue,manual_cost,revenue,cost,profit,
+    return {...p,name:(p.project_name || '').trim() || (p.company_name || '').trim() || `Project ${p.id}`,auto_revenue,auto_cost,manual_revenue,manual_cost,revenue,cost,profit,
       margin:revenue>0?round(profit/revenue*100):null,auto_count:ledger.filter(e=>!e.manual).length,manual_count:ledger.filter(e=>e.manual).length,
       has_activity:ledger.length>0,ledger,adjustments:adjustments.filter(a=>a.project_id===p.id)};
+  });
+  const groups = new Map();
+  for (const order of orderRows) {
+    const display = (order.project_name || '').trim() || (order.company_name || '').trim() || `Project ${order.id}`;
+    const key = display.normalize('NFKC').replace(/\s+/g,' ').toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(order);
+  }
+  const rows = [...groups.values()].map(orders => {
+    orders.sort((a,b)=>a.id-b.id);
+    const first=orders[0], total=key=>round(orders.reduce((n,o)=>n+o[key],0));
+    const revenue=total('revenue'),cost=total('cost'),profit=round(revenue-cost);
+    return {...first,name:first.name.trim().replace(/\s+/g,' '),orders:orders.map(({ledger,adjustments,...order})=>order),
+      order_count:orders.length,lead_no:orders.map(o=>o.lead_no || `Order #${o.id}`).join(', '),
+      client_name:[...new Set(orders.map(o=>o.client_name).filter(Boolean))].join(', '),
+      contract_value:total('contract_value'),auto_revenue:total('auto_revenue'),auto_cost:total('auto_cost'),
+      manual_revenue:total('manual_revenue'),manual_cost:total('manual_cost'),revenue,cost,profit,
+      margin:revenue>0?round(profit/revenue*100):null,auto_count:total('auto_count'),manual_count:total('manual_count'),
+      has_activity:orders.some(o=>o.has_activity),ledger:orders.flatMap(o=>o.ledger.map(e=>({...e,order_reference:o.lead_no || `Order #${o.id}`}))),
+      adjustments:orders.flatMap(o=>o.adjustments.map(a=>({...a,order_reference:o.lead_no || `Order #${o.id}`}))).sort((a,b)=>b.id-a.id)};
   });
   return {basis,from,to,rows,warnings:{unlinked_count:unlinked.length,undated_count:undated.length},unlinked};
 }
