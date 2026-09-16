@@ -14,6 +14,7 @@ import { useModuleFlags } from '../../context/ModuleFlagsContext';
 // revoke access.  Grouped by sidebar section for readability; keys
 // (used by backend role_permissions) are unchanged.
 const ALL_MODULES = [
+  { key: 'project_profit', label: 'Project Profit & Loss' },
   // — Finance & Daily Operations
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'cashflow', label: 'Bank — cash ledger (the Cash Flow page was removed 2026-09-03; this key still gates Bank)' },

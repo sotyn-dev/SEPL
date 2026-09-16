@@ -195,6 +195,7 @@ const SIDEBAR_GROUPS = [
   //     for Bank back under Finance — it's where the bank statement is
   //     uploaded and credits/debits are matched. Do NOT re-add `hidden` here.
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
+    { path: '/project-profit', label: 'Project Profit & Loss', icon: FiBarChart2, module: 'project_profit' },
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },

@@ -1302,6 +1302,23 @@ function initializeDatabase() {
     -- ============================================
     -- SYSTEM 4: DPR DAILY CALCULATION SYSTEM
     -- ============================================
+    CREATE TABLE IF NOT EXISTS project_profit_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id),
+      basis TEXT NOT NULL CHECK(basis IN ('sales','client_ra','dpr')),
+      kind TEXT NOT NULL CHECK(kind IN ('revenue','cost')),
+      category TEXT NOT NULL,
+      entry_date TEXT NOT NULL,
+      amount REAL NOT NULL CHECK(amount != 0),
+      reason TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      voided_at TEXT,
+      voided_by INTEGER REFERENCES users(id),
+      void_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_profit_adjustments ON project_profit_adjustments(project_id,basis,entry_date);
+
     CREATE TABLE IF NOT EXISTS sites (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -6693,7 +6710,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): AR/AP Tracker — rolling weekly cash-flow forecast
     // (receivables vs payables by party × week) with a mandatory-remark
     // change log. Under the Finance sidebar group.
-    'ar_ap_tracker',
+    'ar_ap_tracker', 'project_profit',
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
