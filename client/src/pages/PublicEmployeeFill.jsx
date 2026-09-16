@@ -30,6 +30,7 @@ export default function PublicEmployeeFill() {
   const [files, setFiles] = useState({});          // key -> File
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  const [ifscStatus, setIfscStatus] = useState('');
 
   // Bare axios (NOT the auth-aware api instance) — this page runs with no login.
   useEffect(() => {
@@ -49,8 +50,30 @@ export default function PublicEmployeeFill() {
       .catch(e => setErr(e.response?.data?.error || 'Failed to open this link'));
   }, [token]);
 
+  useEffect(() => {
+    const code = form.bank_ifsc;
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(code)) {
+      setIfscStatus('Enter an 11-character IFSC to fill bank and branch automatically.');
+      return;
+    }
+    const controller = new AbortController();
+    setIfscStatus('Looking up bank and branch…');
+    const timer = setTimeout(async () => {
+      try {
+        const { data } = await axios.get(`/api/public/employee-fill/${token}/ifsc/${code}`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setForm(old => old.bank_ifsc === code ? { ...old, bank_name: data.bank || '', bank_branch: data.branch || '' } : old);
+        setIfscStatus('Bank and branch filled. Please verify the details.');
+      } catch (error) {
+        if (!controller.signal.aborted) setIfscStatus(error.response?.data?.error || 'Lookup unavailable. Enter bank and branch manually.');
+      }
+    }, 400);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [form.bank_ifsc, token]);
+
   const set = (k) => (e) => setForm(f => {
     const next = { ...f, [k]: ['pan_number', 'bank_ifsc'].includes(k) ? e.target.value.toUpperCase() : e.target.value };
+    if (k === 'bank_ifsc') { next.bank_ifsc = next.bank_ifsc.trim(); next.bank_name = ''; next.bank_branch = ''; }
     if (next.same_as_permanent) { next.current_address = next.permanent_address; next.current_pin = next.permanent_pin; }
     return next;
   });
@@ -178,7 +201,7 @@ export default function PublicEmployeeFill() {
             <legend className="text-sm font-bold text-gray-800 pt-4">Salary bank account</legend>
             <p className="text-xs text-gray-500">Enter details as printed in your bank passbook. {prefill?.has_bank_details ? 'Bank details are already on file. Leave these fields blank to keep them.' : 'HR will review these for payroll setup.'}</p>
             <div className="grid sm:grid-cols-2 gap-3">
-              <label className="block"><span className="text-xs font-semibold text-gray-700">IFSC code</span><input className="input mt-1" value={form.bank_ifsc} onChange={set('bank_ifsc')} pattern="[A-Z]{4}0[A-Z0-9]{6}" maxLength={11} title="Enter a valid 11-character IFSC code" placeholder="e.g. SBIN0001234" /></label>
+              <label className="block"><span className="text-xs font-semibold text-gray-700">IFSC code</span><input className="input mt-1" value={form.bank_ifsc} onChange={set('bank_ifsc')} pattern="[A-Z]{4}0[A-Z0-9]{6}" maxLength={11} title="Enter a valid 11-character IFSC code" placeholder="e.g. SBIN0001234" /><small className="block mt-1 text-gray-500" aria-live="polite">{ifscStatus}</small></label>
               <label className="block"><span className="text-xs font-semibold text-gray-700">Bank name</span><input className="input mt-1" value={form.bank_name} onChange={set('bank_name')} maxLength={200} /></label>
               <label className="block"><span className="text-xs font-semibold text-gray-700">Bank branch</span><input className="input mt-1" value={form.bank_branch} onChange={set('bank_branch')} maxLength={200} /></label>
               <label className="block"><span className="text-xs font-semibold text-gray-700">Bank account number</span><input className="input mt-1" inputMode="numeric" value={form.bank_account_no} onChange={set('bank_account_no')} pattern="[0-9]{6,20}" maxLength={20} title="Enter 6 to 20 digits" autoComplete="off" /></label>

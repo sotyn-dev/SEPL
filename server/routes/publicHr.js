@@ -186,6 +186,12 @@ function liveFillLink(db, token) {
   return { link };
 }
 
+router.get('/employee-fill/:token/ifsc/:code', (req, res, next) => {
+  const { err } = liveFillLink(getDb(), req.params.token);
+  if (err) return res.status(err[0]).json({ error: err[1] });
+  next();
+}, require('../lib/ifscLookup'));
+
 router.get('/employee-fill/:token', (req, res) => {
   const db = getDb();
   const { link, err } = liveFillLink(db, req.params.token);
