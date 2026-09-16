@@ -58,7 +58,7 @@ export default function LabourRate() {
     let list = rows;
     if (catFilter) list = list.filter(r => (r.category || '') === catFilter);
     const q = search.toLowerCase().trim();
-    if (q) { const toks = q.split(/\s+/).filter(Boolean); list = list.filter(r => toks.every(t => (r.item_name || '').toLowerCase().includes(t))); }
+    if (q) { const toks = q.split(/\s+/).filter(Boolean); list = list.filter(r => toks.every(t => `${r.item_name || ''} LR-${r.id}`.toLowerCase().includes(t))); }
     return list;
   }, [rows, catFilter, search]);
   const pager = usePagination(filtered, { resetKey: [catFilter, search] });
@@ -162,7 +162,7 @@ export default function LabourRate() {
             {c || 'All'}
           </button>
         ))}
-        <input className="input ml-auto max-w-xs" placeholder="Search item…" value={search} onChange={e => setSearch(e.target.value)} />
+        <input className="input ml-auto max-w-xs" placeholder="Search item or Task ID (LR-11639)…" aria-label="Search labour item or Task ID" value={search} onChange={e => setSearch(e.target.value)} />
       </div>
 
       {/* Table */}

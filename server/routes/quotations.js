@@ -1133,9 +1133,9 @@ router.get('/labour-rates', (req, res) => {
   const cond = [], args = [];
   if (category) { cond.push('category = ?'); args.push(category); }
   // Token-wise AND, mirroring the page's own filter (LabourRate.jsx): every
-  // whitespace-separated word must appear in item_name, in any order. One
+  // whitespace-separated word must appear in the item name or Task ID. One
   // contiguous LIKE made the export drop rows the table was visibly showing.
-  if (search) { String(search).toLowerCase().trim().split(/\s+/).filter(Boolean).forEach(t => { cond.push('LOWER(item_name) LIKE ?'); args.push('%' + t + '%'); }); }
+  if (search) { String(search).toLowerCase().trim().split(/\s+/).filter(Boolean).forEach(t => { cond.push("INSTR(LOWER(COALESCE(item_name, '') || ' LR-' || id), ?) > 0"); args.push(t); }); }
   const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   res.json(db.prepare(`SELECT * FROM labour_rates ${where} ORDER BY category, item_name`).all(...args));
 });
@@ -1181,9 +1181,9 @@ router.get('/labour-rates/export', (req, res) => {
   const cond = [], args = [];
   if (category) { cond.push('category = ?'); args.push(category); }
   // Token-wise AND, mirroring the page's own filter (LabourRate.jsx): every
-  // whitespace-separated word must appear in item_name, in any order. One
+  // whitespace-separated word must appear in the item name or Task ID. One
   // contiguous LIKE made the export drop rows the table was visibly showing.
-  if (search) { String(search).toLowerCase().trim().split(/\s+/).filter(Boolean).forEach(t => { cond.push('LOWER(item_name) LIKE ?'); args.push('%' + t + '%'); }); }
+  if (search) { String(search).toLowerCase().trim().split(/\s+/).filter(Boolean).forEach(t => { cond.push("INSTR(LOWER(COALESCE(item_name, '') || ' LR-' || id), ?) > 0"); args.push(t); }); }
   const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
   const rows = db.prepare(`SELECT * FROM labour_rates ${where} ORDER BY category, item_name`).all(...args);
   const aoa = rows.map(r => [r.item_name, r.specification || '', r.size || '', r.rate || 0, r.uom || '', r.category || '']);
