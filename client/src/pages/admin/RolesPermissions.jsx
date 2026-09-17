@@ -100,12 +100,6 @@ const ALL_MODULES = [
   { key: 'employees', label: 'Employees' },
   { key: 'expenses', label: 'Expenses' },
 
-  // — ERP Management (2026-09) — System Flow & Implementation Control.
-  // View = dashboards/flows + update OWN tasks · Create = create flows ·
-  // Edit = edit any flow + manage Step/Process masters + ERP links ·
-  // Approve = override an incomplete-dependency completion.
-  { key: 'system_flow', label: 'System Flow (ERP Management) — build tracker, bottlenecks, step master' },
-
   // — Platform
   { key: 'ai_agent', label: 'AI Agent (Ask SOTYN.AI)' },
   { key: 'users', label: 'User Management' },
