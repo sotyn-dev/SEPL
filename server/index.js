@@ -603,7 +603,8 @@ app.use('/api/sotyn-flow', requireModuleEnabled('sotyn_flow'), require('./routes
 // System Requirements — product evolution tracker (upload-heavy; swept/quarantined)
 app.use('/api/system-requirements', requireModuleEnabled('system_requirements'), require('./routes/systemRequirements'));
 // System Flow & ERP Implementation Control (mam 2026-09-01)
-app.use('/api/system-flow', require('./routes/systemFlow'));
+// ERP Management retired; keep existing records, disable all API operations.
+app.use('/api/system-flow', (req, res) => res.status(410).json({ error: 'ERP Management has been removed' }));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 

@@ -6774,7 +6774,6 @@ in your first week. If a process feels broken, raise a Help Ticket
     //   can_create  → create flows
     //   can_edit    → edit any flow, manage Step/Process masters
     //   can_approve → override an incomplete-dependency completion
-    'system_flow',
     // Mam (2026-09-07): Sotyn Leads — the sotyn.ai website enquiry inbox.
     // The public webhook writes the row with no user attached; this key
     // gates who can READ and work the inbox inside the ERP:

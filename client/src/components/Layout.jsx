@@ -63,8 +63,6 @@ import {
   FiTrello,
   // Client Snag · bill missing client signature (2026-08-11)
   FiCamera,
-  // ERP Management · System Flow single-click entry (mam 2026-09-01).
-  FiCpu,
   // Sotyn Leads · sotyn.ai website enquiry inbox (mam 2026-09-07).
   FiRss,
 } from 'react-icons/fi';
@@ -250,11 +248,6 @@ const SIDEBAR_GROUPS = [
     { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null, open: true },
     { path: '/system-requirements', label: 'System Requirements', icon: FiClipboard, module: null, open: true, flag: 'system_requirements' },
   ]},
-  // ERP MANAGEMENT — System Flow & Implementation Control. Mam 2026-09-01:
-  // "if all things in one then why side bar write erp management steps" —
-  // the page carries its own tabs, so the sidebar entry is a single-click
-  // LINK GROUP (path + no items) straight to /system-flow.
-  { id: 'erp_management', label: 'ERP Management', icon: FiCpu, path: '/system-flow', module: 'system_flow', items: [] },
   // Executive group — 3 dashboards (mam 2026-05-27).
   { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [
     { path: '/dashboard/war-room', label: 'War Room',           icon: FiCrosshair, module: 'users' },
