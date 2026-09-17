@@ -17,7 +17,7 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import { exportCsv } from '../utils/exportCsv';
 import {
   FiPenTool, FiTrendingUp, FiGrid, FiMapPin, FiFileText, FiPlus, FiSearch,
-  FiDownload, FiChevronRight, FiChevronLeft, FiLayers, FiClock, FiColumns, FiExternalLink,
+  FiDownload, FiChevronRight, FiChevronLeft, FiLayers, FiClock, FiColumns, FiExternalLink, FiEdit2,
 } from 'react-icons/fi';
 import { RevisionViewer, UploadRevisionModal } from '../components/DrawingRevisionModals';
 
@@ -150,12 +150,13 @@ function DashboardTab() {
 
 // ─── Drawings (flat table + filters) ───────────────────────────────────
 function DrawingsTab() {
-  const { canCreate } = useAuth();
+  const { canCreate, canEdit } = useAuth();
   const [data, setData] = useState({ rows: [], total: 0 });
   const [opts, setOpts] = useState(null);
   const [filters, setFilters] = useState({ search: '', site_id: '', discipline: '', drawing_type: '', status: '' });
   const [offset, setOffset] = useState(0);
   const [newOpen, setNewOpen] = useState(false);
+  const [editItem, setEditItem] = useState(null);
   const LIMIT = 50;
 
   const load = useCallback(() => {
@@ -245,7 +246,15 @@ function DrawingsTab() {
                 <td className="px-3 py-2 text-xs">{fmtDate(r.last_revised_at)}</td>
                 <td className="px-3 py-2 text-xs">{r.last_revised_by || '—'}</td>
                 <td className="px-3 py-2 text-center">
-                  <Link to={`/drawing-tracker/${r.id}`} className="text-red-600 hover:underline text-xs">View</Link>
+                  <div className="flex items-center justify-center gap-2">
+                    <Link to={`/drawing-tracker/${r.id}`} className="text-red-600 hover:underline text-xs">View</Link>
+                    {canEdit('drawing_tracker') && (
+                      <button type="button" onClick={() => setEditItem(r)}
+                        className="text-gray-500 hover:text-blue-600 text-xs flex items-center gap-0.5" title="Edit Drawing Details">
+                        <FiEdit2 size={11} /> Edit
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -266,6 +275,7 @@ function DrawingsTab() {
       </div>
 
       {newOpen && <NewDrawingModal opts={opts} onClose={() => setNewOpen(false)} onSaved={() => { setNewOpen(false); load(); }} />}
+      {editItem && <EditDrawingModal drawing={editItem} opts={opts} onClose={() => setEditItem(null)} onSaved={() => { setEditItem(null); load(); }} />}
     </div>
   );
 }
@@ -273,7 +283,8 @@ function DrawingsTab() {
 // ─── New drawing (creates the identity + its Rev 0 together) ───────────
 function NewDrawingModal({ opts, onClose, onSaved }) {
   const [form, setForm] = useState({
-    project_source: 'business_book', project_id: '', site_id: '',
+    project_source: 'business_book', project_id: '', project_name: '',
+    site_id: '', site_name: '',
     drawing_number: '', title: '', discipline: '', drawing_type: '',
     revision_description: '', revision_date: new Date().toLocaleDateString('en-CA'),
   });
@@ -281,13 +292,36 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  // Sites only cascade off Business Book — sites.business_book_id is the only
-  // project link that exists in this schema. For a Projects-module drawing the
-  // full site list is offered instead.
-  const projects = form.project_source === 'business_book' ? (opts?.projects_business_book || []) : (opts?.projects_module || []);
+  const projects =
+    form.project_source === 'business_book' ? (opts?.projects_business_book || []) :
+    form.project_source === 'sales_funnel' ? (opts?.projects_sales_funnel || []) :
+    form.project_source === 'solar_deal' ? (opts?.projects_solar || []) :
+    (opts?.projects_module || []);
+
   const sites = form.project_source === 'business_book' && form.project_id
     ? (opts?.sites || []).filter(s => String(s.business_book_id) === String(form.project_id))
     : (opts?.sites || []);
+
+  const onProjectChange = (pid) => {
+    F('project_id', pid);
+    F('site_id', '');
+    if (!pid) {
+      F('project_name', '');
+      F('site_name', '');
+      return;
+    }
+    const proj = projects.find(p => String(p.id) === String(pid));
+    if (proj) {
+      F('project_name', proj.name);
+      if (form.project_source === 'sales_funnel') {
+        const autoSite = proj.project_location || proj.district || proj.client_name || '';
+        F('site_name', autoSite);
+      } else if (form.project_source === 'solar_deal') {
+        const autoSite = proj.location || proj.district || proj.client_name || '';
+        F('site_name', autoSite);
+      }
+    }
+  };
 
   const save = async (e) => {
     e.preventDefault();
@@ -300,9 +334,11 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
       fd.append('file', file);
       Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
       const proj = projects.find(p => String(p.id) === String(form.project_id));
-      if (proj) fd.append('project_name', proj.name);
-      const site = (opts?.sites || []).find(s => String(s.id) === String(form.site_id));
-      if (site) fd.append('site_name', site.name);
+      if (proj && !form.project_name) fd.set('project_name', proj.name);
+      if (form.site_id) {
+        const site = (opts?.sites || []).find(s => String(s.id) === String(form.site_id));
+        if (site) fd.set('site_name', site.name);
+      }
       await api.post('/drawing-tracker/drawings', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Drawing created at Rev 0');
       onSaved();
@@ -317,22 +353,37 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div><label className="label">Project from</label>
             <select className="select" value={form.project_source}
-              onChange={e => { F('project_source', e.target.value); F('project_id', ''); F('site_id', ''); }}>
-              <option value="business_book">Business Book</option>
+              onChange={e => { F('project_source', e.target.value); F('project_id', ''); F('site_id', ''); F('site_name', ''); }}>
+              <option value="business_book">Business Book (Confirmed Order)</option>
+              <option value="sales_funnel">Sales Funnel (Qualified Lead / Pre-Sales)</option>
+              <option value="solar_deal">Solar Deals (Funnel)</option>
               <option value="proj_project">Projects module</option>
             </select>
           </div>
-          <div><label className="label">Project</label>
-            <select className="select" value={form.project_id} onChange={e => { F('project_id', e.target.value); F('site_id', ''); }}>
+          <div><label className="label">Project / Lead</label>
+            <select className="select" value={form.project_id} onChange={e => onProjectChange(e.target.value)}>
               <option value="">Select project</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {projects.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.lead_no ? `[${p.lead_no}] ` : p.deal_no ? `[${p.deal_no}] ` : ''}{p.name}
+                </option>
+              ))}
             </select>
           </div>
-          <div><label className="label">Site</label>
-            <select className="select" value={form.site_id} onChange={e => F('site_id', e.target.value)}>
-              <option value="">Select site</option>
-              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+          <div><label className="label">Site / Location</label>
+            {form.project_source === 'business_book' && sites.length > 0 ? (
+              <select className="select" value={form.site_id} onChange={e => {
+                F('site_id', e.target.value);
+                const s = sites.find(st => String(st.id) === String(e.target.value));
+                if (s) F('site_name', s.name);
+              }}>
+                <option value="">Select site</option>
+                {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            ) : (
+              <input className="input" value={form.site_name} onChange={e => F('site_name', e.target.value)}
+                placeholder="Site name or location" />
+            )}
           </div>
         </div>
 
@@ -379,6 +430,163 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="btn">Cancel</button>
           <button type="submit" disabled={busy} className="btn btn-primary">{busy ? 'Uploading…' : 'Create Drawing'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// ─── Edit drawing metadata modal ───────────────────────────────────────
+export function EditDrawingModal({ drawing, opts, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    drawing_number: drawing.drawing_number || '',
+    title: drawing.title || '',
+    discipline: drawing.discipline || '',
+    drawing_type: drawing.drawing_type || '',
+    project_source: drawing.project_source || 'business_book',
+    project_id: drawing.project_id ?? '',
+    project_name: drawing.project_name || '',
+    site_id: drawing.site_id ?? '',
+    site_name: drawing.site_name || '',
+    remarks: drawing.remarks || '',
+  });
+  const [busy, setBusy] = useState(false);
+  const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const projects =
+    form.project_source === 'business_book' ? (opts?.projects_business_book || []) :
+    form.project_source === 'sales_funnel' ? (opts?.projects_sales_funnel || []) :
+    form.project_source === 'solar_deal' ? (opts?.projects_solar || []) :
+    (opts?.projects_module || []);
+
+  const sites = form.project_source === 'business_book' && form.project_id
+    ? (opts?.sites || []).filter(s => String(s.business_book_id) === String(form.project_id))
+    : (opts?.sites || []);
+
+  const onProjectChange = (pid) => {
+    F('project_id', pid);
+    F('site_id', '');
+    if (!pid) {
+      F('project_name', '');
+      return;
+    }
+    const proj = projects.find(p => String(p.id) === String(pid));
+    if (proj) {
+      F('project_name', proj.name);
+      if (form.project_source === 'sales_funnel') {
+        const autoSite = proj.project_location || proj.district || proj.client_name || '';
+        if (autoSite) F('site_name', autoSite);
+      } else if (form.project_source === 'solar_deal') {
+        const autoSite = proj.location || proj.district || proj.client_name || '';
+        if (autoSite) F('site_name', autoSite);
+      }
+    }
+  };
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (!form.drawing_number.trim()) return toast.error('Drawing number is required');
+    setBusy(true);
+    try {
+      const payload = { ...form };
+      if (form.site_id) {
+        const s = (opts?.sites || []).find(st => String(st.id) === String(form.site_id));
+        if (s) payload.site_name = s.name;
+      }
+      await api.put(`/drawing-tracker/drawings/${drawing.id}`, payload);
+      toast.success('Drawing details updated');
+      onSaved();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal isOpen onClose={onClose} title={`Edit Drawing — ${drawing.drawing_number}`} wide>
+      <form onSubmit={save} className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="label">Drawing Number *</label>
+            <input className="input font-mono font-bold text-red-600" value={form.drawing_number}
+              onChange={e => F('drawing_number', e.target.value)} required />
+          </div>
+          <div>
+            <label className="label">Drawing Title</label>
+            <input className="input" value={form.title} onChange={e => F('title', e.target.value)}
+              placeholder="e.g. Ground Floor Electrical Layout" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="label">Project from</label>
+            <select className="select" value={form.project_source}
+              onChange={e => { F('project_source', e.target.value); F('project_id', ''); F('site_id', ''); F('site_name', ''); }}>
+              <option value="business_book">Business Book (Confirmed Order)</option>
+              <option value="sales_funnel">Sales Funnel (Qualified Lead / Pre-Sales)</option>
+              <option value="solar_deal">Solar Deals (Funnel)</option>
+              <option value="proj_project">Projects Module</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Project / Lead</label>
+            <select className="select" value={form.project_id} onChange={e => onProjectChange(e.target.value)}>
+              <option value="">Select project</option>
+              {projects.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.lead_no ? `[${p.lead_no}] ` : p.deal_no ? `[${p.deal_no}] ` : ''}{p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Site / Location</label>
+            {form.project_source === 'business_book' && sites.length > 0 ? (
+              <select className="select" value={form.site_id} onChange={e => {
+                F('site_id', e.target.value);
+                const s = sites.find(st => String(st.id) === String(e.target.value));
+                if (s) F('site_name', s.name);
+              }}>
+                <option value="">Select site</option>
+                {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            ) : (
+              <input className="input" value={form.site_name} onChange={e => F('site_name', e.target.value)}
+                placeholder="Site name or location" />
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="label">Discipline</label>
+            <select className="select" value={form.discipline} onChange={e => F('discipline', e.target.value)}>
+              <option value="">Select</option>
+              {(opts?.disciplines || []).map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Drawing Type</label>
+            <select className="select" value={form.drawing_type} onChange={e => F('drawing_type', e.target.value)}>
+              <option value="">Select</option>
+              {(opts?.drawing_types || []).map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Remarks / Notes</label>
+          <textarea className="input" rows={2} value={form.remarks} onChange={e => F('remarks', e.target.value)}
+            placeholder="Additional notes or specifications..." />
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <button type="button" onClick={onClose} className="btn">Cancel</button>
+          <button type="submit" disabled={busy} className="btn btn-primary">
+            {busy ? 'Saving…' : 'Save Changes'}
+          </button>
         </div>
       </form>
     </Modal>

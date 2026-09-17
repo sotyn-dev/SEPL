@@ -11,14 +11,15 @@ import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
 import { useAuth } from '../context/AuthContext';
 import {
-  FiArrowLeft, FiUpload, FiEye, FiDownload, FiColumns, FiX, FiSlash, FiExternalLink,
+  FiArrowLeft, FiUpload, FiEye, FiDownload, FiColumns, FiX, FiSlash, FiExternalLink, FiEdit2,
 } from 'react-icons/fi';
 // The viewer and the upload modal are shared with the Revision Matrix, so
 // the superseded warning and the upload rules live in exactly one place.
 import {
-  RevisionViewer, UploadRevisionModal, useRevisionBlob, REV_CLS, isPdf,
+  RevisionViewer, UploadRevisionModal, useRevisionBlob, REV_CLS, isPdf, isDwg, getRevExtension,
   fmtDrawingDate as fmtDate,
 } from '../components/DrawingRevisionModals';
+import { EditDrawingModal } from './DrawingTracker';
 
 const fmtSize = (n) => {
   const b = Number(n || 0);
@@ -29,17 +30,21 @@ const fmtSize = (n) => {
 
 export default function DrawingDetail() {
   const { id } = useParams();
-  const { canCreate, canDelete } = useAuth();
+  const { canCreate, canEdit, canDelete } = useAuth();
   const [data, setData] = useState(null);
+  const [opts, setOpts] = useState(null);
   const [viewing, setViewing] = useState(null);   // revision being viewed
   const [uploadOpen, setUploadOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editRev, setEditRev] = useState(null);
 
   const load = useCallback(() => {
     api.get(`/drawing-tracker/drawings/${id}`)
       .then(r => setData(r.data)).catch(() => toast.error('Could not load drawing'));
   }, [id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { api.get('/drawing-tracker/options').then(r => setOpts(r.data)).catch(() => {}); }, []);
 
   if (!data) return <div className="p-4 text-sm text-gray-400">Loading…</div>;
   const current = data.revisions.find(r => r.status === 'current');
@@ -47,9 +52,10 @@ export default function DrawingDetail() {
   const download = async (rev) => {
     try {
       const r = await api.get(`/drawing-tracker/revisions/${rev.id}/file?download=1`, { responseType: 'blob' });
+      const ext = getRevExtension(rev);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(r.data);
-      a.download = `${data.drawing_number}_Rev${rev.revision_no}${(rev.file_name || '').match(/\.[a-z0-9]+$/i)?.[0] || ''}`;
+      a.download = `${data.drawing_number}_Rev${rev.revision_no}${ext}`;
       a.click();
       URL.revokeObjectURL(a.href);
     } catch { toast.error('Download failed'); }
@@ -75,6 +81,11 @@ export default function DrawingDetail() {
           <p className="text-sm text-gray-600">{data.title || '—'}</p>
         </div>
         <div className="flex gap-2">
+          {canEdit('drawing_tracker') && (
+            <button onClick={() => setEditOpen(true)} className="btn btn-secondary text-sm flex items-center gap-1">
+              <FiEdit2 size={14} /> Edit Drawing
+            </button>
+          )}
           {data.revisions.length > 1 && (
             <button onClick={() => setCompareOpen(true)} className="btn btn-secondary text-sm flex items-center gap-1">
               <FiColumns size={14} /> Compare
@@ -158,6 +169,9 @@ export default function DrawingDetail() {
                       <a href={`/drawing-view/${r.id}`} target="_blank" rel="noreferrer"
                         className="text-gray-400 hover:text-red-600" title={`Open Rev ${r.revision_no} in a new tab`}><FiExternalLink size={13} /></a>
                       <button onClick={() => download(r)} className="text-gray-400 hover:text-blue-600" title={`Download Rev ${r.revision_no}`}><FiDownload size={13} /></button>
+                      {canEdit('drawing_tracker') && (
+                        <button onClick={() => setEditRev(r)} className="text-gray-400 hover:text-blue-600" title={`Edit details of Rev ${r.revision_no}`}><FiEdit2 size={13} /></button>
+                      )}
                       {canDelete('drawing_tracker') && r.status === 'superseded' && (
                         <button onClick={() => cancelRev(r)} className="text-gray-400 hover:text-red-600" title="Cancel this revision"><FiSlash size={13} /></button>
                       )}
@@ -179,8 +193,62 @@ export default function DrawingDetail() {
           revisions={data.revisions} onClose={() => setUploadOpen(false)}
           onSaved={() => { setUploadOpen(false); load(); }} />
       )}
+      {editOpen && (
+        <EditDrawingModal drawing={data} opts={opts} onClose={() => setEditOpen(false)} onSaved={() => { setEditOpen(false); load(); }} />
+      )}
+      {editRev && (
+        <EditRevisionModal rev={editRev} onClose={() => setEditRev(null)} onSaved={() => { setEditRev(null); load(); }} />
+      )}
       {compareOpen && <CompareModal drawing={data} onClose={() => setCompareOpen(false)} />}
     </div>
+  );
+}
+
+function EditRevisionModal({ rev, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    revision_description: rev.revision_description || '',
+    revision_reason: rev.revision_reason || '',
+    revision_date: rev.revision_date ? rev.revision_date.slice(0, 10) : '',
+  });
+  const [busy, setBusy] = useState(false);
+  const save = async (e) => {
+    e.preventDefault();
+    if (!form.revision_description.trim()) return toast.error('Revision description is required');
+    setBusy(true);
+    try {
+      await api.put(`/drawing-tracker/revisions/${rev.id}`, form);
+      toast.success(`Rev ${rev.revision_no} updated`);
+      onSaved();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal isOpen onClose={onClose} title={`Edit Revision ${rev.revision_no}`}>
+      <form onSubmit={save} className="space-y-3">
+        <div>
+          <label className="label">Revision Date</label>
+          <input type="date" className="input" value={form.revision_date}
+            onChange={e => setForm(f => ({ ...f, revision_date: e.target.value }))} />
+        </div>
+        <div>
+          <label className="label">Revision Description *</label>
+          <textarea className="input" rows={3} value={form.revision_description}
+            onChange={e => setForm(f => ({ ...f, revision_description: e.target.value }))} required />
+        </div>
+        <div>
+          <label className="label">Revision Reason</label>
+          <input className="input" value={form.revision_reason}
+            onChange={e => setForm(f => ({ ...f, revision_reason: e.target.value }))} placeholder="e.g. Client Revision, Site Requirement" />
+        </div>
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
+          <button type="submit" disabled={busy} className="btn btn-primary">{busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -207,10 +275,20 @@ function CompareModal({ drawing, onClose }) {
         {blob.err && <div className="p-6 text-center text-red-600 text-xs">{blob.err}</div>}
         {!blob.err && !blob.url && <div className="p-6 text-center text-gray-400 text-xs">Loading…</div>}
         {blob.url && isPdf(rev) && <iframe src={blob.url} title={`Rev ${rev.revision_no}`} className="w-full h-full min-h-[45vh] border-0" />}
-        {blob.url && !isPdf(rev) && (
+        {blob.url && isDwg(rev) && (
+          <div className="p-6 text-center space-y-3">
+            <div className="text-xs font-semibold text-gray-700">{rev.file_name} (.DWG)</div>
+            <p className="text-xs text-gray-500">AutoCAD DWG binary files cannot be rendered directly inside the comparison pane.</p>
+            <div className="flex justify-center gap-2">
+              <a href={blob.url} download={`${drawing.drawing_number}_Rev${rev.revision_no}${getRevExtension(rev)}`} className="btn btn-primary text-xs">Download DWG</a>
+              <a href="https://viewer.autodesk.com" target="_blank" rel="noreferrer" className="btn btn-secondary text-xs">Autodesk Viewer</a>
+            </div>
+          </div>
+        )}
+        {blob.url && !isPdf(rev) && !isDwg(rev) && (
           <div className="p-6 text-center text-xs text-gray-600">
             {rev.file_name} can't be previewed in the browser — compare the details below, or download it.
-            <div className="mt-2"><a href={blob.url} download className="btn btn-secondary text-xs">Download</a></div>
+            <div className="mt-2"><a href={blob.url} download={`${drawing.drawing_number}_Rev${rev.revision_no}${getRevExtension(rev)}`} className="btn btn-secondary text-xs">Download</a></div>
           </div>
         )}
       </div>

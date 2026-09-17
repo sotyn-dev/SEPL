@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import Modal from './Modal';
-import { FiAlertTriangle, FiX, FiExternalLink } from 'react-icons/fi';
+import { FiAlertTriangle, FiX, FiExternalLink, FiDownload, FiLayers, FiInfo } from 'react-icons/fi';
 
 export const fmtDrawingDate = (d) => {
   if (!d) return '—';
@@ -20,6 +20,16 @@ export const REV_CLS = {
 };
 
 export const isPdf = (rev) => /pdf/i.test(rev?.file_type || '') || /\.pdf$/i.test(rev?.file_name || '');
+export const isDwg = (rev) => /\.dwg$/i.test(rev?.file_name || '') || /acad|autocad|dwg/i.test(rev?.file_type || '');
+export const isImage = (rev) => /\.(jpe?g|png|webp|gif|svg)$/i.test(rev?.file_name || '') || /^image\//i.test(rev?.file_type || '');
+
+export const getRevExtension = (rev) => {
+  const m = (rev?.file_name || '').match(/\.[a-z0-9]+$/i);
+  if (m) return m[0];
+  if (isDwg(rev)) return '.dwg';
+  if (isPdf(rev)) return '.pdf';
+  return '';
+};
 
 // Fetches a revision's file through the permission-checked route and turns it
 // into an object URL. An <iframe> can't send an Authorization header, so the
@@ -50,14 +60,22 @@ export function RevisionViewer({ revision, drawingNumber, current, onClose, onVi
   const stale = revision && revision.status !== 'current';
   if (!revision) return null;
 
+  const ext = getRevExtension(revision);
+  const downloadFilename = `${drawingNumber}_Rev${revision.revision_no}${ext}`;
+
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex flex-col" onClick={onClose}>
       <div className="bg-white m-4 rounded-lg flex-1 flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-3 border-b">
-          <div>
+          <div className="flex items-center gap-2">
             <span className="font-mono font-bold text-red-600">{drawingNumber}</span>
-            <span className="ml-2 font-semibold">Rev {revision.revision_no}</span>
-            <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded border ${REV_CLS[revision.status]}`}>{revision.status}</span>
+            <span className="font-semibold">Rev {revision.revision_no}</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${REV_CLS[revision.status]}`}>{revision.status}</span>
+            {isDwg(revision) && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-300">
+                AUTOCAD DWG
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <a href={`/drawing-view/${revision.id}`} target="_blank" rel="noreferrer"
@@ -87,11 +105,54 @@ export function RevisionViewer({ revision, drawingNumber, current, onClose, onVi
         <div className="flex-1 bg-gray-100 overflow-auto">
           {err && <div className="p-8 text-center text-red-600 text-sm">{err}</div>}
           {!err && !url && <div className="p-8 text-center text-gray-400 text-sm">Loading file…</div>}
-          {url && isPdf(revision) && <iframe src={url} title={`Rev ${revision.revision_no}`} className="w-full h-full min-h-[60vh] border-0" />}
-          {url && !isPdf(revision) && (
+
+          {url && isPdf(revision) && (
+            <iframe src={url} title={`Rev ${revision.revision_no}`} className="w-full h-full min-h-[60vh] border-0" />
+          )}
+
+          {url && isImage(revision) && (
+            <div className="p-4 flex items-center justify-center min-h-[60vh]">
+              <img src={url} alt={revision.file_name} className="max-w-full max-h-[80vh] object-contain shadow rounded bg-white" />
+            </div>
+          )}
+
+          {url && isDwg(revision) && (
+            <div className="p-6 max-w-2xl mx-auto space-y-4">
+              <div className="card p-6 text-center space-y-4 shadow-sm bg-white border">
+                <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto">
+                  <FiLayers size={32} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800">{revision.file_name}</h3>
+                  <p className="text-xs text-gray-500 mt-1">AutoCAD Drawing Binary File (.DWG)</p>
+                </div>
+                <p className="text-sm text-gray-600 max-w-lg mx-auto">
+                  Standard web browsers (Chrome, Edge, Firefox) do not possess native CAD rendering engines to parse 3D/2D binary DWG files directly in an iframe.
+                </p>
+                <div className="flex flex-wrap gap-3 justify-center pt-2">
+                  <a href={url} download={downloadFilename} className="btn btn-primary text-sm flex items-center gap-1.5">
+                    <FiDownload size={15} /> Download DWG ({downloadFilename})
+                  </a>
+                  <a href="https://viewer.autodesk.com" target="_blank" rel="noreferrer"
+                    className="btn btn-secondary text-sm flex items-center gap-1.5">
+                    <FiExternalLink size={15} /> Open in Autodesk Free CAD Viewer
+                  </a>
+                </div>
+              </div>
+
+              <div className="p-4 bg-amber-50/80 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-start gap-2.5">
+                <FiInfo className="shrink-0 mt-0.5 text-amber-700" size={16} />
+                <div>
+                  <strong>Engineering Workflow Recommendation:</strong> When producing drawings in AutoCAD, export or plot a companion <strong>PDF</strong> alongside the <strong>.DWG</strong>. Uploading the PDF version allows instant 1-click in-browser viewing, mobile site review, and printing without requiring CAD software.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {url && !isPdf(revision) && !isImage(revision) && !isDwg(revision) && (
             <div className="p-8 text-center text-sm text-gray-600">
-              <p className="mb-3">{revision.file_name} — this file type can't be previewed in the browser.</p>
-              <a href={url} download={`${drawingNumber}_Rev${revision.revision_no}`} className="btn btn-primary text-sm">
+              <p className="mb-3">{revision.file_name} — this file type can't be previewed directly in the browser.</p>
+              <a href={url} download={downloadFilename} className="btn btn-primary text-sm">
                 Download Rev {revision.revision_no}
               </a>
             </div>
