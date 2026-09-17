@@ -4177,6 +4177,8 @@ function initializeDatabase() {
     // bill (mam 2026-06-13: "only give option sent to client").
     ['sales_bills', 'sent_to_client INTEGER DEFAULT 0'],
     ['sales_bills', 'sent_at DATETIME'],
+    ['sales_bills', 'checked_at DATETIME'],
+    ['sales_bills', 'checked_by INTEGER REFERENCES users(id)'],
     // Room Rentals — PIN code of the rented room + auto metro/non-metro
     // classification (mam 2026-06-23). metro_type IN ('Metro','Non-Metro');
     // pincode_city is the India-Post-resolved district/city for reference.
@@ -7508,6 +7510,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('../lib/dispatchReceiving').initialize(db);
 
   console.log('Database initialized successfully');
+  require('../lib/salesBillCheckingScore').migrateSalesBillCheckingScore(db);
   return db;
 }
 

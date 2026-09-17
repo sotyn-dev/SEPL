@@ -197,6 +197,7 @@ export default function SalesBilling() {
     try {
       const r = await api.post('/sales-billing/generate-installation', {
         dpr_ids: Array.from(selectedDprIds),
+        checked: true,
         bill_date: installBillDate
       });
       toast.success(r.data.message || 'Installation bills generated');
@@ -212,6 +213,11 @@ export default function SalesBilling() {
   const sendToClient = async (b) => {
     try { const r = await api.put(`/sales-billing/${b.id}/sent`, {}); toast.success(r.data.message || 'Updated'); load(); }
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+
+  const checkBill = async (b) => {
+    try { await api.put(`/sales-billing/${b.id}/checked`, {}); toast.success('Checked / OK'); load(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Could not record check'); }
   };
 
   const openPay = (b) => { setPayForm({ amount: '', payment_date: new Date().toISOString().split('T')[0], payment_mode: 'Bank', transaction_ref: '' }); setPayModal(b); };
@@ -288,6 +294,7 @@ export default function SalesBilling() {
             <th className="px-3 py-2 text-right">GST</th>
             <th className="px-3 py-2 text-right">Total</th>
             <th className="px-3 py-2 text-center">Status</th>
+            {sentMode && <th className="px-3 py-2 text-center">Checked / OK</th>}
             <th className="px-3 py-2 text-center">{sentMode ? 'Sent to Client' : 'Approval'}</th>
             {showPayment && <th className="px-3 py-2 text-center">Payment</th>}
             <th className="px-3 py-2"></th>
@@ -295,9 +302,9 @@ export default function SalesBilling() {
         </thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={showPayment ? 12 : 11} className="text-center py-8 text-gray-400">Loading…</td></tr>
+            <tr><td colSpan={11 + Number(!!showPayment) + Number(!!sentMode)} className="text-center py-8 text-gray-400">Loading…</td></tr>
           ) : rows.length === 0 ? (
-            <tr><td colSpan={showPayment ? 12 : 11} className="text-center py-8 text-gray-400">No bills here yet.</td></tr>
+            <tr><td colSpan={11 + Number(!!showPayment) + Number(!!sentMode)} className="text-center py-8 text-gray-400">No bills here yet.</td></tr>
           ) : rows.map(b => (
             <tr key={b.id} className="border-t border-gray-100 hover:bg-blue-50/40">
               <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{b.bill_number}</td>
@@ -309,9 +316,14 @@ export default function SalesBilling() {
               <td className="px-3 py-2 text-right text-gray-500">{fmt(b.gst_amount)}<span className="text-[10px] ml-0.5">@{b.gst_rate}%</span></td>
               <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmt(b.total_amount)}</td>
               <td className="px-3 py-2 text-center">{StatusCell(b)}</td>
+              {sentMode && <td className="px-3 py-2 text-center">
+                {b.checked_at
+                  ? <span className="text-xs text-emerald-700 whitespace-nowrap" title={`Checked ${b.checked_at}`}>✓ Checked / OK</span>
+                  : <button onClick={() => checkBill(b)} className="btn btn-secondary text-xs whitespace-nowrap">Checked / OK</button>}
+              </td>}
               <td className="px-3 py-2 text-center">
                 {sentMode ? (
-                  <button onClick={() => sendToClient(b)} className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${b.sent_to_client ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}>
+                  <button disabled={!b.checked_at && !b.sent_to_client} title={!b.checked_at && !b.sent_to_client ? 'Mark Checked / OK first' : undefined} onClick={() => sendToClient(b)} className={`text-[11px] font-semibold px-2 py-0.5 rounded-full disabled:opacity-40 disabled:cursor-not-allowed ${b.sent_to_client ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}>
                     {b.sent_to_client ? '✓ Sent to client' : 'Sent to client'}
                   </button>
                 ) : ApprovalCell(b)}
@@ -346,7 +358,7 @@ export default function SalesBilling() {
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h3 className="font-semibold text-lg">Sales Billing</h3>
         <div className="flex gap-2">
-          {tab === 'dpr' && <button onClick={openInstallModal} className="btn btn-secondary flex items-center gap-2" title="Select and create Type-3 installation bills from approved DPRs"><FiCheckCircle /> Generate Installation Bills</button>}
+          {tab === 'dpr' && <button onClick={openInstallModal} className="btn btn-secondary flex items-center gap-2" title="Check completed, approved DPRs to create their bills"><FiCheckCircle /> Check DPRs & Create Bills</button>}
           {(tab === 'orders' || tab === 'dashboard') && <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> New Sales Bill</button>}
           {tab !== 'responsible' && <button onClick={() => {
             // Export what the ACTIVE tab actually shows — each tab is a different
@@ -560,7 +572,7 @@ export default function SalesBilling() {
       {tab === 'dpr' && (
         <div className="space-y-2">
           <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
-            Installation bills are generated from <b>submitted, approved DPRs</b> — each DPR is billed once. Click <b>Generate Installation Bills</b> to select and bill approved DPRs.
+            <b>Done</b> → <b>Checked / OK</b> → Bill created → <b>Sent to Client</b>. Check completed, approved DPRs to create their bills automatically. Each DPR is billed once.
           </div>
           <BillTable rows={t3Pager.pageItems} pager={t3Pager} showPayment={false} sentMode />
         </div>
@@ -569,10 +581,10 @@ export default function SalesBilling() {
       {tab === 'responsible' && <ResponsibilityTab module="sales_billing" title="Sales Billing" />}
 
       {/* Selective Installation Bills Modal */}
-      <Modal isOpen={installModal} onClose={() => setInstallModal(false)} title="Generate Installation Bills from DPRs" xwide>
+      <Modal isOpen={installModal} onClose={() => !generatingInstall && setInstallModal(false)} title="Check DPRs & Create Bills" xwide>
         <div className="space-y-4">
           <div className="text-xs text-gray-600 bg-blue-50/70 border border-blue-200 rounded-lg p-3 leading-relaxed">
-            Select which orders and approved DPRs to bill. Bills will <b>only</b> be created for the items you select below. DPRs not selected remain unbilled for future billing.
+            Review the selected completed DPRs and amounts. Click <b>Checked / OK</b> to record your check and automatically create their bills. Sending to the client remains a separate step.
           </div>
 
           {/* Controls toolbar */}
@@ -751,7 +763,7 @@ export default function SalesBilling() {
                 <FiCheckCircle size={14} />
                 {generatingInstall
                   ? 'Generating…'
-                  : `Generate Bills for Selected (${selectedStats.orderCount} bill${selectedStats.orderCount === 1 ? '' : 's'})`}
+                  : `Checked / OK — Create Bills (${selectedStats.orderCount})`}
               </button>
             </div>
           </div>

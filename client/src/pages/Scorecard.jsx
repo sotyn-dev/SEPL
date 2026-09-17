@@ -155,6 +155,7 @@ const SOURCE_INFO = {
   'auto:installations_completed':{ plan: 'You set',                           actual: 'Installations marked complete this week' },
   'auto:sales_bills':           { plan: 'You set',                            actual: 'Sales bills raised this week' },
   'auto:ra_bills':              { plan: '3 per week (fixed SEPL norm)',          actual: 'RA bills raised for user\'s sites this week' },
+  'auto:sales_bill_checking':   { plan: 'You set', actual: 'Installation bills marked Checked / OK by this user during the week (IST); each bill counts once' },
   'auto:mb_filed':              { plan: 'You set',                            actual: 'MB sheets filed (count)' },
   'auto:mb_signed':             { plan: 'MB bills raised for user\'s sites this week', actual: 'Of those, approved / client-signed' },
   // Cash Flow
@@ -1692,6 +1693,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:installations_completed">installations completed</option>
                     <option value="auto:sales_bills">sales bills raised</option>
                     <option value="auto:ra_bills">RA bills raised (site)</option>
+                    <option value="auto:sales_bill_checking">RA Bill / Sales Bill Checking — Checked / OK</option>
                     <option value="auto:mb_filed">MB bills filed (count)</option>
                     <option value="auto:mb_signed">MB signed by client (site)</option>
                   </optgroup>
