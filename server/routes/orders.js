@@ -7,6 +7,7 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { validatePoNumber } = require('../utils/validate');
 const router = express.Router();
 router.use(authMiddleware);
+router.use('/make-approval', require('./makeApproval'));
 
 // Multer for Excel upload
 const fs = require('fs');
