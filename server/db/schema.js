@@ -7511,6 +7511,7 @@ in your first week. If a process feels broken, raise a Help Ticket
 
   console.log('Database initialized successfully');
   require('../lib/salesBillCheckingScore').migrateSalesBillCheckingScore(db);
+  require('../lib/salesBillCheckingScore').migrateDprBillCheckingScore(db);
   return db;
 }
 

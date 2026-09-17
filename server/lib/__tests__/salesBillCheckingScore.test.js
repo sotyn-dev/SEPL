@@ -2,6 +2,24 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
 const { salesBillCheckingScore, migrateSalesBillCheckingScore } = require('../salesBillCheckingScore');
+const { dprBillCheckingScore, migrateDprBillCheckingScore } = require('../salesBillCheckingScore');
+
+test('DPR to RA Bill counts the bill-date cohort even when admin checks later', () => {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE sales_bills(id INTEGER PRIMARY KEY, bill_type INTEGER, bill_date TEXT, checked_at TEXT);
+    INSERT INTO sales_bills VALUES(1,3,'2026-09-09','2026-09-17 10:00:00'),
+    (2,3,'2026-09-09',NULL),(3,3,'2026-09-17',NULL),(4,2,'2026-09-09','2026-09-17 10:00:00');
+    CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT);
+    CREATE TABLE score_kpis(id INTEGER PRIMARY KEY, metric_name TEXT, data_source TEXT, weightage REAL);
+    INSERT INTO score_kpis VALUES(1,'DPR to RA Bill','auto:dpr_billed_pct',0);`);
+  assert.deepEqual(dprBillCheckingScore(db,'2026-09-07','2026-09-12'),{given:2,done:1});
+  assert.deepEqual(dprBillCheckingScore(db,'2026-09-14','2026-09-19'),{given:1,done:0});
+  assert.deepEqual(dprBillCheckingScore(db,'2026-08-03','2026-08-08'),{given:0,done:0});
+  migrateDprBillCheckingScore(db);
+  migrateDprBillCheckingScore(db);
+  assert.deepEqual(db.prepare('SELECT data_source,weightage FROM score_kpis').get(),{data_source:'auto:dpr_bill_checking',weightage:0});
+  db.close();
+});
 
 test('checking score uses checker and IST check date, never creation or sending', () => {
   const db = new Database(':memory:');

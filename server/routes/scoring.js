@@ -352,6 +352,9 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     const computeAutoCount = (source, since, until) => {
       const sinceDate = since.slice(0, 10);
       const untilDate = until.slice(0, 10);
+      if (source === 'auto:dpr_bill_checking') {
+        return require('../lib/salesBillCheckingScore').dprBillCheckingScore(db, sinceDate, untilDate);
+      }
       if (source === 'auto:sales_bill_checking') {
         return require('../lib/salesBillCheckingScore').salesBillCheckingScore(db, userId, sinceDate, untilDate);
       }
