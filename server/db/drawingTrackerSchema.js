@@ -6,6 +6,45 @@
 // Idempotent: CREATE TABLE / CREATE INDEX IF NOT EXISTS only. No ALTERs.
 // The 'drawing_tracker' permission key stays in schema.js's ALL_MODULES list.
 
+function migrateDrawingsSourceConstraint(db) {
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='drawings'").get();
+    if (!row?.sql || row.sql.includes('sales_funnel')) return;
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE drawings_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_source TEXT NOT NULL DEFAULT 'business_book'
+          CHECK(project_source IN ('business_book','proj_project','sales_funnel','solar_deal')),
+        project_id INTEGER,
+        project_name TEXT,
+        site_id INTEGER,
+        site_name TEXT,
+        drawing_number TEXT NOT NULL,
+        title TEXT,
+        discipline TEXT,
+        drawing_type TEXT,
+        current_revision_id INTEGER,
+        remarks TEXT,
+        created_by INTEGER, created_by_name TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO drawings_new SELECT * FROM drawings;
+      DROP TABLE drawings;
+      ALTER TABLE drawings_new RENAME TO drawings;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_dwg_identity
+        ON drawings(project_source, project_id, drawing_number);
+      CREATE INDEX IF NOT EXISTS idx_dwg_site       ON drawings(site_id);
+      CREATE INDEX IF NOT EXISTS idx_dwg_discipline ON drawings(discipline);
+      CREATE INDEX IF NOT EXISTS idx_dwg_number     ON drawings(drawing_number);
+      PRAGMA foreign_keys = ON;
+    `);
+  } catch (e) {
+    console.warn('[drawing-tracker] migration warn:', e.message);
+  }
+}
+
 function runDrawingTrackerMigrations(db) {
   db.exec(`
     -- ================================================================
@@ -19,16 +58,13 @@ function runDrawingTrackerMigrations(db) {
     -- and file completely untouched and still downloadable. Nothing here ever
     -- overwrites or deletes a revision.
     --
-    -- Project comes from EITHER existing master (they are unlinked in this
-    -- schema): business_book (booked orders — sites.business_book_id points
-    -- here, so the Site dropdown can cascade) or proj_projects (the thin
-    -- name/owner list). project_source says which one project_id refers to.
-    -- No new project or site master is created.
+    -- Project comes from EITHER existing master: business_book (booked orders),
+    -- sales_funnel (qualified leads/pre-sales), solar_deals, or proj_projects.
     -- ================================================================
     CREATE TABLE IF NOT EXISTS drawings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_source TEXT NOT NULL DEFAULT 'business_book'
-        CHECK(project_source IN ('business_book','proj_project')),
+        CHECK(project_source IN ('business_book','proj_project','sales_funnel','solar_deal')),
       project_id INTEGER,
       -- Names denormalised alongside the id so a historical drawing still
       -- reads correctly if the master row is later renamed or deactivated.
@@ -83,6 +119,7 @@ function runDrawingTrackerMigrations(db) {
     CREATE INDEX IF NOT EXISTS idx_dr_drawing ON drawing_revisions(drawing_id, revision_no DESC);
     CREATE INDEX IF NOT EXISTS idx_dr_uploaded ON drawing_revisions(uploaded_at DESC);
   `);
+  migrateDrawingsSourceConstraint(db);
 }
 
 module.exports = { runDrawingTrackerMigrations };
