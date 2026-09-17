@@ -7510,6 +7510,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('../lib/dispatchReceiving').initialize(db);
 
   console.log('Database initialized successfully');
+  require('../lib/poFinalApproval').initialize(db);
   require('../lib/salesBillCheckingScore').migrateSalesBillCheckingScore(db);
   require('../lib/salesBillCheckingScore').migrateDprBillCheckingScore(db);
   return db;

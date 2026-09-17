@@ -147,6 +147,7 @@ router.get('/po', (req, res) => {
     ORDER BY po.created_at DESC`).all();
   // Resolve multi-engineer names from site_engineer_ids CSV
   for (const r of rows) {
+    Object.assign(r, require('../lib/poFinalApproval').state(db, r.id));
     const csv = r.site_engineer_ids;
     if (csv) {
       const ids = String(csv).split(',').map(x => parseInt(x, 10)).filter(Boolean);
@@ -249,6 +250,13 @@ router.post('/po', requirePermission('orders', 'create'), (req, res) => {
   if (lead_id) db.prepare('UPDATE leads SET status=? WHERE id=?').run('won', lead_id);
 
   res.status(201).json({ id: poId });
+});
+
+router.post('/po/:id/final-approval', requirePermission('orders', 'approve'), (req, res) => {
+  try {
+    const result = require('../lib/poFinalApproval').approve(getDb(), Number(req.params.id), req.user.id);
+    res.json({ message: 'Final data entry approved', ...result });
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
 
 router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {

@@ -62,7 +62,8 @@ function poMatches(p, q) {
 const UNIT_OPTIONS = ['Nos', 'nos', 'mtr', 'kg', 'sqm', 'rft', 'set', 'lot', 'pair', 'pc', 'pcs', 'No'];
 
 export default function Orders() {
-  const { canDelete } = useAuth();
+  const { canDelete, canApprove } = useAuth();
+  const [savingPo, setSavingPo] = useState(false);
   const [tab, setTab] = useUrlTab('po');
   const [pos, setPos] = useState([]);
   const [planning, setPlanning] = useState([]);
@@ -175,11 +176,15 @@ export default function Orders() {
 
   const savePo = async (e) => {
     e.preventDefault();
+    if (savingPo) return;
+    const approveAfterSave = e.nativeEvent.submitter?.value === 'approve';
     setPoError(null);
     const engIds = form.site_engineer_ids || [];
     if (!engIds.length) { setPoError('At least one Site Engineer is required'); toast.error('At least one Site Engineer is required'); return; }
     if (!form.crm_name) { setPoError('CRM is required'); toast.error('CRM is required'); return; }
     let stage = 'start';
+    setSavingPo(true);
+    let savedPoId = editingPO?.id;
     try {
       if (editingPO) {
         stage = 'PUT /orders/po/:id (metadata)';
@@ -196,8 +201,16 @@ export default function Orders() {
         toast.success(poItemsDirty ? 'PO + line items updated' : 'PO updated (line items unchanged)');
       } else {
         stage = 'POST /orders/po (create)';
-        await api.post('/orders/po', { ...form, items: poItems.filter(item => item.description && item.description.trim()) });
+        const created = await api.post('/orders/po', { ...form, items: poItems.filter(item => item.description && item.description.trim()) });
+        savedPoId = created.data.id;
+        // Retain the saved ID if approval validation fails so retry updates it.
+        setEditingPO({ id: savedPoId });
         toast.success('PO created');
+      }
+      if (approveAfterSave) {
+        stage = 'Final approval (data already saved)';
+        await api.post(`/orders/po/${savedPoId}/final-approval`, {});
+        toast.success('Final data entry approved');
       }
       setModal(false); setEditingPO(null);
       setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
@@ -219,7 +232,8 @@ export default function Orders() {
       setPoError(fullMsg);
       toast.error(serverErr || err.message || 'Failed', { duration: 6000 });
       console.error('[savePo] failed at', stage, err);
-    }
+      load();
+    } finally { setSavingPo(false); }
   };
 
   // Item-wise plan mapping (mam 2026-08-28: "pick here item wise which is
@@ -362,7 +376,11 @@ export default function Orders() {
       <td className="text-xs">{p.crm_name || <span className="text-gray-400">-</span>}</td>
       <td>{p.po_copy_link ? <a href={p.po_copy_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a> : <span className="text-gray-400 text-xs">-</span>}</td>
       <td>{p.boq_file_link ? <a href={p.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a> : <span className="text-gray-400 text-xs">-</span>}</td>
-      <td><StatusBadge status={p.status} /></td>
+      <td><StatusBadge status={p.status} />
+        <div className={`mt-1 text-xs ${p.final_approval_status === 'approved' ? 'text-emerald-700' : 'text-amber-700'}`} title={p.final_approval_status === 'approved' ? `${p.final_approved_by_name || ''} · ${p.final_approved_at || ''}` : ''}>
+          {p.final_approval_status === 'approved' ? '✓ Entry approved' : p.final_approval_status === 'needs_reapproval' ? 'Entry changed · approve again' : 'Entry approval pending'}
+        </div>
+      </td>
       <td>
         <div className="flex gap-1">
           <button onClick={() => handleEditPO(p)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>
@@ -813,9 +831,16 @@ export default function Orders() {
             </div>
           </div>
 
+          <div className="rounded-lg bg-slate-50 p-3 space-y-1">
+            <h4 className="font-semibold text-sm">Final data-entry approval</h4>
+            <p className="text-xs text-gray-600">Review the project, site details and complete BOQ together. Procurement chooses the brand / make when buying.</p>
+            <p className="text-xs text-gray-500">Changes to the saved entry require approval again.</p>
+            {!canApprove('orders') && <p className="text-xs text-amber-700">Save the entry for an authorized approver to review.</p>}
+          </div>
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
             <button type="button" onClick={() => { setModal(false); setEditingPO(null); }} className="btn btn-secondary w-full sm:w-auto">Cancel</button>
-            <button type="submit" className="btn btn-primary w-full sm:w-auto">{editingPO ? 'Update Purchase Order' : 'Create Purchase Order'}</button>
+            <button type="submit" disabled={savingPo} className="btn btn-primary w-full sm:w-auto">{savingPo ? 'Saving…' : editingPO ? 'Update Purchase Order' : 'Create Purchase Order'}</button>
+            {canApprove('orders') && <button type="submit" name="action" value="approve" disabled={savingPo} className="btn btn-primary w-full sm:w-auto">Save & Approve</button>}
           </div>
         </form>
       </Modal>

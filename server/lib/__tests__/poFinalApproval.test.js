@@ -1,0 +1,31 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const Database = require('better-sqlite3');
+const approval = require('../poFinalApproval');
+
+test('one final approval covers saved PO and BOQ; edited entries require approval again', () => {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE purchase_orders(id INTEGER PRIMARY KEY,business_book_id INTEGER,site_engineer_id INTEGER,site_engineer_ids TEXT,crm_name TEXT);
+    CREATE TABLE po_items(id INTEGER PRIMARY KEY,po_id INTEGER,business_book_id INTEGER,sr_no INTEGER,description TEXT,quantity REAL,unit TEXT,rate REAL);
+    CREATE TABLE users(id INTEGER PRIMARY KEY,name TEXT);
+    INSERT INTO users VALUES(1,'Approver');
+    INSERT INTO purchase_orders VALUES(1,8,2,NULL,'CRM'),(2,8,2,NULL,'CRM');`);
+  approval.initialize(db); approval.initialize(db);
+  assert.equal(approval.state(db,1).final_approval_status,'pending');
+  assert.throws(() => approval.approve(db,1,1), /Complete BOQ/);
+  db.exec("INSERT INTO po_items VALUES(1,1,8,1,'Pipe',5,'mtr',100),(2,2,8,1,'Sibling',2,'nos',50)");
+  assert.equal(approval.approve(db,1,1).final_approval_status,'approved');
+  assert.equal(approval.state(db,1).final_approved_by_name,'Approver');
+  approval.approve(db,1,1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM po_final_approval_log').get().n,1);
+  db.exec('UPDATE po_items SET quantity=3 WHERE id=2');
+  assert.equal(approval.state(db,1).final_approval_status,'approved');
+  db.exec('UPDATE po_items SET quantity=6 WHERE id=1');
+  assert.equal(approval.state(db,1).final_approval_status,'needs_reapproval');
+  approval.approve(db,1,1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM po_final_approval_log').get().n,2);
+  db.exec("UPDATE purchase_orders SET crm_name='New CRM' WHERE id=1");
+  assert.equal(approval.state(db,1).final_approval_status,'needs_reapproval');
+  assert.throws(() => approval.approve(db,999,1), /not found/);
+  db.close();
+});
