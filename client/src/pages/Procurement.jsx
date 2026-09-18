@@ -284,7 +284,7 @@ export default function Procurement() {
   // deep link to ?tab=payment silently fell back to 'indents' — the Payment
   // tab could not be linked to, and an Export there exported indents
   // (mam 2026-09-03).
-  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'payment', 'bills', 'delivery', 'debitnotes', 'pipeline', 'responsible'];
+  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'payment', 'bills', 'tallybill', 'delivery', 'debitnotes', 'pipeline', 'responsible'];
   const urlTab = searchParams.get('tab');
   const [tab, _setTab] = useState(VALID_TABS.includes(urlTab) ? urlTab : 'indents');
   const setTab = (newTab) => {
@@ -301,6 +301,8 @@ export default function Procurement() {
   // ⚙ Workflow Settings popup — approval gate config (who may act + on/off).
   const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
   const [indents, setIndents] = useState([]);
+  const [tallyIndents, setTallyIndents] = useState([]);
+  const [paymentVendorPos, setPaymentVendorPos] = useState([]);
   const [indTotal, setIndTotal] = useState(0);
   const [indLoading, setIndLoading] = useState(false);
   const [indKpis, setIndKpis] = useState(null);
@@ -899,19 +901,45 @@ export default function Procurement() {
     api.get('/procurement/indents/lookup').then(r => setIndentLookup(r.data || [])).catch(() => setIndentLookup([]));
   };
 
+  // Refs to always read current pagination / search / filter parameters inside async fetchers
+  const indParamsRef = useRef({});
+  indParamsRef.current = { page: indPage, limit: indPerPage, status: indFilterStatus, category: indFilterCategory, from: indFilterFrom, to: indFilterTo, search: indSearch };
+
+  const vpoListParamsRef = useRef({});
+  vpoListParamsRef.current = { page: vpoListPage, limit: vpoListPerPage, status: vpoListStatus, from: vpoListFrom, to: vpoListTo, search: vpoListSearch };
+
+  const vpoPendingParamsRef = useRef({});
+  vpoPendingParamsRef.current = { page: vpoPendingPage, limit: vpoPendingPerPage, status: vpoPendingStatus, search: vpoPendingSearch };
+
+  const billsFuParamsRef = useRef({});
+  billsFuParamsRef.current = { page: billsFuPage, limit: billsFuPerPage, from: billsFuExpFrom, to: billsFuExpTo, search: billsFuSearch };
+
+  const billsListParamsRef = useRef({});
+  billsListParamsRef.current = { page: billsListPage, limit: billsListPerPage, from: billsListFrom, to: billsListTo, search: billsListSearch };
+
+  const dispReadyParamsRef = useRef({});
+  dispReadyParamsRef.current = { page: dispReadyPage, limit: dispReadyPerPage, search: dispReadySearch };
+
+  const dispListParamsRef = useRef({});
+  dispListParamsRef.current = { page: dispListPage, limit: dispListPerPage, status: dispListStatus, from: dispListFrom, to: dispListTo, search: dispListSearch };
+
+  const activeTabRef = useRef(tab);
+  activeTabRef.current = tab;
+
   // Central paginated loader for indents
   const fetchIndentsPage = async () => {
     setIndLoading(true);
+    const { page, limit, status, category, from, to, search } = indParamsRef.current;
     try {
       const res = await api.get('/procurement/indents', {
         params: {
-          page: indPage,
-          limit: indPerPage,
-          status: indFilterStatus !== 'all' ? indFilterStatus : undefined,
-          category: indFilterCategory !== 'all' ? indFilterCategory : undefined,
-          from: indFilterFrom || undefined,
-          to: indFilterTo || undefined,
-          q: indSearch.trim() || undefined,
+          page,
+          limit,
+          status: status !== 'all' ? status : undefined,
+          category: category !== 'all' ? category : undefined,
+          from: from || undefined,
+          to: to || undefined,
+          q: search ? search.trim() : undefined,
         }
       });
       if (res.data && Array.isArray(res.data.rows)) {
@@ -936,15 +964,16 @@ export default function Procurement() {
   // Central paginated loader for Vendor PO list
   const fetchVpoListPage = async () => {
     setVpoListLoading(true);
+    const { page, limit, status, from, to, search } = vpoListParamsRef.current;
     try {
       const res = await api.get('/procurement/vendor-po', {
         params: {
-          page: vpoListPage,
-          limit: vpoListPerPage,
-          status: vpoListStatus !== 'all' ? vpoListStatus : undefined,
-          from: vpoListFrom || undefined,
-          to: vpoListTo || undefined,
-          q: vpoListSearch.trim() || undefined,
+          page,
+          limit,
+          status: status !== 'all' ? status : undefined,
+          from: from || undefined,
+          to: to || undefined,
+          q: search ? search.trim() : undefined,
         }
       });
       if (res.data && Array.isArray(res.data.rows)) {
@@ -967,13 +996,14 @@ export default function Procurement() {
   // Central paginated loader for Pending PO Items
   const fetchVpoPendingPage = async () => {
     setVpoPendingLoading(true);
+    const { page, limit, status, search } = vpoPendingParamsRef.current;
     try {
       const res = await api.get('/procurement/pending-po-items', {
         params: {
-          page: vpoPendingPage,
-          limit: vpoPendingPerPage,
-          status: vpoPendingStatus !== 'all' ? vpoPendingStatus : undefined,
-          q: vpoPendingSearch.trim() || undefined,
+          page,
+          limit,
+          status: status !== 'all' ? status : undefined,
+          q: search ? search.trim() : undefined,
         }
       });
       if (res.data && Array.isArray(res.data.rows)) {
@@ -997,14 +1027,15 @@ export default function Procurement() {
   // Central paginated loader for POs awaiting Purchase Bill (Follow-up)
   const fetchBillsFuPage = async () => {
     setBillsFuLoading(true);
+    const { page, limit, from, to, search } = billsFuParamsRef.current;
     try {
       const res = await api.get('/procurement/purchase-bills/followup', {
         params: {
-          page: billsFuPage,
-          limit: billsFuPerPage,
-          from: billsFuExpFrom || undefined,
-          to: billsFuExpTo || undefined,
-          q: billsFuSearch.trim() || undefined,
+          page,
+          limit,
+          from: from || undefined,
+          to: to || undefined,
+          q: search ? search.trim() : undefined,
         }
       });
       if (res.data && Array.isArray(res.data.rows)) {
@@ -1029,14 +1060,15 @@ export default function Procurement() {
   // Central paginated loader for Purchase Bills
   const fetchBillsListPage = async () => {
     setBillsListLoading(true);
+    const { page, limit, from, to, search } = billsListParamsRef.current;
     try {
       const res = await api.get('/procurement/purchase-bills', {
         params: {
-          page: billsListPage,
-          limit: billsListPerPage,
-          from: billsListFrom || undefined,
-          to: billsListTo || undefined,
-          q: billsListSearch.trim() || undefined,
+          page,
+          limit,
+          from: from || undefined,
+          to: to || undefined,
+          q: search ? search.trim() : undefined,
         }
       });
       if (res.data && Array.isArray(res.data.rows)) {
@@ -1065,12 +1097,13 @@ export default function Procurement() {
   // Central paginated loader for Ready to Dispatch POs
   const fetchDispReadyPage = async () => {
     setDispReadyLoading(true);
+    const { page, limit, search } = dispReadyParamsRef.current;
     try {
       const res = await api.get('/procurement/delivery-notes/ready', {
         params: {
-          page: dispReadyPage,
-          limit: dispReadyPerPage,
-          q: dispReadySearch.trim() || undefined,
+          page,
+          limit,
+          q: search ? search.trim() : undefined,
         }
       });
       if (res.data && Array.isArray(res.data.rows)) {
@@ -1095,15 +1128,16 @@ export default function Procurement() {
   // Central paginated loader for Dispatch & Receiving Notes
   const fetchDispListPage = async () => {
     setDispListLoading(true);
+    const { page, limit, status, from, to, search } = dispListParamsRef.current;
     try {
       const res = await api.get('/procurement/delivery-notes', {
         params: {
-          page: dispListPage,
-          limit: dispListPerPage,
-          status: dispListStatus !== 'all' ? dispListStatus : undefined,
-          from: dispListFrom || undefined,
-          to: dispListTo || undefined,
-          q: dispListSearch.trim() || undefined,
+          page,
+          limit,
+          status: status !== 'all' ? status : undefined,
+          from: from || undefined,
+          to: to || undefined,
+          q: search ? search.trim() : undefined,
         }
       });
       if (res.data && Array.isArray(res.data.rows)) {
@@ -1143,12 +1177,10 @@ export default function Procurement() {
       fetchVpoListPage(),
       fetchVpoPendingPage(),
     ]),
-    // Payment tab reads vendorPos only. It had NO fetcher, so opening or
-    // refreshing on ?tab=payment showed 0 / 0 and "Mark cleared" never
-    // reloaded (mam 2026-09-11: "i refresh data not showing").
-    payment: () => api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
-    // Reads the indent list (delivery_bill_amount rides along with it).
-    tallybill: () => api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
+    // Payment tab reads paymentVendorPos only (isolated state so vendor PO pagination is not wiped).
+    payment: () => api.get('/procurement/vendor-po').then(r => setPaymentVendorPos(Array.isArray(r.data) ? r.data : (r.data?.rows || []))).catch(() => setPaymentVendorPos([])),
+    // Reads the indent list into tallyIndents (isolated from Raise Indent).
+    tallybill: () => api.get('/procurement/indents').then(r => setTallyIndents(Array.isArray(r.data) ? r.data : (r.data?.rows || []))).catch(() => setTallyIndents([])),
     bills: () => Promise.all([
       fetchBillsFuPage(),
       fetchBillsListPage(),
@@ -1165,9 +1197,6 @@ export default function Procurement() {
       .catch(() => {}).then(() => Promise.all([
         fetchDispReadyPage(),
         fetchDispListPage(),
-        api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
-        api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
-        api.get('/procurement/delivery-notes').then(r => setDeliveryNotes(r.data)).catch(() => setDeliveryNotes([])),
       ])),
   };
 
@@ -1341,7 +1370,7 @@ export default function Procurement() {
       if (newPoParamHandled.current) return;
       newPoParamHandled.current = true;
       const indentId = searchParams.get('indent') || '';
-      if (indentId && !indents.length) api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => { });
+      if (indentId && !indentLookup.length) api.get('/procurement/indents/lookup').then(r => setIndentLookup(r.data || [])).catch(() => { });
       openCreateVendorPo(indentId);
       const next = new URLSearchParams(searchParams);
       next.delete('new'); next.delete('indent');
@@ -1358,12 +1387,11 @@ export default function Procurement() {
 
   // Returning to this browser tab after editing an item's UOM / price on
   // the Item Master page in another tab should show the live value here.
-  // Refetch the Raise-Indent data on focus; skipped for inline-edit tabs
-  // (e.g. Vendor Rates) so in-progress typing isn't clobbered.
+  // Refetch the active tab's data on focus with latest parameters.
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState === 'visible' && tab === 'indents') {
-        loadTab('indents', { force: true });
+      if (document.visibilityState === 'visible' && activeTabRef.current === 'indents') {
+        fetchIndentsPage();
       }
     };
     window.addEventListener('focus', refresh);
@@ -1372,8 +1400,7 @@ export default function Procurement() {
       window.removeEventListener('focus', refresh);
       document.removeEventListener('visibilitychange', refresh);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, []);
 
   // Site dropdown shows one row per unique name. BOQ/PO items are aggregated
   // across every Business Book entry matching that name, so picking
@@ -2769,7 +2796,7 @@ export default function Procurement() {
               // at a glance whether anything needs clearing without clicking
               // (mam 2026-05-27 workflow gate).
               const urgentCount = t.id === 'payment'
-                ? (vendorPos || []).filter(po => !po.cancelled && po.payment_block_status === 'pending').length
+                ? ((paymentVendorPos.length ? paymentVendorPos : vendorPos) || []).filter(po => !po.cancelled && po.payment_block_status === 'pending').length
                 : 0;
               return (
                 <button
@@ -2877,7 +2904,7 @@ export default function Procurement() {
                 return;
               }
               if (tab === 'payment') {
-                const rows = (vendorPos || []).filter(v => !v.cancelled && v.payment_block_type);
+                const rows = ((paymentVendorPos.length ? paymentVendorPos : vendorPos) || []).filter(v => !v.cancelled && v.payment_block_type);
                 exportCsv('po-payment-status', ['PO Number', 'PO Date', 'Vendor', 'Amount', 'Block Type', 'Block Amount', 'Payment Status', 'Cleared On', 'Notes'],
                   rows.map(v => [v.po_number, v.po_date, v.vendor_name, Math.round(+v.display_total || +v.total_amount || 0),
                   v.payment_block_type || '', Math.round(+v.payment_block_amount || 0), v.payment_block_status || '',
@@ -2936,7 +2963,7 @@ export default function Procurement() {
           delivery-bill PDF to check it against, and the Tally bill filed on it.
           Upload only — no number, no approval, no status change. */}
       {tab === 'tallybill' && (() => {
-        const billable = (indents || []).filter(i => +i.delivery_bill_amount > 0);
+        const billable = ((tallyIndents.length ? tallyIndents : indents) || []).filter(i => +i.delivery_bill_amount > 0);
         const q = tallySearch.trim().toLowerCase();
         const rows = billable.filter(i => !q
           || `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''}`.toLowerCase().includes(q));
@@ -5211,7 +5238,7 @@ export default function Procurement() {
         // this tab ONLY shows POs that need (or just had) Accounts action —
         // pending payment OR recently cleared. POs with no_advance / NULL
         // status live in Purchase Bills > Follow-up directly.
-        const activePos = (vendorPos || []).filter(po => !po.cancelled);
+        const activePos = ((paymentVendorPos.length ? paymentVendorPos : vendorPos) || []).filter(po => !po.cancelled);
 
         // Collapse duplicate POs for the SAME indent + vendor + amount (mam
         // 2026-06-15: "indent one against one vendor → only one need to show").
