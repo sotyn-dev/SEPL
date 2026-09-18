@@ -1,0 +1,10 @@
+const assert = require('node:assert/strict');
+const { previousBacklog } = require('../previousBacklog');
+assert.deepEqual(previousBacklog(1, 14), { pending: 15, done: 14 });
+assert.deepEqual(previousBacklog(0, 14), { pending: 14, done: 14 });
+assert.deepEqual(previousBacklog(5, 0), { pending: 5, done: 0 });
+assert.deepEqual(previousBacklog(undefined, undefined), { pending: 0, done: 0 });
+assert.deepEqual(previousBacklog('1', '14'), { pending: 15, done: 14 });
+const sample = previousBacklog(1, 14);
+assert.equal(Math.round((sample.done / sample.pending * 100 - 100) * 100) / 100, -6.67);
+console.log('Previous backlog regression checks passed');
