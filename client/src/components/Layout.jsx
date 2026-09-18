@@ -570,7 +570,19 @@ export default function Layout() {
   // accordion state untouched.
   const [navSearch, setNavSearch] = useState('');
   const navQuery = navSearch.trim().toLowerCase();
-  const itemMatches = (item) => !navQuery || flowLabel(item.path, item.label).toLowerCase().includes(navQuery);
+
+  const groupLabelMatches = (g) => {
+    if (!navQuery || !g) return false;
+    const gText = `${g.label || ''} ${g.id || ''}`.toLowerCase();
+    return gText.includes(navQuery);
+  };
+
+  const itemMatches = (item, group = null) => {
+    if (!navQuery) return true;
+    if (group && groupLabelMatches(group)) return true;
+    const itText = `${flowLabel(item.path, item.label)} ${item.label || ''} ${item.path || ''} ${item.module || ''}`.toLowerCase();
+    return itText.includes(navQuery);
+  };
 
   // ─── Sidebar accordion state ───────────────────────────────────────
   // Each group is collapsible, INITIALLY CLOSED, expand independently
@@ -642,8 +654,8 @@ export default function Layout() {
     if (g.adminOnly && !isAdmin()) return false;
     // Link group (path, no items): the header itself is the destination —
     // visibility follows its own module/search match (ERP Management).
-    if (g.path) return itemVisible(g) && itemMatches(g);
-    return g.items.some(it => !it.hidden && itemVisible(it) && itemMatches(it));
+    if (g.path) return itemVisible(g) && (itemMatches(g, g) || groupLabelMatches(g));
+    return g.items.some(it => !it.hidden && itemVisible(it) && itemMatches(it, g));
   };
   const visibleGroups = SIDEBAR_GROUPS.filter(groupVisible);
   const showSettings = groupVisible(SIDEBAR_SETTINGS);
@@ -799,7 +811,7 @@ export default function Layout() {
               </Link>
             );
             const isOpen = isGroupOpen(g.id);
-            const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it));
+            const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it, g));
             const hasActiveChild = childItems.some(it => location.pathname === it.path);
             return (
               <div key={g.id} className="pt-0.5">
@@ -832,7 +844,7 @@ export default function Layout() {
               mam's spec.  Same collapsible accordion as the others. */}
           {showSettings && (() => {
             const isOpen = isGroupOpen(SIDEBAR_SETTINGS.id);
-            const childItems = SIDEBAR_SETTINGS.items.filter(it => itemVisible(it) && itemMatches(it));
+            const childItems = SIDEBAR_SETTINGS.items.filter(it => itemVisible(it) && itemMatches(it, SIDEBAR_SETTINGS));
             const hasActiveChild = childItems.some(it => location.pathname === it.path);
             return (
               <div className="pt-3 mt-2 border-t border-white/10">
