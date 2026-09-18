@@ -333,19 +333,7 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     //   purchase_orders.site_engineer_id (CSV via site_engineer_ids too) →
     //                                    sites are linked through po.id
     const userName = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
-    const siteIdsForUser = () => {
-      const rows = db.prepare(`
-        SELECT id FROM sites WHERE site_engineer_id = ? OR supervisor_id = ?
-        UNION
-        SELECT id FROM sites WHERE LOWER(TRIM(COALESCE(supervisor,''))) = LOWER(TRIM(?))
-        UNION
-        SELECT s.id FROM sites s
-        JOIN purchase_orders po ON po.id = s.po_id
-        WHERE po.site_engineer_id = ?
-           OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ?
-      `).all(userId, userId, userName, userId, `%,${userId},%`);
-      return rows.map(r => r.id).filter(Boolean);
-    };
+    const siteIdsForUser = () => require('../lib/scorecardSites').scorecardSiteIds(db, userId, userName);
 
     let _raciAgg; // memoized RACI aggregate for this user/week — both raci sources reuse it
     let _raciBreakdown; // memoized per-(module,step) RACI breakdown — per-step KPIs reuse it
