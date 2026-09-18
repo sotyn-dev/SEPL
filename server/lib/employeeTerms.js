@@ -1,4 +1,5 @@
-const FIELDS = ['reports_to', 'employment_type', 'employment_status', 'notice_period_days', 'probation_end_date', 'uan_number', 'uan_verified', 'permanent_address', 'permanent_pin', 'current_address', 'current_pin', 'same_as_permanent', 'pf_number', 'esi_number', 'pt_state', 'form11_file', 'form_f_file', 'ctc_annual', 'variable_bonus', 'basic_salary', 'hra', 'pf_deduction', 'esi_deduction', 'blood_group', 'tds_estimated_annual', 'last_increment_date'];
+const FIELDS = ['reports_to', 'employment_type', 'employment_status', 'notice_period_days', 'probation_end_date', 'uan_number', 'uan_verified', 'permanent_address', 'permanent_pin', 'current_address', 'current_pin', 'same_as_permanent', 'pf_number', 'esi_number', 'pt_state', 'form11_file', 'form_f_file', 'ctc_annual', 'variable_bonus', 'basic_salary', 'hra', 'pf_deduction', 'esi_deduction', 'blood_group', 'tds_estimated_annual', 'last_increment_date', 'grade_band', 'special_allowance', 'reimbursement_lta_annual', 'reimbursement_medical_annual', 'reimbursement_phone_annual', 'bonus_target_pct', 'salary_review_cycle'];
+const SALARY_FIELDS = ["ctc_annual", "variable_bonus", "basic_salary", "hra", "pf_deduction", "esi_deduction", "tds_estimated_annual", "last_increment_date", "special_allowance", "reimbursement_lta_annual", "reimbursement_medical_annual", "reimbursement_phone_annual", "bonus_target_pct", "salary_review_cycle"];
 function employeeTerms(body, db, employeeId) {
   const values = {};
   for (const field of FIELDS) {
@@ -6,7 +7,18 @@ function employeeTerms(body, db, employeeId) {
     const raw = body[field];
     values[field] = raw === '' || raw == null ? null : raw;
   }
-  for (const [field, choices] of Object.entries({ employment_type: ['permanent', 'contract', 'intern'], employment_status: ['probation', 'confirmed'] })) {
+  // Annual CTC is derived from monthly salary, never trusted from the client.
+  if (Object.prototype.hasOwnProperty.call(body, 'salary')) {
+    const salary = body.salary;
+    if (salary === '' || salary == null) values.ctc_annual = null;
+    else {
+      if (!['number', 'string'].includes(typeof salary) || !Number.isFinite(Number(salary)) || Number(salary) < 0) throw new Error('Salary must be zero or greater');
+      values.ctc_annual = Math.round(Number(salary) * 1200) / 100;
+    }
+  } else if ('ctc_annual' in values) {
+    delete values.ctc_annual;
+  }
+  for (const [field, choices] of Object.entries({ employment_type: ['permanent', 'contract', 'intern'], employment_status: ['probation', 'confirmed'], grade_band: ['L1','L2','L3','L4','L5','L6','L7','L8'], salary_review_cycle: ['apr_mar','joining_anniversary'] })) {
     if (values[field] != null && !choices.includes(values[field])) throw new Error(`Invalid ${field.replaceAll('_', ' ')}`);
   }
   if (values.notice_period_days != null) {
@@ -35,7 +47,7 @@ function employeeTerms(body, db, employeeId) {
     if (!uan || (current?.uan_number && 'uan_number' in values && values.uan_number !== current.uan_number)) values.uan_verified = 0;
     else if ('uan_verified' in values) values.uan_verified = values.uan_verified ? 1 : 0;
   }
-  for (const key of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual"]) {
+  for (const key of ["ctc_annual","variable_bonus","basic_salary","hra","pf_deduction","esi_deduction","tds_estimated_annual","special_allowance","reimbursement_lta_annual","reimbursement_medical_annual","reimbursement_phone_annual","bonus_target_pct"]) {
     if (values[key] != null) {
       if (!['number', 'string'].includes(typeof values[key])) throw new Error('Enter a valid amount');
       values[key] = Number(values[key]);
@@ -67,6 +79,13 @@ function employeeTerms(body, db, employeeId) {
     const date = values.last_increment_date;
     if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) throw new Error('Enter a valid last increment date');
   }
+  if (values.bonus_target_pct != null && values.bonus_target_pct > 100) throw new Error('Bonus target must be between 0 and 100 percent');
+  if ('bonus_target_pct' in values || 'user_id' in body) {
+    const previous = employeeId ? db.prepare('SELECT user_id, bonus_target_pct FROM employees WHERE id=?').get(employeeId) : null;
+    const target = 'bonus_target_pct' in values ? values.bonus_target_pct : previous?.bonus_target_pct;
+    const userId = 'user_id' in body ? body.user_id : previous?.user_id;
+    if (target > 0 && (!userId || !db.prepare('SELECT ut.template_id FROM score_user_template ut JOIN score_templates t ON t.id=ut.template_id WHERE ut.user_id=? AND COALESCE(t.active,1)=1').get(userId))) throw new Error('Assign an active scorecard to the linked login user before setting a bonus target');
+  }
   return values;
 }
-module.exports = { employeeTerms };
+module.exports = { employeeTerms, FIELDS, SALARY_FIELDS };

@@ -23,6 +23,7 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const router = express.Router();
+const personalFields = require('../../shared/employeeMaster.json').fields.filter(f => ['date_of_birth', 'gender', 'blood_group', 'emergency_contact_name', 'emergency_contact_phone', 'guardian_title', 'guardian_relation', 'guardian_name'].includes(f.key));
 
 // ── GET /api/public/offer/:token ─────────────────────────────────
 // Returns just enough for the public offer page to render the
@@ -186,6 +187,12 @@ function liveFillLink(db, token) {
   return { link };
 }
 
+router.get('/employee-fill/:token/ifsc/:code', (req, res, next) => {
+  const { err } = liveFillLink(getDb(), req.params.token);
+  if (err) return res.status(err[0]).json({ error: err[1] });
+  next();
+}, require('../lib/ifscLookup'));
+
 router.get('/employee-fill/:token', (req, res) => {
   const db = getDb();
   const { link, err } = liveFillLink(db, req.params.token);
@@ -193,13 +200,16 @@ router.get('/employee-fill/:token', (req, res) => {
   let employee = null;
   if (link.employee_id) {
     const e = db.prepare(`SELECT name, phone, email, designation, department, join_date,
-                                 aadhar_file, pan_file, qualification_file
+                                 date_of_birth, gender, blood_group, emergency_contact_name, emergency_contact_phone, guardian_title, guardian_relation, guardian_name, aadhar_file, pan_file, qualification_file, permanent_address, permanent_pin, current_address, current_pin, same_as_permanent, aadhaar_last4, pan_number, bank_account_no
                             FROM employees WHERE id=?`).get(link.employee_id);
     if (!e) return res.status(404).json({ error: 'This link is no longer valid' });
     // Prefill basics; docs only as has-flags (never leak stored file URLs publicly)
     employee = {
+      ...Object.fromEntries(personalFields.map(f => [f.key, e[f.key]])),
       name: e.name, phone: e.phone, email: e.email,
       designation: e.designation, department: e.department, join_date: e.join_date,
+      permanent_address: e.permanent_address, permanent_pin: e.permanent_pin, current_address: e.current_address, current_pin: e.current_pin, same_as_permanent: e.same_as_permanent,
+      has_aadhaar_number: !!e.aadhaar_last4, has_pan_number: !!e.pan_number, has_bank_details: !!e.bank_account_no,
       has_aadhar: !!e.aadhar_file, has_pan: !!e.pan_file, has_qualification: !!e.qualification_file,
     };
   }
@@ -227,6 +237,47 @@ router.post('/employee-fill/:token', (req, res) => {
     aadhar_file: doc(b.aadhar_file), pan_file: doc(b.pan_file), qualification_file: doc(b.qualification_file),
   };
 
+  const address = {};
+  for (const key of ['permanent_address','permanent_pin','current_address','current_pin']) {
+    if (b[key] === undefined || b[key] === null || b[key] === '') continue;
+    if (typeof b[key] !== 'string' || b[key].length > 2000) return res.status(400).json({ error: 'Enter a valid address' });
+    address[key] = b[key].trim();
+    if (key.endsWith('_pin') && address[key] && !/^[1-9][0-9]{5}$/.test(address[key])) return res.status(400).json({ error: 'PIN codes must be six digits and cannot start with zero' });
+  }
+  if ('same_as_permanent' in b) {
+    if (![0,1,true,false].includes(b.same_as_permanent)) return res.status(400).json({error:'Invalid address selection'});
+    address.same_as_permanent = b.same_as_permanent ? 1 : 0;
+  }
+  // Explicit allowlist: self-fill cannot write salary, permissions or login links.
+  const formats = {
+    aadhaar_last4: [/^[0-9]{4}$/, 'Enter only the last four Aadhaar digits'],
+    pan_number: [/^[A-Z]{5}[0-9]{4}[A-Z]$/, 'Enter a valid PAN number'],
+    bank_ifsc: [/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Enter a valid IFSC code'],
+    bank_account_no: [/^[0-9]{6,20}$/, 'Bank account number must contain 6 to 20 digits'],
+  };
+  for (const key of ['aadhaar_last4','pan_number','bank_ifsc','bank_name','bank_branch','bank_account_no']) {
+    if (b[key] == null || b[key] === '') continue;
+    if (typeof b[key] !== 'string' || b[key].length > 200) return res.status(400).json({error:'Enter valid bank and identity details'});
+    const value = ['pan_number','bank_ifsc'].includes(key) ? b[key].trim().toUpperCase() : b[key].trim();
+    if (!value) continue;
+    if (formats[key] && !formats[key][0].test(value)) return res.status(400).json({error:formats[key][1]});
+    address[key] = value;
+  }
+  for (const field of personalFields) {
+    const raw = b[field.key];
+    if (raw == null || raw === '') continue;
+    if (typeof raw !== 'string' || raw.length > 200) return res.status(400).json({error: `Enter a valid ${field.label}`});
+    const value = raw.trim();
+    if (!value) continue;
+    if (field.options && !field.options.some(([option]) => option === value)) return res.status(400).json({error: `Select a valid ${field.label}`});
+    if (field.key === 'emergency_contact_phone' && !/^[0-9]{10}$/.test(value)) return res.status(400).json({error:'Emergency contact phone must contain 10 digits'});
+    if (field.key === 'date_of_birth') {
+      const date = new Date(value + 'T00:00:00Z');
+      const today = require('../lib/istDate').istToday();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0,10) !== value || value > today) return res.status(400).json({error:'Enter a valid date of birth'});
+    }
+    address[field.key] = value;
+  }
   let employeeId = link.employee_id;
   try {
     if (employeeId) {
@@ -266,6 +317,13 @@ router.post('/employee-fill/:token', (req, res) => {
              vals.join_date || istToday(), vals.aadhar_file, vals.pan_file, vals.qualification_file);
       employeeId = r.lastInsertRowid;
     }
+    const existingAddress = db.prepare('SELECT permanent_address,permanent_pin,same_as_permanent FROM employees WHERE id=?').get(employeeId);
+    if (address.same_as_permanent ?? existingAddress.same_as_permanent) {
+      address.current_address = address.permanent_address ?? existingAddress.permanent_address;
+      address.current_pin = address.permanent_pin ?? existingAddress.permanent_pin;
+    }
+    const addressKeys = Object.keys(address);
+    if (addressKeys.length) db.prepare(`UPDATE employees SET ${addressKeys.map(key => `${key}=?`).join(',')} WHERE id=?`).run(...addressKeys.map(key => address[key] ?? null),employeeId);
     // Single-use links are consumed; a standing (multi_use) new-joiner link
     // stays live for the next joiner — only the latest submitter name is noted.
     if (link.multi_use) {

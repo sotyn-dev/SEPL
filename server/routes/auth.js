@@ -26,6 +26,7 @@ function finishLogin(res, user, db, ip, ua) {
       approval_role: user.approval_role || null,
       avatar_url: user.avatar_url || null,
       has_recovery_code: !!user.recovery_code_hash,
+      must_change_password: !!user.must_change_password,
       totp_enabled: !!(totp.get(db, user.id) || {}).enabled,
     },
     permissions,
@@ -172,7 +173,7 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
 
 router.get('/me', authMiddleware, (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash, approval_role, avatar_url FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash, approval_role, avatar_url, must_change_password FROM users WHERE id = ?').get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   const has_recovery_code = !!user.recovery_code_hash;
   delete user.recovery_code_hash;
@@ -510,12 +511,13 @@ router.post('/change-password', authMiddleware, (req, res) => {
   const { current_password, new_password } = req.body;
   if (!new_password || new_password.length < 4) return res.status(400).json({ error: 'New password must be at least 4 characters' });
   const db = getDb();
-  const user = db.prepare('SELECT id, password FROM users WHERE id=?').get(req.user.id);
+  const user = db.prepare('SELECT id, password, must_change_password FROM users WHERE id=?').get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   if (!current_password || !bcrypt.compareSync(current_password, user.password)) {
     return res.status(401).json({ error: 'Current password is incorrect' });
   }
-  db.prepare('UPDATE users SET password=? WHERE id=?').run(bcrypt.hashSync(new_password, 10), req.user.id);
+  if (user.must_change_password && (new_password.length < 8 || new_password === current_password)) return res.status(400).json({ error: 'Choose a new password of at least 8 characters, different from the initial password' });
+  db.prepare('UPDATE users SET password=?, must_change_password=0 WHERE id=?').run(bcrypt.hashSync(new_password, 10), req.user.id);
   // Changing your password signs out everywhere ELSE (the usual reason someone
   // changes it is that they think somebody has their old one). The tab doing
   // the change is kept alive by handing back a token minted AFTER the

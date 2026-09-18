@@ -1,0 +1,1200 @@
+{
+  "sections": [
+    {
+      "id": "basic",
+      "label": "Basic information",
+      "ownership": "Employee provided",
+      "description": "Identity and contact details."
+    },
+    {
+      "id": "employment",
+      "label": "Employment",
+      "ownership": "HR managed",
+      "description": "Role, reporting line and employment terms."
+    },
+    {
+      "id": "address",
+      "label": "Address",
+      "ownership": "Employee provided",
+      "description": "Permanent and current residential details."
+    },
+    {
+      "id": "documents",
+      "label": "Documents & KYC",
+      "ownership": "Employee provided",
+      "description": "Identity evidence and qualifications."
+    },
+    {
+      "id": "statutory",
+      "label": "Statutory & compliance",
+      "ownership": "HR managed",
+      "description": "PF, ESI and declarations."
+    },
+    {
+      "id": "compensation",
+      "label": "Compensation",
+      "ownership": "Restricted",
+      "description": "Salary, deductions and annual entitlements."
+    },
+    {
+      "id": "bank",
+      "label": "Bank details",
+      "ownership": "Employee provided",
+      "description": "Salary payment account."
+    },
+    {
+      "id": "assets",
+      "label": "Assets & facilities",
+      "ownership": "HR managed",
+      "description": "Equipment issued from Company Assets."
+    }
+  ],
+  "fields": [
+    {
+      "key": "name",
+      "label": "Full name",
+      "type": "text",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": true,
+      "requiredOnQuickCreate": true,
+      "completionRequired": true,
+      "quickCreate": true
+    },
+    {
+      "key": "phone",
+      "label": "Phone",
+      "type": "tel",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": true
+    },
+    {
+      "key": "email",
+      "label": "Email",
+      "type": "email",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": true
+    },
+    {
+      "key": "date_of_birth",
+      "label": "Date of birth",
+      "type": "date",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "gender",
+      "label": "Gender",
+      "type": "select",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false,
+      "options": [
+        [
+          "Male",
+          "Male"
+        ],
+        [
+          "Female",
+          "Female"
+        ],
+        [
+          "Other",
+          "Other"
+        ]
+      ]
+    },
+    {
+      "key": "blood_group",
+      "label": "Blood group",
+      "type": "select",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false,
+      "options": [
+        [
+          "A+",
+          "A+"
+        ],
+        [
+          "A-",
+          "A-"
+        ],
+        [
+          "B+",
+          "B+"
+        ],
+        [
+          "B-",
+          "B-"
+        ],
+        [
+          "AB+",
+          "AB+"
+        ],
+        [
+          "AB-",
+          "AB-"
+        ],
+        [
+          "O+",
+          "O+"
+        ],
+        [
+          "O-",
+          "O-"
+        ]
+      ]
+    },
+    {
+      "key": "emergency_contact_name",
+      "label": "Emergency contact name",
+      "type": "text",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "emergency_contact_phone",
+      "label": "Emergency contact phone",
+      "type": "tel",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "guardian_title",
+      "label": "Guardian title",
+      "type": "select",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "options": [
+        [
+          "Mr.",
+          "Mr."
+        ],
+        [
+          "Mrs.",
+          "Mrs."
+        ],
+        [
+          "Sh.",
+          "Sh."
+        ],
+        [
+          "Smt.",
+          "Smt."
+        ]
+      ]
+    },
+    {
+      "key": "guardian_relation",
+      "label": "Relationship",
+      "type": "select",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "options": [
+        [
+          "Father",
+          "Father"
+        ],
+        [
+          "Spouse",
+          "Spouse"
+        ],
+        [
+          "Mother",
+          "Mother"
+        ]
+      ]
+    },
+    {
+      "key": "guardian_name",
+      "label": "Father / spouse / mother name",
+      "type": "text",
+      "section": "basic",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "id",
+      "label": "Employee ID",
+      "type": "system",
+      "section": "employment",
+      "owner": "system",
+      "editableByEmployee": false,
+      "editableByHR": false,
+      "sensitive": false,
+      "autoCalculated": true,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "designation",
+      "label": "Designation",
+      "type": "suggestion",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": true,
+      "completionRequired": true,
+      "quickCreate": true
+    },
+    {
+      "key": "department",
+      "label": "Department",
+      "type": "suggestion",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": true,
+      "completionRequired": true,
+      "quickCreate": true
+    },
+    {
+      "key": "reports_to",
+      "label": "Reports to / manager",
+      "type": "manager",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": true,
+      "completionRequired": true,
+      "quickCreate": true
+    },
+    {
+      "key": "join_date",
+      "label": "Joining date",
+      "type": "date",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": true,
+      "completionRequired": true,
+      "quickCreate": true
+    },
+    {
+      "key": "employment_type",
+      "label": "Employment type",
+      "type": "select",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": true,
+      "completionRequired": true,
+      "quickCreate": true,
+      "options": [
+        [
+          "permanent",
+          "Permanent"
+        ],
+        [
+          "contract",
+          "Contract"
+        ],
+        [
+          "intern",
+          "Intern"
+        ]
+      ]
+    },
+    {
+      "key": "grade_band",
+      "label": "Grade / band",
+      "type": "select",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false,
+      "options": [
+        [
+          "L1",
+          "L1"
+        ],
+        [
+          "L2",
+          "L2"
+        ],
+        [
+          "L3",
+          "L3"
+        ],
+        [
+          "L4",
+          "L4"
+        ],
+        [
+          "L5",
+          "L5"
+        ],
+        [
+          "L6",
+          "L6"
+        ],
+        [
+          "L7",
+          "L7"
+        ],
+        [
+          "L8",
+          "L8"
+        ]
+      ]
+    },
+    {
+      "key": "employment_status",
+      "label": "Employment status",
+      "type": "select",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "options": [
+        [
+          "probation",
+          "Probation"
+        ],
+        [
+          "confirmed",
+          "Confirmed"
+        ]
+      ]
+    },
+    {
+      "key": "status",
+      "label": "Account status",
+      "type": "select",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "options": [
+        [
+          "active",
+          "Active"
+        ],
+        [
+          "training",
+          "Training"
+        ],
+        [
+          "inactive",
+          "Inactive"
+        ],
+        [
+          "terminated",
+          "Terminated"
+        ]
+      ]
+    },
+    {
+      "key": "roster",
+      "label": "Roster / shift",
+      "type": "select",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "options": [
+        [
+          "general",
+          "General — 9:30 AM to 6:30 PM"
+        ],
+        [
+          "early",
+          "Early — 9:00 AM to 6:00 PM"
+        ]
+      ]
+    },
+    {
+      "key": "notice_period_days",
+      "label": "Notice period (days)",
+      "type": "select",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false,
+      "options": [
+        [
+          30,
+          "30"
+        ],
+        [
+          60,
+          "60"
+        ],
+        [
+          90,
+          "90"
+        ]
+      ]
+    },
+    {
+      "key": "probation_end_date",
+      "label": "Probation end date",
+      "type": "probation",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": true,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "user_id",
+      "label": "Linked login user",
+      "type": "user",
+      "section": "employment",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "same_as_permanent",
+      "label": "Current address same as permanent",
+      "type": "checkbox",
+      "section": "address",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "permanent_address",
+      "label": "Permanent address",
+      "type": "textarea",
+      "section": "address",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "permanent_pin",
+      "label": "Permanent PIN",
+      "type": "text",
+      "section": "address",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "current_address",
+      "label": "Current address",
+      "type": "textarea",
+      "section": "address",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "current_pin",
+      "label": "Current PIN",
+      "type": "text",
+      "section": "address",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "aadhaar_last4",
+      "label": "Aadhaar — last 4 digits",
+      "type": "text",
+      "section": "documents",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "aadhar_file",
+      "label": "Aadhaar card",
+      "type": "file",
+      "section": "documents",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "pan_number",
+      "label": "PAN number",
+      "type": "text",
+      "section": "documents",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "pan_file",
+      "label": "PAN card",
+      "type": "file",
+      "section": "documents",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "qualification_file",
+      "label": "Highest qualification certificate",
+      "type": "file",
+      "section": "documents",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "uan_number",
+      "label": "UAN number",
+      "type": "text",
+      "section": "statutory",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "uan_verified",
+      "label": "Verified by HR",
+      "type": "checkbox",
+      "section": "statutory",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "pf_number",
+      "label": "PF number",
+      "type": "text",
+      "section": "statutory",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "esi_number",
+      "label": "ESI number",
+      "type": "text",
+      "section": "statutory",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "pt_state",
+      "label": "Professional tax state",
+      "type": "state",
+      "section": "statutory",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "form11_file",
+      "label": "Form 11 — PF declaration",
+      "type": "file",
+      "section": "statutory",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "form_f_file",
+      "label": "Form F — gratuity nomination",
+      "type": "file",
+      "section": "statutory",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "salary",
+      "label": "Monthly salary",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false,
+      "period": "month"
+    },
+    {
+      "key": "ctc_annual",
+      "label": "Annual CTC",
+      "type": "calculated",
+      "section": "compensation",
+      "owner": "system",
+      "editableByEmployee": false,
+      "editableByHR": false,
+      "sensitive": true,
+      "autoCalculated": true,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "basic_salary",
+      "label": "Basic",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "month"
+    },
+    {
+      "key": "hra",
+      "label": "HRA",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "month"
+    },
+    {
+      "key": "special_allowance",
+      "label": "Special allowance",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "month"
+    },
+    {
+      "key": "variable_bonus",
+      "label": "Variable / bonus",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "year"
+    },
+    {
+      "key": "bonus_target_pct",
+      "label": "Bonus / variable target (%)",
+      "type": "number",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "pf_deduction",
+      "label": "PF deduction",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "month"
+    },
+    {
+      "key": "esi_deduction",
+      "label": "ESI deduction",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "month"
+    },
+    {
+      "key": "professional_tax_estimate",
+      "label": "Professional tax estimate",
+      "type": "pt",
+      "section": "compensation",
+      "owner": "system",
+      "editableByEmployee": false,
+      "editableByHR": false,
+      "sensitive": true,
+      "autoCalculated": true,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "tds_estimated_annual",
+      "label": "Estimated TDS",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "year"
+    },
+    {
+      "key": "last_increment_date",
+      "label": "Last increment date",
+      "type": "date",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "salary_review_cycle",
+      "label": "Salary review cycle",
+      "type": "select",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "options": [
+        [
+          "apr_mar",
+          "Apr–Mar"
+        ],
+        [
+          "joining_anniversary",
+          "Joining anniversary"
+        ]
+      ]
+    },
+    {
+      "key": "reimbursement_lta_annual",
+      "label": "LTA entitlement",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "year"
+    },
+    {
+      "key": "reimbursement_medical_annual",
+      "label": "Medical entitlement",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "year"
+    },
+    {
+      "key": "reimbursement_phone_annual",
+      "label": "Phone entitlement",
+      "type": "money",
+      "section": "compensation",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false,
+      "period": "year"
+    },
+    {
+      "key": "bank_ifsc",
+      "label": "IFSC code",
+      "type": "text",
+      "section": "bank",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "bank_name",
+      "label": "Bank name",
+      "type": "text",
+      "section": "bank",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "bank_branch",
+      "label": "Bank branch",
+      "type": "text",
+      "section": "bank",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "bank_account_no",
+      "label": "Bank account number",
+      "type": "text",
+      "section": "bank",
+      "owner": "employee",
+      "editableByEmployee": true,
+      "editableByHR": true,
+      "sensitive": true,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": true,
+      "quickCreate": false
+    },
+    {
+      "key": "equipment_asset_ids",
+      "label": "Equipment assignments",
+      "type": "assets",
+      "section": "assets",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    },
+    {
+      "key": "vehicle_asset_id",
+      "label": "Vehicle allotted",
+      "type": "assets",
+      "section": "assets",
+      "owner": "hr",
+      "editableByEmployee": false,
+      "editableByHR": true,
+      "sensitive": false,
+      "autoCalculated": false,
+      "required": false,
+      "requiredOnQuickCreate": false,
+      "completionRequired": false,
+      "quickCreate": false
+    }
+  ]
+}

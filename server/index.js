@@ -618,7 +618,7 @@ app.use('/audit', require('./routes/auditReport'));
 
 // File upload endpoint
 const { authMiddleware } = require('./middleware/auth');
-app.post('/api/upload', authMiddleware, upload.single('file'), async (req, res) => {
+app.post('/api/upload', authMiddleware, require('./lib/employeeDocumentUpload'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const key = uploadKey(req, req.file);
   // On local this is a no-op (multer already wrote the file where it belongs). On s3 it
@@ -669,6 +669,8 @@ app.post('/api/public/employee-upload/:token',
 // quarantine (e.g. a chat/ticket was deleted, then a DB revert re-referenced its
 // file), pull it back out of quarantine and serve it — automatic recovery, no
 // manual sweep needed. Runs before express.static so the restored file is served.
+// New employee documents require HR read access even when their URL is known.
+app.use('/uploads/employee-documents', authMiddleware, require('./middleware/auth').requirePermission('employees', 'view'));
 app.use('/uploads', async (req, res, next) => {
   let key = null;
   try {

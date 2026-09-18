@@ -1,3 +1,4 @@
+import InitialPasswordChange from './components/InitialPasswordChange';
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
@@ -131,6 +132,7 @@ const Training = lazy(() => import('./pages/Training'));
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
+  if (user?.must_change_password) return <InitialPasswordChange />;
   return user ? children : <Navigate to="/login" />;
 }
 

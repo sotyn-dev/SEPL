@@ -22,6 +22,7 @@ export function AuthProvider({ children }) {
             approval_role: r.data.approval_role || null,
             avatar_url: r.data.avatar_url || null,
             has_recovery_code: !!r.data.has_recovery_code,
+            must_change_password: !!r.data.must_change_password,
             totp_enabled: !!r.data.totp_enabled,
           });
           setPermissions(r.data.permissions || {});
@@ -65,8 +66,8 @@ export function AuthProvider({ children }) {
         setUser(u => {
           if (!u) return u;
           const totp = !!r.data.totp_enabled;
-          if (u.role === r.data.role && u.department === r.data.department && !!u.totp_enabled === totp) return u;
-          return { ...u, role: r.data.role, department: r.data.department, totp_enabled: totp };
+          if (u.role === r.data.role && u.department === r.data.department && !!u.totp_enabled === totp && !!u.must_change_password === !!r.data.must_change_password) return u;
+          return { ...u, role: r.data.role, department: r.data.department, totp_enabled: totp, must_change_password: !!r.data.must_change_password };
         });
       }).catch(() => {});
     };

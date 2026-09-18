@@ -7,7 +7,7 @@ import { useState, useRef, useEffect } from 'react';
 // anything reachable by typing a couple of words.
 const RENDER_CAP = 400;
 
-export default function SearchableSelect({ options, value, onChange, placeholder = 'Search...', displayKey = 'label', valueKey = 'value', buttonClassName = 'input text-left text-sm w-full truncate flex items-center justify-between gap-1 cursor-pointer' }) {
+export default function SearchableSelect({ id, ariaLabel, disabled = false, options, value, onChange, placeholder = 'Search...', displayKey = 'label', valueKey = 'value', buttonClassName = 'input text-left text-sm w-full truncate flex items-center justify-between gap-1 cursor-pointer' }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef(null);
@@ -47,7 +47,7 @@ export default function SearchableSelect({ options, value, onChange, placeholder
 
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => { setOpen(!open); setSearch(''); }}
+      <button id={id} aria-label={ariaLabel} aria-expanded={open} disabled={disabled} type="button" onClick={() => { setOpen(!open); setSearch(''); }}
         // title attribute → browser-native tooltip on hover with the full
         // (untruncated) selected value.  Cheap, no library needed, works
         // across all browsers.
@@ -63,9 +63,9 @@ export default function SearchableSelect({ options, value, onChange, placeholder
         // Panel width expands to at least 240px (up to 90vw) when button is narrow
         <div className="absolute z-50 mt-1 left-0 min-w-full sm:min-w-[240px] max-w-[90vw] bg-white border border-gray-200 rounded-lg shadow-lg max-h-80 overflow-hidden">
           <div className="p-2 border-b">
-            <input ref={inputRef} type="text" className="input text-sm w-full" placeholder="Type to search..."
+            <input ref={inputRef} type="text" className="input text-sm w-full" placeholder="Type to search..." aria-label={ariaLabel ? `Search ${ariaLabel}` : "Search options"}
               value={search} onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }} />
+              onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); } }} />
           </div>
           <div className="overflow-y-auto max-h-64">
             {value && (
