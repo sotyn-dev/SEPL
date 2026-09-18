@@ -363,6 +363,20 @@ router.post('/', (req, res) => {
       tag: `delegation-${r.lastInsertRowid}`,
     });
   } catch {}
+
+  try {
+    const { createMandatoryTaskNotification } = require('../services/complianceService');
+    createMandatoryTaskNotification({
+      userId: +assigned_to,
+      taskType: 'delegation',
+      taskId: r.lastInsertRowid,
+      title: `Delegation: ${derivedTitle}`,
+      body: desc.slice(0, 150),
+      linkUrl: '/delegations',
+      dbInstance: db,
+    });
+  } catch {}
+
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
@@ -529,6 +543,12 @@ router.post('/:id/approve', (req, res) => {
   db.prepare(
     `UPDATE delegations SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewer_id=? WHERE id=?`
   ).run(req.user.id, req.params.id);
+
+  try {
+    const { closeMandatoryTaskNotification } = require('../services/complianceService');
+    closeMandatoryTaskNotification('delegation', req.params.id, req.user.id, db);
+  } catch (_) {}
+
   res.json({ message: 'Task approved' });
 });
 

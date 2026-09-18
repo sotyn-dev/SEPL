@@ -71,6 +71,7 @@ const Inventory = lazy(() => import('./pages/Inventory'));
 const HelpTickets = lazy(() => import('./pages/HelpTickets'));
 const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
 const SystemFlow = lazy(() => import('./pages/SystemFlow'));
+const ComplianceDashboard = lazy(() => import('./pages/ComplianceDashboard'));
 const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
 const FileViewer = lazy(() => import('./pages/FileViewer'));
@@ -258,6 +259,7 @@ export default function App() {
           <Route path="bill-verification" element={<ModuleRoute module="bill_verification"><BillVerification /></ModuleRoute>} />
           <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />
           <Route path="pms-tasks" element={<ModuleRoute module="pms_tasks"><PMSTasks /></ModuleRoute>} />
+          <Route path="compliance" element={<ComplianceDashboard />} />
           {/* Other Modules */}
           <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
           <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />

@@ -301,7 +301,8 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = a.user_id) AS hr_department,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = a.user_id) AS hr_designation,
-    (SELECT COUNT(*) FROM employees e WHERE e.user_id = a.user_id) AS hr_record_count
+    (SELECT COUNT(*) FROM employees e WHERE e.user_id = a.user_id) AS hr_record_count,
+    (SELECT COUNT(*) FROM compliance_cases cc WHERE cc.user_id = a.user_id AND DATE(cc.detected_at) = a.date) AS compliance_violations_count
     FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;
   const params = [];
   if (date) { sql += ' AND a.date=?'; params.push(date); }
@@ -994,6 +995,28 @@ router.post('/track-location', (req, res) => {
   if (gps_off) {
     db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,NULL,NULL,?,?)')
       .run(req.user.id, today, now, reason || null, 'GPS_OFF');
+
+    try {
+      const { createComplianceCase } = require('../services/complianceService');
+      const existingCase = db.prepare(`
+        SELECT id FROM compliance_cases 
+        WHERE user_id = ? AND violation_type = 'location_off' AND DATE(detected_at) = ? AND status NOT IN ('resolved', 'closed')
+      `).get(req.user.id, today);
+      if (!existingCase) {
+        createComplianceCase({
+          userId: req.user.id,
+          employeeName: req.user.name,
+          violationType: 'location_off',
+          title: `GPS Turned Off During Field Duty: ${req.user.name}`,
+          description: `Employee reported GPS_OFF during duty hours. Reason: ${reason || 'GPS location turned off on mobile'}.`,
+          slaHours: 2,
+          impactsAttendance: 1,
+          impactsExpense: 1,
+          dbInstance: db,
+        });
+      }
+    } catch (_) {}
+
     return res.json({ site: 'GPS_OFF', recorded: true });
   }
 

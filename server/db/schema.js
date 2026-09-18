@@ -7004,6 +7004,26 @@ in your first week. If a process feels broken, raise a Help Ticket
     console.log(`[seed] Created backup admin — username: backup-admin, password: ${backupPwd}`);
   }
 
+  // Seed / ensure Nancy Compliance Monitor user
+  const nancyPwdHash = bcrypt.hashSync('Nancy@123456', 10);
+  const nancyUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get('nancy@securedengineers.com', 'nancy');
+  if (!nancyUser) {
+    db.prepare('INSERT INTO users (name, email, username, password, role, department, active) VALUES (?, ?, ?, ?, ?, ?, 1)')
+      .run('Nancy', 'nancy@securedengineers.com', 'nancy', nancyPwdHash, 'user', 'HR / Compliance');
+  } else {
+    db.prepare("UPDATE users SET password = ?, active = 1, username = 'nancy' WHERE id = ?").run(nancyPwdHash, nancyUser.id);
+  }
+
+  // Seed / ensure Rahul Sharma Normal Test Employee
+  const rahulPwdHash = bcrypt.hashSync('User@123456', 10);
+  const rahulUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get('rahul@securedengineers.com', 'rahul');
+  if (!rahulUser) {
+    db.prepare('INSERT INTO users (name, email, username, password, role, department, active) VALUES (?, ?, ?, ?, ?, ?, 1)')
+      .run('Rahul Sharma', 'rahul@securedengineers.com', 'rahul', rahulPwdHash, 'user', 'Site Operations');
+  } else {
+    db.prepare("UPDATE users SET password = ?, active = 1, username = 'rahul' WHERE id = ?").run(rahulPwdHash, rahulUser.id);
+  }
+
   // ============================================
   // LOCATION TRACKING OPT-OUT seed (mam's request 2026-04-28)
   // ============================================
@@ -7481,6 +7501,7 @@ in your first week. If a process feels broken, raise a Help Ticket
 
   require('./userTotp').initialize(db);
   require('../lib/dispatchReceiving').initialize(db);
+  require('./complianceSchema').initializeComplianceSchema(db);
 
   console.log('Database initialized successfully');
   return db;

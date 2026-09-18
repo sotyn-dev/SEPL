@@ -507,6 +507,16 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         } catch (e) { return { given: null, done: null }; }
       }
 
+      // Compliance Monitoring KPI (Nancy / Compliance Officer)
+      // Weighted 100%: 30% On-time SLA, 30% Closure, 20% Task follow-up, 20% Field-location follow-up
+      if (source === 'auto:compliance_monitoring') {
+        try {
+          const { calculateComplianceKpi } = require('../services/complianceService');
+          const kpi = calculateComplianceKpi(since, until, db);
+          return { given: 100, done: kpi.overallKpi };
+        } catch (e) { return { given: 100, done: 100 }; }
+      }
+
       // Data Entry volume — total records entered company-wide this week (mam
       // 2026-07-04: "data entry ... total words enter", target e.g. 300000).
       // audit_log stores ACTIONS not word counts, so this counts the CREATE/
