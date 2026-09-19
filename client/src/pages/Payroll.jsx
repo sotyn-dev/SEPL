@@ -594,8 +594,7 @@ export default function Payroll() {
                   <th className="text-right" title="Paid Days = Present + Sunday + CL + Holiday (+ extra days for Sundays worked)">Paid Days</th>
                   <th className="text-center">Half</th>
                   <th className="text-center">Absent</th>
-                  <th className="text-center" title={`Number of late arrivals this month. ${lateRuleText}`}>Late</th>
-                  <th className="text-right" title={lateRuleText}>Late ₹</th>
+                  <th className="text-center" title={`Number of late arrivals this month and deduction. ${lateRuleText}`}>Late</th>
                   <th className="text-center">Leaves</th>
                   <th className="text-right" title="Overtime for hours worked beyond 9/day, paid at salary ÷ days ÷ 9 per hour">OT (&gt;9h)</th>
                   <th className="text-right" title="Salary before overtime is added">Before OT ₹</th>
@@ -638,20 +637,18 @@ export default function Payroll() {
                       {r.holiday_days || 0}
                     </td>
                     <td className="text-right font-semibold">
-                      {isAdmin && !r.locked
-                        ? ovInput(r, 'paid_days', r.paid_days, r.paid_days_overridden, { w: 'w-14', step: '0.5', title: 'Paid days used for salary — type to override, clear to reset to auto' })
-                        : r.paid_days}
+                      {r.paid_days}
                       <div className="text-[9px] font-normal text-gray-400" title="Present + Sunday + CL + Holiday (+ Sundays-worked bonus)">
                         P+S+CL+H
                       </div>
                     </td>
                     <td className="text-center">{r.half_days || 0}</td>
                     <td className="text-center text-red-600">{r.absent_days || 0}</td>
-                    <td className="text-center text-amber-600" title="Late count only — does not reduce pay. See Late ₹ for the deduction.">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
-                    <td className="text-right text-amber-700">
-                      {isAdmin && !r.locked
-                        ? ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-16', step: '10', title: `Late deduction — auto. ${lateRuleText}` })
-                        : (r.late_penalty ? fmtC(r.late_penalty) : '-')}
+                    <td className="text-center text-amber-700" title={`Number of late arrivals this month and penalty deduction. ${lateRuleText}`}>
+                      <div className="font-semibold">
+                        {r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}
+                        {r.late_penalty > 0 ? ` (-₹${fmtC(r.late_penalty)})` : ''}
+                      </div>
                       {r.late_marks > 0 && (
                         <div className="text-[9px] font-normal text-gray-400"
                           title={`${r.late_marks} late arrival(s) this month. ${lateRuleText}`}>
@@ -766,18 +763,16 @@ export default function Payroll() {
                   </div>
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">Late</div>
-                    <div className="font-semibold text-amber-600">{r.late_marks || 0}</div>
+                    <div className="font-semibold text-amber-600">
+                      {r.late_marks || 0}
+                      {r.late_penalty > 0 ? ` (-₹${fmtC(r.late_penalty)})` : ''}
+                    </div>
                   </div>
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">Leaves</div>
                     <div className="font-semibold text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</div>
                   </div>
                 </div>
-                {r.late_penalty > 0 && (
-                  <div className="text-[11px] text-amber-700 font-semibold pt-1 border-t border-gray-100">
-                    Late penalty: {fmt(r.late_penalty)}
-                  </div>
-                )}
                 {isAdmin && !r.locked ? (
                   <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
                     <span className="text-[11px] text-gray-500 font-semibold whitespace-nowrap">Advance ₹</span>
@@ -806,15 +801,9 @@ export default function Payroll() {
                     table (mam 2026-07-06: edit controls must show on mobile too,
                     not just desktop). Reuses ovInput / savePaid. */}
                 {isAdmin && !r.locked && (
-                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100">
-                    <label className="text-[9px] uppercase text-gray-400 font-semibold block">Paid days
-                      {ovInput(r, 'paid_days', r.paid_days, r.paid_days_overridden, { w: 'w-full', step: '0.5', title: 'Paid days — type to override, clear to reset' })}
-                    </label>
+                  <div className="grid grid-cols-1 gap-2 pt-1 border-t border-gray-100">
                     <label className="text-[9px] uppercase text-gray-400 font-semibold block">CL
                       {ovInput(r, 'cl', r.paid_leaves, r.cl_overridden, { w: 'w-full', step: '0.5', title: 'Casual / paid leave days — type to override' })}
-                    </label>
-                    <label className="text-[9px] uppercase text-gray-400 font-semibold block">Late ₹
-                      {ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-full', step: '10', title: 'Late deduction ₹ — type to override, clear to reset' })}
                     </label>
                   </div>
                 )}
