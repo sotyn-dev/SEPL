@@ -2215,6 +2215,10 @@ function initializeDatabase() {
       amount REAL DEFAULT 0,
       terms TEXT,                 -- 'Advance' or 'Credit'
       credit_days INTEGER DEFAULT 0,
+      description TEXT,
+      hsn_code TEXT,
+      specification TEXT,
+      rate_updated_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -4076,6 +4080,7 @@ function initializeDatabase() {
     // "no such column" → 500 → the Edit modal showed zero line items.
     ['vendor_po_items', 'description TEXT'],
     ['vendor_po_items', 'hsn_code TEXT'],
+    ['vendor_po_items', 'specification TEXT'],
     // Stamped when a PO line's RATE is edited via Edit PO. The print page has
     // to choose between two rate sources — this line and the finalised
     // 3-vendor rate (indent_item_rates.final_rate) — and used to always prefer

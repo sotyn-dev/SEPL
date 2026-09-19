@@ -574,6 +574,7 @@ export default function Procurement() {
           quantity: l.quantity,
           rate: l.final_rate || 0,
           description: l.description || l.master_name || '',
+          specification: l.specification || '',
         }));
         // Let the server recompute the total from the lines just attached.
         delete payload.total_amount;
@@ -586,6 +587,7 @@ export default function Procurement() {
           rate: it.rate,
           description: it.description,
           hsn_code: it.hsn_code,
+          specification: it.specification,
         }));
         // Header total_amount will be auto-recomputed server-side from
         // the line items, so don't send the stale value.
@@ -2118,6 +2120,7 @@ export default function Procurement() {
           checked: it.rate_status === 'finalized' && pending > 0,
           quantity: pending,
           rate: it.final_rate || 0,
+          specification: it.specification || '',
         };
       }
       setPoItemSelection(sel);
@@ -2179,6 +2182,7 @@ export default function Procurement() {
       .map(it => ({ it, v: poItemSelection[it.indent_item_id] || {} }))
       .filter(({ v }) => v.checked && +v.quantity > 0 && +v.rate > 0)
       .map(({ it, v }) => {
+        const spec = v.specification !== undefined ? String(v.specification).trim() : (it.specification ? String(it.specification).trim() : '');
         const wpm = +it.weight_per_meter || 0;
         if (wpm > 0) {
           const mtr = +v.quantity;
@@ -2188,9 +2192,10 @@ export default function Procurement() {
             rate: +v.rate,                                  // ₹/kg
             weight_per_meter: wpm,
             original_qty_mtr: mtr,
+            specification: spec || null,
           };
         }
-        return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate };
+        return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate, specification: spec || null };
       });
 
     // Mandatory items (mam 2026-08-27 "civic sense"): a PO must carry at
@@ -7877,6 +7882,7 @@ export default function Procurement() {
                       <tr>
                         <th className="px-2 py-1.5"></th>
                         <th className="px-2 py-1.5 text-left">Item</th>
+                        <th className="px-2 py-1.5 text-left min-w-[160px]">Specification</th>
                         <th className="px-2 py-1.5">Qty</th>
                         <th className="px-2 py-1.5">Unit</th>
                         <th className="px-2 py-1.5">Rate</th>
@@ -7914,6 +7920,16 @@ export default function Procurement() {
                               )}
                             </td>
                             <td className="px-1 py-1">
+                              <input
+                                type="text"
+                                className="input text-[11px] px-1.5 py-0.5 w-full min-w-[140px]"
+                                placeholder="Specification / Grade…"
+                                disabled={fullyOrdered}
+                                value={s.specification !== undefined ? s.specification : (it.specification || '')}
+                                onChange={e => togglePoItem(it.indent_item_id, { specification: e.target.value })}
+                              />
+                            </td>
+                            <td className="px-1 py-1">
                               <NumInput className="input text-[11px] px-1 py-0.5 w-16 text-right" min="0" emitZeroOnEmpty disabled={fullyOrdered} value={s.quantity ?? pending ?? 0} onChange={v => togglePoItem(it.indent_item_id, { quantity: v })} />
                               {isPipe && <div className="text-[10px] text-blue-700 text-right mt-0.5">= {kg.toLocaleString('en-IN')} kg</div>}
                             </td>
@@ -7928,14 +7944,14 @@ export default function Procurement() {
                     </tbody>
                     <tfoot className="bg-gray-50">
                       {+form.freight_amount > 0 && (
-                        <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
+                        <tr><td colSpan="6" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
                           <td className="px-2 py-1 text-right text-gray-700">Rs {(+form.freight_amount).toLocaleString()}</td></tr>
                       )}
-                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total (taxable):</td>
+                      <tr><td colSpan="6" className="px-2 py-2 text-right font-bold">PO Total (taxable):</td>
                         <td className="px-2 py-2 text-right font-bold text-red-700">Rs {(poTotal + (+form.freight_amount || 0)).toLocaleString()}</td></tr>
-                      <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">GST @ {poGstPct}%:</td>
+                      <tr><td colSpan="6" className="px-2 py-1 text-right text-gray-600">GST @ {poGstPct}%:</td>
                         <td className="px-2 py-1 text-right text-gray-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (poGstPct / 100)).toLocaleString()}</td></tr>
-                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
+                      <tr><td colSpan="6" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
                         <td className="px-2 py-2 text-right font-bold text-red-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (1 + poGstPct / 100)).toLocaleString()}</td></tr>
                     </tfoot>
                   </table>
@@ -9268,6 +9284,7 @@ export default function Procurement() {
                       <tr>
                         <th className="text-left px-2 py-1 w-8">#</th>
                         <th className="text-left px-2 py-1">Description</th>
+                        <th className="text-left px-2 py-1 min-w-[140px]">Specification</th>
                         <th className="text-left px-2 py-1 w-20">HSN</th>
                         <th className="text-right px-2 py-1 w-20">Qty</th>
                         <th className="text-left px-2 py-1 w-16">Unit</th>
@@ -9286,6 +9303,12 @@ export default function Procurement() {
                               <input className="input text-xs w-full" disabled={editPoLocked}
                                 value={it.description || ''}
                                 onChange={e => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, description: e.target.value } : r))} />
+                            </td>
+                            <td className="px-2 py-1">
+                              <input className="input text-xs w-full" disabled={editPoLocked}
+                                placeholder="Specification…"
+                                value={it.specification || ''}
+                                onChange={e => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, specification: e.target.value } : r))} />
                             </td>
                             <td className="px-2 py-1">
                               <input className="input text-xs w-full" disabled={editPoLocked}
@@ -9312,13 +9335,13 @@ export default function Procurement() {
                     </tbody>
                     <tfoot>
                       <tr className="bg-blue-50 font-semibold">
-                        <td colSpan="6" className="px-2 py-2 text-right">Sub-total (taxable)</td>
+                        <td colSpan="7" className="px-2 py-2 text-right">Sub-total (taxable)</td>
                         <td className="px-2 py-2 text-right text-blue-700">
                           ₹{editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                       <tr className="bg-blue-50 font-semibold text-blue-800">
-                        <td colSpan="6" className="px-2 py-2 text-right">+ {(editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18}% GST · Grand Total</td>
+                        <td colSpan="7" className="px-2 py-2 text-right">+ {(editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18}% GST · Grand Total</td>
                         <td className="px-2 py-2 text-right">
                           ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * (1 + ((editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18) / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>

@@ -3567,9 +3567,11 @@ router.get('/vendor-po/:id/print', (req, res) => {
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
            vpi.weight_per_meter, vpi.original_qty_mtr,
+           vpi.description as custom_description, vpi.hsn_code as custom_hsn,
+           COALESCE(vpi.specification, im.specification) as specification,
            ii.description, ii.make as ii_make, ii.unit, ii.required_date,
            ii.item_type,
-           im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
+           im.item_code, im.item_name as master_name, im.size, im.uom, im.make as im_make,
            im.type as im_type,
            poi.description as boq_description,
            -- Mam (2026-05-21): "update here if i update rate in 3
@@ -3798,7 +3800,7 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity,
            COALESCE(NULLIF(TRIM(im.item_name), ''), ii.description) as description,
-           im.specification, im.size,
+           COALESCE(vpi.specification, im.specification) as specification, im.size,
            COALESCE(im.make, ii.make) as make,
            CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
                   THEN ii.unit ELSE COALESCE(im.uom, ii.unit) END as uom,
@@ -4476,15 +4478,16 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
       // Terms + credit_days are deliberately null — PO terms now live on the
       // uploaded Tally PO itself.
       const insItem = db.prepare(
-        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days, weight_per_meter, original_qty_mtr)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?)`
+        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days, weight_per_meter, original_qty_mtr, specification)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)`
       );
       for (const i of lines) {
         // For pipe lines the client sends quantity already in KG (mtr × kg/m),
         // rate in ₹/kg, plus weight_per_meter + original_qty_mtr for display.
         const wpm = +i.weight_per_meter > 0 ? +i.weight_per_meter : null;
         const mtr = +i.original_qty_mtr > 0 ? +i.original_qty_mtr : null;
-        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr);
+        const spec = i.specification ? String(i.specification).trim() : null;
+        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr, spec);
       }
       // Push the actual ordered rate into the Item Master (mam 2026-07-21:
       // "in items only one … from po update rate as per current").
@@ -4703,8 +4706,8 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
        WHERE vpi.indent_item_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled,0)=0 LIMIT 1`);
     const already = db.prepare('SELECT 1 FROM vendor_po_items WHERE vendor_po_id=? AND indent_item_id=?');
     const ins = db.prepare(`INSERT INTO vendor_po_items
-      (vendor_po_id, indent_item_id, quantity, rate, amount, description, rate_updated_at)
-      VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+      (vendor_po_id, indent_item_id, quantity, rate, amount, description, specification, rate_updated_at)
+      VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
     try {
       db.transaction(() => {
         for (const li of b.link_items) {
@@ -4718,7 +4721,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
           if (already.get(id, iid)) continue;
           const qty = +li.quantity || 0;
           const rate = +li.rate || 0;
-          ins.run(id, iid, qty, rate, +(qty * rate).toFixed(2), li.description ? String(li.description) : null);
+          ins.run(id, iid, qty, rate, +(qty * rate).toFixed(2), li.description ? String(li.description) : null, li.specification ? String(li.specification).trim() : null);
           itemUpdates++;
         }
         // Keep the stored total in step with what was just attached, unless the
@@ -4748,6 +4751,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
              amount      = COALESCE(?, amount),
              description = COALESCE(?, description),
              hsn_code    = COALESCE(?, hsn_code),
+             specification = COALESCE(?, specification),
              -- Stamp whenever the caller SUBMITS a rate for this line, even if
              -- the value is unchanged. The Edit PO modal always sends every
              -- line's rate, so saving it is the user asserting "this PO's rate
@@ -4770,7 +4774,8 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
         const amount = qty != null && rate != null ? +(qty * rate).toFixed(2) : null;
         const desc = it.description !== undefined ? String(it.description || '') : null;
         const hsn = it.hsn_code !== undefined ? String(it.hsn_code || '') : null;
-        const r = updLine.run(qty, rate, amount, desc, hsn, rate, itemId, id);
+        const spec = it.specification !== undefined ? String(it.specification || '') : null;
+        const r = updLine.run(qty, rate, amount, desc, hsn, spec, rate, itemId, id);
         itemUpdates += r.changes;
       }
       // Auto-recompute total_amount = sum(line amounts) × (1 + GST%) + freight.
@@ -4840,8 +4845,9 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
   if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
   let items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.description, vpi.hsn_code,
+           COALESCE(vpi.specification, im.specification) as specification,
            ii.description as indent_description, ii.unit,
-           im.item_code, im.item_name as master_name, im.specification, im.size
+           im.item_code, im.item_name as master_name, im.size
       FROM vendor_po_items vpi
       LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
       LEFT JOIN item_master im ON im.id = ii.item_master_id
