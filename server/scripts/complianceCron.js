@@ -142,7 +142,7 @@ function runComplianceScan(dbInstance = null) {
           newCasesCount++;
         }
       }
-    } catch (_) {}
+    } catch (_) { }
 
     // B. Overdue PMS Tasks
     try {
@@ -180,7 +180,7 @@ function runComplianceScan(dbInstance = null) {
           newCasesCount++;
         }
       }
-    } catch (_) {}
+    } catch (_) { }
 
   } catch (err) {
     console.error('[compliance-cron] error during compliance scan:', err.message);

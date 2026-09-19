@@ -2818,6 +2818,37 @@ router.get('/my-notifications', (req, res) => {
 
   const isNancy = userName.toLowerCase().includes('nancy') || userEmail.includes('nancy') || req.user.role === 'admin';
 
+  // If Nancy or Admin is viewing, auto-heal any compliance cases missing monitor notifications
+  if (isNancy) {
+    try {
+      const unlinkedCases = db.prepare(`
+        SELECT c.* FROM compliance_cases c
+        WHERE NOT EXISTS (
+          SELECT 1 FROM notifications n 
+          WHERE n.task_type = 'compliance_case_monitor' AND n.task_id = c.id
+        )
+      `).all();
+
+      const nowStr = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+      for (const c of unlinkedCases) {
+        db.prepare(`
+          INSERT INTO notifications (
+            user_id, type, title, body, link_url, channel_sent,
+            is_mandatory, is_pending, task_type, task_id, delivered_at, status, created_at
+          ) VALUES (?, 'compliance_monitor_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case_monitor', ?, ?, 'active', ?)
+        `).run(
+          userId,
+          `New Compliance Case: ${c.case_number} - ${c.employee_name}`,
+          `Violation [${c.violation_type}]: ${c.title} for ${c.employee_name}. Follow-up required before ${c.sla_deadline || 'SLA deadline'}.`,
+          `/compliance?case_id=${c.id}`,
+          c.id,
+          c.created_at || nowStr,
+          c.created_at || nowStr
+        );
+      }
+    } catch (_) {}
+  }
+
   let sql = `
     SELECT DISTINCT n.id, n.user_id, n.type, n.title, n.body, n.link_url, n.channel_sent, n.dedupe_key,
            n.read_at, n.created_at, COALESCE(n.is_mandatory, 0) as is_mandatory,
@@ -2835,8 +2866,8 @@ router.get('/my-notifications', (req, res) => {
   `;
   const params = [...allUserIds, isNancy ? 1 : 0, ...allUserIds, userName];
   if (unread === '1') sql += " AND (n.read_at IS NULL OR (n.is_mandatory = 1 AND n.status = 'active'))";
-  // Mandatory active items always sort first, followed by newest notifications
-  sql += " ORDER BY (CASE WHEN n.is_mandatory = 1 AND n.status = 'active' THEN 1 ELSE 0 END) DESC, n.created_at DESC LIMIT 50";
+  // Mandatory active items always sort first, followed by newest notifications (highest id)
+  sql += " ORDER BY (CASE WHEN n.is_mandatory = 1 AND n.status = 'active' THEN 1 ELSE 0 END) DESC, n.id DESC LIMIT 50";
   
   const notifs = db.prepare(sql).all(...params);
   res.json(notifs);

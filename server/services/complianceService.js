@@ -132,6 +132,7 @@ function createComplianceCase({
   const now = new Date();
   const slaDeadline = new Date(now.getTime() + slaHours * 3600 * 1000).toISOString();
   const nowIso = now.toISOString();
+  const nowStr = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 
   const res = db.prepare(`
     INSERT INTO compliance_cases (
@@ -176,14 +177,15 @@ function createComplianceCase({
   db.prepare(`
     INSERT INTO notifications (
       user_id, type, title, body, link_url, channel_sent,
-      is_mandatory, is_pending, task_type, task_id, delivered_at, status
-    ) VALUES (?, 'compliance_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case', ?, ?, 'active')
+      is_mandatory, is_pending, task_type, task_id, delivered_at, status, created_at
+    ) VALUES (?, 'compliance_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case', ?, ?, 'active', ?)
   `).run(
     userId,
     `[MANDATORY] Compliance Alert: ${title}`,
     `A compliance alert (${caseNumber}) has been flagged regarding: ${description || title}. Please acknowledge and respond immediately.`,
     `/compliance?case_id=${caseId}`,
     caseId,
+    nowStr,
     nowStr
   );
 
@@ -192,17 +194,33 @@ function createComplianceCase({
     db.prepare(`
       INSERT INTO notifications (
         user_id, type, title, body, link_url, channel_sent,
-        is_mandatory, is_pending, task_type, task_id, delivered_at, status
-      ) VALUES (?, 'compliance_monitor_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case_monitor', ?, ?, 'active')
+        is_mandatory, is_pending, task_type, task_id, delivered_at, status, created_at
+      ) VALUES (?, 'compliance_monitor_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case_monitor', ?, ?, 'active', ?)
     `).run(
       monitor.id,
       `New Compliance Case: ${caseNumber} - ${employeeName}`,
       `Violation [${violationType}]: ${title} for ${employeeName}. Follow-up required before ${slaDeadline}.`,
       `/compliance?case_id=${caseId}`,
       caseId,
+      nowStr,
       nowStr
     );
   }
+
+  // 3. Instant Real-Time Socket.IO Broadcast to Nancy (0-second instant bell chime & toast)
+  try {
+    const { getIO } = require('../lib/chatSocket');
+    const io = getIO();
+    if (io) {
+      io.emit('notification:new', {
+        type: 'compliance_monitor_alert',
+        title: `New Compliance Case: ${caseNumber} - ${employeeName}`,
+        body: `Violation [${violationType}]: ${title} for ${employeeName}.`,
+        link_url: `/compliance?case_id=${caseId}`,
+        created_at: nowStr,
+      });
+    }
+  } catch (_) {}
 
   return { caseId, caseNumber, monitorId: monitor.id };
 }

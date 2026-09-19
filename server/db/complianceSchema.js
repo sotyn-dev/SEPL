@@ -103,6 +103,8 @@ function initializeComplianceSchema(db) {
     'CREATE INDEX IF NOT EXISTS idx_cmp_cases_violation ON compliance_cases(violation_type)',
     'CREATE INDEX IF NOT EXISTS idx_cmp_cases_detected ON compliance_cases(detected_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_cmp_cases_assigned ON compliance_cases(assigned_to, status)',
+    'CREATE INDEX IF NOT EXISTS idx_cmp_cases_number ON compliance_cases(case_number)',
+    'CREATE INDEX IF NOT EXISTS idx_cmp_cases_emp_name ON compliance_cases(employee_name)',
     'CREATE INDEX IF NOT EXISTS idx_cmp_logs_case ON compliance_case_logs(case_id, created_at ASC)',
     'CREATE INDEX IF NOT EXISTS idx_notif_mandatory ON notifications(user_id, is_mandatory, is_pending, status)',
   ];

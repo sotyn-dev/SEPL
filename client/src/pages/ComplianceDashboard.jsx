@@ -57,16 +57,19 @@ export default function ComplianceDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [loading, setLoading] = useState(true);
+  const [casesLoading, setCasesLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [dashboardData, setDashboardData] = useState(null);
   const [cases, setCases] = useState([]);
   const [totalCases, setTotalCases] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState('all');
   const [violationFilter, setViolationFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
@@ -98,6 +101,15 @@ export default function ComplianceDashboard() {
   const isNancy = user?.email?.toLowerCase().includes('nancy') || user?.name?.toLowerCase().includes('nancy');
   const canManage = isAdmin() || isNancy;
 
+  // Search Debounce (500ms) to eliminate backend spam
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+      setPage(1);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
   const loadDashboard = () => {
     setLoading(true);
     const query = new URLSearchParams();
@@ -115,13 +127,14 @@ export default function ComplianceDashboard() {
   };
 
   const loadCases = () => {
+    setCasesLoading(true);
     const query = new URLSearchParams({
       page: String(page),
-      limit: '25',
+      limit: String(pageSize),
       status: statusFilter,
       violation_type: violationFilter,
     });
-    if (searchTerm) query.set('search', searchTerm);
+    if (debouncedSearch) query.set('search', debouncedSearch);
     if (startDate) query.set('start_date', startDate);
     if (endDate) query.set('end_date', endDate);
 
@@ -130,7 +143,8 @@ export default function ComplianceDashboard() {
         setCases(res.data.cases || []);
         setTotalCases(res.data.total || 0);
       })
-      .catch(err => toast.error('Failed to load compliance cases'));
+      .catch(err => toast.error('Failed to load compliance cases'))
+      .finally(() => setCasesLoading(false));
   };
 
   const loadCaseDetail = (caseId) => {
@@ -180,7 +194,7 @@ export default function ComplianceDashboard() {
 
   useEffect(() => {
     loadCases();
-  }, [page, statusFilter, violationFilter, searchTerm, startDate, endDate]);
+  }, [page, pageSize, statusFilter, violationFilter, debouncedSearch, startDate, endDate]);
 
   // Open direct case from URL query ?case_id=
   useEffect(() => {
@@ -494,7 +508,7 @@ export default function ComplianceDashboard() {
           <div className="flex items-center gap-2 w-full md:w-auto flex-wrap">
             <select
               value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
+              onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
               className="select text-xs py-1.5 rounded-xl border-gray-300"
             >
               <option value="all">All Statuses</option>
@@ -507,7 +521,7 @@ export default function ComplianceDashboard() {
 
             <select
               value={violationFilter}
-              onChange={e => setViolationFilter(e.target.value)}
+              onChange={e => { setViolationFilter(e.target.value); setPage(1); }}
               className="select text-xs py-1.5 rounded-xl border-gray-300"
             >
               <option value="all">All Violations</option>
@@ -521,22 +535,48 @@ export default function ComplianceDashboard() {
             <input
               type="date"
               value={startDate}
-              onChange={e => setStartDate(e.target.value)}
+              onChange={e => { setStartDate(e.target.value); setPage(1); }}
               className="input text-xs py-1.5 rounded-xl border-gray-300"
               title="From Date"
             />
             <input
               type="date"
               value={endDate}
-              onChange={e => setEndDate(e.target.value)}
+              onChange={e => { setEndDate(e.target.value); setPage(1); }}
               className="input text-xs py-1.5 rounded-xl border-gray-300"
               title="To Date"
             />
+
+            {(statusFilter !== 'all' || violationFilter !== 'all' || searchTerm || startDate || endDate) && (
+              <button
+                onClick={() => {
+                  setStatusFilter('all');
+                  setViolationFilter('all');
+                  setSearchTerm('');
+                  setStartDate('');
+                  setEndDate('');
+                  setPage(1);
+                }}
+                className="btn btn-secondary text-xs py-1 px-2 text-gray-500 hover:text-gray-700"
+                title="Reset Filters"
+              >
+                Reset
+              </button>
+            )}
           </div>
         </div>
 
         {/* Data Table */}
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto relative min-h-[220px]">
+          {casesLoading && (
+            <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] z-10 flex items-center justify-center">
+              <div className="flex items-center gap-2 text-indigo-600 text-xs font-semibold">
+                <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                Loading records…
+              </div>
+            </div>
+          )}
+
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-slate-100/70 text-gray-600 uppercase text-[10px] tracking-wider border-b border-gray-200">
@@ -552,7 +592,7 @@ export default function ComplianceDashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {cases.length === 0 ? (
+              {cases.length === 0 && !casesLoading ? (
                 <tr>
                   <td colSpan={9} className="text-center py-10 text-gray-400">
                     <FiShield size={32} className="mx-auto opacity-30 mb-2" />
@@ -649,21 +689,45 @@ export default function ComplianceDashboard() {
           </table>
         </div>
 
-        {/* Pagination */}
-        <div className="p-3 border-t border-gray-100 bg-slate-50/50 flex justify-between items-center text-xs text-gray-500">
-          <span>Showing {cases.length} of {totalCases} compliance cases</span>
-          <div className="flex gap-2">
+        {/* Enhanced Pagination Controls */}
+        <div className="p-3 border-t border-gray-100 bg-slate-50/50 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-gray-500">
+          <div className="flex items-center gap-3">
+            <span>
+              Showing <strong className="text-gray-700">{cases.length > 0 ? (page - 1) * pageSize + 1 : 0}</strong> to{' '}
+              <strong className="text-gray-700">{Math.min(page * pageSize, totalCases)}</strong> of{' '}
+              <strong className="text-gray-700">{totalCases}</strong> compliance cases
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-400 text-[11px]">Rows:</span>
+              <select
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+                className="select text-xs py-0.5 px-1.5 rounded-lg border-gray-200 bg-white"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-gray-400 mr-1">
+              Page <strong className="text-gray-700">{page}</strong> of{' '}
+              <strong className="text-gray-700">{Math.max(1, Math.ceil(totalCases / pageSize))}</strong>
+            </span>
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="btn btn-secondary text-xs py-1 px-2.5 disabled:opacity-50"
+              disabled={page <= 1 || casesLoading}
+              className="btn btn-secondary text-xs py-1 px-2.5 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Previous
             </button>
             <button
               onClick={() => setPage(p => p + 1)}
-              disabled={cases.length < 25}
-              className="btn btn-secondary text-xs py-1 px-2.5 disabled:opacity-50"
+              disabled={page >= Math.ceil(totalCases / pageSize) || cases.length === 0 || casesLoading}
+              className="btn btn-secondary text-xs py-1 px-2.5 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Next
             </button>

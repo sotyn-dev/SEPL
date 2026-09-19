@@ -544,7 +544,7 @@ export default function Layout() {
             reason: reasonMap[err?.code] || 'gps-disabled',
           }).catch(() => {});
         },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 5000 }
       );
     };
 
@@ -564,7 +564,7 @@ export default function Layout() {
     document.addEventListener('visibilitychange', onVisible);
 
     trackLocation();
-    const interval = setInterval(trackLocation, 30 * 1000);
+    const interval = setInterval(trackLocation, 10 * 1000);
 
     return () => {
       cancelled = true;
