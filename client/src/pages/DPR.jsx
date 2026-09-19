@@ -368,7 +368,7 @@ export default function DPR() {
       const res = await api.get('/dpr/destination-warehouses', { params: { exclude_site_id: siteId || undefined } });
       const whs = res.data || [];
       setDestWarehouses(whs);
-      const office = whs.find(w => w.warehouse_type === 'office') || whs[0];
+      const office = whs.find(w => w.type === 'office' || w.warehouse_type === 'office') || whs[0];
       if (office) {
         setSlipToWarehouse(String(office.id));
       } else {
@@ -2655,15 +2655,27 @@ export default function DPR() {
                 onChange={e => setSlipToWarehouse(e.target.value)}
               >
                 <option value="">— Pick destination store / warehouse —</option>
-                {destWarehouses.map(w => (
-                  <option key={w.id} value={w.id}>
-                    {w.warehouse_type === 'office' ? '🏢 ' : '🏗️ '}
-                    {w.name} {w.warehouse_type === 'office' ? '(Central / Office Store)' : `(Site Store — ${w.site_name || ''})`}
-                  </option>
-                ))}
+                {destWarehouses.map(w => {
+                  const isOffice = w.type === 'office' || w.warehouse_type === 'office';
+                  return (
+                    <option key={w.id} value={w.id}>
+                      {isOffice ? '🏢 ' : '🏗️ '}
+                      {w.name} {isOffice ? '(Central / Office Store)' : `(Site Store — ${w.site_name || 'Site'})`}
+                    </option>
+                  );
+                })}
               </select>
               <div className="text-[11px] text-purple-700 mt-1">
-                Surplus or idle materials will be deducted from this site store and added to the destination warehouse.
+                {(() => {
+                  const sel = destWarehouses.find(w => String(w.id) === String(slipToWarehouse));
+                  const isOffice = sel?.type === 'office' || sel?.warehouse_type === 'office';
+                  if (isOffice) {
+                    return `✓ Material will be returned & added directly into Office Store inventory (${sel.name}).`;
+                  } else if (sel) {
+                    return `✓ Material will be transferred & added directly into ${sel.site_name || sel.name} site store inventory.`;
+                  }
+                  return 'Surplus or idle materials will be deducted from this site store and added to the destination warehouse.';
+                })()}
               </div>
             </div>
           )}

@@ -1644,7 +1644,7 @@ router.get('/destination-warehouses', requirePermission('dpr', 'view'), (req, re
   const db = getDb();
   const excludeSiteId = req.query.exclude_site_id ? +req.query.exclude_site_id : null;
   const rows = db.prepare(`
-    SELECT w.id, w.name, w.type, w.site_id, s.name AS site_name
+    SELECT w.id, w.name, w.type, w.type AS warehouse_type, w.site_id, s.name AS site_name
       FROM warehouses w
       LEFT JOIN sites s ON s.id = w.site_id
      WHERE COALESCE(w.active, 1) = 1
@@ -1739,7 +1739,7 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
       slipId = r.lastInsertRowid;
       const insItem = db.prepare('INSERT INTO site_store_slip_items (slip_id, item_master_id, item_name, unit, quantity, rate) VALUES (?,?,?,?,?,?)');
       const upBal = db.prepare('UPDATE stock_balance SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-      const insBal = db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)');
+      const insBal = db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate, aging_start_date) VALUES (?,?,?,?,?)');
       const insMv = db.prepare(`
         INSERT INTO stock_movements (warehouse_id, item_master_id, type, quantity, rate, total_value, reference_type, reference_id, to_warehouse_id, from_warehouse_id, site_id, notes, created_by)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -1759,15 +1759,16 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
                     `Transferred to ${targetStore.name} by ${String(issued_to).trim()} (${slipNumber})`,
                     req.user.id);
 
-          // Increment destination warehouse
+          // Increment destination warehouse (Office Store OR another Site Store)
           const targetBal = getBal.get(targetStore.id, it.item_master_id);
           if (targetBal) {
             const newQty = (+targetBal.quantity) + it.quantity;
             const newAvg = newQty > 0 ? (((+targetBal.quantity) * (+targetBal.avg_rate || 0)) + (it.quantity * rate)) / newQty : rate;
-            db.prepare('UPDATE stock_balance SET quantity = ?, avg_rate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-              .run(newQty, newAvg, targetBal.id);
+            const agingDate = targetBal.aging_start_date || dateIso;
+            db.prepare('UPDATE stock_balance SET quantity = ?, avg_rate = ?, aging_start_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+              .run(newQty, newAvg, agingDate, targetBal.id);
           } else {
-            insBal.run(targetStore.id, it.item_master_id, it.quantity, rate);
+            insBal.run(targetStore.id, it.item_master_id, it.quantity, rate, dateIso);
           }
           insMv.run(targetStore.id, it.item_master_id, 'IN',
                     it.quantity, rate, it.quantity * rate,
@@ -1777,7 +1778,7 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
         } else {
           const delta = slip_type === 'issue' ? -it.quantity : it.quantity;
           if (bal) upBal.run(delta, bal.id);
-          else insBal.run(store.id, it.item_master_id, Math.max(0, delta), rate);
+          else insBal.run(store.id, it.item_master_id, Math.max(0, delta), rate, dateIso);
           insMv.run(store.id, it.item_master_id, slip_type === 'issue' ? 'OUT' : 'IN',
                     it.quantity, rate, it.quantity * rate,
                     slip_type === 'issue' ? 'SITE_ISSUE' : 'SITE_RETURN', slipNumber, null, null, site_id,

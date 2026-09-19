@@ -70,7 +70,8 @@ function executeTransfer(siteId, toWarehouseId, items, issuedTo, notes, userId =
     }
   }
 
-  const slipNumber = `XFR/2026/0001`;
+  let seq = 1;
+  const slipNumber = `XFR/2026/` + String(db.prepare("SELECT COUNT(*) c FROM site_store_slips").get().c + 1).padStart(4, '0');
   let slipId;
   db.transaction(() => {
     const r = db.prepare(`
@@ -139,5 +140,14 @@ assert.throws(() => {
   executeTransfer(10, 1, [{ item_master_id: 100, quantity: 20 }], 'Abhishek', 'Over transfer');
 }, /Insufficient stock/);
 
-console.log('Site store transfer regression checks passed successfully!');
+// 3. Transfer from Site Alpha to Site Beta Store (Site-to-site transfer)
+const res2 = executeTransfer(10, 3, [{ item_master_id: 100, quantity: 6 }], 'Carrier Driver Shyam', 'Transfer surplus to Site Beta');
+const alphaBal2 = db.prepare("SELECT quantity FROM stock_balance WHERE warehouse_id = 2 AND item_master_id = 100").get();
+assert.equal(alphaBal2.quantity, 9, 'Site Alpha should now have 9 PCS (15 - 6)');
+
+const betaBal = db.prepare("SELECT quantity, avg_rate FROM stock_balance WHERE warehouse_id = 3 AND item_master_id = 100").get();
+assert.equal(betaBal.quantity, 6, 'Site Beta Store should now have 6 PCS credited to its inventory');
+assert.equal(betaBal.avg_rate, 50, 'Site Beta Store rate should be ₹50');
+
+console.log('Site store transfer regression checks (Office Store & Site-to-Site) passed successfully!');
 db.close();
