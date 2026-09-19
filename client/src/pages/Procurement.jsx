@@ -7910,7 +7910,7 @@ export default function Procurement() {
                             </td>
                             <td className="px-2 py-1.5 max-w-[320px]">
                               {it.item_code && <div className="text-[10px] font-mono text-gray-500">[{it.item_code}]</div>}
-                              <div className="whitespace-normal leading-snug font-medium">{[it.master_name || it.description, it.specification, it.size].filter(Boolean).join(' / ')}</div>
+                              <div className="whitespace-normal leading-snug font-medium">{[it.master_name || it.description, it.size].filter(Boolean).join(' / ')}</div>
                               {it.make && <div className="text-[10px] text-gray-400">Make: {it.make}</div>}
                               {isPipe && <div className="text-[10px] text-blue-700 font-semibold">🪈 Pipe · {wpm} kg/pipe — PO in KG</div>}
                               {orderedQty > 0 && (
@@ -7926,7 +7926,7 @@ export default function Procurement() {
                                 placeholder="Specification / Grade…"
                                 disabled={fullyOrdered}
                                 value={s.specification !== undefined ? s.specification : (it.specification || '')}
-                                onChange={e => togglePoItem(it.indent_item_id, { specification: e.target.value })}
+                                onChange={e => togglePoItem(it.indent_item_id, { specification: e.target.value, checked: true })}
                               />
                             </td>
                             <td className="px-1 py-1">
