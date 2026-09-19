@@ -42,8 +42,9 @@ export default function SiteSlipPrint() {
   if (err) return <div className="p-8 text-center text-red-600">{err}</div>;
   if (!slip) return <div className="p-8 text-center text-gray-500">Loading slip…</div>;
 
+  const isTransfer = slip.slip_type === 'transfer';
   const isIssue = slip.slip_type === 'issue';
-  const title = isIssue ? 'SITE STORE ISSUE SLIP' : 'SITE STORE RETURN SLIP';
+  const title = isTransfer ? 'SITE STORE MATERIAL TRANSFER / RETURN SLIP' : isIssue ? 'SITE STORE ISSUE SLIP' : 'SITE STORE RETURN SLIP';
   const rows = slip.items || [];
   const padded = [...rows];
   while (padded.length < 8) padded.push(null);
@@ -75,14 +76,14 @@ export default function SiteSlipPrint() {
         <div className="grid grid-cols-2 sm:grid-cols-4 border-b border-gray-300 text-[10.5px]">
           <div className="px-3 py-1.5 border-r border-gray-200"><span className="text-gray-500">Slip No: </span><b className="font-mono">{slip.slip_number}</b></div>
           <div className="px-3 py-1.5 border-r border-gray-200"><span className="text-gray-500">Date: </span><b>{fmtDateLong(slip.slip_date)}</b></div>
-          <div className="px-3 py-1.5 border-r border-gray-200"><span className="text-gray-500">Site: </span><b>{slip.site_name || '—'}</b></div>
-          <div className="px-3 py-1.5"><span className="text-gray-500">Store: </span><b>{slip.store_name || '—'}</b></div>
+          <div className="px-3 py-1.5 border-r border-gray-200"><span className="text-gray-500">From Site: </span><b>{slip.site_name || '—'}</b></div>
+          <div className="px-3 py-1.5"><span className="text-gray-500">{isTransfer ? 'To Store / Site: ' : 'Store: '}</span><b>{isTransfer ? (slip.to_warehouse_name || 'Office Store') : (slip.store_name || '—')}</b></div>
         </div>
 
         {/* Parties */}
         <div className="grid grid-cols-2 border-b border-gray-300 text-[10.5px]">
           <div className="px-3 py-1.5 border-r border-gray-200">
-            <span className="text-gray-500">{isIssue ? 'Issued To (Sr. Site Engineer / Team): ' : 'Returned By: '}</span>
+            <span className="text-gray-500">{isTransfer ? 'Carrier / Transferred By: ' : isIssue ? 'Issued To (Sr. Site Engineer / Team): ' : 'Returned By: '}</span>
             <b>{slip.issued_to || '—'}</b>
           </div>
           <div className="px-3 py-1.5">
@@ -98,14 +99,14 @@ export default function SiteSlipPrint() {
               <td className="border border-gray-300 px-2 py-1 w-8 text-center">SL</td>
               <td className="border border-gray-300 px-2 py-1">Description of Material</td>
               <td className="border border-gray-300 px-2 py-1 w-16 text-center">UOM</td>
-              <td className="border border-gray-300 px-2 py-1 w-24 text-right">{isIssue ? 'Qty Issued' : 'Qty Returned'}</td>
+              <td className="border border-gray-300 px-2 py-1 w-24 text-right">{isTransfer ? 'Qty Transferred' : isIssue ? 'Qty Issued' : 'Qty Returned'}</td>
               <td className="border border-gray-300 px-2 py-1 w-28">Remarks</td>
             </tr>
           </thead>
           <tbody>
             {padded.map((it, i) => (
               <tr key={i}>
-                <td className="border border-gray-300 px-2 py-1 text-center">{it ? i + 1 : ' '}</td>
+                <td className="border border-gray-300 px-2 py-1 text-center">{it ? i + 1 : ' '}</td>
                 <td className="border border-gray-300 px-2 py-1">{it ? it.item_name : ''}</td>
                 <td className="border border-gray-300 px-2 py-1 text-center">{it ? it.unit : ''}</td>
                 <td className="border border-gray-300 px-2 py-1 text-right tabular-nums">{it ? it.quantity : ''}</td>
@@ -121,21 +122,23 @@ export default function SiteSlipPrint() {
 
         {/* Rule strip */}
         <div className="px-3 py-1.5 bg-amber-50 border-b border-gray-300 text-[9.5px] text-amber-800 font-semibold">
-          {isIssue
-            ? 'SPOS RULE: Material leaves the site store ONLY on this slip. Unused balance MUST return in the evening on a Return Slip — net consumption feeds the DPR automatically.'
-            : 'SPOS RULE: Returned quantity goes back into site-store stock. Issued − Returned = today\'s consumption, auto-recorded in the DPR.'}
+          {isTransfer
+            ? 'SPOS RULE: Inter-store transfer of materials between site store and central/site warehouse. Automatically updates stock balance in both warehouses.'
+            : isIssue
+              ? 'SPOS RULE: Material leaves the site store ONLY on this slip. Unused balance MUST return in the evening on a Return Slip — net consumption feeds the DPR automatically.'
+              : 'SPOS RULE: Returned quantity goes back into site-store stock. Issued − Returned = today\'s consumption, auto-recorded in the DPR.'}
         </div>
 
         {/* Signatures */}
         <div className="grid grid-cols-2 text-[10px]">
           <div className="px-3 pt-6 pb-3 border-r border-gray-200">
             <div className="border-t border-gray-500 inline-block pt-1 min-w-[160px]">
-              {isIssue ? 'Received By (Sr. Site Engineer)' : 'Returned By'} — Signature
+              {isTransfer ? 'Dispatched / Transferred By' : isIssue ? 'Received By (Sr. Site Engineer)' : 'Returned By'} — Signature
             </div>
           </div>
           <div className="px-3 pt-6 pb-3 text-right">
             <div className="border-t border-gray-500 inline-block pt-1 min-w-[160px]">
-              Store In-charge (Jr. Site Engineer) — Signature
+              {isTransfer ? 'Received By (Destination Store)' : 'Store In-charge (Jr. Site Engineer)'} — Signature
             </div>
           </div>
         </div>

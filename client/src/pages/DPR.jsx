@@ -350,9 +350,9 @@ export default function DPR() {
     }).catch(() => { setDprMaterials([]); setDprStoreName(null); setDprStoreErr(true); });
   };
 
-  // ── Site-store Issue / Return slip modal (jr. site engineer's counter) ──
+  // ── Site-store Issue / Return / Transfer slip modal (jr. site engineer's counter) ──
   const [slipModal, setSlipModal] = useState(false);
-  const [slipType, setSlipType] = useState('issue');
+  const [slipType, setSlipType] = useState('issue'); // 'issue' | 'return' | 'transfer'
   const [slipSite, setSlipSite] = useState('');
   const [slipDate, setSlipDate] = useState(istTodayIso());
   const [slipTo, setSlipTo] = useState('');
@@ -360,6 +360,25 @@ export default function DPR() {
   const [slipRows, setSlipRows] = useState([]);      // {item_master_id, name, unit, cap, qty}
   const [slipBusy, setSlipBusy] = useState(false);
   const [slipsToday, setSlipsToday] = useState([]);  // register for the picked site+date
+  const [destWarehouses, setDestWarehouses] = useState([]); // warehouses for transfer destination
+  const [slipToWarehouse, setSlipToWarehouse] = useState(''); // chosen destination warehouse ID
+
+  const loadDestWarehouses = async (siteId) => {
+    try {
+      const res = await api.get('/dpr/destination-warehouses', { params: { exclude_site_id: siteId || undefined } });
+      const whs = res.data || [];
+      setDestWarehouses(whs);
+      const office = whs.find(w => w.warehouse_type === 'office') || whs[0];
+      if (office) {
+        setSlipToWarehouse(String(office.id));
+      } else {
+        setSlipToWarehouse('');
+      }
+    } catch {
+      setDestWarehouses([]);
+      setSlipToWarehouse('');
+    }
+  };
 
   const loadSlipRows = async (siteId, type, dateIso) => {
     if (!siteId) { setSlipRows([]); setSlipsToday([]); return; }
@@ -414,6 +433,23 @@ export default function DPR() {
           });
         });
         setSlipRows([...rows.values()].sort((a, b) => (b.cap - a.cap) || a.name.localeCompare(b.name)));
+      } else if (type === 'transfer') {
+        // Material Return to Office Store or Transfer to another site store:
+        // Cap is available stock in this site's store.
+        const r = await api.get(`/dpr/sites/${siteId}/store-stock`);
+        const rows = (r.data?.items || [])
+          .filter(it => +it.stock_qty > 0)
+          .map(it => ({
+            item_master_id: it.item_master_id,
+            name: [it.item_name, it.specification, it.size].filter(Boolean).join(' '),
+            unit: it.uom || 'nos',
+            cap: +it.stock_qty || 0,
+            planned_today: 0,
+            age_days: it.age_days,
+            age_status: it.age_status,
+            qty: '',
+          }));
+        setSlipRows(rows.sort((a, b) => (b.cap - a.cap) || a.name.localeCompare(b.name)));
       } else {
         // Return caps = issued today − already returned
         const r = await api.get(`/dpr/sites/${siteId}/consumption`, { params: { date: dateIso } });
@@ -438,18 +474,36 @@ export default function DPR() {
     setSlipModal(true); setSlipType('issue'); setSlipSite(siteId || '');
     setSlipDate(today); setSlipTo(''); setSlipNotes(''); setSlipRows([]); setSlipsToday([]);
     setSlipShift(autoSlipShift());
-    if (siteId) loadSlipRows(siteId, 'issue', today);
+    if (siteId) {
+      loadSlipRows(siteId, 'issue', today);
+      loadDestWarehouses(siteId);
+    }
   };
   const saveSlip = async () => {
     const items = slipRows.filter(r => +r.qty > 0).map(r => ({ item_master_id: r.item_master_id, quantity: +r.qty }));
     if (!slipSite) return toast.error('Pick a site first');
     if (!items.length) return toast.error('Enter a quantity on at least one item');
-    if (!slipTo.trim()) return toast.error(slipType === 'issue' ? 'Issued To is required — who is taking the material?' : 'Returned By is required');
+    if (slipType === 'transfer') {
+      if (!slipToWarehouse) return toast.error('Pick destination warehouse / store');
+      if (!slipTo.trim()) return toast.error('Carrier / Transferred By name is required');
+    } else {
+      if (!slipTo.trim()) return toast.error(slipType === 'issue' ? 'Issued To is required — who is taking the material?' : 'Returned By is required');
+    }
     const over = slipRows.find(r => +r.qty > 0 && +r.qty > r.cap);
-    if (over) return toast.error(`${over.name}: max ${over.cap} ${slipType === 'issue' ? 'in stock' : 'outstanding'}`);
+    if (over) return toast.error(`${over.name}: max ${over.cap} ${slipType === 'issue' || slipType === 'transfer' ? 'in stock' : 'outstanding'}`);
     setSlipBusy(true);
     try {
-      const r = await api.post('/dpr/site-slips', { site_id: slipSite, slip_type: slipType, slip_date: slipDate, issued_to: slipTo.trim(), notes: slipNotes, shift: slipShift, items });
+      const payload = {
+        site_id: slipSite,
+        slip_type: slipType,
+        slip_date: slipDate,
+        issued_to: slipTo.trim(),
+        notes: slipNotes,
+        shift: slipShift,
+        items,
+        ...(slipType === 'transfer' ? { to_warehouse_id: slipToWarehouse } : {}),
+      };
+      const r = await api.post('/dpr/site-slips', payload);
       toast.success(`${r.data.slip_number} saved — opening print`);
       window.open(`/site-slip/${r.data.id}/print`, '_blank');
       loadSlipRows(slipSite, slipType, slipDate);
@@ -1108,7 +1162,7 @@ export default function DPR() {
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiUsers /> Morning Manpower</button>
               {/* Site-store Issue/Return slips — the jr. engineer's GRN counter (mam 2026-07-31) */}
               <button onClick={() => openSlipModal(form.site_id || '')}
-                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiPackage /> Store Issue/Return</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiPackage /> Store Issue / Return / Transfer</button>
               {/* Attendance Records — register of all saved morning manpower (mam 2026-06-24) */}
               <button onClick={openAttendanceRecords}
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiList /> Attendance Records</button>
@@ -2550,13 +2604,18 @@ export default function DPR() {
           engineer issues material on a numbered ISU slip (stock OUT now),
           takes back the evening balance on an RTN slip (stock IN). Net
           consumption auto-fills the DPR. Every slip prints as a GRN bill. */}
-      <Modal isOpen={slipModal} onClose={() => setSlipModal(false)} title="Site Store — Material Issue / Return (GRN Slip)" wide>
+      <Modal isOpen={slipModal} onClose={() => setSlipModal(false)} title="Site Store — Material Issue / Return / Transfer (GRN Slip)" wide>
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="label">Site *</label>
               <select className="select" value={slipSite}
-                onChange={e => { setSlipSite(e.target.value); loadSlipRows(e.target.value, slipType, slipDate); }}>
+                onChange={e => {
+                  const sId = e.target.value;
+                  setSlipSite(sId);
+                  loadSlipRows(sId, slipType, slipDate);
+                  loadDestWarehouses(sId);
+                }}>
                 <option value="">— Pick site —</option>
                 {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
@@ -2565,12 +2624,16 @@ export default function DPR() {
               <label className="label">Type *</label>
               <div className="flex rounded border overflow-hidden">
                 <button type="button" onClick={() => { setSlipType('issue'); loadSlipRows(slipSite, 'issue', slipDate); }}
-                  className={`flex-1 py-2 text-xs font-semibold ${slipType === 'issue' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>
+                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'issue' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>
                   🌅 Morning Issue
                 </button>
                 <button type="button" onClick={() => { setSlipType('return'); loadSlipRows(slipSite, 'return', slipDate); }}
-                  className={`flex-1 py-2 text-xs font-semibold ${slipType === 'return' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600'}`}>
+                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'return' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600'}`}>
                   🌇 Evening Return
+                </button>
+                <button type="button" onClick={() => { setSlipType('transfer'); loadSlipRows(slipSite, 'transfer', slipDate); if (!destWarehouses.length && slipSite) loadDestWarehouses(slipSite); }}
+                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'transfer' ? 'bg-purple-700 text-white' : 'bg-white text-gray-600'}`}>
+                  🚚 Return / Transfer
                 </button>
               </div>
             </div>
@@ -2580,6 +2643,30 @@ export default function DPR() {
                 onChange={e => { setSlipDate(e.target.value); loadSlipRows(slipSite, slipType, e.target.value); }} />
             </div>
           </div>
+
+          {slipType === 'transfer' && (
+            <div className="bg-purple-50 border border-purple-200 rounded p-2.5">
+              <label className="label text-purple-900 font-semibold mb-1">
+                Destination Store / Warehouse (Transfer or Return to) *
+              </label>
+              <select
+                className="select bg-white"
+                value={slipToWarehouse}
+                onChange={e => setSlipToWarehouse(e.target.value)}
+              >
+                <option value="">— Pick destination store / warehouse —</option>
+                {destWarehouses.map(w => (
+                  <option key={w.id} value={w.id}>
+                    {w.warehouse_type === 'office' ? '🏢 ' : '🏗️ '}
+                    {w.name} {w.warehouse_type === 'office' ? '(Central / Office Store)' : `(Site Store — ${w.site_name || ''})`}
+                  </option>
+                ))}
+              </select>
+              <div className="text-[11px] text-purple-700 mt-1">
+                Surplus or idle materials will be deducted from this site store and added to the destination warehouse.
+              </div>
+            </div>
+          )}
 
           {/* Shift tag (mam 2026-07-31: 3-shift method) — auto from IST clock */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -2591,8 +2678,15 @@ export default function DPR() {
           </div>
 
           <div>
-            <label className="label">{slipType === 'issue' ? 'Issued To (Sr. Site Engineer / team) *' : 'Returned By *'}</label>
-            <input className="input" list="slip-person-suggestions" placeholder="Type a name or pick from the team…"
+            <label className="label">
+              {slipType === 'issue'
+                ? 'Issued To (Sr. Site Engineer / team) *'
+                : slipType === 'transfer'
+                  ? 'Carrier / Transferred By (Driver / Person carrying material) *'
+                  : 'Returned By *'}
+            </label>
+            <input className="input" list="slip-person-suggestions"
+              placeholder={slipType === 'transfer' ? 'Driver / person name or vehicle info…' : 'Type a name or pick from the team…'}
               value={slipTo} onChange={e => setSlipTo(e.target.value)} />
             <datalist id="slip-person-suggestions">
               {(users || []).map(u => <option key={u.id} value={u.name} />)}
@@ -2610,7 +2704,11 @@ export default function DPR() {
                     <li><b>Receive a PO</b> into this site's store warehouse (Dispatch &amp; Receiving → Mark Received → pick the site warehouse).</li>
                   </ul>
                 </>
-              ) : 'Nothing outstanding to return — no material issued (and not yet returned) on this date.'}
+              ) : slipType === 'transfer' ? (
+                'This site store has no stock available to transfer or return.'
+              ) : (
+                'Nothing outstanding to return — no material issued (and not yet returned) on this date.'
+              )}
             </div>
           )}
           {slipRows.length > 0 && (
@@ -2619,9 +2717,11 @@ export default function DPR() {
                 <thead>
                   <tr className="text-gray-500 border-b">
                     <th className="text-left py-1 pr-2">Material</th>
-                    <th className="text-right py-1 px-2 whitespace-nowrap">{slipType === 'issue' ? 'In Store' : 'Outstanding'}</th>
+                    <th className="text-right py-1 px-2 whitespace-nowrap">{slipType === 'issue' || slipType === 'transfer' ? 'In Store' : 'Outstanding'}</th>
                     {slipType === 'issue' && <th className="text-right py-1 px-2 whitespace-nowrap">Aaj Ka Plan</th>}
-                    <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">{slipType === 'issue' ? 'Issue Qty (suggested)' : 'Return Qty'}</th>
+                    <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">
+                      {slipType === 'issue' ? 'Issue Qty (suggested)' : slipType === 'transfer' ? 'Transfer Qty' : 'Return Qty'}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2660,9 +2760,15 @@ export default function DPR() {
               <div className="text-[11px] font-semibold text-gray-600 mb-1">Slips on {slipDate}</div>
               {slipsToday.map(s => (
                 <div key={s.id} className="flex flex-wrap items-center gap-2 text-[11px] py-0.5">
-                  <span className={`font-mono font-semibold ${s.slip_type === 'issue' ? 'text-red-700' : 'text-emerald-700'}`}>{s.slip_number}</span>
+                  <span className={`font-mono font-semibold ${s.slip_type === 'issue' ? 'text-red-700' : s.slip_type === 'transfer' ? 'text-purple-700' : 'text-emerald-700'}`}>{s.slip_number}</span>
                   <span>{s.shift === 'evening' ? '🌆' : s.shift === 'night' ? '🌙' : '🌅'}</span>
-                  <span className="text-gray-500">{s.slip_type === 'issue' ? 'Issue →' : 'Return ←'} {s.issued_to}</span>
+                  <span className="text-gray-500">
+                    {s.slip_type === 'issue'
+                      ? `Issue → ${s.issued_to}`
+                      : s.slip_type === 'transfer'
+                        ? `Transfer 🚚 ${s.to_warehouse_name ? `→ ${s.to_warehouse_name}` : ''} (${s.issued_to})`
+                        : `Return ← ${s.issued_to}`}
+                  </span>
                   <span className="text-gray-400">· {(s.items || []).length} item(s)</span>
                   <a className="text-blue-700 hover:underline font-medium" href={`/site-slip/${s.id}/print`} target="_blank" rel="noreferrer">Print</a>
                 </div>
@@ -2673,7 +2779,7 @@ export default function DPR() {
           <div className="flex justify-end gap-2 pt-2 border-t">
             <button onClick={() => setSlipModal(false)} className="btn btn-secondary">Close</button>
             <button onClick={saveSlip} disabled={slipBusy || !slipSite} className="btn btn-primary">
-              {slipBusy ? 'Saving…' : slipType === 'issue' ? 'Save Issue Slip & Print' : 'Save Return Slip & Print'}
+              {slipBusy ? 'Saving…' : slipType === 'issue' ? 'Save Issue Slip & Print' : slipType === 'transfer' ? 'Save Transfer Slip & Print' : 'Save Return Slip & Print'}
             </button>
           </div>
         </div>

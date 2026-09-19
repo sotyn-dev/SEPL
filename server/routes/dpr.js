@@ -783,23 +783,52 @@ try {
 // material comes back against a RETURN slip (RTN/YYYY/####, stock IN).
 // Net consumption (issued − returned) auto-fills the DPR — the engineer
 // never types stock numbers ("GRN bill" both ways, SPOS zero manual calc).
-try { getDb().exec(`
-  CREATE TABLE IF NOT EXISTS site_store_slips (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    slip_number TEXT UNIQUE,
-    slip_type TEXT NOT NULL CHECK(slip_type IN ('issue','return')),
-    site_id INTEGER NOT NULL REFERENCES sites(id),
-    warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
-    slip_date DATE NOT NULL,
-    issued_to TEXT,
-    notes TEXT,
-    created_by INTEGER REFERENCES users(id),
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`); } catch (_) {}
-// Shift tag on slips (mam 2026-07-31: three-shift method — Morning 9-6 /
-// Evening 6-10 / Night 10-2). Auto-picked from IST time, overridable.
-try { getDb().exec(`ALTER TABLE site_store_slips ADD COLUMN shift TEXT DEFAULT 'day'`); } catch (_) {}
+try {
+  const db = getDb();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS site_store_slips (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slip_number TEXT UNIQUE,
+      slip_type TEXT NOT NULL CHECK(slip_type IN ('issue','return','transfer')),
+      site_id INTEGER NOT NULL REFERENCES sites(id),
+      warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+      to_warehouse_id INTEGER REFERENCES warehouses(id),
+      slip_date DATE NOT NULL,
+      issued_to TEXT,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      shift TEXT DEFAULT 'day'
+    )
+  `);
+  const info = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='site_store_slips'").get();
+  if (info && !info.sql.includes('transfer')) {
+    db.exec(`
+      CREATE TABLE site_store_slips_v2 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slip_number TEXT UNIQUE,
+        slip_type TEXT NOT NULL CHECK(slip_type IN ('issue','return','transfer')),
+        site_id INTEGER NOT NULL REFERENCES sites(id),
+        warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+        to_warehouse_id INTEGER REFERENCES warehouses(id),
+        slip_date DATE NOT NULL,
+        issued_to TEXT,
+        notes TEXT,
+        created_by INTEGER REFERENCES users(id),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        shift TEXT DEFAULT 'day'
+      );
+      INSERT INTO site_store_slips_v2 (id, slip_number, slip_type, site_id, warehouse_id, slip_date, issued_to, notes, created_by, created_at, shift)
+        SELECT id, slip_number, slip_type, site_id, warehouse_id, slip_date, issued_to, notes, created_by, created_at, COALESCE(shift, 'day') FROM site_store_slips;
+      DROP TABLE site_store_slips;
+      ALTER TABLE site_store_slips_v2 RENAME TO site_store_slips;
+    `);
+  } else if (info && !info.sql.includes('to_warehouse_id')) {
+    db.exec(`ALTER TABLE site_store_slips ADD COLUMN to_warehouse_id INTEGER REFERENCES warehouses(id)`);
+  }
+} catch (e) {
+  console.warn('[dpr] site_store_slips migration notice:', e.message);
+}
 // Three-shift DPR (mam 2026-08-03: "make three time dpr method … or suggest
 // something more innovative"): ONE daily DPR per site, but every child row
 // is shift-tagged and submissions are ADDITIVE per shift — morning submit +
@@ -1610,24 +1639,60 @@ function siteConsumptionFor(db, siteId, dateIso) {
   }));
 }
 
-// Create a slip. Issue: qty capped at live store stock (stock goes OUT).
-// Return: qty capped at today's issued − already returned (stock comes IN).
+// Destination warehouses for inter-store transfer: Office Store (Central) + other Site Stores
+router.get('/destination-warehouses', requirePermission('dpr', 'view'), (req, res) => {
+  const db = getDb();
+  const excludeSiteId = req.query.exclude_site_id ? +req.query.exclude_site_id : null;
+  const rows = db.prepare(`
+    SELECT w.id, w.name, w.type, w.site_id, s.name AS site_name
+      FROM warehouses w
+      LEFT JOIN sites s ON s.id = w.site_id
+     WHERE COALESCE(w.active, 1) = 1
+       AND (w.type = 'office' OR (w.type = 'site_store' AND (w.site_id IS NULL OR w.site_id != ?)))
+     ORDER BY w.type = 'office' DESC, w.name ASC
+  `).all(excludeSiteId || 0);
+  res.json(rows);
+});
+
+// Create a slip.
+// Issue: qty capped at live store stock (stock goes OUT to engineer/team).
+// Return: qty capped at today's issued − already returned (unused material comes IN).
+// Transfer: surplus/idle material transferred OUT of site store INTO Office Store or another Site Store.
 router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
-  const { site_id, slip_type, slip_date, issued_to, notes, items } = req.body || {};
-  if (!site_id || !['issue', 'return'].includes(slip_type)) {
-    return res.status(400).json({ error: 'site_id and slip_type (issue/return) are required' });
+  const { site_id, slip_type, slip_date, issued_to, notes, items, to_warehouse_id } = req.body || {};
+  if (!site_id || !['issue', 'return', 'transfer'].includes(slip_type)) {
+    return res.status(400).json({ error: 'site_id and slip_type (issue/return/transfer) are required' });
+  }
+  const isTransfer = slip_type === 'transfer';
+  if (isTransfer && !to_warehouse_id) {
+    return res.status(400).json({ error: 'Destination warehouse required for transfer' });
   }
   const clean = (Array.isArray(items) ? items : [])
     .map(i => ({ item_master_id: +i.item_master_id, quantity: +i.quantity }))
     .filter(i => i.item_master_id > 0 && i.quantity > 0);
   if (!clean.length) return res.status(400).json({ error: 'At least one item with a quantity is required' });
   if (!String(issued_to || '').trim()) {
-    return res.status(400).json({ error: slip_type === 'issue' ? 'Issued To (who is taking the material) is required' : 'Returned By (who is bringing it back) is required' });
+    return res.status(400).json({
+      error: slip_type === 'issue'
+        ? 'Issued To (who is taking the material) is required'
+        : slip_type === 'return'
+          ? 'Returned By (who is bringing it back) is required'
+          : 'Transferred By / Carrier (who is transporting the material) is required'
+    });
   }
   const db = getDb();
   if (!userOwnsSite(db, req.user, site_id)) return res.status(403).json({ error: 'Not your site' });
   const store = db.prepare("SELECT id, name FROM warehouses WHERE site_id = ? AND type = 'site_store' AND COALESCE(active,1) = 1 LIMIT 1").get(site_id);
   if (!store) return res.status(400).json({ error: 'This site has no site store yet — create one in Inventory → Warehouses first.' });
+  if (isTransfer && +to_warehouse_id === store.id) {
+    return res.status(400).json({ error: 'Source and destination warehouse must differ' });
+  }
+  const targetStore = isTransfer
+    ? db.prepare("SELECT id, name, type FROM warehouses WHERE id = ? AND COALESCE(active,1) = 1").get(to_warehouse_id)
+    : null;
+  if (isTransfer && !targetStore) {
+    return res.status(400).json({ error: 'Target destination warehouse not found or inactive' });
+  }
   const dateIso = String(slip_date || istTodayIso()).slice(0, 10);
 
   const getBal = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id = ? AND item_master_id = ?');
@@ -1639,10 +1704,10 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
     const m = getMaster.get(it.item_master_id);
     if (!m) return res.status(400).json({ error: `Unknown item #${it.item_master_id}` });
     const name = [m.item_name, m.specification, m.size].filter(Boolean).join(' ');
-    if (slip_type === 'issue') {
+    if (slip_type === 'issue' || slip_type === 'transfer') {
       const bal = +(getBal.get(store.id, it.item_master_id)?.quantity || 0);
       if (it.quantity > bal) {
-        return res.status(400).json({ error: `${name}: only ${bal} in the site store — cannot issue ${it.quantity}.` });
+        return res.status(400).json({ error: `${name}: only ${bal} in the site store — cannot ${slip_type === 'transfer' ? 'transfer' : 'issue'} ${it.quantity}.` });
       }
     } else {
       const c = consumedToday.find(x => x.item_master_id === it.item_master_id);
@@ -1655,7 +1720,7 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
 
   const { nextSequence } = require('../db/nextSequence');
   const year = new Date().getFullYear();
-  const prefix = slip_type === 'issue' ? `ISU/${year}/` : `RTN/${year}/`;
+  const prefix = slip_type === 'issue' ? `ISU/${year}/` : slip_type === 'return' ? `RTN/${year}/` : `XFR/${year}/`;
   let slipId, slipNumber;
   try {
     const txn = db.transaction(() => {
@@ -1668,30 +1733,57 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
         shift = (h >= 9 && h < 18) ? 'day' : (h >= 18 && h < 22) ? 'evening' : 'night';
       }
       const r = db.prepare(`
-        INSERT INTO site_store_slips (slip_number, slip_type, site_id, warehouse_id, slip_date, issued_to, notes, created_by, shift)
-        VALUES (?,?,?,?,?,?,?,?,?)`)
-        .run(slipNumber, slip_type, site_id, store.id, dateIso, String(issued_to).trim(), notes || null, req.user.id, shift);
+        INSERT INTO site_store_slips (slip_number, slip_type, site_id, warehouse_id, to_warehouse_id, slip_date, issued_to, notes, created_by, shift)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .run(slipNumber, slip_type, site_id, store.id, targetStore ? targetStore.id : null, dateIso, String(issued_to).trim(), notes || null, req.user.id, shift);
       slipId = r.lastInsertRowid;
       const insItem = db.prepare('INSERT INTO site_store_slip_items (slip_id, item_master_id, item_name, unit, quantity, rate) VALUES (?,?,?,?,?,?)');
       const upBal = db.prepare('UPDATE stock_balance SET quantity = quantity + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
       const insBal = db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)');
       const insMv = db.prepare(`
-        INSERT INTO stock_movements (warehouse_id, item_master_id, type, quantity, rate, total_value, reference_type, reference_id, site_id, notes, created_by)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+        INSERT INTO stock_movements (warehouse_id, item_master_id, type, quantity, rate, total_value, reference_type, reference_id, to_warehouse_id, from_warehouse_id, site_id, notes, created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
       for (const it of clean) {
         const m = getMaster.get(it.item_master_id);
         const name = [m.item_name, m.specification, m.size].filter(Boolean).join(' ');
         const bal = getBal.get(store.id, it.item_master_id);
         const rate = +(bal?.avg_rate || 0);
         insItem.run(slipId, it.item_master_id, name, m.uom || 'nos', it.quantity, rate);
-        const delta = slip_type === 'issue' ? -it.quantity : it.quantity;
-        if (bal) upBal.run(delta, bal.id);
-        else insBal.run(store.id, it.item_master_id, Math.max(0, delta), rate);
-        insMv.run(store.id, it.item_master_id, slip_type === 'issue' ? 'OUT' : 'IN',
-                  it.quantity, rate, it.quantity * rate,
-                  slip_type === 'issue' ? 'SITE_ISSUE' : 'SITE_RETURN', slipNumber, site_id,
-                  `${slip_type === 'issue' ? 'Issued to' : 'Returned by'} ${String(issued_to).trim()} (${slipNumber})`,
-                  req.user.id);
+
+        if (isTransfer) {
+          // Decrement source store
+          upBal.run(-it.quantity, bal.id);
+          insMv.run(store.id, it.item_master_id, 'OUT',
+                    it.quantity, rate, it.quantity * rate,
+                    'TRANSFER', slipNumber, targetStore.id, null, site_id,
+                    `Transferred to ${targetStore.name} by ${String(issued_to).trim()} (${slipNumber})`,
+                    req.user.id);
+
+          // Increment destination warehouse
+          const targetBal = getBal.get(targetStore.id, it.item_master_id);
+          if (targetBal) {
+            const newQty = (+targetBal.quantity) + it.quantity;
+            const newAvg = newQty > 0 ? (((+targetBal.quantity) * (+targetBal.avg_rate || 0)) + (it.quantity * rate)) / newQty : rate;
+            db.prepare('UPDATE stock_balance SET quantity = ?, avg_rate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+              .run(newQty, newAvg, targetBal.id);
+          } else {
+            insBal.run(targetStore.id, it.item_master_id, it.quantity, rate);
+          }
+          insMv.run(targetStore.id, it.item_master_id, 'IN',
+                    it.quantity, rate, it.quantity * rate,
+                    'TRANSFER', slipNumber, null, store.id, site_id,
+                    `Transferred from ${store.name} by ${String(issued_to).trim()} (${slipNumber})`,
+                    req.user.id);
+        } else {
+          const delta = slip_type === 'issue' ? -it.quantity : it.quantity;
+          if (bal) upBal.run(delta, bal.id);
+          else insBal.run(store.id, it.item_master_id, Math.max(0, delta), rate);
+          insMv.run(store.id, it.item_master_id, slip_type === 'issue' ? 'OUT' : 'IN',
+                    it.quantity, rate, it.quantity * rate,
+                    slip_type === 'issue' ? 'SITE_ISSUE' : 'SITE_RETURN', slipNumber, null, null, site_id,
+                    `${slip_type === 'issue' ? 'Issued to' : 'Returned by'} ${String(issued_to).trim()} (${slipNumber})`,
+                    req.user.id);
+        }
       }
     });
     txn();
@@ -1699,7 +1791,7 @@ router.post('/site-slips', requirePermission('dpr', 'create'), (req, res) => {
     console.error('[dpr/site-slips]', e.message);
     return res.status(500).json({ error: e.message });
   }
-  res.status(201).json({ id: slipId, slip_number: slipNumber, slip_type, line_count: clean.length });
+  res.status(201).json({ id: slipId, slip_number: slipNumber, slip_type, line_count: clean.length, to_warehouse_name: targetStore?.name });
 });
 
 // Slips for one site + date (register + reprint links).
@@ -1708,10 +1800,11 @@ router.get('/site-slips', requirePermission('dpr', 'view'), (req, res) => {
   if (!site_id) return res.status(400).json({ error: 'site_id required' });
   const db = getDb();
   if (!userOwnsSite(db, req.user, site_id)) return res.status(403).json({ error: 'Not your site' });
-  let sql = `SELECT s.*, u.name AS created_by_name, w.name AS store_name
+  let sql = `SELECT s.*, u.name AS created_by_name, w.name AS store_name, tw.name AS to_warehouse_name
                FROM site_store_slips s
                LEFT JOIN users u ON u.id = s.created_by
                LEFT JOIN warehouses w ON w.id = s.warehouse_id
+               LEFT JOIN warehouses tw ON tw.id = s.to_warehouse_id
               WHERE s.site_id = ?`;
   const params = [site_id];
   if (date) { sql += ' AND s.slip_date = ?'; params.push(String(date).slice(0, 10)); }
@@ -1727,10 +1820,11 @@ router.get('/site-slips', requirePermission('dpr', 'view'), (req, res) => {
 router.get('/site-slips/:id', requirePermission('dpr', 'view'), (req, res) => {
   const db = getDb();
   const slip = db.prepare(`
-    SELECT s.*, u.name AS created_by_name, w.name AS store_name, st.name AS site_name
+    SELECT s.*, u.name AS created_by_name, w.name AS store_name, st.name AS site_name, tw.name AS to_warehouse_name
       FROM site_store_slips s
       LEFT JOIN users u ON u.id = s.created_by
       LEFT JOIN warehouses w ON w.id = s.warehouse_id
+      LEFT JOIN warehouses tw ON tw.id = s.to_warehouse_id
       LEFT JOIN sites st ON st.id = s.site_id
      WHERE s.id = ?`).get(req.params.id);
   if (!slip) return res.status(404).json({ error: 'Slip not found' });
