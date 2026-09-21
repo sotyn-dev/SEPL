@@ -983,16 +983,18 @@ export default function Payroll() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Stat label="Half Days" value={detail.half_days} color="text-orange-600" />
               <Stat label="Absent" value={detail.absent_days} color="text-red-600" />
-              <Stat label="Late Marks" value={`${detail.late_marks}${detail.lates_converted_absent ? ` (-${detail.lates_converted_absent} day)` : ''}`} color="text-amber-600" />
-              <Stat label="Late Penalty" value={detail.late_penalty ? fmt(detail.late_penalty) : '0'} color="text-red-600" />
+              <Stat label="Late" value={`${detail.late_marks || 0}${detail.lates_converted_absent ? ` (-${detail.lates_converted_absent} day)` : ''}${detail.late_penalty > 0 ? ` (-₹${fmt(detail.late_penalty)})` : ''}`} color="text-amber-600" />
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <Stat label="Attendance Days" value={detail.present_days} color="text-emerald-700" />
-              <Stat label="Sundays" value={detail.sunday_count} color="text-blue-600" />
-              <Stat label="Paid CL/Leave" value={detail.paid_leaves} color="text-purple-600" />
-              <Stat label="Holidays" value={detail.holiday_days || 0} color="text-indigo-600" />
-              <Stat label={`OT (>${detail.ot_threshold || 9}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
+            <div className="space-y-1 mt-4 border-t pt-3">
+              <div className="text-[10px] uppercase font-bold text-gray-400 mb-2">Metrics</div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <Stat label="Attendance Days" value={detail.present_days} color="text-emerald-700" />
+                <Stat label="Sundays" value={detail.sunday_count} color="text-blue-600" />
+                <Stat label="Paid CL/Leave" value={detail.paid_leaves} color="text-purple-600" />
+                <Stat label="Holidays" value={detail.holiday_days || 0} color="text-indigo-600" />
+                <Stat label={`OT (>${detail.ot_threshold || 9}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
+              </div>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
