@@ -8,3 +8,8 @@ client/node_modules/
 
 # generated sales-billing exports that land in client/public
 client/public/*.xlsx
+
+# never commit business data exports
+*.db
+*.sqlite
+client/dist/*.xlsx
