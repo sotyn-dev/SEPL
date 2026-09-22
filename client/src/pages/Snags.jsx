@@ -21,6 +21,13 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload, FiCamera, FiLayers } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
+import { compressImage } from '../utils/compressImage';
+
+const toThumb = (url, w = 120) => {
+  if (!url || typeof url !== 'string' || !url.startsWith('/uploads/')) return url;
+  if (/\.pdf$/i.test(url)) return url;
+  return `/api/thumbnail?url=${encodeURIComponent(url)}&w=${w}`;
+};
 
 // ── Ageing helpers ──────────────────────────────────────────────────────────
 // Target: every open/submitted snag must be resolved within 72 hours of being
@@ -229,8 +236,9 @@ export default function Snags() {
     if (!file) return null;
     setUploading(true);
     try {
+      const toSend = file.type?.startsWith('image/') ? await compressImage(file) : file;
       const fd = new FormData();
-      fd.append('file', file);
+      fd.append('file', toSend);
       const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       return r.data.url;
     } catch (err) {
@@ -540,7 +548,7 @@ export default function Snags() {
                 </td>
                 <td>
                   {s.photo_url
-                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={s.photo_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded" /></a>
+                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={toThumb(s.photo_url, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded" /></a>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
@@ -551,7 +559,7 @@ export default function Snags() {
                 </td>
                 <td>
                   {s.proof_url
-                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
+                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={toThumb(s.proof_url, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td>
@@ -689,7 +697,7 @@ export default function Snags() {
                           <span>Uploading…</span>
                         </div>
                       ) : it.photo_url ? (
-                        <img src={it.photo_url} alt="" className="w-full h-full object-cover" />
+                        <img src={toThumb(it.photo_url, 160)} alt="" className="w-full h-full object-cover" />
                       ) : (
                         <span className="text-[10px] text-red-500">Failed</span>
                       )}
@@ -828,7 +836,7 @@ export default function Snags() {
                 <label className="label">Snag Photo</label>
                 {form.photo_url ? (
                   <div className="flex items-start gap-3">
-                    <img src={form.photo_url} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
+                    <img src={toThumb(form.photo_url, 256)} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
                     <button type="button" onClick={() => setForm(f => ({ ...f, photo_url: '' }))} className="text-red-500 text-xs">Remove</button>
                   </div>
                 ) : (
@@ -914,7 +922,7 @@ export default function Snags() {
               <label className="label">Proof Photo *</label>
               {proofForm.proof_url ? (
                 <div className="flex items-start gap-3">
-                  <img src={proofForm.proof_url} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
+                  <img src={toThumb(proofForm.proof_url, 256)} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
                   <button type="button" onClick={() => setProofForm(f => ({ ...f, proof_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (
