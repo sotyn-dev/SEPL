@@ -13,7 +13,7 @@ assert.equal(getModuleFlow('/orders-other'), undefined);
 assert.equal(flowLabel('/orders', 'Order to Planning'), 'Order to Planning (Flow 1)');
 assert.equal(flowLabel('/dispatch-receiving', 'Dispatch Receiving'), 'Dispatch Receiving (88.1)');
 assert.equal(flowStepLabel('/procurement', 'Raise Indent'), 'Raise Indent (4.1)');
-assert.equal(flowStepLabel('/procurement', '⚙ Responsible'), '⚙ Responsible (4.9)');
+assert.equal(flowStepLabel('/procurement', '⚙ Responsible'), '⚙ Responsible (4.10)');
 assert.equal(flowStepLabel('/procurement', 'Select project'), 'Select project');
 const layout = readFileSync(new URL('../components/Layout.jsx', import.meta.url), 'utf8');
 const nav = layout.slice(layout.indexOf('const SIDEBAR_DASHBOARD'), layout.indexOf('export default function Layout'));

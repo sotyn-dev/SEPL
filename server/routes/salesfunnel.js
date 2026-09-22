@@ -12,11 +12,11 @@ router.use(authMiddleware);
 // `sla_hours = null` means no fixed SLA on that stage (T-X in spec).
 // `who` is the role that owns the stage.
 const STAGES = [
-  { key: 'lead_capture', label: 'Lead/Tender Capture', color: 'blue', who: 'BD', sla_hours: 1, gate: false },
-  { key: 'qualification', label: 'Qualified or Not', color: 'indigo', who: 'Sales Head', sla_hours: 24, gate: false },
-  { key: 'site_survey', label: 'Site Survey + Feasibility', color: 'purple', who: 'Site Eng', sla_hours: 72, gate: false },
-  { key: 'concept_design', label: 'Concept Design / Drawings', color: 'violet', who: 'Designer', sla_hours: 168, gate: false },
-  { key: 'boq_costing', label: 'BOQ + Vendor Costing', color: 'amber', who: 'Estimation', sla_hours: 168, gate: false },
+  { key: 'lead_capture', label: 'Lead/Tender Capture', color: 'blue', who: 'ERP (Nancy)', sop: 'SOP-01.1', sla_hours: 1, gate: false },
+  { key: 'qualification', label: 'Qualified or Not', color: 'indigo', who: 'Sales Coordinator (Rajat Sharma)', sop: 'SOP-01.2', sla_hours: 5 / 60, gate: false },
+  { key: 'site_survey', label: 'Site Survey + Feasibility', color: 'purple', who: 'Sales Executive (Rajat Sharma)', sop: 'SOP-01.4', sla_hours: 2, gate: false },
+  { key: 'concept_design', label: 'Concept Design / Drawings', color: 'violet', who: 'Designer', sop: 'SOP-01.5', sla_hours: 168, gate: false },
+  { key: 'boq_costing', label: 'BOQ + Vendor Costing', color: 'amber', who: 'Sales Coordinator / Estimation', sop: 'SOP-01.5', sla_hours: 168, gate: false },
   { key: 'pricing_review', label: 'Internal Pricing Review', color: 'orange', who: 'CFO', sla_hours: 24, gate: true },
   { key: 'quote_submitted', label: 'Quote / Bid Submission', color: 'cyan', who: 'Sales', sla_hours: null, gate: false },
   { key: 'technical_clarification', label: 'Technical Clarification', color: 'sky', who: 'Sales + Tech', sla_hours: 24, gate: false },
@@ -406,29 +406,39 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
     // margin_feasibility_pct, strategic_fit (1-5), decision GO/NO-GO + reason.
     // Existing fields kept so old leads don't lose data: is_qualified,
     // qualified_by, qualified_remarks, first_call_status / remarks.
-    case 'qualification':
+    case 'qualification': {
+      const quickCheck = typeof b.sop_quick_check_data === 'object' ? JSON.stringify(b.sop_quick_check_data) : (b.sop_quick_check_data || null);
+      const callScript = typeof b.sop_call_script_data === 'object' ? JSON.stringify(b.sop_call_script_data) : (b.sop_call_script_data || null);
       sql = `UPDATE sales_funnel SET
         current_stage='qualification', is_qualified=1, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
         qualified_remarks=?, first_call_status=?, first_call_at=CURRENT_TIMESTAMP,
-        first_call_remarks=?, tentative_amount=?, closing_date=?, stage_entered_at=CURRENT_TIMESTAMP,
+        first_call_remarks=?, tentative_amount=?, closing_date=?,
+        sop_quick_check_data=COALESCE(?, sop_quick_check_data),
+        sop_call_script_data=COALESCE(?, sop_call_script_data),
+        stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.qualified_by || req.user.name, b.qualified_remarks || null,
       b.first_call_status || 'interested', b.first_call_remarks || b.qualified_remarks || null,
       (b.tentative_amount === '' || b.tentative_amount == null) ? null : (+b.tentative_amount || null),
-      b.closing_date || null,
+      b.closing_date || null, quickCheck, callScript,
       req.params.id];
       break;
+    }
 
     // First Call NOT Interested → drops the lead with reason. Maps to terminal 'lost'.
-    case 'not_qualified':
+    case 'not_qualified': {
+      const quickCheck = typeof b.sop_quick_check_data === 'object' ? JSON.stringify(b.sop_quick_check_data) : (b.sop_quick_check_data || null);
       sql = `UPDATE sales_funnel SET
         current_stage='lost', is_qualified=0, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
         qualified_remarks=?, first_call_status='not_interested', first_call_at=CURRENT_TIMESTAMP,
-        first_call_remarks=?, stage_entered_at=CURRENT_TIMESTAMP,
+        first_call_remarks=?,
+        sop_quick_check_data=COALESCE(?, sop_quick_check_data),
+        stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.qualified_by || req.user.name, b.qualified_remarks || 'Not qualified',
-      b.first_call_remarks || b.qualified_remarks || null, req.params.id];
+      b.first_call_remarks || b.qualified_remarks || null, quickCheck, req.params.id];
       break;
+    }
 
     // ─── STAGE 3 — SITE SURVEY + FEASIBILITY ───────────────────────────
     // Replaces 'meeting_assigned'. Existing meeting fields reused as the
@@ -502,16 +512,20 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
 
     // ─── STAGE 5 — BOQ + VENDOR COSTING ────────────────────────────────
     // Replaces 'boq_created'. Same fields; vendor-quote rule and
-    // estimation sign-off added later.
-    case 'boq_costing':
+    // estimation sign-off added later. (SOP-01.5 BOQ upload checklist)
+    case 'boq_costing': {
+      const boqChecklist = typeof b.sop_boq_checklist === 'object' ? JSON.stringify(b.sop_boq_checklist) : (b.sop_boq_checklist || null);
       sql = `UPDATE sales_funnel SET
         current_stage='boq_costing',
         boq_file_link=?, revised_boq_file_link=?,
         boq_created_by=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP,
+        sop_boq_checklist=COALESCE(?, sop_boq_checklist),
+        estimation_triggered_at=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.boq_file_link, b.revised_boq_file_link || null,
-      b.boq_created_by || req.user.name, b.boq_amount || 0, req.params.id];
+      b.boq_created_by || req.user.name, b.boq_amount || 0, boqChecklist, req.params.id];
       break;
+    }
 
     // ─── STAGE 6 — INTERNAL PRICING REVIEW (GATE) — stub ───────────────
     // Spec: CFO + Sales Head only. Margin floor enforced at line level.
@@ -602,6 +616,23 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
                   VALUES (?, ?, ?, ?, ?)`)
         .run(req.params.id, b.boq_file_link || null, +b.boq_amount || 0, b.boq_created_by || req.user.name, b.boq_notes || null);
     } catch (_) { /* history is best-effort */ }
+
+    // Auto-notify Estimation team (SOP-01.5 -> SOP-02 Estimation Handoff)
+    try {
+      const usersToNotify = db.prepare(`
+        SELECT id FROM users
+        WHERE active = 1 AND (role = 'admin' OR department IN ('Estimation', 'Pricing', 'Sales'))
+      `).all();
+      const insertNotif = db.prepare(`
+        INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent)
+        VALUES (?, 'boq_uploaded', ?, ?, ?, 'in_app')
+      `);
+      for (const u of usersToNotify) {
+        try {
+          insertNotif.run(u.id, `New BOQ Uploaded: ${lead.client_name}`, `${lead.company_name ? lead.company_name + ' · ' : ''}Estimation work started (SOP-01.5)`, '/quotations');
+        } catch (_) {}
+      }
+    } catch (_) { }
   }
   audit(db, req.params.id, stage, 'enter_stage', req.user, {
     notes: b.result_remarks || b.qualified_remarks || b.mom_notes || null,
@@ -693,6 +724,104 @@ router.get('/followups/overdue', requirePermission('leads', 'view'), (req, res) 
     FROM lead_followups f JOIN sales_funnel sf ON f.lead_id=sf.id
     WHERE f.done=0 AND f.followup_date < ? ORDER BY f.followup_date`).all(today);
   res.json(overdue);
+});
+
+// POST /api/sales-funnel/:id/email-mom — Email meeting minutes (MOM) to client (SOP-01.4)
+router.post('/:id/email-mom', requirePermission('leads', 'edit'), async (req, res) => {
+  const db = getDb();
+  const lead = db.prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  const recipientEmail = (req.body.recipient_email || lead.email || '').trim();
+  if (!recipientEmail) {
+    return res.status(400).json({ error: 'Client email address is required to send MOM' });
+  }
+
+  const clientName = lead.client_name || 'Valued Client';
+  const projectName = lead.project_name || lead.company_name || 'Project Discussion';
+  const meetingDate = lead.meeting_date || lead.updated_at || new Date().toISOString();
+  const meetingLocation = lead.meeting_location || 'Site / Office';
+  const purpose = lead.meeting_purpose || 'Requirement gathering & site survey';
+  const momNotes = req.body.mom_notes || lead.mom_notes || 'Discussion completed as scheduled.';
+  const actionPlanned = req.body.action_planned || lead.action_planned || 'Estimation team to process BOQ.';
+  const senderName = req.user?.name || 'SEPL Sales Team';
+
+  const subject = `Minutes of Meeting (MOM): ${projectName} — Secured Engineers Pvt Ltd`;
+  const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+      <div style="background-color: #1e40af; color: #ffffff; padding: 20px; text-align: center;">
+        <h2 style="margin: 0; font-size: 20px;">Secured Engineers Pvt. Ltd.</h2>
+        <p style="margin: 5px 0 0 0; font-size: 13px; opacity: 0.9;">Minutes of Meeting (MOM) · SOP-01.4</p>
+      </div>
+      <div style="padding: 24px;">
+        <p>Dear <strong>${clientName}</strong>,</p>
+        <p>Thank you for meeting with us regarding <strong>${projectName}</strong>. Below is the summary of the discussions and action items agreed upon:</p>
+        
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px;">
+          <tr style="background-color: #f8fafc;">
+            <td style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #e2e8f0; width: 35%;">Date:</td>
+            <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0;">${new Date(meetingDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Location:</td>
+            <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0;">${meetingLocation}</td>
+          </tr>
+          <tr style="background-color: #f8fafc;">
+            <td style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Purpose:</td>
+            <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0;">${purpose}</td>
+          </tr>
+        </table>
+
+        <div style="margin: 20px 0; padding: 14px; background-color: #f1f5f9; border-left: 4px solid #2563eb; border-radius: 4px;">
+          <h4 style="margin: 0 0 8px 0; color: #1e3a8a;">Discussion Summary / Key Points:</h4>
+          <p style="margin: 0; white-space: pre-wrap; font-size: 13px;">${momNotes}</p>
+        </div>
+
+        <div style="margin: 20px 0; padding: 14px; background-color: #ecfdf5; border-left: 4px solid #059669; border-radius: 4px;">
+          <h4 style="margin: 0 0 8px 0; color: #065f46;">Agreed Next Action:</h4>
+          <p style="margin: 0; white-space: pre-wrap; font-size: 13px;">${actionPlanned}</p>
+        </div>
+
+        <p style="font-size: 13px; color: #64748b;">If there are any amendments or clarifications needed, please feel free to reply directly to this email.</p>
+        <br>
+        <p style="margin: 0; font-size: 13px;">Warm regards,</p>
+        <p style="margin: 4px 0 0 0; font-weight: bold; font-size: 14px;">${senderName}</p>
+        <p style="margin: 0; font-size: 12px; color: #64748b;">Secured Engineers Pvt. Ltd. | Commercial MEP & Fire Solutions</p>
+      </div>
+    </div>
+  `;
+
+  const { sendEmail } = require('../lib/email');
+  let emailResult = { skipped: true, reason: 'Email sending skipped' };
+  try {
+    emailResult = await sendEmail({
+      to: recipientEmail,
+      subject,
+      html,
+      text: `MOM Summary for ${projectName}:\n\n${momNotes}\n\nAction Planned:\n${actionPlanned}`,
+    });
+  } catch (err) {
+    console.error('[email-mom] Send error:', err.message);
+  }
+
+  db.prepare(`
+    UPDATE sales_funnel
+       SET mom_emailed_at = CURRENT_TIMESTAMP,
+           mom_email_recipient = ?,
+           updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+  `).run(recipientEmail, req.params.id);
+
+  audit(db, req.params.id, lead.current_stage, 'email_mom', req.user, {
+    notes: `MOM dispatched to client at ${recipientEmail} (${emailResult.sent ? 'Sent' : 'Recorded'})`,
+  });
+
+  res.json({
+    success: true,
+    mom_emailed_at: new Date().toISOString(),
+    recipient: recipientEmail,
+    emailResult,
+  });
 });
 
 // DELETE

@@ -744,5 +744,21 @@
     "steps": [
       "Dispatch Receiving"
     ]
+  },
+  {
+    "path": "/sales-bill-receive",
+    "title": "Sales Bill Receive",
+    "number": 89,
+    "steps": [
+      "Sales Bill Receive"
+    ]
+  },
+  {
+    "path": "/project-profit",
+    "title": "Project Profit & Loss",
+    "number": 90,
+    "steps": [
+      "Project Profit & Loss"
+    ]
   }
 ]
