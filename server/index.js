@@ -707,7 +707,92 @@ app.use('/uploads', async (req, res, next) => {
   // zero-downtime — files not yet migrated keep serving while the backfill runs.
   return next();
 });
-app.use('/uploads', express.static(uploadsDir));
+
+// High-performance thumbnail serving endpoint with caching
+const fs = require('fs');
+let sharp = null;
+try { sharp = require('sharp'); } catch (_) { }
+const thumbCacheDir = ensureDir(path.join(UPLOADS_ROOT, '.thumb-cache'));
+
+app.get('/api/thumbnail', async (req, res) => {
+  const fileUrl = String(req.query.url || '');
+  const w = Math.min(600, Math.max(32, parseInt(req.query.w, 10) || 120));
+  const q = Math.min(95, Math.max(50, parseInt(req.query.q, 10) || 75));
+
+  // Security check: only allow paths originating from /uploads/
+  const cleanMatch = fileUrl.match(/\/uploads\/([^?#]+)$/);
+  if (!cleanMatch) {
+    return res.status(400).send('Invalid file path');
+  }
+
+  const rawKey = decodeURIComponent(cleanMatch[1]);
+  // Prevent directory traversal
+  const normalizedKey = path.normalize(rawKey).replace(/^(\.\.(\/|\\|$))+/, '');
+  const ext = path.extname(normalizedKey).toLowerCase();
+
+  // If not a resizable image (e.g. PDF), redirect to the original file
+  if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext) || !sharp) {
+    return res.redirect(fileUrl);
+  }
+
+  const localFile = path.join(uploadsDir, normalizedKey);
+  const cacheKey = `${Buffer.from(normalizedKey).toString('hex').slice(0, 32)}-w${w}-q${q}.webp`;
+  const cachedFile = path.join(thumbCacheDir, cacheKey);
+
+  res.setHeader('Cache-Control', 'public, max-age=2592000, immutable'); // 30 days
+  res.type('image/webp');
+
+  // 1. Check if cached thumbnail exists on disk
+  if (fs.existsSync(cachedFile)) {
+    return res.sendFile(cachedFile);
+  }
+
+  // 2. If original exists locally, resize it
+  if (fs.existsSync(localFile)) {
+    try {
+      const buffer = await sharp(localFile)
+        .resize({ width: w, withoutEnlargement: true })
+        .webp({ quality: q })
+        .toBuffer();
+
+      // Write cache file asynchronously in background
+      fs.writeFile(cachedFile, buffer, () => {});
+      return res.send(buffer);
+    } catch (err) {
+      console.warn('[thumbnail] resize error:', err.message);
+      return res.sendFile(localFile);
+    }
+  }
+
+  // 3. Remote driver (S3): fetch buffer and thumbnail
+  if (storage.isRemote) {
+    try {
+      const origBuf = await storage.getObject(normalizedKey);
+      if (origBuf) {
+        const buffer = await sharp(origBuf)
+          .resize({ width: w, withoutEnlargement: true })
+          .webp({ quality: q })
+          .toBuffer();
+        fs.writeFile(cachedFile, buffer, () => {});
+        return res.send(buffer);
+      }
+    } catch (err) {
+      console.warn('[thumbnail] remote resize error:', err.message);
+    }
+  }
+
+  // 4. Fallback to original URL
+  return res.redirect(fileUrl);
+});
+
+// Cache image uploads in browser for 7 days
+app.use('/uploads', (req, res, next) => {
+  if (/\.(jpg|jpeg|png|webp|gif|svg)$/i.test(req.path)) {
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+  }
+  next();
+});
+app.use('/uploads', express.static(uploadsDir, { maxAge: '7d' }));
 
 // Health check for deployment platforms
 // Health + DEPLOY FINGERPRINT.
