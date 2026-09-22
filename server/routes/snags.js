@@ -80,61 +80,122 @@ function siteScopeWhere(db, user) {
 // a downloaded sheet always matches what's on screen.
 function buildSnagQuery(db, req) {
   const { status, priority, site_id, assigned_to, scope, search, due_from, due_to } = req.query;
-  let sql = `
+  let where = 'WHERE 1=1';
+  const params = [];
+
+  // Mandatory per-site visibility for non-privileged users — applies on top
+  // of every optional filter below, so search/site/status can never widen
+  // the window back to company-wide.
+  const scopeW = siteScopeWhere(db, req.user);
+  if (scopeW) { where += ` AND ${scopeW.where}`; params.push(...scopeW.params); }
+  if (status) { where += ' AND s.status = ?'; params.push(status); }
+  if (priority) { where += ' AND s.priority = ?'; params.push(priority); }
+  if (site_id) { where += ' AND s.site_id = ?'; params.push(site_id); }
+  if (assigned_to) { where += ' AND s.assigned_to = ?'; params.push(assigned_to); }
+  // Due (target) date window, inclusive; snags with no target date drop out.
+  // Same expression as the Snag List scorecard row, so a Mon→Sat filter here
+  // always shows the scorecard's Planned (lib/dueDay.js snagDue).
+  const isoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+  const due = require('../lib/dueDay').snagDue('s.');
+  if (isoDate(due_from)) { where += ` AND ${due} >= ?`; params.push(due_from); }
+  if (isoDate(due_to)) { where += ` AND ${due} <= ?`; params.push(due_to); }
+  // scope=mine → only those raised-by or assigned-to me
+  if (scope === 'mine') {
+    where += ' AND (s.raised_by = ? OR s.assigned_to = ?)';
+    params.push(req.user.id, req.user.id);
+  }
+  if (search) {
+    where += ' AND (s.description LIKE ? OR s.location LIKE ? OR s.snag_no LIKE ? OR s.site_name LIKE ?)';
+    const q = `%${search}%`;
+    params.push(q, q, q, q);
+  }
+
+  const baseFrom = `FROM snags s
+    LEFT JOIN users rb ON rb.id = s.raised_by
+    LEFT JOIN users at ON at.id = s.assigned_to
+    LEFT JOIN users ap ON ap.id = s.approved_by
+    LEFT JOIN users ps ON ps.id = s.proof_submitted_by
+    LEFT JOIN sites site ON site.id = s.site_id`;
+
+  // Open / submitted at top so urgent things are visible first
+  const orderClause = ` ORDER BY
+    CASE s.status WHEN 'submitted' THEN 0 WHEN 'open' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
+    s.raised_at DESC`;
+
+  const sql = `
     SELECT s.*,
            rb.name as raised_by_name,
            at.name as assigned_to_user_name,
            ap.name as approved_by_name,
            ps.name as proof_submitted_by_name,
            site.name as site_name_live
-    FROM snags s
-    LEFT JOIN users rb ON rb.id = s.raised_by
-    LEFT JOIN users at ON at.id = s.assigned_to
-    LEFT JOIN users ap ON ap.id = s.approved_by
-    LEFT JOIN users ps ON ps.id = s.proof_submitted_by
-    LEFT JOIN sites site ON site.id = s.site_id
-    WHERE 1=1
+    ${baseFrom}
+    ${where}
+    ${orderClause}
   `;
-  const params = [];
-  // Mandatory per-site visibility for non-privileged users — applies on top
-  // of every optional filter below, so search/site/status can never widen
-  // the window back to company-wide.
-  const scopeW = siteScopeWhere(db, req.user);
-  if (scopeW) { sql += ` AND ${scopeW.where}`; params.push(...scopeW.params); }
-  if (status) { sql += ' AND s.status = ?'; params.push(status); }
-  if (priority) { sql += ' AND s.priority = ?'; params.push(priority); }
-  if (site_id) { sql += ' AND s.site_id = ?'; params.push(site_id); }
-  if (assigned_to) { sql += ' AND s.assigned_to = ?'; params.push(assigned_to); }
-  // Due (target) date window, inclusive; snags with no target date drop out.
-  // Same expression as the Snag List scorecard row, so a Mon→Sat filter here
-  // always shows the scorecard's Planned (lib/dueDay.js snagDue).
-  const isoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
-  const due = require('../lib/dueDay').snagDue('s.');
-  if (isoDate(due_from)) { sql += ` AND ${due} >= ?`; params.push(due_from); }
-  if (isoDate(due_to)) { sql += ` AND ${due} <= ?`; params.push(due_to); }
-  // scope=mine → only those raised-by or assigned-to me
-  if (scope === 'mine') {
-    sql += ' AND (s.raised_by = ? OR s.assigned_to = ?)';
-    params.push(req.user.id, req.user.id);
-  }
-  if (search) {
-    sql += ' AND (s.description LIKE ? OR s.location LIKE ? OR s.snag_no LIKE ? OR s.site_name LIKE ?)';
-    const q = `%${search}%`;
-    params.push(q, q, q, q);
-  }
-  // Open / submitted at top so urgent things are visible first
-  sql += ` ORDER BY
-    CASE s.status WHEN 'submitted' THEN 0 WHEN 'open' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
-    s.raised_at DESC`;
-  return { sql, params };
+
+  const countSql = `SELECT COUNT(*) as c FROM snags s ${where}`;
+
+  const statsSql = `
+    SELECT
+      COUNT(*) as total,
+      COALESCE(SUM(CASE WHEN s.status='open' THEN 1 ELSE 0 END), 0) as open,
+      COALESCE(SUM(CASE WHEN s.status='submitted' THEN 1 ELSE 0 END), 0) as submitted,
+      COALESCE(SUM(CASE WHEN s.status='approved' THEN 1 ELSE 0 END), 0) as approved,
+      COALESCE(SUM(CASE WHEN s.status='rejected' THEN 1 ELSE 0 END), 0) as rejected,
+      COALESCE(SUM(CASE WHEN s.priority='critical' AND s.status != 'approved' THEN 1 ELSE 0 END), 0) as critical,
+      COALESCE(SUM(CASE WHEN s.status != 'approved' AND (julianday('now') - julianday(s.raised_at)) * 24 >= 72 THEN 1 ELSE 0 END), 0) as overdue
+    FROM snags s
+    ${where}
+  `;
+
+  return { sql, countSql, statsSql, params };
 }
 
-// LIST
+// LIST — supports server-side pagination, searching, filtration and aggregated KPI stats.
+// Falls back to unpaginated rows array if neither page nor limit is provided (for exports/backward compat).
 router.get('/', requirePermission('snags', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const { sql, params } = buildSnagQuery(db, req);
-    res.json(db.prepare(sql).all(...params));
+    const { sql, countSql, statsSql, params } = buildSnagQuery(db, req);
+
+    if (!req.query.page && !req.query.limit) {
+      return res.json(db.prepare(sql).all(...params));
+    }
+
+    const total = db.prepare(countSql).get(...params).c;
+
+    const isAll = String(req.query.limit).toLowerCase() === 'all';
+    const limit = isAll ? Math.max(total, 1) : Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 15));
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const offset = (page - 1) * limit;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const from = total === 0 ? 0 : offset;
+    const to = Math.min(offset + limit, total);
+
+    const rows = db.prepare(`${sql} LIMIT ? OFFSET ?`).all(...params, limit, offset);
+
+    const statsRaw = db.prepare(statsSql).get(...params) || {};
+    const stats = {
+      total: Number(statsRaw.total || 0),
+      open: Number(statsRaw.open || 0),
+      submitted: Number(statsRaw.submitted || 0),
+      approved: Number(statsRaw.approved || 0),
+      rejected: Number(statsRaw.rejected || 0),
+      critical: Number(statsRaw.critical || 0),
+      overdue: Number(statsRaw.overdue || 0),
+    };
+
+    res.json({
+      rows,
+      total,
+      page,
+      limit,
+      pages,
+      from,
+      to,
+      stats,
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -333,6 +394,89 @@ router.post('/', requirePermission('snags', 'create'), (req, res) => {
     } catch {}
 
     res.status(201).json({ id: r.lastInsertRowid, snag_no: snagNo });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// BATCH RAISE (rapid site-walk punch list — raises multiple snags in a single transaction)
+router.post('/batch', requirePermission('snags', 'create'), (req, res) => {
+  try {
+    const { site_id, site_name, assigned_to, assigned_to_name, priority, target_date, items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one snag item is required' });
+    }
+    const validItems = items.filter(it => it && String(it.description || '').trim());
+    if (validItems.length === 0) {
+      return res.status(400).json({ error: 'All items have empty descriptions' });
+    }
+
+    const db = getDb();
+    const yr = new Date().getFullYear();
+    const prefix = `SNAG-${yr}-`;
+
+    let resolvedSiteName = site_name || null;
+    if (!resolvedSiteName && site_id) {
+      const s = db.prepare('SELECT name FROM sites WHERE id=?').get(site_id);
+      resolvedSiteName = s?.name || null;
+    }
+    let resolvedAssigneeName = assigned_to_name || null;
+    if (!resolvedAssigneeName && assigned_to) {
+      const u = db.prepare('SELECT name FROM users WHERE id=?').get(assigned_to);
+      resolvedAssigneeName = u?.name || null;
+    }
+
+    const defaultPriority = ['low','medium','high','critical'].includes(priority) ? priority : 'medium';
+    const insertStmt = db.prepare(`
+      INSERT INTO snags (
+        snag_no, site_id, site_name, location, description, photo_url,
+        priority, status, assigned_to, assigned_to_name,
+        raised_by, target_date
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    `);
+
+    // Determine starting sequence safely
+    const esc = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const existingRows = db.prepare(`SELECT snag_no as v FROM snags WHERE snag_no IS NOT NULL AND snag_no LIKE ?`).all(prefix + '%');
+    const re = new RegExp('^' + esc + '(\\d+)');
+    let maxNum = 0;
+    for (const r of existingRows) {
+      const m = String(r.v || '').match(re);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (!isNaN(n) && n > maxNum) maxNum = n;
+      }
+    }
+
+    const created = [];
+    const runBatch = db.transaction(() => {
+      for (const it of validItems) {
+        maxNum++;
+        const snagNo = `${prefix}${String(maxNum).padStart(4, '0')}`;
+        const itemPriority = ['low','medium','high','critical'].includes(it.priority) ? it.priority : defaultPriority;
+        const r = insertStmt.run(
+          snagNo, site_id || null, resolvedSiteName, it.location || null,
+          String(it.description).trim(), it.photo_url || null,
+          itemPriority, 'open', assigned_to || null, resolvedAssigneeName,
+          req.user.id, it.target_date || target_date || null
+        );
+        created.push({ id: r.lastInsertRowid, snag_no: snagNo });
+      }
+    });
+    runBatch();
+
+    // Notify assignee if assigned
+    try {
+      const { notifyMany } = require('../lib/push');
+      if (assigned_to && assigned_to !== req.user.id && created.length > 0) {
+        notifyMany([assigned_to], {
+          title: `🚧 ${created.length} new snags assigned to you`,
+          body: `${resolvedSiteName ? resolvedSiteName + ' · ' : ''}${created.length} punch-list items raised`,
+          url: '/snags',
+          tag: `snag-batch-${Date.now()}`,
+        });
+      }
+    } catch {}
+
+    res.status(201).json({ count: created.length, snags: created });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
