@@ -711,7 +711,12 @@ app.use('/uploads', async (req, res, next) => {
 // High-performance thumbnail serving endpoint with caching
 const fs = require('fs');
 let sharp = null;
-try { sharp = require('sharp'); } catch (_) { }
+try {
+  sharp = require('sharp');
+  console.log('[thumbnail] sharp image processing engine loaded successfully');
+} catch (e) {
+  console.warn('[thumbnail] sharp is NOT installed or failed to load — fallback redirecting to original images:', e.message);
+}
 const thumbCacheDir = ensureDir(path.join(UPLOADS_ROOT, '.thumb-cache'));
 
 app.get('/api/thumbnail', async (req, res) => {
@@ -720,7 +725,7 @@ app.get('/api/thumbnail', async (req, res) => {
   const q = Math.min(95, Math.max(50, parseInt(req.query.q, 10) || 75));
 
   // Security check: only allow paths originating from /uploads/
-  const cleanMatch = fileUrl.match(/\/uploads\/([^?#]+)$/);
+  const cleanMatch = fileUrl.match(/\/uploads\/([^?#]+)/);
   if (!cleanMatch) {
     return res.status(400).send('Invalid file path');
   }
