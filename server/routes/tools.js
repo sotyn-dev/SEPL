@@ -32,6 +32,7 @@ router.get('/', requirePermission('tools', 'view'), (req, res) => {
              im.specification as item_specification,
              im.size as item_size,
              im.uom as item_uom,
+             im.photo_link as item_photo_link,
              s.name as current_site_name,
              u.name as current_user_name,
              cu.name as created_by_name
@@ -80,7 +81,7 @@ router.get('/stats', requirePermission('tools', 'view'), (req, res) => {
 router.get('/lookup/rgp-items', requirePermission('tools', 'view'), (req, res) => {
   try {
     const rows = getDb().prepare(`
-      SELECT id, item_code, item_name, specification, size, uom, current_price
+      SELECT id, item_code, item_name, specification, size, uom, current_price, photo_link
         FROM item_master
        WHERE UPPER(TRIM(type)) = 'RGP'
        ORDER BY item_code

@@ -12,7 +12,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusMultiSelect from '../components/StatusMultiSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard } from 'react-icons/fi';
+import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard, FiImage, FiX } from 'react-icons/fi';
 import { fmtDateTime } from '../utils/datetime';
 
 const CATEGORIES = ['Drilling', 'Cutting', 'Measurement', 'Safety', 'Power', 'Hand', 'Lifting', 'Electrical', 'Other'];
@@ -49,6 +49,7 @@ export default function Tools() {
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
   const [rgpItems, setRgpItems] = useState([]);
+  const [imagePreview, setImagePreview] = useState(null);
   const [filters, setFilters] = useState({ category: '', status: [], search: '' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
@@ -238,7 +239,16 @@ export default function Tools() {
                   {toolsPager.pageItems.map(t => (
                     <tr key={t.id} className="hover:bg-gray-50">
                       <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
-                      <td className="font-medium">{t.name}</td>
+                      <td className="font-medium">
+                        <div className="flex items-center gap-2">
+                          {t.item_photo_link ? (
+                            <button type="button" onClick={() => setImagePreview({ url: t.item_photo_link, name: t.name })} title="Click to enlarge" className="shrink-0">
+                              <img src={t.item_photo_link} alt={t.name} loading="lazy" className="w-10 h-10 object-cover rounded border border-gray-200 cursor-zoom-in hover:ring-2 hover:ring-blue-300" />
+                            </button>
+                          ) : <span className="w-10 h-10 rounded border border-dashed border-gray-200 bg-gray-50 flex items-center justify-center shrink-0"><FiImage className="text-gray-300" size={17} /></span>}
+                          <span>{t.name}</span>
+                        </div>
+                      </td>
                       <td className="text-xs font-medium text-blue-700">{t.item_master_code || 'Legacy tool'}</td>
                       <td className="text-xs">{[t.item_specification, t.item_size].filter(Boolean).join(' / ') || '—'}</td>
                       <td className="text-xs text-gray-500">{t.serial_no || '—'}</td>
@@ -416,6 +426,13 @@ export default function Tools() {
       <Modal isOpen={!!historyTool} onClose={() => setHistoryTool(null)} title={historyTool ? `History — ${historyTool.name} (${historyTool.tool_code})` : ''} wide>
         {historyTool && <ToolHistory id={historyTool.id} />}
       </Modal>
+
+      {imagePreview && (
+        <div className="!m-0 fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setImagePreview(null)}>
+          <img src={imagePreview.url} alt={imagePreview.name} className="max-w-full max-h-full rounded shadow-2xl" onClick={e => e.stopPropagation()} />
+          <button type="button" onClick={() => setImagePreview(null)} className="absolute top-4 right-4 text-white/90 hover:text-white" aria-label="Close image"><FiX size={30} /></button>
+        </div>
+      )}
 
       {/* Weekly Submission Modal */}
       <Modal isOpen={modal === 'submit'} onClose={() => setModal(null)} title="Submit Weekly Tools List" wide>
