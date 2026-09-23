@@ -48,6 +48,7 @@ export default function Checklists() {
   const [historyDate, setHistoryDate] = useState(new Date().toISOString().slice(0, 10));
   const [historyRows, setHistoryRows] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [pendingReview, setPendingReview] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all'); // all | done | not_done | pending | rejected
   const [deptFilter, setDeptFilter] = useState('');
   // Follow-up view (mam, 2026-05-22) — per-task timeline grid spanning
@@ -74,11 +75,25 @@ export default function Checklists() {
     try {
       const r = await api.get('/hr/checklists/by-date', { params: { date: d || historyDate } });
       setHistoryRows(r.data?.rows || []);
+      setPendingReview(false);
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed to load history');
     } finally {
       setHistoryLoading(false);
     }
+  };
+
+  const loadPendingReview = async () => {
+    setHistoryLoading(true);
+    try {
+      const r = await api.get('/hr/checklists/pending-review');
+      setHistoryRows(r.data?.rows || []);
+      setPendingReview(true);
+      setStatusFilter('pending');
+      setView('by-date');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to load pending proofs');
+    } finally { setHistoryLoading(false); }
   };
 
   // Admin approve / reject a completion.  Optional note via prompt
@@ -92,7 +107,7 @@ export default function Checklists() {
     try {
       await api.post(`/hr/checklists/completions/${compId}/decision`, { status, note });
       toast.success(`Marked ${status}`);
-      loadHistory();
+      if (pendingReview) loadPendingReview(); else loadHistory();
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed');
     }
@@ -367,6 +382,12 @@ export default function Checklists() {
                   className={`btn ${view === 'by-date' ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
             <FiCalendar size={13} /> Today / By Date
           </button>
+          {canManage() && (
+            <button onClick={loadPendingReview}
+                    className={`btn ${pendingReview ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
+              <FiClock size={13} /> All Pending Proofs
+            </button>
+          )}
           <button onClick={() => setView('current')}
                   className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-xs sm:text-sm flex items-center gap-1.5`}>
             Master Templates
@@ -379,7 +400,7 @@ export default function Checklists() {
             <FiClock size={13} /> Follow-up Timeline
           </button>
         </div>
-        {view === 'by-date' && (
+        {view === 'by-date' && !pendingReview && (
           <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
             <input type="date" className="input text-xs sm:text-sm py-1.5 px-2.5 w-36 sm:w-44" value={historyDate}
                    onChange={e => { setHistoryDate(e.target.value); loadHistory(e.target.value); }} />
@@ -478,7 +499,7 @@ export default function Checklists() {
                               : apStat === 'pending' ? 'bg-amber-100 text-amber-700'
                               : 'bg-gray-100 text-gray-500';
                 return (
-                  <tr key={r.id} className={done ? '' : 'bg-gray-50/50'}>
+                  <tr key={r.completion_id || r.id} className={done ? '' : 'bg-gray-50/50'}>
                     <td className="text-xs font-medium">{r.assigned_to_name || '—'}</td>
                     <td className="text-[10px]">
                       {r.department ? (
@@ -513,6 +534,7 @@ export default function Checklists() {
                       )}
                     </td>
                     <td className="text-xs text-gray-500 font-mono">
+                      {pendingReview && r.completion_date && <div className="font-sans font-semibold text-gray-700">{new Date(`${r.completion_date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>}
                       {r.submitted_at ? new Date(r.submitted_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}
                     </td>
                     {canManage() && (

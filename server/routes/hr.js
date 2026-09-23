@@ -1932,6 +1932,33 @@ router.get('/checklists/by-date', (req, res) => {
   res.json({ date, rows: filtered });
 });
 
+// Pending proof review is deliberately date-independent: an older weekly or
+// monthly submission must remain visible to the reviewer until a decision is
+// recorded. The by-date register remains available for attendance-style audit.
+router.get('/checklists/pending-review', (req, res) => {
+  const db = getDb();
+  let canManage = req.user.role === 'admin';
+  if (!canManage) {
+    const p = db.prepare("SELECT rp.can_see_all, rp.can_edit, rp.can_create FROM role_permissions rp JOIN user_roles ur ON rp.role_id=ur.role_id WHERE ur.user_id=? AND rp.module='checklists'").get(req.user.id);
+    canManage = !!(p && (p.can_see_all || p.can_edit || p.can_create));
+  }
+  if (!canManage) return res.status(403).json({ error: 'Checklist review permission required' });
+  const rows = db.prepare(`
+    SELECT c.id, c.description, c.title, c.frequency, c.department, c.assigned_to,
+           u.name AS assigned_to_name, comp.id AS completion_id,
+           comp.completion_date, comp.proof_url, comp.notes, comp.submitted_at,
+           comp.approval_status, comp.approved_at, comp.approval_note,
+           au.name AS approved_by_name
+      FROM checklist_completions comp
+      JOIN checklists c ON c.id=comp.checklist_id
+      LEFT JOIN users u ON u.id=comp.user_id
+      LEFT JOIN users au ON au.id=comp.approved_by
+     WHERE COALESCE(comp.approval_status,'pending')='pending'
+     ORDER BY comp.completion_date ASC, comp.submitted_at ASC, comp.id ASC
+  `).all();
+  res.json({ rows });
+});
+
 // ── GET /hr/checklists/followup?back=7&forward=7 ────────────────
 // Mam (2026-05-22): "i need followup checklist where all record
 // mention previous, present, future".  Returns one row per checklist
