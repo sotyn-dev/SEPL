@@ -9,6 +9,14 @@ const totp = require('../db/userTotp');
 const router = express.Router();
 
 function finishLogin(res, user, db, ip, ua) {
+  // Clear any past session revocation stamp so a fresh, authenticated login
+  // is never rejected by a stale lockout timestamp from an earlier password reset
+  // or user edit. Also bust the in-memory account cache.
+  try {
+    db.prepare('UPDATE users SET token_revoked_at = NULL WHERE id = ?').run(user.id);
+    clearSessionCache(user.id);
+  } catch (_) { /* non-fatal */ }
+
   const { logAuditEvent } = require('../middleware/audit');
   const token = generateToken(user);
   const permissions = getUserPermissions(user.id);
