@@ -3,6 +3,7 @@
 Route: `POST /api/webhooks/website-lead` (`server/routes/webhooks.js`)
 Branch: `fix/website-lead-no-browser-secret`
 Tests: `server/routes/__tests__/websiteLead.route.test.js` — **16 cases, 16 passing**
+(re-run after the burst limit was raised to 20 per 10 minutes: still 16 passing)
 
 ```
 node --test server/routes/__tests__/websiteLead.route.test.js
@@ -61,8 +62,8 @@ privileged capability sits behind this route.
 | 9 | Value band `₹50 lakh – ₹1 crore` | stored as ₹50 lakh, the floor | pass |
 | 10 | **Replay** — same website reference four times | first 201, then 200 `duplicate:true` with the same `lead_no`; exactly one row | pass |
 | 11 | **Concurrency** — four simultaneous copies of one submission | exactly one row | pass |
-| 12 | Burst of 12 from one address | 9th is the first 429 | pass |
-| 13 | **Refused requests spend the allowance** | 8 × 401, then a genuine enquiry is 429 | pass — see finding A |
+| 12 | Burst of 24 from one address | 21st is the first 429 | pass |
+| 13 | **Refused requests spend the allowance** | 20 × 401, then a genuine enquiry is 429 | pass — see finding A |
 | 14 | Rotating `X-Forwarded-For` | still limited; the header is not read | pass |
 | 15 | `X-Real-IP` from a loopback socket | honoured, one allowance per address | pass — see finding B |
 | 16 | Configured secret, server-to-server | 201 with no `Origin`; near-miss secret 401; 20 in a row not limited | pass |
@@ -77,23 +78,28 @@ rather than the status codes.
 
 ## Findings
 
-### A. A refused request spends the rate-limit allowance (availability, medium)
+### A. A refused request spends the rate-limit allowance — ADDRESSED
 
-The limiter sits in front of the handler, so **every** request counts — including the
-401s. Eight refusals from one address leave a genuine visitor on that address with
-nothing left for ten minutes. Behind a factory's single NAT that is everyone in the
-building, and the website retries a slow post, so three enquiries that each retry twice
-already reach nine.
+The limiter sits in front of the handler, so **every** request counts, including the
+401s. At the original 8 per 10 minutes, eight refusals from one address left a genuine
+visitor on that address with nothing for ten minutes. Behind a factory's single NAT that
+is everyone in the building, and the website re-posts an enquiry when the reply is slow,
+so three enquiries that each retried twice already reached nine.
 
-This is a lead-loss risk, not a theoretical one. Two options, both small:
+**Director's decision, 23 September 2026: raise the burst window to 20 per 10 minutes.**
+Applied in this branch. A scripted flood still cannot hide inside 20, and a shared office
+address no longer locks itself out on ordinary use.
 
-1. Count only requests that reach the handler, so refusals and honeypot hits do not
-   spend a real visitor's allowance.
-2. Raise the burst window from 8 per 10 minutes to something a shared office IP will
-   not trip — 20 per 10 minutes still stops a scripted flood.
+Case 12 asserts the limiter cuts in on the 21st request, so the number cannot drift
+without a test failing. The test reads it from one constant, `BURST`, which has to match
+`websiteBurstLimit` in the route.
 
-**Not changed in this branch.** It trades spam resistance against enquiry loss, and
-that is the director's call, not mine.
+**The daily limit was left at 40 and is now the tighter constraint.** Two full bursts
+exhaust a day. Allowing for the website's retries, that is roughly 13 genuine enquiries
+per address per 24 hours. For a single factory or consultancy that is ample; for a very
+large shared corporate egress it is not. Nothing observed today comes close, so it is
+left alone rather than guessed at — revisit if a 429 ever shows up against a real
+enquiry.
 
 ### B. `X-Real-IP` is trusted from any loopback connection (latent, low)
 

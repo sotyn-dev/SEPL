@@ -88,6 +88,11 @@ const leadRows = (refFragment) =>
 
 const ref = (n) => `SEPL-20260923-TEST${String(n).padStart(4, '0')}`;
 
+// Must match websiteBurstLimit in routes/webhooks.js. Raised from 8 on
+// 23 Sep 2026 because a refused request spends the allowance and the address it
+// spends belongs to everyone behind that NAT — see the matrix doc, finding A.
+const BURST = 20;
+
 // Failure messages that name the status AND the body, so a 500 is diagnosable
 // from the test output instead of needing a re-run with logging.
 const expectStatus = async (res, want, what) => {
@@ -295,21 +300,26 @@ test('simultaneous copies of one submission leave exactly one lead', () =>
 test('a burst from one connection is cut off at the limit', () =>
   withServer(async ({ post }) => {
     const codes = [];
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < BURST + 4; i++) {
       const r = await post({ name: `Burst ${i}`, lead_id: `SEPL-20260923-BRST${i}` }, { origin: ALLOWED });
       codes.push(r.status);
     }
     assert.ok(codes.includes(429), `no request was limited: ${codes.join(', ')}`);
-    assert.equal(codes.indexOf(429), 8, `the limiter cut in at request ${codes.indexOf(429)}, expected the 9th`);
+    assert.equal(
+      codes.indexOf(429),
+      BURST,
+      `the limiter cut in at request ${codes.indexOf(429) + 1}, expected number ${BURST + 1}`,
+    );
   }));
 
 test('a refused request still spends the allowance — a NAT can be locked out by someone else', () =>
   withServer(async ({ post }) => {
-    // Documented, not desired. The limiter sits in front of the handler, so
-    // eight 401s from one address leave a genuine visitor on that address with
-    // nothing left. Behind a factory's single NAT that is everyone in the
-    // building. See the matrix note in the pull request.
-    for (let i = 0; i < 8; i++) await post({ name: 'Refused' }); // no Origin → 401
+    // Documented, not desired. The limiter sits in front of the handler, so a
+    // full window of 401s from one address leaves a genuine visitor on that
+    // address with nothing left. Behind a factory's single NAT that is everyone
+    // in the building — which is why the window was raised to 20 rather than
+    // left at 8. See finding A in the matrix doc.
+    for (let i = 0; i < BURST; i++) await post({ name: 'Refused' }); // no Origin → 401
     const genuine = await post({ name: 'Genuine visitor', lead_id: ref(8) }, { origin: ALLOWED });
     assert.equal(genuine.status, 429, 'behaviour changed — re-check the NAT note in the PR');
     assert.equal(leadRows(ref(8)).length, 0);
@@ -320,7 +330,7 @@ test('rotating X-Forwarded-For does not mint a fresh allowance', () =>
     // req.ip derives from X-Forwarded-For when Express trusts a proxy, so a bot
     // rotating the header would get a new bucket per request. clientIp()
     // deliberately does not read it.
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < BURST; i++) {
       await post({ name: `Fill ${i}`, lead_id: `SEPL-20260923-FILL${i}` }, { origin: ALLOWED });
     }
     const codes = [];
@@ -347,7 +357,7 @@ test('X-Real-IP is honoured from a local socket, which is what nginx is — and 
     // may be able to open a loopback connection to the Node port. If the port is
     // ever exposed, or another process on the box can reach it, X-Real-IP
     // becomes a free rate-limit bypass.
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < BURST; i++) {
       await post({ name: `A ${i}`, lead_id: `SEPL-20260923-RIPA${i}` }, { origin: ALLOWED, headers: { 'X-Real-IP': '198.51.100.1' } });
     }
     const exhausted = await post({ name: 'A last' }, { origin: ALLOWED, headers: { 'X-Real-IP': '198.51.100.1' } });

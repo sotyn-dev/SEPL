@@ -36,8 +36,15 @@ const withValidSecret = (req) => {
 // uses. A caller with a valid secret is not limited: keyFn returns null, and
 // rateLimit() lets an unidentifiable caller through rather than blocking it.
 const ipKey = (req) => (withValidSecret(req) ? null : 'ip:' + clientIp(req));
+// 20 per 10 minutes, not 8 (director's call, 23 Sep 2026). The limiter runs in
+// FRONT of the handler, so a refused request spends the allowance too — and the
+// address it spends belongs to everyone behind that NAT. A factory office is one
+// address, and the website re-posts an enquiry when the reply is slow, so at 8
+// three enquiries that each retried twice would lock the building out for ten
+// minutes. Losing a genuine enquiry costs more than admitting a few extra posts
+// a scripted flood still cannot hide in.
 const websiteBurstLimit = rateLimit({
-  windowMs: 10 * 60 * 1000, max: 8, keyFn: ipKey,
+  windowMs: 10 * 60 * 1000, max: 20, keyFn: ipKey,
   message: 'Too many enquiries from this connection — please try again in a few minutes, or send your details on WhatsApp.',
 });
 const websiteDayLimit = rateLimit({
