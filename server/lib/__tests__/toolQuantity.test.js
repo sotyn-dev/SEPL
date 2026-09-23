@@ -60,5 +60,24 @@ for (const unit of ['', '  ', null, 'x'.repeat(31)]) {
 }
 assert.equal(call('PUT /:id', { notes: 'Photo review', item_master_id: null }, 1).code, 200);
 assert.equal(db.prepare('SELECT quantity FROM tools WHERE id=1').get().quantity, 1);
+db.exec("CREATE TABLE sites (id INTEGER PRIMARY KEY); INSERT INTO sites VALUES (1); CREATE TABLE users (id INTEGER PRIMARY KEY); INSERT INTO users VALUES (1);");
+const beforeBulk = db.prepare('SELECT COUNT(*) AS n FROM tools').get().n;
+const batch = call('POST /bulk', { site_id: 1, user_id: 1, items: [
+  { item_master_id: 1, quantity: 3, photo_url: '/uploads/condition.jpg' },
+  { item_master_id: 1, quantity: 7, unit: 'SET', current_site_id: 999 },
+] });
+assert.equal(batch.code, 201, JSON.stringify(batch.data));
+assert.equal(batch.data.count, 2);
+assert.notEqual(batch.data.tools[0].serial_no, batch.data.tools[1].serial_no);
+for (const result of batch.data.tools) {
+  assert.equal(db.prepare('SELECT current_site_id FROM tools WHERE id=?').get(result.id).current_site_id, 1);
+}
+assert.equal(db.prepare('SELECT photo_url FROM tools WHERE id=?').get(batch.data.tools[0].id).photo_url, '/uploads/condition.jpg');
+const rejected = call('POST /bulk', { site_id: 1, items: [{ item_master_id: 1 }, { item_master_id: 1, quantity: -2 }] });
+assert.equal(rejected.code, 400);
+assert.match(rejected.data.error, /Row 2/);
+assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tools').get().n, beforeBulk + 2);
+assert.equal(call('POST /bulk', { site_id: 999, items: [{ item_master_id: 1 }] }).code, 400);
+assert.equal(call('POST /bulk', { site_id: 1, items: [] }).code, 400);
 db.close();
 console.log('Tool quantity migration, create/update persistence and validation passed');

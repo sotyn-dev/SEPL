@@ -41,6 +41,67 @@ const lastMonday = () => {
   return d.toISOString().slice(0, 10);
 };
 
+function BulkToolsModal({ sites, users, items, onClose, onSaved, onPreview }) {
+  const newRow = () => ({ key: crypto.randomUUID(), item_master_id: '', quantity: 1, unit: 'Nos', condition: 'good', status: 'available', purchase_price: 0, notes: '', photo_url: '' });
+  const [rows, setRows] = useState(() => [newRow()]);
+  const [siteId, setSiteId] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const update = (key, patch) => setRows(previous => previous.map(row => row.key === key ? { ...row, ...patch } : row));
+  const upload = async (key, file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/') || file.size > 5 * 1024 * 1024) return toast.error('Choose an image under 5 MB');
+    setBusy(true);
+    try {
+      const body = new FormData(); body.append('file', file);
+      const { data } = await api.post('/upload?folder=tools', body, { headers: { 'Content-Type': 'multipart/form-data' } });
+      update(key, { photo_url: data.url });
+    } catch (err) { toast.error(err.response?.data?.error || 'Photo upload failed'); }
+    finally { setBusy(false); }
+  };
+  const save = async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    if (!siteId) return toast.error('Select a site');
+    const missing = rows.findIndex(row => !row.item_master_id);
+    if (missing >= 0) return toast.error(`Row ${missing + 1}: select an RGP item`);
+    setBusy(true);
+    try {
+      const { data } = await api.post('/tools/bulk', { site_id: siteId, user_id: userId, items: rows.map(({ key, ...row }) => row) });
+      toast.success(`Added ${data.count} tool entries`);
+      onSaved();
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not save tool entries'); }
+    finally { setBusy(false); }
+  };
+  return <Modal isOpen onClose={() => { if (!busy) onClose(); }} title="Add Multiple Tools — One Site" xwide>
+    <form onSubmit={save}>
+      <fieldset disabled={busy} className="space-y-4">
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div><label className="label">Site Name *</label><SearchableSelect options={sites} value={siteId} valueKey="id" displayKey="name" placeholder="Pick site…" onChange={site => setSiteId(site?.id || null)} /></div>
+          <div><label className="label">Issued To (optional)</label><SearchableSelect options={users} value={userId} valueKey="id" displayKey="name" placeholder="Pick employee…" onChange={user => setUserId(user?.id || null)} /></div>
+        </div>
+        <p className="text-xs text-gray-500">All entries will be saved to this site. Each entry receives its own automatic serial number.</p>
+        {rows.map((row, index) => <div key={row.key} className="border rounded-lg p-3 space-y-3">
+          <div className="flex justify-between items-center"><h3 className="font-semibold text-sm">Item {index + 1}</h3><button type="button" disabled={rows.length === 1} onClick={() => setRows(previous => previous.filter(item => item.key !== row.key))} className="text-sm text-red-600 disabled:opacity-30">Remove</button></div>
+          <div><label className="label">RGP Item *</label><SearchableSelect options={items} value={row.item_master_id || null} valueKey="id" displayKey="label" placeholder="Pick an RGP item…" onChange={item => update(row.key, { item_master_id: item?.id || '', purchase_price: item?.current_price || 0 })} /></div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <label><span className="label">Quantity *</span><input type="number" required min="0.000001" step="any" className="input" value={row.quantity} onChange={e => update(row.key, { quantity: e.target.value })} /></label>
+            <label><span className="label">Unit *</span><input required maxLength={30} className="input" value={row.unit} onChange={e => update(row.key, { unit: e.target.value })} /></label>
+            <label><span className="label">Condition</span><select className="select" value={row.condition} onChange={e => update(row.key, { condition: e.target.value })}>{['new', 'good', 'fair', 'poor', 'scrap'].map(value => <option key={value}>{value}</option>)}</select></label>
+            <label><span className="label">Status</span><select className="select" value={row.status} onChange={e => update(row.key, { status: e.target.value })}>{STATUSES.map(value => <option key={value} value={value}>{value.replace('_', ' ')}</option>)}</select></label>
+            <label><span className="label">Purchase Price (Rs)</span><input type="number" min="0" step="any" className="input" value={row.purchase_price} onChange={e => update(row.key, { purchase_price: e.target.value })} /></label>
+            <label className="col-span-2 sm:col-span-3"><span className="label">Notes</span><input className="input" value={row.notes} onChange={e => update(row.key, { notes: e.target.value })} /></label>
+          </div>
+          <label className="block"><span className="label">Tool Condition Photo</span><input type="file" accept="image/*" className="text-sm max-w-full" onChange={e => { upload(row.key, e.target.files?.[0]); e.target.value = ''; }} /></label>
+          {row.photo_url && <div className="flex gap-3 items-center"><button type="button" onClick={() => onPreview({ url: row.photo_url, name: `Item ${index + 1} condition` })}><img src={row.photo_url} alt="Tool condition" className="w-16 h-16 object-cover border rounded cursor-zoom-in" /></button><button type="button" className="text-sm text-red-600" onClick={() => update(row.key, { photo_url: '' })}>Remove photo</button></div>}
+        </div>)}
+        <button type="button" disabled={rows.length >= 100} className="btn btn-secondary" onClick={() => setRows(previous => [...previous, newRow()])}>+ Add Another Item</button>
+        <div className="flex justify-end gap-2 border-t pt-3"><button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button><button type="submit" className="btn btn-primary">{busy ? 'Please wait…' : `Save All (${rows.length})`}</button></div>
+      </fieldset>
+    </form>
+  </Modal>;
+}
+
 export default function Tools() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [tab, setTab] = useUrlTab('catalog');
@@ -161,7 +222,10 @@ export default function Tools() {
           <p className="text-sm text-gray-500">Returnable assets — catalog, issue, return, weekly site submissions.</p>
         </div>
         {canCreate('tools') && tab === 'catalog' && (
+          <div className="flex gap-2 flex-wrap">
           <button onClick={() => { setForm({ condition: 'good', status: 'available', quantity: 1, unit: 'Nos' }); setModal('add'); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Tool</button>
+          <button onClick={() => setModal('bulk')} className="btn btn-secondary flex items-center gap-1"><FiPlus size={14} /> Add Multiple Tools</button>
+          </div>
         )}
         {canCreate('tools') && tab === 'submissions' && (
           <button onClick={() => { setSubmitForm({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' }); setModal('submit'); }} className="btn btn-primary flex items-center gap-1"><FiClipboard size={14} /> Submit Weekly List</button>
@@ -346,6 +410,7 @@ export default function Tools() {
       )}
 
       {/* Add / Edit Tool Modal */}
+      {modal === 'bulk' && <BulkToolsModal sites={sites} users={users} items={rgpItems} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(); }} onPreview={setImagePreview} />}
       <Modal isOpen={modal === 'add'} onClose={() => { if (!uploadingPhoto) { setModal(null); setForm({}); } }} title={form.id ? `Edit ${form.tool_code}` : 'Add Tool'} wide>
         <form onSubmit={save} className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

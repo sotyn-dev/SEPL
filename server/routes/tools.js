@@ -141,17 +141,14 @@ router.get('/:id', requirePermission('tools', 'view'), (req, res) => {
   res.json({ ...tool, movements });
 });
 
-router.post('/', requirePermission('tools', 'create'), (req, res) => {
-  try {
-    const b = req.body;
-    const db = getDb();
-    if (!b.item_master_id) return res.status(400).json({ error: 'Select an RGP item from Item Master' });
+function createTool(db, b, createdBy) {
+    if (!b.item_master_id) throw Object.assign(new Error('Select an RGP item from Item Master'), { status: 400 });
     const master = db.prepare(`SELECT id, item_name, department, current_price, uom FROM item_master WHERE id=? AND UPPER(TRIM(type))='RGP'`).get(b.item_master_id);
-    if (!master) return res.status(400).json({ error: 'The selected Item Master entry must be RGP type' });
+    if (!master) throw Object.assign(new Error('The selected Item Master entry must be RGP type'), { status: 400 });
     const quantity = b.quantity === undefined ? 1 : b.quantity;
     const unit = b.unit === undefined ? 'Nos' : b.unit;
-    if (!validQuantity(quantity)) return res.status(400).json({ error: 'Quantity must be greater than zero' });
-    if (!validUnit(unit)) return res.status(400).json({ error: 'Enter a unit (up to 30 characters)' });
+    if (!validQuantity(quantity)) throw Object.assign(new Error('Quantity must be greater than zero'), { status: 400 });
+    if (!validUnit(unit)) throw Object.assign(new Error('Enter a unit (up to 30 characters)'), { status: 400 });
     const yr = new Date().getFullYear();
     const tool_code = b.tool_code || nextSequence(db, 'tools', 'tool_code', `T-${yr}-`, { startFrom: 0, pad: 4 });
     const serial_no = nextSequence(db, 'tools', 'serial_no', '');
@@ -168,12 +165,40 @@ router.post('/', requirePermission('tools', 'create'), (req, res) => {
       b.purchase_date || null, b.purchase_price ?? master.current_price ?? 0, b.condition || 'good', b.status || 'available',
       b.current_site_id || null, b.current_user_id || null,
       b.last_calibration_date || null, b.next_calibration_date || null,
-      b.photo_url || null, b.notes || null, req.user.id, Number(quantity), unit.trim()
+      b.photo_url || null, b.notes || null, createdBy, Number(quantity), unit.trim()
     );
-    res.status(201).json({ id: r.lastInsertRowid, tool_code, serial_no });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    return { id: r.lastInsertRowid, tool_code, serial_no };
+}
+
+router.post('/', requirePermission('tools', 'create'), (req, res) => {
+  try {
+    const db = getDb();
+    const result = db.transaction(() => createTool(db, req.body, req.user.id))();
+    res.status(201).json(result);
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+
+router.post('/bulk', requirePermission('tools', 'create'), (req, res) => {
+  try {
+    const db = getDb();
+    const { site_id, user_id, items } = req.body;
+    if (!site_id || !db.prepare('SELECT id FROM sites WHERE id=?').get(site_id)) {
+      return res.status(400).json({ error: 'Select a valid site' });
+    }
+    if (user_id && !db.prepare('SELECT id FROM users WHERE id=?').get(user_id)) {
+      return res.status(400).json({ error: 'Select a valid employee' });
+    }
+    if (!Array.isArray(items) || !items.length || items.length > 100) {
+      return res.status(400).json({ error: 'Add between 1 and 100 tool entries' });
+    }
+    const results = db.transaction(() => items.map((item, index) => {
+      if (!item || typeof item !== 'object') throw Object.assign(new Error(`Row ${index + 1}: select an RGP item`), { status: 400 });
+      try {
+        return createTool(db, { ...item, tool_code: undefined, current_site_id: site_id, current_user_id: user_id || null }, req.user.id);
+      } catch (err) { err.message = `Row ${index + 1}: ${err.message}`; throw err; }
+    }))();
+    res.status(201).json({ count: results.length, tools: results });
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
 
 router.put('/:id', requirePermission('tools', 'edit'), (req, res) => {
