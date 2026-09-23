@@ -1914,8 +1914,11 @@ router.get('/checklists/by-date', (req, res) => {
            au.name as approved_by_name
     FROM checklists c
     LEFT JOIN users u  ON c.assigned_to = u.id
-    LEFT JOIN checklist_completions comp
-      ON comp.checklist_id = c.id AND comp.user_id = c.assigned_to AND comp.completion_date = ?
+    LEFT JOIN checklist_completions comp ON comp.id = (
+      SELECT cc.id FROM checklist_completions cc
+       WHERE cc.checklist_id = c.id AND cc.completion_date = ?
+       ORDER BY cc.submitted_at DESC, cc.id DESC LIMIT 1
+    )
     LEFT JOIN users au ON comp.approved_by = au.id
     WHERE 1=1 ${scope}
       AND (c.recurrence_start_date IS NULL OR c.recurrence_start_date <= ?)
@@ -1945,13 +1948,15 @@ router.get('/checklists/pending-review', (req, res) => {
   if (!canManage) return res.status(403).json({ error: 'Checklist review permission required' });
   const rows = db.prepare(`
     SELECT c.id, c.description, c.title, c.frequency, c.department, c.assigned_to,
-           u.name AS assigned_to_name, comp.id AS completion_id,
+           assigned.name AS assigned_to_name, submitter.name AS submitted_by_name,
+           comp.id AS completion_id,
            comp.completion_date, comp.proof_url, comp.notes, comp.submitted_at,
            comp.approval_status, comp.approved_at, comp.approval_note,
            au.name AS approved_by_name
       FROM checklist_completions comp
       JOIN checklists c ON c.id=comp.checklist_id
-      LEFT JOIN users u ON u.id=comp.user_id
+      LEFT JOIN users assigned ON assigned.id=c.assigned_to
+      LEFT JOIN users submitter ON submitter.id=comp.user_id
       LEFT JOIN users au ON au.id=comp.approved_by
      WHERE COALESCE(comp.approval_status,'pending')='pending'
      ORDER BY comp.completion_date ASC, comp.submitted_at ASC, comp.id ASC
@@ -2018,6 +2023,7 @@ router.get('/checklists/followup', (req, res) => {
            approval_status, submitted_at
     FROM checklist_completions
     WHERE completion_date BETWEEN ? AND ?
+    ORDER BY submitted_at, id
   `).all(fromDate, toDate);
   const compMap = {};
   for (const r of compRows) {

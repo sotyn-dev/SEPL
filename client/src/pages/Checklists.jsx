@@ -536,6 +536,7 @@ export default function Checklists() {
                     <td className="text-xs text-gray-500 font-mono">
                       {pendingReview && r.completion_date && <div className="font-sans font-semibold text-gray-700">{new Date(`${r.completion_date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>}
                       {r.submitted_at ? new Date(r.submitted_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}
+                      {r.submitted_by_name && r.submitted_by_name !== r.assigned_to_name && <div className="font-sans text-[9px] text-gray-400">by {r.submitted_by_name}</div>}
                     </td>
                     {canManage() && (
                       <td>
