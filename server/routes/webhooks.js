@@ -3,14 +3,47 @@ const cors = require('cors');
 const { getDb } = require('../db/schema');
 const { nextSequence } = require('../db/nextSequence');
 const { notifyMany } = require('../lib/push');
+const { rateLimit } = require('../lib/rateLimit');
+const { clientIp } = require('../lib/clientIp');
+const { isAllowedWebsiteOrigin, websiteRefOf, parseEstimatedValue } = require('../lib/websiteLead');
 
 const router = express.Router();
 
 // Allow cross-origin requests from the public website (dev and prod)
 router.use(cors());
 
-// Secret key for website webhook ingestion. Can be set in .env as WEBSITE_WEBHOOK_SECRET
-const WEBHOOK_SECRET = process.env.WEBSITE_WEBHOOK_SECRET || 'sepl_website_lead_secret_2026';
+// Secret for callers that can actually hold one — server to server.
+//
+// There is deliberately NO fallback value. A default written into the source is
+// not a secret: this route shipped with one, the website appended it to the URL
+// in every page's JavaScript, and from 21 Sep 2026 it was readable by anyone who
+// opened View Source (found 22 Sep 2026). Unset, this path is simply closed, and
+// browser traffic is accepted by the website rule below instead. Rotate by
+// setting WEBSITE_WEBHOOK_SECRET on the server only, never in the site's build.
+const WEBHOOK_SECRET = process.env.WEBSITE_WEBHOOK_SECRET || '';
+
+// Does this request carry the server-to-server secret?
+const withValidSecret = (req) => {
+  const h = req.headers || {};
+  const auth = String(h['authorization'] || '');
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const provided = h['x-webhook-secret'] || h['x-api-key'] || bearer ||
+    (req.query && req.query.secret) || (req.body && (req.body.secret || req.body.webhook_secret));
+  return Boolean(WEBHOOK_SECRET) && provided === WEBHOOK_SECRET;
+};
+
+// Per-IP limits for browser traffic, the same shape routes/publicSotynLead.js
+// uses. A caller with a valid secret is not limited: keyFn returns null, and
+// rateLimit() lets an unidentifiable caller through rather than blocking it.
+const ipKey = (req) => (withValidSecret(req) ? null : 'ip:' + clientIp(req));
+const websiteBurstLimit = rateLimit({
+  windowMs: 10 * 60 * 1000, max: 8, keyFn: ipKey,
+  message: 'Too many enquiries from this connection — please try again in a few minutes, or send your details on WhatsApp.',
+});
+const websiteDayLimit = rateLimit({
+  windowMs: 24 * 3600 * 1000, max: 40, keyFn: ipKey,
+  message: 'Too many enquiries from this connection today — please send your details on WhatsApp.',
+});
 
 // Helper to extract a field from nested bodies (e.g. Elementor, CF7, plain JSON)
 function getField(body, ...keys) {
@@ -68,22 +101,10 @@ function extractScopes(body) {
   return matched.join(', ');
 }
 
-// Helper to estimate numeric value from text like "₹5 Crore - ₹10 Crore" or "5000000"
-function parseEstimatedValue(raw) {
-  if (!raw) return 0;
-  if (typeof raw === 'number') return raw >= 0 ? raw : 0;
-  const str = String(raw).toLowerCase().trim();
-  const crMatch = str.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:cr|crore)/i);
-  if (crMatch) {
-    return Math.round(parseFloat(crMatch[1]) * 10000000);
-  }
-  const lkMatch = str.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:lakh|lac|l)/i);
-  if (lkMatch) {
-    return Math.round(parseFloat(lkMatch[1]) * 100000);
-  }
-  const num = parseFloat(str.replace(/[^0-9.]/g, ''));
-  return (!isNaN(num) && num > 0) ? num : 0;
-}
+// parseEstimatedValue now lives in ../lib/websiteLead.js, where it can be tested.
+// It also reads a band the way the band is written: "₹50 lakh – ₹1 crore" is
+// ₹50 lakh, the floor. This file used to search for "crore" first wherever it
+// appeared, which read that same band as ₹1 crore and doubled the enquiry.
 
 // Health check / test endpoint for webmasters
 router.get('/health', (req, res) => {
@@ -104,22 +125,27 @@ router.get('/test', (req, res) => {
 
 // POST /api/webhooks/website-lead
 // Ingests leads directly into Sales Funnel Stage 1 (Lead/Tender Capture)
-router.post('/website-lead', (req, res) => {
+router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
   const b = req.body || {};
 
-  // 1. Verify Secret Key
-  const authHeader = req.headers['authorization'] || '';
-  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-  const providedSecret = req.headers['x-webhook-secret'] ||
-                         req.headers['x-api-key'] ||
-                         bearerToken ||
-                         req.query.secret ||
-                         b.secret ||
-                         b.webhook_secret;
-
-  if (WEBHOOK_SECRET && providedSecret !== WEBHOOK_SECRET) {
+  // 1. Who is calling?
+  //
+  // Two accepted callers, and neither needs a token inside public JavaScript:
+  //   • our own website, recognised by the Origin header. A browser sets that
+  //     itself and a page on another site cannot forge it, so a form on
+  //     securedengineers.com is admitted while a form elsewhere is not. The
+  //     honeypot below, the field validation and the per-IP limits above are
+  //     the rest of the defence — the same reasoning, and the same shape, as
+  //     routes/publicSotynLead.js uses for the sotyn.ai forms.
+  //   • server-to-server callers holding WEBSITE_WEBHOOK_SECRET.
+  //
+  // This is write-only either way: the route inserts one sales_funnel row and
+  // returns its number. It never reads a lead back and never lists anything.
+  const viaSecret = withValidSecret(req);
+  const viaWebsite = isAllowedWebsiteOrigin(req.headers.origin);
+  if (!viaSecret && !viaWebsite) {
     return res.status(401).json({
-      error: 'Unauthorized. Invalid or missing x-webhook-secret header.',
+      error: 'Unauthorized. Post from an allowed website origin, or send a valid x-webhook-secret header.',
     });
   }
 
@@ -167,6 +193,12 @@ router.post('/website-lead', (req, res) => {
 
   const formTitle = isRfq ? 'Request a Preliminary BOQ (/rfq/)' : 'Request a Free Quote';
 
+  // 4b. The website's own reference for this submission, identical across its
+  // retries. The site posts again when a reply is slow (it prefers a duplicate
+  // to a lost lead), and on 22 Sep a 20-second reply produced two records for
+  // one enquiry. Recognising the reference makes a repeat idempotent.
+  const websiteRef = websiteRefOf(b);
+
   // 5. Compile Rich Remarks / Scoping Notes
   const remarksList = [
     `[Website Enquiry: ${formTitle}]`,
@@ -181,6 +213,10 @@ router.post('/website-lead', (req, res) => {
     tenderStage ? `• Tender / Selection Stage: ${tenderStage}` : null,
     awardDate ? `• Expected Award / Start: ${awardDate}` : null,
     scopes ? `• Scopes Selected: ${scopes}` : null,
+    // The reference the visitor is shown on /thank-you/. Storing it lets Sales
+    // match a caller's "my reference is SEPL-2026…" to this record, and lets
+    // anyone reconcile the ERP against the website's own Sheet of enquiries.
+    websiteRef ? `• Website ref: ${websiteRef}` : null,
     projectDetails ? `• Project Details:\n${projectDetails}` : null,
   ].filter(Boolean);
 
@@ -194,6 +230,27 @@ router.post('/website-lead', (req, res) => {
   const db = getDb();
 
   try {
+    // Same submission arriving twice? Answer with the record we already have,
+    // so a slow reply or a retry never becomes a second lead for Sales to work.
+    if (websiteRef) {
+      const seen = db.prepare(`
+        SELECT lead_no FROM sales_funnel
+        WHERE source = 'Website' AND remarks LIKE ?
+          AND created_at >= datetime('now', '-2 days')
+        ORDER BY id DESC LIMIT 1
+      `).get(`%Website ref: ${websiteRef}%`);
+      if (seen) {
+        console.log(`[webhook] website ref ${websiteRef} already recorded as ${seen.lead_no} — not inserting again`);
+        return res.status(200).json({
+          success: true,
+          lead_no: seen.lead_no,
+          duplicate: true,
+          stage: 'lead_capture',
+          message: `Lead ${seen.lead_no} was already recorded for this enquiry.`,
+        });
+      }
+    }
+
     const leadNo = nextSequence(db, 'sales_funnel', 'lead_no', 'SEPL', { startFrom: 9000, pad: 4 });
 
     const r = db.prepare(`
