@@ -12,7 +12,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusMultiSelect from '../components/StatusMultiSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard } from 'react-icons/fi';
+import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard, FiUpload, FiImage } from 'react-icons/fi';
 import { fmtDateTime } from '../utils/datetime';
 
 const CATEGORIES = ['Drilling', 'Cutting', 'Measurement', 'Safety', 'Power', 'Hand', 'Lifting', 'Electrical', 'Other'];
@@ -51,6 +51,7 @@ export default function Tools() {
   const [filters, setFilters] = useState({ category: '', status: [], search: '' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
+  const [uploadingToolPhoto, setUploadingToolPhoto] = useState(false);
   const [actionTool, setActionTool] = useState(null);
   const [actionType, setActionType] = useState(null);
   const [actionForm, setActionForm] = useState({});
@@ -94,6 +95,24 @@ export default function Tools() {
       setForm({});
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  const uploadToolPhoto = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return toast.error('Please select an image');
+    if (file.size > 5 * 1024 * 1024) return toast.error('Tool photo must be under 5 MB');
+    setUploadingToolPhoto(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { data } = await api.post('/upload?folder=tools', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setForm(f => ({ ...f, photo_url: data.url }));
+      toast.success('Tool photo uploaded');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Photo upload failed');
+    } finally {
+      setUploadingToolPhoto(false);
+    }
   };
 
   const del = async (t) => {
@@ -233,7 +252,16 @@ export default function Tools() {
                   {toolsPager.pageItems.map(t => (
                     <tr key={t.id} className="hover:bg-gray-50">
                       <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
-                      <td className="font-medium">{t.name}</td>
+                      <td className="font-medium">
+                        <div className="flex items-center gap-2">
+                          {t.photo_url ? (
+                            <a href={t.photo_url} target="_blank" rel="noreferrer" title="View tool photo" className="shrink-0">
+                              <img src={t.photo_url} alt={t.name} className="w-9 h-9 rounded border object-cover bg-gray-50" />
+                            </a>
+                          ) : <FiImage className="text-gray-300 shrink-0" size={18} />}
+                          <span>{t.name}</span>
+                        </div>
+                      </td>
                       <td className="text-xs">{t.category || '—'}</td>
                       <td className="text-xs">{[t.brand, t.model].filter(Boolean).join(' / ') || '—'}</td>
                       <td className="text-xs text-gray-500">{t.serial_no || '—'}</td>
@@ -341,7 +369,7 @@ export default function Tools() {
             {/* Site / user assignment — mam: lets her correct where a tool
                 is parked without going through the Issue / Return flow. */}
             <div>
-              <label className="label">Current Site</label>
+              <label className="label">Site Name / Current Site</label>
               <SearchableSelect
                 options={sites}
                 value={form.current_site_id || null}
@@ -361,6 +389,24 @@ export default function Tools() {
                 placeholder="Pick employee…"
                 onChange={(u) => setForm(f => ({ ...f, current_user_id: u?.id || '' }))}
               />
+            </div>
+            <div className="col-span-1 sm:col-span-2">
+              <label className="label">Tool Photo</label>
+              <div className="flex items-center gap-3 rounded-lg border border-gray-200 p-3 bg-gray-50">
+                <div className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden bg-white shrink-0">
+                  {form.photo_url
+                    ? <img src={form.photo_url} alt="Tool preview" className="w-full h-full object-cover" />
+                    : <FiImage className="text-gray-300" size={26} />}
+                </div>
+                <div>
+                  <label className={`btn btn-secondary text-xs flex items-center gap-1 w-fit ${uploadingToolPhoto ? 'opacity-60 cursor-wait' : 'cursor-pointer'}`}>
+                    <FiUpload size={13} /> {uploadingToolPhoto ? 'Uploading…' : form.photo_url ? 'Replace Photo' : 'Upload Photo'}
+                    <input type="file" accept="image/*" className="hidden" disabled={uploadingToolPhoto} onChange={e => { uploadToolPhoto(e.target.files?.[0]); e.target.value = ''; }} />
+                  </label>
+                  <p className="text-[10px] text-gray-400 mt-1">JPG, PNG or other image, up to 5 MB.</p>
+                  {form.photo_url && <button type="button" className="text-xs text-red-500 mt-1" onClick={() => setForm(f => ({ ...f, photo_url: '' }))}>Remove photo</button>}
+                </div>
+              </div>
             </div>
             <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
