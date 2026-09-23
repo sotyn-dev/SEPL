@@ -38,7 +38,11 @@ export function setToken(token) {
     else localStorage.removeItem('token');
     // Some browsers (private mode / blocked storage) accept setItem but
     // silently drop it — verify the write actually stuck.
-    if (token && localStorage.getItem('token') !== token) storageBlocked = true;
+    if (token && localStorage.getItem('token') !== token) {
+      storageBlocked = true;
+    } else if (token) {
+      storageBlocked = false;
+    }
   } catch {
     storageBlocked = true;
   }
