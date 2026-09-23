@@ -153,13 +153,14 @@ router.put('/:id', requirePermission('tools', 'edit'), (req, res) => {
   try {
     const b = req.body;
     const db = getDb();
+    if (b.item_master_id === null) delete b.item_master_id;
     if (b.item_master_id !== undefined) {
       const master = db.prepare(`SELECT id, item_name, department FROM item_master WHERE id=? AND UPPER(TRIM(type))='RGP'`).get(b.item_master_id);
       if (!master) return res.status(400).json({ error: 'The selected Item Master entry must be RGP type' });
       b.name = master.item_name;
       b.category = master.department || null;
     }
-    const fields = ['item_master_id','name','category','serial_no','purchase_date','purchase_price','condition','status','current_site_id','current_user_id','last_calibration_date','next_calibration_date','notes'];
+    const fields = ['item_master_id','name','category','serial_no','purchase_date','purchase_price','condition','status','current_site_id','current_user_id','last_calibration_date','next_calibration_date','photo_url','notes'];
     const sets = [];
     const vals = [];
     for (const f of fields) {

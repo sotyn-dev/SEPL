@@ -53,6 +53,7 @@ export default function Tools() {
   const [filters, setFilters] = useState({ category: '', status: [], search: '' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [actionTool, setActionTool] = useState(null);
   const [actionType, setActionType] = useState(null);
   const [actionForm, setActionForm] = useState({});
@@ -88,6 +89,7 @@ export default function Tools() {
 
   const save = async (e) => {
     e.preventDefault();
+    if (uploadingPhoto) return;
     try {
       if (form.id) {
         await api.put(`/tools/${form.id}`, form);
@@ -100,6 +102,22 @@ export default function Tools() {
       setForm({});
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  const uploadConditionPhoto = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return toast.error('Please choose an image');
+    if (file.size > 5 * 1024 * 1024) return toast.error('Photo must be under 5 MB');
+    setUploadingPhoto(true);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const { data } = await api.post('/upload?folder=tools', body, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setForm(f => ({ ...f, photo_url: data.url }));
+      toast.success('Photo uploaded. Save to attach it to this tool.');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Photo upload failed');
+    } finally { setUploadingPhoto(false); }
   };
 
   const del = async (t) => {
@@ -241,9 +259,9 @@ export default function Tools() {
                       <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
                       <td className="font-medium">
                         <div className="flex items-center gap-2">
-                          {t.item_photo_link ? (
-                            <button type="button" onClick={() => setImagePreview({ url: t.item_photo_link, name: t.name })} title="Click to enlarge" className="shrink-0">
-                              <img src={t.item_photo_link} alt={t.name} loading="lazy" className="w-10 h-10 object-cover rounded border border-gray-200 cursor-zoom-in hover:ring-2 hover:ring-blue-300" />
+                          {(t.photo_url || t.item_photo_link) ? (
+                            <button type="button" onClick={() => setImagePreview({ url: t.photo_url || t.item_photo_link, name: t.name })} title={t.photo_url ? 'Tool condition photo — click to enlarge' : 'Item Master reference photo — click to enlarge'} className="shrink-0">
+                              <img src={t.photo_url || t.item_photo_link} alt={t.name} loading="lazy" className="w-10 h-10 object-cover rounded border border-gray-200 cursor-zoom-in hover:ring-2 hover:ring-blue-300" />
                             </button>
                           ) : <span className="w-10 h-10 rounded border border-dashed border-gray-200 bg-gray-50 flex items-center justify-center shrink-0"><FiImage className="text-gray-300" size={17} /></span>}
                           <span>{t.name}</span>
@@ -323,7 +341,7 @@ export default function Tools() {
       )}
 
       {/* Add / Edit Tool Modal */}
-      <Modal isOpen={modal === 'add'} onClose={() => { setModal(null); setForm({}); }} title={form.id ? `Edit ${form.tool_code}` : 'Add Tool'} wide>
+      <Modal isOpen={modal === 'add'} onClose={() => { if (!uploadingPhoto) { setModal(null); setForm({}); } }} title={form.id ? `Edit ${form.tool_code}` : 'Add Tool'} wide>
         <form onSubmit={save} className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="col-span-1 sm:col-span-2">
@@ -379,11 +397,23 @@ export default function Tools() {
                 onChange={(u) => setForm(f => ({ ...f, current_user_id: u?.id || '' }))}
               />
             </div>
+            <div className="col-span-1 sm:col-span-2 space-y-2 rounded-lg border p-3">
+              <label htmlFor="tool-condition-photo" className="label">Tool Condition Photo</label>
+              <p className="text-xs text-gray-500">Upload a photo of this tool’s actual condition. It will appear in the tools list.</p>
+              {form.photo_url && <div className="flex items-center gap-3">
+                <button type="button" onClick={() => setImagePreview({ url: form.photo_url, name: form.name || 'Tool condition' })} title="Click to enlarge">
+                  <img src={form.photo_url} alt="Tool condition" className="w-20 h-20 object-cover rounded border cursor-zoom-in" />
+                </button>
+                <button type="button" disabled={uploadingPhoto} onClick={() => setForm(f => ({ ...f, photo_url: '' }))} className="text-sm text-red-600">Remove photo</button>
+              </div>}
+              <input id="tool-condition-photo" type="file" accept="image/*" disabled={uploadingPhoto} onChange={e => { uploadConditionPhoto(e.target.files?.[0]); e.target.value = ''; }} className="block w-full text-sm" />
+              <p className="text-xs text-gray-500">{uploadingPhoto ? 'Uploading…' : 'Images up to 5 MB. Click Save to keep your changes.'}</p>
+            </div>
             <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t">
-            <button type="button" onClick={() => { setModal(null); setForm({}); }} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">{form.id ? 'Save' : 'Add Tool'}</button>
+            <button type="button" disabled={uploadingPhoto} onClick={() => { setModal(null); setForm({}); }} className="btn btn-secondary">Cancel</button>
+            <button type="submit" disabled={uploadingPhoto} className="btn btn-primary">{uploadingPhoto ? 'Uploading…' : form.id ? 'Save' : 'Add Tool'}</button>
           </div>
         </form>
       </Modal>
