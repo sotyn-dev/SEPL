@@ -7907,9 +7907,9 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
   const db = getDb();
   const b = req.body || {};
   const { final_rate, final_vendor_name, final_terms, final_credit_days } = b;
-  if (!final_vendor_name || !final_rate) return res.status(400).json({ error: 'final_vendor_name and final_rate are required' });
+  if (typeof final_vendor_name !== 'string' || !final_vendor_name.trim() || !Number.isFinite(+final_rate) || +final_rate <= 0) return res.status(400).json({ error: 'A final vendor and a positive final rate are required' });
 
-  // All 3 vendor quotes mandatory before finalizing (mam 2026-07-21: "3 vendors
+  // Non-admins require all 3 vendor quotes before finalizing (mam 2026-07-21: "3 vendors
   // rate is mandatory to fill then can finalise rate"). Each vendor slot needs
   // BOTH a name and a rate > 0. Enforced here too so a direct API call / the
   // bulk-fill path can't bypass the button gate.
@@ -7918,7 +7918,9 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
        FROM indent_item_rates WHERE id=?`
   ).get(req.params.id);
   const threeFilled = q && [1, 2, 3].every(n => +q[`vendor${n}_rate`] > 0 && String(q[`vendor${n}_name`] || '').trim());
-  if (!threeFilled) {
+  if (!q) return res.status(404).json({ error: 'Rate row not found' });
+  // Only the authenticated admin role may finalize without three quotations.
+  if (req.user.role !== 'admin' && !threeFilled) {
     return res.status(400).json({ error: 'All 3 vendor quotes (name + rate) must be filled before you can finalize the rate.' });
   }
 

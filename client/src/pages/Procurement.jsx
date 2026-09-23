@@ -2779,9 +2779,17 @@ export default function Procurement() {
     // sharing the same item_master in the same indent). Finalize ALL of them
     // so the merged display stays consistent — every backing row picks the
     // same vendor + rate + terms.
-    const rateIds = finalForm.row?.rate_ids?.length ? finalForm.row.rate_ids : [finalForm.rate_id].filter(Boolean);
-    if (!rateIds.length) return toast.error('Enter a vendor rate first');
+    const rateIds = finalForm.row?.rate_ids?.length ? [...finalForm.row.rate_ids] : [finalForm.rate_id].filter(Boolean);
+    if (!rateIds.length && !isAdmin()) return toast.error('Enter a vendor rate first');
     try {
+      // Ensure every backing item exists, even for partially quoted merged rows.
+      if (isAdmin()) {
+        const itemIds = finalForm.row?.indent_item_ids || [finalForm.row?.indent_item_id];
+        for (const iid of itemIds.filter(Boolean)) {
+          const { data } = await api.post('/procurement/item-rates', { indent_item_id: iid });
+          if (!rateIds.includes(data.id)) rateIds.push(data.id);
+        }
+      }
       for (const rid of rateIds) {
         await api.post(`/procurement/item-rates/${rid}/finalize`, finalForm);
       }
@@ -4339,7 +4347,7 @@ export default function Procurement() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
               <div>
                 <h3 className="font-semibold">Item-wise Vendor Rates</h3>
-                <p className="text-xs text-gray-500">Step 1: enter up to 3 vendor quotes per indent item. Step 2: finalize the best rate.</p>
+                <p className="text-xs text-gray-500">{isAdmin() ? 'Admin: use Direct Finalize to select a vendor and enter the final rate without three quotations.' : 'Step 1: enter 3 vendor quotes per indent item. Step 2: finalize the best rate.'}</p>
                 <p className="text-[11px] text-amber-700 mt-0.5">ⓘ Only indents that have cleared L1 + L2 approval appear here. Pending-approval indents will show up automatically after both approvers sign off.</p>
               </div>
               <div className="flex gap-1 flex-wrap">
@@ -4650,7 +4658,7 @@ export default function Procurement() {
                           <div className="flex items-center gap-1">
                             {stat === 'finalized'
                               ? <div className="text-[11px]"><div className="font-semibold text-emerald-700">{r.final_vendor_name}</div><div>Rs {r.final_rate}</div></div>
-                              : <button onClick={() => openFinalize(r)} disabled={!threeFilled} title={threeFilled ? 'Finalize the best rate' : 'Fill all 3 vendor rates first'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">Finalize</button>}
+                              : <button onClick={() => openFinalize(r)} disabled={!isAdmin() && !threeFilled} title={isAdmin() ? 'Finalize directly without three quotations' : threeFilled ? 'Finalize the best rate' : 'Fill all 3 vendor rates first'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">{isAdmin() ? 'Direct Finalize' : 'Finalize'}</button>}
                             {/* Admin-only: clear ALL vendor quotes for this row.
                               Useful when mam wants to re-quote (wrong rates,
                               vendor change, etc.). Returns row to Pending. */}
@@ -4723,8 +4731,8 @@ export default function Procurement() {
                     {stat === 'finalized'
                       ? <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs"><b className="text-emerald-700">Final:</b> {r.final_vendor_name} @ Rs {r.final_rate}</div>
                       : <>
-                        <button onClick={() => openFinalize(r)} disabled={!threeFilled} className="btn btn-primary text-xs w-full disabled:opacity-40">Finalize Rate</button>
-                        {!threeFilled && <p className="text-[10px] text-amber-600 text-center mt-1">Fill all 3 vendor rates to finalize.</p>}
+                        <button onClick={() => openFinalize(r)} disabled={!isAdmin() && !threeFilled} className="btn btn-primary text-xs w-full disabled:opacity-40">{isAdmin() ? 'Direct Finalize' : 'Finalize Rate'}</button>
+                        {!isAdmin() && !threeFilled && <p className="text-[10px] text-amber-600 text-center mt-1">Fill all 3 vendor rates to finalize.</p>}
                       </>}
                   </div>
                 );
@@ -9002,6 +9010,9 @@ export default function Procurement() {
                 }}
               >
                 <option value="">— Pick vendor —</option>
+                {isAdmin() && vendorOptions.filter(v => ![1, 2, 3].some(n => finalModal?.[`vendor${n}_name`] === v.name && +finalModal?.[`vendor${n}_rate`] > 0)).map(v => (
+                  <option key={`vendor-${v.id}`} value={v.name}>{v.label}</option>
+                ))}
                 {finalModal && [1, 2, 3].map(n => {
                   const name = finalModal[`vendor${n}_name`];
                   const rate = +finalModal[`vendor${n}_rate`] || 0;
@@ -9013,7 +9024,7 @@ export default function Procurement() {
                 })}
               </select>
             </div>
-            <div><label className="label">Final Rate (Rs) *</label><input className="input" type="number" required value={finalForm.final_rate || ''} onChange={e => setFinalForm(f => ({ ...f, final_rate: +e.target.value }))} /></div>
+            <div><label className="label">Final Rate (Rs) *</label><input className="input" type="number" min="0.01" step="any" required value={finalForm.final_rate || ''} onChange={e => setFinalForm(f => ({ ...f, final_rate: +e.target.value }))} /></div>
             <div>
               <label className="label">Payment Terms</label>
               <select className="select" value={finalForm.final_terms || ''} onChange={e => setFinalForm(f => ({ ...f, final_terms: e.target.value }))}>
