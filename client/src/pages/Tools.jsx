@@ -90,7 +90,7 @@ export default function Tools() {
   const save = async (e) => {
     e.preventDefault();
     if (uploadingPhoto) return;
-    const payload = { ...form, quantity: form.quantity ?? 1, unit: form.unit ?? form.resolved_unit ?? form.item_uom ?? 'PCS' };
+    const payload = { ...form, quantity: form.quantity ?? 1, unit: form.unit ?? form.resolved_unit ?? 'Nos' };
     try {
       if (form.id) {
         await api.put(`/tools/${form.id}`, payload);
@@ -161,7 +161,7 @@ export default function Tools() {
           <p className="text-sm text-gray-500">Returnable assets — catalog, issue, return, weekly site submissions.</p>
         </div>
         {canCreate('tools') && tab === 'catalog' && (
-          <button onClick={() => { setForm({ condition: 'good', status: 'available', quantity: 1, unit: 'PCS' }); setModal('add'); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Tool</button>
+          <button onClick={() => { setForm({ condition: 'good', status: 'available', quantity: 1, unit: 'Nos' }); setModal('add'); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Tool</button>
         )}
         {canCreate('tools') && tab === 'submissions' && (
           <button onClick={() => { setSubmitForm({ site_id: '', week_start: lastMonday(), tools_json: [], notes: '' }); setModal('submit'); }} className="btn btn-primary flex items-center gap-1"><FiClipboard size={14} /> Submit Weekly List</button>
@@ -273,7 +273,7 @@ export default function Tools() {
                       <td className="text-xs font-medium text-blue-700">{t.item_master_code || 'Legacy tool'}</td>
                       <td className="text-xs">{[t.item_specification, t.item_size].filter(Boolean).join(' / ') || '—'}</td>
                       <td className="text-sm font-semibold">{t.quantity ?? 1}</td>
-                      <td className="text-xs">{t.resolved_unit || t.unit || t.item_uom || 'PCS'}</td>
+                      <td className="text-xs">{t.resolved_unit || t.unit || 'Nos'}</td>
                       <td className="text-xs text-gray-500">{t.serial_no || '—'}</td>
                       <td><span className={`text-[10px] px-1.5 py-0.5 rounded border ${CONDITION_PILL[t.condition] || 'bg-gray-50'}`}>{t.condition}</span></td>
                       <td><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[t.status]}`}>{t.status.replace('_', ' ')}</span></td>
@@ -357,12 +357,12 @@ export default function Tools() {
                 valueKey="id"
                 displayKey="label"
                 placeholder="Pick an RGP item from Item Master…"
-                onChange={(i) => setForm(f => ({ ...f, item_master_id: i?.id || '', name: i?.item_name || '', purchase_price: i?.current_price || 0, unit: i?.uom || 'PCS' }))}
+                onChange={(i) => setForm(f => ({ ...f, item_master_id: i?.id || '', name: i?.item_name || '', purchase_price: i?.current_price || 0, unit: f.unit ?? 'Nos' }))}
               />
               <p className="text-[10px] text-gray-400 mt-1">Only Item Master entries with type RGP are available.</p>
             </div>
             <div><label htmlFor="tool-quantity" className="label">Quantity *</label><input id="tool-quantity" type="number" step="any" min="0.000001" required className="input" value={form.quantity ?? 1} onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))} /></div>
-            <div><label htmlFor="tool-unit" className="label">Unit *</label><input id="tool-unit" className="input" required maxLength={30} value={form.unit ?? form.resolved_unit ?? form.item_uom ?? 'PCS'} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} placeholder="e.g. PCS, SET, MTR" /><p className="text-xs text-gray-500 mt-1">Filled from the selected RGP item.</p></div>
+            <div><label htmlFor="tool-unit" className="label">Unit *</label><input id="tool-unit" className="input" required maxLength={30} value={form.unit ?? form.resolved_unit ?? 'Nos'} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} placeholder="e.g. Nos, SET, MTR" /><p className="text-xs text-gray-500 mt-1">Defaults to Nos. Change if needed.</p></div>
             <div><label className="label">Serial No.</label><input className="input" value={form.serial_no || ''} onChange={e => setForm(f => ({ ...f, serial_no: e.target.value }))} /></div>
             <div><label className="label">Purchase Date</label><input type="date" className="input" value={form.purchase_date || ''} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))} /></div>
             <div><label className="label">Purchase Price (Rs)</label><input type="number" className="input" value={form.purchase_price || 0} onChange={e => setForm(f => ({ ...f, purchase_price: +e.target.value }))} /></div>

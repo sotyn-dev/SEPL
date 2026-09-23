@@ -43,7 +43,7 @@ router.get('/', requirePermission('tools', 'view'), (req, res) => {
              im.specification as item_specification,
              im.size as item_size,
              im.uom as item_uom,
-             COALESCE(NULLIF(TRIM(t.unit), ''), NULLIF(TRIM(im.uom), ''), 'PCS') as resolved_unit,
+             COALESCE(NULLIF(TRIM(t.unit), ''), 'Nos') as resolved_unit,
              im.photo_link as item_photo_link,
              s.name as current_site_name,
              u.name as current_user_name,
@@ -139,7 +139,7 @@ router.post('/', requirePermission('tools', 'create'), (req, res) => {
     const master = db.prepare(`SELECT id, item_name, department, current_price, uom FROM item_master WHERE id=? AND UPPER(TRIM(type))='RGP'`).get(b.item_master_id);
     if (!master) return res.status(400).json({ error: 'The selected Item Master entry must be RGP type' });
     const quantity = b.quantity === undefined ? 1 : b.quantity;
-    const unit = b.unit === undefined ? (master.uom || 'PCS') : b.unit;
+    const unit = b.unit === undefined ? 'Nos' : b.unit;
     if (!validQuantity(quantity)) return res.status(400).json({ error: 'Quantity must be greater than zero' });
     if (!validUnit(unit)) return res.status(400).json({ error: 'Enter a unit (up to 30 characters)' });
     const yr = new Date().getFullYear();

@@ -40,7 +40,7 @@ function call(key, body, id) {
 const added = call('POST /', { item_master_id: 1, quantity: 12 });
 assert.equal(added.code, 201, JSON.stringify(added.data));
 const id = added.data.id;
-assert.deepEqual(db.prepare('SELECT quantity, unit FROM tools WHERE id=?').get(id), { quantity: 12, unit: 'SET' });
+assert.deepEqual(db.prepare('SELECT quantity, unit FROM tools WHERE id=?').get(id), { quantity: 12, unit: 'Nos' });
 assert.equal(call('PUT /:id', { quantity: '2.5', unit: ' MTR ' }, id).code, 200);
 assert.deepEqual(db.prepare('SELECT quantity, unit FROM tools WHERE id=?').get(id), { quantity: 2.5, unit: 'MTR' });
 for (const quantity of [0, -1, '', null, 'abc', 'Infinity', true]) {
