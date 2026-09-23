@@ -23,6 +23,16 @@ const toolColumns = getDb().prepare('PRAGMA table_info(tools)').all().map(c => c
 if (!toolColumns.includes('quantity')) getDb().exec('ALTER TABLE tools ADD COLUMN quantity REAL NOT NULL DEFAULT 1 CHECK(quantity > 0)');
 if (!toolColumns.includes('unit')) getDb().exec('ALTER TABLE tools ADD COLUMN unit TEXT');
 
+// Preserve assigned serials; fill older blank records once with the next number.
+getDb().transaction(() => {
+  const db = getDb();
+  const missing = db.prepare("SELECT id FROM tools WHERE serial_no IS NULL OR TRIM(serial_no) = '' ORDER BY id").all();
+  const assign = db.prepare('UPDATE tools SET serial_no=? WHERE id=?');
+  for (const tool of missing) {
+    assign.run(nextSequence(db, 'tools', 'serial_no', ''), tool.id);
+  }
+})();
+
 function validQuantity(value) {
   return (typeof value === 'number' || typeof value === 'string') && Number.isFinite(Number(value)) && Number(value) > 0;
 }
@@ -144,6 +154,7 @@ router.post('/', requirePermission('tools', 'create'), (req, res) => {
     if (!validUnit(unit)) return res.status(400).json({ error: 'Enter a unit (up to 30 characters)' });
     const yr = new Date().getFullYear();
     const tool_code = b.tool_code || nextSequence(db, 'tools', 'tool_code', `T-${yr}-`, { startFrom: 0, pad: 4 });
+    const serial_no = nextSequence(db, 'tools', 'serial_no', '');
     const r = db.prepare(`
       INSERT INTO tools (
         item_master_id, tool_code, name, category, brand, model, serial_no,
@@ -153,13 +164,13 @@ router.post('/', requirePermission('tools', 'create'), (req, res) => {
         photo_url, notes, created_by, quantity, unit
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-      master.id, tool_code, master.item_name, master.department || null, null, null, b.serial_no || null,
+      master.id, tool_code, master.item_name, master.department || null, null, null, serial_no,
       b.purchase_date || null, b.purchase_price ?? master.current_price ?? 0, b.condition || 'good', b.status || 'available',
       b.current_site_id || null, b.current_user_id || null,
       b.last_calibration_date || null, b.next_calibration_date || null,
       b.photo_url || null, b.notes || null, req.user.id, Number(quantity), unit.trim()
     );
-    res.status(201).json({ id: r.lastInsertRowid, tool_code });
+    res.status(201).json({ id: r.lastInsertRowid, tool_code, serial_no });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -184,7 +195,7 @@ router.put('/:id', requirePermission('tools', 'edit'), (req, res) => {
       b.name = master.item_name;
       b.category = master.department || null;
     }
-    const fields = ['quantity','unit','item_master_id','name','category','serial_no','purchase_date','purchase_price','condition','status','current_site_id','current_user_id','last_calibration_date','next_calibration_date','photo_url','notes'];
+    const fields = ['quantity','unit','item_master_id','name','category','purchase_date','purchase_price','condition','status','current_site_id','current_user_id','last_calibration_date','next_calibration_date','photo_url','notes'];
     const sets = [];
     const vals = [];
     for (const f of fields) {

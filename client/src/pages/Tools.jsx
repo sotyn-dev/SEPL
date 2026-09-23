@@ -363,7 +363,7 @@ export default function Tools() {
             </div>
             <div><label htmlFor="tool-quantity" className="label">Quantity *</label><input id="tool-quantity" type="number" step="any" min="0.000001" required className="input" value={form.quantity ?? 1} onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))} /></div>
             <div><label htmlFor="tool-unit" className="label">Unit *</label><input id="tool-unit" className="input" required maxLength={30} value={form.unit ?? form.resolved_unit ?? 'Nos'} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} placeholder="e.g. Nos, SET, MTR" /><p className="text-xs text-gray-500 mt-1">Defaults to Nos. Change if needed.</p></div>
-            <div><label className="label">Serial No.</label><input className="input" value={form.serial_no || ''} onChange={e => setForm(f => ({ ...f, serial_no: e.target.value }))} /></div>
+            <div><label htmlFor="tool-serial" className="label">Serial No. (Automatic)</label><input id="tool-serial" className="input bg-gray-50 text-gray-500" readOnly value={form.serial_no || ''} placeholder="Generated when saved" /><p className="text-xs text-gray-500 mt-1">Assigned automatically and cannot be edited.</p></div>
             <div><label className="label">Purchase Date</label><input type="date" className="input" value={form.purchase_date || ''} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))} /></div>
             <div><label className="label">Purchase Price (Rs)</label><input type="number" className="input" value={form.purchase_price || 0} onChange={e => setForm(f => ({ ...f, purchase_price: +e.target.value }))} /></div>
             <div>

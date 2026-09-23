@@ -12,8 +12,8 @@ db.exec(schema.match(/CREATE TABLE IF NOT EXISTS tools \([\s\S]*?\n    \);/)[0]
   .replace('unit TEXT,', ''));
 db.exec(`CREATE TABLE item_master (id INTEGER PRIMARY KEY, item_name TEXT, department TEXT, current_price REAL, type TEXT, uom TEXT);
   INSERT INTO item_master VALUES (1, 'Drill bits', 'Electrical', 123, 'RGP', 'SET');
-  INSERT INTO tools (tool_code, name) VALUES ('OLD-1', 'Legacy tool');`);
-let sequence = 0;
+  INSERT INTO tools (tool_code, name) VALUES ('OLD-1', 'Legacy tool');
+  INSERT INTO tools (tool_code, name, serial_no) VALUES ('OLD-2', 'Existing tool', '45');`);
 function loadRoutes() {
   const routes = {};
   const router = { use() {}, get() {}, delete() {}, post(url, ...handlers) { routes['POST ' + url] = handlers.at(-1); }, put(url, ...handlers) { routes['PUT ' + url] = handlers.at(-1); } };
@@ -22,7 +22,7 @@ function loadRoutes() {
     '../db/schema': { getDb: () => db },
     '../lib/statusFilter': {},
     '../middleware/auth': { requirePermission: () => () => {} },
-    '../db/nextSequence': { nextSequence: () => 'TEST-' + (++sequence) },
+    '../db/nextSequence': require('../../db/nextSequence'),
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../routes/tools.js'), 'utf8'), {
     require: key => { assert.ok(key in mocks, key); return mocks[key]; }, module: {}, console,
@@ -32,14 +32,22 @@ function loadRoutes() {
 const routes = loadRoutes();
 loadRoutes(); // Deployment migration must be repeatable.
 assert.equal(db.prepare('SELECT quantity FROM tools WHERE id=1').get().quantity, 1);
+assert.equal(db.prepare('SELECT serial_no FROM tools WHERE id=1').get().serial_no, '46');
+assert.equal(db.prepare('SELECT serial_no FROM tools WHERE id=2').get().serial_no, '45');
 function call(key, body, id) {
   const res = { code: 200, status(code) { this.code = code; return this; }, json(data) { this.data = data; } };
   routes[key]({ body, params: { id }, user: { id: 1 } }, res);
   return res;
 }
-const added = call('POST /', { item_master_id: 1, quantity: 12 });
+const added = call('POST /', { item_master_id: 1, quantity: 12, serial_no: '9999' });
 assert.equal(added.code, 201, JSON.stringify(added.data));
 const id = added.data.id;
+assert.equal(added.data.serial_no, '47');
+assert.equal(db.prepare('SELECT serial_no FROM tools WHERE id=?').get(id).serial_no, '47');
+assert.equal(call('PUT /:id', { serial_no: '9999', notes: 'Attempted serial change' }, id).code, 200);
+assert.equal(db.prepare('SELECT serial_no FROM tools WHERE id=?').get(id).serial_no, '47');
+const next = call('POST /', { item_master_id: 1 });
+assert.equal(next.data.serial_no, '48');
 assert.deepEqual(db.prepare('SELECT quantity, unit FROM tools WHERE id=?').get(id), { quantity: 12, unit: 'Nos' });
 assert.equal(call('PUT /:id', { quantity: '2.5', unit: ' MTR ' }, id).code, 200);
 assert.deepEqual(db.prepare('SELECT quantity, unit FROM tools WHERE id=?').get(id), { quantity: 2.5, unit: 'MTR' });
