@@ -12,7 +12,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusMultiSelect from '../components/StatusMultiSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard, FiUpload, FiImage } from 'react-icons/fi';
+import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard } from 'react-icons/fi';
 import { fmtDateTime } from '../utils/datetime';
 
 const CATEGORIES = ['Drilling', 'Cutting', 'Measurement', 'Safety', 'Power', 'Hand', 'Lifting', 'Electrical', 'Other'];
@@ -48,10 +48,10 @@ export default function Tools() {
   const [stats, setStats] = useState(null);
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
+  const [rgpItems, setRgpItems] = useState([]);
   const [filters, setFilters] = useState({ category: '', status: [], search: '' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
-  const [uploadingToolPhoto, setUploadingToolPhoto] = useState(false);
   const [actionTool, setActionTool] = useState(null);
   const [actionType, setActionType] = useState(null);
   const [actionForm, setActionForm] = useState({});
@@ -79,6 +79,10 @@ export default function Tools() {
     }
     api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => { });
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => { });
+    api.get('/tools/lookup/rgp-items').then(r => setRgpItems((r.data || []).map(i => ({
+      ...i,
+      label: [i.item_code, i.item_name, i.specification, i.size].filter(Boolean).join(' — '),
+    })))).catch(() => { });
   }, [tab, load, submissionWeek]);
 
   const save = async (e) => {
@@ -95,24 +99,6 @@ export default function Tools() {
       setForm({});
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-
-  const uploadToolPhoto = async (file) => {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) return toast.error('Please select an image');
-    if (file.size > 5 * 1024 * 1024) return toast.error('Tool photo must be under 5 MB');
-    setUploadingToolPhoto(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const { data } = await api.post('/upload?folder=tools', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      setForm(f => ({ ...f, photo_url: data.url }));
-      toast.success('Tool photo uploaded');
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Photo upload failed');
-    } finally {
-      setUploadingToolPhoto(false);
-    }
   };
 
   const del = async (t) => {
@@ -238,8 +224,8 @@ export default function Tools() {
                   <tr>
                     <th>Code</th>
                     <th>Name</th>
-                    <th>Category</th>
-                    <th>Brand / Model</th>
+                    <th>Item Master Code</th>
+                    <th>Specification / Size</th>
                     <th>Serial</th>
                     <th>Cond.</th>
                     <th>Status</th>
@@ -252,18 +238,9 @@ export default function Tools() {
                   {toolsPager.pageItems.map(t => (
                     <tr key={t.id} className="hover:bg-gray-50">
                       <td className="font-bold text-blue-700 text-xs">{t.tool_code}</td>
-                      <td className="font-medium">
-                        <div className="flex items-center gap-2">
-                          {t.photo_url ? (
-                            <a href={t.photo_url} target="_blank" rel="noreferrer" title="View tool photo" className="shrink-0">
-                              <img src={t.photo_url} alt={t.name} className="w-9 h-9 rounded border object-cover bg-gray-50" />
-                            </a>
-                          ) : <FiImage className="text-gray-300 shrink-0" size={18} />}
-                          <span>{t.name}</span>
-                        </div>
-                      </td>
-                      <td className="text-xs">{t.category || '—'}</td>
-                      <td className="text-xs">{[t.brand, t.model].filter(Boolean).join(' / ') || '—'}</td>
+                      <td className="font-medium">{t.name}</td>
+                      <td className="text-xs font-medium text-blue-700">{t.item_master_code || 'Legacy tool'}</td>
+                      <td className="text-xs">{[t.item_specification, t.item_size].filter(Boolean).join(' / ') || '—'}</td>
                       <td className="text-xs text-gray-500">{t.serial_no || '—'}</td>
                       <td><span className={`text-[10px] px-1.5 py-0.5 rounded border ${CONDITION_PILL[t.condition] || 'bg-gray-50'}`}>{t.condition}</span></td>
                       <td><span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[t.status]}`}>{t.status.replace('_', ' ')}</span></td>
@@ -339,16 +316,18 @@ export default function Tools() {
       <Modal isOpen={modal === 'add'} onClose={() => { setModal(null); setForm({}); }} title={form.id ? `Edit ${form.tool_code}` : 'Add Tool'} wide>
         <form onSubmit={save} className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div><label className="label">Name *</label><input className="input" required value={form.name || ''} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Bosch GBM 350 drill" /></div>
-            <div>
-              <label className="label">Category</label>
-              <select className="select" value={form.category || ''} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
-                <option value="">— pick —</option>
-                {CATEGORIES.map(c => <option key={c}>{c}</option>)}
-              </select>
+            <div className="col-span-1 sm:col-span-2">
+              <label className="label">RGP Item *</label>
+              <SearchableSelect
+                options={rgpItems}
+                value={form.item_master_id || null}
+                valueKey="id"
+                displayKey="label"
+                placeholder="Pick an RGP item from Item Master…"
+                onChange={(i) => setForm(f => ({ ...f, item_master_id: i?.id || '', name: i?.item_name || '', purchase_price: i?.current_price || 0 }))}
+              />
+              <p className="text-[10px] text-gray-400 mt-1">Only Item Master entries with type RGP are available.</p>
             </div>
-            <div><label className="label">Brand</label><input className="input" value={form.brand || ''} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} placeholder="Bosch / Makita / DeWalt…" /></div>
-            <div><label className="label">Model</label><input className="input" value={form.model || ''} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} placeholder="GBM 350 RE" /></div>
             <div><label className="label">Serial No.</label><input className="input" value={form.serial_no || ''} onChange={e => setForm(f => ({ ...f, serial_no: e.target.value }))} /></div>
             <div><label className="label">Purchase Date</label><input type="date" className="input" value={form.purchase_date || ''} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))} /></div>
             <div><label className="label">Purchase Price (Rs)</label><input type="number" className="input" value={form.purchase_price || 0} onChange={e => setForm(f => ({ ...f, purchase_price: +e.target.value }))} /></div>
@@ -389,24 +368,6 @@ export default function Tools() {
                 placeholder="Pick employee…"
                 onChange={(u) => setForm(f => ({ ...f, current_user_id: u?.id || '' }))}
               />
-            </div>
-            <div className="col-span-1 sm:col-span-2">
-              <label className="label">Tool Photo</label>
-              <div className="flex items-center gap-3 rounded-lg border border-gray-200 p-3 bg-gray-50">
-                <div className="w-20 h-20 rounded-lg border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden bg-white shrink-0">
-                  {form.photo_url
-                    ? <img src={form.photo_url} alt="Tool preview" className="w-full h-full object-cover" />
-                    : <FiImage className="text-gray-300" size={26} />}
-                </div>
-                <div>
-                  <label className={`btn btn-secondary text-xs flex items-center gap-1 w-fit ${uploadingToolPhoto ? 'opacity-60 cursor-wait' : 'cursor-pointer'}`}>
-                    <FiUpload size={13} /> {uploadingToolPhoto ? 'Uploading…' : form.photo_url ? 'Replace Photo' : 'Upload Photo'}
-                    <input type="file" accept="image/*" className="hidden" disabled={uploadingToolPhoto} onChange={e => { uploadToolPhoto(e.target.files?.[0]); e.target.value = ''; }} />
-                  </label>
-                  <p className="text-[10px] text-gray-400 mt-1">JPG, PNG or other image, up to 5 MB.</p>
-                  {form.photo_url && <button type="button" className="text-xs text-red-500 mt-1" onClick={() => setForm(f => ({ ...f, photo_url: '' }))}>Remove photo</button>}
-                </div>
-              </div>
             </div>
             <div className="col-span-1 sm:col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>

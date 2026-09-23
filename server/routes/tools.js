@@ -16,6 +16,10 @@ const { nextSequence } = require('../db/nextSequence');
 
 router.use(authMiddleware);
 
+// Tools are individual instances of RGP Item Master rows. Keep this
+// migration beside the route so older databases are upgraded on deploy.
+try { getDb().exec('ALTER TABLE tools ADD COLUMN item_master_id INTEGER REFERENCES item_master(id)'); } catch (_) {}
+
 // ---------- TOOLS CATALOG ----------
 
 router.get('/', requirePermission('tools', 'view'), (req, res) => {
@@ -24,10 +28,15 @@ router.get('/', requirePermission('tools', 'view'), (req, res) => {
     const { category, status, site_id, user_id, search } = req.query;
     let sql = `
       SELECT t.*,
+             im.item_code as item_master_code,
+             im.specification as item_specification,
+             im.size as item_size,
+             im.uom as item_uom,
              s.name as current_site_name,
              u.name as current_user_name,
              cu.name as created_by_name
       FROM tools t
+      LEFT JOIN item_master im ON im.id = t.item_master_id
       LEFT JOIN sites s ON s.id = t.current_site_id
       LEFT JOIN users u ON u.id = t.current_user_id
       LEFT JOIN users cu ON cu.id = t.created_by
@@ -41,9 +50,9 @@ router.get('/', requirePermission('tools', 'view'), (req, res) => {
     if (site_id) { sql += ' AND t.current_site_id = ?'; params.push(site_id); }
     if (user_id) { sql += ' AND t.current_user_id = ?'; params.push(user_id); }
     if (search) {
-      sql += ` AND (LOWER(t.name) LIKE ? OR LOWER(t.tool_code) LIKE ? OR LOWER(t.serial_no) LIKE ? OR LOWER(t.brand) LIKE ?)`;
+      sql += ` AND (LOWER(t.name) LIKE ? OR LOWER(t.tool_code) LIKE ? OR LOWER(t.serial_no) LIKE ? OR LOWER(im.item_code) LIKE ? OR LOWER(im.specification) LIKE ?)`;
       const q = `%${search.toLowerCase()}%`;
-      params.push(q, q, q, q);
+      params.push(q, q, q, q, q);
     }
     sql += ' ORDER BY t.created_at DESC';
     res.json(db.prepare(sql).all(...params));
@@ -61,6 +70,22 @@ router.get('/stats', requirePermission('tools', 'view'), (req, res) => {
     const calibrationDue = db.prepare(`SELECT COUNT(*) as c FROM tools WHERE next_calibration_date IS NOT NULL AND next_calibration_date <= date('now', '+30 days')`).get().c;
     const totalValue = db.prepare(`SELECT COALESCE(SUM(purchase_price), 0) as s FROM tools WHERE status != 'scrapped'`).get().s;
     res.json({ total, by_status: byStatus, by_category: byCategory, calibration_due_30d: calibrationDue, total_value: totalValue });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// RGP-only Item Master picker for the tools form. It uses tools permission so
+// a store user can register tools without needing full Item Master access.
+router.get('/lookup/rgp-items', requirePermission('tools', 'view'), (req, res) => {
+  try {
+    const rows = getDb().prepare(`
+      SELECT id, item_code, item_name, specification, size, uom, current_price
+        FROM item_master
+       WHERE UPPER(TRIM(type)) = 'RGP'
+       ORDER BY item_code
+    `).all();
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -96,21 +121,23 @@ router.get('/:id', requirePermission('tools', 'view'), (req, res) => {
 router.post('/', requirePermission('tools', 'create'), (req, res) => {
   try {
     const b = req.body;
-    if (!b.name) return res.status(400).json({ error: 'Name is required' });
     const db = getDb();
+    if (!b.item_master_id) return res.status(400).json({ error: 'Select an RGP item from Item Master' });
+    const master = db.prepare(`SELECT id, item_name, department, current_price FROM item_master WHERE id=? AND UPPER(TRIM(type))='RGP'`).get(b.item_master_id);
+    if (!master) return res.status(400).json({ error: 'The selected Item Master entry must be RGP type' });
     const yr = new Date().getFullYear();
     const tool_code = b.tool_code || nextSequence(db, 'tools', 'tool_code', `T-${yr}-`, { startFrom: 0, pad: 4 });
     const r = db.prepare(`
       INSERT INTO tools (
-        tool_code, name, category, brand, model, serial_no,
+        item_master_id, tool_code, name, category, brand, model, serial_no,
         purchase_date, purchase_price, condition, status,
         current_site_id, current_user_id,
         last_calibration_date, next_calibration_date,
         photo_url, notes, created_by
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-      tool_code, b.name, b.category || null, b.brand || null, b.model || null, b.serial_no || null,
-      b.purchase_date || null, b.purchase_price || 0, b.condition || 'good', b.status || 'available',
+      master.id, tool_code, master.item_name, master.department || null, null, null, b.serial_no || null,
+      b.purchase_date || null, b.purchase_price ?? master.current_price ?? 0, b.condition || 'good', b.status || 'available',
       b.current_site_id || null, b.current_user_id || null,
       b.last_calibration_date || null, b.next_calibration_date || null,
       b.photo_url || null, b.notes || null, req.user.id
@@ -125,7 +152,13 @@ router.put('/:id', requirePermission('tools', 'edit'), (req, res) => {
   try {
     const b = req.body;
     const db = getDb();
-    const fields = ['name','category','brand','model','serial_no','purchase_date','purchase_price','condition','status','current_site_id','current_user_id','last_calibration_date','next_calibration_date','photo_url','notes'];
+    if (b.item_master_id !== undefined) {
+      const master = db.prepare(`SELECT id, item_name, department FROM item_master WHERE id=? AND UPPER(TRIM(type))='RGP'`).get(b.item_master_id);
+      if (!master) return res.status(400).json({ error: 'The selected Item Master entry must be RGP type' });
+      b.name = master.item_name;
+      b.category = master.department || null;
+    }
+    const fields = ['item_master_id','name','category','serial_no','purchase_date','purchase_price','condition','status','current_site_id','current_user_id','last_calibration_date','next_calibration_date','notes'];
     const sets = [];
     const vals = [];
     for (const f of fields) {
