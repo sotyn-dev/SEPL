@@ -1353,4 +1353,145 @@ router.get('/:project_id/export-gantter', requirePermission('procurement_schedul
   res.send(csv);
 });
 
+// POST /procurement-schedule/:project_id/ai-monthly-milestones (TSK-0827)
+// AI decomposition of project BOQ items into Monthly Milestones & WBS Tasks
+router.post('/:project_id/ai-monthly-milestones', requirePermission('procurement_schedule', 'edit'), async (req, res) => {
+  const pid = +req.params.project_id;
+  const db = getDb();
+  const cfg = aiConfig(db);
+  if (!cfg.configured) {
+    return res.status(400).json({ error: aiNotConfiguredMessage(cfg.provider) });
+  }
+
+  let project = db.prepare('SELECT id, company_name AS project_name, committed_completion_date AS completion_date, created_at FROM business_book WHERE id = ?').get(pid);
+  if (!project) {
+    const site = db.prepare('SELECT id, name, created_at FROM sites WHERE id = ? OR business_book_id = ?').get(pid, pid);
+    if (site) {
+      project = { id: pid, project_name: site.name, completion_date: null, created_at: site.created_at };
+    }
+  }
+  if (!project) return res.status(404).json({ error: 'Project record not found' });
+
+  // Explicit or saved anchor dates
+  const meta = db.prepare('SELECT start_date, end_date FROM procurement_schedule_meta WHERE project_id = ?').get(pid);
+  const startDate = req.body?.start_date || meta?.start_date || (project.created_at ? project.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10));
+  const endDate = req.body?.end_date || meta?.end_date || project.completion_date;
+
+  const items = db.prepare(`
+    SELECT pi.id, pi.description, pi.unit, pi.quantity, pi.rate,
+           im.department AS category, im.item_code, im.item_name
+      FROM purchase_orders po
+      JOIN po_items pi ON pi.po_id = po.id
+      LEFT JOIN item_master im ON im.id = pi.item_master_id
+     WHERE po.business_book_id = ?
+  `).all(pid);
+
+  if (items.length === 0) {
+    return res.status(400).json({ error: 'No BOQ items linked to this project (upload client PO or BOQ first)' });
+  }
+
+  const itemsSummary = items.slice(0, 40).map(it => ({
+    id: it.id,
+    desc: it.item_name || it.description,
+    qty: it.quantity,
+    unit: it.unit,
+    trade: it.category || 'General'
+  }));
+
+  const prompt = `You are a Chief Project Planner for an Indian MEPF / Engineering Contracting Company.
+Project Name: "${project.project_name}"
+Start Date: ${startDate}
+Target Completion Date: ${endDate || '3 to 4 months from start'}
+
+## PROJECT BOQ SCOPE:
+${JSON.stringify(itemsSummary)}
+
+## TASK:
+Decompose this project into a 3 to 5 Monthly Milestone Schedule (WBS structure).
+Break it down month by month in execution sequence:
+- Month 1: Mobilization, Engineering Approvals, Underground/First-Fix Piping, Sleeve Marking.
+- Month 2: Risers, Cable Trays, Main Piping Distribution, Panel Insets.
+- Month 3: Equipment Positioning (Pumps/AHUs/Inverters), Wiring, Secondary Piping.
+- Month 4 (if needed): Terminal fixtures, Trim, Pressure Testing, Flusing.
+- Month 5 (Final): Pre-commissioning, Testing & Commissioning, Snag closure, Handover.
+
+Format each task as a valid item for a Project Gantt / WBS:
+- "wbs_code": e.g. "1.0", "1.1", "1.2", "2.0", "2.1", etc.
+- "task_name": Clear description (e.g. "Month 1 Milestone: First-Fix & Rough-in", "Core cutting & insert placement")
+- "outline_level": 1 for Month Milestone header, 2 for subtasks
+- "is_milestone": 1 for Month Milestone header, 0 for subtasks
+- "duration_days": realistic business days
+- "start_date": YYYY-MM-DD
+- "end_date": YYYY-MM-DD
+- "dependencies": predecessor WBS code (e.g. "1.1") or empty string
+- "progress_pct": 0
+- "status": "planned"
+
+OUTPUT FORMAT:
+Reply with ONLY a valid JSON object:
+{
+  "monthly_overview": "2-3 sentences summarizing the monthly phased rollout",
+  "tasks": [
+    {
+      "wbs_code": "1.0",
+      "task_name": "Month 1 Milestone: Site Mobilization & First-Fix",
+      "outline_level": 1,
+      "is_milestone": 1,
+      "duration_days": 30,
+      "start_date": "YYYY-MM-DD",
+      "end_date": "YYYY-MM-DD",
+      "dependencies": "",
+      "progress_pct": 0,
+      "status": "planned"
+    },
+    {
+      "wbs_code": "1.1",
+      "task_name": "Sleeve marking and core cutting",
+      "outline_level": 2,
+      "is_milestone": 0,
+      "duration_days": 10,
+      "start_date": "YYYY-MM-DD",
+      "end_date": "YYYY-MM-DD",
+      "dependencies": "",
+      "progress_pct": 0,
+      "status": "planned"
+    }
+  ]
+}`;
+
+  try {
+    const out = await aiComplete(db, {
+      prompt,
+      maxTokens: 3500,
+      json: true,
+      timeout: 60000,
+    });
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(out.text);
+    } catch (_) {
+      const m = out.text.match(/\{[\s\S]*\}/);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch (__) {} }
+    }
+
+    if (!parsed || !Array.isArray(parsed.tasks)) {
+      throw new Error('AI could not generate monthly milestone tasks');
+    }
+
+    res.json({
+      project_id: pid,
+      project_name: project.project_name,
+      start_date: startDate,
+      end_date: endDate,
+      monthly_overview: parsed.monthly_overview || '',
+      tasks: parsed.tasks,
+      model: out.model
+    });
+  } catch (e) {
+    console.error('[procurementSchedule] ai-monthly-milestones failed:', e.status || '', e.message);
+    res.status(e.status === 429 ? 429 : 500).json({ error: aiErrorMessage(e, cfg.provider) });
+  }
+});
+
 module.exports = router;

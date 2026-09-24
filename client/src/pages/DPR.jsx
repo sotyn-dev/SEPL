@@ -7,7 +7,7 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera, FiList, FiPackage } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera, FiList, FiPackage, FiZap, FiCpu } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import EngineerPerformance from '../components/EngineerPerformance';
 
@@ -106,6 +106,14 @@ export default function DPR() {
   const [planActing, setPlanActing] = useState(false);
   const [pendingPlans, setPendingPlans] = useState([]);      // status='submitted' headers for the badge
   const [pendingPlansModal, setPendingPlansModal] = useState(false);
+
+  // TSK-0827: AI in Scheduling & DPR states
+  const [aiPlanningLoading, setAiPlanningLoading] = useState(false);
+  const [aiPlanReasoning, setAiPlanReasoning] = useState('');
+  const [quickNotesText, setQuickNotesText] = useState('');
+  const [showQuickNotes, setShowQuickNotes] = useState(false);
+  const [aiParsingLoading, setAiParsingLoading] = useState(false);
+  const [aiLossLoading, setAiLossLoading] = useState(false);
 
   // Friday cutoff = 3 days before the Monday week-start (SPOS: plan is
   // finalized every Friday). After it, saves are flagged LATE server-side.
@@ -912,6 +920,162 @@ export default function DPR() {
     } catch (err) { toast.error(err.response?.data?.error || 'Error'); }
   };
 
+  // ── TSK-0827: AI in Scheduling — Weekly 7-Day Lookahead Planner ───────────
+  const handleAiSuggestWeek = async () => {
+    if (!planSiteId) { toast.error('Pick a site first'); return; }
+    setAiPlanningLoading(true);
+    try {
+      const r = await api.post('/dpr/ai-suggest-week', { site_id: planSiteId, week_start: planWeekStart });
+      if (Array.isArray(r.data?.days) && r.data.days.length === 7) {
+        setPlanDays(r.data.days);
+        setAiPlanReasoning(r.data.reasoning || '');
+        toast.success('AI 7-day schedule generated! Review & adjust any field before saving.');
+      } else {
+        toast.error('AI returned incomplete week data');
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'AI Weekly suggestion failed');
+    } finally {
+      setAiPlanningLoading(false);
+    }
+  };
+
+  // ── TSK-0827: AI Daily Field Note / Voice Parser ──────────────────────────
+  const handleAiParseQuickNotes = async () => {
+    if (!form.site_id) { toast.error('Please pick a Site first'); return; }
+    if (!quickNotesText || !quickNotesText.trim()) { toast.error('Enter or paste site notes first'); return; }
+    setAiParsingLoading(true);
+    try {
+      const r = await api.post('/dpr/ai-parse-quick-dpr', {
+        site_id: form.site_id,
+        report_date: form.report_date || istTodayIso(),
+        quick_notes: quickNotesText
+      });
+      const p = r.data?.parsed;
+      if (p) {
+        // 1. Pre-fill or add matched work items in Table A
+        if (Array.isArray(p.work_items) && p.work_items.length > 0) {
+          setWorkItems(prev => {
+            const next = [...prev];
+            p.work_items.forEach(match => {
+              if (!match || !match.po_item_id) return;
+              const idx = next.findIndex(w => +w.po_item_id === +match.po_item_id);
+              const actual = Math.max(0, +match.actual_qty || 0);
+              if (idx >= 0) {
+                next[idx] = {
+                  ...next[idx],
+                  qty: actual,
+                  amount: actual * (next[idx].rate || 0),
+                  remarks: match.remarks || next[idx].remarks || ''
+                };
+              } else {
+                const poIt = poItemsForSite.find(item => item.id === +match.po_item_id);
+                if (poIt) {
+                  const sitc = +poIt.rate || 0;
+                  const rate = Math.round(sitc * LABOUR_RATE_PCT * 100) / 100;
+                  next.push({
+                    po_item_id: poIt.id,
+                    description: poIt.description || '',
+                    unit: poIt.unit || 'nos',
+                    boq_qty: poIt.quantity || 0,
+                    remaining_qty: poIt.remaining_qty ?? poIt.quantity ?? 0,
+                    filled_qty: poIt.filled_qty || 0,
+                    sitc_rate: sitc,
+                    rate,
+                    qty: actual,
+                    amount: actual * rate,
+                    remarks: match.remarks || ''
+                  });
+                }
+              }
+            });
+            return next;
+          });
+        }
+
+        // 2. Pre-fill Table B Manpower
+        if (p.skilled_manpower !== undefined || p.helper_manpower !== undefined || p.rental_cost !== undefined) {
+          setCosts(prev => prev.map(c => {
+            if (c.type === 'Skilled Manpower' && p.skilled_manpower !== undefined) {
+              const qty = Math.max(0, +p.skilled_manpower || 0);
+              return { ...c, qty, amount: qty * (c.rate || 800) };
+            }
+            if (c.type === 'Helper' && p.helper_manpower !== undefined) {
+              const qty = Math.max(0, +p.helper_manpower || 0);
+              return { ...c, qty, amount: qty * (c.rate || 500) };
+            }
+            if (c.type === 'Rental Cost' && p.rental_cost) {
+              const amt = Math.max(0, +p.rental_cost || 0);
+              return { ...c, qty: 1, rate: amt, amount: amt };
+            }
+            return c;
+          }));
+        }
+
+        // 3. Pre-fill Machinery
+        if (Array.isArray(p.machinery) && p.machinery.length > 0) {
+          setMachinery(p.machinery.map(m => ({
+            equipment: m.equipment || '',
+            quantity: 1,
+            hours_used: Math.max(0, +m.hours_used || 0),
+            condition: m.condition || 'working'
+          })));
+        }
+
+        // 4. Pre-fill form flags & fields
+        setForm(f => ({
+          ...f,
+          safety_toolbox_talk: p.safety_toolbox_talk !== undefined ? !!p.safety_toolbox_talk : f.safety_toolbox_talk,
+          safety_ppe_compliance: p.safety_ppe_compliance !== undefined ? !!p.safety_ppe_compliance : f.safety_ppe_compliance,
+          safety_incidents: p.safety_incidents || f.safety_incidents || '',
+          hindrances: p.hindrances || f.hindrances || '',
+          hindrance_category: p.hindrance_category || f.hindrance_category || '',
+          next_day_plan: p.next_day_plan || f.next_day_plan || '',
+          overall_status: p.overall_status || f.overall_status || 'on_track'
+        }));
+
+        toast.success('DPR form populated from field notes! Please review all values.');
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to parse notes with AI');
+    } finally {
+      setAiParsingLoading(false);
+    }
+  };
+
+  // ── TSK-0827: AI Next Day Plan & Loss Root Cause Suggestion ───────────────
+  const handleAiSuggestLossAndNextDay = async () => {
+    if (!form.site_id) { toast.error('Pick a site first'); return; }
+    setAiLossLoading(true);
+    try {
+      const r = await api.post('/dpr/ai-suggest-next-day-and-loss', {
+        site_id: form.site_id,
+        report_date: form.report_date || istTodayIso(),
+        grand_total_a: grandTotalA,
+        grand_total_b: grandTotalB,
+        work_items: workItems,
+        hindrances: form.hindrances,
+        hindrance_category: form.hindrance_category
+      });
+
+      if (r.data?.next_day_plan) {
+        setForm(f => ({ ...f, next_day_plan: r.data.next_day_plan }));
+      }
+      if (r.data?.suggested_loss_category) {
+        setForm(f => ({
+          ...f,
+          hindrance_category: r.data.suggested_loss_category,
+          hindrances: r.data.suggested_loss_reason || f.hindrances
+        }));
+      }
+      toast.success('Next day plan & loss analysis updated!');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'AI Suggestion failed');
+    } finally {
+      setAiLossLoading(false);
+    }
+  };
+
   const createSite = async (e) => { e.preventDefault(); await api.post('/dpr/sites', form); toast.success('Site created'); setSiteModal(false); load(); };
   // A DPR already on a client bill is not reopened silently: the server replies
   // 409 needs_force, we name the bill, and only an explicit yes goes through.
@@ -1452,6 +1616,62 @@ export default function DPR() {
       <Modal isOpen={modal} onClose={() => setModal(false)} title="DAILY PROGRESS SHEET - SECURED ENGINEERS PVT LTD" wide>
         <form onSubmit={submitDpr} className="space-y-4">
 
+          {/* TSK-0827: AI Smart Fill from Field Notes */}
+          <div className="border border-indigo-200 bg-gradient-to-r from-indigo-50/70 via-purple-50/40 to-blue-50/50 rounded-lg p-3 shadow-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-md bg-indigo-600 text-white shadow-xs"><FiZap size={14} /></span>
+                <div>
+                  <h5 className="font-semibold text-xs text-indigo-950 flex items-center gap-1.5">
+                    AI Smart Fill from Field Notes / Voice
+                    <span className="bg-indigo-100 text-indigo-800 text-[10px] px-1.5 py-0.5 rounded font-medium">Copilot</span>
+                  </h5>
+                  <p className="text-[11px] text-gray-500">Dictate or paste field notes — AI will automatically match BOQ items, manpower, safety & hindrances.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuickNotes(!showQuickNotes)}
+                className="text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-100/70 hover:bg-indigo-200/80 px-2.5 py-1 rounded transition"
+              >
+                {showQuickNotes ? 'Close Smart Fill' : '✨ Open Smart Fill'}
+              </button>
+            </div>
+
+            {showQuickNotes && (
+              <div className="mt-2.5 pt-2.5 border-t border-indigo-100 space-y-2">
+                <textarea
+                  className="input text-xs w-full bg-white"
+                  rows="3"
+                  placeholder="e.g. Installed 45 sprinklers in Basement 2, 4 fitters, 2 helpers, 1 hr rain delay halt at 3pm, morning toolbox talk conducted, tomorrow will do hydrostatic pressure testing."
+                  value={quickNotesText}
+                  onChange={e => setQuickNotesText(e.target.value)}
+                />
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-gray-400">💡 Select the Site below first so AI can match exact BOQ items.</span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setQuickNotesText('')}
+                      className="btn btn-secondary text-xs py-1 px-2.5"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAiParseQuickNotes}
+                      disabled={aiParsingLoading || !quickNotesText.trim()}
+                      className="btn btn-primary text-xs py-1 px-3 flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 shadow-xs"
+                    >
+                      <FiZap size={12} className={aiParsingLoading ? 'animate-spin' : ''} />
+                      {aiParsingLoading ? 'Parsing with AI…' : 'Apply to DPR Form'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Header */}
           <div className="border rounded-lg p-3 bg-gray-50">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
@@ -1990,7 +2210,19 @@ export default function DPR() {
               />
             </div>
             <div className="border rounded-lg p-3 bg-emerald-50">
-              <h5 className="font-semibold text-sm text-emerald-700 mb-2">Next Day Plan</h5>
+              <div className="flex items-center justify-between mb-2">
+                <h5 className="font-semibold text-sm text-emerald-700">Next Day Plan</h5>
+                <button
+                  type="button"
+                  onClick={handleAiSuggestLossAndNextDay}
+                  disabled={aiLossLoading || !form.site_id}
+                  className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 flex items-center gap-1.5 bg-emerald-100/90 hover:bg-emerald-200 px-2.5 py-1 rounded border border-emerald-300 shadow-2xs transition"
+                  title="Auto-draft tomorrow's plan from weekly schedule and analyze loss reason if cost > installed value"
+                >
+                  <FiZap size={11} className={aiLossLoading ? 'animate-spin text-amber-600' : 'text-emerald-600'} />
+                  {aiLossLoading ? 'Drafting…' : '✨ AI Next Day & Loss Assist'}
+                </button>
+              </div>
               <textarea className="input" rows="2" value={form.next_day_plan || ''} onChange={e => setForm({ ...form, next_day_plan: e.target.value })} placeholder="Tomorrow's work plan..." />
             </div>
           </div>
@@ -2335,6 +2567,35 @@ export default function DPR() {
                 onChange={e => { setPlanWeekStart(e.target.value); openPlanWeek(planSiteId, e.target.value); }} />
             </div>
           </div>
+
+          {/* TSK-0827: AI 7-Day Lookahead Planner */}
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-gradient-to-r from-indigo-50/80 via-purple-50/60 to-emerald-50/70 border border-indigo-200/80 rounded-lg shadow-2xs">
+            <div className="text-xs">
+              <span className="font-bold text-indigo-900 flex items-center gap-1.5">
+                <FiZap className="text-amber-500" /> AI 7-Day Lookahead Planner
+                <span className="bg-indigo-100 text-indigo-800 text-[10px] px-1.5 py-0.2 rounded font-medium">Copilot</span>
+              </span>
+              <p className="text-[11px] text-gray-600">Calculates daily BOQ targets based on remaining scope, past site velocity & weather forecast.</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleAiSuggestWeek}
+              disabled={aiPlanningLoading || !planSiteId}
+              className="btn btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 shadow-xs bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50"
+            >
+              <FiZap className={aiPlanningLoading ? 'animate-spin text-amber-300' : ''} />
+              {aiPlanningLoading ? 'Analyzing & Planning…' : '✨ AI Suggest Week Plan'}
+            </button>
+          </div>
+
+          {aiPlanReasoning && (
+            <div className="bg-indigo-50/80 border border-indigo-200 rounded p-2.5 text-xs text-indigo-950 flex items-start gap-2 shadow-2xs">
+              <span className="text-base leading-none">💡</span>
+              <div className="text-[11px] leading-relaxed">
+                <strong className="font-semibold text-indigo-900">AI Weekly Strategy:</strong> {aiPlanReasoning}
+              </div>
+            </div>
+          )}
 
           {/* ── SPOS approval status banner (mam 2026-07-29) ── */}
           {planHeader?.status === 'submitted' && (

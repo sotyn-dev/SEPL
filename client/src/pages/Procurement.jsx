@@ -492,6 +492,8 @@ export default function Procurement() {
   const [editPoLocked, setEditPoLocked] = useState(false); // locked when bills/DN exist
   const [editPoLockReason, setEditPoLockReason] = useState('');
   const [editPoSaving, setEditPoSaving] = useState(false);
+  // TSK-0824: Cost estimate evaluation details for the PO currently being edited/viewed
+  const [editPoCostEval, setEditPoCostEval] = useState(null);
 
   // Open Edit PO modal — fetches the PO with items so line-level fields
   // can be edited (mam 2026-05-25: "i want edit the po after creation
@@ -531,6 +533,7 @@ export default function Procurement() {
       .catch(() => { setLinkLines([]); setLinkPick({}); });
     setEditPoLocked(false);
     setEditPoLockReason('');
+    setEditPoCostEval(null);
     try {
       const r = await api.get(`/procurement/vendor-po/${v.id}/with-items`);
       // Drop the synthetic 'ind-<id>' placeholders /with-items invents for
@@ -550,7 +553,15 @@ export default function Procurement() {
         specification: it.specification || '',
         size: it.size || '',
         unit: it.unit || '',
+        estimated_rate: it.estimated_rate,
+        benchmark_source: it.benchmark_source,
+        variance_pct: it.variance_pct,
+        variance_amount: it.variance_amount,
+        is_overrun: it.is_overrun,
+        is_within: it.is_within,
+        is_missing: it.is_missing,
       })));
+      setEditPoCostEval(r.data?.cost_evaluation || null);
       if (r.data?.edit_locked) {
         setEditPoLocked(true);
         setEditPoLockReason(`${r.data.bill_count || 0} bill(s) and ${r.data.dn_count || 0} delivery note(s) reference this PO.  Cancel them first to edit line items.`);
@@ -598,6 +609,7 @@ export default function Procurement() {
       setEditPo(null);
       setEditPoForm({});
       setEditPoItems([]);
+      setEditPoCostEval(null);
       load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
@@ -2271,8 +2283,17 @@ export default function Procurement() {
     return (v.po_pending_approver_ids || []).includes(user?.id);
   };
   const approvePo = async (v) => {
-    try { await api.post(`/procurement/vendor-po/${v.id}/po-approve`); toast.success('PO approved'); load(); }
-    catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
+    try {
+      const res = await api.post(`/procurement/vendor-po/${v.id}/po-approve`);
+      if (res.data?.auto_approved) {
+        toast.success(`⚡ PO Auto-Approved: ${res.data.approval_note || 'All items within estimated cost'}`);
+      } else if (res.data?.po_approval === 'pending_l2') {
+        toast.success('PO L1 approved → Forwarded to L2 (MD) for cost overrun approval');
+      } else {
+        toast.success('PO approved');
+      }
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
   };
   const rejectPo = async (v) => {
     const reason = prompt(`Reject Vendor PO "${v.po_number}"?\n\nReason (required):`);
@@ -5046,10 +5067,31 @@ export default function Procurement() {
                     {v.cancelled
                       ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
                       : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
-                        ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}</span>
+                        ? <div className="flex flex-col gap-1 items-start">
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>
+                              Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}
+                            </span>
+                            {v.cost_status === 'cost_overrun' && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason}>
+                                ⚠️ Overrun (+{v.max_overrun_pct}%)
+                              </span>
+                            )}
+                            {v.cost_status === 'within_estimate' && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200" title={v.cost_reason}>
+                                ⚡ ≤ Estimate
+                              </span>
+                            )}
+                          </div>
                         : v.po_approval === 'rejected'
                           ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
-                          : <StatusBadge status={v.status} />}
+                          : <div className="flex flex-col gap-1 items-start">
+                              <StatusBadge status={v.status} />
+                              {+v.po_auto_approved === 1 && (
+                                <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300" title={v.po_approval_note || 'Auto-approved: all items within estimated cost'}>
+                                  ⚡ Auto-Approved
+                                </span>
+                              )}
+                            </div>}
                   </td>
                   <td>
                     {/* Three actions: Cancel (soft-delete, reverses), Restore
@@ -5141,10 +5183,31 @@ export default function Procurement() {
                   {v.cancelled
                     ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border border-gray-300 text-gray-600 bg-gray-50" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
                     : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
-                      ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</span>
+                      ? <div className="flex flex-col gap-0.5 items-end">
+                          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>
+                            Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}
+                          </span>
+                          {v.cost_status === 'cost_overrun' && (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason}>
+                              ⚠️ Overrun (+{v.max_overrun_pct}%)
+                            </span>
+                          )}
+                          {v.cost_status === 'within_estimate' && (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200" title={v.cost_reason}>
+                              ⚡ ≤ Estimate
+                            </span>
+                          )}
+                        </div>
                       : v.po_approval === 'rejected'
                         ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
-                        : <StatusBadge status={v.status} />}
+                        : <div className="flex flex-col gap-0.5 items-end">
+                            <StatusBadge status={v.status} />
+                            {+v.po_auto_approved === 1 && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300" title={v.po_approval_note || 'Auto-approved: all items within estimated cost'}>
+                                ⚡ Auto-Approved
+                              </span>
+                            )}
+                          </div>}
                 </div>
                 {/* Site */}
                 {v.indent_site_name && (
@@ -9049,7 +9112,7 @@ export default function Procurement() {
           any Purchase Bill references the PO.  Modal shows that
           context inline so user knows why a field might fail. */}
       {editPo && (
-        <Modal isOpen={true} onClose={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); }} title={`Edit Vendor PO — ${editPo.po_number}`} wide>
+        <Modal isOpen={true} onClose={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); setEditPoCostEval(null); }} title={`Edit Vendor PO — ${editPo.po_number}`} wide>
           <form onSubmit={saveEditVendorPo} className="space-y-3 text-sm">
             <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-gray-700">
               <strong>{editPo.po_number}</strong> · {editPo.vendor_name}
@@ -9289,6 +9352,35 @@ export default function Procurement() {
                     </span>
                   )}
                 </div>
+                {editPoCostEval && (
+                  <div className={`p-2.5 rounded mb-2.5 text-xs flex items-center justify-between border ${
+                    editPoCostEval.cost_status === 'within_estimate'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : editPoCostEval.cost_status === 'cost_overrun'
+                        ? 'bg-rose-50 text-rose-800 border-rose-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">
+                        {editPoCostEval.cost_status === 'within_estimate' ? '⚡' : editPoCostEval.cost_status === 'cost_overrun' ? '⚠️' : 'ℹ️'}
+                      </span>
+                      <div>
+                        <div className="font-semibold">
+                          {editPoCostEval.cost_status === 'within_estimate'
+                            ? 'TSK-0824: Within Estimated Budget (Auto-Approve Eligible)'
+                            : editPoCostEval.cost_status === 'cost_overrun'
+                              ? `TSK-0824: Cost Overrun (${editPoCostEval.overrun_count} item(s) exceed estimate by up to +${editPoCostEval.max_overrun_pct}%)`
+                              : 'TSK-0824: Missing Estimated Baselines'}
+                        </div>
+                        <div className="text-[11px] opacity-90">{editPoCostEval.reason}</div>
+                      </div>
+                    </div>
+                    <div className="text-right text-[11px] whitespace-nowrap">
+                      <div>Est. Total: <span className="font-medium">₹{Math.round(editPoCostEval.total_estimated_amount || 0).toLocaleString('en-IN')}</span></div>
+                      <div>Actual Total: <span className="font-medium">₹{Math.round(editPoCostEval.total_actual_amount || 0).toLocaleString('en-IN')}</span></div>
+                    </div>
+                  </div>
+                )}
                 <div className="overflow-x-auto">
                   <table className="text-xs w-full">
                     <thead className="bg-gray-50 text-gray-600">
@@ -9299,7 +9391,7 @@ export default function Procurement() {
                         <th className="text-left px-2 py-1 w-20">HSN</th>
                         <th className="text-right px-2 py-1 w-20">Qty</th>
                         <th className="text-left px-2 py-1 w-16">Unit</th>
-                        <th className="text-right px-2 py-1 w-24">Rate (₹)</th>
+                        <th className="text-right px-2 py-1 w-28">Rate (₹)</th>
                         <th className="text-right px-2 py-1 w-28">Amount (₹)</th>
                       </tr>
                     </thead>
@@ -9336,6 +9428,16 @@ export default function Procurement() {
                               <NumInput className="input text-xs w-full text-right" disabled={editPoLocked} emitZeroOnEmpty min="0"
                                 value={it.rate}
                                 onChange={v => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, rate: v } : r))} />
+                              {it.estimated_rate > 0 && (
+                                <div className={`text-[10px] font-medium mt-0.5 whitespace-nowrap ${it.is_overrun ? 'text-rose-600 font-semibold' : 'text-emerald-700'}`}>
+                                  {it.is_overrun ? `⚠️ Overrun +${it.variance_pct}%` : '✓ ≤ Est'} (₹{it.estimated_rate})
+                                </div>
+                              )}
+                              {it.is_missing && (
+                                <div className="text-[10px] text-gray-400 mt-0.5 whitespace-nowrap">
+                                  No est. baseline
+                                </div>
+                              )}
                             </td>
                             <td className="px-2 py-1 text-right font-semibold whitespace-nowrap">
                               ₹{amt.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
@@ -9369,7 +9471,7 @@ export default function Procurement() {
             )}
 
             <div className="flex justify-end gap-3 pt-2 border-t">
-              <button type="button" onClick={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); setEditPoCostEval(null); }} className="btn btn-secondary">Cancel</button>
               <button type="submit" disabled={editPoSaving} className="btn btn-primary">
                 {editPoSaving ? 'Saving…' : 'Update PO'}
               </button>
