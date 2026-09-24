@@ -12,6 +12,43 @@ import { LuIndianRupee } from 'react-icons/lu';
 import TimePicker from '../components/TimePicker';
 import { fmtDate, fmtTime, fmtDateTime, parseUTC } from '../utils/datetime';
 
+// Export the displayed payroll rows, including frozen values for finalised months.
+// Missing fields in older snapshots stay blank rather than inventing values.
+export function buildPayrollExport(rows, month) {
+  const yesNo = value => value == null ? '' : value ? 'Yes' : 'No';
+  const columns = [
+    ['Pay Month', () => month],
+    ['Employee ID', r => r.employee_id], ['Employee', r => r.employee_name],
+    ['Dept', r => r.department], ['Designation', r => r.designation], ['Joining Date', r => r.join_date],
+    ['Base Salary (Rs)', r => r.base_salary], ['Per Day Rate (Rs)', r => r.per_day_rate],
+    ['Present (paid equivalents)', r => r.present_days],
+    ['Sunday (including worked bonus)', r => r.sunday_count == null ? null : Math.round((Number(r.sunday_count) + Number(r.sunday_worked_pay || 0)) * 100) / 100],
+    ['Weekly-off Sundays', r => r.sunday_count], ['Sundays Worked', r => r.sunday_worked],
+    ['Sunday Worked Bonus (days)', r => r.sunday_worked_pay],
+    ['CL / Paid Leave', r => r.paid_leaves], ['Holidays', r => r.holiday_days],
+    ['Paid Days', r => r.paid_days], ['Paid Days (Auto)', r => r.paid_days_auto],
+    ['Paid Days Adjusted', r => yesNo(r.paid_days_overridden)],
+    ['Half Days', r => r.half_days], ['Absent Days', r => r.absent_days],
+    ['Late Marks', r => r.late_marks], ['Lates Converted to Absent (days)', r => r.lates_converted_absent],
+    ['Late Deduction (Rs)', r => r.late_penalty], ['Late Deduction Auto (Rs)', r => r.late_penalty_auto],
+    ['Late Deduction Adjusted', r => yesNo(r.late_penalty_overridden)],
+    ['Unpaid Leave', r => r.unpaid_leaves],
+    ['Total Leave', r => r.paid_leaves == null && r.unpaid_leaves == null ? null : Number(r.paid_leaves || 0) + Number(r.unpaid_leaves || 0)],
+    ['CL / Paid Leave (Auto)', r => r.paid_leaves_auto], ['CL Adjusted', r => yesNo(r.cl_overridden)],
+    ['CL Used', r => r.cl_used], ['SL Used', r => r.sl_used], ['PL Used', r => r.pl_used], ['Short Leave Used', r => r.short_leave_used],
+    ['OT Eligible', r => yesNo(r.ot_eligible)], ['OT Hours', r => r.ot_hours], ['OT Rate (Rs/hour)', r => r.ot_per_hour_rate],
+    ['OT Pay (Rs)', r => r.ot_pay], ['Gross Earned (Rs)', r => r.gross_earned],
+    ['Basic Pay (Rs)', r => r.basic_pay], ['Conveyance (Rs)', r => r.conveyance], ['HRA (Rs)', r => r.hra],
+    ['Adhoc (Rs)', r => r.adhoc], ['Misc (Rs)', r => r.misc], ['Total Earnings (Rs)', r => r.total_earnings],
+    ['Advance (Rs)', r => r.advance], ['Food Allowance (Rs)', r => r.food], ['Total Deductions (Rs)', r => r.total_deductions],
+    ['Salary Before OT (Rs)', r => r.net_before_ot ?? (r.net_pay == null ? null : r.net_pay - (r.ot_pay || 0))],
+    ['Net Pay (Rs)', r => r.net_pay], ['Finalised', r => yesNo(r.locked)],
+    ['Payment Status', r => r.paid ? 'Paid' : r.locked ? 'Unpaid' : 'Not finalised'],
+    ['Finalised At', r => r.finalised_at], ['Finalised By', r => r.finalised_by_name],
+  ];
+  return { headers: columns.map(([label]) => label), rows: rows.map(r => columns.map(([, value]) => value(r) ?? '')) };
+}
+
 const monthNow = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -100,6 +137,7 @@ const SETTING_GROUPS = [
 ];
 
 const LABEL_PILL = {
+  not_joined: 'bg-gray-100 text-gray-500',
   present: 'bg-emerald-100 text-emerald-700',
   late: 'bg-amber-100 text-amber-700',
   half_day_late: 'bg-orange-100 text-orange-700',
@@ -327,6 +365,17 @@ export default function Payroll() {
     }
   };
 
+  const lateAdjustment = (r) => isAdmin && !r.locked ? (
+    <label className="block text-[10px] text-amber-700 mt-1">
+      Late deduction ₹
+      {ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, {
+        w: 'w-20', step: '0.01', title: 'Monthly late deduction: enter 0 to waive; clear to restore automatic calculation. Half-day deductions are separate.',
+      })}
+      <span className="block text-gray-400">{r.late_penalty_overridden ? 'Adjusted' : 'Auto'} · clear to reset</span>
+    </label>
+  ) : null;
+
+
   // Time-aware finalise warning (SEPL 2026-08): targets Aryan's day-2 and
   // Ishaan's day-30 early-finalise incidents. Only applies to the current
   // in-progress month — a past month has already fully ended, same scoping
@@ -497,17 +546,14 @@ export default function Payroll() {
               <input type="month" className="input" value={month} onChange={e => setMonth(e.target.value)} />
             </div>
             <div className="flex-1" />
-            <button onClick={() => exportCsv(`payroll-${month}`,
-              ['Employee','Dept','Paid Days','Base Pay (excl. OT)','OT Hours','OT Pay','Total Payable (Base+OT)'],
-              list.map(p => [p.employee_name, p.department, p.paid_days,
-                (p.net_before_ot ?? (p.net_pay - (p.ot_pay || 0))),
-                (p.ot_eligible ? (p.ot_hours || 0) : 0),
-                (p.ot_eligible ? (p.ot_pay || 0) : 0),
-                p.net_pay]))}
+            <button disabled={loading || list.length === 0} onClick={() => {
+              const data = buildPayrollExport(list, month);
+              exportCsv(`payroll-${month}`, data.headers, data.rows);
+            }}
               className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Export Excel</button>
             <button onClick={() => setHolidayModal(true)}
               className="btn btn-secondary text-sm flex items-center gap-1"
-              title="Declare company-wide paid holidays for this month (e.g. 15 Aug) — everyone is paid for these days automatically">
+              title="Declare paid holidays for employees who joined on or before each holiday">
               🗓 Holidays{holidays.length ? ` (${holidays.length})` : ''}
             </button>
             <div className="text-right">
@@ -590,7 +636,7 @@ export default function Payroll() {
                   <th className="text-center" title="Auto from attendance — full day = 1, half day = 0.5">Present</th>
                   <th className="text-center" title="Sundays credited for the month. A Sunday is deducted only when BOTH the Saturday before AND the Monday after are absent. Working a Sunday earns an extra day on top.">Sunday</th>
                   <th className="text-center" title="Paid CL / leave days — type to override (admin)">CL</th>
-                  <th className="text-center" title="Declared company holidays (🗓 Holidays button) + admin-marked holiday days — everyone paid automatically">Holiday</th>
+                  <th className="text-center" title="Declared company holidays on or after the employee joining date">Holiday</th>
                   <th className="text-right" title="Paid Days = Present + Sunday + CL + Holiday (+ extra days for Sundays worked)">Paid Days</th>
                   <th className="text-center">Half</th>
                   <th className="text-center">Absent</th>
@@ -617,7 +663,10 @@ export default function Payroll() {
                     </td>
                     <td className="text-xs text-gray-500">{r.department || '-'}</td>
                     <td className="text-right">{fmtC(r.base_salary)}</td>
-                    <td className="text-center font-semibold" title="Auto from attendance (full=1, half=0.5)">{dayBreakdown(r).att}</td>
+                    <td className="text-center font-semibold" title="Payroll day equivalents after the configured half-day rules; attendance counts dates attended.">
+                      {dayBreakdown(r).att}
+                      {r.half_days > 0 && <div className="text-[9px] font-normal text-orange-600">{r.half_days} half-days: −{r.half_days * 0.5}d</div>}
+                    </td>
                     <td className="text-center text-blue-700" title="Sundays credited (weekly-off + worked). Deducted only when Saturday AND Monday around it are both absent.">
                       {dayBreakdown(r).sun}
                       {r.sunday_worked > 0 && (
@@ -649,6 +698,7 @@ export default function Payroll() {
                         {r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}
                         {r.late_penalty > 0 ? ` (-₹${fmtC(r.late_penalty)})` : ''}
                       </div>
+                      {lateAdjustment(r)}
                       {r.late_marks > 0 && (
                         <div className="text-[9px] font-normal text-gray-400"
                           title={`${r.late_marks} late arrival(s) this month. ${lateRuleText}`}>
@@ -773,6 +823,7 @@ export default function Payroll() {
                     <div className="font-semibold text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</div>
                   </div>
                 </div>
+                {lateAdjustment(r)}
                 {isAdmin && !r.locked ? (
                   <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
                     <span className="text-[11px] text-gray-500 font-semibold whitespace-nowrap">Advance ₹</span>
@@ -986,6 +1037,12 @@ export default function Payroll() {
               <Stat label="Late" value={`${detail.late_marks || 0}${detail.lates_converted_absent ? ` (-${detail.lates_converted_absent} day)` : ''}${detail.late_penalty > 0 ? ` (-₹${fmt(detail.late_penalty)})` : ''}`} color="text-amber-600" />
             </div>
 
+            <p className="text-xs text-gray-500">
+              Payroll Present counts paid day equivalents: full day = 1, half-day = 0.5.
+              Attendance counts dates attended. Arrival after the configured half-day cutoff or too few hours can reduce payroll days.
+              Late ₹ adjustments change the money deduction only; use Paid Days to adjust a half-day deduction.
+              See the daily breakdown below for each date and reason.
+            </p>
             <div className="space-y-1 mt-4 border-t pt-3">
               <div className="text-[10px] uppercase font-bold text-gray-400 mb-2">Metrics</div>
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -1067,7 +1124,7 @@ export default function Payroll() {
       <Modal isOpen={holidayModal} onClose={() => setHolidayModal(false)} title={`🗓 Paid Holidays — ${month}`}>
         <div className="space-y-3">
           <p className="text-xs text-gray-500">
-            Declare a company-wide paid holiday (e.g. 15 August). Every employee is paid for that day
+            Declare a company-wide paid holiday (e.g. 15 August). Employees who joined on or before the holiday date are eligible for that day
             without any marking — it shows in the <b>Holiday</b> column and inside Paid Days.
             Finalised months are frozen snapshots and never change.
           </p>

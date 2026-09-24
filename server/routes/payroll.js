@@ -292,8 +292,16 @@ function calculateForEmployee(db, settings, employee, month) {
   const lateAfter = timeToMinutes(cut.late_after_time);
   const halfDayAfter = timeToMinutes(cut.half_day_after_time);
 
+  const joinDate = String(employee.join_date || '').slice(0, 10);
+  const hasJoinDate = isRealDate(joinDate);
+
   for (let day = 1; day <= lastDay; day++) {
     const dateStr = `${year}-${pad(mm)}-${pad(day)}`;
+    // Before employment: no holiday, weekly-off, leave, absence or penalty.
+    if (hasJoinDate && dateStr < joinDate) {
+      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: 'not_joined', pay: 0 });
+      continue;
+    }
     const sun = isSunday(year, mm, day);
     const att = attByDate[dateStr];
     const leaveType = leaveByDate[dateStr];
@@ -512,8 +520,8 @@ function calculateForEmployee(db, settings, employee, month) {
     if (!(b.label && b.label.startsWith('sunday'))) continue;
     const prev = i > 0 ? breakdown[i - 1] : null;
     const next = i < breakdown.length - 1 ? breakdown[i + 1] : null;
-    const prevAbsent = !!prev && prev.pay === 0; // Saturday absent (no pay)
-    const nextAbsent = !!next && next.pay === 0; // Monday absent (no pay)
+    const prevAbsent = !!prev && prev.label !== 'not_joined' && prev.pay === 0; // Saturday absent (no pay)
+    const nextAbsent = !!next && next.label !== 'not_joined' && next.pay === 0; // Monday absent (no pay)
     if (prevAbsent && nextAbsent) {
       // Both neighbours absent → Sunday deducted.
       if (b.pay > 0) {
@@ -1143,7 +1151,7 @@ router.post('/holidays', adminOnly, (req, res) => {
     db.prepare(`INSERT INTO payroll_holidays (date, name, created_by) VALUES (?,?,?)
                 ON CONFLICT(date) DO UPDATE SET name = excluded.name`).run(date, name, req.user.id);
     logAuditEvent({ user: req.user, action: 'PAYROLL_HOLIDAY_SET', entity_type: 'payroll', entity_label: `${date} ${name}`, method: 'POST', path: '/api/payroll/holidays', status_code: 200 });
-    res.json({ message: `Holiday saved — ${date} ${name}. Everyone is paid for this day.`, date, name });
+    res.json({ message: `Holiday saved — ${date} ${name}. Employees who have joined by this date are eligible for holiday pay.`, date, name });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

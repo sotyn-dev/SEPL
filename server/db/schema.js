@@ -2102,6 +2102,9 @@ function initializeDatabase() {
     -- etc. — and tracked individually with serial / current location.
     CREATE TABLE IF NOT EXISTS tools (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_master_id INTEGER REFERENCES item_master(id),
+      quantity REAL NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      unit TEXT,
       tool_code TEXT UNIQUE,                  -- e.g. T-2026-0001 auto-generated
       name TEXT NOT NULL,
       category TEXT,                          -- 'Drilling','Cutting','Measurement','Safety','Power','Hand','Other'
