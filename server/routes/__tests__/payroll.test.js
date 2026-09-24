@@ -68,34 +68,25 @@ test('25 attended dates with 9 late half-days give 20.5 payroll day equivalents'
   assert.equal(r.present_days, 20.5);
   assert.equal(r.half_days, 9);
 });
-test('monthly late override can waive charges and reset without changing half-days', () => {
+test('late deductions remain automatic even with a saved manual override', () => {
   const options = { attendance: [{ date: '2025-08-04', punch_in_time: '09:50', total_hours: 10 }], adjustments: {} };
   const rules = { ...settings, late_grace_count: 0 };
   const auto = run(options, employee, rules);
   assert.equal(auto.late_penalty, 100);
-  options.adjustments.late_penalty_override = 0;
-  const waived = run(options, employee, rules);
-  assert.equal(waived.late_penalty, 0);
-  assert.equal(waived.net_pay, auto.net_pay + 100);
-  assert.equal(waived.paid_days, auto.paid_days);
-  options.adjustments.late_penalty_override = null;
-  assert.equal(run(options, employee, rules).late_penalty, 100);
+  for (const override of [0, 500, null]) {
+    options.adjustments.late_penalty_override = override;
+    const r = run(options, employee, rules);
+    assert.equal(r.late_penalty, 100);
+    assert.equal(r.late_penalty_overridden, false);
+    assert.equal(r.net_pay, auto.net_pay);
+  }
 });
-test('late override endpoint persists zero, resets to auto and rejects a locked month', () => {
-  const adjustments = {};
-  const call = value => {
-    const res = { code: 200, status(n) { this.code = n; return this; }, json(v) { this.body = v; } };
-    routes['PUT /override/:employee_id']({ body: { month: '2025-08', field: 'late_penalty', value }, params: { employee_id: '1' }, user: { id: 1 } }, res);
-    return res;
-  };
-  activeDb = fixture({ adjustments });
-  assert.equal(call(0).code, 200);
-  assert.equal(adjustments.late_penalty_override, 0);
-  assert.equal(call('').code, 200);
-  assert.equal(adjustments.late_penalty_override, null);
-  activeDb = fixture({ locked: true });
-  assert.equal(call(50).code, 409);
-  assert.equal(call(-1).code, 400);
+test('late override endpoint refuses manual late amounts', () => {
+  activeDb = fixture();
+  const res = { code: 200, status(n) { this.code = n; return this; }, json(v) { this.body = v; } };
+  routes['PUT /override/:employee_id']({ body: { month: '2025-08', field: 'late_penalty', value: 0 }, params: { employee_id: '1' }, user: { id: 1 } }, res);
+  assert.equal(res.code, 400);
+  assert.match(res.body.error, /automatic/);
 });
 
 test('payroll export includes displayed totals and adjustments without recalculating snapshots', () => {
@@ -120,7 +111,7 @@ test('payroll export includes displayed totals and adjustments without recalcula
   assert.equal(cell('Half Days'), 9);
   assert.equal(cell('Late Deduction (Rs)'), 0);
   assert.equal(cell('Late Deduction Auto (Rs)'), 1040);
-  assert.equal(cell('Late Deduction Adjusted'), 'Yes');
+  assert.equal(headers.includes('Late Deduction Adjusted'), false);
   assert.equal(cell('Salary Before OT (Rs)'), 39000);
   assert.equal(cell('Net Pay (Rs)'), 40000);
   assert.equal(cell('Payment Status'), 'Paid');
