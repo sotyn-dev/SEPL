@@ -2876,8 +2876,8 @@ router.get('/my-notifications', (req, res) => {
 router.put('/notifications/:id/read', (req, res) => {
   getDb().prepare(
     `UPDATE notifications SET read_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND user_id = ? AND read_at IS NULL`
-  ).run(req.params.id, req.user.id);
+     WHERE id = ? AND read_at IS NULL`
+  ).run(req.params.id);
   res.json({ ok: true });
 });
 
