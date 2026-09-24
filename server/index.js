@@ -602,9 +602,10 @@ app.use('/api/site-chat', requireModuleEnabled('site_chat'), require('./routes/s
 app.use('/api/sotyn-flow', requireModuleEnabled('sotyn_flow'), require('./routes/sotynFlow'));
 // System Requirements — product evolution tracker (upload-heavy; swept/quarantined)
 app.use('/api/system-requirements', requireModuleEnabled('system_requirements'), require('./routes/systemRequirements'));
-// System Flow & ERP Implementation Control (mam 2026-09-01)
 // ERP Management retired; keep existing records, disable all API operations.
 app.use('/api/system-flow', (req, res) => res.status(410).json({ error: 'ERP Management has been removed' }));
+// Mandatory Compliance & Violation Monitoring (Nancy)
+app.use('/api/compliance', require('./routes/compliance'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 
@@ -995,6 +996,12 @@ try {
   io.on('connection', (socket) => { try { socket.emit('app:version', { build: BUILD_ID }); } catch (_) { /* never break chat */ } });
 }
 catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
+
+try {
+  require('./scripts/complianceCron').startComplianceCron();
+} catch (e) {
+  console.warn('[compliance-cron] could not start cron:', e.message);
+}
 // Bind loopback-only by default (2026-08-26): on the VPS, nginx is the sole
 // public front door (HTTPS, server_tokens off) — with 0.0.0.0 anyone could
 // hit http://<vps-ip>:5000 directly, skipping nginx and sending logins over
