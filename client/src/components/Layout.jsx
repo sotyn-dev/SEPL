@@ -63,8 +63,6 @@ import {
   FiTrello,
   // Client Snag · bill missing client signature (2026-08-11)
   FiCamera,
-  // ERP Management · System Flow single-click entry (mam 2026-09-01).
-  FiCpu,
   // Sotyn Leads · sotyn.ai website enquiry inbox (mam 2026-09-07).
   FiRss,
 } from 'react-icons/fi';
@@ -195,6 +193,7 @@ const SIDEBAR_GROUPS = [
   //     for Bank back under Finance — it's where the bank statement is
   //     uploaded and credits/debits are matched. Do NOT re-add `hidden` here.
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
+    { path: '/project-profit', label: 'Project Profit & Loss', icon: FiBarChart2, module: 'project_profit' },
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
@@ -250,11 +249,6 @@ const SIDEBAR_GROUPS = [
     { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null, open: true },
     { path: '/system-requirements', label: 'System Requirements', icon: FiClipboard, module: null, open: true, flag: 'system_requirements' },
   ]},
-  // ERP MANAGEMENT — System Flow & Implementation Control. Mam 2026-09-01:
-  // "if all things in one then why side bar write erp management steps" —
-  // the page carries its own tabs, so the sidebar entry is a single-click
-  // LINK GROUP (path + no items) straight to /system-flow.
-  { id: 'erp_management', label: 'ERP Management', icon: FiCpu, path: '/system-flow', module: 'system_flow', items: [] },
   // Executive group — 3 dashboards (mam 2026-05-27).
   { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [
     { path: '/dashboard/war-room', label: 'War Room',           icon: FiCrosshair, module: 'users' },
@@ -584,7 +578,19 @@ export default function Layout() {
   // accordion state untouched.
   const [navSearch, setNavSearch] = useState('');
   const navQuery = navSearch.trim().toLowerCase();
-  const itemMatches = (item) => !navQuery || flowLabel(item.path, item.label).toLowerCase().includes(navQuery);
+
+  const groupLabelMatches = (g) => {
+    if (!navQuery || !g) return false;
+    const gText = `${g.label || ''} ${g.id || ''}`.toLowerCase();
+    return gText.includes(navQuery);
+  };
+
+  const itemMatches = (item, group = null) => {
+    if (!navQuery) return true;
+    if (group && groupLabelMatches(group)) return true;
+    const itText = `${flowLabel(item.path, item.label)} ${item.label || ''} ${item.path || ''} ${item.module || ''}`.toLowerCase();
+    return itText.includes(navQuery);
+  };
 
   // ─── Sidebar accordion state ───────────────────────────────────────
   // Each group is collapsible, INITIALLY CLOSED, expand independently
@@ -661,8 +667,8 @@ export default function Layout() {
     if (g.adminOnly && !isAdmin()) return false;
     // Link group (path, no items): the header itself is the destination —
     // visibility follows its own module/search match (ERP Management).
-    if (g.path) return itemVisible(g) && itemMatches(g);
-    return g.items.some(it => !it.hidden && itemVisible(it) && itemMatches(it));
+    if (g.path) return itemVisible(g) && (itemMatches(g, g) || groupLabelMatches(g));
+    return g.items.some(it => !it.hidden && itemVisible(it) && itemMatches(it, g));
   };
   const visibleGroups = SIDEBAR_GROUPS.filter(groupVisible);
   const showSettings = groupVisible(SIDEBAR_SETTINGS);
@@ -818,7 +824,7 @@ export default function Layout() {
               </Link>
             );
             const isOpen = isGroupOpen(g.id);
-            const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it));
+            const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it, g));
             const hasActiveChild = childItems.some(it => location.pathname === it.path);
             return (
               <div key={g.id} className="pt-0.5">
@@ -851,7 +857,7 @@ export default function Layout() {
               mam's spec.  Same collapsible accordion as the others. */}
           {showSettings && (() => {
             const isOpen = isGroupOpen(SIDEBAR_SETTINGS.id);
-            const childItems = SIDEBAR_SETTINGS.items.filter(it => itemVisible(it) && itemMatches(it));
+            const childItems = SIDEBAR_SETTINGS.items.filter(it => itemVisible(it) && itemMatches(it, SIDEBAR_SETTINGS));
             const hasActiveChild = childItems.some(it => location.pathname === it.path);
             return (
               <div className="pt-3 mt-2 border-t border-white/10">

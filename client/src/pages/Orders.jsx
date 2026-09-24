@@ -13,6 +13,7 @@ import { useAuth } from '../context/AuthContext';
 // The Order Planning tab renders the Item-wise Rates register itself
 // (mam 2026-09-05), rather than duplicating a second items table here.
 import RatesItems from './RatesItems';
+import MakeApproval from './MakeApproval';
 
 const CRM_OPTIONS = ['Sushila', 'Lovely'];
 
@@ -322,6 +323,7 @@ export default function Orders() {
   const tabs = [
     { id: 'po', label: 'Purchase Orders' },
     { id: 'planning', label: 'Order Planning' },
+    { id: 'make-approval', label: 'Make Approval' },
   ];
 
   // ── PO list grouped by PROJECT (collapsible) — same layout as the
@@ -388,6 +390,7 @@ export default function Orders() {
         ))}</div>
       </div>
 
+      {tab === 'make-approval' && <MakeApproval orders={pos} />}
       {tab === 'po' && (
         <>
           <div className="flex flex-wrap justify-between items-center gap-3">

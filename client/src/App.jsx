@@ -27,6 +27,7 @@ const PoFocPrint = lazy(() => import('./pages/PoFocPrint'));
 const LabourRate = lazy(() => import('./pages/LabourRate'));
 const Orders = lazy(() => import('./pages/Orders'));
 const DispatchReceiving = lazy(() => import('./pages/DispatchReceiving'));
+const ProjectProfit = lazy(() => import('./pages/ProjectProfit'));
 const BusinessBook = lazy(() => import('./pages/BusinessBook'));
 const ItemMaster = lazy(() => import('./pages/ItemMaster'));
 const PaymentRequired = lazy(() => import('./pages/PaymentRequired'));
@@ -71,7 +72,6 @@ const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const HelpTickets = lazy(() => import('./pages/HelpTickets'));
 const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
-const SystemFlow = lazy(() => import('./pages/SystemFlow'));
 const ComplianceDashboard = lazy(() => import('./pages/ComplianceDashboard'));
 const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
@@ -277,6 +277,7 @@ export default function App() {
           <Route path="solar-rate-master" element={<ModuleRoute module="solar_quotation"><SolarRateMaster /></ModuleRoute>} />
           <Route path="po-foc-stripped" element={<ModuleRoute module="quotations"><PoFocStripped /></ModuleRoute>} />
           <Route path="labour-rate" element={<ModuleRoute module="labour_rates"><LabourRate /></ModuleRoute>} />
+          <Route path="project-profit" element={<ModuleRoute module="project_profit"><ProjectProfit /></ModuleRoute>} />
           <Route path="business-book" element={<ModuleRoute module="business_book"><BusinessBook /></ModuleRoute>} />
           <Route path="item-master" element={<ModuleRoute module="item_master"><ItemMaster /></ModuleRoute>} />
           <Route path="orders" element={<ModuleRoute module="orders"><Orders /></ModuleRoute>} />
@@ -295,8 +296,8 @@ export default function App() {
           <Route path="price-required" element={<PriceRequired />} />
           <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
           <Route path="help-tickets" element={<HelpTickets />} />
-          {/* ERP Management — System Flow & Implementation Control (2026-09) */}
-          <Route path="system-flow" element={<ModuleRoute module="system_flow"><SystemFlow /></ModuleRoute>} />
+          {/* Retired ERP Management links return to Dashboard. */}
+          <Route path="system-flow/*" element={<Navigate to="/" replace />} />
           <Route path="system-requirements" element={<ModuleGate module="system_requirements"><SystemRequirements /></ModuleGate>} />
           <Route path="system-requirements/:id" element={<ModuleGate module="system_requirements"><SystemRequirementWorkspace /></ModuleGate>} />
           <Route path="installation" element={<ModuleRoute module="installation"><SalesBilling /></ModuleRoute>} />

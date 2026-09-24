@@ -35,7 +35,9 @@ export function AuthProvider({ children }) {
         // token than the now-active one) — that stale-request race logged a
         // just-logged-in user straight back out (mam 2026-06-24, Nitin Jain).
         .catch((e) => {
-          if (e?.response?.status === 401 && (e.config?.metadata?.tokenAtSend || null) === getToken()) logout();
+          if (e?.response?.status === 401 && (e.config?.metadata?.tokenAtSend || null) === getToken()) {
+            if (!window.location.pathname.startsWith('/login')) logout();
+          }
         })
         .finally(() => setLoading(false));
     } else {

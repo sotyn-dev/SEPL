@@ -1,0 +1,27 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const Database=require('better-sqlite3');
+const logic=require('../makeApproval');
+test('make selection is scoped, reviewed once, and resets when changed',()=>{
+ const db=new Database(':memory:');
+ db.exec(`CREATE TABLE purchase_orders(id INTEGER,business_book_id INTEGER);
+ CREATE TABLE po_items(id INTEGER,po_id INTEGER,business_book_id INTEGER,description TEXT,item_master_id INTEGER,quantity REAL,unit TEXT);
+ INSERT INTO purchase_orders VALUES(1,1),(2,1);
+ INSERT INTO po_items VALUES(1,1,1,'Pipe',NULL,10,'mtr'),(2,2,1,'Valve',NULL,2,'nos');`);
+ logic.initialize(db);logic.initialize(db);
+ assert.throws(()=>logic.selectMake(db,1,2,'Brand A',5),/not found/);
+ assert.throws(()=>logic.selectMake(db,1,1,'',5),/Choose/);
+ logic.selectMake(db,1,1,'Brand A',5);
+ assert.throws(()=>logic.review(db,1,1,'approved',1,'Stale brand'),/changed/);
+ logic.review(db,1,1,'approved',1,'Brand A');
+ logic.review(db,1,1,'approved',1,'Brand A');
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM po_make_approval_log').get().n,2);
+ logic.selectMake(db,1,1,'Brand B',5);
+ assert.equal(db.prepare('SELECT status FROM po_make_approvals').get().status,'pending');
+ db.exec('UPDATE po_items SET quantity=11 WHERE id=1');
+ assert.throws(()=>logic.review(db,1,1,'approved',1,'Brand B'),/changed/);
+ logic.selectMake(db,1,1,'Brand B',5);
+ logic.review(db,1,1,'rejected',1,'Brand B');
+ assert.equal(db.prepare('SELECT status FROM po_make_approvals').get().status,'rejected');
+ db.close();
+});

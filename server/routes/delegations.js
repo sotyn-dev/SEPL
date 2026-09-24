@@ -482,7 +482,8 @@ router.post('/:id/approve-extension', (req, res) => {
   }
   db.prepare(
     `UPDATE delegations SET due_date = requested_due_date,
-       extension_count = COALESCE(extension_count, 0) + 1,
+       extension_count = COALESCE(extension_count, 0) +
+         CASE WHEN due_date IS NOT NULL AND due_date <> '' AND due_date <> requested_due_date THEN 1 ELSE 0 END,
        extension_status='approved', extension_reviewed_at=CURRENT_TIMESTAMP, extension_reviewed_by=?
      WHERE id=?`
   ).run(req.user.id, req.params.id);

@@ -155,6 +155,8 @@ const SOURCE_INFO = {
   'auto:installations_completed':{ plan: 'You set',                           actual: 'Installations marked complete this week' },
   'auto:sales_bills':           { plan: 'You set',                            actual: 'Sales bills raised this week' },
   'auto:ra_bills':              { plan: '3 per week (fixed SEPL norm)',          actual: 'RA bills raised for user\'s sites this week' },
+  'auto:sales_bill_checking':   { plan: 'You set', actual: 'Installation bills marked Checked / OK by this user during the week (IST); each bill counts once' },
+  'auto:dpr_bill_checking':     { plan: 'All installation bills dated in the selected week', actual: 'Of those bills, marked Checked / OK by anyone; later checks update the bill-date week' },
   'auto:mb_filed':              { plan: 'You set',                            actual: 'MB sheets filed (count)' },
   'auto:mb_signed':             { plan: 'MB bills raised for user\'s sites this week', actual: 'Of those, approved / client-signed' },
   // Cash Flow
@@ -1009,8 +1011,8 @@ function RaciBreakdown({ data }) {
                       outstanding (week + pre-week backlog) / backlog closed
                       this week (mam 2026-08-27 audit — no 502-vs-297 mismatch). */}
                   <td className="text-center p-2"
-                      title={`${(r.pending || 0) + (r.pending_before || 0)} pending in total / ${r.closed_before || 0} previous completed this week`}>
-                    <span className="text-amber-700">{((r.pending || 0) + (r.pending_before || 0)) || ''}</span>
+                      title={`${(r.pending_before || 0) + (r.closed_before || 0)} previous pending total / ${r.closed_before || 0} completed this week — ${r.pending_before || 0} remaining`}>
+                    <span className="text-amber-700">{((r.pending_before || 0) + (r.closed_before || 0)) || ''}</span>
                     {(r.closed_before || 0) > 0 && <span className="text-gray-300"> / <b className="text-emerald-700">{r.closed_before}</b></span>}
                   </td>
                   <td className={`text-center p-2 font-bold ${pctClr(pct(r.actual, r.planned))}`}>{pct(r.actual, r.planned)}%</td>
@@ -1138,12 +1140,12 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           totalUp stays in state so a save never wipes an old stored value. */}
       <td className="text-center p-2">
         {/* Previous pendency only (mam 2026-09-14): of the tasks due BEFORE this
-            week, how many are still pending at the week end / how many were done
-            during this week. Carried in = pending + done. This week's own
+            week, opening pending total / how many were done during this week.
+            Opening total = remaining + done. This week's own
             leftover is already Planned − Actual, so it is not in here. */}
         {kpi.pending_auto ? (
           <div className="flex items-start justify-center gap-2 font-semibold leading-tight"
-            title={`Previous (due before this week): ${(+kpi.pending_uptodate || 0) + (+kpi.pending_work || 0)} carried in — ${kpi.pending_uptodate || 0} still pending, ${kpi.pending_work || 0} done this week`}>
+            title={`Previous (due before this week): ${kpi.pending_uptodate || 0} carried in — ${Math.max(0, (+kpi.pending_uptodate || 0) - (+kpi.pending_work || 0))} still pending, ${kpi.pending_work || 0} done this week`}>
             <div className="text-center">
               <div className={kpi.pending_uptodate > 0 ? 'text-amber-700' : 'text-gray-400'}>{kpi.pending_uptodate || 0}</div>
               <div className="text-[9px] font-normal text-gray-400">pending</div>
@@ -1156,7 +1158,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
           </div>
         ) : (
           <div className="flex items-center justify-center gap-1">
-            <input type="number" className="input text-center text-xs w-14" placeholder="pending" title="Previous tasks still pending" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
+            <input type="number" className="input text-center text-xs w-14" placeholder="pending" title="Previous pending total, including tasks completed this week" value={pendingUp} onChange={e => setPendingUp(e.target.value)} onBlur={flush} disabled={readOnly} />
             <span className="text-gray-300">/</span>
             <input type="number" className="input text-center text-xs w-14" placeholder="done" title="Previous tasks done this week" value={pendingWork} onChange={e => setPendingWork(e.target.value)} onBlur={flush} disabled={readOnly} />
           </div>
@@ -1692,6 +1694,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:installations_completed">installations completed</option>
                     <option value="auto:sales_bills">sales bills raised</option>
                     <option value="auto:ra_bills">RA bills raised (site)</option>
+                    <option value="auto:sales_bill_checking">RA Bill / Sales Bill Checking — Checked / OK</option>
+                    <option value="auto:dpr_bill_checking">DPR to RA Bill — checked bills by bill date (all)</option>
                     <option value="auto:mb_filed">MB bills filed (count)</option>
                     <option value="auto:mb_signed">MB signed by client (site)</option>
                   </optgroup>

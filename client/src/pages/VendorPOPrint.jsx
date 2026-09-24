@@ -376,9 +376,10 @@ export default function VendorPOPrint() {
               </tr>
             )}
             {items.map((it, idx) => {
-              const desc = it.master_name || it.description || '—';
-              const detail = [it.size, it.specification].filter(Boolean).join(' · ');
+              const desc = it.custom_description || it.master_name || it.description || '—';
               const make = it.im_make || it.ii_make;
+              const spec = it.specification || '';
+              const size = it.size || '';
               // UOM source priority: item_master.uom is the canonical
               // unit (mam, 2026-05-15 normalised the master); fall back
               // to whatever the indent line was raised with.
@@ -405,23 +406,21 @@ export default function VendorPOPrint() {
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center text-gray-500">{idx + 1}</td>
                   <td className="border-r border-gray-800 print:border-black px-2 py-2 text-gray-900">
                     {/* Item code chip + bold name on first visual line, then
-                        a subtle secondary line with size · spec · make so
-                        long descriptions don't dominate the cell. Explicit
-                        dark text colors so no inherited link color bleeds in. */}
+                        prominent Specification line + size/make so the vendor
+                        supplies the exact correct goods. */}
                     <div className="flex items-baseline gap-1.5 flex-wrap">
                       {it.item_code && <span className="font-mono text-[9px] text-gray-500 bg-gray-100 px-1 py-0.5 rounded">{it.item_code}</span>}
-                      {/* Mam (2026-05-22): unit (MTR / KG / NOS) is
-                          already shown in the Quantity column AND the
-                          Per column — appending it to the description
-                          here was triple-printing it ("ARMOURED WIRE MTR
-                          · 300 MTR · MTR").  Description shows the name
-                          only now. */}
                       <span className="font-bold text-[11.5px] leading-snug text-gray-900" style={{ color: '#111827' }}>{desc}</span>
                     </div>
-                    {(detail || make) && (
+                    {spec && (
+                      <div className="text-[10px] text-gray-800 mt-0.5 leading-tight font-medium print:text-black">
+                        <span className="font-bold text-gray-900 print:text-black">Specification:</span> {spec}
+                      </div>
+                    )}
+                    {(size || make) && (
                       <div className="text-[9.5px] text-gray-700 mt-0.5 leading-tight">
-                        {detail && <span>{detail}</span>}
-                        {detail && make && <span className="mx-1">·</span>}
+                        {size && <span>Size: <span className="font-semibold text-gray-800">{size}</span></span>}
+                        {size && make && <span className="mx-1">·</span>}
                         {make && <span>Make: <span className="font-semibold text-gray-800">{make}</span></span>}
                       </div>
                     )}

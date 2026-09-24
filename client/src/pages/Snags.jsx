@@ -15,12 +15,19 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
-import Pagination, { usePagination } from '../components/Pagination';
+import Pagination from '../components/Pagination';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload, FiCamera, FiLayers } from 'react-icons/fi';
 import { fmtDate } from '../utils/datetime';
+import { compressImage } from '../utils/compressImage';
+
+const toThumb = (url, w = 120) => {
+  if (!url || typeof url !== 'string' || !url.startsWith('/uploads/')) return url;
+  if (/\.pdf$/i.test(url)) return url;
+  return `/api/thumbnail?url=${encodeURIComponent(url)}&w=${w}`;
+};
 
 // ── Ageing helpers ──────────────────────────────────────────────────────────
 // Target: every open/submitted snag must be resolved within 72 hours of being
@@ -56,13 +63,34 @@ const PRIORITY_PILL = {
   critical: 'bg-red-50 text-red-700 border-red-300',
 };
 
+// Common site defect presets for 1-tap entry during site walks
+const COMMON_DEFECTS = [
+  { label: '⚡ Earthing / Cable', text: 'Earthing missing / loose cable termination' },
+  { label: '🔧 Pipe Clamping', text: 'Pipe clamping / support loose or missing' },
+  { label: '📏 Alignment / Level', text: 'Equipment alignment / leveling required' },
+  { label: '🎨 Paint / Touch-up', text: 'Surface scratch / paint touch-up required' },
+  { label: '🏷️ Label / Ferrule', text: 'Identification label / ferrule missing' },
+  { label: '🧹 Cleanliness', text: 'Debris / construction scrap clearance needed' },
+  { label: '💧 Leakage / Seepage', text: 'Leakage / pressure drop observed' },
+  { label: '🚪 Fire Seal', text: 'Fire barrier penetration / seal incomplete' },
+];
+
+function defaultTargetDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 3);
+  return d.toISOString().slice(0, 10);
+}
+
 export default function Snags() {
   const { canCreate, canEdit, canDelete, canApprove, isAdmin, user } = useAuth();
   const [snags, setSnags] = useState([]);
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
   const [filters, setFilters] = useState({ status: '', priority: '', search: '', scope: '', site_id: '', due_from: '', due_to: '' });
+  const [searchInput, setSearchInput] = useState('');
   const [modal, setModal] = useState(false);          // raise/edit
+  const [snagMode, setSnagMode] = useState('single'); // 'single' | 'walk'
+  const [walkItems, setWalkItems] = useState([]);     // items for multi-photo snag walk
   const [proofModal, setProofModal] = useState(null); // snag obj being submitted
   // Which snag's proof modal is actually open right now — checked before an
   // in-flight upload is allowed to write into proofForm (mam 2026-08-24:
@@ -76,32 +104,58 @@ export default function Snags() {
   const [, setAgeingTick] = useState(0);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(15);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [serverStats, setServerStats] = useState(null);
+  const [, setLoading] = useState(false);
   const scrollBoxRef = useRef(null);   // the table's own overflow container
 
+  // 500ms debounced search input sync with filters.search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setFilters(f => {
+        if (f.search === searchInput) return f;
+        return { ...f, search: searchInput };
+      });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
   const load = useCallback(() => {
+    setLoading(true);
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
-    api.get(`/snags?${params}`).then(r => setSnags(r.data || [])).catch(() => {});
-  }, [filters]);
+    params.set('page', String(page));
+    params.set('limit', String(perPage));
 
-  // Summary cards reflect exactly what the filtered list shows (site,
-  // status, priority, search, scope) — derived from the loaded rows so
-  // the numbers always match the table below.
-  const stats = useMemo(() => {
-    const s = { total: snags.length, open: 0, submitted: 0, approved: 0, rejected: 0, critical: 0, overdue: 0 };
-    for (const x of snags) {
-      if (x.status === 'open') s.open++;
-      else if (x.status === 'submitted') s.submitted++;
-      else if (x.status === 'approved') s.approved++;
-      else if (x.status === 'rejected') s.rejected++;
-      if (x.priority === 'critical' && x.status !== 'approved') s.critical++;
-      if (x.status !== 'approved') {
-        const age = snagAge(x.raised_at);
-        if (age && age.hours >= SLA_HOURS) s.overdue++;
-      }
-    }
-    return s;
-  }, [snags]);
+    api.get(`/snags?${params}`)
+      .then(r => {
+        const data = r.data;
+        if (data && typeof data === 'object' && Array.isArray(data.rows)) {
+          setSnags(data.rows);
+          setTotal(data.total || 0);
+          setTotalPages(data.pages || 1);
+          if (data.stats) setServerStats(data.stats);
+        } else if (Array.isArray(data)) {
+          setSnags(data);
+          setTotal(data.length);
+          setTotalPages(1);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [filters, page, perPage]);
+
+  // Derived stats: prefer server-calculated stats across entire filtered dataset
+  const stats = serverStats || {
+    total,
+    open: 0,
+    submitted: 0,
+    approved: 0,
+    rejected: 0,
+    critical: 0,
+    overdue: 0,
+  };
 
   // Re-render ageing badges and the overdue counter while the page stays open.
   useEffect(() => {
@@ -109,26 +163,38 @@ export default function Snags() {
     return () => clearInterval(timer);
   }, []);
 
-  // Only the table is paginated; summary cards and export use all matches.
-  const pg = usePagination(snags, perPage, page, setPage);
+  // Server-side pagination object for <Pagination />
+  const pg = useMemo(() => {
+    const isAll = perPage === 'all';
+    const size = isAll ? Math.max(total, 1) : perPage;
+    const cur = Math.min(Math.max(1, page), totalPages);
+    const from = total === 0 ? 0 : (cur - 1) * size;
+    const to = Math.min(from + size, total);
+    return {
+      page: cur,
+      pages: totalPages,
+      perPage: size,
+      isAll,
+      total,
+      from,
+      to,
+      setPage,
+      rows: snags,
+      hasPrev: cur > 1,
+      hasNext: cur < totalPages,
+    };
+  }, [page, totalPages, perPage, total, snags]);
+
   useEffect(() => { setPage(1); }, [filters]);
-  // Keep edits on their current page; clamp after deleting the last row.
-  useEffect(() => { setPage(pg.page); }, [pg.page]);
   useEffect(() => {
     scrollBoxRef.current?.scrollTo({ top: 0 });
-  }, [pg.page, perPage, filters]);
+  }, [page, perPage, filters]);
 
   // Export the (filtered) snag list as a real .xlsx WITH the defect + proof
   // photos embedded. CSV can't carry images, so this hits the server which
   // builds the workbook; filters mirror the on-screen list.
-  // `snags` is the COMPLETE filtered set (all filters run server-side), so an
-  // empty list here means the export would be a header-only workbook. Bail the
-  // same way exportCsv does rather than "downloading" nothing.
-  // `photos=false` asks the server to skip embedding images. The full export
-  // can be heavy on a long list, so a failure offers this as a fallback
-  // rather than leaving the user with a dead button.
   const exportXlsx = async (photos = true) => {
-    if (snags.length === 0) { toast.error('No data to export'); return; }
+    if (total === 0 && snags.length === 0) { toast.error('No data to export'); return; }
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
@@ -137,6 +203,7 @@ export default function Snags() {
       const url = URL.createObjectURL(new Blob([resp.data]));
       const a = document.createElement('a');
       a.href = url; a.download = `snags-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       const skipped = Number(resp.headers?.['x-photos-skipped'] || 0);
@@ -169,8 +236,9 @@ export default function Snags() {
     if (!file) return null;
     setUploading(true);
     try {
+      const toSend = file.type?.startsWith('image/') ? await compressImage(file) : file;
       const fd = new FormData();
-      fd.append('file', file);
+      fd.append('file', toSend);
       const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       return r.data.url;
     } catch (err) {
@@ -181,11 +249,27 @@ export default function Snags() {
 
   const openRaise = () => {
     setEditingId(null);
-    setForm({ priority: 'medium' });
+    setSnagMode('single');
+    setWalkItems([]);
+    const preselectedSite = filters.site_id ? sites.find(s => String(s.id) === String(filters.site_id)) : null;
+    setForm({
+      site_id: preselectedSite?.id || '',
+      site_name: preselectedSite?.name || '',
+      location: '',
+      description: '',
+      photo_url: '',
+      priority: 'medium',
+      assigned_to: preselectedSite?.site_engineer_id || '',
+      assigned_to_name: preselectedSite?.engineer_name || '',
+      target_date: defaultTargetDate(),
+    });
     setModal(true);
   };
+
   const openEdit = (s) => {
     setEditingId(s.id);
+    setSnagMode('single');
+    setWalkItems([]);
     setForm({
       site_id: s.site_id || '',
       site_name: s.site_name || '',
@@ -201,8 +285,8 @@ export default function Snags() {
     setModal(true);
   };
 
-  const save = async (e) => {
-    e.preventDefault();
+  const save = async (e, addNext = false) => {
+    if (e && e.preventDefault) e.preventDefault();
     if (!form.description?.trim()) return toast.error('Description is required');
     try {
       if (editingId) {
@@ -210,12 +294,84 @@ export default function Snags() {
         // never sent, so editing can never change it (server allowlist too).
         await api.put(`/snags/${editingId}`, { ...form, target_date: form.target_date || null });
         toast.success('Snag updated');
+        setModal(false); setForm({}); setEditingId(null); load();
       } else {
         const r = await api.post('/snags', form);
         toast.success(`Raised ${r.data.snag_no}`);
+        if (addNext) {
+          // Keep site, location, assignee, priority, target_date!
+          // Clear description and photo_url for immediate next point
+          setForm(f => ({
+            ...f,
+            description: '',
+            photo_url: '',
+          }));
+          load();
+        } else {
+          setModal(false); setForm({}); setEditingId(null); load();
+        }
       }
-      setModal(false); setForm({}); setEditingId(null); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Snag Walk: multi-photo batch handler
+  const handleWalkPhotos = async (files) => {
+    if (!files || files.length === 0) return;
+    const fileList = Array.from(files);
+    const newItems = fileList.map((file, idx) => ({
+      id: `${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 7)}`,
+      file,
+      photo_url: '',
+      location: form.location || '',
+      description: '',
+      priority: form.priority || 'medium',
+      uploading: true,
+    }));
+    setWalkItems(prev => [...prev, ...newItems]);
+
+    for (const it of newItems) {
+      const url = await upload(it.file);
+      setWalkItems(prev => prev.map(p => p.id === it.id ? { ...p, photo_url: url || '', uploading: false } : p));
+    }
+  };
+
+  const saveWalk = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!walkItems || walkItems.length === 0) {
+      return toast.error('Please add at least one photo / snag item');
+    }
+    const emptyDesc = walkItems.some(it => !it.description?.trim());
+    if (emptyDesc) {
+      return toast.error('Please enter a description for all snag items');
+    }
+    const isStillUploading = walkItems.some(it => it.uploading);
+    if (isStillUploading) {
+      return toast.error('Photos are still uploading, please wait a moment');
+    }
+    try {
+      setUploading(true);
+      const r = await api.post('/snags/batch', {
+        site_id: form.site_id || null,
+        site_name: form.site_name || null,
+        assigned_to: form.assigned_to || null,
+        assigned_to_name: form.assigned_to_name || null,
+        priority: form.priority || 'medium',
+        target_date: form.target_date || null,
+        items: walkItems.map(it => ({
+          location: it.location || form.location || null,
+          description: it.description,
+          photo_url: it.photo_url || null,
+          priority: it.priority || form.priority || 'medium',
+          target_date: it.target_date || form.target_date || null,
+        })),
+      });
+      toast.success(`Raised ${r.data.count} snags successfully!`);
+      setModal(false); setForm({}); setWalkItems([]); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to raise batch snags');
+    } finally {
+      setUploading(false);
+    }
   };
 
   const submitProof = async (e) => {
@@ -288,7 +444,7 @@ export default function Snags() {
       <div className="card p-3 flex flex-wrap items-end gap-3">
         <div className="relative flex-1 min-w-[160px]">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
-          <input className="input pl-9 text-sm" placeholder="Search snag #, site, location, description…" value={filters.search} onChange={e => setFilters(f => ({ ...f, search: e.target.value }))} />
+          <input className="input pl-9 text-sm" placeholder="Search snag #, site, location, description…" value={searchInput} onChange={e => setSearchInput(e.target.value)} />
         </div>
         <div className="w-36 shrink-0">
           <label className="label">Scope</label>
@@ -392,7 +548,7 @@ export default function Snags() {
                 </td>
                 <td>
                   {s.photo_url
-                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={s.photo_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded" /></a>
+                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={toThumb(s.photo_url, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded" /></a>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
@@ -403,7 +559,7 @@ export default function Snags() {
                 </td>
                 <td>
                   {s.proof_url
-                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
+                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={toThumb(s.proof_url, 120)} alt="" width="48" height="48" loading="lazy" decoding="async" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
                     : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td>
@@ -439,84 +595,318 @@ export default function Snags() {
       <Pagination pg={pg} setPerPage={setPerPage} className="card !px-8 !py-6" />
 
       {/* RAISE / EDIT MODAL */}
-      <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); }} title={editingId ? 'Edit Snag' : 'Raise Snag'} wide>
-        <form onSubmit={save} className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="label">Site Name</label>
-              <SearchableSelect
-                options={sites}
-                value={form.site_id || null}
-                valueKey="id"
-                displayKey="name"
-                placeholder="Pick site…"
-                onChange={(s) => setForm(f => ({ ...f, site_id: s?.id || '', site_name: s?.name || '' }))}
-              />
-            </div>
-            <div>
-              <label className="label">Location <span className="text-gray-400 font-normal text-[10px]">(within site)</span></label>
-              <input className="input" value={form.location || ''} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. 2nd floor pump room" />
-            </div>
-            <div className="col-span-1 sm:col-span-2">
-              <label className="label">Description *</label>
-              <textarea className="input" rows="3" required value={form.description || ''} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What's wrong / needs fixing?" />
-            </div>
-            <div className="col-span-1 sm:col-span-2">
-              <label className="label">Snag Photo</label>
-              {form.photo_url ? (
-                <div className="flex items-start gap-3">
-                  <img src={form.photo_url} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
-                  <button type="button" onClick={() => setForm(f => ({ ...f, photo_url: '' }))} className="text-red-500 text-xs">Remove</button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
-                    <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
-                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => {
-                      const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, photo_url: url }));
-                      e.target.value = '';
-                    }} />
-                  </label>
-                  <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
-                    <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
-                    <input type="file" accept="image/*" className="hidden" onChange={async e => {
-                      const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, photo_url: url }));
-                      e.target.value = '';
-                    }} />
-                  </label>
-                </div>
-              )}
-            </div>
-            <div>
-              <label className="label">Assign To <span className="text-gray-400 font-normal text-[10px]">(employee)</span></label>
-              <SearchableSelect
-                options={users.map(u => ({ ...u, label: u.name + (u.department ? ` — ${u.department}` : '') }))}
-                value={form.assigned_to || null}
-                valueKey="id"
-                displayKey="label"
-                placeholder="Pick employee…"
-                onChange={(u) => setForm(f => ({ ...f, assigned_to: u?.id || '', assigned_to_name: u?.name || '' }))}
-              />
-            </div>
-            <div>
-              <label className="label">Priority</label>
-              <select className="select" value={form.priority || 'medium'} onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="critical">Critical</option>
-              </select>
-            </div>
-            <div>
-              <label className="label">Target Date</label>
-              <input type="date" className="input" value={form.target_date || ''} onChange={e => setForm(f => ({ ...f, target_date: e.target.value }))} />
-            </div>
+      <Modal isOpen={modal} onClose={() => { setModal(false); setEditingId(null); setForm({}); setWalkItems([]); }} title={editingId ? 'Edit Snag' : (snagMode === 'walk' ? 'Snag Walk — Batch Defect Logger' : 'Raise Snag')} wide>
+        {!editingId && (
+          <div className="flex border-b mb-3 -mt-1 pb-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setSnagMode('single')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition ${
+                snagMode === 'single'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <FiPlus size={13} /> Single Snag
+            </button>
+            <button
+              type="button"
+              onClick={() => setSnagMode('walk')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition ${
+                snagMode === 'walk'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <FiLayers size={13} /> Snag Walk (Multi-Photo Batch)
+            </button>
           </div>
-          <div className="flex justify-end gap-2 pt-2 border-t">
-            <button type="button" onClick={() => { setModal(false); setEditingId(null); setForm({}); }} className="btn btn-secondary">Cancel</button>
-            <button type="submit" disabled={uploading} className="btn btn-primary">{uploading ? 'Uploading…' : (editingId ? 'Save' : 'Raise Snag')}</button>
-          </div>
-        </form>
+        )}
+
+        {snagMode === 'walk' && !editingId ? (
+          <form onSubmit={saveWalk} className="space-y-3">
+            <div className="bg-indigo-50/50 p-3 rounded-lg border border-indigo-100 space-y-3">
+              <div className="text-xs font-bold text-indigo-900 flex items-center gap-1.5">
+                <FiLayers className="text-indigo-600" /> Walk Parameters (Shared for all photos on this walk)
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                <div>
+                  <label className="label">Site Name</label>
+                  <SearchableSelect
+                    options={sites}
+                    value={form.site_id || null}
+                    valueKey="id"
+                    displayKey="name"
+                    placeholder="Pick site…"
+                    onChange={(s) => setForm(f => ({
+                      ...f,
+                      site_id: s?.id || '',
+                      site_name: s?.name || '',
+                      assigned_to: s?.site_engineer_id || f.assigned_to || '',
+                      assigned_to_name: s?.engineer_name || f.assigned_to_name || '',
+                    }))}
+                  />
+                </div>
+                <div>
+                  <label className="label">Assign To</label>
+                  <SearchableSelect
+                    options={users.map(u => ({ ...u, label: u.name + (u.department ? ` — ${u.department}` : '') }))}
+                    value={form.assigned_to || null}
+                    valueKey="id"
+                    displayKey="label"
+                    placeholder="Pick employee…"
+                    onChange={(u) => setForm(f => ({ ...f, assigned_to: u?.id || '', assigned_to_name: u?.name || '' }))}
+                  />
+                </div>
+                <div>
+                  <label className="label">Target Date (SLA)</label>
+                  <input type="date" className="input" value={form.target_date || ''} onChange={e => setForm(f => ({ ...f, target_date: e.target.value }))} />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="cursor-pointer border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/40 rounded-lg p-3 text-center transition flex items-center justify-center gap-2">
+                <FiCamera className="text-indigo-600" size={16} />
+                <span className="text-indigo-700 font-semibold text-xs">📷 Take / Add Photo</span>
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => { handleWalkPhotos(e.target.files); e.target.value = ''; }} />
+              </label>
+              <label className="cursor-pointer border-2 border-dashed border-blue-200 hover:border-blue-400 bg-blue-50/40 rounded-lg p-3 text-center transition flex items-center justify-center gap-2">
+                <FiUploadCloud className="text-blue-600" size={16} />
+                <span className="text-blue-700 font-semibold text-xs">📂 Select Multiple Photos</span>
+                <input type="file" accept="image/*" multiple className="hidden" onChange={e => { handleWalkPhotos(e.target.files); e.target.value = ''; }} />
+              </label>
+            </div>
+
+            {walkItems.length === 0 ? (
+              <div className="text-center py-8 border-2 border-dashed rounded-lg bg-gray-50 text-gray-400 text-xs">
+                No snag photos added yet. Snap or select multiple photos above to quickly log defect points during your site walk!
+              </div>
+            ) : (
+              <div className="space-y-2.5 max-h-[50vh] overflow-auto pr-1">
+                <div className="flex justify-between items-center text-xs font-semibold text-gray-600 px-1">
+                  <span>Logged Points ({walkItems.length})</span>
+                  <button type="button" onClick={() => setWalkItems([])} className="text-red-500 hover:underline text-[11px]">Clear all</button>
+                </div>
+                {walkItems.map((it, idx) => (
+                  <div key={it.id} className="p-2.5 bg-gray-50 border rounded-lg flex flex-col sm:flex-row gap-3 items-start">
+                    <div className="relative w-20 h-20 shrink-0 bg-gray-200 rounded border overflow-hidden flex items-center justify-center">
+                      {it.uploading ? (
+                        <div className="text-[10px] text-gray-500 flex flex-col items-center">
+                          <span className="animate-spin text-sm">⏳</span>
+                          <span>Uploading…</span>
+                        </div>
+                      ) : it.photo_url ? (
+                        <img src={toThumb(it.photo_url, 160)} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-[10px] text-red-500">Failed</span>
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-1.5 w-full">
+                      <div className="flex gap-2 items-center">
+                        <span className="text-xs font-bold text-gray-400">#{idx + 1}</span>
+                        <input
+                          className="input text-xs py-1 flex-1"
+                          placeholder="Location (e.g. 2nd floor shaft)"
+                          value={it.location || ''}
+                          onChange={e => {
+                            const v = e.target.value;
+                            setWalkItems(items => items.map(x => x.id === it.id ? { ...x, location: v } : x));
+                          }}
+                        />
+                        <select
+                          className="select text-xs py-1 w-28 shrink-0"
+                          value={it.priority || form.priority || 'medium'}
+                          onChange={e => {
+                            const v = e.target.value;
+                            setWalkItems(items => items.map(x => x.id === it.id ? { ...x, priority: v } : x));
+                          }}
+                        >
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                          <option value="critical">Critical</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => setWalkItems(items => items.filter(x => x.id !== it.id))}
+                          className="p-1.5 text-gray-400 hover:text-red-600 rounded"
+                          title="Remove item"
+                        >
+                          <FiTrash2 size={13} />
+                        </button>
+                      </div>
+                      <input
+                        className="input text-xs py-1 w-full"
+                        placeholder="Description (What's wrong / needs fixing?) *"
+                        value={it.description || ''}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setWalkItems(items => items.map(x => x.id === it.id ? { ...x, description: v } : x));
+                        }}
+                      />
+                      <div className="flex flex-wrap gap-1">
+                        {COMMON_DEFECTS.slice(0, 6).map(def => (
+                          <button
+                            key={def.label}
+                            type="button"
+                            onClick={() => {
+                              setWalkItems(items => items.map(x => x.id === it.id ? {
+                                ...x,
+                                description: x.description?.trim() ? `${x.description.trim()} · ${def.text}` : def.text
+                              } : x));
+                            }}
+                            className="text-[10px] px-1.5 py-0.5 bg-white hover:bg-blue-50 text-gray-600 hover:text-blue-700 rounded border border-gray-200 transition"
+                          >
+                            {def.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-between items-center pt-2 border-t">
+              <div className="text-[11px] text-gray-400">
+                {walkItems.length > 0 && `${walkItems.length} point(s) ready to create.`}
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => { setModal(false); setEditingId(null); setForm({}); setWalkItems([]); }} className="btn btn-secondary">Cancel</button>
+                <button
+                  type="submit"
+                  disabled={uploading || walkItems.length === 0 || walkItems.some(it => it.uploading)}
+                  className="btn btn-primary"
+                >
+                  {uploading ? 'Creating…' : `Raise All (${walkItems.length}) Snags`}
+                </button>
+              </div>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={save} className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Site Name</label>
+                <SearchableSelect
+                  options={sites}
+                  value={form.site_id || null}
+                  valueKey="id"
+                  displayKey="name"
+                  placeholder="Pick site…"
+                  onChange={(s) => setForm(f => ({
+                    ...f,
+                    site_id: s?.id || '',
+                    site_name: s?.name || '',
+                    assigned_to: s?.site_engineer_id || f.assigned_to || '',
+                    assigned_to_name: s?.engineer_name || f.assigned_to_name || '',
+                  }))}
+                />
+              </div>
+              <div>
+                <label className="label">Location <span className="text-gray-400 font-normal text-[10px]">(within site)</span></label>
+                <input className="input" value={form.location || ''} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. 2nd floor pump room" />
+              </div>
+
+              <div className="col-span-1 sm:col-span-2">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="label mb-0">Description *</label>
+                  <span className="text-[11px] text-gray-400 font-medium">Quick Tags:</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {COMMON_DEFECTS.map(def => (
+                    <button
+                      key={def.label}
+                      type="button"
+                      onClick={() => setForm(f => ({
+                        ...f,
+                        description: f.description?.trim() ? `${f.description.trim()} · ${def.text}` : def.text
+                      }))}
+                      className="text-[11px] px-2 py-0.5 bg-gray-100 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-300 text-gray-700 rounded border border-gray-200 transition"
+                    >
+                      {def.label}
+                    </button>
+                  ))}
+                </div>
+                <textarea className="input" rows="3" required value={form.description || ''} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What's wrong / needs fixing?" />
+              </div>
+
+              <div className="col-span-1 sm:col-span-2">
+                <label className="label">Snag Photo</label>
+                {form.photo_url ? (
+                  <div className="flex items-start gap-3">
+                    <img src={toThumb(form.photo_url, 256)} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
+                    <button type="button" onClick={() => setForm(f => ({ ...f, photo_url: '' }))} className="text-red-500 text-xs">Remove</button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                      <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
+                      <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => {
+                        const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, photo_url: url }));
+                        e.target.value = '';
+                      }} />
+                    </label>
+                    <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                      <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
+                      <input type="file" accept="image/*" className="hidden" onChange={async e => {
+                        const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, photo_url: url }));
+                        e.target.value = '';
+                      }} />
+                    </label>
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="label">Assign To <span className="text-gray-400 font-normal text-[10px]">(employee)</span></label>
+                <SearchableSelect
+                  options={users.map(u => ({ ...u, label: u.name + (u.department ? ` — ${u.department}` : '') }))}
+                  value={form.assigned_to || null}
+                  valueKey="id"
+                  displayKey="label"
+                  placeholder="Pick employee…"
+                  onChange={(u) => setForm(f => ({ ...f, assigned_to: u?.id || '', assigned_to_name: u?.name || '' }))}
+                />
+              </div>
+              <div>
+                <label className="label">Priority</label>
+                <select className="select" value={form.priority || 'medium'} onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Target Date</label>
+                <input type="date" className="input" value={form.target_date || ''} onChange={e => setForm(f => ({ ...f, target_date: e.target.value }))} />
+              </div>
+            </div>
+            <div className="flex justify-between items-center pt-2 border-t">
+              <div>
+                {!editingId && (
+                  <span className="text-[11px] text-gray-400">💡 Click "Save & Add Next" to keep site locked for the next point.</span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => { setModal(false); setEditingId(null); setForm({}); }} className="btn btn-secondary">Cancel</button>
+                {!editingId && (
+                  <button
+                    type="button"
+                    disabled={uploading}
+                    onClick={(e) => save(e, true)}
+                    className="btn btn-secondary border-blue-400 text-blue-700 hover:bg-blue-50 font-semibold"
+                    title="Save this snag and keep site & assignee locked for next entry"
+                  >
+                    Save & Add Next
+                  </button>
+                )}
+                <button type="submit" disabled={uploading} className="btn btn-primary">{uploading ? 'Uploading…' : (editingId ? 'Save' : 'Raise Snag')}</button>
+              </div>
+            </div>
+          </form>
+        )}
       </Modal>
 
       {/* SUBMIT PROOF MODAL */}
@@ -532,7 +922,7 @@ export default function Snags() {
               <label className="label">Proof Photo *</label>
               {proofForm.proof_url ? (
                 <div className="flex items-start gap-3">
-                  <img src={proofForm.proof_url} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
+                  <img src={toThumb(proofForm.proof_url, 256)} alt="" width="128" height="128" decoding="async" className="w-32 h-32 object-cover rounded border" />
                   <button type="button" onClick={() => setProofForm(f => ({ ...f, proof_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (

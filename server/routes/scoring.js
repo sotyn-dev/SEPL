@@ -333,25 +333,19 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
     //   purchase_orders.site_engineer_id (CSV via site_engineer_ids too) →
     //                                    sites are linked through po.id
     const userName = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
-    const siteIdsForUser = () => {
-      const rows = db.prepare(`
-        SELECT id FROM sites WHERE site_engineer_id = ? OR supervisor_id = ?
-        UNION
-        SELECT id FROM sites WHERE LOWER(TRIM(COALESCE(supervisor,''))) = LOWER(TRIM(?))
-        UNION
-        SELECT s.id FROM sites s
-        JOIN purchase_orders po ON po.id = s.po_id
-        WHERE po.site_engineer_id = ?
-           OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ?
-      `).all(userId, userId, userName, userId, `%,${userId},%`);
-      return rows.map(r => r.id).filter(Boolean);
-    };
+    const siteIdsForUser = () => require('../lib/scorecardSites').scorecardSiteIds(db, userId, userName);
 
     let _raciAgg; // memoized RACI aggregate for this user/week — both raci sources reuse it
     let _raciBreakdown; // memoized per-(module,step) RACI breakdown — per-step KPIs reuse it
     const computeAutoCount = (source, since, until) => {
       const sinceDate = since.slice(0, 10);
       const untilDate = until.slice(0, 10);
+      if (source === 'auto:dpr_bill_checking') {
+        return require('../lib/salesBillCheckingScore').dprBillCheckingScore(db, sinceDate, untilDate);
+      }
+      if (source === 'auto:sales_bill_checking') {
+        return require('../lib/salesBillCheckingScore').salesBillCheckingScore(db, userId, sinceDate, untilDate);
+      }
 
       // mam 2026-06-29: count Planned vs Actual on the SAME cohort — tasks
       // ASSIGNED this week, and of those how many reached the done status — so
@@ -1462,19 +1456,22 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
             // already filtered to tasks due on/before the week end, so a task
             // whose date was extended into the future is not "pending" yet.
             // mam 2026-09-14: Pending = PREVIOUS pendency only — tasks due
-            // before this week still not done at the week end. This week's own
-            // leftover already reads as Planned − Actual, so it is not re-added.
-            pendingUp = carry.stillOpen || 0;
-            pendingWk = carry.prevDone;
+            // before this week, including those completed during the week.
+            // This week's own leftover stays in Planned − Actual.
+            const previous = require('../lib/previousBacklog').previousBacklog(carry.stillOpen, carry.prevDone);
+            pendingUp = previous.pending;
+            pendingWk = previous.done;
+            carryPrevPending = previous.pending;
             pendingAuto = true;
           } else if (pendingWeekOnly(k.data_source) && given !== null && done !== null) {
             // RACI: same pair — openBefore joins the outstanding total (never
             // Planned, 2026-08-22 rule) and closedBefore = backlog steps the
             // user closed this week. Checklists have neither → 0s.
             // Previous pendency only (mam 2026-09-14) — same rule as above.
-            pendingUp = autoRes.openBefore || 0;
-            pendingWk = autoRes.closedBefore || 0;
-            carryPrevPending = autoRes.openBefore || 0;
+            const previous = require('../lib/previousBacklog').previousBacklog(autoRes.openBefore, autoRes.closedBefore);
+            pendingUp = previous.pending;
+            pendingWk = previous.done;
+            carryPrevPending = previous.pending;
             carryPrevDone = autoRes.closedBefore || 0;
             pendingAuto = true;
           }
@@ -1700,12 +1697,12 @@ router.get('/raci-breakdown', (req, res) => {
     const untilDate = shiftWeek(weekStart, 5);
     const rows = require('../utils/raciModules').raciUserWeekBreakdown(getDb(), userId, sinceDate, untilDate);
     // totals.pending mirrors the scorecard row's Pending pair (mam 2026-08-27
-    // audit): total outstanding includes the pre-week backlog (pending_before),
+    // audit): opening backlog includes remaining + completed previous tasks,
     // and prev_done = backlog steps closed this week — else the drill-down
     // would contradict the row it expands (502 vs 297).
     const totals = rows.reduce(
       (t, r) => ({ planned: t.planned + r.planned, actual: t.actual + r.actual,
-                   pending: t.pending + r.pending + (r.pending_before || 0),
+                   pending: t.pending + (r.pending_before || 0) + (r.closed_before || 0),
                    prev_done: t.prev_done + (r.closed_before || 0) }),
       { planned: 0, actual: 0, pending: 0, prev_done: 0 }
     );

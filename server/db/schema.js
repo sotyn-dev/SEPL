@@ -1302,6 +1302,23 @@ function initializeDatabase() {
     -- ============================================
     -- SYSTEM 4: DPR DAILY CALCULATION SYSTEM
     -- ============================================
+    CREATE TABLE IF NOT EXISTS project_profit_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id),
+      basis TEXT NOT NULL CHECK(basis IN ('sales','client_ra','dpr')),
+      kind TEXT NOT NULL CHECK(kind IN ('revenue','cost')),
+      category TEXT NOT NULL,
+      entry_date TEXT NOT NULL,
+      amount REAL NOT NULL CHECK(amount != 0),
+      reason TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      voided_at TEXT,
+      voided_by INTEGER REFERENCES users(id),
+      void_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_profit_adjustments ON project_profit_adjustments(project_id,basis,entry_date);
+
     CREATE TABLE IF NOT EXISTS sites (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -2085,6 +2102,9 @@ function initializeDatabase() {
     -- etc. — and tracked individually with serial / current location.
     CREATE TABLE IF NOT EXISTS tools (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_master_id INTEGER REFERENCES item_master(id),
+      quantity REAL NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      unit TEXT,
       tool_code TEXT UNIQUE,                  -- e.g. T-2026-0001 auto-generated
       name TEXT NOT NULL,
       category TEXT,                          -- 'Drilling','Cutting','Measurement','Safety','Power','Hand','Other'
@@ -2198,6 +2218,10 @@ function initializeDatabase() {
       amount REAL DEFAULT 0,
       terms TEXT,                 -- 'Advance' or 'Credit'
       credit_days INTEGER DEFAULT 0,
+      description TEXT,
+      hsn_code TEXT,
+      specification TEXT,
+      rate_updated_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -3122,6 +3146,8 @@ function initializeDatabase() {
     ['vendor_pos', 'po_reject_by INTEGER'],
     ['vendor_pos', 'po_reject_at DATETIME'],
     ['vendor_pos', 'po_reject_reason TEXT'],
+    ['vendor_pos', 'po_auto_approved INTEGER DEFAULT 0'],
+    ['vendor_pos', 'po_approval_note TEXT'],
     // Per-rule dynamic From address for email triggers (mam 2026-06-03:
     // "from mail which id also dynamic"). Optional; supports {{vars}}.
     ['email_rules', 'from_addr TEXT'],
@@ -4059,6 +4085,7 @@ function initializeDatabase() {
     // "no such column" → 500 → the Edit modal showed zero line items.
     ['vendor_po_items', 'description TEXT'],
     ['vendor_po_items', 'hsn_code TEXT'],
+    ['vendor_po_items', 'specification TEXT'],
     // Stamped when a PO line's RATE is edited via Edit PO. The print page has
     // to choose between two rate sources — this line and the finalised
     // 3-vendor rate (indent_item_rates.final_rate) — and used to always prefer
@@ -4160,6 +4187,8 @@ function initializeDatabase() {
     // bill (mam 2026-06-13: "only give option sent to client").
     ['sales_bills', 'sent_to_client INTEGER DEFAULT 0'],
     ['sales_bills', 'sent_at DATETIME'],
+    ['sales_bills', 'checked_at DATETIME'],
+    ['sales_bills', 'checked_by INTEGER REFERENCES users(id)'],
     // Room Rentals — PIN code of the rented room + auto metro/non-metro
     // classification (mam 2026-06-23). metro_type IN ('Metro','Non-Metro');
     // pincode_city is the India-Post-resolved district/city for reference.
@@ -6693,7 +6722,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): AR/AP Tracker — rolling weekly cash-flow forecast
     // (receivables vs payables by party × week) with a mandatory-remark
     // change log. Under the Finance sidebar group.
-    'ar_ap_tracker',
+    'ar_ap_tracker', 'project_profit',
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
@@ -6757,7 +6786,6 @@ in your first week. If a process feels broken, raise a Help Ticket
     //   can_create  → create flows
     //   can_edit    → edit any flow, manage Step/Process masters
     //   can_approve → override an incomplete-dependency completion
-    'system_flow',
     // Mam (2026-09-07): Sotyn Leads — the sotyn.ai website enquiry inbox.
     // The public webhook writes the row with no user attached; this key
     // gates who can READ and work the inbox inside the ERP:
@@ -7513,6 +7541,9 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('./complianceSchema').initializeComplianceSchema(db);
 
   console.log('Database initialized successfully');
+  require('../lib/makeApproval').initialize(db);
+  require('../lib/salesBillCheckingScore').migrateSalesBillCheckingScore(db);
+  require('../lib/salesBillCheckingScore').migrateDprBillCheckingScore(db);
   return db;
 }
 

@@ -257,10 +257,15 @@ export default function CRMFunnel() {
   };
 
   const stepBadge = (r) => {
-    if (r.final_status === 'win') return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-emerald-100 text-emerald-800">WIN</span>;
-    if (r.final_status === 'loss') return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-red-100 text-red-700">LOSS</span>;
-    if (r.quotation_submitted) return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-amber-100 text-amber-800">STEP 2 · NEGOTIATION</span>;
-    return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-blue-100 text-blue-700">STEP 1 · QUOTATION</span>;
+    if (r.final_status === 'win') return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-emerald-100 text-emerald-800 whitespace-nowrap">WIN</span>;
+    if (r.final_status === 'loss') return (
+      <div className="inline-flex flex-col items-start">
+        <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-red-100 text-red-700 whitespace-nowrap">LOSS</span>
+        {r.loss_reason && <span className="text-[10px] text-red-600 truncate max-w-[130px]" title={r.loss_reason}>({r.loss_reason})</span>}
+      </div>
+    );
+    if (r.quotation_submitted) return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-amber-100 text-amber-800 whitespace-nowrap">STEP 2 · NEGOTIATION</span>;
+    return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-blue-100 text-blue-700 whitespace-nowrap">STEP 1 · QUOTATION</span>;
   };
 
   // Metrics — counts mirror the existing 11-stage Sales Funnel dashboard so
@@ -370,14 +375,17 @@ export default function CRMFunnel() {
 
         <div className="card p-0 overflow-hidden">
           <div className="table-responsive">
-            <table className="freeze-head min-w-[900px] sm:min-w-full">
+            <table className="freeze-head dense-cols text-xs min-w-[950px] w-full">
               <thead>
                 <tr>
                   <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>
                   <th>Type</th><th>Category</th><th>State</th>
                   <th>BOQ</th><th>Quote</th><th>Qty Amount</th>
                   <th>Neg Status</th><th>Neg Amount</th>
-                  <th>Stage</th><th>Loss Reason</th><th>Actions</th>
+                  <th>Stage</th><th>Loss Reason</th>
+                  <th className="sticky right-0 z-20 bg-gray-100 text-center shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.12)] min-w-[95px] px-2 py-2">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -388,19 +396,19 @@ export default function CRMFunnel() {
                   </td></tr>
                 )}
                 {pager.pageItems.map(r => (
-                  <tr key={r.id}>
-                    <td className="font-mono text-xs">{r.lead_no}</td>
+                  <tr key={r.id} onClick={() => setViewRow(r)} className="cursor-pointer hover:bg-red-50/40 group transition-colors" title="Click to view / update lead">
+                    <td className="font-mono text-xs whitespace-nowrap">{r.lead_no}</td>
                     <td className="font-medium">
                       {r.client_name}
                       {r.requirement_items && (
-                        <div className="text-[10px] text-gray-500 font-normal max-w-[220px] truncate" title={r.requirement_items}>🧾 {r.requirement_items}</div>
+                        <div className="text-[10px] text-gray-500 font-normal max-w-[200px] truncate" title={r.requirement_items}>🧾 {r.requirement_items}</div>
                       )}
                     </td>
-                    <td>{r.company_name || '-'}</td>
-                    <td>{r.mobile || '-'}</td>
+                    <td className="max-w-[130px] truncate" title={r.company_name}>{r.company_name || '-'}</td>
+                    <td className="whitespace-nowrap">{r.mobile || '-'}</td>
                     <td>{r.source || '-'}</td>
                     <td>{r.type || '-'}</td>
-                    <td>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
+                    <td className="max-w-[130px] truncate" title={r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : r.category}>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
                     <td>{r.state || '-'}</td>
                     <td>
                       {/* The uploaded "Customer BOQ File" counts as the BOQ too —
@@ -408,33 +416,33 @@ export default function CRMFunnel() {
                       BOQ was UPLOADED showed "-" on the very page it was
                       uploaded from (mam 2026-09-07). */}
                       {(r.cust_boq_link || r.boq_file_link) ? (
-                        <a className="text-red-600 hover:underline" href={r.cust_boq_link || r.boq_file_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                        <a className="text-red-600 hover:underline" href={r.cust_boq_link || r.boq_file_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}><FiExternalLink size={12} className="inline" /></a>
                       ) : r.source_indent_id ? (
-                        <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
+                        <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
                       ) : '-'}
                     </td>
                     <td>
                       {r.quotation_link ? (
-                        <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                        <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}><FiExternalLink size={12} className="inline" /></a>
                       ) : (r.source_indent_id && r.category === 'extra_schedule') ? (
-                        <a href={`/quotation/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap font-semibold" title="Auto-priced quotation from previous BOQ rates"><FiExternalLink size={11} /> Make quotation</a>
+                        <a href={`/quotation/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap font-semibold" title="Auto-priced quotation from previous BOQ rates"><FiExternalLink size={11} /> Make quotation</a>
                       ) : '-'}
                     </td>
-                    <td>{r.quotation_amount ? `Rs ${(+r.quotation_amount).toLocaleString('en-IN')}` : '-'}</td>
-                    <td>{NEG_STATUSES.find(s => s.v === r.negotiation_status)?.l || '-'}</td>
-                    <td>{r.negotiation_amount ? `Rs ${(+r.negotiation_amount).toLocaleString('en-IN')}` : '-'}</td>
+                    <td className="whitespace-nowrap">{r.quotation_amount ? `Rs ${(+r.quotation_amount).toLocaleString('en-IN')}` : '-'}</td>
+                    <td className="whitespace-nowrap">{NEG_STATUSES.find(s => s.v === r.negotiation_status)?.l || '-'}</td>
+                    <td className="whitespace-nowrap">{r.negotiation_amount ? `Rs ${(+r.negotiation_amount).toLocaleString('en-IN')}` : '-'}</td>
                     <td>{stepBadge(r)}</td>
-                    <td className="text-xs text-gray-600 max-w-[180px] truncate" title={r.loss_reason}>{r.loss_reason || '-'}</td>
-                    <td>
-                      <div className="flex gap-1">
+                    <td className="text-xs text-gray-500 max-w-[130px] truncate" title={r.loss_reason}>{r.loss_reason || '-'}</td>
+                    <td className="sticky right-0 z-10 bg-white group-hover:bg-[#fef2f2] text-center shadow-[-4px_0_6px_-2px_rgba(0,0,0,0.12)] px-2 py-2" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center justify-center gap-1">
                         {/* View (eye) — works for everyone with view
                         access, including roles that can't edit.
                         Mam wanted a consistent eye-button shape
                         across CRM Funnel, Sales Funnel, BB,
                         Rental, etc. */}
-                        <button onClick={() => setViewRow(r)} className="p-1 text-gray-400 hover:text-red-600" title="View lead"><FiEye size={14} /></button>
-                        {canEdit('crm_funnel') && <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}
-                        {canDelete('crm_funnel') && <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                        <button onClick={(e) => { e.stopPropagation(); setViewRow(r); }} className="p-1.5 text-gray-500 hover:text-red-600 rounded hover:bg-gray-100 transition-colors" title="View / Update stage"><FiEye size={15} /></button>
+                        {canEdit('crm_funnel') && <button onClick={(e) => { e.stopPropagation(); openEdit(r); }} className="p-1.5 text-gray-500 hover:text-red-600 rounded hover:bg-gray-100 transition-colors" title="Edit"><FiEdit2 size={15} /></button>}
+                        {canDelete('crm_funnel') && <button onClick={(e) => { e.stopPropagation(); remove(r); }} className="p-1.5 text-gray-400 hover:text-red-600 rounded hover:bg-gray-100 transition-colors" title="Delete"><FiTrash2 size={15} /></button>}
                       </div>
                     </td>
                   </tr>

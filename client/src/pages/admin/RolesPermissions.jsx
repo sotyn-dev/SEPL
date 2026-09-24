@@ -14,6 +14,7 @@ import { useModuleFlags } from '../../context/ModuleFlagsContext';
 // revoke access.  Grouped by sidebar section for readability; keys
 // (used by backend role_permissions) are unchanged.
 const ALL_MODULES = [
+  { key: 'project_profit', label: 'Project Profit & Loss' },
   // — Finance & Daily Operations
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'cashflow', label: 'Bank — cash ledger (the Cash Flow page was removed 2026-09-03; this key still gates Bank)' },
@@ -98,12 +99,6 @@ const ALL_MODULES = [
   { key: 'rentals', label: 'Room Rentals' },
   { key: 'employees', label: 'Employees' },
   { key: 'expenses', label: 'Expenses' },
-
-  // — ERP Management (2026-09) — System Flow & Implementation Control.
-  // View = dashboards/flows + update OWN tasks · Create = create flows ·
-  // Edit = edit any flow + manage Step/Process masters + ERP links ·
-  // Approve = override an incomplete-dependency completion.
-  { key: 'system_flow', label: 'System Flow (ERP Management) — build tracker, bottlenecks, step master' },
 
   // — Platform
   { key: 'ai_agent', label: 'AI Agent (Ask SOTYN.AI)' },

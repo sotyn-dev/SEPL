@@ -728,12 +728,27 @@ router.delete('/:id', requirePermission('installation', 'delete'), (req, res) =>
   res.json({ message: 'Bill deleted' });
 });
 
-// Mark an installation bill "Sent to Client" — the only manual step on an
-// auto-generated Type-3 bill (mam 2026-06-13). Toggle.
+// Existing installation bills also need an explicit check before client sending.
+router.put('/:id/checked', requirePermission('installation', 'edit'), (req, res) => {
+  const db = getDb();
+  const bill = db.prepare('SELECT id, checked_at FROM sales_bills WHERE id=? AND bill_type=3').get(req.params.id);
+  if (!bill) return res.status(404).json({ error: 'Installation bill not found' });
+  if (!bill.checked_at) db.transaction(() => {
+    db.prepare('UPDATE sales_bills SET checked_at=CURRENT_TIMESTAMP, checked_by=? WHERE id=?').run(req.user.id, bill.id);
+    db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
+      .run(bill.id, 'checked', req.user.id, 'Checked / OK before sending to client');
+  })();
+  res.json({ message: 'Checked / OK' });
+});
+
+// Mark a checked installation bill sent. Historical sent flags remain intact.
 router.put('/:id/sent', requirePermission('installation', 'edit'), (req, res) => {
   const db = getDb();
-  const bill = db.prepare('SELECT id, sent_to_client FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
+  const bill = db.prepare('SELECT id, bill_type, checked_at, sent_to_client FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
+  if (bill.bill_type === 3 && !bill.sent_to_client && !bill.checked_at) {
+    return res.status(400).json({ error: 'Mark this installation bill Checked / OK before Sent to Client.' });
+  }
   const sent = bill.sent_to_client ? 0 : 1;
   db.prepare('UPDATE sales_bills SET sent_to_client=?, sent_at=' + (sent ? 'CURRENT_TIMESTAMP' : 'NULL') + ' WHERE id=?').run(sent, bill.id);
   db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
@@ -799,7 +814,9 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
 // Sums each project's DPR work-item value for approved, billing-ready, NOT-yet-billed DPRs,
 // and raises one Type-3 bill per project. Supports selective billing via dprIds.
 // Idempotent via dpr.sales_bill_id (a DPR is billed once). Returns a summary.
-function generateInstallationBills(db, userId, { draft = true, dprIds = null, billDate = null } = {}) {
+function generateInstallationBills(db, userId, { draft = true, dprIds = null, billDate = null, checked = false } = {}) {
+  // No background or legacy caller may bypass the human check step.
+  if (!checked || !userId) throw new Error('Check the selected DPRs before creating installation bills.');
   let sql = `
     SELECT d.id AS dpr_id, d.report_date, s.business_book_id AS bb_id
        FROM dpr d JOIN sites s ON s.id = d.site_id
@@ -812,6 +829,11 @@ function generateInstallationBills(db, userId, { draft = true, dprIds = null, bi
     params.push(...dprIds);
   }
   const rows = db.prepare(sql).all(...params);
+  if (Array.isArray(dprIds) && rows.length !== new Set(dprIds).size) {
+    const error = new Error('Some selected DPRs are already billed or no longer ready. Refresh and review the selection.');
+    error.status = 409;
+    throw error;
+  }
   if (!rows.length) return { created: 0, bills: [] };
 
   const groups = new Map();   // bb_id → { dprIds, minDate, maxDate }
@@ -828,11 +850,11 @@ function generateInstallationBills(db, userId, { draft = true, dprIds = null, bi
   const tx = db.transaction(() => {
     for (const [bbId, g] of groups) {
       const bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbId);
-      if (!bb) continue;
+      if (!bb) throw new Error('A selected DPR has no linked order.');
 
       const sitcRes = getDprSitcWorkItems(db, { dprIds: g.dprIds, businessBookId: bbId });
       const workValue = round2(sitcRes.totalSitcVal);
-      if (workValue <= 0) continue;
+      if (workValue <= 0) throw new Error('A selected project has no billable work value. Review its DPR quantities and rates.');
 
       const instPct = parseFloat(String(bb.payment_against_installation || '').replace(/[^0-9.]/g, '')) || 0;
       const pctToUse = instPct > 0 ? instPct : 100;
@@ -861,6 +883,9 @@ function generateInstallationBills(db, userId, { draft = true, dprIds = null, bi
         bbId, (bb.client_name || bb.company_name || '').trim(), bb.project_name || null, BILL_STATUS[3],
         prior ? prior.id : null, refDoc, draft ? 'draft' : 'approved', userId);
       const billId = r.lastInsertRowid;
+      db.prepare('UPDATE sales_bills SET checked_at=CURRENT_TIMESTAMP, checked_by=? WHERE id=?').run(userId, billId);
+      db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
+        .run(billId, 'checked', userId, `Checked / OK: DPRs ${g.dprIds.join(', ')}; bill created automatically`);
 
       // Populate sales_bill_items with full SITC rates
       const insItem = db.prepare(
@@ -886,12 +911,14 @@ function generateInstallationBills(db, userId, { draft = true, dprIds = null, bi
 router.post('/generate-installation', requirePermission('installation', 'create'), (req, res) => {
   try {
     const db = getDb();
+    if (req.body.checked !== true) return res.status(400).json({ error: 'Confirm Checked / OK to create the bill.' });
     const dprIds = Array.isArray(req.body.dpr_ids) ? req.body.dpr_ids.map(Number).filter(Boolean) : null;
-    if (req.body.dpr_ids !== undefined && (!dprIds || dprIds.length === 0)) {
+    if (!dprIds || dprIds.length === 0) {
       return res.status(400).json({ error: 'Please select at least one DPR to generate installation bills.' });
     }
     const result = generateInstallationBills(db, req.user.id, {
       draft: false,
+      checked: true,
       dprIds,
       billDate: req.body.bill_date
     });
@@ -903,7 +930,7 @@ router.post('/generate-installation', requirePermission('installation', 'create'
     });
   } catch (err) {
     console.error('sales-billing generate-installation error', err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 400).json({ error: err.message });
   }
 });
 

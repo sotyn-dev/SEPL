@@ -414,11 +414,9 @@ export default function Delegation() {
   // when user gives a second date but on that date not done, red on the third date").
   // The colour tracks how many times the due date has been PUSHED, not how close it
   // is. Each approved extension / manual re-date bumps extension_count on the server.
-  //   GREEN  = done, OR still on the original date (never pushed)
-  //   YELLOW = date pushed once — a 2nd date was given and it's still open
-  //   RED    = date pushed twice or more — a 3rd (or later) date and still open
+  // Keep the date history even after completion or approval.
+  //   GREEN = original date; YELLOW = second date; RED = third date or later.
   const taskHealth = (t) => {
-    if (t.status === 'approved') return 'green';           // done — closed on whatever date
     const n = +t.extension_count || 0;                     // times the date was pushed
     if (n >= 2) return 'red';                              // 3rd date or beyond
     if (n >= 1) return 'yellow';                           // 2nd date given

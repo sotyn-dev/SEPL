@@ -94,6 +94,26 @@ const DWG_FROM = `FROM drawings d LEFT JOIN drawing_revisions r ON r.id = d.curr
 // full site list. That's a schema limitation, surfaced honestly to the UI.
 router.get('/options', canView, (req, res) => {
   const db = getDb();
+  let projectsSalesFunnel = [];
+  try {
+    projectsSalesFunnel = db.prepare(`
+      SELECT id, lead_no, client_name, company_name, project_name, project_location, address, district, state, current_stage, is_qualified,
+             COALESCE(NULLIF(TRIM(project_name),''), client_name, company_name) AS name
+        FROM sales_funnel
+       WHERE current_stage != 'lost'
+       ORDER BY id DESC LIMIT 1000`).all();
+  } catch (_) {}
+
+  let projectsSolar = [];
+  try {
+    projectsSolar = db.prepare(`
+      SELECT id, deal_no, client_name, company, location, state, district, stage,
+             COALESCE(NULLIF(TRIM(company),''), client_name) AS name
+        FROM solar_deals
+       WHERE status != 'lost'
+       ORDER BY id DESC LIMIT 1000`).all();
+  } catch (_) {}
+
   res.json({
     disciplines: listSetting('drawing_disciplines', DEFAULT_DISCIPLINES),
     drawing_types: listSetting('drawing_types', DEFAULT_TYPES),
@@ -103,6 +123,8 @@ router.get('/options', canView, (req, res) => {
         FROM business_book
        WHERE COALESCE(NULLIF(TRIM(project_name),''), client_name) IS NOT NULL
        ORDER BY name LIMIT 2000`).all(),
+    projects_sales_funnel: projectsSalesFunnel,
+    projects_solar: projectsSolar,
     projects_module: db.prepare(`SELECT id, name FROM proj_projects ORDER BY name`).all(),
     sites: db.prepare(`SELECT id, name, business_book_id FROM sites ORDER BY name`).all(),
   });
@@ -167,7 +189,8 @@ router.post('/drawings', canCreate, upload.single('file'), async (req, res) => {
   if (!str(b.drawing_number)) return fail(400, 'Drawing number is required');
   if (!str(b.revision_description)) return fail(400, 'Revision description is required');
   if (!req.file) return fail(400, 'A drawing file is required');
-  const projectSource = b.project_source === 'proj_project' ? 'proj_project' : 'business_book';
+  const validSources = ['business_book', 'proj_project', 'sales_funnel', 'solar_deal'];
+  const projectSource = validSources.includes(b.project_source) ? b.project_source : 'business_book';
 
   // Land the file in storage first (no-op locally, uploads to S3 when remote),
   // then do the DB work synchronously. better-sqlite3 transactions are sync, so
@@ -366,7 +389,8 @@ router.get('/revisions/:id/file', canView, async (req, res) => {
   if (!opened) return res.status(404).json({ error: 'The file for this revision could not be found.' });
 
   const download = req.query.download === '1';
-  const ext = path.extname(rev.file_name || '') || path.extname(key) || '';
+  let ext = path.extname(rev.file_name || '') || path.extname(key) || '';
+  if (!ext && /\.dwg$/i.test(rev.file_name || '')) ext = '.dwg';
   // The user-facing filename follows the spec convention even though the
   // on-disk name can't (the revision number isn't known at multer time).
   const nice = `${rev.drawing_number}_Rev${rev.revision_no}${ext}`.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -378,7 +402,13 @@ router.get('/revisions/:id/file', canView, async (req, res) => {
     method: 'GET', path: req.originalUrl, ip: req.ip, user_agent: req.get('user-agent'),
   });
 
-  if (rev.file_type) res.setHeader('Content-Type', rev.file_type);
+  let contentType = rev.file_type;
+  if (ext.toLowerCase() === '.dwg') {
+    contentType = 'application/acad';
+  } else if (!contentType) {
+    contentType = 'application/octet-stream';
+  }
+  res.setHeader('Content-Type', contentType);
   if (opened.size) res.setHeader('Content-Length', opened.size);
   res.setHeader('Content-Disposition', `${download ? 'attachment' : 'inline'}; filename="${nice}"`);
   opened.stream.on('error', () => { if (!res.headersSent) res.status(500).end(); });
@@ -415,18 +445,78 @@ router.put('/drawings/:id', canEdit, (req, res) => {
   if (!before) return res.status(404).json({ error: 'Drawing not found' });
   const b = req.body || {};
   try {
+    const validSources = ['business_book', 'proj_project', 'sales_funnel', 'solar_deal'];
+    const projectSource = b.project_source && validSources.includes(b.project_source) ? b.project_source : before.project_source;
+    const projectId = b.project_id !== undefined ? int(b.project_id) : before.project_id;
+    const projectName = b.project_name !== undefined ? str(b.project_name) : before.project_name;
+    const drawingNumber = str(b.drawing_number) || before.drawing_number;
+
+    // Check unique identity constraint if drawing number or project changed
+    if (drawingNumber !== before.drawing_number || projectId !== before.project_id || projectSource !== before.project_source) {
+      const conflict = db.prepare(`
+        SELECT id FROM drawings
+         WHERE project_source = ? AND project_id IS ? AND drawing_number = ? AND id != ?
+      `).get(projectSource, projectId, drawingNumber, before.id);
+      if (conflict) {
+        return res.status(409).json({ error: `Drawing number "${drawingNumber}" already exists for this project.` });
+      }
+    }
+
     db.prepare(`UPDATE drawings SET
-        title = COALESCE(?, title), discipline = COALESCE(?, discipline),
-        drawing_type = COALESCE(?, drawing_type), site_id = COALESCE(?, site_id),
-        site_name = COALESCE(?, site_name), remarks = COALESCE(?, remarks),
+        drawing_number = ?,
+        title = COALESCE(?, title),
+        discipline = COALESCE(?, discipline),
+        drawing_type = COALESCE(?, drawing_type),
+        project_source = ?,
+        project_id = ?,
+        project_name = ?,
+        site_id = ?,
+        site_name = ?,
+        remarks = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?`).run(
+      drawingNumber,
       str(b.title), str(b.discipline), str(b.drawing_type),
-      int(b.site_id), str(b.site_name), str(b.remarks), req.params.id);
+      projectSource, projectId, projectName,
+      b.site_id !== undefined ? int(b.site_id) : before.site_id,
+      b.site_name !== undefined ? str(b.site_name) : before.site_name,
+      b.remarks !== undefined ? str(b.remarks) : before.remarks,
+      req.params.id);
+
+    logAuditEvent({
+      user: req.user, action: 'DRAWING_UPDATED', entity_type: 'drawings',
+      entity_id: before.id, entity_label: drawingNumber,
+      before: { drawing_number: before.drawing_number, title: before.title, site_name: before.site_name },
+      after: { drawing_number: drawingNumber, title: str(b.title), site_name: str(b.site_name) },
+    });
   } catch (e) {
+    console.error('[drawing-tracker] update failed:', e.message);
     return res.status(500).json({ error: 'Could not update the drawing.' });
   }
   res.json(db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(req.params.id));
+});
+
+// ─── Edit revision remarks/date (never touches file or revision_no) ────
+router.put('/revisions/:id', canEdit, (req, res) => {
+  const db = getDb();
+  const rev = db.prepare('SELECT * FROM drawing_revisions WHERE id=?').get(req.params.id);
+  if (!rev) return res.status(404).json({ error: 'Revision not found' });
+  const b = req.body || {};
+  try {
+    db.prepare(`UPDATE drawing_revisions SET
+        revision_description = COALESCE(?, revision_description),
+        revision_reason = COALESCE(?, revision_reason),
+        revision_date = COALESCE(?, revision_date)
+      WHERE id = ?`).run(str(b.revision_description), str(b.revision_reason), str(b.revision_date), rev.id);
+    logAuditEvent({
+      user: req.user, action: 'REVISION_EDITED', entity_type: 'drawing_revisions',
+      entity_id: rev.id, entity_label: `Rev ${rev.revision_no}`,
+      after: { revision_description: b.revision_description, revision_reason: b.revision_reason },
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'Could not update revision details.' });
+  }
+  res.json(db.prepare('SELECT * FROM drawing_revisions WHERE id=?').get(rev.id));
 });
 
 // ─── Dashboard ─────────────────────────────────────────────────────────

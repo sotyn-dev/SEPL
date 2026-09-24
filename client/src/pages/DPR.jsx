@@ -7,7 +7,7 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera, FiList, FiPackage } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera, FiList, FiPackage, FiZap, FiCpu } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import EngineerPerformance from '../components/EngineerPerformance';
 
@@ -106,6 +106,14 @@ export default function DPR() {
   const [planActing, setPlanActing] = useState(false);
   const [pendingPlans, setPendingPlans] = useState([]);      // status='submitted' headers for the badge
   const [pendingPlansModal, setPendingPlansModal] = useState(false);
+
+  // TSK-0827: AI in Scheduling & DPR states
+  const [aiPlanningLoading, setAiPlanningLoading] = useState(false);
+  const [aiPlanReasoning, setAiPlanReasoning] = useState('');
+  const [quickNotesText, setQuickNotesText] = useState('');
+  const [showQuickNotes, setShowQuickNotes] = useState(false);
+  const [aiParsingLoading, setAiParsingLoading] = useState(false);
+  const [aiLossLoading, setAiLossLoading] = useState(false);
 
   // Friday cutoff = 3 days before the Monday week-start (SPOS: plan is
   // finalized every Friday). After it, saves are flagged LATE server-side.
@@ -350,9 +358,9 @@ export default function DPR() {
     }).catch(() => { setDprMaterials([]); setDprStoreName(null); setDprStoreErr(true); });
   };
 
-  // ── Site-store Issue / Return slip modal (jr. site engineer's counter) ──
+  // ── Site-store Issue / Return / Transfer slip modal (jr. site engineer's counter) ──
   const [slipModal, setSlipModal] = useState(false);
-  const [slipType, setSlipType] = useState('issue');
+  const [slipType, setSlipType] = useState('issue'); // 'issue' | 'return' | 'transfer'
   const [slipSite, setSlipSite] = useState('');
   const [slipDate, setSlipDate] = useState(istTodayIso());
   const [slipTo, setSlipTo] = useState('');
@@ -360,6 +368,25 @@ export default function DPR() {
   const [slipRows, setSlipRows] = useState([]);      // {item_master_id, name, unit, cap, qty}
   const [slipBusy, setSlipBusy] = useState(false);
   const [slipsToday, setSlipsToday] = useState([]);  // register for the picked site+date
+  const [destWarehouses, setDestWarehouses] = useState([]); // warehouses for transfer destination
+  const [slipToWarehouse, setSlipToWarehouse] = useState(''); // chosen destination warehouse ID
+
+  const loadDestWarehouses = async (siteId) => {
+    try {
+      const res = await api.get('/dpr/destination-warehouses', { params: { exclude_site_id: siteId || undefined } });
+      const whs = res.data || [];
+      setDestWarehouses(whs);
+      const office = whs.find(w => w.type === 'office' || w.warehouse_type === 'office') || whs[0];
+      if (office) {
+        setSlipToWarehouse(String(office.id));
+      } else {
+        setSlipToWarehouse('');
+      }
+    } catch {
+      setDestWarehouses([]);
+      setSlipToWarehouse('');
+    }
+  };
 
   const loadSlipRows = async (siteId, type, dateIso) => {
     if (!siteId) { setSlipRows([]); setSlipsToday([]); return; }
@@ -414,6 +441,23 @@ export default function DPR() {
           });
         });
         setSlipRows([...rows.values()].sort((a, b) => (b.cap - a.cap) || a.name.localeCompare(b.name)));
+      } else if (type === 'transfer') {
+        // Material Return to Office Store or Transfer to another site store:
+        // Cap is available stock in this site's store.
+        const r = await api.get(`/dpr/sites/${siteId}/store-stock`);
+        const rows = (r.data?.items || [])
+          .filter(it => +it.stock_qty > 0)
+          .map(it => ({
+            item_master_id: it.item_master_id,
+            name: [it.item_name, it.specification, it.size].filter(Boolean).join(' '),
+            unit: it.uom || 'nos',
+            cap: +it.stock_qty || 0,
+            planned_today: 0,
+            age_days: it.age_days,
+            age_status: it.age_status,
+            qty: '',
+          }));
+        setSlipRows(rows.sort((a, b) => (b.cap - a.cap) || a.name.localeCompare(b.name)));
       } else {
         // Return caps = issued today − already returned
         const r = await api.get(`/dpr/sites/${siteId}/consumption`, { params: { date: dateIso } });
@@ -438,18 +482,36 @@ export default function DPR() {
     setSlipModal(true); setSlipType('issue'); setSlipSite(siteId || '');
     setSlipDate(today); setSlipTo(''); setSlipNotes(''); setSlipRows([]); setSlipsToday([]);
     setSlipShift(autoSlipShift());
-    if (siteId) loadSlipRows(siteId, 'issue', today);
+    if (siteId) {
+      loadSlipRows(siteId, 'issue', today);
+      loadDestWarehouses(siteId);
+    }
   };
   const saveSlip = async () => {
     const items = slipRows.filter(r => +r.qty > 0).map(r => ({ item_master_id: r.item_master_id, quantity: +r.qty }));
     if (!slipSite) return toast.error('Pick a site first');
     if (!items.length) return toast.error('Enter a quantity on at least one item');
-    if (!slipTo.trim()) return toast.error(slipType === 'issue' ? 'Issued To is required — who is taking the material?' : 'Returned By is required');
+    if (slipType === 'transfer') {
+      if (!slipToWarehouse) return toast.error('Pick destination warehouse / store');
+      if (!slipTo.trim()) return toast.error('Carrier / Transferred By name is required');
+    } else {
+      if (!slipTo.trim()) return toast.error(slipType === 'issue' ? 'Issued To is required — who is taking the material?' : 'Returned By is required');
+    }
     const over = slipRows.find(r => +r.qty > 0 && +r.qty > r.cap);
-    if (over) return toast.error(`${over.name}: max ${over.cap} ${slipType === 'issue' ? 'in stock' : 'outstanding'}`);
+    if (over) return toast.error(`${over.name}: max ${over.cap} ${slipType === 'issue' || slipType === 'transfer' ? 'in stock' : 'outstanding'}`);
     setSlipBusy(true);
     try {
-      const r = await api.post('/dpr/site-slips', { site_id: slipSite, slip_type: slipType, slip_date: slipDate, issued_to: slipTo.trim(), notes: slipNotes, shift: slipShift, items });
+      const payload = {
+        site_id: slipSite,
+        slip_type: slipType,
+        slip_date: slipDate,
+        issued_to: slipTo.trim(),
+        notes: slipNotes,
+        shift: slipShift,
+        items,
+        ...(slipType === 'transfer' ? { to_warehouse_id: slipToWarehouse } : {}),
+      };
+      const r = await api.post('/dpr/site-slips', payload);
       toast.success(`${r.data.slip_number} saved — opening print`);
       window.open(`/site-slip/${r.data.id}/print`, '_blank');
       loadSlipRows(slipSite, slipType, slipDate);
@@ -858,6 +920,162 @@ export default function DPR() {
     } catch (err) { toast.error(err.response?.data?.error || 'Error'); }
   };
 
+  // ── TSK-0827: AI in Scheduling — Weekly 7-Day Lookahead Planner ───────────
+  const handleAiSuggestWeek = async () => {
+    if (!planSiteId) { toast.error('Pick a site first'); return; }
+    setAiPlanningLoading(true);
+    try {
+      const r = await api.post('/dpr/ai-suggest-week', { site_id: planSiteId, week_start: planWeekStart });
+      if (Array.isArray(r.data?.days) && r.data.days.length === 7) {
+        setPlanDays(r.data.days);
+        setAiPlanReasoning(r.data.reasoning || '');
+        toast.success('AI 7-day schedule generated! Review & adjust any field before saving.');
+      } else {
+        toast.error('AI returned incomplete week data');
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'AI Weekly suggestion failed');
+    } finally {
+      setAiPlanningLoading(false);
+    }
+  };
+
+  // ── TSK-0827: AI Daily Field Note / Voice Parser ──────────────────────────
+  const handleAiParseQuickNotes = async () => {
+    if (!form.site_id) { toast.error('Please pick a Site first'); return; }
+    if (!quickNotesText || !quickNotesText.trim()) { toast.error('Enter or paste site notes first'); return; }
+    setAiParsingLoading(true);
+    try {
+      const r = await api.post('/dpr/ai-parse-quick-dpr', {
+        site_id: form.site_id,
+        report_date: form.report_date || istTodayIso(),
+        quick_notes: quickNotesText
+      });
+      const p = r.data?.parsed;
+      if (p) {
+        // 1. Pre-fill or add matched work items in Table A
+        if (Array.isArray(p.work_items) && p.work_items.length > 0) {
+          setWorkItems(prev => {
+            const next = [...prev];
+            p.work_items.forEach(match => {
+              if (!match || !match.po_item_id) return;
+              const idx = next.findIndex(w => +w.po_item_id === +match.po_item_id);
+              const actual = Math.max(0, +match.actual_qty || 0);
+              if (idx >= 0) {
+                next[idx] = {
+                  ...next[idx],
+                  qty: actual,
+                  amount: actual * (next[idx].rate || 0),
+                  remarks: match.remarks || next[idx].remarks || ''
+                };
+              } else {
+                const poIt = poItemsForSite.find(item => item.id === +match.po_item_id);
+                if (poIt) {
+                  const sitc = +poIt.rate || 0;
+                  const rate = Math.round(sitc * LABOUR_RATE_PCT * 100) / 100;
+                  next.push({
+                    po_item_id: poIt.id,
+                    description: poIt.description || '',
+                    unit: poIt.unit || 'nos',
+                    boq_qty: poIt.quantity || 0,
+                    remaining_qty: poIt.remaining_qty ?? poIt.quantity ?? 0,
+                    filled_qty: poIt.filled_qty || 0,
+                    sitc_rate: sitc,
+                    rate,
+                    qty: actual,
+                    amount: actual * rate,
+                    remarks: match.remarks || ''
+                  });
+                }
+              }
+            });
+            return next;
+          });
+        }
+
+        // 2. Pre-fill Table B Manpower
+        if (p.skilled_manpower !== undefined || p.helper_manpower !== undefined || p.rental_cost !== undefined) {
+          setCosts(prev => prev.map(c => {
+            if (c.type === 'Skilled Manpower' && p.skilled_manpower !== undefined) {
+              const qty = Math.max(0, +p.skilled_manpower || 0);
+              return { ...c, qty, amount: qty * (c.rate || 800) };
+            }
+            if (c.type === 'Helper' && p.helper_manpower !== undefined) {
+              const qty = Math.max(0, +p.helper_manpower || 0);
+              return { ...c, qty, amount: qty * (c.rate || 500) };
+            }
+            if (c.type === 'Rental Cost' && p.rental_cost) {
+              const amt = Math.max(0, +p.rental_cost || 0);
+              return { ...c, qty: 1, rate: amt, amount: amt };
+            }
+            return c;
+          }));
+        }
+
+        // 3. Pre-fill Machinery
+        if (Array.isArray(p.machinery) && p.machinery.length > 0) {
+          setMachinery(p.machinery.map(m => ({
+            equipment: m.equipment || '',
+            quantity: 1,
+            hours_used: Math.max(0, +m.hours_used || 0),
+            condition: m.condition || 'working'
+          })));
+        }
+
+        // 4. Pre-fill form flags & fields
+        setForm(f => ({
+          ...f,
+          safety_toolbox_talk: p.safety_toolbox_talk !== undefined ? !!p.safety_toolbox_talk : f.safety_toolbox_talk,
+          safety_ppe_compliance: p.safety_ppe_compliance !== undefined ? !!p.safety_ppe_compliance : f.safety_ppe_compliance,
+          safety_incidents: p.safety_incidents || f.safety_incidents || '',
+          hindrances: p.hindrances || f.hindrances || '',
+          hindrance_category: p.hindrance_category || f.hindrance_category || '',
+          next_day_plan: p.next_day_plan || f.next_day_plan || '',
+          overall_status: p.overall_status || f.overall_status || 'on_track'
+        }));
+
+        toast.success('DPR form populated from field notes! Please review all values.');
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to parse notes with AI');
+    } finally {
+      setAiParsingLoading(false);
+    }
+  };
+
+  // ── TSK-0827: AI Next Day Plan & Loss Root Cause Suggestion ───────────────
+  const handleAiSuggestLossAndNextDay = async () => {
+    if (!form.site_id) { toast.error('Pick a site first'); return; }
+    setAiLossLoading(true);
+    try {
+      const r = await api.post('/dpr/ai-suggest-next-day-and-loss', {
+        site_id: form.site_id,
+        report_date: form.report_date || istTodayIso(),
+        grand_total_a: grandTotalA,
+        grand_total_b: grandTotalB,
+        work_items: workItems,
+        hindrances: form.hindrances,
+        hindrance_category: form.hindrance_category
+      });
+
+      if (r.data?.next_day_plan) {
+        setForm(f => ({ ...f, next_day_plan: r.data.next_day_plan }));
+      }
+      if (r.data?.suggested_loss_category) {
+        setForm(f => ({
+          ...f,
+          hindrance_category: r.data.suggested_loss_category,
+          hindrances: r.data.suggested_loss_reason || f.hindrances
+        }));
+      }
+      toast.success('Next day plan & loss analysis updated!');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'AI Suggestion failed');
+    } finally {
+      setAiLossLoading(false);
+    }
+  };
+
   const createSite = async (e) => { e.preventDefault(); await api.post('/dpr/sites', form); toast.success('Site created'); setSiteModal(false); load(); };
   // A DPR already on a client bill is not reopened silently: the server replies
   // 409 needs_force, we name the bill, and only an explicit yes goes through.
@@ -1108,7 +1326,7 @@ export default function DPR() {
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiUsers /> Morning Manpower</button>
               {/* Site-store Issue/Return slips — the jr. engineer's GRN counter (mam 2026-07-31) */}
               <button onClick={() => openSlipModal(form.site_id || '')}
-                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiPackage /> Store Issue/Return</button>
+                className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiPackage /> Store Issue / Return / Transfer</button>
               {/* Attendance Records — register of all saved morning manpower (mam 2026-06-24) */}
               <button onClick={openAttendanceRecords}
                 className="btn btn-secondary text-xs sm:text-sm flex items-center gap-1.5 sm:gap-2 flex-1 sm:flex-initial justify-center"><FiList /> Attendance Records</button>
@@ -1397,6 +1615,62 @@ export default function DPR() {
       {/* ===== SUBMIT DPR MODAL - Matches SEPL DPR Format ===== */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title="DAILY PROGRESS SHEET - SECURED ENGINEERS PVT LTD" wide>
         <form onSubmit={submitDpr} className="space-y-4">
+
+          {/* TSK-0827: AI Smart Fill from Field Notes */}
+          <div className="border border-indigo-200 bg-gradient-to-r from-indigo-50/70 via-purple-50/40 to-blue-50/50 rounded-lg p-3 shadow-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-md bg-indigo-600 text-white shadow-xs"><FiZap size={14} /></span>
+                <div>
+                  <h5 className="font-semibold text-xs text-indigo-950 flex items-center gap-1.5">
+                    AI Smart Fill from Field Notes / Voice
+                    <span className="bg-indigo-100 text-indigo-800 text-[10px] px-1.5 py-0.5 rounded font-medium">Copilot</span>
+                  </h5>
+                  <p className="text-[11px] text-gray-500">Dictate or paste field notes — AI will automatically match BOQ items, manpower, safety & hindrances.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuickNotes(!showQuickNotes)}
+                className="text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-100/70 hover:bg-indigo-200/80 px-2.5 py-1 rounded transition"
+              >
+                {showQuickNotes ? 'Close Smart Fill' : '✨ Open Smart Fill'}
+              </button>
+            </div>
+
+            {showQuickNotes && (
+              <div className="mt-2.5 pt-2.5 border-t border-indigo-100 space-y-2">
+                <textarea
+                  className="input text-xs w-full bg-white"
+                  rows="3"
+                  placeholder="e.g. Installed 45 sprinklers in Basement 2, 4 fitters, 2 helpers, 1 hr rain delay halt at 3pm, morning toolbox talk conducted, tomorrow will do hydrostatic pressure testing."
+                  value={quickNotesText}
+                  onChange={e => setQuickNotesText(e.target.value)}
+                />
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-gray-400">💡 Select the Site below first so AI can match exact BOQ items.</span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setQuickNotesText('')}
+                      className="btn btn-secondary text-xs py-1 px-2.5"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAiParseQuickNotes}
+                      disabled={aiParsingLoading || !quickNotesText.trim()}
+                      className="btn btn-primary text-xs py-1 px-3 flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 shadow-xs"
+                    >
+                      <FiZap size={12} className={aiParsingLoading ? 'animate-spin' : ''} />
+                      {aiParsingLoading ? 'Parsing with AI…' : 'Apply to DPR Form'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Header */}
           <div className="border rounded-lg p-3 bg-gray-50">
@@ -1936,7 +2210,19 @@ export default function DPR() {
               />
             </div>
             <div className="border rounded-lg p-3 bg-emerald-50">
-              <h5 className="font-semibold text-sm text-emerald-700 mb-2">Next Day Plan</h5>
+              <div className="flex items-center justify-between mb-2">
+                <h5 className="font-semibold text-sm text-emerald-700">Next Day Plan</h5>
+                <button
+                  type="button"
+                  onClick={handleAiSuggestLossAndNextDay}
+                  disabled={aiLossLoading || !form.site_id}
+                  className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 flex items-center gap-1.5 bg-emerald-100/90 hover:bg-emerald-200 px-2.5 py-1 rounded border border-emerald-300 shadow-2xs transition"
+                  title="Auto-draft tomorrow's plan from weekly schedule and analyze loss reason if cost > installed value"
+                >
+                  <FiZap size={11} className={aiLossLoading ? 'animate-spin text-amber-600' : 'text-emerald-600'} />
+                  {aiLossLoading ? 'Drafting…' : '✨ AI Next Day & Loss Assist'}
+                </button>
+              </div>
               <textarea className="input" rows="2" value={form.next_day_plan || ''} onChange={e => setForm({ ...form, next_day_plan: e.target.value })} placeholder="Tomorrow's work plan..." />
             </div>
           </div>
@@ -2282,6 +2568,35 @@ export default function DPR() {
             </div>
           </div>
 
+          {/* TSK-0827: AI 7-Day Lookahead Planner */}
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-gradient-to-r from-indigo-50/80 via-purple-50/60 to-emerald-50/70 border border-indigo-200/80 rounded-lg shadow-2xs">
+            <div className="text-xs">
+              <span className="font-bold text-indigo-900 flex items-center gap-1.5">
+                <FiZap className="text-amber-500" /> AI 7-Day Lookahead Planner
+                <span className="bg-indigo-100 text-indigo-800 text-[10px] px-1.5 py-0.2 rounded font-medium">Copilot</span>
+              </span>
+              <p className="text-[11px] text-gray-600">Calculates daily BOQ targets based on remaining scope, past site velocity & weather forecast.</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleAiSuggestWeek}
+              disabled={aiPlanningLoading || !planSiteId}
+              className="btn btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 shadow-xs bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50"
+            >
+              <FiZap className={aiPlanningLoading ? 'animate-spin text-amber-300' : ''} />
+              {aiPlanningLoading ? 'Analyzing & Planning…' : '✨ AI Suggest Week Plan'}
+            </button>
+          </div>
+
+          {aiPlanReasoning && (
+            <div className="bg-indigo-50/80 border border-indigo-200 rounded p-2.5 text-xs text-indigo-950 flex items-start gap-2 shadow-2xs">
+              <span className="text-base leading-none">💡</span>
+              <div className="text-[11px] leading-relaxed">
+                <strong className="font-semibold text-indigo-900">AI Weekly Strategy:</strong> {aiPlanReasoning}
+              </div>
+            </div>
+          )}
+
           {/* ── SPOS approval status banner (mam 2026-07-29) ── */}
           {planHeader?.status === 'submitted' && (
             <div className="bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-900 flex flex-wrap items-center gap-2">
@@ -2550,13 +2865,18 @@ export default function DPR() {
           engineer issues material on a numbered ISU slip (stock OUT now),
           takes back the evening balance on an RTN slip (stock IN). Net
           consumption auto-fills the DPR. Every slip prints as a GRN bill. */}
-      <Modal isOpen={slipModal} onClose={() => setSlipModal(false)} title="Site Store — Material Issue / Return (GRN Slip)" wide>
+      <Modal isOpen={slipModal} onClose={() => setSlipModal(false)} title="Site Store — Material Issue / Return / Transfer (GRN Slip)" wide>
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="label">Site *</label>
               <select className="select" value={slipSite}
-                onChange={e => { setSlipSite(e.target.value); loadSlipRows(e.target.value, slipType, slipDate); }}>
+                onChange={e => {
+                  const sId = e.target.value;
+                  setSlipSite(sId);
+                  loadSlipRows(sId, slipType, slipDate);
+                  loadDestWarehouses(sId);
+                }}>
                 <option value="">— Pick site —</option>
                 {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
@@ -2565,12 +2885,16 @@ export default function DPR() {
               <label className="label">Type *</label>
               <div className="flex rounded border overflow-hidden">
                 <button type="button" onClick={() => { setSlipType('issue'); loadSlipRows(slipSite, 'issue', slipDate); }}
-                  className={`flex-1 py-2 text-xs font-semibold ${slipType === 'issue' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>
+                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'issue' ? 'bg-red-600 text-white' : 'bg-white text-gray-600'}`}>
                   🌅 Morning Issue
                 </button>
                 <button type="button" onClick={() => { setSlipType('return'); loadSlipRows(slipSite, 'return', slipDate); }}
-                  className={`flex-1 py-2 text-xs font-semibold ${slipType === 'return' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600'}`}>
+                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'return' ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600'}`}>
                   🌇 Evening Return
+                </button>
+                <button type="button" onClick={() => { setSlipType('transfer'); loadSlipRows(slipSite, 'transfer', slipDate); if (!destWarehouses.length && slipSite) loadDestWarehouses(slipSite); }}
+                  className={`flex-1 py-2 text-[11px] sm:text-xs font-semibold ${slipType === 'transfer' ? 'bg-purple-700 text-white' : 'bg-white text-gray-600'}`}>
+                  🚚 Return / Transfer
                 </button>
               </div>
             </div>
@@ -2580,6 +2904,42 @@ export default function DPR() {
                 onChange={e => { setSlipDate(e.target.value); loadSlipRows(slipSite, slipType, e.target.value); }} />
             </div>
           </div>
+
+          {slipType === 'transfer' && (
+            <div className="bg-purple-50 border border-purple-200 rounded p-2.5">
+              <label className="label text-purple-900 font-semibold mb-1">
+                Destination Store / Warehouse (Transfer or Return to) *
+              </label>
+              <select
+                className="select bg-white"
+                value={slipToWarehouse}
+                onChange={e => setSlipToWarehouse(e.target.value)}
+              >
+                <option value="">— Pick destination store / warehouse —</option>
+                {destWarehouses.map(w => {
+                  const isOffice = w.type === 'office' || w.warehouse_type === 'office';
+                  return (
+                    <option key={w.id} value={w.id}>
+                      {isOffice ? '🏢 ' : '🏗️ '}
+                      {w.name} {isOffice ? '(Central / Office Store)' : `(Site Store — ${w.site_name || 'Site'})`}
+                    </option>
+                  );
+                })}
+              </select>
+              <div className="text-[11px] text-purple-700 mt-1">
+                {(() => {
+                  const sel = destWarehouses.find(w => String(w.id) === String(slipToWarehouse));
+                  const isOffice = sel?.type === 'office' || sel?.warehouse_type === 'office';
+                  if (isOffice) {
+                    return `✓ Material will be returned & added directly into Office Store inventory (${sel.name}).`;
+                  } else if (sel) {
+                    return `✓ Material will be transferred & added directly into ${sel.site_name || sel.name} site store inventory.`;
+                  }
+                  return 'Surplus or idle materials will be deducted from this site store and added to the destination warehouse.';
+                })()}
+              </div>
+            </div>
+          )}
 
           {/* Shift tag (mam 2026-07-31: 3-shift method) — auto from IST clock */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -2591,8 +2951,15 @@ export default function DPR() {
           </div>
 
           <div>
-            <label className="label">{slipType === 'issue' ? 'Issued To (Sr. Site Engineer / team) *' : 'Returned By *'}</label>
-            <input className="input" list="slip-person-suggestions" placeholder="Type a name or pick from the team…"
+            <label className="label">
+              {slipType === 'issue'
+                ? 'Issued To (Sr. Site Engineer / team) *'
+                : slipType === 'transfer'
+                  ? 'Carrier / Transferred By (Driver / Person carrying material) *'
+                  : 'Returned By *'}
+            </label>
+            <input className="input" list="slip-person-suggestions"
+              placeholder={slipType === 'transfer' ? 'Driver / person name or vehicle info…' : 'Type a name or pick from the team…'}
               value={slipTo} onChange={e => setSlipTo(e.target.value)} />
             <datalist id="slip-person-suggestions">
               {(users || []).map(u => <option key={u.id} value={u.name} />)}
@@ -2610,7 +2977,11 @@ export default function DPR() {
                     <li><b>Receive a PO</b> into this site's store warehouse (Dispatch &amp; Receiving → Mark Received → pick the site warehouse).</li>
                   </ul>
                 </>
-              ) : 'Nothing outstanding to return — no material issued (and not yet returned) on this date.'}
+              ) : slipType === 'transfer' ? (
+                'This site store has no stock available to transfer or return.'
+              ) : (
+                'Nothing outstanding to return — no material issued (and not yet returned) on this date.'
+              )}
             </div>
           )}
           {slipRows.length > 0 && (
@@ -2619,9 +2990,11 @@ export default function DPR() {
                 <thead>
                   <tr className="text-gray-500 border-b">
                     <th className="text-left py-1 pr-2">Material</th>
-                    <th className="text-right py-1 px-2 whitespace-nowrap">{slipType === 'issue' ? 'In Store' : 'Outstanding'}</th>
+                    <th className="text-right py-1 px-2 whitespace-nowrap">{slipType === 'issue' || slipType === 'transfer' ? 'In Store' : 'Outstanding'}</th>
                     {slipType === 'issue' && <th className="text-right py-1 px-2 whitespace-nowrap">Aaj Ka Plan</th>}
-                    <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">{slipType === 'issue' ? 'Issue Qty (suggested)' : 'Return Qty'}</th>
+                    <th className="text-right py-1 pl-2 w-32 whitespace-nowrap">
+                      {slipType === 'issue' ? 'Issue Qty (suggested)' : slipType === 'transfer' ? 'Transfer Qty' : 'Return Qty'}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2660,9 +3033,15 @@ export default function DPR() {
               <div className="text-[11px] font-semibold text-gray-600 mb-1">Slips on {slipDate}</div>
               {slipsToday.map(s => (
                 <div key={s.id} className="flex flex-wrap items-center gap-2 text-[11px] py-0.5">
-                  <span className={`font-mono font-semibold ${s.slip_type === 'issue' ? 'text-red-700' : 'text-emerald-700'}`}>{s.slip_number}</span>
+                  <span className={`font-mono font-semibold ${s.slip_type === 'issue' ? 'text-red-700' : s.slip_type === 'transfer' ? 'text-purple-700' : 'text-emerald-700'}`}>{s.slip_number}</span>
                   <span>{s.shift === 'evening' ? '🌆' : s.shift === 'night' ? '🌙' : '🌅'}</span>
-                  <span className="text-gray-500">{s.slip_type === 'issue' ? 'Issue →' : 'Return ←'} {s.issued_to}</span>
+                  <span className="text-gray-500">
+                    {s.slip_type === 'issue'
+                      ? `Issue → ${s.issued_to}`
+                      : s.slip_type === 'transfer'
+                        ? `Transfer 🚚 ${s.to_warehouse_name ? `→ ${s.to_warehouse_name}` : ''} (${s.issued_to})`
+                        : `Return ← ${s.issued_to}`}
+                  </span>
                   <span className="text-gray-400">· {(s.items || []).length} item(s)</span>
                   <a className="text-blue-700 hover:underline font-medium" href={`/site-slip/${s.id}/print`} target="_blank" rel="noreferrer">Print</a>
                 </div>
@@ -2673,7 +3052,7 @@ export default function DPR() {
           <div className="flex justify-end gap-2 pt-2 border-t">
             <button onClick={() => setSlipModal(false)} className="btn btn-secondary">Close</button>
             <button onClick={saveSlip} disabled={slipBusy || !slipSite} className="btn btn-primary">
-              {slipBusy ? 'Saving…' : slipType === 'issue' ? 'Save Issue Slip & Print' : 'Save Return Slip & Print'}
+              {slipBusy ? 'Saving…' : slipType === 'issue' ? 'Save Issue Slip & Print' : slipType === 'transfer' ? 'Save Transfer Slip & Print' : 'Save Return Slip & Print'}
             </button>
           </div>
         </div>

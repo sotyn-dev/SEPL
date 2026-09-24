@@ -239,15 +239,15 @@ function buildBoard(db, moduleKey) {
 
   const rows = recs.map(rec => {
     const recRaci = raci[rec.id] || {};
-    const stampOf = (k) => (recRaci[k] && recRaci[k].done_at) || rec.stamps[k] || null;
+    const stampOf = (k) => (rec.native_completion?.includes(k) ? rec.stamps[k] : ((recRaci[k] && recRaci[k].done_at) || rec.stamps[k])) || null;
     const anyManual = defSteps.some(s => recRaci[s.key] && recRaci[s.key].done_at);
     const useMerged = anyManual || rec.owner_id != null;
-    const currentKey = useMerged
+    const currentKey = rec.native_completion ? rec.current_key : useMerged
       ? (rec.current_key == null ? null : ((defSteps.find(s => !stampOf(s.key)) || {}).key || null))
       : rec.current_key;
 
     let prev = tsMs(rec.created_at);
-    const steps = defSteps.map(s => {
+    const steps = defSteps.filter(s => !rec.exempt_steps?.includes(s.key)).map(s => {
       const cfg = recRaci[s.key] || {};
       const m = md[s.key] || {};        // module-wide default for this step
       const sla = cfg.sla_hours != null ? +cfg.sla_hours

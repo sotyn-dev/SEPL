@@ -1,0 +1,14 @@
+const assert = require('node:assert/strict');
+const Database = require('better-sqlite3');
+const { scorecardSiteIds } = require('../scorecardSites');
+const db = new Database(':memory:');
+db.exec(`CREATE TABLE sites (id INTEGER PRIMARY KEY, site_engineer_id INTEGER, supervisor_id INTEGER, supervisor TEXT, po_id INTEGER, business_book_id INTEGER);
+CREATE TABLE purchase_orders (id INTEGER PRIMARY KEY, business_book_id INTEGER, site_engineer_id INTEGER, site_engineer_ids TEXT, jr_site_engineer_ids TEXT, supervisor_ids TEXT);
+INSERT INTO sites VALUES (1,7,NULL,NULL,NULL,NULL),(2,NULL,NULL,NULL,NULL,20),(3,NULL,NULL,NULL,30,NULL),(4,NULL,NULL,NULL,40,NULL),(5,NULL,NULL,NULL,50,NULL),(6,NULL,NULL,'Imam',NULL,NULL),(7,NULL,NULL,'',NULL,NULL);
+INSERT INTO purchase_orders VALUES (20,20,NULL,'7, 8',NULL,NULL),(30,NULL,NULL,NULL,'7',NULL),(40,NULL,NULL,NULL,NULL,'7'),(50,NULL,17,'17',NULL,NULL);`);
+assert.deepEqual(scorecardSiteIds(db, 7, 'Imam'), [1,2,3,4,6]);
+assert.deepEqual(scorecardSiteIds(db, 9, ''), []);
+db.exec("INSERT INTO purchase_orders VALUES (21,20,7,NULL,NULL,NULL)");
+assert.deepEqual(scorecardSiteIds(db, 7, 'Imam'), [1,2,3,4,6]);
+db.close();
+console.log('Scorecard site allotment checks passed');
