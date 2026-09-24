@@ -207,18 +207,28 @@ function createComplianceCase({
     );
   }
 
-  // 3. Instant Real-Time Socket.IO Broadcast to Nancy (0-second instant bell chime & toast)
+  // 3. Instant Real-Time Socket.IO Notification to Nancy & Employee (Targeted, no spam to other admins)
   try {
     const { getIO } = require('../lib/chatSocket');
     const io = getIO();
     if (io) {
-      io.emit('notification:new', {
+      io.to('u:' + monitor.id).emit('notification:new', {
         type: 'compliance_monitor_alert',
         title: `New Compliance Case: ${caseNumber} - ${employeeName}`,
         body: `Violation [${violationType}]: ${title} for ${employeeName}.`,
         link_url: `/compliance?case_id=${caseId}`,
         created_at: nowStr,
       });
+
+      if (monitor.id !== userId) {
+        io.to('u:' + userId).emit('notification:new', {
+          type: 'compliance_alert',
+          title: `[MANDATORY] Compliance Alert: ${title}`,
+          body: `A compliance alert (${caseNumber}) has been flagged: ${description || title}.`,
+          link_url: `/compliance?case_id=${caseId}`,
+          created_at: nowStr,
+        });
+      }
     }
   } catch (_) {}
 
@@ -457,6 +467,309 @@ function calculateComplianceKpi(startDate = null, endDate = null, dbInstance = n
   };
 }
 
+/**
+ * Formats duration in milliseconds to human-readable English string (e.g., '1 hr 15 mins' or '25 mins')
+ */
+function formatDuration(ms) {
+  const totalMins = Math.max(1, Math.round(ms / (60 * 1000)));
+  const hrs = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  if (hrs > 0 && mins > 0) return `${hrs} hr ${mins} min${mins > 1 ? 's' : ''}`;
+  if (hrs > 0) return `${hrs} hr${hrs > 1 ? 's' : ''}`;
+  return `${mins} min${mins > 1 ? 's' : ''}`;
+}
+
+/**
+ * Formats a Date object to IST 12-hour time string (e.g., '12:10 PM')
+ */
+function formatISTTime(dateObj) {
+  const d = dateObj ? new Date(dateObj.getTime() + 5.5 * 3600 * 1000) : new Date(Date.now() + 5.5 * 3600 * 1000);
+  const hh = d.getUTCHours();
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  const ampm = hh >= 12 ? 'PM' : 'AM';
+  const displayH = hh % 12 || 12;
+  return `${displayH}:${mm} ${ampm}`;
+}
+
+/**
+ * Handles GPS OFF event lifecycle:
+ * - Initial detection: creates case + sends initial alerts to Monitor and Employee.
+ * - Ongoing GPS OFF:
+ *   • Employee: receives simple reminder every 15 minutes.
+ *   • Monitor (Nancy): receives escalation follow-up alert every 30 minutes with elapsed duration.
+ */
+function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) {
+  const db = dbInstance || getDb();
+  const today = istToday();
+
+  // STRICT REQUIREMENT: Only trigger GPS OFF compliance when user is currently PUNCHED IN and NOT PUNCHED OUT
+  const attRecord = db.prepare(`
+    SELECT id, punch_in_time, punch_out_time, status, COALESCE(admin_marked, 0) as admin_marked 
+    FROM attendance 
+    WHERE user_id = ? AND date = ?
+  `).get(userId, today);
+
+  const isPunchedIn = attRecord && (attRecord.punch_in_time || attRecord.admin_marked === 1 || ['present', 'late', 'half_day'].includes(attRecord.status)) && !attRecord.punch_out_time;
+  if (!isPunchedIn) {
+    // User has not punched in today, or has already punched out (shift ended). No compliance violation.
+    return null;
+  }
+
+  const monitor = getOrCreateComplianceMonitor(db);
+  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  const nowStr = new Date(nowMs + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const timeFormatted = formatISTTime(new Date());
+
+  // Check for active open location_off case
+  const activeCase = db.prepare(`
+    SELECT * FROM compliance_cases 
+    WHERE user_id = ? AND violation_type = 'location_off' AND status = 'open'
+    ORDER BY id DESC LIMIT 1
+  `).get(userId);
+
+  if (!activeCase) {
+    // Initial GPS OFF Event -> Create Case + Send Initial Notifications
+    const metaObj = {
+      off_at: nowIso,
+      last_employee_notified_at: nowIso,
+      last_monitor_notified_at: nowIso,
+      reason: reason || 'GPS location turned off on mobile',
+    };
+
+    return createComplianceCase({
+      userId,
+      employeeName,
+      violationType: 'location_off',
+      title: `GPS Location Turned Off: ${employeeName} (${timeFormatted} IST)`,
+      description: `Employee reported GPS turned off during duty hours at ${timeFormatted} IST. Reason: ${reason || 'GPS location turned off on mobile'}.`,
+      slaHours: 2,
+      impactsAttendance: 1,
+      impactsExpense: 1,
+      metadata: metaObj,
+      dbInstance: db,
+    });
+  }
+
+  // Active open case exists -> Check 15m employee reminder & 30m monitor reminder
+  let meta = {};
+  try {
+    meta = typeof activeCase.metadata === 'string' ? JSON.parse(activeCase.metadata) : (activeCase.metadata || {});
+  } catch (_) { meta = {}; }
+
+  const offAt = new Date(meta.off_at || activeCase.detected_at);
+  const offTimeStr = formatISTTime(offAt);
+  const lastEmpNotif = new Date(meta.last_employee_notified_at || activeCase.detected_at);
+  const lastMonNotif = new Date(meta.last_monitor_notified_at || activeCase.detected_at);
+
+  let updated = false;
+
+  // 1. Employee Reminder: every 15 minutes (in English)
+  if (nowMs - lastEmpNotif.getTime() >= 15 * 60 * 1000) {
+    const elapsedStr = formatDuration(nowMs - offAt.getTime());
+    db.prepare(`
+      INSERT INTO notifications (
+        user_id, type, title, body, link_url, channel_sent,
+        is_mandatory, is_pending, task_type, task_id, delivered_at, status, created_at
+      ) VALUES (?, 'compliance_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case', ?, ?, 'active', ?)
+    `).run(
+      userId,
+      `[REMINDER] GPS Location Still Turned Off`,
+      `Your device GPS is still turned off since ${offTimeStr} IST (${elapsedStr} elapsed). Please turn on your device GPS immediately.`,
+      `/compliance?case_id=${activeCase.id}`,
+      activeCase.id,
+      nowStr,
+      nowStr
+    );
+
+    try {
+      const { getIO } = require('../lib/chatSocket');
+      const io = getIO();
+      if (io) {
+        io.to('u:' + userId).emit('notification:new', {
+          type: 'compliance_alert',
+          title: `[REMINDER] GPS Location Still Turned Off`,
+          body: `Your device GPS is still turned off since ${offTimeStr} IST (${elapsedStr} elapsed). Please turn on your device GPS immediately.`,
+          link_url: `/compliance?case_id=${activeCase.id}`,
+          created_at: nowStr,
+        });
+      }
+    } catch (_) {}
+
+    meta.last_employee_notified_at = nowIso;
+    updated = true;
+  }
+
+  // 2. Nancy Monitor Escalation Reminder: every 30 minutes (in English)
+  if (nowMs - lastMonNotif.getTime() >= 30 * 60 * 1000) {
+    const elapsedStr = formatDuration(nowMs - offAt.getTime());
+    db.prepare(`
+      INSERT INTO notifications (
+        user_id, type, title, body, link_url, channel_sent,
+        is_mandatory, is_pending, task_type, task_id, delivered_at, status, created_at
+      ) VALUES (?, 'compliance_monitor_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case_monitor', ?, ?, 'active', ?)
+    `).run(
+      monitor.id,
+      `[URGENT] GPS Still OFF: ${activeCase.employee_name} (${elapsedStr})`,
+      `Employee ${activeCase.employee_name} has kept GPS turned off since ${offTimeStr} IST (${elapsedStr} elapsed without turning ON). Follow-up required.`,
+      `/compliance?case_id=${activeCase.id}`,
+      activeCase.id,
+      nowStr,
+      nowStr
+    );
+
+    try {
+      const { getIO } = require('../lib/chatSocket');
+      const io = getIO();
+      if (io) {
+        io.to('u:' + monitor.id).emit('notification:new', {
+          type: 'compliance_monitor_alert',
+          title: `[URGENT] GPS Still OFF: ${activeCase.employee_name} (${elapsedStr})`,
+          body: `Employee ${activeCase.employee_name} has kept GPS turned off since ${offTimeStr} IST (${elapsedStr} elapsed without turning ON). Follow-up required.`,
+          link_url: `/compliance?case_id=${activeCase.id}`,
+          created_at: nowStr,
+        });
+      }
+    } catch (_) {}
+
+    db.prepare(`
+      INSERT INTO compliance_case_logs (case_id, action, performer_name, notes, created_at)
+      VALUES (?, 'followup_reminder', 'System Monitor', ?, ?)
+    `).run(
+      activeCase.id,
+      `GPS still OFF after ${elapsedStr} (since ${offTimeStr} IST). Escalation alert sent to monitor.`,
+      nowStr
+    );
+
+    meta.last_monitor_notified_at = nowIso;
+    updated = true;
+  }
+
+  if (updated) {
+    db.prepare(`
+      UPDATE compliance_cases 
+      SET metadata = ?, updated_at = ?
+      WHERE id = ?
+    `).run(JSON.stringify(meta), nowIso, activeCase.id);
+  }
+}
+
+/**
+ * Handles GPS Restored event:
+ * - Calculates total off duration and compiles full lifecycle incident report.
+ * - Updates case status to 'resolved' with full resolution notes.
+ * - Notifies Nancy with complete restoration report (Off Time, On Time, Duration, Location).
+ * - Notifies Employee that GPS signal is successfully restored and active.
+ */
+function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInstance = null }) {
+  const db = dbInstance || getDb();
+  const today = istToday();
+  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  const nowStr = new Date(nowMs + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+
+  const activeCase = db.prepare(`
+    SELECT * FROM compliance_cases 
+    WHERE user_id = ? AND violation_type IN ('location_off', 'location_unavailable') 
+      AND status = 'open'
+    ORDER BY id DESC LIMIT 1
+  `).get(userId);
+
+  if (!activeCase) return;
+
+  let meta = {};
+  try {
+    meta = typeof activeCase.metadata === 'string' ? JSON.parse(activeCase.metadata) : (activeCase.metadata || {});
+  } catch (_) { meta = {}; }
+
+  const offAt = new Date(meta.off_at || activeCase.detected_at);
+  const onAt = new Date();
+  const offTimeStr = formatISTTime(offAt);
+  const onTimeStr = formatISTTime(onAt);
+  const durationStr = formatDuration(onAt.getTime() - offAt.getTime());
+  const monitor = getOrCreateComplianceMonitor(db);
+  const empName = activeCase.employee_name || `User #${userId}`;
+
+  // 1. Resolve case in compliance_cases
+  const resNotes = `GPS restored at ${onTimeStr} IST on site: ${siteName} (${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}). Total off duration: ${durationStr} (from ${offTimeStr} to ${onTimeStr} IST).`;
+
+  db.prepare(`
+    UPDATE compliance_cases 
+    SET status = 'resolved', resolution_notes = ?, resolved_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(resNotes, nowIso, nowIso, activeCase.id);
+
+  // 2. Audit log entry
+  db.prepare(`
+    INSERT INTO compliance_case_logs (case_id, action, performer_name, notes, created_at)
+    VALUES (?, 'gps_restored', 'System Monitor', ?, ?)
+  `).run(
+    activeCase.id,
+    resNotes,
+    nowStr
+  );
+
+  // 3. Complete Lifecycle Report Notification to Nancy (in English)
+  db.prepare(`
+    INSERT INTO notifications (
+      user_id, type, title, body, link_url, channel_sent,
+      is_mandatory, is_pending, task_type, task_id, delivered_at, status, created_at
+    ) VALUES (?, 'compliance_monitor_alert', ?, ?, ?, 'in_app', 0, 0, 'compliance_case_monitor', ?, ?, 'active', ?)
+  `).run(
+    monitor.id,
+    `GPS Restored: ${empName} (Was OFF for ${durationStr})`,
+    `Employee ${empName} restored GPS at ${onTimeStr} IST on ${siteName}. Total off duration: ${durationStr} (from ${offTimeStr} to ${onTimeStr} IST).`,
+    `/compliance?case_id=${activeCase.id}`,
+    activeCase.id,
+    nowStr,
+    nowStr
+  );
+
+  try {
+    const { getIO } = require('../lib/chatSocket');
+    const io = getIO();
+    if (io) {
+      io.to('u:' + monitor.id).emit('notification:new', {
+        type: 'compliance_monitor_alert',
+        title: `GPS Restored: ${empName} (Was OFF for ${durationStr})`,
+        body: `Employee ${empName} restored GPS at ${onTimeStr} IST on ${siteName}. Total off duration: ${durationStr} (from ${offTimeStr} to ${onTimeStr} IST).`,
+        link_url: `/compliance?case_id=${activeCase.id}`,
+        created_at: nowStr,
+      });
+    }
+  } catch (_) {}
+
+  // 4. Confirmation Notification to Employee (in English)
+  db.prepare(`
+    INSERT INTO notifications (
+      user_id, type, title, body, link_url, channel_sent,
+      is_mandatory, is_pending, task_type, task_id, delivered_at, status, created_at
+    ) VALUES (?, 'compliance_alert', ?, ?, ?, 'in_app', 0, 0, 'compliance_case', ?, ?, 'active', ?)
+  `).run(
+    userId,
+    `GPS Signal Restored`,
+    `Your device GPS is active and verified at ${siteName}. Thank you.`,
+    `/compliance?case_id=${activeCase.id}`,
+    activeCase.id,
+    nowStr,
+    nowStr
+  );
+
+  try {
+    const { getIO } = require('../lib/chatSocket');
+    const io = getIO();
+    if (io) {
+      io.to('u:' + userId).emit('notification:new', {
+        type: 'compliance_alert',
+        title: `GPS Signal Restored`,
+        body: `Your device GPS is active and verified at ${siteName}. Thank you.`,
+        link_url: `/compliance?case_id=${activeCase.id}`,
+        created_at: nowStr,
+      });
+    }
+  } catch (_) {}
+}
+
 module.exports = {
   COMPLIANCE_MONITOR_EMAIL,
   COMPLIANCE_MONITOR_NAME,
@@ -467,4 +780,8 @@ module.exports = {
   acknowledgeMandatoryNotification,
   closeMandatoryTaskNotification,
   calculateComplianceKpi,
+  formatDuration,
+  formatISTTime,
+  handleGpsOffEvent,
+  handleGpsRestoredEvent,
 };

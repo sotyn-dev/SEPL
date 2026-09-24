@@ -117,7 +117,7 @@ export default function AnnouncementBell() {
             <span>🎯</span> {notif?.title || 'New Notification'}
           </div>
           {notif?.body && <div className="text-xs text-gray-600 mt-0.5">{notif.body}</div>}
-          <div className="text-[10px] text-blue-600 font-semibold mt-1">Click to open lead in Sales Funnel →</div>
+          {notif?.link_url && <div className="text-[10px] text-blue-600 font-semibold mt-1">Click to view details →</div>}
         </div>
       ), { duration: 8000 });
     });

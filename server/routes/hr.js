@@ -2849,9 +2849,9 @@ router.get('/my-notifications', (req, res) => {
     }
   } catch (_) {}
 
-  const isNancy = userName.toLowerCase().includes('nancy') || userEmail.includes('nancy') || req.user.role === 'admin';
+  const isNancy = userName.toLowerCase().includes('nancy') || userEmail.includes('nancy');
 
-  // If Nancy or Admin is viewing, auto-heal any compliance cases missing monitor notifications
+  // If Nancy is viewing, auto-heal any compliance cases missing monitor notifications
   if (isNancy) {
     try {
       const unlinkedCases = db.prepare(`
