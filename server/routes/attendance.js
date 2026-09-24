@@ -997,32 +997,15 @@ router.post('/track-location', (req, res) => {
       .run(req.user.id, today, now, reason || null, 'GPS_OFF');
 
     try {
-      const { createComplianceCase } = require('../services/complianceService');
-
-      // Debounce: check if a GPS_OFF case was created for this user in the last 5 minutes
-      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      const recentCase = db.prepare(`
-        SELECT id FROM compliance_cases 
-        WHERE user_id = ? AND violation_type = 'location_off' AND detected_at >= ?
-      `).get(req.user.id, fiveMinAgo);
-
-      // If no case was created in the last 5 minutes, generate a fresh case and notify Nancy immediately
-      if (!recentCase) {
-        const timeFormatted = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(11, 16);
-        createComplianceCase({
-          userId: req.user.id,
-          employeeName: req.user.name,
-          violationType: 'location_off',
-          title: `GPS Turned Off: ${req.user.name} (${timeFormatted} IST)`,
-          description: `Employee reported GPS_OFF during duty hours at ${timeFormatted} IST. Reason: ${reason || 'GPS location turned off on mobile'}.`,
-          slaHours: 2,
-          impactsAttendance: 1,
-          impactsExpense: 1,
-          dbInstance: db,
-        });
-      }
+      const { handleGpsOffEvent } = require('../services/complianceService');
+      handleGpsOffEvent({
+        userId: req.user.id,
+        employeeName: req.user.name,
+        reason: reason || 'GPS location turned off on mobile',
+        dbInstance: db,
+      });
     } catch (err) {
-      console.error('[attendance-track-location] error creating compliance case:', err);
+      console.error('[attendance-track-location] error handling GPS OFF event:', err);
     }
 
     return res.json({ site: 'GPS_OFF', recorded: true });
@@ -1039,35 +1022,19 @@ router.post('/track-location', (req, res) => {
   db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,?,?,?,?)')
     .run(req.user.id, today, now, latitude, longitude, address, siteName);
 
-  // Auto-log GPS restored event on active compliance case
+  // Auto-log GPS restored event and send complete lifecycle report
   try {
-    const activeCase = db.prepare(`
-      SELECT id FROM compliance_cases 
-      WHERE user_id = ? AND violation_type IN ('location_off', 'location_unavailable') 
-        AND DATE(detected_at) = ? AND status = 'open'
-      ORDER BY id DESC LIMIT 1
-    `).get(req.user.id, today);
-
-    if (activeCase) {
-      const alreadyLogged = db.prepare(`
-        SELECT 1 FROM compliance_case_logs 
-        WHERE case_id = ? AND action = 'gps_restored' 
-        ORDER BY id DESC LIMIT 1
-      `).get(activeCase.id);
-
-      if (!alreadyLogged) {
-        const nowStr = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
-        db.prepare(`
-          INSERT INTO compliance_case_logs (case_id, action, performer_name, notes, created_at)
-          VALUES (?, 'gps_restored', 'System Monitor', ?, ?)
-        `).run(
-          activeCase.id,
-          `GPS signal re-enabled & live location restored on site: ${siteName} (${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)})`,
-          nowStr
-        );
-      }
-    }
-  } catch (_) { }
+    const { handleGpsRestoredEvent } = require('../services/complianceService');
+    handleGpsRestoredEvent({
+      userId: req.user.id,
+      latitude,
+      longitude,
+      siteName,
+      dbInstance: db,
+    });
+  } catch (err) {
+    console.error('[attendance-track-location] error handling GPS Restored event:', err);
+  }
 
   res.json({ site: siteName });
 });
