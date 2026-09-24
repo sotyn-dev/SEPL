@@ -3143,6 +3143,8 @@ function initializeDatabase() {
     ['vendor_pos', 'po_reject_by INTEGER'],
     ['vendor_pos', 'po_reject_at DATETIME'],
     ['vendor_pos', 'po_reject_reason TEXT'],
+    ['vendor_pos', 'po_auto_approved INTEGER DEFAULT 0'],
+    ['vendor_pos', 'po_approval_note TEXT'],
     // Per-rule dynamic From address for email triggers (mam 2026-06-03:
     // "from mail which id also dynamic"). Optional; supports {{vars}}.
     ['email_rules', 'from_addr TEXT'],

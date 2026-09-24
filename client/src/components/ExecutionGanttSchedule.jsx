@@ -6,7 +6,7 @@ import {
   FiCalendar, FiPlus, FiEdit2, FiTrash2, FiUpload, FiDownload, FiRefreshCw,
   FiChevronRight, FiChevronDown, FiCheckCircle, FiClock, FiAlertTriangle,
   FiSearch, FiLayers, FiMaximize2, FiMinimize2, FiFileText, FiClipboard,
-  FiCheck, FiX, FiCornerDownRight, FiSliders
+  FiCheck, FiX, FiCornerDownRight, FiSliders, FiZap
 } from 'react-icons/fi';
 
 const fmtDate = (iso) => {
@@ -54,6 +54,11 @@ export default function ExecutionGanttSchedule({ projectId, canEdit }) {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [hoveredTaskId, setHoveredTaskId] = useState(null);
 
+  // TSK-0827: AI Monthly Milestones
+  const [isAiMilestonesModalOpen, setIsAiMilestonesModalOpen] = useState(false);
+  const [aiMilestonesLoading, setAiMilestonesLoading] = useState(false);
+  const [aiMilestonesData, setAiMilestonesData] = useState(null);
+
   // Sync scrolling between left table and right timeline
   const tableScrollRef = useRef(null);
   const chartScrollRef = useRef(null);
@@ -96,6 +101,26 @@ export default function ExecutionGanttSchedule({ projectId, canEdit }) {
   useEffect(() => {
     loadTasks();
   }, [loadTasks]);
+
+  // TSK-0827: AI Monthly Milestones Generator
+  const handleGenerateAiMilestones = async () => {
+    if (!projectId) { toast.error('Pick a project first'); return; }
+    setAiMilestonesLoading(true);
+    try {
+      const r = await api.post(`/procurement-schedule/${projectId}/ai-monthly-milestones`);
+      if (r.data && Array.isArray(r.data.tasks) && r.data.tasks.length > 0) {
+        setAiMilestonesData(r.data);
+        setIsAiMilestonesModalOpen(true);
+        toast.success(`Generated ${r.data.tasks.length} monthly milestone tasks!`);
+      } else {
+        toast.error('No tasks generated');
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'AI Monthly Milestones generation failed');
+    } finally {
+      setAiMilestonesLoading(false);
+    }
+  };
 
   // Guaranteed array of tasks
   const safeTasks = useMemo(() => {
@@ -431,6 +456,16 @@ export default function ExecutionGanttSchedule({ projectId, canEdit }) {
         <div className="flex items-center gap-2 flex-wrap">
           {canEdit && (
             <>
+              <button
+                onClick={handleGenerateAiMilestones}
+                disabled={aiMilestonesLoading}
+                className="btn btn-secondary text-xs h-8 flex items-center gap-1.5 border-emerald-300 text-emerald-800 bg-emerald-50/70 hover:bg-emerald-100 shadow-2xs"
+                title="AI decomposition of BOQ items into Monthly Milestones & WBS schedule"
+              >
+                <FiZap size={12} className={aiMilestonesLoading ? 'animate-spin text-amber-500' : 'text-emerald-600'} />
+                {aiMilestonesLoading ? 'Generating…' : '✨ AI Monthly Milestones'}
+              </button>
+
               <button
                 onClick={() => setIsImportModalOpen(true)}
                 className="btn btn-secondary text-xs h-8 flex items-center gap-1.5 border-indigo-200 text-indigo-700 hover:bg-indigo-50"
@@ -846,6 +881,15 @@ export default function ExecutionGanttSchedule({ projectId, canEdit }) {
         projectId={projectId}
         onSuccess={() => { setIsTaskModalOpen(false); setEditingTask(null); loadTasks(); }}
         onDelete={handleDeleteTask}
+      />
+
+      {/* ──── TSK-0827: AI MONTHLY MILESTONES MODAL ──── */}
+      <AiMilestonesModal
+        isOpen={isAiMilestonesModalOpen}
+        onClose={() => setIsAiMilestonesModalOpen(false)}
+        data={aiMilestonesData}
+        projectId={projectId}
+        onSuccess={() => { setIsAiMilestonesModalOpen(false); loadTasks(); }}
       />
     </div>
   );
@@ -1634,6 +1678,141 @@ function TaskEditModal({ isOpen, onClose, task, parentTask, isMilestoneInitial, 
           </div>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+// ──── TSK-0827: AI MONTHLY MILESTONES PREVIEW & APPLY MODAL ────
+function AiMilestonesModal({ isOpen, onClose, data, projectId, onSuccess }) {
+  const [applyMode, setApplyMode] = useState('replace'); // 'replace' | 'append'
+  const [submitting, setSubmitting] = useState(false);
+
+  if (!isOpen || !data) return null;
+
+  const handleApply = async () => {
+    setSubmitting(true);
+    try {
+      if (applyMode === 'replace') {
+        await api.post(`/procurement-schedule/${projectId}/execution-tasks/bulk-save`, {
+          tasks: data.tasks || []
+        });
+      } else {
+        const currentRes = await api.get(`/procurement-schedule/${projectId}/execution-tasks`);
+        const currentList = Array.isArray(currentRes.data) ? currentRes.data : (currentRes.data?.tasks || []);
+        const combined = [...currentList, ...(data.tasks || [])];
+        await api.post(`/procurement-schedule/${projectId}/execution-tasks/bulk-save`, {
+          tasks: combined
+        });
+      }
+      toast.success('AI Monthly Milestones applied to Project Schedule!');
+      onSuccess();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to apply milestones');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="AI Monthly Milestone Schedule — Preview" wide>
+      <div className="space-y-4">
+        {data.monthly_overview && (
+          <div className="p-3 bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border border-emerald-200 rounded-lg text-xs text-emerald-950">
+            <div className="font-semibold text-emerald-900 flex items-center gap-1.5 mb-1">
+              <FiZap className="text-amber-500" /> Phased Monthly Strategy:
+            </div>
+            <p className="leading-relaxed">{data.monthly_overview}</p>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between text-xs text-gray-500">
+          <span>Project: <strong className="text-gray-800">{data.project_name}</strong></span>
+          <span>Timeline: <strong className="text-gray-800">{fmtShortDate(data.start_date)}</strong> to <strong className="text-gray-800">{fmtShortDate(data.end_date)}</strong></span>
+        </div>
+
+        <div className="border border-slate-200 rounded-lg overflow-hidden max-h-[50vh] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 sticky top-0">
+              <tr>
+                <th className="py-2 px-3 text-left w-16">WBS</th>
+                <th className="py-2 px-3 text-left">Task / Milestone Name</th>
+                <th className="py-2 px-3 text-center w-20">Duration</th>
+                <th className="py-2 px-3 text-left w-24">Start</th>
+                <th className="py-2 px-3 text-left w-24">Finish</th>
+                <th className="py-2 px-3 text-center w-20">Type</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {(data.tasks || []).map((t, idx) => {
+                const isHdr = t.outline_level === 1 || t.is_milestone;
+                return (
+                  <tr key={idx} className={isHdr ? 'bg-emerald-50/50 font-semibold text-slate-800' : 'hover:bg-slate-50/70 text-slate-700'}>
+                    <td className="py-1.5 px-3 font-mono text-[11px] text-slate-500">{t.wbs_code}</td>
+                    <td className="py-1.5 px-3">
+                      <span style={{ paddingLeft: `${((t.outline_level || 1) - 1) * 16}px` }}>
+                        {isHdr ? '◆ ' : '• '}
+                        {t.task_name}
+                      </span>
+                    </td>
+                    <td className="py-1.5 px-3 text-center tabular-nums text-slate-500">{t.duration_days} d</td>
+                    <td className="py-1.5 px-3 tabular-nums">{fmtShortDate(t.start_date)}</td>
+                    <td className="py-1.5 px-3 tabular-nums">{fmtShortDate(t.end_date)}</td>
+                    <td className="py-1.5 px-3 text-center">
+                      {isHdr ? (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-100 text-purple-800 font-bold">Milestone</span>
+                      ) : (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600">Task</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Application Mode */}
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-4 text-xs">
+            <span className="font-semibold text-slate-700">Apply to Schedule:</span>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="radio"
+                name="applyMode"
+                value="replace"
+                checked={applyMode === 'replace'}
+                onChange={() => setApplyMode('replace')}
+              />
+              <span>Replace existing tasks</span>
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="radio"
+                name="applyMode"
+                value="append"
+                checked={applyMode === 'append'}
+                onChange={() => setApplyMode('append')}
+              />
+              <span>Append to existing tasks</span>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onClose} className="btn btn-secondary text-xs">
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={submitting}
+              className="btn btn-primary text-xs flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+            >
+              <FiCheck size={12} />
+              {submitting ? 'Applying…' : 'Apply to Gantt Schedule'}
+            </button>
+          </div>
+        </div>
+      </div>
     </Modal>
   );
 }

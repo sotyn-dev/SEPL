@@ -14,6 +14,8 @@ const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJso
 // auto:po_bill_pending KPI so the flow-board tile and the KPI can never
 // disagree (mam 2026-09-07).
 const { poMissingBillWhere } = require('../lib/poBill');
+// TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
+const { evaluatePoCostEstimate, autoApprovePoIfEligible } = require('../lib/costEstimateApproval');
 
 // Unit spellings that mean the same thing. Kept identical to the SQL CASE the
 // one-time unit_overridden backfill uses (db/schema.js), so "pcs" vs "nos" or
@@ -3377,6 +3379,20 @@ router.get('/vendor-po', (req, res) => {
     const stored = +r.total_amount || 0;
     const live = +r.display_total || 0;
     r.total_amount_drift = Math.round(Math.abs(stored - live));
+
+    // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
+    try {
+      const evalRes = evaluatePoCostEstimate(db, r.id);
+      r.cost_status = evalRes.cost_status;
+      r.can_auto_approve = evalRes.can_auto_approve;
+      r.overrun_count = evalRes.overrun_count;
+      r.max_overrun_pct = evalRes.max_overrun_pct;
+      r.total_estimated_amount = evalRes.total_estimated_amount;
+      r.total_variance_pct = evalRes.total_variance_pct;
+      r.cost_reason = evalRes.reason;
+    } catch (_) {
+      r.cost_status = 'unknown';
+    }
   }
 
   if (isPaginated) {
@@ -4566,9 +4582,29 @@ router.post('/vendor-po/:id/po-approve', (req, res) => {
     const who = poApproversFor(db, level).map(a => a.name).join(', ') || 'nobody named';
     return res.status(403).json({ error: `Only ${who} (PO L${level}) or an admin can approve this step. Set in ⚙ Workflow Settings.` });
   }
-  if (level === 1) db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
-  else             db.prepare("UPDATE vendor_pos SET po_approval='approved',  po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
-  res.json({ ok: true, po_approval: level === 1 ? 'pending_l2' : 'approved' });
+  if (level === 1) {
+    db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
+    // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
+    const autoRes = autoApprovePoIfEligible(db, id, req.user);
+    if (autoRes.auto_approved) {
+      return res.json({
+        ok: true,
+        po_approval: 'approved',
+        auto_approved: true,
+        approval_note: autoRes.evaluation.reason,
+        evaluation: autoRes.evaluation,
+      });
+    }
+    return res.json({
+      ok: true,
+      po_approval: 'pending_l2',
+      auto_approved: false,
+      evaluation: autoRes.evaluation,
+    });
+  } else {
+    db.prepare("UPDATE vendor_pos SET po_approval='approved', po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP, po_auto_approved=0 WHERE id=?").run(req.user.id, id);
+    return res.json({ ok: true, po_approval: 'approved', auto_approved: false });
+  }
 });
 
 // Reject at the current pending level (reason required).
@@ -4586,6 +4622,13 @@ router.post('/vendor-po/:id/po-reject', (req, res) => {
   if (reason.length < 3) return res.status(400).json({ error: 'A rejection reason is required' });
   db.prepare("UPDATE vendor_pos SET po_approval='rejected', po_reject_by=?, po_reject_at=CURRENT_TIMESTAMP, po_reject_reason=? WHERE id=?").run(req.user.id, reason, id);
   res.json({ ok: true });
+});
+
+// TSK-0824: Get cost estimate evaluation details for a vendor PO
+router.get('/vendor-po/:id/cost-evaluation', (req, res) => {
+  const db = getDb();
+  const evaluation = evaluatePoCostEstimate(db, +req.params.id);
+  res.json(evaluation);
 });
 
 // PUT /vendor-po/:id  —  status / advance OR full header edit.
@@ -4881,7 +4924,27 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
   // this PO.
   const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(req.params.id).c;
   const dnCount = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(req.params.id).c;
-  res.json({ po, items, bill_count: billCount, dn_count: dnCount, edit_locked: billCount > 0 || dnCount > 0 });
+
+  // TSK-0824: Attach cost estimate evaluation per item and overall
+  let costEvaluation = null;
+  try {
+    costEvaluation = evaluatePoCostEstimate(db, req.params.id);
+    const evalMap = new Map((costEvaluation.items || []).map(it => [it.vpi_id, it]));
+    for (const it of items) {
+      const e = evalMap.get(it.id);
+      if (e) {
+        it.estimated_rate = e.estimated_rate;
+        it.benchmark_source = e.benchmark_source;
+        it.variance_pct = e.variance_pct;
+        it.variance_amount = e.variance_amount;
+        it.is_overrun = e.is_overrun;
+        it.is_within = e.is_within;
+        it.is_missing = e.is_missing;
+      }
+    }
+  } catch (_) { /* ignore */ }
+
+  res.json({ po, items, bill_count: billCount, dn_count: dnCount, edit_locked: billCount > 0 || dnCount > 0, cost_evaluation: costEvaluation });
 });
 
 router.delete('/vendor-po/:id', requirePermission('procurement', 'delete'), (req, res) => {
