@@ -31,7 +31,6 @@ export function buildPayrollExport(rows, month) {
     ['Half Days', r => r.half_days], ['Absent Days', r => r.absent_days],
     ['Late Marks', r => r.late_marks], ['Lates Converted to Absent (days)', r => r.lates_converted_absent],
     ['Late Deduction (Rs)', r => r.late_penalty], ['Late Deduction Auto (Rs)', r => r.late_penalty_auto],
-    ['Late Deduction Adjusted', r => yesNo(r.late_penalty_overridden)],
     ['Unpaid Leave', r => r.unpaid_leaves],
     ['Total Leave', r => r.paid_leaves == null && r.unpaid_leaves == null ? null : Number(r.paid_leaves || 0) + Number(r.unpaid_leaves || 0)],
     ['CL / Paid Leave (Auto)', r => r.paid_leaves_auto], ['CL Adjusted', r => yesNo(r.cl_overridden)],
@@ -365,17 +364,6 @@ export default function Payroll() {
     }
   };
 
-  const lateAdjustment = (r) => isAdmin && !r.locked ? (
-    <label className="block text-[10px] text-amber-700 mt-1">
-      Late deduction ₹
-      {ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, {
-        w: 'w-20', step: '0.01', title: 'Monthly late deduction: enter 0 to waive; clear to restore automatic calculation. Half-day deductions are separate.',
-      })}
-      <span className="block text-gray-400">{r.late_penalty_overridden ? 'Adjusted' : 'Auto'} · clear to reset</span>
-    </label>
-  ) : null;
-
-
   // Time-aware finalise warning (SEPL 2026-08): targets Aryan's day-2 and
   // Ishaan's day-30 early-finalise incidents. Only applies to the current
   // in-progress month — a past month has already fully ended, same scoping
@@ -698,7 +686,6 @@ export default function Payroll() {
                         {r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}
                         {r.late_penalty > 0 ? ` (-₹${fmtC(r.late_penalty)})` : ''}
                       </div>
-                      {lateAdjustment(r)}
                       {r.late_marks > 0 && (
                         <div className="text-[9px] font-normal text-gray-400"
                           title={`${r.late_marks} late arrival(s) this month. ${lateRuleText}`}>
@@ -823,7 +810,6 @@ export default function Payroll() {
                     <div className="font-semibold text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</div>
                   </div>
                 </div>
-                {lateAdjustment(r)}
                 {isAdmin && !r.locked ? (
                   <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
                     <span className="text-[11px] text-gray-500 font-semibold whitespace-nowrap">Advance ₹</span>
@@ -1040,7 +1026,7 @@ export default function Payroll() {
             <p className="text-xs text-gray-500">
               Payroll Present counts paid day equivalents: full day = 1, half-day = 0.5.
               Attendance counts dates attended. Arrival after the configured half-day cutoff or too few hours can reduce payroll days.
-              Late ₹ adjustments change the money deduction only; use Paid Days to adjust a half-day deduction.
+              Late deductions are calculated automatically from attendance and Rules / Settings.
               See the daily breakdown below for each date and reason.
             </p>
             <div className="space-y-1 mt-4 border-t pt-3">

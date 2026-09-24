@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
+import ProofPreview from '../components/ProofPreview';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -216,14 +217,14 @@ export default function PMSTasks() {
     // resolves, instead of letting a stale file silently attach here.
     const forId = submitModalIdRef.current;
     const fd = new FormData(); fd.append('file', file);
-    setSubmitForm(s => ({ ...s, uploading: true }));
+    setSubmitForm(s => ({ ...s, proof_url: '', proof_name: '', proof_type: '', uploading: true }));
     try {
       const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       if (submitModalIdRef.current !== forId) {
         toast('That upload finished after you switched tasks — please upload again here.', { icon: '⚠️' });
         return;
       }
-      setSubmitForm({ proof_url: res.data.url, uploading: false });
+      setSubmitForm({ proof_url: res.data.url, proof_name: file.name, proof_type: file.type, uploading: false });
       toast.success('File uploaded — click Submit');
     } catch {
       if (submitModalIdRef.current !== forId) return;
@@ -808,17 +809,17 @@ export default function PMSTasks() {
                 <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
                 <input type="file" accept="image/*" capture="environment" disabled={submitForm.uploading}
                   className="hidden"
-                  onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }} />
+                  onChange={e => { const f = e.target.files[0]; e.target.value = ''; if (f) uploadProof(f); }} />
               </label>
               <label className={`cursor-pointer border-2 ${submitForm.uploading ? 'border-gray-200 bg-gray-50 cursor-not-allowed' : 'border-gray-200 hover:border-gray-400 bg-gray-50'} rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5`}>
                 <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
                 <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" disabled={submitForm.uploading}
                   className="hidden"
-                  onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }} />
+                  onChange={e => { const f = e.target.files[0]; e.target.value = ''; if (f) uploadProof(f); }} />
               </label>
             </div>
             {submitForm.uploading && <p className="text-xs text-blue-700 mt-1">Uploading…</p>}
-            {submitForm.proof_url && <p className="text-xs text-emerald-600 mt-1">✓ Ready to submit</p>}
+            <ProofPreview key={submitForm.proof_url} url={submitForm.uploading ? null : submitForm.proof_url} name={submitForm.proof_name} type={submitForm.proof_type} />
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => { setSubmitModal(null); submitModalIdRef.current = null; }} className="btn btn-secondary">Cancel</button>
