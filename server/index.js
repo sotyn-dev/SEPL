@@ -509,6 +509,8 @@ app.use('/api/support', require('./routes/support'));
 app.use('/api/item-master', require('./routes/itemmaster'));
 app.use('/api/drawing-tracker', require('./routes/drawingTracker'));
 app.use('/api/pipe-weights', require('./routes/pipeweights'));
+// Durable challan-to-tools import, including historical RGP dispatches.
+app.use('/api', require('./lib/rgpToolsSync').rgpToolsBridge(require('./db/schema').getDb()));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/sales-bill-receive', require('./routes/salesBillReceive'));
 app.use('/api/dispatch-receiving', require('./routes/dispatchReceiving'));

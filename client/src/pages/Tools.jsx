@@ -104,9 +104,12 @@ function BulkToolsModal({ sites, users, items, onClose, onSaved, onPreview }) {
 
 export default function Tools() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
+  const admin = isAdmin();
   const [tab, setTab] = useUrlTab('catalog');
   const [tools, setTools] = useState([]);
   const [stats, setStats] = useState(null);
+  const [rgpSync, setRgpSync] = useState(null);
+  const [syncBusy, setSyncBusy] = useState(false);
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
   const [rgpItems, setRgpItems] = useState([]);
@@ -147,6 +150,24 @@ export default function Tools() {
       label: [i.item_code, i.item_name, i.specification, i.size].filter(Boolean).join(' — '),
     })))).catch(() => { });
   }, [tab, load, submissionWeek]);
+
+  useEffect(() => {
+    if (admin && (tab === 'dashboard' || tab === 'catalog')) {
+      api.get('/tools/rgp-sync').then(r => setRgpSync(r.data)).catch(() => toast.error('Could not load RGP import status'));
+    }
+  }, [admin, tab]);
+
+  const retryRgp = async (deliveryNoteId) => {
+    if (syncBusy) return;
+    if (deliveryNoteId && !window.confirm('Only continue if these are ADDITIONAL assets. If this challan moves existing tools, use Issue / Transfer instead. Import as new tools?')) return;
+    setSyncBusy(true);
+    try {
+      const { data } = await api.post('/tools/rgp-sync', deliveryNoteId ? { delivery_note_id: deliveryNoteId, allow_additional_assets: true } : {});
+      setRgpSync(data); load();
+      toast.success(data.review.length ? 'Checked challans. Review the remaining items below.' : 'RGP tools are up to date');
+    } catch (err) { toast.error(err.response?.data?.error || 'RGP import failed'); }
+    finally { setSyncBusy(false); }
+  };
 
   const save = async (e) => {
     e.preventDefault();
@@ -241,6 +262,20 @@ export default function Tools() {
       </div>
 
       {/* Dashboard */}
+      {(tab === 'dashboard' || tab === 'catalog') && admin && rgpSync && <details className="card p-4">
+        <summary className="cursor-pointer font-semibold">RGP challan imports: {rgpSync.imported} tool entries linked · {rgpSync.review.length} challans need review</summary>
+        <p className="text-sm text-gray-500 my-3">New and old RGP challans populate Tools with dispatched quantity, indent site and Raised By employee. Value = quantity × recorded challan rate (or indent rate for zero-value RGP challans). Fix missing details in Procurement, then retry. Existing tool movements are preserved.</p>
+        <button disabled={syncBusy} onClick={() => retryRgp()} className="btn btn-secondary mb-3">{syncBusy ? 'Checking…' : 'Retry old / unresolved RGP challans'}</button>
+        {!!rgpSync.review.length && <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead><tr><th>Challan / Indent</th><th>Site / Raised By</th><th>Needs review</th><th>Action</th></tr></thead>
+          <tbody>{rgpSync.review.map(row => <tr key={row.delivery_note_id}>
+            <td>{row.document_number || `Challan #${row.delivery_note_id}`}<div className="text-xs text-gray-500">{row.indent_number}</div></td>
+            <td>{row.site_name || 'Missing site'}<div className="text-xs text-gray-500">{row.raised_by_name || 'Missing Raised By'}</div></td>
+            <td>{row.reason || 'Waiting for import'}</td>
+            <td>{row.reason?.startsWith('Possible existing asset') && <button disabled={syncBusy} onClick={() => retryRgp(row.delivery_note_id)} className="btn btn-secondary text-xs">Import as additional assets</button>}</td>
+          </tr>)}</tbody>
+        </table></div>}
+      </details>}
       {tab === 'dashboard' && stats && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -253,6 +288,35 @@ export default function Tools() {
                 <p className="text-2xl font-bold">{s.c}</p>
               </div>
             ))}
+          </div>
+
+          <div className="card p-0 overflow-hidden">
+            <div className="p-4 border-b">
+              <h3 className="font-bold text-sm">Site-wise Tools</h3>
+              <p className="text-xs text-gray-500 mt-1">Current site and assigned site engineers. Count totals recorded quantities. Amount is the recorded total value of tool entries, excluding scrapped tools. RGP imports use dispatched quantity × recorded rate.</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr><th>Site Name</th><th>Site Engineer</th><th className="text-right">Tools Count</th><th className="text-right">Tools Amount (Rs)</th></tr></thead>
+                <tbody>
+                  {!stats.by_site && <tr><td colSpan="4" className="text-center py-8 text-gray-400">Site-wise summary unavailable</td></tr>}
+                  {stats.by_site?.length === 0 && <tr><td colSpan="4" className="text-center py-8 text-gray-400">No tools recorded yet</td></tr>}
+                  {stats.by_site?.map(site => (
+                    <tr key={site.site_id ?? 'unassigned'}>
+                      <td className="font-medium">{site.site_name}</td>
+                      <td>{site.site_engineer_name || (site.site_id == null ? '—' : 'Not assigned')}</td>
+                      <td className="text-right tabular-nums">{site.tool_count.toLocaleString('en-IN')}</td>
+                      <td className="text-right font-semibold tabular-nums whitespace-nowrap">{site.tools_amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {!!stats.by_site?.length && <tfoot><tr className="bg-gray-50 font-bold">
+                  <td colSpan="2">Total</td>
+                  <td className="text-right tabular-nums">{stats.by_site.reduce((sum, site) => sum + site.tool_count, 0).toLocaleString('en-IN')}</td>
+                  <td className="text-right tabular-nums whitespace-nowrap">{stats.by_site.reduce((sum, site) => sum + site.tools_amount, 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                </tr></tfoot>}
+              </table>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
