@@ -13,6 +13,7 @@ const { getDb } = require('../db/schema');
 const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { nextSequence } = require('../db/nextSequence');
+const { TOOLS_SITE_SUMMARY_SQL } = require('../lib/toolsSiteSummary');
 
 router.use(authMiddleware);
 
@@ -92,7 +93,8 @@ router.get('/stats', requirePermission('tools', 'view'), (req, res) => {
     const byCategory = db.prepare(`SELECT COALESCE(category, '—') as category, COUNT(*) as c FROM tools GROUP BY category`).all();
     const calibrationDue = db.prepare(`SELECT COUNT(*) as c FROM tools WHERE next_calibration_date IS NOT NULL AND next_calibration_date <= date('now', '+30 days')`).get().c;
     const totalValue = db.prepare(`SELECT COALESCE(SUM(purchase_price), 0) as s FROM tools WHERE status != 'scrapped'`).get().s;
-    res.json({ total, by_status: byStatus, by_category: byCategory, calibration_due_30d: calibrationDue, total_value: totalValue });
+    const bySite = db.prepare(TOOLS_SITE_SUMMARY_SQL).all();
+    res.json({ total, by_status: byStatus, by_category: byCategory, by_site: bySite, calibration_due_30d: calibrationDue, total_value: totalValue });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
