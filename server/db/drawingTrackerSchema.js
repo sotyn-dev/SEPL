@@ -77,6 +77,9 @@ function runDrawingTrackerMigrations(db) {
       drawing_type TEXT,
       current_revision_id INTEGER,      -- pointer to the live revision
       remarks TEXT,
+      boq_required INTEGER DEFAULT 0,
+      boq_file_url TEXT,
+      boq_file_name TEXT,
       created_by INTEGER, created_by_name TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -120,6 +123,11 @@ function runDrawingTrackerMigrations(db) {
     CREATE INDEX IF NOT EXISTS idx_dr_uploaded ON drawing_revisions(uploaded_at DESC);
   `);
   migrateDrawingsSourceConstraint(db);
+
+  // Idempotent column additions for BOQ support
+  try { db.exec(`ALTER TABLE drawings ADD COLUMN boq_required INTEGER DEFAULT 0;`); } catch (_) {}
+  try { db.exec(`ALTER TABLE drawings ADD COLUMN boq_file_url TEXT;`); } catch (_) {}
+  try { db.exec(`ALTER TABLE drawings ADD COLUMN boq_file_name TEXT;`); } catch (_) {}
 }
 
 module.exports = { runDrawingTrackerMigrations };
