@@ -35,6 +35,9 @@ function initializeRgpToolsSync(db) {
       END;
     `);
     if (firstRun) db.exec('INSERT OR IGNORE INTO rgp_tool_sync(delivery_note_id) SELECT id FROM delivery_notes');
+    // Older deployments held distinct challans when their item already existed.
+    // A challan line is the import identity, not the item-master entry.
+    db.exec("UPDATE rgp_tool_sync SET state='pending', reason=NULL WHERE state='review' AND reason LIKE 'Possible existing asset (%'");
   })();
 }
 
@@ -97,7 +100,7 @@ function resolveLines(db, dn) {
   return result;
 }
 
-function syncDocument(db, id, allowAdditionalAssets = false) {
+function syncDocument(db, id) {
   const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(id);
   const links = db.prepare('SELECT * FROM rgp_tool_links WHERE delivery_note_id=? ORDER BY line_number').all(id);
   const eligible = dn && dn.document_type === 'challan' && !dn.is_draft && dn.status !== 'rejected';
@@ -113,12 +116,6 @@ function syncDocument(db, id, allowAdditionalAssets = false) {
     return 'imported'; // A retry must never re-issue a returned tool.
   }
   if (!lines.length) return 'ignored';
-  if (!allowAdditionalAssets) {
-    for (const line of lines) {
-      const existing = db.prepare('SELECT tool_code FROM tools WHERE item_master_id=? OR LOWER(TRIM(name))=? LIMIT 1').get(line.item_master_id, norm(line.name));
-      if (existing) throw new Error(`Possible existing asset (${existing.tool_code}); confirm this challan adds new assets, or issue/transfer the existing tool`);
-    }
-  }
   for (const line of lines) {
     const note = `${line.document_number || 'Challan #' + id} / ${line.indent_number}; Raised by: ${line.raised_by}; Site: ${line.site_name}; ${line.rate_source}: ${line.rate} × ${line.quantity} ${line.unit}`;
     const tool = db.prepare(`INSERT INTO tools (item_master_id, tool_code, serial_no, name, category, quantity, unit,
@@ -135,14 +132,14 @@ function syncDocument(db, id, allowAdditionalAssets = false) {
   return 'imported';
 }
 
-function drainRgpToolsSync(db, { retry = false, deliveryNoteId = null, allowAdditionalAssets = false } = {}) {
+function drainRgpToolsSync(db, { retry = false, deliveryNoteId = null } = {}) {
   const queue = deliveryNoteId
     ? db.prepare('SELECT delivery_note_id FROM rgp_tool_sync WHERE delivery_note_id=?').all(deliveryNoteId)
     : db.prepare(`SELECT delivery_note_id FROM rgp_tool_sync WHERE state='pending' ${retry ? "OR state='review'" : ''} ORDER BY delivery_note_id`).all();
   for (const { delivery_note_id: id } of queue) {
     try {
       db.transaction(() => {
-        const state = syncDocument(db, id, allowAdditionalAssets && !!deliveryNoteId);
+        const state = syncDocument(db, id);
         db.prepare("UPDATE rgp_tool_sync SET state=?, reason=NULL, updated_at=CURRENT_TIMESTAMP WHERE delivery_note_id=?").run(state, id);
       })();
     } catch (error) {
