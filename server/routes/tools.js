@@ -54,8 +54,7 @@ router.post('/rgp-sync', adminOnly, (req, res) => {
   try {
     const id = req.body?.delivery_note_id;
     if (id !== undefined && (!Number.isSafeInteger(Number(id)) || Number(id) <= 0)) return res.status(400).json({ error: 'Invalid challan ID' });
-    if (req.body?.allow_additional_assets === true && !id) return res.status(400).json({ error: 'Select one reviewed challan' });
-    res.json(drainRgpToolsSync(getDb(), { retry: true, deliveryNoteId: id ? Number(id) : null, allowAdditionalAssets: req.body?.allow_additional_assets === true }));
+    res.json(drainRgpToolsSync(getDb(), { retry: true, deliveryNoteId: id ? Number(id) : null }));
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
