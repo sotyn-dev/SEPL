@@ -14,6 +14,7 @@ const { statusFilter } = require('../lib/statusFilter');
 const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 const { nextSequence } = require('../db/nextSequence');
 const { TOOLS_SITE_SUMMARY_SQL } = require('../lib/toolsSiteSummary');
+const { getRgpToolsSyncStatus, drainRgpToolsSync } = require('../lib/rgpToolsSync');
 
 router.use(authMiddleware);
 
@@ -43,6 +44,20 @@ function validUnit(value) {
 }
 
 // ---------- TOOLS CATALOG ----------
+
+router.get('/rgp-sync', adminOnly, (req, res) => {
+  try { res.json(getRgpToolsSyncStatus(getDb())); }
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+router.post('/rgp-sync', adminOnly, (req, res) => {
+  try {
+    const id = req.body?.delivery_note_id;
+    if (id !== undefined && (!Number.isSafeInteger(Number(id)) || Number(id) <= 0)) return res.status(400).json({ error: 'Invalid challan ID' });
+    if (req.body?.allow_additional_assets === true && !id) return res.status(400).json({ error: 'Select one reviewed challan' });
+    res.json(drainRgpToolsSync(getDb(), { retry: true, deliveryNoteId: id ? Number(id) : null, allowAdditionalAssets: req.body?.allow_additional_assets === true }));
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
 
 router.get('/', requirePermission('tools', 'view'), (req, res) => {
   try {
@@ -88,9 +103,9 @@ router.get('/', requirePermission('tools', 'view'), (req, res) => {
 router.get('/stats', requirePermission('tools', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const total = db.prepare('SELECT COUNT(*) as c FROM tools').get().c;
-    const byStatus = db.prepare(`SELECT status, COUNT(*) as c FROM tools GROUP BY status`).all();
-    const byCategory = db.prepare(`SELECT COALESCE(category, '—') as category, COUNT(*) as c FROM tools GROUP BY category`).all();
+    const total = db.prepare('SELECT COALESCE(SUM(quantity), 0) as c FROM tools').get().c;
+    const byStatus = db.prepare(`SELECT status, SUM(quantity) as c FROM tools GROUP BY status`).all();
+    const byCategory = db.prepare(`SELECT COALESCE(category, '—') as category, SUM(quantity) as c FROM tools GROUP BY category`).all();
     const calibrationDue = db.prepare(`SELECT COUNT(*) as c FROM tools WHERE next_calibration_date IS NOT NULL AND next_calibration_date <= date('now', '+30 days')`).get().c;
     const totalValue = db.prepare(`SELECT COALESCE(SUM(purchase_price), 0) as s FROM tools WHERE status != 'scrapped'`).get().s;
     const bySite = db.prepare(TOOLS_SITE_SUMMARY_SQL).all();
