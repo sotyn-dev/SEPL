@@ -125,17 +125,27 @@ test('uncertain history stays visible without invented employee, item, quantity 
   }
 });
 
-test('existing asset requires explicit single-challan review; repeated override is idempotent', () => {
+test('distinct challans for the same item import automatically; repeat imports stay idempotent', () => {
   const db = fixture(); initializeRgpToolsSync(db);
   challan(db); drainRgpToolsSync(db);
   const id = challan(db, { document_number: 'RGP/2' });
   let result = drainRgpToolsSync(db);
-  assert.match(result.review[0].reason, /Possible existing asset/);
-  assert.equal(result.imported, 1);
-  result = drainRgpToolsSync(db, { deliveryNoteId: id, allowAdditionalAssets: true });
+  assert.equal(result.review.length, 0);
   assert.equal(result.imported, 2);
-  drainRgpToolsSync(db, { deliveryNoteId: id, allowAdditionalAssets: true });
+  drainRgpToolsSync(db, { deliveryNoteId: id });
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tools').get().n, 2);
+  db.close();
+});
+
+test('deployment automatically retries challans held by the old item-level duplicate check', () => {
+  const db = fixture(); initializeRgpToolsSync(db);
+  challan(db); drainRgpToolsSync(db);
+  const id = challan(db, { document_number: 'RGP/2' });
+  db.prepare("UPDATE rgp_tool_sync SET state='review', reason='Possible existing asset (T-1); confirm' WHERE delivery_note_id=?").run(id);
+  initializeRgpToolsSync(db);
+  const result = drainRgpToolsSync(db);
+  assert.equal(result.review.length, 0);
+  assert.equal(result.imported, 2);
   db.close();
 });
 
