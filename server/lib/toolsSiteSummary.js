@@ -24,7 +24,7 @@ const TOOLS_SITE_SUMMARY_SQL = `
          totals.tools_amount
   FROM (
     SELECT current_site_id AS site_id,
-           COUNT(*) AS tool_count,
+           SUM(quantity) AS tool_count,
            COALESCE(SUM(CASE WHEN status != 'scrapped' THEN purchase_price ELSE 0 END), 0) AS tools_amount
     FROM tools
     GROUP BY current_site_id
