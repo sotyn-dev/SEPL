@@ -292,7 +292,7 @@ function authMiddleware(req, res, next) {
     // noise from the many unauthenticated/probe requests.
     if (String(req.originalUrl || '').includes('/auth/me')) {
       let who = '?';
-      try { who = (jwt.decode(token) || {}).id ?? '?'; } catch (_) {}
+      try { who = (jwt.decode(token) || {}).id ?? '?'; } catch (_) { }
       console.warn(`[auth] /auth/me 401 — ${e.name || 'Error'}: ${e.message} | token.user=${who}`);
     }
     res.status(401).json({ error: 'Invalid token' });
@@ -339,6 +339,7 @@ function requirePermission(module, action) {
   };
 }
 
+
 // Get all permissions for a user (used by frontend)
 function getUserPermissions(userId) {
   const db = getDb();
@@ -347,14 +348,14 @@ function getUserPermissions(userId) {
   if (user?.role === 'admin') {
     // Admin gets everything
     let modules = [
-      'dashboard','leads','quotations','solar_quotation','orders','business_book','item_master','vendors','customers','procurement',
-      'cashflow','collections','payment_required','attendance','indent_fms','dpr',
-      'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','gamification','tools','rentals','client_snag',
+      'dashboard', 'leads', 'quotations', 'solar_quotation', 'orders', 'business_book', 'item_master', 'vendors', 'customers', 'procurement',
+      'cashflow', 'collections', 'payment_required', 'attendance', 'indent_fms', 'dpr',
+      'installation', 'billing', 'complaints', 'hr', 'payroll', 'employees', 'expenses', 'checklists', 'users', 'delegations', 'pms_tasks', 'inventory', 'scoring', 'gamification', 'tools', 'rentals', 'client_snag',
       // employee_salary: gates visibility of the salary field on GET /hr/employees.
       // hr_team: HR-team membership — gates hiring-request actions and the HR-alert
       // recipient group (cron). Both replace the fuzzy department/role "is HR" checks.
       // attendance_grid: gates viewing the Attendance Monthly Grid tab (marking needs attendance.can_approve).
-      'employee_salary','hr_team','attendance_grid',
+      'employee_salary', 'hr_team', 'attendance_grid',
       // Drawing Tracker (2026-08). NOTE: this list is a separate hardcoded copy
       // from schema.js's ALL_MODULES and has drifted out of sync over time — a
       // new module must be added to BOTH or admin's frontend permission map
