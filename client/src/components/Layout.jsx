@@ -65,6 +65,8 @@ import {
   FiCamera,
   // Sotyn Leads · sotyn.ai website enquiry inbox (mam 2026-09-07).
   FiRss,
+  // Project Dashboard & PO Analytics (TSK-0819)
+  FiPieChart,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -150,6 +152,7 @@ const SIDEBAR_GROUPS = [
     { path: '/procurement-schedule', label: 'Schedule (Gantt)',   icon: FiGitBranch,    module: 'procurement_schedule' },
   ]},
   { id: 'projects', label: 'Projects', icon: FiBriefcase, items: [
+    { path: '/project-dashboard', label: 'Project Dashboard', icon: FiPieChart, module: 'project_dashboard' },
     // Mam (2026-06-01): the execution + billing pipeline used to sit here.
     // Mam (2026-08): MOVED into the Labour Management System group as
     // "Projects & Work Orders" — same route and permission key, listed once so
@@ -655,6 +658,9 @@ export default function Layout() {
       const isNancy = !!(user?.email?.toLowerCase().includes('nancy') || user?.name?.toLowerCase().includes('nancy'));
       const isAdm = (typeof isAdmin === 'function' ? isAdmin() : !!isAdmin) || user?.role === 'admin' || user?.role === 'backup_admin' || user?.role_name?.toLowerCase().includes('admin');
       return isNancy || isAdm || canView('compliance');
+    }
+    if (item.path === '/project-dashboard') {
+      return canView('project_dashboard') || canView('business_book') || canView('procurement') || canView('orders') || canView('dpr');
     }
     if (item.flag && !moduleAccess(item.flag).ok) return false;
     return item.open === true || canView(item.module);

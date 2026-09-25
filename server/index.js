@@ -501,6 +501,7 @@ app.use('/api/solar', require('./routes/solar'));
 app.use('/api/solar-site', require('./routes/solarSite'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/project-profit', require('./routes/projectProfit'));
+app.use('/api/project-dashboard', require('./routes/projectDashboard'));
 app.use('/api/business-book', require('./routes/businessbook'));
 app.use('/api/payment-required', require('./routes/paymentrequired'));
 app.use('/api/raci', require('./routes/raci').router);
