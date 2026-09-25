@@ -255,6 +255,35 @@ export default function Tools() {
             ))}
           </div>
 
+          <div className="card p-0 overflow-hidden">
+            <div className="p-4 border-b">
+              <h3 className="font-bold text-sm">Site-wise Tools</h3>
+              <p className="text-xs text-gray-500 mt-1">Current site and assigned site engineers. Amount is the recorded purchase value, excluding scrapped tools. Count includes all tool records.</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead><tr><th>Site Name</th><th>Site Engineer</th><th className="text-right">Tools Count</th><th className="text-right">Tools Amount (Rs)</th></tr></thead>
+                <tbody>
+                  {!stats.by_site && <tr><td colSpan="4" className="text-center py-8 text-gray-400">Site-wise summary unavailable</td></tr>}
+                  {stats.by_site?.length === 0 && <tr><td colSpan="4" className="text-center py-8 text-gray-400">No tools recorded yet</td></tr>}
+                  {stats.by_site?.map(site => (
+                    <tr key={site.site_id ?? 'unassigned'}>
+                      <td className="font-medium">{site.site_name}</td>
+                      <td>{site.site_engineer_name || (site.site_id == null ? '—' : 'Not assigned')}</td>
+                      <td className="text-right tabular-nums">{site.tool_count.toLocaleString('en-IN')}</td>
+                      <td className="text-right font-semibold tabular-nums whitespace-nowrap">{site.tools_amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {!!stats.by_site?.length && <tfoot><tr className="bg-gray-50 font-bold">
+                  <td colSpan="2">Total</td>
+                  <td className="text-right tabular-nums">{stats.by_site.reduce((sum, site) => sum + site.tool_count, 0).toLocaleString('en-IN')}</td>
+                  <td className="text-right tabular-nums whitespace-nowrap">{stats.by_site.reduce((sum, site) => sum + site.tools_amount, 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                </tr></tfoot>}
+              </table>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="card p-4">
               <h3 className="font-bold text-sm mb-3">By Status</h3>
