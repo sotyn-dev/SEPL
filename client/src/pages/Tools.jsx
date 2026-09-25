@@ -104,9 +104,12 @@ function BulkToolsModal({ sites, users, items, onClose, onSaved, onPreview }) {
 
 export default function Tools() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
+  const admin = isAdmin();
   const [tab, setTab] = useUrlTab('catalog');
   const [tools, setTools] = useState([]);
   const [stats, setStats] = useState(null);
+  const [rgpSync, setRgpSync] = useState(null);
+  const [syncBusy, setSyncBusy] = useState(false);
   const [sites, setSites] = useState([]);
   const [users, setUsers] = useState([]);
   const [rgpItems, setRgpItems] = useState([]);
@@ -147,6 +150,24 @@ export default function Tools() {
       label: [i.item_code, i.item_name, i.specification, i.size].filter(Boolean).join(' — '),
     })))).catch(() => { });
   }, [tab, load, submissionWeek]);
+
+  useEffect(() => {
+    if (admin && (tab === 'dashboard' || tab === 'catalog')) {
+      api.get('/tools/rgp-sync').then(r => setRgpSync(r.data)).catch(() => toast.error('Could not load RGP import status'));
+    }
+  }, [admin, tab]);
+
+  const retryRgp = async (deliveryNoteId) => {
+    if (syncBusy) return;
+    if (deliveryNoteId && !window.confirm('Only continue if these are ADDITIONAL assets. If this challan moves existing tools, use Issue / Transfer instead. Import as new tools?')) return;
+    setSyncBusy(true);
+    try {
+      const { data } = await api.post('/tools/rgp-sync', deliveryNoteId ? { delivery_note_id: deliveryNoteId, allow_additional_assets: true } : {});
+      setRgpSync(data); load();
+      toast.success(data.review.length ? 'Checked challans. Review the remaining items below.' : 'RGP tools are up to date');
+    } catch (err) { toast.error(err.response?.data?.error || 'RGP import failed'); }
+    finally { setSyncBusy(false); }
+  };
 
   const save = async (e) => {
     e.preventDefault();
@@ -241,6 +262,20 @@ export default function Tools() {
       </div>
 
       {/* Dashboard */}
+      {(tab === 'dashboard' || tab === 'catalog') && admin && rgpSync && <details className="card p-4">
+        <summary className="cursor-pointer font-semibold">RGP challan imports: {rgpSync.imported} tool entries linked · {rgpSync.review.length} challans need review</summary>
+        <p className="text-sm text-gray-500 my-3">New and old RGP challans populate Tools with dispatched quantity, indent site and Raised By employee. Value = quantity × recorded challan rate (or indent rate for zero-value RGP challans). Fix missing details in Procurement, then retry. Existing tool movements are preserved.</p>
+        <button disabled={syncBusy} onClick={() => retryRgp()} className="btn btn-secondary mb-3">{syncBusy ? 'Checking…' : 'Retry old / unresolved RGP challans'}</button>
+        {!!rgpSync.review.length && <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead><tr><th>Challan / Indent</th><th>Site / Raised By</th><th>Needs review</th><th>Action</th></tr></thead>
+          <tbody>{rgpSync.review.map(row => <tr key={row.delivery_note_id}>
+            <td>{row.document_number || `Challan #${row.delivery_note_id}`}<div className="text-xs text-gray-500">{row.indent_number}</div></td>
+            <td>{row.site_name || 'Missing site'}<div className="text-xs text-gray-500">{row.raised_by_name || 'Missing Raised By'}</div></td>
+            <td>{row.reason || 'Waiting for import'}</td>
+            <td>{row.reason?.startsWith('Possible existing asset') && <button disabled={syncBusy} onClick={() => retryRgp(row.delivery_note_id)} className="btn btn-secondary text-xs">Import as additional assets</button>}</td>
+          </tr>)}</tbody>
+        </table></div>}
+      </details>}
       {tab === 'dashboard' && stats && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -258,7 +293,7 @@ export default function Tools() {
           <div className="card p-0 overflow-hidden">
             <div className="p-4 border-b">
               <h3 className="font-bold text-sm">Site-wise Tools</h3>
-              <p className="text-xs text-gray-500 mt-1">Current site and assigned site engineers. Amount is the recorded purchase value, excluding scrapped tools. Count includes all tool records.</p>
+              <p className="text-xs text-gray-500 mt-1">Current site and assigned site engineers. Count totals recorded quantities. Amount is the recorded total value of tool entries, excluding scrapped tools. RGP imports use dispatched quantity × recorded rate.</p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
