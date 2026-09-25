@@ -157,12 +157,11 @@ export default function Tools() {
     }
   }, [admin, tab]);
 
-  const retryRgp = async (deliveryNoteId) => {
+  const retryRgp = async () => {
     if (syncBusy) return;
-    if (deliveryNoteId && !window.confirm('Only continue if these are ADDITIONAL assets. If this challan moves existing tools, use Issue / Transfer instead. Import as new tools?')) return;
     setSyncBusy(true);
     try {
-      const { data } = await api.post('/tools/rgp-sync', deliveryNoteId ? { delivery_note_id: deliveryNoteId, allow_additional_assets: true } : {});
+      const { data } = await api.post('/tools/rgp-sync', {});
       setRgpSync(data); load();
       toast.success(data.review.length ? 'Checked challans. Review the remaining items below.' : 'RGP tools are up to date');
     } catch (err) { toast.error(err.response?.data?.error || 'RGP import failed'); }
@@ -267,12 +266,11 @@ export default function Tools() {
         <p className="text-sm text-gray-500 my-3">New and old RGP challans populate Tools with dispatched quantity, indent site and Raised By employee. Value = quantity × recorded challan rate (or indent rate for zero-value RGP challans). Fix missing details in Procurement, then retry. Existing tool movements are preserved.</p>
         <button disabled={syncBusy} onClick={() => retryRgp()} className="btn btn-secondary mb-3">{syncBusy ? 'Checking…' : 'Retry old / unresolved RGP challans'}</button>
         {!!rgpSync.review.length && <div className="overflow-x-auto"><table className="w-full text-sm">
-          <thead><tr><th>Challan / Indent</th><th>Site / Raised By</th><th>Needs review</th><th>Action</th></tr></thead>
+          <thead><tr><th>Challan / Indent</th><th>Site / Raised By</th><th>Needs review</th></tr></thead>
           <tbody>{rgpSync.review.map(row => <tr key={row.delivery_note_id}>
             <td>{row.document_number || `Challan #${row.delivery_note_id}`}<div className="text-xs text-gray-500">{row.indent_number}</div></td>
             <td>{row.site_name || 'Missing site'}<div className="text-xs text-gray-500">{row.raised_by_name || 'Missing Raised By'}</div></td>
             <td>{row.reason || 'Waiting for import'}</td>
-            <td>{row.reason?.startsWith('Possible existing asset') && <button disabled={syncBusy} onClick={() => retryRgp(row.delivery_note_id)} className="btn btn-secondary text-xs">Import as additional assets</button>}</td>
           </tr>)}</tbody>
         </table></div>}
       </details>}
