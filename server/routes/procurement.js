@@ -2308,6 +2308,7 @@ router.put('/indents/:id', (req, res) => {
           `SELECT ii.id, ii.indent_id, ii.item_master_id, ii.quantity, ii.unit, ii.rate,
                   COALESCE(NULLIF(TRIM(ii.description), ''), NULLIF(TRIM(im.item_name), ''),
                            NULLIF(TRIM(im.specification), '')) AS description,
+                  im.item_name,
                   im.specification AS specification, im.size AS size,
                   COALESCE(NULLIF(TRIM(ii.make), ''), NULLIF(TRIM(im.make), '')) AS make,
                   im.item_code AS item_code,
@@ -2344,7 +2345,7 @@ router.put('/indents/:id', (req, res) => {
         }
         storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0,
           description: row.description, specification: row.specification, size: row.size,
-          make: row.make, item_code: row.item_code, unit: row.unit, item_type: row.item_type });
+          make: row.make, item_code: row.item_code, item_name: row.item_name || '', unit: row.unit, item_type: row.item_type });
       }
 
       try {
@@ -2547,7 +2548,7 @@ router.put('/indents/:id', (req, res) => {
             // sales_bill_pending=1 when any line is a billable PO item.
             const storeItems = storePlans.map(p => ({
               description: p.description, specification: p.specification || '', size: p.size || '',
-              make: p.make || '', item_code: p.item_code || '',
+              make: p.make || '', item_code: p.item_code || '', item_name: p.item_name || '',
               qty: p.fromStore, unit: p.unit || '',
               rate: +p.rate || 0, amount: p.fromStore * (+p.rate || 0),
               item_type: p.item_type || '',
@@ -2597,6 +2598,7 @@ router.put('/indents/:id', (req, res) => {
             const rgpRows = db.prepare(
               `SELECT ii.quantity AS qty, ii.unit, ii.item_master_id,
                       COALESCE(NULLIF(TRIM(ii.description), ''), NULLIF(TRIM(im.item_name), ''), 'Item') AS name,
+                      im.item_name,
                       im.size, im.specification, im.make, im.item_code
                  FROM indent_items ii
                  LEFT JOIN item_master im ON im.id = ii.item_master_id
@@ -2612,7 +2614,7 @@ router.put('/indents/:id', (req, res) => {
                 const gpItems = rgpRows.map(r => ({
                   description: [r.name, r.size, r.specification].filter(Boolean).join(' / '),
                   qty: +r.qty || 0, unit: r.unit || '', rate: 0, amount: 0,
-                  item_code: r.item_code || '', make: r.make || '', item_type: 'RGP',
+                  item_code: r.item_code || '', item_name: r.item_name || '', make: r.make || '', item_type: 'RGP',
                 }));
                 db.prepare(
                   `INSERT INTO delivery_notes
@@ -3821,6 +3823,7 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
            CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
                   THEN ii.unit ELSE COALESCE(im.uom, ii.unit) END as uom,
            im.item_code,
+           im.item_name,
            poi.hsn_code as hsn_code,
            im.gst as gst_text
       FROM vendor_po_items vpi
@@ -6976,21 +6979,54 @@ router.get('/delivery-notes/:id/print', (req, res) => {
       if (Array.isArray(parsed) && parsed.length) {
         items = parsed
           .filter(it => it && it.include !== false)
-          .map(it => ({
-            description: it.description || '',
-            // Store-issue challans write `qty`; the create-modal writes
-            // `quantity` — accept either (mam 2026-06-04: store DN showed 0).
-            quantity: +it.quantity || +it.qty || 0,
-            unit: it.unit || '',
-            rate: +it.rate || 0,
-            disc_pct: +it.disc_pct || 0,
-            amount: +it.amount || ((+it.quantity || +it.qty || 0) * (+it.rate || 0) * (1 - (+it.disc_pct || 0) / 100)),
-            item_code: it.item_code || it.hsn || '',
-            specification: it.specification || '',
-            size: it.size || '',
-            gst_text: it.hsn || it.gst_text || '',
-            item_name: it.item_name || '',
-          }));
+          .map(it => {
+            let itemName = it.item_name || '';
+            let itemCode = it.item_code || it.hsn || '';
+            let itemSpec = it.specification || '';
+            let itemSize = it.size || '';
+            if (!itemName && itemCode) {
+              try {
+                const im = db.prepare('SELECT item_name, specification, size FROM item_master WHERE item_code = ?').get(itemCode);
+                if (im) {
+                  if (im.item_name) itemName = im.item_name;
+                  if (!itemSpec && im.specification) itemSpec = im.specification;
+                  if (!itemSize && im.size) itemSize = im.size;
+                }
+              } catch (_) {}
+            }
+            if (!itemName && dn.indent_id) {
+              try {
+                const im = db.prepare(`
+                  SELECT im.item_name, im.item_code, im.specification, im.size
+                    FROM indent_items ii
+                    JOIN item_master im ON im.id = ii.item_master_id
+                   WHERE ii.indent_id = ? AND (ii.description = ? OR ii.description LIKE ?)
+                   LIMIT 1
+                `).get(dn.indent_id, it.description || '', `%${String(it.description || '').slice(0, 35)}%`);
+                if (im) {
+                  if (im.item_name) itemName = im.item_name;
+                  if (!itemCode && im.item_code) itemCode = im.item_code;
+                  if (!itemSpec && im.specification) itemSpec = im.specification;
+                  if (!itemSize && im.size) itemSize = im.size;
+                }
+              } catch (_) {}
+            }
+            return {
+              description: it.description || '',
+              // Store-issue challans write `qty`; the create-modal writes
+              // `quantity` — accept either (mam 2026-06-04: store DN showed 0).
+              quantity: +it.quantity || +it.qty || 0,
+              unit: it.unit || '',
+              rate: +it.rate || 0,
+              disc_pct: +it.disc_pct || 0,
+              amount: +it.amount || ((+it.quantity || +it.qty || 0) * (+it.rate || 0) * (1 - (+it.disc_pct || 0) / 100)),
+              item_code: itemCode,
+              specification: itemSpec,
+              size: itemSize,
+              gst_text: it.hsn || it.gst_text || '',
+              item_name: itemName,
+            };
+          });
         itemsSource = 'overrides';
       }
     } catch (_) { /* fall through to po_items */ }
@@ -7136,12 +7172,24 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     if (isSalesBill) {
       return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(rate)}</td><td class="num">${discPct ? fmt(discPct) : '0'}</td><td class="num">${fmt(taxable)}</td></tr>`;
     }
-    return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
+    // ITEM / SUB-ITEM column cell (exact Item Master name + size/spec + code)
+    const subItemParts = [it.specification, it.size].filter(Boolean).filter(s => !it.item_name || !it.item_name.includes(s));
+    const subItemDetail = subItemParts.join(' / ');
+    const itemName = it.item_name || '';
+    const itemCode = it.item_code || '';
+    const itemCellHtml = (itemName || itemCode)
+      ? `<div>` +
+        (itemName ? `<div style="font-weight:bold;color:#111">${esc(itemName)}</div>` : '') +
+        (subItemDetail ? `<div style="font-size:9.5px;color:#444">${esc(subItemDetail)}</div>` : '') +
+        (itemCode ? `<div style="font-size:9px;color:#666;font-family:monospace">[${esc(itemCode)}]</div>` : '') +
+        `</div>`
+      : '';
+    return `<tr><td class="num">${idx + 1}</td><td>${itemCellHtml}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || it.item_code || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
   }).join('') + Array.from({ length: padCount }, (_, i) => {
     const idx = items.length + i + 1;
     return isSalesBill
       ? `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`
-      : `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
+      : `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
   }).join('');
 
   const css = `
@@ -7623,7 +7671,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     </table>`;
     })()}
     <table class="items">
-      <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:80px">HSN / CODE</th><th style="width:70px">QUANTITY</th><th style="width:50px">UOM</th><th style="width:130px">REMARKS</th></tr></thead>
+      <thead><tr><th style="width:28px">SL NO.</th><th style="width:140px">ITEM / SUB-ITEM</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:75px">HSN / CODE</th><th style="width:65px">QUANTITY</th><th style="width:45px">UOM</th><th style="width:100px">REMARKS</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
     <div style="margin-top:6px;border:1px solid #e7d4d4">

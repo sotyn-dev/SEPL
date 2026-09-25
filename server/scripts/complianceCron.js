@@ -33,7 +33,7 @@ function runComplianceScan(dbInstance = null) {
     // ── 1. SCAN FIELD EMPLOYEES LOCATION COMPLIANCE ──
     // Find active staff who punched in today
     const fieldStaffPunchedIn = db.prepare(`
-      SELECT u.id as user_id, u.name as employee_name, u.role, u.department,
+      SELECT u.id as user_id, u.name as employee_name, u.email, u.role, u.department,
              a.id as attendance_id, a.punch_in_time, a.punch_out_time
       FROM users u
       JOIN attendance a ON a.user_id = u.id AND a.date = ?
@@ -43,6 +43,13 @@ function runComplianceScan(dbInstance = null) {
     `).all(today);
 
     for (const staff of fieldStaffPunchedIn) {
+      // Do not track location compliance for MD Ankur Kaplesh (director@securedengineers.com)
+      const staffEmail = (staff.email || '').toLowerCase().trim();
+      const staffName = (staff.employee_name || '').toLowerCase().trim();
+      if (staffEmail === 'director@securedengineers.com' || (staffName.includes('ankur') && staffName.includes('kaplesh'))) {
+        continue;
+      }
+
       // Check latest location ping
       const latestPing = db.prepare(`
         SELECT time, latitude, longitude, site_name, COALESCE(gps_off, 0) as gps_off 

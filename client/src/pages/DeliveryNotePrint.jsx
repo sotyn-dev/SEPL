@@ -157,25 +157,31 @@ export default function DeliveryNotePrint() {
           <thead>
             <tr style={{ backgroundColor: '#1e40af' }}>
               <th className="border border-rose-900 px-1 py-1.5 text-[10px] text-white uppercase w-8">SL<br/>NO.</th>
+              <th className="border border-rose-900 px-2 py-1.5 text-[10px] text-white uppercase text-left w-36">Item / Sub-Item</th>
               <th className="border border-rose-900 px-2 py-1.5 text-[10px] text-white uppercase text-left">Description of Material / Work</th>
               <th className="border border-rose-900 px-1 py-1.5 text-[10px] text-white uppercase w-20">HSN / Code</th>
               <th className="border border-rose-900 px-1 py-1.5 text-[10px] text-white uppercase w-20">Quantity</th>
               <th className="border border-rose-900 px-1 py-1.5 text-[10px] text-white uppercase w-16">UOM</th>
-              <th className="border border-rose-900 px-2 py-1.5 text-[10px] text-white uppercase w-32">Remarks</th>
+              <th className="border border-rose-900 px-2 py-1.5 text-[10px] text-white uppercase w-28">Remarks</th>
             </tr>
           </thead>
           <tbody>
             {items.map((it, idx) => {
               const detail = [it.specification, it.size, it.make].filter(Boolean).join(' · ');
+              const subItemName = it.item_name || '';
               return (
                 <tr key={it.id || idx} className="align-top">
                   <td className="border border-rose-200 px-1 py-1.5 text-center text-gray-600">{idx + 1}</td>
+                  <td className="border border-rose-200 px-2 py-1.5">
+                    {subItemName && <div className="font-semibold text-gray-900">{subItemName}</div>}
+                    {it.item_code && <div className="text-[9px] font-mono text-gray-500">[{it.item_code}]</div>}
+                  </td>
                   <td className="border border-rose-200 px-2 py-1.5">
                     <div className="font-semibold">{it.description || ''}</div>
                     {detail && <div className="text-[9.5px] text-gray-700 mt-0.5">{detail}</div>}
                     {it.make && !detail.includes(it.make) && <div className="text-[9.5px] text-gray-700">Make: <span className="font-semibold">{it.make}</span></div>}
                   </td>
-                  <td className="border border-rose-200 px-1 py-1.5 text-center font-mono text-[10px]">{it.hsn_code || it.gst_text || ''}</td>
+                  <td className="border border-rose-200 px-1 py-1.5 text-center font-mono text-[10px]">{it.hsn_code || it.gst_text || it.item_code || ''}</td>
                   <td className="border border-rose-200 px-1 py-1.5 text-right tabular-nums font-semibold">{(+it.quantity || 0).toLocaleString('en-IN')}</td>
                   <td className="border border-rose-200 px-1 py-1.5 text-center">{it.uom || ''}</td>
                   <td className="border border-rose-200 px-2 py-1.5"></td>
@@ -186,6 +192,7 @@ export default function DeliveryNotePrint() {
             {Array.from({ length: padCount }).map((_, i) => (
               <tr key={`pad-${i}`}>
                 <td className="border border-rose-200 px-1 py-2 text-center text-gray-400">{items.length + i + 1}</td>
+                <td className="border border-rose-200 px-2 py-2"></td>
                 <td className="border border-rose-200 px-2 py-2"></td>
                 <td className="border border-rose-200 px-1 py-2"></td>
                 <td className="border border-rose-200 px-1 py-2"></td>

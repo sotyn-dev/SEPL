@@ -52,6 +52,19 @@ function getOrCreateComplianceMonitor(db) {
 }
 
 /**
+ * Checks if user is Managing Director (Ankur Kaplesh / director@securedengineers.com).
+ * Exempt from location tracking and GPS compliance alerts.
+ */
+function isMdLocationExempt(user) {
+  if (!user) return false;
+  const email = (user.email || '').toLowerCase().trim();
+  const name = (user.name || user.employee_name || '').toLowerCase().trim();
+  if (email === 'director@securedengineers.com') return true;
+  if (name.includes('ankur') && name.includes('kaplesh')) return true;
+  return false;
+}
+
+/**
  * Generates next sequential case number: CMP-YYYYMM-XXXX
  */
 function generateCaseNumber(db) {
@@ -127,6 +140,13 @@ function createComplianceCase({
     employeeName = `User #${resolvedUserId || userId}`;
   }
   userId = resolvedUserId || userId;
+
+  // Do not track location compliance for MD Ankur Kaplesh (director@securedengineers.com)
+  if (['location_off', 'location_unavailable', 'geofence_breach'].includes(violationType)) {
+    if (isMdLocationExempt(userRow) || isMdLocationExempt({ name: employeeName })) {
+      return null;
+    }
+  }
 
   const caseNumber = generateCaseNumber(db);
   const now = new Date();
@@ -502,6 +522,12 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
   const db = dbInstance || getDb();
   const today = istToday();
 
+  // Do not track location compliance for MD Ankur Kaplesh (director@securedengineers.com)
+  const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(userId);
+  if (isMdLocationExempt(user) || isMdLocationExempt({ name: employeeName })) {
+    return null;
+  }
+
   // STRICT REQUIREMENT: Only trigger GPS OFF compliance when user is currently PUNCHED IN and NOT PUNCHED OUT
   const attRecord = db.prepare(`
     SELECT id, punch_in_time, punch_out_time, status, COALESCE(admin_marked, 0) as admin_marked 
@@ -663,6 +689,10 @@ function handleGpsOffEvent({ userId, employeeName, reason, dbInstance = null }) 
  */
 function handleGpsRestoredEvent({ userId, latitude, longitude, siteName, dbInstance = null }) {
   const db = dbInstance || getDb();
+
+  // Do not track location compliance for MD Ankur Kaplesh (director@securedengineers.com)
+  const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(userId);
+  if (isMdLocationExempt(user)) return;
   const today = istToday();
   const nowIso = new Date().toISOString();
   const nowMs = Date.now();
@@ -784,4 +814,5 @@ module.exports = {
   formatISTTime,
   handleGpsOffEvent,
   handleGpsRestoredEvent,
+  isMdLocationExempt,
 };

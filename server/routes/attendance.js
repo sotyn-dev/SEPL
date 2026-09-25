@@ -987,6 +987,10 @@ router.post('/track-location', (req, res) => {
   const today = istTodayStr();
   const now = new Date().toISOString();
 
+  const uEmail = (req.user?.email || '').toLowerCase().trim();
+  const uName = (req.user?.name || '').toLowerCase().trim();
+  const isMdExempt = uEmail === 'director@securedengineers.com' || (uName.includes('ankur') && uName.includes('kaplesh'));
+
   // Heartbeat with gps_off=true → user is online (page is open, network
   // alive) but their browser couldn't get a GPS fix. Mam: 'can show me
   // here like some off GPS even network is good'. Stored with NULL
@@ -996,16 +1000,18 @@ router.post('/track-location', (req, res) => {
     db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,NULL,NULL,?,?)')
       .run(req.user.id, today, now, reason || null, 'GPS_OFF');
 
-    try {
-      const { handleGpsOffEvent } = require('../services/complianceService');
-      handleGpsOffEvent({
-        userId: req.user.id,
-        employeeName: req.user.name,
-        reason: reason || 'GPS location turned off on mobile',
-        dbInstance: db,
-      });
-    } catch (err) {
-      console.error('[attendance-track-location] error handling GPS OFF event:', err);
+    if (!isMdExempt) {
+      try {
+        const { handleGpsOffEvent } = require('../services/complianceService');
+        handleGpsOffEvent({
+          userId: req.user.id,
+          employeeName: req.user.name,
+          reason: reason || 'GPS location turned off on mobile',
+          dbInstance: db,
+        });
+      } catch (err) {
+        console.error('[attendance-track-location] error handling GPS OFF event:', err);
+      }
     }
 
     return res.json({ site: 'GPS_OFF', recorded: true });
@@ -1022,18 +1028,20 @@ router.post('/track-location', (req, res) => {
   db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,?,?,?,?)')
     .run(req.user.id, today, now, latitude, longitude, address, siteName);
 
-  // Auto-log GPS restored event and send complete lifecycle report
-  try {
-    const { handleGpsRestoredEvent } = require('../services/complianceService');
-    handleGpsRestoredEvent({
-      userId: req.user.id,
-      latitude,
-      longitude,
-      siteName,
-      dbInstance: db,
-    });
-  } catch (err) {
-    console.error('[attendance-track-location] error handling GPS Restored event:', err);
+  if (!isMdExempt) {
+    // Auto-log GPS restored event and send complete lifecycle report
+    try {
+      const { handleGpsRestoredEvent } = require('../services/complianceService');
+      handleGpsRestoredEvent({
+        userId: req.user.id,
+        latitude,
+        longitude,
+        siteName,
+        dbInstance: db,
+      });
+    } catch (err) {
+      console.error('[attendance-track-location] error handling GPS Restored event:', err);
+    }
   }
 
   res.json({ site: siteName });

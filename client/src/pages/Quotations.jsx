@@ -459,11 +459,14 @@ export default function Quotations() {
 
           <div className="card p-0 table-responsive">
             <table className="freeze-head min-w-[750px]">
-              <thead><tr><th>Title</th><th>Client</th><th>Drawing</th><th>Total</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+              <thead><tr><th style={{ width: '45px' }} className="text-center">#</th><th>Title</th><th>Client</th><th>Drawing</th><th>Total</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
               <tbody>
-                {boqs.map(b => (
-                  <tr key={b.id}>
-                    <td className="font-medium">
+                {boqs.map((b, idx) => {
+                  const sNo = ((boqPage - 1) * (boqPerPage === 'all' ? 0 : boqPerPage)) + idx + 1;
+                  return (
+                    <tr key={b.id}>
+                      <td className="text-center text-gray-400 font-medium text-xs w-10">{sNo}</td>
+                      <td className="font-medium">
                       {b.title}
                       {/* Sales-funnel BOQs listed alongside (mam 2026-08-27) —
                           first BOQ on a lead = FUNNEL, later additions = EXTRA. */}
@@ -513,16 +516,17 @@ export default function Quotations() {
                       </div>
                     </td>
                   </tr>
-                ))}
-                {boqs.length === 0 && (
-                  <tr>
-                    <td colSpan="7" className="text-center py-8 text-gray-400">
-                      {boqLoading ? 'Loading BOQs…' : boqFilter === 'pending' ? 'No pending BOQs — all up to date!' : 'No BOQs found'}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                );
+              })}
+              {boqs.length === 0 && (
+                <tr>
+                  <td colSpan="8" className="text-center py-8 text-gray-400">
+                    {boqLoading ? 'Loading BOQs…' : boqFilter === 'pending' ? 'No pending BOQs — all up to date!' : 'No BOQs found'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
 
             {/* Server-side Pagination Bar */}
             <Pagination
@@ -605,10 +609,13 @@ export default function Quotations() {
 
           <div className="card p-0 table-responsive">
             <table className="freeze-head min-w-[850px]">
-              <thead><tr><th>Number</th><th>Client</th><th>Total</th><th>Discount</th><th>Final</th><th>Status</th><th>Actions</th></tr></thead>
+              <thead><tr><th style={{ width: '45px' }} className="text-center">#</th><th>Number</th><th>Client</th><th>Total</th><th>Discount</th><th>Final</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>
-                {quotations.map(q => (
+                {quotations.map((q, idx) => {
+                  const sNo = ((quotePage - 1) * (quotePerPage === 'all' ? 0 : quotePerPage)) + idx + 1;
+                  return (
                   <tr key={q.id}>
+                    <td className="text-center text-gray-400 font-medium text-xs w-10">{sNo}</td>
                     <td className="font-medium">
                       {q.quotation_number}
                       {/* Funnel-uploaded quotations listed alongside (mam 2026-08-27) */}
@@ -702,14 +709,15 @@ export default function Quotations() {
                       </div>
                     </td>
                   </tr>
-                ))}
-                {quotations.length === 0 && (
-                  <tr>
-                    <td colSpan="7" className="text-center py-8 text-gray-400">
-                      {quoteLoading ? 'Loading quotations…' : 'No quotations yet'}
-                    </td>
-                  </tr>
-                )}
+                );
+              })}
+              {quotations.length === 0 && (
+                <tr>
+                  <td colSpan="8" className="text-center py-8 text-gray-400">
+                    {quoteLoading ? 'Loading quotations…' : 'No quotations yet'}
+                  </td>
+                </tr>
+              )}
               </tbody>
             </table>
 
