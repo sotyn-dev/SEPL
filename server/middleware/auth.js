@@ -361,7 +361,9 @@ function getUserPermissions(userId) {
       // silently omits it (routes still work; the sidebar entry disappears).
       'drawing_tracker',
       // System Flow & ERP Implementation Control (2026-09)
-      'system_flow'
+      'system_flow',
+      // Project Dashboard & PO Analytics (TSK-0819)
+      'project_dashboard'
     ];
     // Drift fix (2026-09-01): the hardcoded copy above was 26 modules behind
     // schema.js's ALL_MODULES. The top-up loop in schema.js seeds EVERY module

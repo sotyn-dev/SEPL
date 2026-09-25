@@ -6722,7 +6722,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): AR/AP Tracker — rolling weekly cash-flow forecast
     // (receivables vs payables by party × week) with a mandatory-remark
     // change log. Under the Finance sidebar group.
-    'ar_ap_tracker', 'project_profit',
+    'ar_ap_tracker', 'project_profit', 'project_dashboard',
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
