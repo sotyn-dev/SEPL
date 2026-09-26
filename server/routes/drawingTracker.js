@@ -81,12 +81,98 @@ function listSetting(key, fallback) {
 const DWG_COLS = `d.id, d.project_source, d.project_id, d.project_name, d.site_id, d.site_name,
   d.drawing_number, d.title, d.discipline, d.drawing_type, d.current_revision_id, d.remarks,
   d.boq_required, d.boq_file_url, d.boq_file_name,
+  d.target_date, d.sop_stage,
+  d.internal_review_status, d.internal_reviewed_by, d.internal_reviewed_by_name, d.internal_reviewed_at, d.internal_review_notes, d.internal_checklist,
+  d.client_submitted_at, d.client_submitted_by, d.client_submitted_by_name, d.client_expected_date, d.submission_ref_no, d.submission_notes,
+  d.reminder_50_sent_at, d.reminder_80_sent_at, d.reminder_escalation_status,
+  d.site_release_status, d.site_released_at, d.site_released_by, d.site_released_by_name, d.release_note_no, d.ready_checklist_ticked, d.site_release_remarks,
   d.created_by, d.created_by_name, d.created_at, d.updated_at,
   r.revision_no AS current_revision_no, r.status AS current_status,
   r.uploaded_at AS last_revised_at, r.uploaded_by_name AS last_revised_by,
   (SELECT COUNT(*) FROM drawing_revisions x WHERE x.drawing_id = d.id) AS revision_count`;
 
 const DWG_FROM = `FROM drawings d LEFT JOIN drawing_revisions r ON r.id = d.current_revision_id`;
+
+const DEFAULT_SOP_RACI = {
+  s1_s2_drafting: {
+    key: 's1_s2_drafting',
+    role_name: 'Design / Drafting Engineer',
+    raci_type: 'R',
+    stage_label: 'S1/S2 Drafting',
+    default_name: 'MD Asad',
+    description: 'Drafts drawing in standard CAD template and uploads Rev 0 or subsequent revisions.'
+  },
+  s3_senior_check: {
+    key: 's3_senior_check',
+    role_name: 'Senior Checker (QC Pre-Check)',
+    raci_type: 'A',
+    stage_label: 'S3 Senior Check',
+    default_name: 'Ambuj',
+    description: 'Conducts mandatory 5-point quality checklist review within 4-hour SLA.'
+  },
+  s4_client_submit: {
+    key: 's4_client_submit',
+    role_name: 'Client Submission Coordinator',
+    raci_type: 'R',
+    stage_label: 'S4 Client Submit',
+    default_name: 'Lovely',
+    description: 'Submits checked drawing to client with transmittal ref & tracks expected approval date.'
+  },
+  s5_reminder_50: {
+    key: 's5_reminder_50',
+    role_name: '50% Milestone SLA Follow-Up',
+    raci_type: 'I',
+    stage_label: 'S5 Milestone (50%)',
+    default_name: 'Project Manager',
+    description: 'Receives automated half-time reminder to follow up on client approval.'
+  },
+  s5_escalation_80: {
+    key: 's5_escalation_80',
+    role_name: '80% SLA Escalation Authority (MD)',
+    raci_type: 'A',
+    stage_label: 'S5 Escalation (80%)',
+    default_name: 'Rajat Sharma (MD)',
+    description: 'Receives urgent escalation alert when drawing reaches 80% elapsed time without approval.'
+  },
+  s6_site_release: {
+    key: 's6_site_release',
+    role_name: 'Good For Construction (GFC) Release Authority',
+    raci_type: 'A',
+    stage_label: 'S6 Site Release',
+    default_name: 'Ambuj',
+    description: 'Verifies site ready-checklist & generates official Drawing Release Note (DRN).'
+  }
+};
+
+function getDrawingRaci(db) {
+  let saved = {};
+  try {
+    const row = db.prepare("SELECT value FROM app_settings WHERE key='sop06_drawing_raci'").get();
+    if (row?.value) saved = JSON.parse(row.value);
+  } catch (_) {}
+
+  let users = [];
+  try {
+    users = db.prepare("SELECT id, name, email, department, role FROM users WHERE active=1 ORDER BY name").all();
+  } catch (_) {}
+  const userMap = new Map(users.map(u => [u.id, u]));
+
+  const result = {};
+  for (const [k, def] of Object.entries(DEFAULT_SOP_RACI)) {
+    const s = saved[k] || {};
+    const uid = s.user_id ? Number(s.user_id) : null;
+    const u = uid ? userMap.get(uid) : null;
+    result[k] = {
+      ...def,
+      user_id: uid,
+      assigned_name: u ? u.name : (s.custom_name || def.default_name),
+      assigned_email: u ? u.email : null,
+      assigned_department: u ? u.department : null,
+      is_custom: !!u || !!s.custom_name,
+    };
+  }
+  return { raci: result, users };
+}
 
 // ─── Dropdown options ──────────────────────────────────────────────────
 // Both project masters are offered because the ERP has two unlinked ones.
@@ -115,6 +201,8 @@ router.get('/options', canView, (req, res) => {
        ORDER BY id DESC LIMIT 1000`).all();
   } catch (_) {}
 
+  const raciData = getDrawingRaci(db);
+
   res.json({
     disciplines: listSetting('drawing_disciplines', DEFAULT_DISCIPLINES),
     drawing_types: listSetting('drawing_types', DEFAULT_TYPES),
@@ -128,7 +216,52 @@ router.get('/options', canView, (req, res) => {
     projects_solar: projectsSolar,
     projects_module: db.prepare(`SELECT id, name FROM proj_projects ORDER BY name`).all(),
     sites: db.prepare(`SELECT id, name, business_book_id FROM sites ORDER BY name`).all(),
+    raci: raciData.raci,
   });
+});
+
+// ─── SOP-06 RACI Configuration Routes ──────────────────────────────────
+router.get('/raci', canView, (req, res) => {
+  const db = getDb();
+  res.json(getDrawingRaci(db));
+});
+
+router.put('/raci', (req, res, next) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Only administrators can modify SOP-06 RACI role delegations' });
+  }
+  next();
+}, (req, res) => {
+  const db = getDb();
+  const assignments = req.body.assignments || {};
+  const current = getDrawingRaci(db);
+  const toSave = {};
+
+  for (const [key, val] of Object.entries(assignments)) {
+    if (DEFAULT_SOP_RACI[key]) {
+      toSave[key] = {
+        user_id: val.user_id ? Number(val.user_id) : null,
+        custom_name: str(val.custom_name) || null,
+      };
+    }
+  }
+
+  db.prepare(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ('sop06_drawing_raci', ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+  `).run(JSON.stringify(toSave));
+
+  logAuditEvent({
+    user: req.user,
+    action: 'DRAWING_RACI_UPDATED',
+    entity_type: 'drawing_tracker',
+    entity_id: 0,
+    entity_label: 'SOP-06 RACI Roles',
+    after: toSave,
+  });
+
+  res.json(getDrawingRaci(db));
 });
 
 // ─── Drawings list ─────────────────────────────────────────────────────
@@ -226,24 +359,28 @@ router.post('/drawings', canCreate, upload.fields([{ name: 'file', maxCount: 1 }
   }
 
   try {
+    const targetDate = str(b.target_date) || null;
     const result = db.transaction(() => {
       const info = db.prepare(`
         INSERT INTO drawings
           (project_source, project_id, project_name, site_id, site_name, drawing_number,
            title, discipline, drawing_type, remarks, boq_required, boq_file_url, boq_file_name,
+           target_date, sop_stage, internal_review_status,
            created_by, created_by_name)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'s3_internal_check','pending',?,?)`).run(
         projectSource, int(b.project_id), str(b.project_name), int(b.site_id), str(b.site_name),
         str(b.drawing_number), str(b.title), str(b.discipline), str(b.drawing_type),
-        str(b.remarks), boqRequired, boqUrl, boqName, req.user.id, req.user.name || null);
+        str(b.remarks), boqRequired, boqUrl, boqName,
+        targetDate, req.user.id, req.user.name || null);
       const drawingId = info.lastInsertRowid;
 
       // Rev 0 is the starting drawing. It is current until something supersedes it.
       const rev = db.prepare(`
         INSERT INTO drawing_revisions
           (drawing_id, revision_no, revision_date, revision_description, revision_reason,
-           status, file_url, file_name, file_type, file_size, uploaded_by, uploaded_by_name)
-        VALUES (?,0,?,?,?,'current',?,?,?,?,?,?)`).run(
+           status, file_url, file_name, file_type, file_size, uploaded_by, uploaded_by_name,
+           internal_review_status)
+        VALUES (?,0,?,?,?,'current',?,?,?,?,?,?,'pending')`).run(
         drawingId, str(b.revision_date) || new Date().toISOString().slice(0, 10),
         str(b.revision_description), str(b.revision_reason),
         url, drawingFile.originalname, drawingFile.mimetype, drawingFile.size,
@@ -254,6 +391,10 @@ router.post('/drawings', canCreate, upload.fields([{ name: 'file', maxCount: 1 }
     })();
 
     notify(db, result.drawingId, 'created', 0, req.user);
+    notifySOP(db, result.drawingId, 's2_drafted', req.user, {
+      title: `Drawing Ready for Review: ${str(b.drawing_number)} Rev 0`,
+      body: `MD Asad (${req.user.name || 'Design Engg'}) uploaded Rev 0. Awaiting Ambuj's Senior Pre-Check (SOP-06.3 · 4h SLA).`,
+    });
     const out = db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(result.drawingId);
     res.status(201).json(out);
   } catch (e) {
@@ -327,15 +468,37 @@ router.post('/drawings/:id/revisions', canCreate, upload.single('file'), async (
     const rev = db.prepare(`
       INSERT INTO drawing_revisions
         (drawing_id, revision_no, revision_date, revision_description, revision_reason,
-         status, file_url, file_name, file_type, file_size, uploaded_by, uploaded_by_name)
-      VALUES (?,?,?,?,?,'current',?,?,?,?,?,?)`).run(
+         status, file_url, file_name, file_type, file_size, uploaded_by, uploaded_by_name,
+         internal_review_status)
+      VALUES (?,?,?,?,?,'current',?,?,?,?,?,?,'pending')`).run(
       drawing.id, no, str(b.revision_date) || new Date().toISOString().slice(0, 10),
       str(b.revision_description), str(b.revision_reason),
       url, req.file.originalname, req.file.mimetype, req.file.size,
       req.user.id, req.user.name || null);
 
-    db.prepare('UPDATE drawings SET current_revision_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
-      .run(rev.lastInsertRowid, drawing.id);
+    db.prepare(`UPDATE drawings SET
+      current_revision_id = ?,
+      sop_stage = 's3_internal_check',
+      internal_review_status = 'pending',
+      internal_reviewed_by = NULL,
+      internal_reviewed_by_name = NULL,
+      internal_reviewed_at = NULL,
+      internal_review_notes = NULL,
+      internal_checklist = NULL,
+      client_submitted_at = NULL,
+      client_expected_date = NULL,
+      submission_ref_no = NULL,
+      submission_notes = NULL,
+      reminder_50_sent_at = NULL,
+      reminder_80_sent_at = NULL,
+      reminder_escalation_status = NULL,
+      site_release_status = 'pending',
+      site_released_at = NULL,
+      release_note_no = NULL,
+      ready_checklist_ticked = 0,
+      updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?`
+    ).run(rev.lastInsertRowid, drawing.id);
     return { revisionId: rev.lastInsertRowid, revisionNo: no };
   })();
 
@@ -372,6 +535,10 @@ router.post('/drawings/:id/revisions', canCreate, upload.single('file'), async (
     after: { revision_no: result.revisionNo, description: str(b.revision_description) },
   });
   notify(db, drawing.id, 'revised', result.revisionNo, req.user);
+  notifySOP(db, drawing.id, 's2_revised', req.user, {
+    title: `Drawing Revised: ${drawing.drawing_number} Rev ${result.revisionNo}`,
+    body: `MD Asad (${req.user.name || 'Design Engg'}) uploaded Rev ${result.revisionNo}. Awaiting Ambuj's Senior Pre-Check (SOP-06.3 · 4h SLA).`,
+  });
 
   const out = db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(drawing.id);
   res.status(201).json({ ...out, new_revision_no: result.revisionNo });
@@ -527,6 +694,7 @@ router.put('/drawings/:id', canEdit, upload.single('boq_file'), async (req, res)
         boq_required = ?,
         boq_file_url = ?,
         boq_file_name = ?,
+        target_date = COALESCE(?, target_date),
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?`).run(
       drawingNumber,
@@ -536,6 +704,7 @@ router.put('/drawings/:id', canEdit, upload.single('boq_file'), async (req, res)
       b.site_name !== undefined ? str(b.site_name) : before.site_name,
       b.remarks !== undefined ? str(b.remarks) : before.remarks,
       boqRequired, boqUrl, boqName,
+      b.target_date !== undefined ? (str(b.target_date) || null) : before.target_date,
       req.params.id);
 
     logAuditEvent({
@@ -833,5 +1002,323 @@ function notify(db, drawingId, event, revisionNo, actor) {
     console.warn('[drawing-tracker] notify failed:', e.message);
   }
 }
+
+// ─── SOP-06 Notifications Helper ─────────────────────────────────────────
+function notifySOP(db, drawingId, event, actor, alert, isUrgent = false) {
+  try {
+    const d = db.prepare('SELECT drawing_number, title FROM drawings WHERE id=?').get(drawingId);
+    if (!d) return;
+
+    const raciData = getDrawingRaci(db).raci;
+    let targetUserId = null;
+    if (event === 's2_drafted') targetUserId = raciData.s3_senior_check?.user_id;
+    else if (event === 's3_rejected') targetUserId = raciData.s1_s2_drafting?.user_id;
+    else if (event === 's3_approved') targetUserId = raciData.s4_client_submit?.user_id;
+    else if (event === 's4_submitted') targetUserId = raciData.s5_reminder_50?.user_id;
+    else if (event === 'reminder_50') targetUserId = raciData.s5_reminder_50?.user_id;
+    else if (event === 'reminder_80') targetUserId = raciData.s5_escalation_80?.user_id;
+    else if (event === 's6_released') targetUserId = raciData.s6_site_release?.user_id;
+
+    const recipients = db.prepare(`
+      SELECT DISTINCT ur.user_id AS id FROM user_roles ur
+        JOIN role_permissions rp ON rp.role_id = ur.role_id
+       WHERE rp.module = 'drawing_tracker' AND rp.can_view = 1
+       UNION SELECT id FROM users WHERE (role='admin' OR department IN ('Design', 'Engineering', 'Site Operations', 'Sales', 'Management')) AND active=1
+    `).all();
+
+    if (targetUserId && !recipients.some(r => r.id === targetUserId)) {
+      recipients.push({ id: targetUserId });
+    }
+
+    const title = alert.title || `Drawing Update: ${d.drawing_number}`;
+    const body = alert.body || `Drawing ${d.drawing_number} status updated.`;
+    const linkUrl = `/drawing-tracker/${drawingId}`;
+    const dedupeKey = `drawing:${drawingId}:${event}:${Date.now()}`;
+
+    const ins = db.prepare(`
+      INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+      VALUES (?, 'drawing_tracker', ?, ?, ?, 'in_app', ?)
+    `);
+
+    for (const r of recipients) {
+      if (r.id === actor?.id) continue;
+      try {
+        ins.run(r.id, title, body, linkUrl, `${dedupeKey}:${r.id}`);
+      } catch (_) {}
+    }
+
+    if (recipients.length > 0) {
+      try {
+        const { notifyMany } = require('../lib/push');
+        notifyMany(recipients.map(r => r.id), {
+          title: isUrgent ? `🚨 ${title}` : `📐 ${title}`,
+          body,
+          url: linkUrl,
+        });
+      } catch (_) {}
+    }
+
+    try {
+      const { getIO } = require('../lib/chatSocket');
+      const io = getIO();
+      if (io) {
+        io.emit('notification:new', {
+          type: 'drawing_tracker',
+          title,
+          body,
+          link_url: linkUrl,
+          created_at: new Date().toISOString(),
+        });
+        io.emit('drawing:updated', { drawing_id: drawingId, event });
+      }
+    } catch (_) {}
+  } catch (e) {
+    console.warn('[drawing-tracker] notifySOP failed:', e.message);
+  }
+}
+
+// ─── SOP-06.3: Internal Senior Pre-Check (Ambuj) ────────────────────────
+router.post('/drawings/:id/sop/internal-review', canEdit, (req, res) => {
+  const db = getDb();
+  const drawing = db.prepare(`SELECT * FROM drawings WHERE id=?`).get(req.params.id);
+  if (!drawing) return res.status(404).json({ error: 'Drawing not found' });
+  const b = req.body || {};
+  const status = b.status === 'approved' ? 'approved' : 'rejected';
+
+  if (status === 'approved') {
+    const checklist = b.checklist || {};
+    const requiredChecks = ['chk_title_block', 'chk_dimensions', 'chk_specs', 'chk_scale', 'chk_clash'];
+    const missing = requiredChecks.filter(k => !checklist[k]);
+    if (missing.length > 0) {
+      return res.status(400).json({
+        error: `All 5 pre-submission checklist items must be verified by Senior Engineer before approving (${5 - missing.length}/5 checked).`
+      });
+    }
+
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE drawings SET
+          internal_review_status = 'approved',
+          internal_reviewed_by = ?,
+          internal_reviewed_by_name = ?,
+          internal_reviewed_at = CURRENT_TIMESTAMP,
+          internal_review_notes = ?,
+          internal_checklist = ?,
+          sop_stage = 's4_client_submitted',
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(req.user.id, req.user.name || 'Ambuj', str(b.notes), JSON.stringify(checklist), drawing.id);
+
+      if (drawing.current_revision_id) {
+        db.prepare(`
+          UPDATE drawing_revisions SET
+            internal_review_status = 'approved',
+            internal_reviewed_by = ?,
+            internal_reviewed_by_name = ?,
+            internal_reviewed_at = CURRENT_TIMESTAMP,
+            internal_checklist = ?,
+            internal_review_notes = ?
+          WHERE id = ?
+        `).run(req.user.id, req.user.name || 'Ambuj', JSON.stringify(checklist), str(b.notes), drawing.current_revision_id);
+      }
+    })();
+
+    logAuditEvent({
+      user: req.user, action: 'DRAWING_PRECHECK_APPROVED', entity_type: 'drawings',
+      entity_id: drawing.id, entity_label: drawing.drawing_number,
+      after: { reviewer: req.user.name || 'Ambuj', checklist },
+    });
+
+    notifySOP(db, drawing.id, 's3_approved', req.user, {
+      title: `Drawing Checked & Approved: ${drawing.drawing_number}`,
+      body: `Ambuj (${req.user.name || 'Senior Engg'}) passed internal pre-check (SOP-06.3). Ready for client submission.`,
+    });
+  } else {
+    // Rejected / Revision needed
+    if (!str(b.notes)) {
+      return res.status(400).json({ error: 'Please specify correction notes / mistakes caught when requesting revision.' });
+    }
+    db.prepare(`
+      UPDATE drawings SET
+        internal_review_status = 'rejected',
+        internal_reviewed_by = ?,
+        internal_reviewed_by_name = ?,
+        internal_reviewed_at = CURRENT_TIMESTAMP,
+        internal_review_notes = ?,
+        sop_stage = 's2_drafting',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(req.user.id, req.user.name || 'Ambuj', str(b.notes), drawing.id);
+
+    logAuditEvent({
+      user: req.user, action: 'DRAWING_PRECHECK_REJECTED', entity_type: 'drawings',
+      entity_id: drawing.id, entity_label: drawing.drawing_number,
+      after: { reviewer: req.user.name || 'Ambuj', notes: str(b.notes) },
+    });
+
+    notifySOP(db, drawing.id, 's3_rejected', req.user, {
+      title: `Drawing Corrections Required: ${drawing.drawing_number}`,
+      body: `Ambuj (${req.user.name || 'Senior Engg'}) returned drawing for revisions: ${str(b.notes)} (SOP-06.3)`,
+    });
+  }
+
+  const updated = db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(drawing.id);
+  res.json(updated);
+});
+
+// ─── SOP-06.4: Client Submission (Lovely / Coordinator) ────────────────
+router.post('/drawings/:id/sop/client-submit', canEdit, (req, res) => {
+  const db = getDb();
+  const drawing = db.prepare(`SELECT * FROM drawings WHERE id=?`).get(req.params.id);
+  if (!drawing) return res.status(404).json({ error: 'Drawing not found' });
+  const b = req.body || {};
+
+  if (drawing.internal_review_status !== 'approved') {
+    return res.status(400).json({
+      error: 'Cannot submit to client without Senior Engineer internal review sign-off (SOP-06.3).'
+    });
+  }
+  if (!str(b.client_expected_date)) {
+    return res.status(400).json({ error: 'Expected client approval date is required to start the SLA clock.' });
+  }
+
+  const submittedAt = str(b.client_submitted_at) || new Date().toISOString();
+  const expectedDate = str(b.client_expected_date);
+  const refNo = str(b.submission_ref_no) || 'Client Transmittal';
+  const notes = str(b.submission_notes);
+
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE drawings SET
+        client_submitted_at = ?,
+        client_submitted_by = ?,
+        client_submitted_by_name = ?,
+        client_expected_date = ?,
+        submission_ref_no = ?,
+        submission_notes = ?,
+        sop_stage = 's5_under_review',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(submittedAt, req.user.id, req.user.name || 'Lovely', expectedDate, refNo, notes, drawing.id);
+
+    if (drawing.current_revision_id) {
+      db.prepare(`
+        UPDATE drawing_revisions SET
+          client_submitted_at = ?,
+          client_expected_date = ?,
+          submission_ref_no = ?
+        WHERE id = ?
+      `).run(submittedAt, expectedDate, refNo, drawing.current_revision_id);
+    }
+  })();
+
+  logAuditEvent({
+    user: req.user, action: 'DRAWING_CLIENT_SUBMITTED', entity_type: 'drawings',
+    entity_id: drawing.id, entity_label: drawing.drawing_number,
+    after: { submitted_by: req.user.name || 'Lovely', expectedDate, refNo },
+  });
+
+  notifySOP(db, drawing.id, 's4_submitted', req.user, {
+    title: `Drawing Sent to Client: ${drawing.drawing_number}`,
+    body: `Transmitted by Lovely (${req.user.name || 'Coordinator'}) under Ref: ${refNo}. SLA approval clock started (Due: ${expectedDate}).`,
+  });
+
+  const updated = db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(drawing.id);
+  res.json(updated);
+});
+
+// ─── SOP-06.5: Milestone Reminders (50% / 80% / Rajat sir) ──────────────
+router.post('/drawings/:id/sop/client-reminder', canEdit, (req, res) => {
+  const db = getDb();
+  const drawing = db.prepare(`SELECT * FROM drawings WHERE id=?`).get(req.params.id);
+  if (!drawing) return res.status(404).json({ error: 'Drawing not found' });
+  const b = req.body || {};
+  const reminderType = str(b.reminder_type) || 'manual';
+
+  let updateCol = '';
+  let title = '';
+  let body = '';
+  if (reminderType === '50') {
+    updateCol = `reminder_50_sent_at = CURRENT_TIMESTAMP,`;
+    title = `⏰ 50% SLA Milestone: ${drawing.drawing_number}`;
+    body = `Drawing approval is at half-time (Due: ${drawing.client_expected_date || 'TBD'}). Follow-up sent to Project Manager & Design Head.`;
+  } else if (reminderType === '80') {
+    updateCol = `reminder_80_sent_at = CURRENT_TIMESTAMP,`;
+    title = `🚨 80% SLA Urgent Escalation: ${drawing.drawing_number}`;
+    body = `Drawing approval is at 80% elapsed time (Due: ${drawing.client_expected_date || 'TBD'}). Escalated to Design Head & MD (Rajat sir).`;
+  } else {
+    title = `Client Follow-Up Sent: ${drawing.drawing_number}`;
+    body = `Follow-up reminder sent to client (Ref: ${drawing.submission_ref_no || 'Transmittal'}) · ${str(b.notes) || 'Approval awaited'}.`;
+  }
+
+  db.prepare(`
+    UPDATE drawings SET
+      ${updateCol}
+      reminder_escalation_status = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(`${reminderType} reminder sent (${new Date().toLocaleDateString('en-IN')})`, drawing.id);
+
+  notifySOP(db, drawing.id, `reminder_${reminderType}`, req.user, { title, body }, reminderType === '80');
+
+  const updated = db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(drawing.id);
+  res.json(updated);
+});
+
+// ─── SOP-06.6: Site Release & Checklist Tick (Ambuj) ────────────────────
+router.post('/drawings/:id/sop/release-to-site', canEdit, (req, res) => {
+  const db = getDb();
+  const drawing = db.prepare(`SELECT * FROM drawings WHERE id=?`).get(req.params.id);
+  if (!drawing) return res.status(404).json({ error: 'Drawing not found' });
+  const b = req.body || {};
+
+  const year = new Date().getFullYear();
+  const countRow = db.prepare("SELECT COUNT(*) AS c FROM drawings WHERE release_note_no IS NOT NULL").get();
+  const seq = (countRow?.c || 0) + 1;
+  const releaseNoteNo = str(b.release_note_no) || `DRN-${year}-${String(seq).padStart(4, '0')}`;
+  const remarks = str(b.site_release_remarks) || 'Approved by client — Issued Good For Construction (GFC) to site.';
+
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE drawings SET
+        site_release_status = 'released',
+        site_released_at = CURRENT_TIMESTAMP,
+        site_released_by = ?,
+        site_released_by_name = ?,
+        release_note_no = ?,
+        ready_checklist_ticked = 1,
+        site_release_remarks = ?,
+        sop_stage = 's6_approved_site',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(req.user.id, req.user.name || 'Ambuj', releaseNoteNo, remarks, drawing.id);
+
+    if (drawing.current_revision_id) {
+      db.prepare(`
+        UPDATE drawing_revisions SET
+          release_note_no = ?,
+          site_released_at = CURRENT_TIMESTAMP,
+          approved_by = ?,
+          approved_by_name = ?,
+          approved_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(releaseNoteNo, req.user.id, req.user.name || 'Ambuj', drawing.current_revision_id);
+    }
+  })();
+
+  logAuditEvent({
+    user: req.user, action: 'DRAWING_RELEASED_TO_SITE', entity_type: 'drawings',
+    entity_id: drawing.id, entity_label: `${drawing.drawing_number} (${releaseNoteNo})`,
+    after: { releaseNoteNo, remarks },
+  });
+
+  notifySOP(db, drawing.id, 's6_released', req.user, {
+    title: `Drawing Released to Site: ${drawing.drawing_number}`,
+    body: `Ambuj (${req.user.name || 'Senior Engg'}) issued GFC Release Note ${releaseNoteNo}. Site ready-checklist ticked (SOP-06.6).`,
+  });
+
+  const updated = db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(drawing.id);
+  res.json(updated);
+});
 
 module.exports = router;
