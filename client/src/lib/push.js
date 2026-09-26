@@ -42,14 +42,14 @@ export async function requestPermission() {
 // subscribe, send to backend. Returns { ok, reason }.
 export async function enablePushNotifications(deviceLabel) {
   if (!pushSupported()) return { ok: false, reason: 'unsupported' };
+  // iPhone requires the permission request directly from the Enable tap.
+  let perm = Notification.permission;
+  if (perm === 'default') perm = await Notification.requestPermission();
+  if (perm !== 'granted') return { ok: false, reason: 'permission_denied' };
   const reg = await registerServiceWorker();
   if (!reg) return { ok: false, reason: 'sw_register_failed' };
   // Wait for SW to be ready (active worker controlling the page)
   await navigator.serviceWorker.ready;
-
-  let perm = Notification.permission;
-  if (perm === 'default') perm = await Notification.requestPermission();
-  if (perm !== 'granted') return { ok: false, reason: 'permission_denied' };
 
   // Get VAPID public key
   let publicKey;
