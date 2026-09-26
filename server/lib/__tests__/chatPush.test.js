@@ -19,7 +19,7 @@ test('group and direct messages notify only members other than the sender',()=>{
   const db=fixture();assert.deepEqual(chatDelivery(db,1,1).recipients,[20,30]);
   const dm=chatDelivery(db,2,2);assert.deepEqual(dm.recipients,[20]);
   assert.equal(dm.payload.type,'site_chat');assert.match(dm.payload.body,/drawing.pdf/);
-  assert.equal(dm.payload.url,'/site-chat');assert.equal(dm.payload.tag,'chat-message-2');db.close();
+  assert.equal(dm.payload.url,'/site-chat?chat=2');assert.equal(dm.payload.groupId,2);assert.equal(dm.payload.messageId,2);assert.equal(dm.payload.tag,'chat-message-2');db.close();
 });
 test('system messages, deleted messages, wrong groups and archived groups do not push',()=>{
   const db=fixture();assert.equal(chatDelivery(db,1,2),null);

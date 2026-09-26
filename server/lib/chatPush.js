@@ -12,9 +12,10 @@ function chatDelivery(db, groupId, messageId) {
   const sender = message.sender_name || 'Someone';
   return {recipients,payload:{
     type:'site_chat',
+    groupId:Number(groupId),messageId:Number(message.id),
     title:group.is_dm ? `SOTYN Chat · ${sender}` : `SOTYN Chat · ${group.name}`,
     body:`${sender}: ${message.body || (message.attachment_name ? `Attachment: ${message.attachment_name}` : 'New attachment')}`.slice(0,240),
-    url:'/site-chat',tag:`chat-message-${message.id}`,
+    url:`/site-chat?chat=${Number(groupId)}`,tag:`chat-message-${message.id}`,
   }};
 }
 

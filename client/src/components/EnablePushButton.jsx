@@ -112,7 +112,8 @@ export default function EnablePushButton() {
                 </div>
               </>
             )}
-            <p className="text-[10px] text-gray-400 mt-3 border-t pt-2">Enable each phone separately. iPhone needs the Home Screen app. Internet, Focus mode, notification settings and battery restrictions can affect delivery.</p>
+            <p className="text-xs text-gray-600 mt-3 border-t pt-2">No sound? Android: long-press a SOTYN notification → Settings → choose Alerting and a sound. iPhone: Settings → Notifications → SOTYN → Sounds on. Check notification volume and Silent/Focus mode. SOTYN cannot override your phone's sound settings.</p>
+            <p className="text-[10px] text-gray-400 mt-2">Enable each phone separately. iPhone needs the Home Screen app. Internet and battery restrictions can affect delivery.</p>
           </div>
         </>
       )}
