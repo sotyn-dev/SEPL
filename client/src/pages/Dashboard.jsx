@@ -2,29 +2,22 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api';
 import StatusBadge from '../components/StatusBadge';
-import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare, FiUpload, FiClock, FiAlertTriangle, FiExternalLink, FiCalendar, FiHelpCircle, FiTrendingUp } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import ErpMantraBanner from '../components/ErpMantraBanner';
 import DashHero3D from '../components/DashHero3D';
+import DashboardHelpTickets from '../components/DashboardHelpTickets';
+import DashboardAssignments from '../components/DashboardAssignments';
+import DashboardRaci from '../components/DashboardRaci';
 import { fmtDate } from '../utils/datetime';
 
 export default function Dashboard() {
-  const { isAdmin, user } = useAuth();
-  const [stats, setStats] = useState(null);
+  const { isAdmin, user, canView } = useAuth();
   const [perf, setPerf] = useState(null);
-  const [myTasks, setMyTasks] = useState([]);
-  const [todayChecklists, setTodayChecklists] = useState([]);
-  const [myTickets, setMyTickets] = useState({ active: 0, recent: [] });
   const [myAttendance, setMyAttendance] = useState(null);
-  const [uploadingFor, setUploadingFor] = useState(null); // id of the checklist/task currently uploading
 
   const loadPersonal = () => {
-    api.get('/delegations?scope=mine').then(r => setMyTasks(r.data)).catch(() => setMyTasks([]));
-    api.get('/hr/checklists/my-today').then(r => setTodayChecklists(r.data)).catch(() => setTodayChecklists([]));
-    // Support tickets assigned to me — open + in_progress ones
-    api.get('/support/mine').then(r => setMyTickets(r.data || { active: 0, recent: [] })).catch(() => setMyTickets({ active: 0, recent: [] }));
     // Current month's attendance summary — only relevant for regular users
     // who actually punch in/out. Admin doesn't personally punch attendance
     // (they monitor everyone's), so skip the API call to avoid the noisy
@@ -35,7 +28,6 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    api.get('/dashboard').then(r => setStats(r.data));
     loadPersonal();
     // Team performance this week — auto-scored live from SOTYN.AI activity. Admin-only
     // (endpoint is scoring-gated); non-admins just don't see the panel.
@@ -55,41 +47,6 @@ export default function Dashboard() {
         .then(r => setPerf(r.data)).catch(() => setPerf(null));
     }
   }, []);
-
-  // Shared proof-upload helper: POST /upload then return the URL
-  const uploadProof = async (file) => {
-    const fd = new FormData(); fd.append('file', file);
-    const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-    return res.data.url;
-  };
-
-  const completeChecklist = async (cl, file) => {
-    setUploadingFor('cl-' + cl.id);
-    try {
-      const url = await uploadProof(file);
-      await api.post(`/hr/checklists/${cl.id}/complete`, { proof_url: url });
-      toast.success(`${cl.title} marked complete`);
-      loadPersonal();
-    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
-    setUploadingFor(null);
-  };
-
-  const submitDelegationProof = async (task, file) => {
-    setUploadingFor('del-' + task.id);
-    try {
-      const url = await uploadProof(file);
-      await api.post(`/delegations/${task.id}/submit`, { proof_url: url });
-      toast.success('Proof submitted — awaiting approval');
-      loadPersonal();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-    setUploadingFor(null);
-  };
-
-  if (!stats) return <div className="text-center py-10">Loading...</div>;
-
-  const myPendingTasks = myTasks.filter(t => t.status === 'pending' || t.status === 'rejected');
-  const pendingChecklists = todayChecklists.filter(c => !c.completion_id);
-  const doneChecklists = todayChecklists.filter(c => c.completion_id);
 
   // Mam (2026-05-22): the 8 colour-coded KPI tiles (Total Leads /
   // Won Deals / Active Orders / Installations / Open Complaints /
@@ -298,185 +255,12 @@ export default function Dashboard() {
         );
       })()}
 
-      {/* Support tickets assigned to me — only shows when there are active ones,
-          otherwise stays hidden to keep the dashboard clean. Clicking a ticket
-          doesn't navigate (tickets live inside the floating help widget) but
-          mam's people see the list + priority + who raised it at a glance. */}
-      {myTickets.active > 0 && (
-        <div className="card border-l-4 border-indigo-400 bg-indigo-50/30">
-          <div className="flex justify-between items-center mb-2">
-            <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-              <FiHelpCircle className="text-indigo-600" />
-              Support Tickets Assigned to You
-              <span className="text-xs font-normal text-indigo-600">({myTickets.active} active)</span>
-            </h3>
-            <span className="text-[11px] text-gray-400">Open the Help (?) button bottom-right to respond</span>
-          </div>
-          <div className="space-y-1.5">
-            {myTickets.recent.map(t => {
-              const pColor = t.priority === 'urgent' || t.priority === 'high' ? 'text-red-700 bg-red-100' : t.priority === 'medium' ? 'text-amber-700 bg-amber-100' : 'text-gray-600 bg-gray-100';
-              return (
-                <div key={t.id} className="bg-white border rounded-lg px-3 py-2 flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-[11px] font-bold text-red-600">{t.ticket_no}</span>
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${pColor}`}>{t.priority.toUpperCase()}</span>
-                      {t.module && <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded">{t.module}</span>}
-                    </div>
-                    <p className="text-sm font-medium text-gray-800 line-clamp-1 mt-0.5">{t.subject}</p>
-                    <p className="text-[11px] text-gray-500">Raised by {t.user_name}</p>
-                  </div>
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${t.status === 'in_progress' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{t.status}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <DashboardHelpTickets />
+      {canView('snags') && <DashboardHelpTickets snags />}
 
-      {/* My Tasks & Today's Checklists — always visible so users know where
-          to upload proof even when nothing is pending. */}
-      {(
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* My pending delegations */}
-          <div className="card">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-semibold text-gray-800 flex items-center gap-2"><FiCheckSquare className="text-red-600" /> My Tasks <span className="text-xs font-normal text-gray-400">({myPendingTasks.length} pending)</span></h3>
-              <Link to="/delegations" className="text-xs text-red-600 hover:underline">Open Delegations →</Link>
-            </div>
-            {myPendingTasks.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-4">No pending tasks — you're all caught up!</p>
-            ) : (
-              <div className="space-y-2">
-                {myPendingTasks.slice(0, 5).map(t => (
-                  <div key={t.id} className={`border rounded-lg p-2.5 ${t.status === 'rejected' ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white'}`}>
-                    <div className="flex justify-between items-start gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm text-gray-800 line-clamp-2">{t.description || t.title}</p>
-                        <div className="flex flex-wrap gap-2 text-[10px] text-gray-500 mt-0.5">
-                          <span>by {t.assigned_by_name}</span>
-                          {t.due_date && <span className="flex items-center gap-1"><FiClock size={10} /> {t.due_date}</span>}
-                        </div>
-                        {t.status === 'rejected' && t.reject_reason && (
-                          <p className="text-[11px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={11} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</p>
-                        )}
-                        {t.extension_status === 'pending' && (
-                          <p className="text-[11px] text-amber-700 mt-1 flex items-start gap-1"><FiCalendar size={11} className="mt-0.5 flex-shrink-0" /> Extension to {t.requested_due_date} — awaiting admin</p>
-                        )}
-                      </div>
-                      <label className={`btn btn-primary text-[11px] px-2 py-1 flex items-center gap-1 cursor-pointer ${uploadingFor === 'del-' + t.id ? 'opacity-60 pointer-events-none' : ''}`}>
-                        <FiUpload size={11} /> {uploadingFor === 'del-' + t.id ? '...' : 'Submit'}
-                        <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="hidden"
-                          onChange={e => { const f = e.target.files[0]; if (f) submitDelegationProof(t, f); e.target.value = ''; }} />
-                      </label>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Today's checklists */}
-          <div className="card">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-semibold text-gray-800 flex items-center gap-2"><FiCheckSquare className="text-emerald-600" /> Today's Checklists <span className="text-xs font-normal text-gray-400">({pendingChecklists.length} pending, {doneChecklists.length} done)</span></h3>
-              <Link to="/checklists" className="text-xs text-red-600 hover:underline">Manage →</Link>
-            </div>
-            {todayChecklists.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-4">No checklists due today.</p>
-            ) : (
-              <div className="space-y-2">
-                {todayChecklists.slice(0, 6).map(c => (
-                  <div key={c.id} className={`border rounded-lg p-2.5 ${c.completion_id ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-white'}`}>
-                    <div className="flex justify-between items-start gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className={`font-semibold text-sm ${c.completion_id ? 'text-emerald-800' : 'text-gray-800'} line-clamp-2`}>
-                          {c.completion_id && '✓ '}{c.description || c.title}
-                        </p>
-                        <div className="flex flex-wrap gap-2 text-[10px] text-gray-500 mt-0.5">
-                          <span className="uppercase">{c.frequency}</span>
-                          {c.due_time && <span className="flex items-center gap-1 font-mono"><FiClock size={10} /> {c.due_time}</span>}
-                          {c.completion_id && c.proof_url && <a href={c.proof_url} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1"><FiExternalLink size={10} /> proof</a>}
-                        </div>
-                      </div>
-                      {!c.completion_id && (
-                        <label className={`btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 cursor-pointer ${uploadingFor === 'cl-' + c.id ? 'opacity-60 pointer-events-none' : ''}`}>
-                          <FiUpload size={11} /> {uploadingFor === 'cl-' + c.id ? '...' : 'Upload Proof'}
-                          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="hidden"
-                            onChange={e => { const f = e.target.files[0]; if (f) completeChecklist(c, f); e.target.value = ''; }} />
-                        </label>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* (Widget block now always rendered — the matching ) closes here) */}
-
-      {/* Recent Data */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="card">
-          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2"><span className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center"><FiTarget size={15} /></span> Recent Leads</h3>
-          <div className="overflow-x-auto">
-            <table>
-              <thead><tr><th>Company</th><th>Status</th><th>Date</th></tr></thead>
-              <tbody>
-                {stats.recentLeads.map(l => (
-                  <tr key={l.id}>
-                    <td className="font-medium">{l.company_name}</td>
-                    <td><StatusBadge status={l.status} /></td>
-                    <td className="text-gray-500">{fmtDate(l.created_at)}</td>
-                  </tr>
-                ))}
-                {stats.recentLeads.length === 0 && <tr><td colSpan="3" className="text-center text-gray-400 py-4">No leads yet</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="card">
-          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2"><span className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center"><FiShoppingCart size={15} /></span> Recent Orders</h3>
-          <div className="overflow-x-auto">
-            <table>
-              <thead><tr><th>PO Number</th><th>Amount</th><th>Status</th></tr></thead>
-              <tbody>
-                {stats.recentOrders.map(o => (
-                  <tr key={o.id}>
-                    <td className="font-medium">{o.po_number}</td>
-                    <td>Rs {o.total_amount?.toLocaleString()}</td>
-                    <td><StatusBadge status={o.status} /></td>
-                  </tr>
-                ))}
-                {stats.recentOrders.length === 0 && <tr><td colSpan="3" className="text-center text-gray-400 py-4">No orders yet</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="card lg:col-span-2">
-          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2"><span className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center"><FiAlertCircle size={15} /></span> Recent Complaints</h3>
-          <div className="overflow-x-auto">
-            <table>
-              <thead><tr><th>Number</th><th>Description</th><th>Priority</th><th>Status</th></tr></thead>
-              <tbody>
-                {stats.recentComplaints.map(c => (
-                  <tr key={c.id}>
-                    <td className="font-medium">{c.complaint_number}</td>
-                    <td className="max-w-[180px] sm:max-w-xs truncate">{c.description}</td>
-                    <td><StatusBadge status={c.priority} /></td>
-                    <td><StatusBadge status={c.status} /></td>
-                  </tr>
-                ))}
-                {stats.recentComplaints.length === 0 && <tr><td colSpan="4" className="text-center text-gray-400 py-4">No complaints</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
+      <DashboardAssignments />
+      <DashboardAssignments checklists />
+      <DashboardRaci />
     </div>
   );
 }
