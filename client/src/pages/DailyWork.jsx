@@ -137,7 +137,8 @@ function ScheduleForm({data,onSave,busy}) {
   </form>;
 }
 
-export default function DailyWork() {
+export default function DailyWork({ embedded = false }) {
+  const Heading = embedded ? 'h2' : 'h1';
   const {user,canApprove}=useAuth();
   const [date,setDate]=useState(today),[userId,setUserId]=useState(user.id),[data,setData]=useState(null),[team,setTeam]=useState([]),[tab,setTab]=useState('mine'),[loading,setLoading]=useState(true),[error,setError]=useState(''),[busy,setBusy]=useState(false),[modal,setModal]=useState(null),[history,setHistory]=useState([]);
   const sequence=useRef(0), mounted=useRef(true);
@@ -208,8 +209,8 @@ export default function DailyWork() {
       <button className={button} onClick={()=>openHistory(t)}>History</button><Link className={`${button} inline-block`} to={t.path}>Open source module</Link>
     </div>
   </article>;
-  return <div className="max-w-6xl mx-auto space-y-5 pb-12">
-    <header className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs uppercase tracking-widest text-blue-700 font-semibold">Your working day</p><h1 className="text-2xl font-bold">Daily Work</h1><p className="text-sm text-gray-500">Plan the steps. Do the work. Review what remains.</p></div>
+  return <div className={embedded ? 'space-y-5' : 'max-w-6xl mx-auto space-y-5 pb-12'}>
+    <header className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs uppercase tracking-widest text-blue-700 font-semibold">Your working day</p><Heading className="text-2xl font-bold">Daily Work</Heading><p className="text-sm text-gray-500">Plan the steps. Do the work. Review what remains.</p></div>
       <div className="flex gap-2 flex-wrap"><input aria-label="Work date" type="date" className="input" value={date} onChange={e=>setDate(e.target.value)}/><button className={button} onClick={load}>Refresh</button></div>
     </header>
     <div className="flex flex-wrap gap-2 items-center"><button className={tab==='mine'?'btn btn-primary':button} onClick={()=>setTab('mine')}>Daily timeline</button><button className={tab==='team'?'btn btn-primary':button} onClick={()=>setTab('team')}>Team overview</button>
