@@ -20,7 +20,8 @@ export default function EnablePushButton() {
     try {
       const reg = await navigator.serviceWorker.getRegistration();
       const sub = reg ? await reg.pushManager.getSubscription() : null;
-      setState(sub && perm === 'granted' ? 'on' : 'off');
+      const saved = sub && perm === 'granted' ? await enablePushNotifications() : null;
+      setState(saved?.ok ? 'on' : 'off');
     } catch {
       setState('off');
     }
@@ -31,7 +32,7 @@ export default function EnablePushButton() {
   const turnOn = async () => {
     const r = await enablePushNotifications();
     if (r.ok) {
-      toast.success('Push notifications enabled on this device');
+      toast.success('SOTYN Chat notifications enabled on this device');
       refresh();
     } else if (r.reason === 'permission_denied') {
       toast.error('You blocked notifications. Open browser settings → Site Settings → Notifications → Allow.', { duration: 6000 });
@@ -50,7 +51,8 @@ export default function EnablePushButton() {
   const test = async () => {
     try {
       const r = await api.post('/push/test', { message: 'Test from SOTYN.AI — your devices are connected ✓' });
-      toast.success(`Sent — ${r.data.sent} of ${r.data.total} devices`);
+      if (r.data.sent) toast.success(`Accepted by push service — ${r.data.sent} of ${r.data.total} devices. Check your phone.`);
+      else toast.error('No connected device accepted the test. Enable notifications again and check phone settings.');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
     }
@@ -74,7 +76,7 @@ export default function EnablePushButton() {
           <div className="absolute left-3 right-3 top-full mt-1.5 sm:left-auto sm:right-0 sm:mt-1 sm:w-80 max-w-[calc(100vw-1.5rem)] sm:max-w-none bg-white border border-gray-200 rounded-xl shadow-2xl z-50 p-4 text-sm">
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-bold text-gray-800 flex items-center gap-2">
-                <FiBell className="text-blue-600" /> Push Notifications
+                <FiBell className="text-blue-600" /> SOTYN Chat Notifications
               </h4>
               <button
                 type="button"
@@ -86,7 +88,7 @@ export default function EnablePushButton() {
               </button>
             </div>
             {state === 'unsupported' && (
-              <p className="text-xs text-amber-700">This browser doesn't support push notifications. Try Chrome / Edge / Firefox / Safari 16.4+.</p>
+              <p className="text-xs text-amber-700">On iPhone/iPad (iOS 16.4+), use Safari → Share → Add to Home Screen, then open SOTYN from that icon. On Android, use Chrome and allow notifications.</p>
             )}
             {state === 'denied' && (
               <p className="text-xs text-red-700">Permission was blocked. Open browser site settings → Notifications → Allow, then refresh.</p>
@@ -94,7 +96,7 @@ export default function EnablePushButton() {
             {state === 'off' && (
               <>
                 <p className="text-xs text-gray-600 mb-3 leading-relaxed">
-                  Get instant alerts on this device when delegations, payments, tickets, scorecard updates and announcements happen.
+                  Get only SOTYN Chat messages in your phone notification panel, even when you close the app without logging out. Other alerts stay inside SOTYN.
                 </p>
                 <button onClick={turnOn} className="btn btn-primary w-full text-sm py-2">Enable on this device</button>
               </>
@@ -102,7 +104,7 @@ export default function EnablePushButton() {
             {state === 'on' && (
               <>
                 <p className="text-xs text-emerald-700 mb-3 leading-relaxed">
-                  ✓ Active on this device. You'll get alerts even when the SOTYN.AI tab is closed.
+                  ✓ SOTYN Chat alerts are enabled on this device, including when the app is closed. Logging out disconnects this device.
                 </p>
                 <div className="flex gap-2">
                   <button onClick={test} className="btn btn-secondary flex-1 text-xs py-2">Send Test</button>
@@ -110,7 +112,7 @@ export default function EnablePushButton() {
                 </div>
               </>
             )}
-            <p className="text-[10px] text-gray-400 mt-3 border-t pt-2">Each device (phone, laptop, desktop) needs to be enabled separately.</p>
+            <p className="text-[10px] text-gray-400 mt-3 border-t pt-2">Enable each phone separately. iPhone needs the Home Screen app. Internet, Focus mode, notification settings and battery restrictions can affect delivery.</p>
           </div>
         </>
       )}
