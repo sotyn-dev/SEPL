@@ -57,6 +57,10 @@ export default function Checklists() {
   const [followup, setFollowup] = useState(null);
   const [followupBack, setFollowupBack] = useState(7);
   const [followupForward, setFollowupForward] = useState(7);
+  const [followupFrom, setFollowupFrom] = useState('');
+  const [followupTo, setFollowupTo] = useState('');
+  const [followupName, setFollowupName] = useState('');
+  const [followupStatus, setFollowupStatus] = useState('all');
   // Sub-view inside Follow-up: 'list' = one row per (task, date)
   // matching mam's Google Sheet, 'timeline' = the matrix view.
   // Mam (2026-05-22) prefers list because each row carries its own
@@ -282,7 +286,14 @@ export default function Checklists() {
     instances.sort((a, b) => b.cell.date.localeCompare(a.cell.date));
     return instances;
   })();
-  const followupPager = usePagination(followupInstances, { resetKey: [followupBack, followupForward] });
+  const followupFiltered = followupInstances.filter(({ task, cell }) => {
+    if (followupFrom && cell.date < followupFrom) return false;
+    if (followupTo && cell.date > followupTo) return false;
+    if (followupName && String(task.assigned_to) !== String(followupName)) return false;
+    if (followupStatus !== 'all' && cell.status !== followupStatus) return false;
+    return true;
+  });
+  const followupPager = usePagination(followupFiltered, { resetKey: [followupBack, followupForward, followupFrom, followupTo, followupName, followupStatus] });
 
   const save = async (e) => {
     e.preventDefault();
@@ -311,7 +322,7 @@ export default function Checklists() {
                 r.submitted_at ? new Date(r.submitted_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '']));
             if (view === 'followup') exportCsv('checklists-followup',
               ['Person','Task ID','Frequency','Task','Planned Date','Status','Department','Proof'],
-              followupInstances.map(({ task: t, cell: c }) => [t.assigned_to_name, t.id, t.frequency, t.description,
+              followupFiltered.map(({ task: t, cell: c }) => [t.assigned_to_name, t.id, t.frequency, t.description,
                 c.date, c.status, t.department, c.proof_url]));
             if (view === 'current') exportCsv('checklists',
               ['Description','Frequency','Due Date','Due Time','Assigned To','Department'],
@@ -478,7 +489,7 @@ export default function Checklists() {
                               : apStat === 'pending' ? 'bg-amber-100 text-amber-700'
                               : 'bg-gray-100 text-gray-500';
                 return (
-                  <tr key={r.id} className={done ? '' : 'bg-gray-50/50'}>
+                  <tr key={r.completion_id || r.id} className={done ? '' : 'bg-gray-50/50'}>
                     <td className="text-xs font-medium">{r.assigned_to_name || '—'}</td>
                     <td className="text-[10px]">
                       {r.department ? (
@@ -514,6 +525,7 @@ export default function Checklists() {
                     </td>
                     <td className="text-xs text-gray-500 font-mono">
                       {r.submitted_at ? new Date(r.submitted_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}
+                      {r.submitted_by_name && r.submitted_by_name !== r.assigned_to_name && <div className="font-sans text-[9px] text-gray-400">by {r.submitted_by_name}</div>}
                     </td>
                     {canManage() && (
                       <td>
@@ -590,6 +602,40 @@ export default function Checklists() {
               📅 Timeline Grid
             </button>
           </div>
+
+          {followup && followupSubView === 'list' && (
+            <div className="card p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 items-end">
+              <label className="text-[10px] uppercase font-semibold text-gray-500">Start date
+                <input type="date" className="input mt-1 text-sm w-full" min={followup.from} max={followup.to}
+                  value={followupFrom} onChange={e => setFollowupFrom(e.target.value)} />
+              </label>
+              <label className="text-[10px] uppercase font-semibold text-gray-500">End date
+                <input type="date" className="input mt-1 text-sm w-full" min={followup.from} max={followup.to}
+                  value={followupTo} onChange={e => setFollowupTo(e.target.value)} />
+              </label>
+              <label className="text-[10px] uppercase font-semibold text-gray-500">Employee
+                <select className="select mt-1 text-sm w-full" value={followupName} onChange={e => setFollowupName(e.target.value)}>
+                  <option value="">All employees</option>
+                  {[...new Map(followup.rows.map(t => [String(t.assigned_to ?? ''), t.assigned_to_name || 'Unassigned'])).entries()]
+                    .sort((a, b) => a[1].localeCompare(b[1])).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] uppercase font-semibold text-gray-500">Status
+                <select className="select mt-1 text-sm w-full" value={followupStatus} onChange={e => setFollowupStatus(e.target.value)}>
+                  <option value="all">All statuses</option>
+                  <option value="today">Today / Due</option>
+                  <option value="missed">Missed</option>
+                  <option value="done_pending">Pending Approval</option>
+                  <option value="done_approved">Approved</option>
+                  <option value="done_rejected">Rejected</option>
+                </select>
+              </label>
+              <div className="flex items-center gap-2">
+                <button className="btn btn-secondary text-xs" onClick={() => { setFollowupFrom(''); setFollowupTo(''); setFollowupName(''); setFollowupStatus('all'); }}>Clear filters</button>
+                <span className="text-xs text-gray-500">{followupFiltered.length} rows</span>
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-xs text-gray-500 font-semibold uppercase">Window:</label>
             <select className="select text-sm" value={followupBack} onChange={e => { const v = +e.target.value; setFollowupBack(v); loadFollowup(v, followupForward); }}>
@@ -709,7 +755,7 @@ export default function Checklists() {
                         </tr>
                       );
                     })}
-                    {followupInstances.length === 0 && (
+                    {followupFiltered.length === 0 && (
                       <tr><td colSpan="8" className="text-center py-8 text-gray-400">No instances in the selected window.</td></tr>
                     )}
                   </tbody>

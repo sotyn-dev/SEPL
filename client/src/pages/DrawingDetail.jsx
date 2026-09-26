@@ -61,6 +61,17 @@ export default function DrawingDetail() {
     } catch { toast.error('Download failed'); }
   };
 
+  const downloadBoq = async () => {
+    try {
+      const r = await api.get(`/drawing-tracker/drawings/${data.id}/boq`, { responseType: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(r.data);
+      a.download = data.boq_file_name || `${data.drawing_number}_BOQ.xlsx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch { toast.error('BOQ download failed'); }
+  };
+
   const cancelRev = async (rev) => {
     const reason = window.prompt(`Cancel Rev ${rev.revision_no}? This keeps the file and the record — it only marks it cancelled.\n\nReason:`);
     if (!reason) return;
@@ -99,11 +110,31 @@ export default function DrawingDetail() {
         </div>
       </div>
 
-      <div className="card p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+      <div className="card p-4 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
         <div><div className="text-xs text-gray-500">Project</div>{data.project_name || '—'}</div>
         <div><div className="text-xs text-gray-500">Site</div>{data.site_name || '—'}</div>
         <div><div className="text-xs text-gray-500">Discipline</div>{data.discipline || '—'}</div>
         <div><div className="text-xs text-gray-500">Drawing Type</div>{data.drawing_type || '—'}</div>
+        <div>
+          <div className="text-xs text-gray-500">BOQ Required</div>
+          {data.boq_required ? (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-semibold text-emerald-700">Yes</span>
+              {data.boq_file_url ? (
+                <button
+                  type="button"
+                  onClick={downloadBoq}
+                  className="text-xs text-blue-600 hover:underline flex items-center gap-0.5">
+                  <FiDownload size={11} /> {data.boq_file_name || 'Download BOQ'}
+                </button>
+              ) : (
+                <span className="text-[11px] text-gray-400">(No file)</span>
+              )}
+            </div>
+          ) : (
+            <span className="text-gray-500">No</span>
+          )}
+        </div>
         <div><div className="text-xs text-gray-500">Current Revision</div>
           <span className="font-semibold text-emerald-700">Rev {current?.revision_no ?? '—'}</span>
         </div>
@@ -210,14 +241,19 @@ function EditRevisionModal({ rev, onClose, onSaved }) {
     revision_reason: rev.revision_reason || '',
     revision_date: rev.revision_date ? rev.revision_date.slice(0, 10) : '',
   });
+  const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
+
   const save = async (e) => {
     e.preventDefault();
     if (!form.revision_description.trim()) return toast.error('Revision description is required');
     setBusy(true);
     try {
-      await api.put(`/drawing-tracker/revisions/${rev.id}`, form);
-      toast.success(`Rev ${rev.revision_no} updated`);
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
+      if (file) fd.append('file', file);
+      await api.put(`/drawing-tracker/revisions/${rev.id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success(file ? `Rev ${rev.revision_no} file & details updated` : `Rev ${rev.revision_no} updated`);
       onSaved();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Update failed');
@@ -225,9 +261,54 @@ function EditRevisionModal({ rev, onClose, onSaved }) {
       setBusy(false);
     }
   };
+
+  const downloadCurrentFile = async () => {
+    try {
+      const r = await api.get(`/drawing-tracker/revisions/${rev.id}/file?download=1`, { responseType: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(r.data);
+      a.download = rev.file_name || `Revision_${rev.revision_no}`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch {
+      toast.error('Download failed');
+    }
+  };
+
   return (
     <Modal isOpen onClose={onClose} title={`Edit Revision ${rev.revision_no}`}>
       <form onSubmit={save} className="space-y-3">
+        {/* Current File Display */}
+        <div className="text-xs bg-gray-50 p-2.5 rounded border border-gray-200 flex items-center justify-between">
+          <div className="truncate mr-2">
+            <span className="text-gray-500 mr-1.5">Current File:</span>
+            <span className="font-mono font-medium text-gray-800 truncate">{rev.file_name || 'Attached Drawing File'}</span>
+          </div>
+          <button
+            type="button"
+            onClick={downloadCurrentFile}
+            className="text-blue-600 hover:underline text-xs flex items-center gap-1 whitespace-nowrap ml-2">
+            <FiDownload size={11} /> Download
+          </button>
+        </div>
+
+        {/* Replace Drawing File Option */}
+        <div>
+          <label className="label">
+            Replace Drawing File <span className="text-gray-400 font-normal">(optional — choose file if wrong design was uploaded)</span>
+          </label>
+          <input
+            type="file"
+            className="input text-xs"
+            onChange={e => setFile(e.target.files?.[0] || null)}
+          />
+          {file && (
+            <p className="text-[11px] text-amber-700 mt-1 font-semibold">
+              ⚠️ Note: Uploading this file will replace the design file for Rev {rev.revision_no}.
+            </p>
+          )}
+        </div>
+
         <div>
           <label className="label">Revision Date</label>
           <input type="date" className="input" value={form.revision_date}

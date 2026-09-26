@@ -14,6 +14,8 @@ const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJso
 // auto:po_bill_pending KPI so the flow-board tile and the KPI can never
 // disagree (mam 2026-09-07).
 const { poMissingBillWhere } = require('../lib/poBill');
+// TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
+const { evaluatePoCostEstimate, autoApprovePoIfEligible } = require('../lib/costEstimateApproval');
 
 // Unit spellings that mean the same thing. Kept identical to the SQL CASE the
 // one-time unit_overridden backfill uses (db/schema.js), so "pcs" vs "nos" or
@@ -2306,6 +2308,7 @@ router.put('/indents/:id', (req, res) => {
           `SELECT ii.id, ii.indent_id, ii.item_master_id, ii.quantity, ii.unit, ii.rate,
                   COALESCE(NULLIF(TRIM(ii.description), ''), NULLIF(TRIM(im.item_name), ''),
                            NULLIF(TRIM(im.specification), '')) AS description,
+                  im.item_name,
                   im.specification AS specification, im.size AS size,
                   COALESCE(NULLIF(TRIM(ii.make), ''), NULLIF(TRIM(im.make), '')) AS make,
                   im.item_code AS item_code,
@@ -2342,7 +2345,7 @@ router.put('/indents/:id', (req, res) => {
         }
         storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0,
           description: row.description, specification: row.specification, size: row.size,
-          make: row.make, item_code: row.item_code, unit: row.unit, item_type: row.item_type });
+          make: row.make, item_code: row.item_code, item_name: row.item_name || '', unit: row.unit, item_type: row.item_type });
       }
 
       try {
@@ -2545,7 +2548,7 @@ router.put('/indents/:id', (req, res) => {
             // sales_bill_pending=1 when any line is a billable PO item.
             const storeItems = storePlans.map(p => ({
               description: p.description, specification: p.specification || '', size: p.size || '',
-              make: p.make || '', item_code: p.item_code || '',
+              make: p.make || '', item_code: p.item_code || '', item_name: p.item_name || '',
               qty: p.fromStore, unit: p.unit || '',
               rate: +p.rate || 0, amount: p.fromStore * (+p.rate || 0),
               item_type: p.item_type || '',
@@ -2595,6 +2598,7 @@ router.put('/indents/:id', (req, res) => {
             const rgpRows = db.prepare(
               `SELECT ii.quantity AS qty, ii.unit, ii.item_master_id,
                       COALESCE(NULLIF(TRIM(ii.description), ''), NULLIF(TRIM(im.item_name), ''), 'Item') AS name,
+                      im.item_name,
                       im.size, im.specification, im.make, im.item_code
                  FROM indent_items ii
                  LEFT JOIN item_master im ON im.id = ii.item_master_id
@@ -2610,7 +2614,7 @@ router.put('/indents/:id', (req, res) => {
                 const gpItems = rgpRows.map(r => ({
                   description: [r.name, r.size, r.specification].filter(Boolean).join(' / '),
                   qty: +r.qty || 0, unit: r.unit || '', rate: 0, amount: 0,
-                  item_code: r.item_code || '', make: r.make || '', item_type: 'RGP',
+                  item_code: r.item_code || '', item_name: r.item_name || '', make: r.make || '', item_type: 'RGP',
                 }));
                 db.prepare(
                   `INSERT INTO delivery_notes
@@ -3377,6 +3381,20 @@ router.get('/vendor-po', (req, res) => {
     const stored = +r.total_amount || 0;
     const live = +r.display_total || 0;
     r.total_amount_drift = Math.round(Math.abs(stored - live));
+
+    // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
+    try {
+      const evalRes = evaluatePoCostEstimate(db, r.id);
+      r.cost_status = evalRes.cost_status;
+      r.can_auto_approve = evalRes.can_auto_approve;
+      r.overrun_count = evalRes.overrun_count;
+      r.max_overrun_pct = evalRes.max_overrun_pct;
+      r.total_estimated_amount = evalRes.total_estimated_amount;
+      r.total_variance_pct = evalRes.total_variance_pct;
+      r.cost_reason = evalRes.reason;
+    } catch (_) {
+      r.cost_status = 'unknown';
+    }
   }
 
   if (isPaginated) {
@@ -3567,9 +3585,11 @@ router.get('/vendor-po/:id/print', (req, res) => {
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
            vpi.weight_per_meter, vpi.original_qty_mtr,
+           vpi.description as custom_description, vpi.hsn_code as custom_hsn,
+           COALESCE(vpi.specification, im.specification) as specification,
            ii.description, ii.make as ii_make, ii.unit, ii.required_date,
            ii.item_type,
-           im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
+           im.item_code, im.item_name as master_name, im.size, im.uom, im.make as im_make,
            im.type as im_type,
            poi.description as boq_description,
            -- Mam (2026-05-21): "update here if i update rate in 3
@@ -3798,11 +3818,12 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity,
            COALESCE(NULLIF(TRIM(im.item_name), ''), ii.description) as description,
-           im.specification, im.size,
+           COALESCE(vpi.specification, im.specification) as specification, im.size,
            COALESCE(im.make, ii.make) as make,
            CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
                   THEN ii.unit ELSE COALESCE(im.uom, ii.unit) END as uom,
            im.item_code,
+           im.item_name,
            poi.hsn_code as hsn_code,
            im.gst as gst_text
       FROM vendor_po_items vpi
@@ -4476,15 +4497,16 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
       // Terms + credit_days are deliberately null — PO terms now live on the
       // uploaded Tally PO itself.
       const insItem = db.prepare(
-        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days, weight_per_meter, original_qty_mtr)
-         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?)`
+        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days, weight_per_meter, original_qty_mtr, specification)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)`
       );
       for (const i of lines) {
         // For pipe lines the client sends quantity already in KG (mtr × kg/m),
         // rate in ₹/kg, plus weight_per_meter + original_qty_mtr for display.
         const wpm = +i.weight_per_meter > 0 ? +i.weight_per_meter : null;
         const mtr = +i.original_qty_mtr > 0 ? +i.original_qty_mtr : null;
-        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr);
+        const spec = i.specification ? String(i.specification).trim() : null;
+        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr, spec);
       }
       // Push the actual ordered rate into the Item Master (mam 2026-07-21:
       // "in items only one … from po update rate as per current").
@@ -4563,9 +4585,29 @@ router.post('/vendor-po/:id/po-approve', (req, res) => {
     const who = poApproversFor(db, level).map(a => a.name).join(', ') || 'nobody named';
     return res.status(403).json({ error: `Only ${who} (PO L${level}) or an admin can approve this step. Set in ⚙ Workflow Settings.` });
   }
-  if (level === 1) db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
-  else             db.prepare("UPDATE vendor_pos SET po_approval='approved',  po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
-  res.json({ ok: true, po_approval: level === 1 ? 'pending_l2' : 'approved' });
+  if (level === 1) {
+    db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
+    // TSK-0824: "I will only approve items where cost is more than estimated otherwise auto approve"
+    const autoRes = autoApprovePoIfEligible(db, id, req.user);
+    if (autoRes.auto_approved) {
+      return res.json({
+        ok: true,
+        po_approval: 'approved',
+        auto_approved: true,
+        approval_note: autoRes.evaluation.reason,
+        evaluation: autoRes.evaluation,
+      });
+    }
+    return res.json({
+      ok: true,
+      po_approval: 'pending_l2',
+      auto_approved: false,
+      evaluation: autoRes.evaluation,
+    });
+  } else {
+    db.prepare("UPDATE vendor_pos SET po_approval='approved', po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP, po_auto_approved=0 WHERE id=?").run(req.user.id, id);
+    return res.json({ ok: true, po_approval: 'approved', auto_approved: false });
+  }
 });
 
 // Reject at the current pending level (reason required).
@@ -4583,6 +4625,13 @@ router.post('/vendor-po/:id/po-reject', (req, res) => {
   if (reason.length < 3) return res.status(400).json({ error: 'A rejection reason is required' });
   db.prepare("UPDATE vendor_pos SET po_approval='rejected', po_reject_by=?, po_reject_at=CURRENT_TIMESTAMP, po_reject_reason=? WHERE id=?").run(req.user.id, reason, id);
   res.json({ ok: true });
+});
+
+// TSK-0824: Get cost estimate evaluation details for a vendor PO
+router.get('/vendor-po/:id/cost-evaluation', (req, res) => {
+  const db = getDb();
+  const evaluation = evaluatePoCostEstimate(db, +req.params.id);
+  res.json(evaluation);
 });
 
 // PUT /vendor-po/:id  —  status / advance OR full header edit.
@@ -4703,8 +4752,8 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
        WHERE vpi.indent_item_id = ? AND ovp.id <> ? AND COALESCE(ovp.cancelled,0)=0 LIMIT 1`);
     const already = db.prepare('SELECT 1 FROM vendor_po_items WHERE vendor_po_id=? AND indent_item_id=?');
     const ins = db.prepare(`INSERT INTO vendor_po_items
-      (vendor_po_id, indent_item_id, quantity, rate, amount, description, rate_updated_at)
-      VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+      (vendor_po_id, indent_item_id, quantity, rate, amount, description, specification, rate_updated_at)
+      VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
     try {
       db.transaction(() => {
         for (const li of b.link_items) {
@@ -4718,7 +4767,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
           if (already.get(id, iid)) continue;
           const qty = +li.quantity || 0;
           const rate = +li.rate || 0;
-          ins.run(id, iid, qty, rate, +(qty * rate).toFixed(2), li.description ? String(li.description) : null);
+          ins.run(id, iid, qty, rate, +(qty * rate).toFixed(2), li.description ? String(li.description) : null, li.specification ? String(li.specification).trim() : null);
           itemUpdates++;
         }
         // Keep the stored total in step with what was just attached, unless the
@@ -4748,6 +4797,7 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
              amount      = COALESCE(?, amount),
              description = COALESCE(?, description),
              hsn_code    = COALESCE(?, hsn_code),
+             specification = COALESCE(?, specification),
              -- Stamp whenever the caller SUBMITS a rate for this line, even if
              -- the value is unchanged. The Edit PO modal always sends every
              -- line's rate, so saving it is the user asserting "this PO's rate
@@ -4770,7 +4820,8 @@ router.put('/vendor-po/:id', requirePermission('procurement', 'edit'), (req, res
         const amount = qty != null && rate != null ? +(qty * rate).toFixed(2) : null;
         const desc = it.description !== undefined ? String(it.description || '') : null;
         const hsn = it.hsn_code !== undefined ? String(it.hsn_code || '') : null;
-        const r = updLine.run(qty, rate, amount, desc, hsn, rate, itemId, id);
+        const spec = it.specification !== undefined ? String(it.specification || '') : null;
+        const r = updLine.run(qty, rate, amount, desc, hsn, spec, rate, itemId, id);
         itemUpdates += r.changes;
       }
       // Auto-recompute total_amount = sum(line amounts) × (1 + GST%) + freight.
@@ -4840,8 +4891,9 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
   if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
   let items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.description, vpi.hsn_code,
+           COALESCE(vpi.specification, im.specification) as specification,
            ii.description as indent_description, ii.unit,
-           im.item_code, im.item_name as master_name, im.specification, im.size
+           im.item_code, im.item_name as master_name, im.size
       FROM vendor_po_items vpi
       LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
       LEFT JOIN item_master im ON im.id = ii.item_master_id
@@ -4875,7 +4927,27 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
   // this PO.
   const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(req.params.id).c;
   const dnCount = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(req.params.id).c;
-  res.json({ po, items, bill_count: billCount, dn_count: dnCount, edit_locked: billCount > 0 || dnCount > 0 });
+
+  // TSK-0824: Attach cost estimate evaluation per item and overall
+  let costEvaluation = null;
+  try {
+    costEvaluation = evaluatePoCostEstimate(db, req.params.id);
+    const evalMap = new Map((costEvaluation.items || []).map(it => [it.vpi_id, it]));
+    for (const it of items) {
+      const e = evalMap.get(it.id);
+      if (e) {
+        it.estimated_rate = e.estimated_rate;
+        it.benchmark_source = e.benchmark_source;
+        it.variance_pct = e.variance_pct;
+        it.variance_amount = e.variance_amount;
+        it.is_overrun = e.is_overrun;
+        it.is_within = e.is_within;
+        it.is_missing = e.is_missing;
+      }
+    }
+  } catch (_) { /* ignore */ }
+
+  res.json({ po, items, bill_count: billCount, dn_count: dnCount, edit_locked: billCount > 0 || dnCount > 0, cost_evaluation: costEvaluation });
 });
 
 router.delete('/vendor-po/:id', requirePermission('procurement', 'delete'), (req, res) => {
@@ -6907,21 +6979,54 @@ router.get('/delivery-notes/:id/print', (req, res) => {
       if (Array.isArray(parsed) && parsed.length) {
         items = parsed
           .filter(it => it && it.include !== false)
-          .map(it => ({
-            description: it.description || '',
-            // Store-issue challans write `qty`; the create-modal writes
-            // `quantity` — accept either (mam 2026-06-04: store DN showed 0).
-            quantity: +it.quantity || +it.qty || 0,
-            unit: it.unit || '',
-            rate: +it.rate || 0,
-            disc_pct: +it.disc_pct || 0,
-            amount: +it.amount || ((+it.quantity || +it.qty || 0) * (+it.rate || 0) * (1 - (+it.disc_pct || 0) / 100)),
-            item_code: it.item_code || it.hsn || '',
-            specification: it.specification || '',
-            size: it.size || '',
-            gst_text: it.hsn || it.gst_text || '',
-            item_name: it.item_name || '',
-          }));
+          .map(it => {
+            let itemName = it.item_name || '';
+            let itemCode = it.item_code || it.hsn || '';
+            let itemSpec = it.specification || '';
+            let itemSize = it.size || '';
+            if (!itemName && itemCode) {
+              try {
+                const im = db.prepare('SELECT item_name, specification, size FROM item_master WHERE item_code = ?').get(itemCode);
+                if (im) {
+                  if (im.item_name) itemName = im.item_name;
+                  if (!itemSpec && im.specification) itemSpec = im.specification;
+                  if (!itemSize && im.size) itemSize = im.size;
+                }
+              } catch (_) {}
+            }
+            if (!itemName && dn.indent_id) {
+              try {
+                const im = db.prepare(`
+                  SELECT im.item_name, im.item_code, im.specification, im.size
+                    FROM indent_items ii
+                    JOIN item_master im ON im.id = ii.item_master_id
+                   WHERE ii.indent_id = ? AND (ii.description = ? OR ii.description LIKE ?)
+                   LIMIT 1
+                `).get(dn.indent_id, it.description || '', `%${String(it.description || '').slice(0, 35)}%`);
+                if (im) {
+                  if (im.item_name) itemName = im.item_name;
+                  if (!itemCode && im.item_code) itemCode = im.item_code;
+                  if (!itemSpec && im.specification) itemSpec = im.specification;
+                  if (!itemSize && im.size) itemSize = im.size;
+                }
+              } catch (_) {}
+            }
+            return {
+              description: it.description || '',
+              // Store-issue challans write `qty`; the create-modal writes
+              // `quantity` — accept either (mam 2026-06-04: store DN showed 0).
+              quantity: +it.quantity || +it.qty || 0,
+              unit: it.unit || '',
+              rate: +it.rate || 0,
+              disc_pct: +it.disc_pct || 0,
+              amount: +it.amount || ((+it.quantity || +it.qty || 0) * (+it.rate || 0) * (1 - (+it.disc_pct || 0) / 100)),
+              item_code: itemCode,
+              specification: itemSpec,
+              size: itemSize,
+              gst_text: it.hsn || it.gst_text || '',
+              item_name: itemName,
+            };
+          });
         itemsSource = 'overrides';
       }
     } catch (_) { /* fall through to po_items */ }
@@ -7067,12 +7172,24 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     if (isSalesBill) {
       return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(rate)}</td><td class="num">${discPct ? fmt(discPct) : '0'}</td><td class="num">${fmt(taxable)}</td></tr>`;
     }
-    return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
+    // ITEM / SUB-ITEM column cell (exact Item Master name + size/spec + code)
+    const subItemParts = [it.specification, it.size].filter(Boolean).filter(s => !it.item_name || !it.item_name.includes(s));
+    const subItemDetail = subItemParts.join(' / ');
+    const itemName = it.item_name || '';
+    const itemCode = it.item_code || '';
+    const itemCellHtml = (itemName || itemCode)
+      ? `<div>` +
+        (itemName ? `<div style="font-weight:bold;color:#111">${esc(itemName)}</div>` : '') +
+        (subItemDetail ? `<div style="font-size:9.5px;color:#444">${esc(subItemDetail)}</div>` : '') +
+        (itemCode ? `<div style="font-size:9px;color:#666;font-family:monospace">[${esc(itemCode)}]</div>` : '') +
+        `</div>`
+      : '';
+    return `<tr><td class="num">${idx + 1}</td><td>${itemCellHtml}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || it.item_code || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
   }).join('') + Array.from({ length: padCount }, (_, i) => {
     const idx = items.length + i + 1;
     return isSalesBill
       ? `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`
-      : `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
+      : `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
   }).join('');
 
   const css = `
@@ -7554,7 +7671,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     </table>`;
     })()}
     <table class="items">
-      <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:80px">HSN / CODE</th><th style="width:70px">QUANTITY</th><th style="width:50px">UOM</th><th style="width:130px">REMARKS</th></tr></thead>
+      <thead><tr><th style="width:28px">SL NO.</th><th style="width:140px">ITEM / SUB-ITEM</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:75px">HSN / CODE</th><th style="width:65px">QUANTITY</th><th style="width:45px">UOM</th><th style="width:100px">REMARKS</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
     <div style="margin-top:6px;border:1px solid #e7d4d4">
@@ -7901,9 +8018,9 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
   const db = getDb();
   const b = req.body || {};
   const { final_rate, final_vendor_name, final_terms, final_credit_days } = b;
-  if (!final_vendor_name || !final_rate) return res.status(400).json({ error: 'final_vendor_name and final_rate are required' });
+  if (typeof final_vendor_name !== 'string' || !final_vendor_name.trim() || !Number.isFinite(+final_rate) || +final_rate <= 0) return res.status(400).json({ error: 'A final vendor and a positive final rate are required' });
 
-  // All 3 vendor quotes mandatory before finalizing (mam 2026-07-21: "3 vendors
+  // Non-admins require all 3 vendor quotes before finalizing (mam 2026-07-21: "3 vendors
   // rate is mandatory to fill then can finalise rate"). Each vendor slot needs
   // BOTH a name and a rate > 0. Enforced here too so a direct API call / the
   // bulk-fill path can't bypass the button gate.
@@ -7912,7 +8029,9 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
        FROM indent_item_rates WHERE id=?`
   ).get(req.params.id);
   const threeFilled = q && [1, 2, 3].every(n => +q[`vendor${n}_rate`] > 0 && String(q[`vendor${n}_name`] || '').trim());
-  if (!threeFilled) {
+  if (!q) return res.status(404).json({ error: 'Rate row not found' });
+  // Only the authenticated admin role may finalize without three quotations.
+  if (req.user.role !== 'admin' && !threeFilled) {
     return res.status(400).json({ error: 'All 3 vendor quotes (name + rate) must be filled before you can finalize the rate.' });
   }
 

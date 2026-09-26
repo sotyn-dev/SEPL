@@ -72,7 +72,7 @@ function isPunchLate(db, whenIso, roster) {
       const [h, m] = String(eff.late_after_time).split(':').map(Number);
       cutoffMin = h * 60 + (m || 0);
     }
-  } catch {}
+  } catch { }
   // Shift UTC → IST by adding 5h30m, then read 'UTC' hours/minutes from
   // the shifted Date — those values are now the actual IST time-of-day.
   const ist = new Date(new Date(whenIso || Date.now()).getTime() + 5.5 * 60 * 60 * 1000);
@@ -141,7 +141,7 @@ router.get('/my-month', (req, res) => {
       const [h, m] = eff.late_after_time.split(':').map(Number);
       lateCutoffMin = h * 60 + (m || 0);
     }
-  } catch {}
+  } catch { }
 
   // Build a per-day map of status. Key = YYYY-MM-DD.
   // Order of precedence: attendance row wins; else leave; else (past weekdays) absent; future = blank.
@@ -281,7 +281,7 @@ router.get('/my-history', (req, res) => {
   const today = istTodayStr();
   const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
   let from = ok(req.query.from) ? req.query.from : today;
-  let to   = ok(req.query.to)   ? req.query.to   : today;
+  let to = ok(req.query.to) ? req.query.to : today;
   if (from > to) { const t = from; from = to; to = t; }   // tolerate swapped range
   const rows = db.prepare(
     `SELECT * FROM attendance
@@ -301,7 +301,8 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.department),''))  FROM employees e WHERE e.user_id = a.user_id) AS hr_department,
     (SELECT GROUP_CONCAT(DISTINCT NULLIF(TRIM(e.designation),'')) FROM employees e WHERE e.user_id = a.user_id) AS hr_designation,
-    (SELECT COUNT(*) FROM employees e WHERE e.user_id = a.user_id) AS hr_record_count
+    (SELECT COUNT(*) FROM employees e WHERE e.user_id = a.user_id) AS hr_record_count,
+    (SELECT COUNT(*) FROM compliance_cases cc WHERE cc.user_id = a.user_id AND DATE(cc.detected_at) = a.date) AS compliance_violations_count
     FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;
   const params = [];
   if (date) { sql += ' AND a.date=?'; params.push(date); }
@@ -448,7 +449,7 @@ router.post('/admin-mark', (req, res) => {
   // 'late' included (mam 2026-09-12): the backfill form sets the status from
   // the punch times, and an admin-marked row is paid by STATUS alone, so a
   // late arrival has to be storable as late.
-  const finalStatus = ['present','late','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
+  const finalStatus = ['present', 'late', 'half_day', 'short_day', 'absent', 'leave', 'holiday'].includes(status) ? status : 'present';
 
   // Punch in / out typed by the admin (mam 2026-09-12: "so that if someone
   // miss to punch in or out we can mark it"). Optional — a mark with no times
@@ -986,6 +987,10 @@ router.post('/track-location', (req, res) => {
   const today = istTodayStr();
   const now = new Date().toISOString();
 
+  const uEmail = (req.user?.email || '').toLowerCase().trim();
+  const uName = (req.user?.name || '').toLowerCase().trim();
+  const isMdExempt = uEmail === 'director@securedengineers.com' || (uName.includes('ankur') && uName.includes('kaplesh'));
+
   // Heartbeat with gps_off=true → user is online (page is open, network
   // alive) but their browser couldn't get a GPS fix. Mam: 'can show me
   // here like some off GPS even network is good'. Stored with NULL
@@ -994,6 +999,21 @@ router.post('/track-location', (req, res) => {
   if (gps_off) {
     db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,NULL,NULL,?,?)')
       .run(req.user.id, today, now, reason || null, 'GPS_OFF');
+
+    if (!isMdExempt) {
+      try {
+        const { handleGpsOffEvent } = require('../services/complianceService');
+        handleGpsOffEvent({
+          userId: req.user.id,
+          employeeName: req.user.name,
+          reason: reason || 'GPS location turned off on mobile',
+          dbInstance: db,
+        });
+      } catch (err) {
+        console.error('[attendance-track-location] error handling GPS OFF event:', err);
+      }
+    }
+
     return res.json({ site: 'GPS_OFF', recorded: true });
   }
 
@@ -1007,6 +1027,23 @@ router.post('/track-location', (req, res) => {
   const siteName = geo && geo.decision === 'inside' ? geo.matchedSite : 'Outside';
   db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,?,?,?,?)')
     .run(req.user.id, today, now, latitude, longitude, address, siteName);
+
+  if (!isMdExempt) {
+    // Auto-log GPS restored event and send complete lifecycle report
+    try {
+      const { handleGpsRestoredEvent } = require('../services/complianceService');
+      handleGpsRestoredEvent({
+        userId: req.user.id,
+        latitude,
+        longitude,
+        siteName,
+        dbInstance: db,
+      });
+    } catch (err) {
+      console.error('[attendance-track-location] error handling GPS Restored event:', err);
+    }
+  }
+
   res.json({ site: siteName });
 });
 
@@ -1056,7 +1093,7 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
     const end = new Date();
     const start = new Date(); start.setDate(start.getDate() - d);
     from = start.toISOString().slice(0, 10);
-    to   = end.toISOString().slice(0, 10);
+    to = end.toISOString().slice(0, 10);
   }
 
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
@@ -1101,9 +1138,9 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
   };
 
   const enriched = rows.map(r => {
-    const inInfo  = enrich(r.punch_in_lat,  r.punch_in_lng);
+    const inInfo = enrich(r.punch_in_lat, r.punch_in_lng);
     const outInfo = enrich(r.punch_out_lat, r.punch_out_lng);
-    const punchInOutside  = isOutside(inInfo.distance_m,  r.punch_in_accuracy);
+    const punchInOutside = isOutside(inInfo.distance_m, r.punch_in_accuracy);
     const punchOutOutside = isOutside(outInfo.distance_m, r.punch_out_accuracy);
     return {
       id: r.id,
@@ -1150,10 +1187,10 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
     totals: {
       total_attendance_rows: enriched.length,
       punch_in_outside_geofence: enriched.filter(r => r.punch_in.outside_geofence).length,
-      punch_in_beyond_3km:       enriched.filter(r => r.punch_in.beyond_3km).length,
+      punch_in_beyond_3km: enriched.filter(r => r.punch_in.beyond_3km).length,
       punch_out_outside_geofence: enriched.filter(r => r.punch_out?.outside_geofence).length,
-      punch_out_beyond_3km:       enriched.filter(r => r.punch_out?.beyond_3km).length,
-      location_unverified:        unverified.length,
+      punch_out_beyond_3km: enriched.filter(r => r.punch_out?.beyond_3km).length,
+      location_unverified: unverified.length,
     },
     enforcement_notes: {
       rule: `Uncertainty-honest (from 2026-06-29). A punch is INSIDE when distance - GPS_accuracy <= radius (${radius}m). Staff are only BLOCKED when a precise GPS lock (accuracy <= ${trust}m) puts them confidently outside. Weak/coarse fixes are allowed but tagged location_verified=0 for review — they CANNOT falsely block an on-site person.`,
@@ -1303,7 +1340,7 @@ router.put('/leave/:id/approve', requirePermission('attendance', 'approve'), (re
 router.put('/leave/:id', requirePermission('attendance', 'edit'), (req, res) => {
   try {
     const b = req.body;
-    const fields = ['leave_type','from_date','to_date','from_time','to_time','days','hours','reason'];
+    const fields = ['leave_type', 'from_date', 'to_date', 'from_time', 'to_time', 'days', 'hours', 'reason'];
     const sets = []; const vals = [];
     for (const f of fields) if (b[f] !== undefined) { sets.push(`${f}=?`); vals.push(b[f]); }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });

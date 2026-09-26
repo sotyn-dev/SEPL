@@ -63,6 +63,7 @@ const SiteChat = lazy(() => import('./pages/SiteChat'));
 const SotynFlow = lazy(() => import('./pages/SotynFlow'));
 const IndentFMS = lazy(() => import('./pages/IndentFMS'));
 const DPR = lazy(() => import('./pages/DPR'));
+const ProjectDashboard = lazy(() => import('./pages/ProjectDashboard'));
 const IndentLabourPayment = lazy(() => import('./pages/IndentLabourPayment'));
 const LabourManagementSystem = lazy(() => import('./pages/LabourManagementSystem'));
 const LabourMaster = lazy(() => import('./pages/LabourMaster'));
@@ -72,6 +73,7 @@ const PMSTasks = lazy(() => import('./pages/PMSTasks'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const HelpTickets = lazy(() => import('./pages/HelpTickets'));
 const SystemRequirements = lazy(() => import('./pages/SystemRequirements'));
+const ComplianceDashboard = lazy(() => import('./pages/ComplianceDashboard'));
 const SystemRequirementWorkspace = lazy(() => import('./pages/SystemRequirements/Workspace'));
 const VendorPOPrint = lazy(() => import('./pages/VendorPOPrint'));
 const FileViewer = lazy(() => import('./pages/FileViewer'));
@@ -144,7 +146,10 @@ function AdminRoute({ children }) {
 function ModuleRoute({ module, children }) {
   const { canView, loading } = useAuth();
   if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
-  if (!canView(module)) return (
+  const hasAccess = module === 'project_dashboard'
+    ? canView('project_dashboard') || canView('business_book') || canView('procurement') || canView('orders') || canView('dpr')
+    : canView(module);
+  if (!hasAccess) return (
     <div className="flex flex-col items-center justify-center h-96 text-gray-400">
       <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
       <h3 className="text-lg font-medium text-gray-500">Access Denied</h3>
@@ -253,13 +258,16 @@ export default function App() {
           <Route path="sotyn-flow/:boardId" element={<ModuleGate module="sotyn_flow"><SotynFlow /></ModuleGate>} />
           <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
           <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
+          <Route path="project-dashboard" element={<ModuleRoute module="project_dashboard"><ProjectDashboard /></ModuleRoute>} />
           {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
           <Route path="indent-labour-payment" element={<ModuleRoute module="indent_labour_payment"><IndentLabourPayment /></ModuleRoute>} />
           <Route path="labour-management" element={<ModuleRoute module="labour_quotation"><LabourManagementSystem /></ModuleRoute>} />
           <Route path="labour-master" element={<ModuleRoute module="labour_master"><LabourMaster /></ModuleRoute>} />
           <Route path="bill-verification" element={<ModuleRoute module="bill_verification"><BillVerification /></ModuleRoute>} />
           <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />
+          <Route path="daily-work" element={<Navigate to="/" replace />} />
           <Route path="pms-tasks" element={<ModuleRoute module="pms_tasks"><PMSTasks /></ModuleRoute>} />
+          <Route path="compliance" element={<ComplianceDashboard />} />
           {/* Other Modules */}
           <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
           <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />

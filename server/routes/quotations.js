@@ -360,13 +360,34 @@ router.get('/client-boq', async (req, res) => {
 // native boq ids or be deleted/quoted by mistake.
 router.get('/boq', (req, res) => {
   const db = getDb();
+  // Pre-load all existing quotations so we can determine whether each BOQ is quoted
+  const boqQuoteMap = new Map();
+  const sfQuoteMap = new Map();
+  const crmQuoteMap = new Map();
+  try {
+    const allQuotes = db.prepare(`SELECT id, quotation_number, boq_id, funnel_id, crm_funnel_id FROM quotations`).all();
+    for (const q of allQuotes) {
+      if (q.boq_id) boqQuoteMap.set(q.boq_id, q);
+      if (q.funnel_id) sfQuoteMap.set(q.funnel_id, q);
+      if (q.crm_funnel_id) crmQuoteMap.set(q.crm_funnel_id, q);
+    }
+  } catch (_) {}
+
   const native = db.prepare(`SELECT b.*, l.company_name, u.name as created_by_name, 'boq' AS source FROM boq b
     LEFT JOIN leads l ON b.lead_id=l.id LEFT JOIN users u ON b.created_by=u.id ORDER BY b.created_at DESC`).all();
+  for (const b of native) {
+    const q = boqQuoteMap.get(b.id);
+    b.is_quoted = !!q;
+    b.quotation_number = q?.quotation_number || null;
+    b.quotation_id = q?.id || null;
+  }
+
   let funnel = [];
   try {
     funnel = db.prepare(`
       SELECT fb.id, fb.funnel_id, fb.boq_file_link, fb.boq_amount AS total_amount,
              fb.notes, fb.created_by AS created_by_name, fb.created_at,
+             sf.quotation_number, sf.quotation_amount,
              COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name,
              (SELECT COUNT(*) FROM sales_funnel_boqs x
                WHERE x.funnel_id = fb.funnel_id
@@ -374,25 +395,32 @@ router.get('/boq', (req, res) => {
         FROM sales_funnel_boqs fb
         JOIN sales_funnel sf ON sf.id = fb.funnel_id
        ORDER BY fb.created_at DESC, fb.id DESC`).all()
-      .map(r => ({
-        id: `sf-${r.id}`,
-        source: r.prior_count > 0 ? 'funnel_extra' : 'funnel',
-        title: `${r.prior_count > 0 ? 'Extra BOQ' : 'Funnel BOQ'}${r.notes ? ` — ${r.notes}` : ''}`,
-        company_name: r.company_name,
-        drawing_required: 0,
-        total_amount: r.total_amount || 0,
-        status: r.prior_count > 0 ? 'extra' : 'funnel',
-        created_at: r.created_at,
-        boq_file_link: r.boq_file_link || null,
-        created_by_name: r.created_by_name || null,
-        funnel_id: r.funnel_id,
-      }));
+      .map(r => {
+        const q = sfQuoteMap.get(r.funnel_id);
+        const isQuoted = !!(q || r.quotation_number || (r.quotation_amount && r.quotation_amount > 0));
+        return {
+          id: `sf-${r.id}`,
+          source: r.prior_count > 0 ? 'funnel_extra' : 'funnel',
+          title: `${r.prior_count > 0 ? 'Extra BOQ' : 'Funnel BOQ'}${r.notes ? ` — ${r.notes}` : ''}`,
+          company_name: r.company_name,
+          drawing_required: 0,
+          total_amount: r.total_amount || 0,
+          status: r.prior_count > 0 ? 'extra' : 'funnel',
+          created_at: r.created_at,
+          boq_file_link: r.boq_file_link || null,
+          created_by_name: r.created_by_name || null,
+          funnel_id: r.funnel_id,
+          is_quoted: isQuoted,
+          quotation_number: q?.quotation_number || r.quotation_number || null,
+          quotation_id: q?.id || null,
+        };
+      });
     // The lead's own latest columns can hold files the history table never
     // saw — the ORIGINAL and the REVISED BOQ (mam 2026-08-27 "previous also
     // add"). Emit each file that isn't already covered by a history row.
     const historyLinks = new Set(funnel.map(r => `${r.funnel_id}|${r.boq_file_link || ''}`));
     const latest = db.prepare(`
-      SELECT sf.id AS funnel_id,
+      SELECT sf.id AS funnel_id, sf.quotation_number, sf.quotation_amount,
              COALESCE(NULLIF(sf.company_name,''), sf.client_name) AS company_name,
              NULLIF(sf.boq_file_link,'') AS boq_file_link,
              NULLIF(sf.revised_boq_file_link,'') AS revised_boq_file_link,
@@ -415,6 +443,8 @@ router.get('/boq', (req, res) => {
       if (!emitted.length && !r.has_history && r.total_amount > 0) {
         emitted.push({ link: null, title: 'Funnel BOQ', status: 'funnel', source: 'funnel' });
       }
+      const q = sfQuoteMap.get(r.funnel_id);
+      const isQuoted = !!(q || r.quotation_number || (r.quotation_amount && r.quotation_amount > 0));
       emitted.forEach((e, i) => funnel.push({
         id: `sfl-${r.funnel_id}-${i}`, source: e.source, title: e.title,
         company_name: r.company_name, drawing_required: 0,
@@ -423,6 +453,9 @@ router.get('/boq', (req, res) => {
         total_amount: (i === emitted.length - 1) ? r.total_amount : 0,
         status: e.status, created_at: r.created_at,
         boq_file_link: e.link, funnel_id: r.funnel_id,
+        is_quoted: isQuoted,
+        quotation_number: q?.quotation_number || r.quotation_number || null,
+        quotation_id: q?.id || null,
       }));
     }
   } catch (e) { /* funnel tables missing on a stale DB — native list still serves */ }
@@ -443,6 +476,8 @@ router.get('/boq', (req, res) => {
       // sources (history file, latest file, typed link) can never drift apart.
       const emit = (r, id, label, link, createdAt) => {
         const extra = r.lead_type === 'Extra Enquiry';
+        const q = crmQuoteMap.get(r.crm_id);
+        const isQuoted = !!(q || r.quotation_submitted == 1 || (r.quotation_amount && r.quotation_amount > 0));
         crm.push({
           id,
           source: extra ? 'crm_extra' : 'crm',
@@ -459,6 +494,9 @@ router.get('/boq', (req, res) => {
           // crm_id, NOT funnel_id: funnel_id is a sales_funnel id and the two id
           // spaces overlap, so quoting it would stamp a different client's lead.
           crm_id: r.crm_id,
+          is_quoted: isQuoted,
+          quotation_number: q?.quotation_number || null,
+          quotation_id: q?.id || null,
         });
       };
       // EVERY BOQ ever attached to a lead, not just the one the column still
@@ -470,7 +508,7 @@ router.get('/boq', (req, res) => {
       try {
         crmHistory = db.prepare(`
         SELECT cb.id, cb.crm_id, cb.boq_file_link, cb.notes, cb.created_at,
-               cf.lead_no, cf.lead_type,
+               cf.lead_no, cf.lead_type, cf.quotation_submitted, cf.quotation_amount,
                COALESCE(NULLIF(cf.company_name,''), cf.client_name) AS company_name,
                COALESCE(NULLIF(cb.created_by,''), u.name) AS created_by_name
           FROM crm_funnel_boqs cb
@@ -492,7 +530,7 @@ router.get('/boq', (req, res) => {
       // crm_id|link, so a file that is both "latest" AND in history shows ONCE.
       const historyLinks = new Set(crmHistory.map(h => `${h.crm_id}|${h.boq_file_link}`));
       const crmLeads = db.prepare(`
-        SELECT cf.id AS crm_id, cf.lead_no, cf.lead_type,
+        SELECT cf.id AS crm_id, cf.lead_no, cf.lead_type, cf.quotation_submitted, cf.quotation_amount,
                COALESCE(NULLIF(cf.company_name,''), cf.client_name) AS company_name,
                NULLIF(cf.boq_file_link,'') AS boq_file_link,
                NULLIF(cf.cust_boq_link,'') AS cust_boq_link,
@@ -523,15 +561,55 @@ router.get('/boq', (req, res) => {
       }
     } catch (e) { /* crm_funnel missing on a stale DB — the rest of the list still serves */ }
   }
-  res.json([...native, ...funnel, ...crm].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+
+  let all = [...native, ...funnel, ...crm].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
+  // Server-side filter: 'pending' (default, unquoted only), 'quoted', or 'all'
+  const filter = String(req.query.filter || 'pending').toLowerCase();
+  if (filter === 'pending') {
+    all = all.filter(r => !r.is_quoted);
+  } else if (filter === 'quoted') {
+    all = all.filter(r => r.is_quoted);
+  }
+
+  // Server-side debounced search
+  const search = String(req.query.search || '').trim().toLowerCase();
+  if (search) {
+    all = all.filter(r => {
+      return (
+        (r.title && r.title.toLowerCase().includes(search)) ||
+        (r.company_name && r.company_name.toLowerCase().includes(search)) ||
+        (r.boq_file_link && r.boq_file_link.toLowerCase().includes(search)) ||
+        (r.created_by_name && r.created_by_name.toLowerCase().includes(search)) ||
+        (r.quotation_number && r.quotation_number.toLowerCase().includes(search))
+      );
+    });
+  }
+
+  // Server-side pagination
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limitParam = req.query.limit;
+  const isAll = limitParam === 'all';
+  const limit = isAll ? 'all' : Math.max(1, parseInt(limitParam, 10) || 15);
+  const total = all.length;
+  const perPage = isAll ? Math.max(total, 1) : limit;
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const curPage = Math.min(Math.max(1, page), pages);
+  const from = total === 0 ? 0 : (curPage - 1) * perPage;
+  const to = Math.min(from + perPage, total);
+  const rows = isAll ? all : all.slice(from, to);
+
+  res.json({ total, page: curPage, perPage: isAll ? 'all' : perPage, pages, from, to, rows });
 });
 
 router.post('/boq', requirePermission('quotations', 'create'), (req, res) => {
   const { lead_id, title, drawing_required, items } = req.body;
+  if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
   const db = getDb();
+  const leadId = (lead_id != null && lead_id !== '' && !isNaN(+lead_id)) ? +lead_id : null;
   const total = (items || []).reduce((s, i) => s + (i.quantity * i.rate), 0);
   const r = db.prepare('INSERT INTO boq (lead_id, title, drawing_required, total_amount, created_by) VALUES (?,?,?,?,?)')
-    .run(lead_id, title, drawing_required ? 1 : 0, total, req.user.id);
+    .run(leadId, String(title).trim(), drawing_required ? 1 : 0, total, req.user.id);
   const insertItem = db.prepare('INSERT INTO boq_items (boq_id, description, quantity, unit, rate, amount, item_id) VALUES (?,?,?,?,?,?,?)');
 
   // AI Agent: when a line item is linked to a catalogue item AND has a
@@ -542,14 +620,14 @@ router.post('/boq', requirePermission('quotations', 'create'), (req, res) => {
     (item_id, rate, quantity, lead_id, company_name, boq_id, source, created_by, created_by_name)
     VALUES (?,?,?,?,?,?,?,?,?)`);
   const updateItemPrice = db.prepare('UPDATE item_master SET current_price=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
-  const lead = lead_id ? db.prepare('SELECT company_name FROM leads WHERE id=?').get(lead_id) : null;
+  const lead = leadId ? db.prepare('SELECT company_name FROM leads WHERE id=?').get(leadId) : null;
   const companyName = lead?.company_name || null;
 
   for (const i of (items || [])) {
     const itemId = i.item_id ? +i.item_id : null;
-    insertItem.run(r.lastInsertRowid, i.description, i.quantity, i.unit, i.rate, i.quantity * i.rate, itemId);
+    insertItem.run(r.lastInsertRowid, i.description || 'Item', i.quantity || 1, i.unit || 'nos', i.rate || 0, (i.quantity || 1) * (i.rate || 0), itemId);
     if (itemId && i.rate > 0) {
-      insertHistory.run(itemId, i.rate, i.quantity || 0, lead_id || null, companyName, r.lastInsertRowid, 'boq', req.user.id, req.user.name || null);
+      insertHistory.run(itemId, i.rate, i.quantity || 0, leadId, companyName, r.lastInsertRowid, 'boq', req.user.id, req.user.name || null);
       updateItemPrice.run(i.rate, itemId);
     }
   }
@@ -665,7 +743,46 @@ router.get('/', (req, res) => {
       }));
    } catch (e) { /* stale DB without the crm columns — the rest of the list still serves */ }
   }
-  res.json([...native, ...funnel, ...crmQ].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  let allQuotations = [...native, ...funnel, ...crmQ].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
+  // Server-side status filter
+  const status = String(req.query.status || 'all').toLowerCase();
+  if (status && status !== 'all') {
+    if (status === 'pending_approval') {
+      allQuotations = allQuotations.filter(q => q.margin_approval === 'pending' || q.discount_approval === 'pending_sh' || q.discount_approval === 'pending_md');
+    } else {
+      allQuotations = allQuotations.filter(q => String(q.status || '').toLowerCase() === status);
+    }
+  }
+
+  // Server-side debounced search
+  const search = String(req.query.search || '').trim().toLowerCase();
+  if (search) {
+    allQuotations = allQuotations.filter(q => {
+      return (
+        (q.quotation_number && q.quotation_number.toLowerCase().includes(search)) ||
+        (q.company_name && q.company_name.toLowerCase().includes(search)) ||
+        (q.notes && q.notes.toLowerCase().includes(search)) ||
+        (q.created_by_name && q.created_by_name.toLowerCase().includes(search)) ||
+        (q.quotation_file_link && q.quotation_file_link.toLowerCase().includes(search))
+      );
+    });
+  }
+
+  // Server-side pagination
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limitParam = req.query.limit;
+  const isAll = limitParam === 'all';
+  const limit = isAll ? 'all' : Math.max(1, parseInt(limitParam, 10) || 15);
+  const total = allQuotations.length;
+  const perPage = isAll ? Math.max(total, 1) : limit;
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const curPage = Math.min(Math.max(1, page), pages);
+  const from = total === 0 ? 0 : (curPage - 1) * perPage;
+  const to = Math.min(from + perPage, total);
+  const rows = isAll ? allQuotations : allQuotations.slice(from, to);
+
+  res.json({ total, page: curPage, perPage: isAll ? 'all' : perPage, pages, from, to, rows });
 });
 
 // ── SOP-02 S5/S6: Margin Chart + floor rule (mam 2026-08-27) ──────────────
@@ -766,20 +883,22 @@ router.post('/:id/margin-decision', (req, res) => {
 // same way (mam 2026-09-07) — crm_id instead of funnel_id.
 router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, res) => {
   try {
-    const { funnel_id, crm_id, base_amount, margin_pct, category, quotation_file_link, valid_until, notes } = req.body || {};
+    const { boq_id, funnel_id, crm_id, base_amount, margin_pct, category, quotation_file_link, valid_until, notes } = req.body || {};
     const db = getDb();
-    // The BOQ comes either from the Sales Funnel or from the CRM Sales Funnel
-    // (mam 2026-09-07). The two ids are kept in SEPARATE fields on purpose:
-    // both tables autoincrement from 1, so one id in the wrong field would
-    // quote — and stamp — a completely different client's lead.
+    // The BOQ comes from the boq table, the Sales Funnel, or the CRM Sales Funnel
+    const boqId = boq_id != null && boq_id !== '' ? +boq_id : null;
     const funnelId = funnel_id != null && funnel_id !== '' ? +funnel_id : null;
     const crmId = crm_id != null && crm_id !== '' ? +crm_id : null;
-    if (!funnelId && !crmId) return res.status(400).json({ error: 'Pick a funnel BOQ to quote' });
-    if (funnelId && crmId) return res.status(400).json({ error: 'A quotation belongs to ONE lead — send funnel_id or crm_id, not both' });
+    if (!funnelId && !crmId && !boqId) return res.status(400).json({ error: 'Pick a BOQ or funnel lead to quote' });
+    if ((funnelId ? 1 : 0) + (crmId ? 1 : 0) + (boqId ? 1 : 0) > 1) {
+      return res.status(400).json({ error: 'A quotation belongs to ONE BOQ or lead — send funnel_id, crm_id, or boq_id' });
+    }
     const sf = funnelId ? db.prepare('SELECT id, company_name, client_name FROM sales_funnel WHERE id=?').get(funnelId) : null;
     if (funnelId && !sf) return res.status(404).json({ error: 'Funnel lead not found' });
     const cf = crmId ? db.prepare('SELECT id, lead_no, company_name, client_name, final_status, quotation_amount FROM crm_funnel WHERE id=?').get(crmId) : null;
     if (crmId && !cf) return res.status(404).json({ error: 'CRM lead not found' });
+    const bq = boqId ? db.prepare('SELECT b.*, l.company_name FROM boq b LEFT JOIN leads l ON l.id = b.lead_id WHERE b.id=?').get(boqId) : null;
+    if (boqId && !bq) return res.status(404).json({ error: 'BOQ not found' });
     // Quoting a CRM lead WRITES to crm_funnel (below), so it needs the CRM
     // module's own edit right — quotations:create is held by every non-Viewer
     // role while crm_funnel edit is admin-only, so without this the CRM board
@@ -810,13 +929,16 @@ router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, re
     const finalAmt = Math.round(base * (1 + margin / 100) * 100) / 100;
     const { nextSequence } = require('../db/nextSequence');
     const qNum = nextSequence(db, 'quotations', 'quotation_number', 'QTN-', { startFrom: 0, pad: 4 });
-    const lead = sf || cf;
-    const clientName = lead.company_name || lead.client_name || '';
+    const clientName = sf ? (sf.company_name || sf.client_name || '')
+                     : cf ? (cf.company_name || cf.client_name || '')
+                     : (bq?.company_name || 'Client');
     const r = db.prepare(`INSERT INTO quotations
         (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, status, margin_approval, created_by, funnel_id, crm_funnel_id, margin_pct, quotation_file_link)
-        VALUES (NULL, NULL, ?, ?, 0, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`)
-      .run(qNum, base, finalAmt, valid_until || null,
-           notes || `Margin ${margin}%${category ? ` (${category})` : ''} on ${cf ? 'CRM funnel' : 'funnel'} BOQ — ${clientName}`,
+        VALUES (?, ?, ?, ?, 0, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`)
+      .run(bq ? bq.lead_id : null,
+           bq ? bq.id : null,
+           qNum, base, finalAmt, valid_until || null,
+           notes || `Margin ${margin}%${category ? ` (${category})` : ''} on ${bq ? 'BOQ' : cf ? 'CRM funnel' : 'funnel'} — ${clientName}`,
            belowFloor ? 'pending' : null,
            req.user.id, sf ? sf.id : null, cf ? cf.id : null, margin, quotation_file_link || null);
     if (!belowFloor && sf) {
@@ -830,6 +952,10 @@ router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, re
       db.prepare(`UPDATE crm_funnel SET quotation_amount=?, quotation_link=COALESCE(?, quotation_link),
                     quotation_submitted=1, quotation_submit_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
         .run(finalAmt, quotation_file_link || null, cf.id);
+    } else if (bq) {
+      try {
+        db.prepare(`UPDATE boq SET status='submitted' WHERE id=?`).run(bq.id);
+      } catch (_) {}
     }
     res.status(201).json({
       id: r.lastInsertRowid, quotation_number: qNum, final_amount: finalAmt,
@@ -838,6 +964,73 @@ router.post('/funnel-quote', requirePermission('quotations', 'create'), (req, re
     });
   } catch (err) {
     console.error('funnel-quote error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Re-quote an existing quotation (with updated base, margin %, notes, quotation file)
+router.post('/:id/requote', requirePermission('quotations', 'create'), (req, res) => {
+  try {
+    const db = getDb();
+    const qId = parseInt(req.params.id, 10);
+    const q = db.prepare('SELECT * FROM quotations WHERE id=?').get(qId);
+    if (!q) return res.status(404).json({ error: 'Quotation not found' });
+
+    const { base_amount, margin_pct, category, quotation_file_link, valid_until, notes } = req.body || {};
+    const base = base_amount != null && base_amount !== '' ? +base_amount : (q.total_amount || 0);
+    if (base <= 0) return res.status(400).json({ error: 'Enter the BOQ base amount' });
+
+    let margin = margin_pct != null && margin_pct !== '' ? +margin_pct : (q.margin_pct != null ? q.margin_pct : null);
+    if (margin == null && category) {
+      margin = db.prepare('SELECT margin_pct FROM quotation_margin_chart WHERE category=?').get(category)?.margin_pct ?? null;
+    }
+    margin = +margin || 0;
+
+    const floor = +(db.prepare("SELECT value FROM app_settings WHERE key='quotation_margin_floor_pct'").get()?.value || 10);
+    const belowFloor = margin < floor;
+    const finalAmt = Math.round(base * (1 + margin / 100) * 100) / 100;
+
+    db.prepare(`UPDATE quotations
+      SET total_amount=?, final_amount=?, margin_pct=?,
+          quotation_file_link=COALESCE(?, quotation_file_link),
+          valid_until=COALESCE(?, valid_until),
+          notes=COALESCE(?, notes),
+          margin_approval=?,
+          status='draft'
+      WHERE id=?`).run(
+        base, finalAmt, margin,
+        quotation_file_link || null,
+        valid_until || null,
+        notes || null,
+        belowFloor ? 'pending' : null,
+        qId
+      );
+
+    if (!belowFloor && q.funnel_id) {
+      db.prepare(`UPDATE sales_funnel SET quotation_amount=?, quotation_file_link=COALESCE(?, quotation_file_link),
+                    quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(finalAmt, quotation_file_link || null, req.user.name || null, q.funnel_id);
+    } else if (!belowFloor && q.crm_funnel_id) {
+      db.prepare(`UPDATE crm_funnel SET quotation_amount=?, quotation_link=COALESCE(?, quotation_link),
+                    quotation_submitted=1, quotation_submit_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(finalAmt, quotation_file_link || null, q.crm_funnel_id);
+    }
+
+    try {
+      db.prepare(`INSERT INTO quotation_negotiation_log (quotation_id, side, at, created_by)
+                  VALUES (?, 'us', CURRENT_TIMESTAMP, ?)`).run(qId, req.user.id);
+    } catch (_) {}
+
+    res.json({
+      ok: true,
+      id: q.id,
+      quotation_number: q.quotation_number,
+      final_amount: finalAmt,
+      margin_approval: belowFloor ? 'pending' : null,
+      message: belowFloor ? `Revised margin ${margin}% is below the ${floor}% floor — sent to the Sales Head for a decision` : `${q.quotation_number} re-quoted — Rs ${finalAmt.toLocaleString()}`
+    });
+  } catch (err) {
+    console.error('requote error', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -492,6 +492,8 @@ export default function Procurement() {
   const [editPoLocked, setEditPoLocked] = useState(false); // locked when bills/DN exist
   const [editPoLockReason, setEditPoLockReason] = useState('');
   const [editPoSaving, setEditPoSaving] = useState(false);
+  // TSK-0824: Cost estimate evaluation details for the PO currently being edited/viewed
+  const [editPoCostEval, setEditPoCostEval] = useState(null);
 
   // Open Edit PO modal — fetches the PO with items so line-level fields
   // can be edited (mam 2026-05-25: "i want edit the po after creation
@@ -531,6 +533,7 @@ export default function Procurement() {
       .catch(() => { setLinkLines([]); setLinkPick({}); });
     setEditPoLocked(false);
     setEditPoLockReason('');
+    setEditPoCostEval(null);
     try {
       const r = await api.get(`/procurement/vendor-po/${v.id}/with-items`);
       // Drop the synthetic 'ind-<id>' placeholders /with-items invents for
@@ -550,7 +553,15 @@ export default function Procurement() {
         specification: it.specification || '',
         size: it.size || '',
         unit: it.unit || '',
+        estimated_rate: it.estimated_rate,
+        benchmark_source: it.benchmark_source,
+        variance_pct: it.variance_pct,
+        variance_amount: it.variance_amount,
+        is_overrun: it.is_overrun,
+        is_within: it.is_within,
+        is_missing: it.is_missing,
       })));
+      setEditPoCostEval(r.data?.cost_evaluation || null);
       if (r.data?.edit_locked) {
         setEditPoLocked(true);
         setEditPoLockReason(`${r.data.bill_count || 0} bill(s) and ${r.data.dn_count || 0} delivery note(s) reference this PO.  Cancel them first to edit line items.`);
@@ -574,6 +585,7 @@ export default function Procurement() {
           quantity: l.quantity,
           rate: l.final_rate || 0,
           description: l.description || l.master_name || '',
+          specification: l.specification || '',
         }));
         // Let the server recompute the total from the lines just attached.
         delete payload.total_amount;
@@ -586,6 +598,7 @@ export default function Procurement() {
           rate: it.rate,
           description: it.description,
           hsn_code: it.hsn_code,
+          specification: it.specification,
         }));
         // Header total_amount will be auto-recomputed server-side from
         // the line items, so don't send the stale value.
@@ -596,6 +609,7 @@ export default function Procurement() {
       setEditPo(null);
       setEditPoForm({});
       setEditPoItems([]);
+      setEditPoCostEval(null);
       load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
@@ -2118,6 +2132,7 @@ export default function Procurement() {
           checked: it.rate_status === 'finalized' && pending > 0,
           quantity: pending,
           rate: it.final_rate || 0,
+          specification: it.specification || '',
         };
       }
       setPoItemSelection(sel);
@@ -2179,6 +2194,7 @@ export default function Procurement() {
       .map(it => ({ it, v: poItemSelection[it.indent_item_id] || {} }))
       .filter(({ v }) => v.checked && +v.quantity > 0 && +v.rate > 0)
       .map(({ it, v }) => {
+        const spec = v.specification !== undefined ? String(v.specification).trim() : (it.specification ? String(it.specification).trim() : '');
         const wpm = +it.weight_per_meter || 0;
         if (wpm > 0) {
           const mtr = +v.quantity;
@@ -2188,9 +2204,10 @@ export default function Procurement() {
             rate: +v.rate,                                  // ₹/kg
             weight_per_meter: wpm,
             original_qty_mtr: mtr,
+            specification: spec || null,
           };
         }
-        return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate };
+        return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate, specification: spec || null };
       });
 
     // Mandatory items (mam 2026-08-27 "civic sense"): a PO must carry at
@@ -2266,8 +2283,17 @@ export default function Procurement() {
     return (v.po_pending_approver_ids || []).includes(user?.id);
   };
   const approvePo = async (v) => {
-    try { await api.post(`/procurement/vendor-po/${v.id}/po-approve`); toast.success('PO approved'); load(); }
-    catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
+    try {
+      const res = await api.post(`/procurement/vendor-po/${v.id}/po-approve`);
+      if (res.data?.auto_approved) {
+        toast.success(`⚡ PO Auto-Approved: ${res.data.approval_note || 'All items within estimated cost'}`);
+      } else if (res.data?.po_approval === 'pending_l2') {
+        toast.success('PO L1 approved → Forwarded to L2 (MD) for cost overrun approval');
+      } else {
+        toast.success('PO approved');
+      }
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
   };
   const rejectPo = async (v) => {
     const reason = prompt(`Reject Vendor PO "${v.po_number}"?\n\nReason (required):`);
@@ -2774,9 +2800,17 @@ export default function Procurement() {
     // sharing the same item_master in the same indent). Finalize ALL of them
     // so the merged display stays consistent — every backing row picks the
     // same vendor + rate + terms.
-    const rateIds = finalForm.row?.rate_ids?.length ? finalForm.row.rate_ids : [finalForm.rate_id].filter(Boolean);
-    if (!rateIds.length) return toast.error('Enter a vendor rate first');
+    const rateIds = finalForm.row?.rate_ids?.length ? [...finalForm.row.rate_ids] : [finalForm.rate_id].filter(Boolean);
+    if (!rateIds.length && !isAdmin()) return toast.error('Enter a vendor rate first');
     try {
+      // Ensure every backing item exists, even for partially quoted merged rows.
+      if (isAdmin()) {
+        const itemIds = finalForm.row?.indent_item_ids || [finalForm.row?.indent_item_id];
+        for (const iid of itemIds.filter(Boolean)) {
+          const { data } = await api.post('/procurement/item-rates', { indent_item_id: iid });
+          if (!rateIds.includes(data.id)) rateIds.push(data.id);
+        }
+      }
       for (const rid of rateIds) {
         await api.post(`/procurement/item-rates/${rid}/finalize`, finalForm);
       }
@@ -4334,7 +4368,7 @@ export default function Procurement() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
               <div>
                 <h3 className="font-semibold">Item-wise Vendor Rates</h3>
-                <p className="text-xs text-gray-500">Step 1: enter up to 3 vendor quotes per indent item. Step 2: finalize the best rate.</p>
+                <p className="text-xs text-gray-500">{isAdmin() ? 'Admin: use Direct Finalize to select a vendor and enter the final rate without three quotations.' : 'Step 1: enter 3 vendor quotes per indent item. Step 2: finalize the best rate.'}</p>
                 <p className="text-[11px] text-amber-700 mt-0.5">ⓘ Only indents that have cleared L1 + L2 approval appear here. Pending-approval indents will show up automatically after both approvers sign off.</p>
               </div>
               <div className="flex gap-1 flex-wrap">
@@ -4645,7 +4679,7 @@ export default function Procurement() {
                           <div className="flex items-center gap-1">
                             {stat === 'finalized'
                               ? <div className="text-[11px]"><div className="font-semibold text-emerald-700">{r.final_vendor_name}</div><div>Rs {r.final_rate}</div></div>
-                              : <button onClick={() => openFinalize(r)} disabled={!threeFilled} title={threeFilled ? 'Finalize the best rate' : 'Fill all 3 vendor rates first'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">Finalize</button>}
+                              : <button onClick={() => openFinalize(r)} disabled={!isAdmin() && !threeFilled} title={isAdmin() ? 'Finalize directly without three quotations' : threeFilled ? 'Finalize the best rate' : 'Fill all 3 vendor rates first'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">{isAdmin() ? 'Direct Finalize' : 'Finalize'}</button>}
                             {/* Admin-only: clear ALL vendor quotes for this row.
                               Useful when mam wants to re-quote (wrong rates,
                               vendor change, etc.). Returns row to Pending. */}
@@ -4718,8 +4752,8 @@ export default function Procurement() {
                     {stat === 'finalized'
                       ? <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs"><b className="text-emerald-700">Final:</b> {r.final_vendor_name} @ Rs {r.final_rate}</div>
                       : <>
-                        <button onClick={() => openFinalize(r)} disabled={!threeFilled} className="btn btn-primary text-xs w-full disabled:opacity-40">Finalize Rate</button>
-                        {!threeFilled && <p className="text-[10px] text-amber-600 text-center mt-1">Fill all 3 vendor rates to finalize.</p>}
+                        <button onClick={() => openFinalize(r)} disabled={!isAdmin() && !threeFilled} className="btn btn-primary text-xs w-full disabled:opacity-40">{isAdmin() ? 'Direct Finalize' : 'Finalize Rate'}</button>
+                        {!isAdmin() && !threeFilled && <p className="text-[10px] text-amber-600 text-center mt-1">Fill all 3 vendor rates to finalize.</p>}
                       </>}
                   </div>
                 );
@@ -5033,10 +5067,31 @@ export default function Procurement() {
                     {v.cancelled
                       ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
                       : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
-                        ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}</span>
+                        ? <div className="flex flex-col gap-1 items-start">
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>
+                              Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}
+                            </span>
+                            {v.cost_status === 'cost_overrun' && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason}>
+                                ⚠️ Overrun (+{v.max_overrun_pct}%)
+                              </span>
+                            )}
+                            {v.cost_status === 'within_estimate' && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200" title={v.cost_reason}>
+                                ⚡ ≤ Estimate
+                              </span>
+                            )}
+                          </div>
                         : v.po_approval === 'rejected'
                           ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
-                          : <StatusBadge status={v.status} />}
+                          : <div className="flex flex-col gap-1 items-start">
+                              <StatusBadge status={v.status} />
+                              {+v.po_auto_approved === 1 && (
+                                <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300" title={v.po_approval_note || 'Auto-approved: all items within estimated cost'}>
+                                  ⚡ Auto-Approved
+                                </span>
+                              )}
+                            </div>}
                   </td>
                   <td>
                     {/* Three actions: Cancel (soft-delete, reverses), Restore
@@ -5128,10 +5183,31 @@ export default function Procurement() {
                   {v.cancelled
                     ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border border-gray-300 text-gray-600 bg-gray-50" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
                     : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
-                      ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</span>
+                      ? <div className="flex flex-col gap-0.5 items-end">
+                          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>
+                            Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}
+                          </span>
+                          {v.cost_status === 'cost_overrun' && (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200" title={v.cost_reason}>
+                              ⚠️ Overrun (+{v.max_overrun_pct}%)
+                            </span>
+                          )}
+                          {v.cost_status === 'within_estimate' && (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200" title={v.cost_reason}>
+                              ⚡ ≤ Estimate
+                            </span>
+                          )}
+                        </div>
                       : v.po_approval === 'rejected'
                         ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
-                        : <StatusBadge status={v.status} />}
+                        : <div className="flex flex-col gap-0.5 items-end">
+                            <StatusBadge status={v.status} />
+                            {+v.po_auto_approved === 1 && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300" title={v.po_approval_note || 'Auto-approved: all items within estimated cost'}>
+                                ⚡ Auto-Approved
+                              </span>
+                            )}
+                          </div>}
                 </div>
                 {/* Site */}
                 {v.indent_site_name && (
@@ -7877,6 +7953,7 @@ export default function Procurement() {
                       <tr>
                         <th className="px-2 py-1.5"></th>
                         <th className="px-2 py-1.5 text-left">Item</th>
+                        <th className="px-2 py-1.5 text-left min-w-[160px]">Specification</th>
                         <th className="px-2 py-1.5">Qty</th>
                         <th className="px-2 py-1.5">Unit</th>
                         <th className="px-2 py-1.5">Rate</th>
@@ -7904,7 +7981,7 @@ export default function Procurement() {
                             </td>
                             <td className="px-2 py-1.5 max-w-[320px]">
                               {it.item_code && <div className="text-[10px] font-mono text-gray-500">[{it.item_code}]</div>}
-                              <div className="whitespace-normal leading-snug font-medium">{[it.master_name || it.description, it.specification, it.size].filter(Boolean).join(' / ')}</div>
+                              <div className="whitespace-normal leading-snug font-medium">{[it.master_name || it.description, it.size].filter(Boolean).join(' / ')}</div>
                               {it.make && <div className="text-[10px] text-gray-400">Make: {it.make}</div>}
                               {isPipe && <div className="text-[10px] text-blue-700 font-semibold">🪈 Pipe · {wpm} kg/pipe — PO in KG</div>}
                               {orderedQty > 0 && (
@@ -7912,6 +7989,16 @@ export default function Procurement() {
                                   {fullyOrdered ? `Fully ordered (${orderedQty} of ${it.quantity})` : `Ordered ${orderedQty} of ${it.quantity} · pending ${pending}`}
                                 </div>
                               )}
+                            </td>
+                            <td className="px-1 py-1">
+                              <input
+                                type="text"
+                                className="input text-[11px] px-1.5 py-0.5 w-full min-w-[140px]"
+                                placeholder="Specification / Grade…"
+                                disabled={fullyOrdered}
+                                value={s.specification !== undefined ? s.specification : (it.specification || '')}
+                                onChange={e => togglePoItem(it.indent_item_id, { specification: e.target.value, checked: true })}
+                              />
                             </td>
                             <td className="px-1 py-1">
                               <NumInput className="input text-[11px] px-1 py-0.5 w-16 text-right" min="0" emitZeroOnEmpty disabled={fullyOrdered} value={s.quantity ?? pending ?? 0} onChange={v => togglePoItem(it.indent_item_id, { quantity: v })} />
@@ -7928,14 +8015,14 @@ export default function Procurement() {
                     </tbody>
                     <tfoot className="bg-gray-50">
                       {+form.freight_amount > 0 && (
-                        <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
+                        <tr><td colSpan="6" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
                           <td className="px-2 py-1 text-right text-gray-700">Rs {(+form.freight_amount).toLocaleString()}</td></tr>
                       )}
-                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total (taxable):</td>
+                      <tr><td colSpan="6" className="px-2 py-2 text-right font-bold">PO Total (taxable):</td>
                         <td className="px-2 py-2 text-right font-bold text-red-700">Rs {(poTotal + (+form.freight_amount || 0)).toLocaleString()}</td></tr>
-                      <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">GST @ {poGstPct}%:</td>
+                      <tr><td colSpan="6" className="px-2 py-1 text-right text-gray-600">GST @ {poGstPct}%:</td>
                         <td className="px-2 py-1 text-right text-gray-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (poGstPct / 100)).toLocaleString()}</td></tr>
-                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
+                      <tr><td colSpan="6" className="px-2 py-2 text-right font-bold">Grand Total (incl GST):</td>
                         <td className="px-2 py-2 text-right font-bold text-red-700">Rs {Math.round((poTotal + (+form.freight_amount || 0)) * (1 + poGstPct / 100)).toLocaleString()}</td></tr>
                     </tfoot>
                   </table>
@@ -8986,6 +9073,9 @@ export default function Procurement() {
                 }}
               >
                 <option value="">— Pick vendor —</option>
+                {isAdmin() && vendorOptions.filter(v => ![1, 2, 3].some(n => finalModal?.[`vendor${n}_name`] === v.name && +finalModal?.[`vendor${n}_rate`] > 0)).map(v => (
+                  <option key={`vendor-${v.id}`} value={v.name}>{v.label}</option>
+                ))}
                 {finalModal && [1, 2, 3].map(n => {
                   const name = finalModal[`vendor${n}_name`];
                   const rate = +finalModal[`vendor${n}_rate`] || 0;
@@ -8997,7 +9087,7 @@ export default function Procurement() {
                 })}
               </select>
             </div>
-            <div><label className="label">Final Rate (Rs) *</label><input className="input" type="number" required value={finalForm.final_rate || ''} onChange={e => setFinalForm(f => ({ ...f, final_rate: +e.target.value }))} /></div>
+            <div><label className="label">Final Rate (Rs) *</label><input className="input" type="number" min="0.01" step="any" required value={finalForm.final_rate || ''} onChange={e => setFinalForm(f => ({ ...f, final_rate: +e.target.value }))} /></div>
             <div>
               <label className="label">Payment Terms</label>
               <select className="select" value={finalForm.final_terms || ''} onChange={e => setFinalForm(f => ({ ...f, final_terms: e.target.value }))}>
@@ -9022,7 +9112,7 @@ export default function Procurement() {
           any Purchase Bill references the PO.  Modal shows that
           context inline so user knows why a field might fail. */}
       {editPo && (
-        <Modal isOpen={true} onClose={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); }} title={`Edit Vendor PO — ${editPo.po_number}`} wide>
+        <Modal isOpen={true} onClose={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); setEditPoCostEval(null); }} title={`Edit Vendor PO — ${editPo.po_number}`} wide>
           <form onSubmit={saveEditVendorPo} className="space-y-3 text-sm">
             <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-gray-700">
               <strong>{editPo.po_number}</strong> · {editPo.vendor_name}
@@ -9262,16 +9352,46 @@ export default function Procurement() {
                     </span>
                   )}
                 </div>
+                {editPoCostEval && (
+                  <div className={`p-2.5 rounded mb-2.5 text-xs flex items-center justify-between border ${
+                    editPoCostEval.cost_status === 'within_estimate'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : editPoCostEval.cost_status === 'cost_overrun'
+                        ? 'bg-rose-50 text-rose-800 border-rose-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">
+                        {editPoCostEval.cost_status === 'within_estimate' ? '⚡' : editPoCostEval.cost_status === 'cost_overrun' ? '⚠️' : 'ℹ️'}
+                      </span>
+                      <div>
+                        <div className="font-semibold">
+                          {editPoCostEval.cost_status === 'within_estimate'
+                            ? 'TSK-0824: Within Estimated Budget (Auto-Approve Eligible)'
+                            : editPoCostEval.cost_status === 'cost_overrun'
+                              ? `TSK-0824: Cost Overrun (${editPoCostEval.overrun_count} item(s) exceed estimate by up to +${editPoCostEval.max_overrun_pct}%)`
+                              : 'TSK-0824: Missing Estimated Baselines'}
+                        </div>
+                        <div className="text-[11px] opacity-90">{editPoCostEval.reason}</div>
+                      </div>
+                    </div>
+                    <div className="text-right text-[11px] whitespace-nowrap">
+                      <div>Est. Total: <span className="font-medium">₹{Math.round(editPoCostEval.total_estimated_amount || 0).toLocaleString('en-IN')}</span></div>
+                      <div>Actual Total: <span className="font-medium">₹{Math.round(editPoCostEval.total_actual_amount || 0).toLocaleString('en-IN')}</span></div>
+                    </div>
+                  </div>
+                )}
                 <div className="overflow-x-auto">
                   <table className="text-xs w-full">
                     <thead className="bg-gray-50 text-gray-600">
                       <tr>
                         <th className="text-left px-2 py-1 w-8">#</th>
                         <th className="text-left px-2 py-1">Description</th>
+                        <th className="text-left px-2 py-1 min-w-[140px]">Specification</th>
                         <th className="text-left px-2 py-1 w-20">HSN</th>
                         <th className="text-right px-2 py-1 w-20">Qty</th>
                         <th className="text-left px-2 py-1 w-16">Unit</th>
-                        <th className="text-right px-2 py-1 w-24">Rate (₹)</th>
+                        <th className="text-right px-2 py-1 w-28">Rate (₹)</th>
                         <th className="text-right px-2 py-1 w-28">Amount (₹)</th>
                       </tr>
                     </thead>
@@ -9289,6 +9409,12 @@ export default function Procurement() {
                             </td>
                             <td className="px-2 py-1">
                               <input className="input text-xs w-full" disabled={editPoLocked}
+                                placeholder="Specification…"
+                                value={it.specification || ''}
+                                onChange={e => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, specification: e.target.value } : r))} />
+                            </td>
+                            <td className="px-2 py-1">
+                              <input className="input text-xs w-full" disabled={editPoLocked}
                                 value={it.hsn_code || ''}
                                 onChange={e => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, hsn_code: e.target.value } : r))} />
                             </td>
@@ -9302,6 +9428,16 @@ export default function Procurement() {
                               <NumInput className="input text-xs w-full text-right" disabled={editPoLocked} emitZeroOnEmpty min="0"
                                 value={it.rate}
                                 onChange={v => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, rate: v } : r))} />
+                              {it.estimated_rate > 0 && (
+                                <div className={`text-[10px] font-medium mt-0.5 whitespace-nowrap ${it.is_overrun ? 'text-rose-600 font-semibold' : 'text-emerald-700'}`}>
+                                  {it.is_overrun ? `⚠️ Overrun +${it.variance_pct}%` : '✓ ≤ Est'} (₹{it.estimated_rate})
+                                </div>
+                              )}
+                              {it.is_missing && (
+                                <div className="text-[10px] text-gray-400 mt-0.5 whitespace-nowrap">
+                                  No est. baseline
+                                </div>
+                              )}
                             </td>
                             <td className="px-2 py-1 text-right font-semibold whitespace-nowrap">
                               ₹{amt.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
@@ -9312,13 +9448,13 @@ export default function Procurement() {
                     </tbody>
                     <tfoot>
                       <tr className="bg-blue-50 font-semibold">
-                        <td colSpan="6" className="px-2 py-2 text-right">Sub-total (taxable)</td>
+                        <td colSpan="7" className="px-2 py-2 text-right">Sub-total (taxable)</td>
                         <td className="px-2 py-2 text-right text-blue-700">
                           ₹{editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
                       </tr>
                       <tr className="bg-blue-50 font-semibold text-blue-800">
-                        <td colSpan="6" className="px-2 py-2 text-right">+ {(editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18}% GST · Grand Total</td>
+                        <td colSpan="7" className="px-2 py-2 text-right">+ {(editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18}% GST · Grand Total</td>
                         <td className="px-2 py-2 text-right">
                           ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * (1 + ((editPoForm.gst_pct !== '' && editPoForm.gst_pct != null && +editPoForm.gst_pct >= 0) ? +editPoForm.gst_pct : 18) / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
@@ -9335,7 +9471,7 @@ export default function Procurement() {
             )}
 
             <div className="flex justify-end gap-3 pt-2 border-t">
-              <button type="button" onClick={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); setEditPoCostEval(null); }} className="btn btn-secondary">Cancel</button>
               <button type="submit" disabled={editPoSaving} className="btn btn-primary">
                 {editPoSaving ? 'Saving…' : 'Update PO'}
               </button>

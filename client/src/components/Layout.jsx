@@ -65,6 +65,8 @@ import {
   FiCamera,
   // Sotyn Leads · sotyn.ai website enquiry inbox (mam 2026-09-07).
   FiRss,
+  // Project Dashboard & PO Analytics (TSK-0819)
+  FiPieChart,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 import { FaTrophy } from 'react-icons/fa';
@@ -150,6 +152,7 @@ const SIDEBAR_GROUPS = [
     { path: '/procurement-schedule', label: 'Schedule (Gantt)',   icon: FiGitBranch,    module: 'procurement_schedule' },
   ]},
   { id: 'projects', label: 'Projects', icon: FiBriefcase, items: [
+    { path: '/project-dashboard', label: 'Project Dashboard', icon: FiPieChart, module: 'project_dashboard' },
     // Mam (2026-06-01): the execution + billing pipeline used to sit here.
     // Mam (2026-08): MOVED into the Labour Management System group as
     // "Projects & Work Orders" — same route and permission key, listed once so
@@ -227,6 +230,7 @@ const SIDEBAR_GROUPS = [
     // ranks everyone on their own role targets, picks employee/team of the
     // week / month / quarter / year. See GAMIFICATION.md.
     { path: '/champions',       label: 'Champions League',          icon: FaTrophy,     module: 'gamification' },
+    { path: '/compliance',      label: 'Compliance Monitoring',     icon: FiShield,     module: 'compliance' },
     { path: '/module-owners',   label: 'Module Owners',             icon: FiAward,      module: 'scoring' },
     { path: '/sub-contractors', label: 'Sub-contractor Master Detail', icon: FiHexagon, module: 'sub_contractors' },
   ]},
@@ -529,8 +533,15 @@ export default function Layout() {
             address: '',
           }).catch(() => {});
         },
-        () => {},                              // permission denied / timeout — silent
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+        (err) => {
+          if (cancelled) return;
+          const reasonMap = { 1: 'permission-denied', 2: 'position-unavailable', 3: 'timeout' };
+          api.post('/attendance/track-location', {
+            gps_off: true,
+            reason: reasonMap[err?.code] || 'gps-disabled',
+          }).catch(() => {});
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 5000 }
       );
     };
 
@@ -550,7 +561,7 @@ export default function Layout() {
     document.addEventListener('visibilitychange', onVisible);
 
     trackLocation();
-    const interval = setInterval(trackLocation, 30 * 1000);
+    const interval = setInterval(trackLocation, 10 * 1000);
 
     return () => {
       cancelled = true;
@@ -643,6 +654,14 @@ export default function Layout() {
   // An item with no `open` flag and no/unknown module is hidden for
   // non-admins — so forgetting to wire a permission key no longer leaks it.
   const itemVisible = (item) => {
+    if (item.path === '/compliance') {
+      const isNancy = !!(user?.email?.toLowerCase().includes('nancy') || user?.name?.toLowerCase().includes('nancy'));
+      const isAdm = (typeof isAdmin === 'function' ? isAdmin() : !!isAdmin) || user?.role === 'admin' || user?.role === 'backup_admin' || user?.role_name?.toLowerCase().includes('admin');
+      return isNancy || isAdm || canView('compliance');
+    }
+    if (item.path === '/project-dashboard') {
+      return canView('project_dashboard') || canView('business_book') || canView('procurement') || canView('orders') || canView('dpr');
+    }
     if (item.flag && !moduleAccess(item.flag).ok) return false;
     return item.open === true || canView(item.module);
   };

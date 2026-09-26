@@ -218,6 +218,7 @@ function DrawingsTab() {
       <div className="card p-0 overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead><tr className="bg-gray-50 text-xs text-gray-600">
+            <th className="px-3 py-2 text-center w-12">#</th>
             <th className="px-3 py-2 text-left">Project</th>
             <th className="px-3 py-2 text-left">Site</th>
             <th className="px-3 py-2 text-left">Drawing No</th>
@@ -230,11 +231,19 @@ function DrawingsTab() {
             <th className="px-3 py-2 text-center">Action</th>
           </tr></thead>
           <tbody className="divide-y divide-gray-100">
-            {data.rows.map(r => (
+            {data.rows.map((r, idx) => (
               <tr key={r.id} className="hover:bg-red-50/30">
+                <td className="px-3 py-2 text-center text-gray-400 font-medium text-xs">{offset + idx + 1}</td>
                 <td className="px-3 py-2 text-xs">{r.project_name || '—'}</td>
                 <td className="px-3 py-2 text-xs">{r.site_name || '—'}</td>
-                <td className="px-3 py-2 font-mono text-xs font-bold text-red-600">{r.drawing_number}</td>
+                <td className="px-3 py-2 font-mono text-xs font-bold text-red-600">
+                  {r.drawing_number}
+                  {!!r.boq_required && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800" title={r.boq_file_url ? "BOQ attached" : "BOQ required"}>
+                      BOQ
+                    </span>
+                  )}
+                </td>
                 <td className="px-3 py-2">{r.title || '—'}</td>
                 <td className="px-3 py-2 text-xs">{r.discipline || '—'}</td>
                 <td className="px-3 py-2 text-center">
@@ -258,7 +267,7 @@ function DrawingsTab() {
                 </td>
               </tr>
             ))}
-            {data.rows.length === 0 && <tr><td colSpan={10} className="text-center py-8 text-gray-400">No drawings found</td></tr>}
+            {data.rows.length === 0 && <tr><td colSpan={11} className="text-center py-8 text-gray-400">No drawings found</td></tr>}
           </tbody>
         </table>
         {data.total > LIMIT && (
@@ -287,8 +296,10 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
     site_id: '', site_name: '',
     drawing_number: '', title: '', discipline: '', drawing_type: '',
     revision_description: '', revision_date: new Date().toLocaleDateString('en-CA'),
+    boq_required: false,
   });
   const [file, setFile] = useState(null);
+  const [boqFile, setBoqFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -328,10 +339,12 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
     if (!form.drawing_number.trim()) return toast.error('Drawing number is required');
     if (!form.revision_description.trim()) return toast.error('Revision description is required');
     if (!file) return toast.error('Please choose the drawing file');
+    if (form.boq_required && !boqFile) return toast.error('Please upload the BOQ file');
     setBusy(true);
     try {
       const fd = new FormData();
       fd.append('file', file);
+      if (form.boq_required && boqFile) fd.append('boq_file', boqFile);
       Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
       const proj = projects.find(p => String(p.id) === String(form.project_id));
       if (proj && !form.project_name) fd.set('project_name', proj.name);
@@ -417,6 +430,34 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
           <input type="file" className="input" onChange={e => setFile(e.target.files?.[0] || null)} required />
         </div>
 
+        {/* BOQ Required Section */}
+        <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer font-medium text-sm text-gray-800">
+            <input
+              type="checkbox"
+              checked={!!form.boq_required}
+              onChange={e => {
+                F('boq_required', e.target.checked);
+                if (!e.target.checked) setBoqFile(null);
+              }}
+              className="w-4 h-4 text-red-600 rounded"
+            />
+            <span>BOQ Required</span>
+          </label>
+          {form.boq_required && (
+            <div className="pt-1">
+              <label className="label text-xs">Upload BOQ File * <span className="text-gray-400 font-normal">(Excel, PDF, CSV)</span></label>
+              <input
+                type="file"
+                className="input text-xs bg-white"
+                accept=".xlsx,.xls,.csv,.pdf"
+                required
+                onChange={e => setBoqFile(e.target.files?.[0] || null)}
+              />
+            </div>
+          )}
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div><label className="label">Revision Date</label>
             <input type="date" className="input" value={form.revision_date} onChange={e => F('revision_date', e.target.value)} />
@@ -449,7 +490,9 @@ export function EditDrawingModal({ drawing, opts, onClose, onSaved }) {
     site_id: drawing.site_id ?? '',
     site_name: drawing.site_name || '',
     remarks: drawing.remarks || '',
+    boq_required: !!drawing.boq_required,
   });
+  const [boqFile, setBoqFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -483,17 +526,35 @@ export function EditDrawingModal({ drawing, opts, onClose, onSaved }) {
     }
   };
 
+  const downloadExistingBoq = async () => {
+    try {
+      const r = await api.get(`/drawing-tracker/drawings/${drawing.id}/boq`, { responseType: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(r.data);
+      a.download = drawing.boq_file_name || `${drawing.drawing_number}_BOQ.xlsx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch {
+      toast.error('BOQ download failed');
+    }
+  };
+
   const save = async (e) => {
     e.preventDefault();
     if (!form.drawing_number.trim()) return toast.error('Drawing number is required');
+    if (form.boq_required && !drawing.boq_file_url && !boqFile) {
+      return toast.error('Please upload the BOQ file');
+    }
     setBusy(true);
     try {
-      const payload = { ...form };
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ''));
+      if (form.boq_required && boqFile) fd.append('boq_file', boqFile);
       if (form.site_id) {
         const s = (opts?.sites || []).find(st => String(st.id) === String(form.site_id));
-        if (s) payload.site_name = s.name;
+        if (s) fd.set('site_name', s.name);
       }
-      await api.put(`/drawing-tracker/drawings/${drawing.id}`, payload);
+      await api.put(`/drawing-tracker/drawings/${drawing.id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Drawing details updated');
       onSaved();
     } catch (err) {
@@ -574,6 +635,52 @@ export function EditDrawingModal({ drawing, opts, onClose, onSaved }) {
               {(opts?.drawing_types || []).map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
+        </div>
+
+        {/* BOQ Required Section */}
+        <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer font-medium text-sm text-gray-800">
+            <input
+              type="checkbox"
+              checked={!!form.boq_required}
+              onChange={e => {
+                F('boq_required', e.target.checked);
+                if (!e.target.checked) setBoqFile(null);
+              }}
+              className="w-4 h-4 text-red-600 rounded"
+            />
+            <span>BOQ Required</span>
+          </label>
+          {form.boq_required && (
+            <div className="pt-1 space-y-2">
+              {drawing.boq_file_name && (
+                <div className="text-xs text-gray-600 flex items-center justify-between bg-white p-2 rounded border border-gray-200">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className="text-gray-400">Current:</span>
+                    <span className="font-medium text-gray-800 truncate">{drawing.boq_file_name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={downloadExistingBoq}
+                    className="text-blue-600 hover:underline text-xs flex items-center gap-0.5 whitespace-nowrap ml-2">
+                    <FiDownload size={11} /> View/Download
+                  </button>
+                </div>
+              )}
+              <div>
+                <label className="label text-xs">
+                  {drawing.boq_file_name ? 'Replace BOQ File (optional)' : 'Upload BOQ File *'} <span className="text-gray-400 font-normal">(Excel, PDF, CSV)</span>
+                </label>
+                <input
+                  type="file"
+                  className="input text-xs bg-white"
+                  accept=".xlsx,.xls,.csv,.pdf"
+                  required={!drawing.boq_file_url}
+                  onChange={e => setBoqFile(e.target.files?.[0] || null)}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div>

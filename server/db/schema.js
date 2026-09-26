@@ -2102,6 +2102,9 @@ function initializeDatabase() {
     -- etc. — and tracked individually with serial / current location.
     CREATE TABLE IF NOT EXISTS tools (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_master_id INTEGER REFERENCES item_master(id),
+      quantity REAL NOT NULL DEFAULT 1 CHECK(quantity > 0),
+      unit TEXT,
       tool_code TEXT UNIQUE,                  -- e.g. T-2026-0001 auto-generated
       name TEXT NOT NULL,
       category TEXT,                          -- 'Drilling','Cutting','Measurement','Safety','Power','Hand','Other'
@@ -2215,6 +2218,10 @@ function initializeDatabase() {
       amount REAL DEFAULT 0,
       terms TEXT,                 -- 'Advance' or 'Credit'
       credit_days INTEGER DEFAULT 0,
+      description TEXT,
+      hsn_code TEXT,
+      specification TEXT,
+      rate_updated_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -3139,6 +3146,8 @@ function initializeDatabase() {
     ['vendor_pos', 'po_reject_by INTEGER'],
     ['vendor_pos', 'po_reject_at DATETIME'],
     ['vendor_pos', 'po_reject_reason TEXT'],
+    ['vendor_pos', 'po_auto_approved INTEGER DEFAULT 0'],
+    ['vendor_pos', 'po_approval_note TEXT'],
     // Per-rule dynamic From address for email triggers (mam 2026-06-03:
     // "from mail which id also dynamic"). Optional; supports {{vars}}.
     ['email_rules', 'from_addr TEXT'],
@@ -4083,6 +4092,7 @@ function initializeDatabase() {
     // "no such column" → 500 → the Edit modal showed zero line items.
     ['vendor_po_items', 'description TEXT'],
     ['vendor_po_items', 'hsn_code TEXT'],
+    ['vendor_po_items', 'specification TEXT'],
     // Stamped when a PO line's RATE is edited via Edit PO. The print page has
     // to choose between two rate sources — this line and the finalised
     // 3-vendor rate (indent_item_rates.final_rate) — and used to always prefer
@@ -6719,7 +6729,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): AR/AP Tracker — rolling weekly cash-flow forecast
     // (receivables vs payables by party × week) with a mandatory-remark
     // change log. Under the Finance sidebar group.
-    'ar_ap_tracker', 'project_profit',
+    'ar_ap_tracker', 'project_profit', 'project_dashboard',
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
@@ -7035,6 +7045,26 @@ in your first week. If a process feels broken, raise a Help Ticket
       db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(br.lastInsertRowid, adminRole.id);
     }
     console.log(`[seed] Created backup admin — username: backup-admin, password: ${backupPwd}`);
+  }
+
+  // Seed / ensure Nancy Compliance Monitor user
+  const nancyPwdHash = bcrypt.hashSync('Nancy@123456', 10);
+  const nancyUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get('nancy@securedengineers.com', 'nancy');
+  if (!nancyUser) {
+    db.prepare('INSERT INTO users (name, email, username, password, role, department, active) VALUES (?, ?, ?, ?, ?, ?, 1)')
+      .run('Nancy', 'nancy@securedengineers.com', 'nancy', nancyPwdHash, 'user', 'HR / Compliance');
+  } else {
+    db.prepare("UPDATE users SET password = ?, active = 1, username = 'nancy' WHERE id = ?").run(nancyPwdHash, nancyUser.id);
+  }
+
+  // Seed / ensure Rahul Sharma Normal Test Employee
+  const rahulPwdHash = bcrypt.hashSync('User@123456', 10);
+  const rahulUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?').get('rahul@securedengineers.com', 'rahul');
+  if (!rahulUser) {
+    db.prepare('INSERT INTO users (name, email, username, password, role, department, active) VALUES (?, ?, ?, ?, ?, ?, 1)')
+      .run('Rahul Sharma', 'rahul@securedengineers.com', 'rahul', rahulPwdHash, 'user', 'Site Operations');
+  } else {
+    db.prepare("UPDATE users SET password = ?, active = 1, username = 'rahul' WHERE id = ?").run(rahulPwdHash, rahulUser.id);
   }
 
   // ============================================
@@ -7514,7 +7544,9 @@ in your first week. If a process feels broken, raise a Help Ticket
 
   require('../lib/employeeProfessionalTax').initialize(db);
   require('./userTotp').initialize(db);
+  require('./dailyWork').initialize(db);
   require('../lib/dispatchReceiving').initialize(db);
+  require('./complianceSchema').initializeComplianceSchema(db);
 
   console.log('Database initialized successfully');
   require('../lib/makeApproval').initialize(db);

@@ -80,6 +80,7 @@ function listSetting(key, fallback) {
 
 const DWG_COLS = `d.id, d.project_source, d.project_id, d.project_name, d.site_id, d.site_name,
   d.drawing_number, d.title, d.discipline, d.drawing_type, d.current_revision_id, d.remarks,
+  d.boq_required, d.boq_file_url, d.boq_file_name,
   d.created_by, d.created_by_name, d.created_at, d.updated_at,
   r.revision_no AS current_revision_no, r.status AS current_status,
   r.uploaded_at AS last_revised_at, r.uploaded_by_name AS last_revised_by,
@@ -181,26 +182,47 @@ router.get('/drawings/:id', canView, (req, res) => {
 });
 
 // ─── Create a drawing + its Rev 0, in one transaction ──────────────────
-router.post('/drawings', canCreate, upload.single('file'), async (req, res) => {
+router.post('/drawings', canCreate, upload.fields([{ name: 'file', maxCount: 1 }, { name: 'boq_file', maxCount: 1 }]), async (req, res) => {
   const db = getDb();
   const b = req.body || {};
-  const fail = (code, error) => { discardFile(req.file); return res.status(code).json({ error }); };
+  const drawingFile = req.files?.file?.[0] || req.file;
+  const boqFile = req.files?.boq_file?.[0];
+  const fail = (code, error) => {
+    discardFile(drawingFile);
+    discardFile(boqFile);
+    return res.status(code).json({ error });
+  };
 
   if (!str(b.drawing_number)) return fail(400, 'Drawing number is required');
   if (!str(b.revision_description)) return fail(400, 'Revision description is required');
-  if (!req.file) return fail(400, 'A drawing file is required');
+  if (!drawingFile) return fail(400, 'A drawing file is required');
   const validSources = ['business_book', 'proj_project', 'sales_funnel', 'solar_deal'];
   const projectSource = validSources.includes(b.project_source) ? b.project_source : 'business_book';
 
-  // Land the file in storage first (no-op locally, uploads to S3 when remote),
+  // Land the drawing file in storage first (no-op locally, uploads to S3 when remote),
   // then do the DB work synchronously. better-sqlite3 transactions are sync, so
   // an await must never sit inside one.
   let url;
   try {
-    url = await storage.adoptLocalFile(req.file.path, `${DRAWINGS_FOLDER}/${req.file.filename}`, req.file.mimetype);
+    url = await storage.adoptLocalFile(drawingFile.path, `${DRAWINGS_FOLDER}/${drawingFile.filename}`, drawingFile.mimetype);
   } catch (e) {
     console.error('[drawing-tracker] file adopt failed:', e.message);
     return fail(500, 'Could not store the uploaded file.');
+  }
+
+  let boqUrl = null;
+  let boqName = null;
+  if (boqFile) {
+    try {
+      boqUrl = await storage.adoptLocalFile(boqFile.path, `${DRAWINGS_FOLDER}/${boqFile.filename}`, boqFile.mimetype);
+      boqName = boqFile.originalname;
+    } catch (e) {
+      console.error('[drawing-tracker] boq file adopt failed:', e.message);
+    }
+  }
+  const boqRequired = (b.boq_required === '1' || b.boq_required === 'true' || b.boq_required === true) ? 1 : 0;
+  if (boqRequired && !boqFile) {
+    return fail(400, 'BOQ file is required when BOQ Required is checked');
   }
 
   try {
@@ -208,11 +230,12 @@ router.post('/drawings', canCreate, upload.single('file'), async (req, res) => {
       const info = db.prepare(`
         INSERT INTO drawings
           (project_source, project_id, project_name, site_id, site_name, drawing_number,
-           title, discipline, drawing_type, remarks, created_by, created_by_name)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+           title, discipline, drawing_type, remarks, boq_required, boq_file_url, boq_file_name,
+           created_by, created_by_name)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         projectSource, int(b.project_id), str(b.project_name), int(b.site_id), str(b.site_name),
         str(b.drawing_number), str(b.title), str(b.discipline), str(b.drawing_type),
-        str(b.remarks), req.user.id, req.user.name || null);
+        str(b.remarks), boqRequired, boqUrl, boqName, req.user.id, req.user.name || null);
       const drawingId = info.lastInsertRowid;
 
       // Rev 0 is the starting drawing. It is current until something supersedes it.
@@ -223,7 +246,7 @@ router.post('/drawings', canCreate, upload.single('file'), async (req, res) => {
         VALUES (?,0,?,?,?,'current',?,?,?,?,?,?)`).run(
         drawingId, str(b.revision_date) || new Date().toISOString().slice(0, 10),
         str(b.revision_description), str(b.revision_reason),
-        url, req.file.originalname, req.file.mimetype, req.file.size,
+        url, drawingFile.originalname, drawingFile.mimetype, drawingFile.size,
         req.user.id, req.user.name || null);
 
       db.prepare('UPDATE drawings SET current_revision_id=? WHERE id=?').run(rev.lastInsertRowid, drawingId);
@@ -234,7 +257,8 @@ router.post('/drawings', canCreate, upload.single('file'), async (req, res) => {
     const out = db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(result.drawingId);
     res.status(201).json(out);
   } catch (e) {
-    discardFile(req.file);
+    discardFile(drawingFile);
+    discardFile(boqFile);
     // SQLite reports a unique-index violation by naming the COLUMNS, not the
     // index ("UNIQUE constraint failed: drawings.project_source, …"), so match
     // on that rather than on uq_dwg_identity.
@@ -438,11 +462,14 @@ router.post('/revisions/:id/cancel', canDelete, (req, res) => {
   res.json({ ok: true });
 });
 
-// ─── Edit drawing metadata (never touches revisions) ───────────────────
-router.put('/drawings/:id', canEdit, (req, res) => {
+// ─── Edit drawing metadata + optional BOQ file ─────────────────────────
+router.put('/drawings/:id', canEdit, upload.single('boq_file'), async (req, res) => {
   const db = getDb();
   const before = db.prepare('SELECT * FROM drawings WHERE id=?').get(req.params.id);
-  if (!before) return res.status(404).json({ error: 'Drawing not found' });
+  if (!before) {
+    discardFile(req.file);
+    return res.status(404).json({ error: 'Drawing not found' });
+  }
   const b = req.body || {};
   try {
     const validSources = ['business_book', 'proj_project', 'sales_funnel', 'solar_deal'];
@@ -458,8 +485,32 @@ router.put('/drawings/:id', canEdit, (req, res) => {
          WHERE project_source = ? AND project_id IS ? AND drawing_number = ? AND id != ?
       `).get(projectSource, projectId, drawingNumber, before.id);
       if (conflict) {
+        discardFile(req.file);
         return res.status(409).json({ error: `Drawing number "${drawingNumber}" already exists for this project.` });
       }
+    }
+
+    let boqUrl = before.boq_file_url;
+    let boqName = before.boq_file_name;
+    if (req.file) {
+      try {
+        boqUrl = await storage.adoptLocalFile(req.file.path, `${DRAWINGS_FOLDER}/${req.file.filename}`, req.file.mimetype);
+        boqName = req.file.originalname;
+      } catch (e) {
+        console.error('[drawing-tracker] boq update adopt failed:', e.message);
+      }
+    } else if (b.remove_boq === 'true' || b.remove_boq === '1') {
+      boqUrl = null;
+      boqName = null;
+    }
+
+    const boqRequired = b.boq_required !== undefined
+      ? ((b.boq_required === '1' || b.boq_required === 'true' || b.boq_required === true) ? 1 : 0)
+      : before.boq_required;
+
+    if (boqRequired && !boqUrl) {
+      discardFile(req.file);
+      return res.status(400).json({ error: 'BOQ file is required when BOQ Required is checked' });
     }
 
     db.prepare(`UPDATE drawings SET
@@ -473,6 +524,9 @@ router.put('/drawings/:id', canEdit, (req, res) => {
         site_id = ?,
         site_name = ?,
         remarks = ?,
+        boq_required = ?,
+        boq_file_url = ?,
+        boq_file_name = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?`).run(
       drawingNumber,
@@ -481,6 +535,7 @@ router.put('/drawings/:id', canEdit, (req, res) => {
       b.site_id !== undefined ? int(b.site_id) : before.site_id,
       b.site_name !== undefined ? str(b.site_name) : before.site_name,
       b.remarks !== undefined ? str(b.remarks) : before.remarks,
+      boqRequired, boqUrl, boqName,
       req.params.id);
 
     logAuditEvent({
@@ -490,28 +545,88 @@ router.put('/drawings/:id', canEdit, (req, res) => {
       after: { drawing_number: drawingNumber, title: str(b.title), site_name: str(b.site_name) },
     });
   } catch (e) {
+    discardFile(req.file);
     console.error('[drawing-tracker] update failed:', e.message);
     return res.status(500).json({ error: 'Could not update the drawing.' });
   }
   res.json(db.prepare(`SELECT ${DWG_COLS} ${DWG_FROM} WHERE d.id = ?`).get(req.params.id));
 });
 
-// ─── Edit revision remarks/date (never touches file or revision_no) ────
-router.put('/revisions/:id', canEdit, (req, res) => {
+// ─── Download BOQ file ────────────────────────────────────────────────
+router.get('/drawings/:id/boq', canView, async (req, res) => {
+  const db = getDb();
+  const d = db.prepare('SELECT id, drawing_number, boq_file_url, boq_file_name FROM drawings WHERE id = ?').get(req.params.id);
+  if (!d || !d.boq_file_url) return res.status(404).json({ error: 'No BOQ file attached for this drawing.' });
+
+  const key = String(d.boq_file_url || '').replace(/^\/uploads\//, '');
+  let opened = null;
+  try { opened = await storage.openStream(key); } catch (_) { opened = null; }
+  if (!opened) return res.status(404).json({ error: 'The BOQ file could not be found.' });
+
+  const ext = path.extname(d.boq_file_name || '') || path.extname(key) || '.xlsx';
+  const nice = `${d.drawing_number}_BOQ${ext}`.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  res.setHeader('Content-Disposition', `attachment; filename="${nice}"`);
+  if (opened.size) res.setHeader('Content-Length', opened.size);
+  opened.stream.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+  opened.stream.pipe(res);
+});
+
+// ─── Edit revision remarks/date + optional file replacement ───────────
+router.put('/revisions/:id', canEdit, upload.single('file'), async (req, res) => {
   const db = getDb();
   const rev = db.prepare('SELECT * FROM drawing_revisions WHERE id=?').get(req.params.id);
-  if (!rev) return res.status(404).json({ error: 'Revision not found' });
+  if (!rev) {
+    discardFile(req.file);
+    return res.status(404).json({ error: 'Revision not found' });
+  }
   const b = req.body || {};
+  let fileUpdated = false;
+  let fileUrl = rev.file_url;
+  let fileName = rev.file_name;
+  let fileType = rev.file_type;
+  let fileSize = rev.file_size;
+
+  if (req.file) {
+    try {
+      fileUrl = await storage.adoptLocalFile(req.file.path, `${DRAWINGS_FOLDER}/${req.file.filename}`, req.file.mimetype);
+      fileName = req.file.originalname;
+      fileType = req.file.mimetype;
+      fileSize = req.file.size;
+      fileUpdated = true;
+    } catch (e) {
+      discardFile(req.file);
+      console.error('[drawing-tracker] revision file replace failed:', e.message);
+      return res.status(500).json({ error: 'Could not store the replacement file.' });
+    }
+  }
+
   try {
     db.prepare(`UPDATE drawing_revisions SET
         revision_description = COALESCE(?, revision_description),
         revision_reason = COALESCE(?, revision_reason),
-        revision_date = COALESCE(?, revision_date)
-      WHERE id = ?`).run(str(b.revision_description), str(b.revision_reason), str(b.revision_date), rev.id);
+        revision_date = COALESCE(?, revision_date),
+        file_url = ?,
+        file_name = ?,
+        file_type = ?,
+        file_size = ?
+      WHERE id = ?`).run(
+      str(b.revision_description), str(b.revision_reason), str(b.revision_date),
+      fileUrl, fileName, fileType, fileSize, rev.id
+    );
+
     logAuditEvent({
-      user: req.user, action: 'REVISION_EDITED', entity_type: 'drawing_revisions',
-      entity_id: rev.id, entity_label: `Rev ${rev.revision_no}`,
-      after: { revision_description: b.revision_description, revision_reason: b.revision_reason },
+      user: req.user,
+      action: fileUpdated ? 'REVISION_FILE_REPLACED' : 'REVISION_EDITED',
+      entity_type: 'drawing_revisions',
+      entity_id: rev.id,
+      entity_label: `Rev ${rev.revision_no}`,
+      after: {
+        revision_description: b.revision_description,
+        revision_reason: b.revision_reason,
+        file_replaced: fileUpdated,
+        file_name: fileName,
+      },
     });
   } catch (e) {
     return res.status(500).json({ error: 'Could not update revision details.' });

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { flowStepLabel } from '../utils/moduleFlows';
 import api from '../api';
 import ResponsibilityTab from '../components/ResponsibilityTab';
@@ -7,7 +7,8 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiSearch } from 'react-icons/fi';
+import Pagination from '../components/Pagination';
 import { exportCsv } from '../utils/exportCsv';
 import { useAuth } from '../context/AuthContext';
 import { fmtDate } from '../utils/datetime';
@@ -112,24 +113,125 @@ function MarginChartEditor({ chart, reload }) {
 export default function Quotations() {
   const { canDelete, canEdit, isAdmin } = useAuth();
   const [tab, setTab] = useUrlTab(['boq', 'quotations', 'responsible'], 'boq');
+
+  // Tab 1 (BOQs) Server-side state
   const [boqs, setBoqs] = useState([]);
+  const [boqMeta, setBoqMeta] = useState({ total: 0, page: 1, perPage: 15, pages: 1, from: 0, to: 0 });
+  const [boqFilter, setBoqFilter] = useState('pending'); // 'pending' (default) | 'quoted' | 'all'
+  const [boqSearchInput, setBoqSearchInput] = useState('');
+  const [boqSearch, setBoqSearch] = useState('');
+  const [boqPage, setBoqPage] = useState(1);
+  const [boqPerPage, setBoqPerPage] = useState(15);
+  const [boqLoading, setBoqLoading] = useState(false);
+
+  // Tab 2 (Quotations) Server-side state
   const [quotations, setQuotations] = useState([]);
+  const [quoteMeta, setQuoteMeta] = useState({ total: 0, page: 1, perPage: 15, pages: 1, from: 0, to: 0 });
+  const [quoteStatus, setQuoteStatus] = useState('all');
+  const [quoteSearchInput, setQuoteSearchInput] = useState('');
+  const [quoteSearch, setQuoteSearch] = useState('');
+  const [quotePage, setQuotePage] = useState(1);
+  const [quotePerPage, setQuotePerPage] = useState(15);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+
   const [leads, setLeads] = useState([]);
   const [itemOptions, setItemOptions] = useState([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
   const [boqItems, setBoqItems] = useState([blankRow()]);
 
+  // 500ms debounce for BOQ Search
   useEffect(() => {
-    api.get('/quotations/boq').then(r => setBoqs(r.data));
-    api.get('/quotations').then(r => setQuotations(r.data));
+    const t = setTimeout(() => {
+      setBoqSearch(boqSearchInput.trim());
+      setBoqPage(1);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [boqSearchInput]);
+
+  // 500ms debounce for Quotations Search
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setQuoteSearch(quoteSearchInput.trim());
+      setQuotePage(1);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [quoteSearchInput]);
+
+  const fetchBoqs = useCallback(() => {
+    setBoqLoading(true);
+    const params = {
+      page: boqPage,
+      limit: boqPerPage,
+      filter: boqFilter,
+      search: boqSearch,
+    };
+    api.get('/quotations/boq', { params })
+      .then(r => {
+        if (r.data && Array.isArray(r.data.rows)) {
+          setBoqs(r.data.rows);
+          setBoqMeta({
+            total: r.data.total || 0,
+            page: r.data.page || 1,
+            perPage: r.data.perPage || 15,
+            pages: r.data.pages || 1,
+            from: r.data.from || 0,
+            to: r.data.to || 0,
+          });
+        } else if (Array.isArray(r.data)) {
+          setBoqs(r.data);
+          setBoqMeta({ total: r.data.length, page: 1, perPage: r.data.length, pages: 1, from: 0, to: r.data.length });
+        }
+      })
+      .catch(err => console.error('Error fetching BOQs', err))
+      .finally(() => setBoqLoading(false));
+  }, [boqPage, boqPerPage, boqFilter, boqSearch]);
+
+  const fetchQuotations = useCallback(() => {
+    setQuoteLoading(true);
+    const params = {
+      page: quotePage,
+      limit: quotePerPage,
+      status: quoteStatus,
+      search: quoteSearch,
+    };
+    api.get('/quotations', { params })
+      .then(r => {
+        if (r.data && Array.isArray(r.data.rows)) {
+          setQuotations(r.data.rows);
+          setQuoteMeta({
+            total: r.data.total || 0,
+            page: r.data.page || 1,
+            perPage: r.data.perPage || 15,
+            pages: r.data.pages || 1,
+            from: r.data.from || 0,
+            to: r.data.to || 0,
+          });
+        } else if (Array.isArray(r.data)) {
+          setQuotations(r.data);
+          setQuoteMeta({ total: r.data.length, page: 1, perPage: r.data.length, pages: 1, from: 0, to: r.data.length });
+        }
+      })
+      .catch(err => console.error('Error fetching quotations', err))
+      .finally(() => setQuoteLoading(false));
+  }, [quotePage, quotePerPage, quoteStatus, quoteSearch]);
+
+  useEffect(() => {
+    fetchBoqs();
+  }, [fetchBoqs]);
+
+  useEffect(() => {
+    fetchQuotations();
+  }, [fetchQuotations]);
+
+  useEffect(() => {
     api.get('/leads').then(r => setLeads(r.data));
     api.get('/item-master/dropdown').then(r => setItemOptions(r.data));
   }, []);
 
   const reload = () => {
-    api.get('/quotations/boq').then(r => setBoqs(r.data));
-    api.get('/quotations').then(r => setQuotations(r.data));
+    fetchBoqs();
+    fetchQuotations();
   };
 
   const addBoqItem = () => setBoqItems([...boqItems, blankRow()]);
@@ -219,22 +321,32 @@ export default function Quotations() {
 
   // Quote-with-margin on a funnel BOQ row (mam 2026-08-27, SOP-02 F5-F7):
   // base = BOQ cost, margin % on top, optional quotation file upload.
-  const [quoteFor, setQuoteFor] = useState(null);   // the funnel BOQ row being quoted
-  const [quoteForm, setQuoteForm] = useState({ base_amount: 0, margin_pct: 10, category: '', quotation_file_link: '', valid_until: '' });
+  const [quoteFor, setQuoteFor] = useState(null);   // the funnel BOQ row or quotation being (re-)quoted
+  const [quoteForm, setQuoteForm] = useState({ base_amount: 0, margin_pct: 10, category: '', quotation_file_link: '', valid_until: '', notes: '' });
   const [quoteBusy, setQuoteBusy] = useState(false);
   // SOP-02 S5/S6: the fixed Margin Chart + floor — "margin chart, not guesswork".
   const [marginChart, setMarginChart] = useState({ rows: [], floor: 10 });
   const [chartOpen, setChartOpen] = useState(false);
   const loadChart = () => api.get('/quotations/margin-chart').then(r => setMarginChart(r.data)).catch(() => {});
   useEffect(() => { loadChart(); }, []);
-  const openQuote = (b) => {
-    setQuoteFor(b);
-    setQuoteForm({ base_amount: +b.total_amount || 0, margin_pct: marginChart.floor ?? 10, category: '', quotation_file_link: '', valid_until: '' });
+
+  const openQuote = (b, isRequote = false) => {
+    setQuoteFor({ ...b, isRequote });
+    setQuoteForm({
+      base_amount: +(b.total_amount || 0),
+      margin_pct: b.margin_pct != null ? b.margin_pct : (marginChart.floor ?? 10),
+      category: b.category || '',
+      quotation_file_link: b.quotation_file_link || '',
+      valid_until: b.valid_until || '',
+      notes: b.notes || '',
+    });
   };
+
   const pickCategory = (cat) => {
     const row = marginChart.rows.find(r => r.category === cat);
     setQuoteForm(f => ({ ...f, category: cat, margin_pct: row ? row.margin_pct : f.margin_pct }));
   };
+
   const uploadQuoteFile = async (file) => {
     if (!file) return;
     setQuoteBusy(true);
@@ -247,21 +359,33 @@ export default function Quotations() {
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
     finally { setQuoteBusy(false); }
   };
+
   const saveQuote = async (e) => {
     e.preventDefault();
     setQuoteBusy(true);
     try {
-      // ONE of the two ids, never both (mam 2026-09-07): funnel_id means a
-      // sales_funnel lead and crm_id a CRM one, and the id spaces overlap.
-      const r = await api.post('/quotations/funnel-quote', {
-        ...(quoteFor.crm_id ? { crm_id: quoteFor.crm_id } : { funnel_id: quoteFor.funnel_id }),
-        ...quoteForm,
-      });
-      if (r.data.message) toast(r.data.message, { icon: '⏳', duration: 6000 });   // below-floor → Sales Head
-      else toast.success(`${r.data.quotation_number} created — Rs ${r.data.final_amount.toLocaleString()}`);
+      if (quoteFor.isRequote && typeof quoteFor.id === 'number') {
+        // Native quotation row being re-quoted
+        const r = await api.post(`/quotations/${quoteFor.id}/requote`, quoteForm);
+        if (r.data.message) toast(r.data.message, { icon: 'ℹ️', duration: 5000 });
+        else toast.success(`Quotation ${r.data.quotation_number} re-quoted — Rs ${r.data.final_amount?.toLocaleString()}`);
+      } else {
+        // Normal quote from BOQ, or re-quoting a synthetic funnel lead
+        const payload = { ...quoteForm };
+        if (quoteFor.source === 'boq' || (!quoteFor.funnel_id && !quoteFor.crm_id && !quoteFor.crm_funnel_id)) {
+          payload.boq_id = quoteFor.id;
+        } else if (quoteFor.crm_id || quoteFor.crm_funnel_id) {
+          payload.crm_id = quoteFor.crm_id || quoteFor.crm_funnel_id;
+        } else {
+          payload.funnel_id = quoteFor.funnel_id;
+        }
+        const r = await api.post('/quotations/funnel-quote', payload);
+        if (r.data.message) toast(r.data.message, { icon: '⏳', duration: 6000 });   // below-floor → Sales Head
+        else toast.success(`${r.data.quotation_number} ${quoteFor.isRequote ? 'revised' : 'created'} — Rs ${r.data.final_amount.toLocaleString()}`);
+      }
       setQuoteFor(null);
       reload();
-    } catch (err) { toast.error(err.response?.data?.error || 'Could not create the quotation'); }
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not save the quotation'); }
     finally { setQuoteBusy(false); }
   };
 
@@ -289,13 +413,60 @@ export default function Quotations() {
               <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-2"><FiPlus /> Create BOQ</button>
             </div>
           </div>
+
+          {/* Search with 500ms debounce & Filter tabs for Pending vs Quoted */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-2.5 rounded-lg border border-gray-200">
+            <div className="relative flex-1 max-w-md">
+              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+              <input
+                type="text"
+                className="input pl-8 py-1.5 text-xs sm:text-sm w-full"
+                placeholder="Search BOQs by title, client, file..."
+                value={boqSearchInput}
+                onChange={(e) => setBoqSearchInput(e.target.value)}
+              />
+              {boqSearchInput && (
+                <button
+                  type="button"
+                  onClick={() => { setBoqSearchInput(''); setBoqSearch(''); setBoqPage(1); }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md text-xs">
+              <button
+                type="button"
+                onClick={() => { setBoqFilter('pending'); setBoqPage(1); }}
+                className={`px-3 py-1 rounded font-medium transition ${boqFilter === 'pending' ? 'bg-white text-indigo-600 shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}>
+                Pending BOQs
+              </button>
+              <button
+                type="button"
+                onClick={() => { setBoqFilter('quoted'); setBoqPage(1); }}
+                className={`px-3 py-1 rounded font-medium transition ${boqFilter === 'quoted' ? 'bg-white text-indigo-600 shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}>
+                Quoted BOQs
+              </button>
+              <button
+                type="button"
+                onClick={() => { setBoqFilter('all'); setBoqPage(1); }}
+                className={`px-3 py-1 rounded font-medium transition ${boqFilter === 'all' ? 'bg-white text-indigo-600 shadow-xs' : 'text-gray-600 hover:text-gray-900'}`}>
+                All ({boqMeta.total})
+              </button>
+            </div>
+          </div>
+
           <div className="card p-0 table-responsive">
             <table className="freeze-head min-w-[750px]">
-              <thead><tr><th>Title</th><th>Client</th><th>Drawing</th><th>Total</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+              <thead><tr><th style={{ width: '45px' }} className="text-center">#</th><th>Title</th><th>Client</th><th>Drawing</th><th>Total</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
               <tbody>
-                {boqs.map(b => (
-                  <tr key={b.id}>
-                    <td className="font-medium">
+                {boqs.map((b, idx) => {
+                  const sNo = ((boqPage - 1) * (boqPerPage === 'all' ? 0 : boqPerPage)) + idx + 1;
+                  return (
+                    <tr key={b.id}>
+                      <td className="text-center text-gray-400 font-medium text-xs w-10">{sNo}</td>
+                      <td className="font-medium">
                       {b.title}
                       {/* Sales-funnel BOQs listed alongside (mam 2026-08-27) —
                           first BOQ on a lead = FUNNEL, later additions = EXTRA. */}
@@ -314,22 +485,28 @@ export default function Quotations() {
                     {/* A CRM lead carries no BOQ amount — "Rs 0" would read as
                         a priced BOQ worth nothing (mam 2026-09-07). */}
                     <td>{(b.source === 'crm' || b.source === 'crm_extra') ? <span className="text-gray-400">—</span> : <>Rs {b.total_amount?.toLocaleString()}</>}</td>
-                    <td><StatusBadge status={b.status} /></td>
+                    <td>
+                      {b.is_quoted ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">QUOTED</span>
+                      ) : (
+                        <StatusBadge status={b.status} />
+                      )}
+                    </td>
                     <td className="text-gray-500">{fmtDate(b.created_at)}</td>
                     <td>
                       <div className="flex items-center gap-1">
-                        {/* Quote this funnel BOQ with margin (SOP-02 F5-F7) —
-                            crm_id covers the CRM funnel rows (mam 2026-09-07). */}
-                        {/* Quoting a CRM BOQ writes to the CRM lead, so the server requires
-                            crm_funnel edit rights. Without the same gate here the
-                            button shows for everyone and 403s for all but admins —
-                            the "granted permission does nothing" shape. */}
-                        {(b.funnel_id || (b.crm_id && canEdit('crm_funnel'))) && (
-                          <button onClick={() => openQuote(b)}
-                            className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 font-semibold"
-                            title="Create a quotation from this BOQ — base amount + margin %">
-                            ₹ Quote
-                          </button>
+                        {b.is_quoted ? (
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold whitespace-nowrap" title={`Already quoted as ${b.quotation_number || 'Quotation'}`}>
+                            ✓ Quoted {b.quotation_number ? `(${b.quotation_number})` : ''}
+                          </span>
+                        ) : (
+                          (!b.source || b.source === 'boq' || b.funnel_id || (b.crm_id && canEdit('crm_funnel'))) && (
+                            <button onClick={() => openQuote(b, false)}
+                              className="text-[11px] px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 font-semibold whitespace-nowrap"
+                              title="Create a quotation from this BOQ — base amount + margin %">
+                              ₹ Quote
+                            </button>
+                          )
                         )}
                         {(!b.source || b.source === 'boq') && canDelete('quotations') && <button onClick={async () => {
                           if (!confirm(`Delete BOQ "${b.title}"?`)) return;
@@ -339,10 +516,36 @@ export default function Quotations() {
                       </div>
                     </td>
                   </tr>
-                ))}
-                {boqs.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No BOQs yet</td></tr>}
-              </tbody>
-            </table>
+                );
+              })}
+              {boqs.length === 0 && (
+                <tr>
+                  <td colSpan="8" className="text-center py-8 text-gray-400">
+                    {boqLoading ? 'Loading BOQs…' : boqFilter === 'pending' ? 'No pending BOQs — all up to date!' : 'No BOQs found'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+
+            {/* Server-side Pagination Bar */}
+            <Pagination
+              pg={{
+                page: boqMeta.page,
+                pages: boqMeta.pages,
+                perPage: boqPerPage === 'all' ? Math.max(boqMeta.total, 1) : boqPerPage,
+                total: boqMeta.total,
+                from: boqMeta.from,
+                to: boqMeta.to,
+                setPage: (p) => setBoqPage(p),
+                hasPrev: boqMeta.page > 1,
+                hasNext: boqMeta.page < boqMeta.pages,
+                isAll: boqPerPage === 'all',
+              }}
+              setPerPage={(newLimit) => { setBoqPerPage(newLimit); setBoqPage(1); }}
+              perPageOptions={[15, 50, 100, 'all']}
+              className="border-t border-gray-100 bg-gray-50/60 px-4 py-2"
+            />
           </div>
         </>
       )}
@@ -365,12 +568,54 @@ export default function Quotations() {
               <button onClick={() => { setForm({ lead_id: '', boq_id: '', total_amount: 0, discount: 0, final_amount: 0, valid_until: '', notes: '' }); setModal('quotation'); }} className="btn btn-primary text-xs sm:text-sm flex items-center gap-2"><FiPlus /> Create Quotation</button>
             </div>
           </div>
+
+          {/* Search with 500ms debounce & Status Filter */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-2.5 rounded-lg border border-gray-200">
+            <div className="relative flex-1 max-w-md">
+              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+              <input
+                type="text"
+                className="input pl-8 py-1.5 text-xs sm:text-sm w-full"
+                placeholder="Search quotations by number, client, notes..."
+                value={quoteSearchInput}
+                onChange={(e) => setQuoteSearchInput(e.target.value)}
+              />
+              {quoteSearchInput && (
+                <button
+                  type="button"
+                  onClick={() => { setQuoteSearchInput(''); setQuoteSearch(''); setQuotePage(1); }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500 font-medium whitespace-nowrap">Filter Status:</label>
+              <select
+                className="select text-xs py-1"
+                value={quoteStatus}
+                onChange={(e) => { setQuoteStatus(e.target.value); setQuotePage(1); }}>
+                <option value="all">All Statuses ({quoteMeta.total})</option>
+                <option value="pending_approval">Pending Approval</option>
+                <option value="draft">Draft</option>
+                <option value="sent">Sent</option>
+                <option value="negotiation">Negotiation</option>
+                <option value="accepted">Accepted (Booked)</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+          </div>
+
           <div className="card p-0 table-responsive">
             <table className="freeze-head min-w-[850px]">
-              <thead><tr><th>Number</th><th>Client</th><th>Total</th><th>Discount</th><th>Final</th><th>Status</th><th>Actions</th></tr></thead>
+              <thead><tr><th style={{ width: '45px' }} className="text-center">#</th><th>Number</th><th>Client</th><th>Total</th><th>Discount</th><th>Final</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>
-                {quotations.map(q => (
+                {quotations.map((q, idx) => {
+                  const sNo = ((quotePage - 1) * (quotePerPage === 'all' ? 0 : quotePerPage)) + idx + 1;
+                  return (
                   <tr key={q.id}>
+                    <td className="text-center text-gray-400 font-medium text-xs w-10">{sNo}</td>
                     <td className="font-medium">
                       {q.quotation_number}
                       {/* Funnel-uploaded quotations listed alongside (mam 2026-08-27) */}
@@ -414,49 +659,86 @@ export default function Quotations() {
                       {q.discount_approval === 'rejected' && <div className="text-[9px] font-bold text-red-700 mt-0.5">DISC REJECTED</div>}
                     </td>
                     <td>
-                      {/* Read-only merged rows carry a synthetic string id —
-                          no status dropdown, no delete (mam 2026-09-07: the
-                          CRM rows are guarded exactly like the funnel ones). */}
-                      {(q.source === 'funnel' || q.source === 'crm') ? (
-                        <span className="text-[11px] text-gray-400">from {q.source === 'crm' ? 'CRM Sales Funnel' : 'Sales Funnel'}</span>
-                      ) : q.margin_approval === 'pending' ? (
-                        // SOP-02 S6: below-floor margin — Sales Head decides.
-                        <div className="flex gap-1 items-center">
-                          <button onClick={async () => {
-                            try { await api.post(`/quotations/${q.id}/margin-decision`, { action: 'approve' }); toast.success('Margin approved — quotation released'); reload(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
-                          }} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 font-semibold">✓ Approve</button>
-                          <button onClick={async () => {
-                            const reason = prompt('Reject reason (optional):') || '';
-                            try { await api.post(`/quotations/${q.id}/margin-decision`, { action: 'reject', reason }); toast.success('Rejected'); reload(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Reject failed'); }
-                          }} className="text-[11px] px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-semibold">✕ Reject</button>
-                        </div>
-                      ) : (q.discount_approval === 'pending_sh' || q.discount_approval === 'pending_md') ? (
-                        // SOP-03 S3: above-chart discount — Sales Head / MD decides.
-                        <div className="flex gap-1 items-center">
-                          <span className="text-[10px] text-gray-500 mr-1">{q.discount_approval === 'pending_md' ? 'MD sir:' : 'Sales Head:'}</span>
-                          <button onClick={() => decideDiscount(q.id, 'approve')} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 font-semibold">✓ Approve</button>
-                          <button onClick={() => decideDiscount(q.id, 'reject')} className="text-[11px] px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-semibold">✕ Reject</button>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2 items-center">
-                          <select className="select w-32" value={q.status} onChange={e => updateQuotation(q.id, e.target.value)}>
-                            {['draft','sent','negotiation','accepted','rejected'].map(s => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                          {canDelete('quotations') && <button onClick={async () => {
-                            if (!confirm(`Delete quotation "${q.quotation_number}"?`)) return;
-                            try { await api.delete(`/quotations/${q.id}`); toast.success('Deleted'); reload(); }
-                            catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                          }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
-                        </div>
-                      )}
+                      <div className="flex gap-1.5 items-center flex-wrap">
+                        {/* Re-quote button for revising quotations */}
+                        <button
+                          type="button"
+                          onClick={() => openQuote(q, true)}
+                          className="text-[11px] px-2 py-1 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-semibold whitespace-nowrap"
+                          title="Re-quote / revise base amount, margin % or quotation file">
+                          ₹ Re-quote
+                        </button>
+
+                        {/* Read-only merged rows carry a synthetic string id —
+                            no status dropdown, no delete (mam 2026-09-07: the
+                            CRM rows are guarded exactly like the funnel ones). */}
+                        {(q.source === 'funnel' || q.source === 'crm') ? (
+                          <span className="text-[11px] text-gray-400">from {q.source === 'crm' ? 'CRM Funnel' : 'Sales Funnel'}</span>
+                        ) : q.margin_approval === 'pending' ? (
+                          // SOP-02 S6: below-floor margin — Sales Head decides.
+                          <div className="flex gap-1 items-center">
+                            <button onClick={async () => {
+                              try { await api.post(`/quotations/${q.id}/margin-decision`, { action: 'approve' }); toast.success('Margin approved — quotation released'); reload(); }
+                              catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
+                            }} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 font-semibold">✓ Approve</button>
+                            <button onClick={async () => {
+                              const reason = prompt('Reject reason (optional):') || '';
+                              try { await api.post(`/quotations/${q.id}/margin-decision`, { action: 'reject', reason }); toast.success('Rejected'); reload(); }
+                              catch (err) { toast.error(err.response?.data?.error || 'Reject failed'); }
+                            }} className="text-[11px] px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-semibold">✕ Reject</button>
+                          </div>
+                        ) : (q.discount_approval === 'pending_sh' || q.discount_approval === 'pending_md') ? (
+                          // SOP-03 S3: above-chart discount — Sales Head / MD decides.
+                          <div className="flex gap-1 items-center">
+                            <span className="text-[10px] text-gray-500 mr-1">{q.discount_approval === 'pending_md' ? 'MD sir:' : 'Sales Head:'}</span>
+                            <button onClick={() => decideDiscount(q.id, 'approve')} className="text-[11px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 font-semibold">✓ Approve</button>
+                            <button onClick={() => decideDiscount(q.id, 'reject')} className="text-[11px] px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-semibold">✕ Reject</button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-1 items-center">
+                            <select className="select text-xs py-1 w-28" value={q.status} onChange={e => updateQuotation(q.id, e.target.value)}>
+                              {['draft','sent','negotiation','accepted','rejected'].map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                            {canDelete('quotations') && <button onClick={async () => {
+                              if (!confirm(`Delete quotation "${q.quotation_number}"?`)) return;
+                              try { await api.delete(`/quotations/${q.id}`); toast.success('Deleted'); reload(); }
+                              catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                            }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                          </div>
+                        )}
+                      </div>
                     </td>
                   </tr>
-                ))}
-                {quotations.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No quotations yet</td></tr>}
+                );
+              })}
+              {quotations.length === 0 && (
+                <tr>
+                  <td colSpan="8" className="text-center py-8 text-gray-400">
+                    {quoteLoading ? 'Loading quotations…' : 'No quotations yet'}
+                  </td>
+                </tr>
+              )}
               </tbody>
             </table>
+
+            {/* Server-side Pagination Bar */}
+            <Pagination
+              pg={{
+                page: quoteMeta.page,
+                pages: quoteMeta.pages,
+                perPage: quotePerPage === 'all' ? Math.max(quoteMeta.total, 1) : quotePerPage,
+                total: quoteMeta.total,
+                from: quoteMeta.from,
+                to: quoteMeta.to,
+                setPage: (p) => setQuotePage(p),
+                hasPrev: quoteMeta.page > 1,
+                hasNext: quoteMeta.page < quoteMeta.pages,
+                isAll: quotePerPage === 'all',
+              }}
+              setPerPage={(newLimit) => { setQuotePerPage(newLimit); setQuotePage(1); }}
+              perPageOptions={[15, 50, 100, 'all']}
+              className="border-t border-gray-100 bg-gray-50/60 px-4 py-2"
+            />
           </div>
         </>
       )}
@@ -467,11 +749,14 @@ export default function Quotations() {
       </Modal>
 
       {/* Quote-with-margin modal (mam 2026-08-27): base BOQ cost × (1 + margin%) */}
-      <Modal isOpen={!!quoteFor} onClose={() => setQuoteFor(null)} title={`Quotation with Margin — ${quoteFor?.company_name || ''}`}>
+      <Modal isOpen={!!quoteFor} onClose={() => setQuoteFor(null)}
+        title={quoteFor?.isRequote ? `Revise / Re-quote — ${quoteFor?.quotation_number || ''} (${quoteFor?.company_name || ''})` : `Quotation with Margin — ${quoteFor?.company_name || ''}`}>
         {quoteFor && (
           <form onSubmit={saveQuote} className="space-y-3">
             <p className="text-xs text-gray-500">
-              From <b>{quoteFor.title}</b>{quoteFor.boq_file_link && <> · <a className="text-blue-600 underline" href={quoteFor.boq_file_link} target="_blank" rel="noreferrer">open BOQ file</a></>}
+              {quoteFor.isRequote
+                ? <>Re-quoting <b>{quoteFor.quotation_number}</b> for <b>{quoteFor.company_name}</b></>
+                : <>From <b>{quoteFor.title}</b>{quoteFor.boq_file_link && <> · <a className="text-blue-600 underline" href={quoteFor.boq_file_link} target="_blank" rel="noreferrer">open BOQ file</a></>}</>}
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -513,13 +798,26 @@ export default function Quotations() {
                   onChange={e => setQuoteForm(f => ({ ...f, valid_until: e.target.value }))} />
               </div>
             </div>
-            {/* CRM leads have no quotation-number column — don't promise one. */}
-            <p className="text-[11px] text-gray-400">{quoteFor.crm_id
-              ? "Saves a quotation here AND stamps the CRM Sales Funnel lead's quotation stage (amount, file, date)."
-              : "Saves a quotation here AND stamps the Sales Funnel lead's quotation stage (number, amount, file, date)."}</p>
+            {/* Notes */}
+            <div>
+              <label className="label">Notes / Revision remarks (optional)</label>
+              <input type="text" className="input text-xs" placeholder="e.g. Revised quote after client discount negotiation"
+                value={quoteForm.notes || ''} onChange={e => setQuoteForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+            <p className="text-[11px] text-gray-400">
+              {quoteFor.isRequote
+                ? "Re-quoting updates this quotation's base & margin, and syncs the revised amount directly to the lead's sales funnel."
+                : (quoteFor.source === 'boq' || (!quoteFor.funnel_id && !quoteFor.crm_id)
+                  ? "Saves a quotation with margin for this BOQ and links it directly to Quotations."
+                  : (quoteFor.crm_id
+                    ? "Saves a quotation here AND stamps the CRM Sales Funnel lead's quotation stage (amount, file, date)."
+                    : "Saves a quotation here AND stamps the Sales Funnel lead's quotation stage (number, amount, file, date)."))}
+            </p>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setQuoteFor(null)} className="btn btn-secondary">Cancel</button>
-              <button type="submit" disabled={quoteBusy} className="btn btn-primary">{quoteBusy ? 'Saving…' : 'Create Quotation'}</button>
+              <button type="submit" disabled={quoteBusy} className="btn btn-primary">
+                {quoteBusy ? 'Saving…' : (quoteFor.isRequote ? 'Save Revised Quote' : 'Create Quotation')}
+              </button>
             </div>
           </form>
         )}

@@ -4,6 +4,7 @@ import {
   FiBell, FiPlus, FiX, FiTrash2, FiBookmark, FiEdit2, FiEye,
   FiChevronDown, FiImage, FiCamera, FiPaperclip,
   FiAlertCircle, FiCalendar, FiClock, FiAward, FiCheck, FiTarget,
+  FiShield, FiAlertTriangle, FiCheckCircle,
 } from 'react-icons/fi';
 import api from '../api';
 import toast from 'react-hot-toast';
@@ -19,6 +20,9 @@ const NOTIF_TYPE_ICON = {
   training_assigned:  FiAward,
   scorecard_added:    FiAward,
   new_lead:           FiTarget,
+  compliance_alert:   FiAlertTriangle,
+  compliance_monitor_alert: FiShield,
+  mandatory_task:     FiAlertCircle,
   generic:            FiBell,
 };
 const NOTIF_TYPE_COLOR = {
@@ -28,6 +32,9 @@ const NOTIF_TYPE_COLOR = {
   training_assigned:  'text-emerald-600',
   scorecard_added:    'text-purple-600',
   new_lead:           'text-blue-600',
+  compliance_alert:   'text-red-600',
+  compliance_monitor_alert: 'text-amber-600',
+  mandatory_task:     'text-rose-600',
   generic:            'text-gray-600',
 };
 
@@ -110,7 +117,7 @@ export default function AnnouncementBell() {
             <span>🎯</span> {notif?.title || 'New Notification'}
           </div>
           {notif?.body && <div className="text-xs text-gray-600 mt-0.5">{notif.body}</div>}
-          <div className="text-[10px] text-blue-600 font-semibold mt-1">Click to open lead in Sales Funnel →</div>
+          {notif?.link_url && <div className="text-[10px] text-blue-600 font-semibold mt-1">Click to view details →</div>}
         </div>
       ), { duration: 8000 });
     });
@@ -416,25 +423,70 @@ export default function AnnouncementBell() {
                 <div className="text-center text-gray-400 text-sm py-10 px-4">
                   <FiBell size={28} className="mx-auto opacity-30 mb-2"/>
                   No notifications yet.
-                  <div className="text-[10px] text-gray-400 mt-1">Interview reminders, offer responses and pending approvals will land here.</div>
+                  <div className="text-[10px] text-gray-400 mt-1">Interview reminders, offer responses, compliance alerts and pending tasks will land here.</div>
                 </div>
               )}
               {notifications.map(n => {
                 const Icon = NOTIF_TYPE_ICON[n.type] || FiBell;
                 const colorCls = NOTIF_TYPE_COLOR[n.type] || 'text-gray-600';
+                const isMandatoryActive = n.is_mandatory && n.status === 'active';
+
                 return (
-                  <button
+                  <div
                     key={n.id}
                     onClick={() => clickNotification(n)}
-                    className={`w-full text-left px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 flex items-start gap-2.5 ${!n.read_at ? 'bg-blue-50/40' : ''}`}>
+                    className={`w-full text-left px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 flex items-start gap-2.5 cursor-pointer transition-colors ${
+                      isMandatoryActive 
+                        ? 'bg-rose-50/70 border-l-4 border-l-rose-500 hover:bg-rose-50' 
+                        : !n.read_at ? 'bg-blue-50/40' : ''
+                    }`}
+                  >
                     <Icon size={16} className={`mt-0.5 ${colorCls} flex-shrink-0`}/>
                     <div className="flex-1 min-w-0">
-                      <div className={`text-[12.5px] ${!n.read_at ? 'font-semibold' : 'text-gray-700'} truncate`}>{n.title}</div>
-                      {n.body && <div className="text-[11px] text-gray-500 line-clamp-2">{n.body}</div>}
-                      <div className="text-[10px] text-gray-400 mt-0.5">{fmt(n.created_at)}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {isMandatoryActive && (
+                          <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.2 rounded bg-rose-600 text-white animate-pulse">
+                            MANDATORY
+                          </span>
+                        )}
+                        <div className={`text-[12.5px] ${!n.read_at || isMandatoryActive ? 'font-semibold text-gray-900' : 'text-gray-700'} truncate`}>
+                          {n.title}
+                        </div>
+                      </div>
+                      {n.body && <div className="text-[11px] text-gray-600 mt-0.5 line-clamp-2">{n.body}</div>}
+                      
+                      <div className="flex items-center justify-between mt-1.5 pt-0.5 gap-2 flex-wrap">
+                        <div className="text-[10px] text-gray-400">{fmt(n.created_at)}</div>
+                        
+                        {isMandatoryActive && (
+                          <div className="flex items-center gap-1.5">
+                            {n.acknowledged_at ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-100/80 px-1.5 py-0.5 rounded font-medium">
+                                <FiCheckCircle size={10} /> Acknowledged
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  api.post(`/hr/notifications/${n.id}/acknowledge`)
+                                    .then(() => {
+                                      toast.success('Mandatory task acknowledged');
+                                      loadNotifications();
+                                    })
+                                    .catch(() => toast.error('Acknowledgement failed'));
+                                }}
+                                className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700 bg-rose-100 hover:bg-rose-200 border border-rose-300 px-2 py-0.5 rounded shadow-sm transition-all"
+                              >
+                                Acknowledge
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    {!n.read_at && <span className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 flex-shrink-0"/>}
-                  </button>
+                    {!n.read_at && !isMandatoryActive && <span className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 flex-shrink-0"/>}
+                  </div>
                 );
               })}
             </div>

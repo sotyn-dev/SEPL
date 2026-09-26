@@ -139,7 +139,7 @@ function calculateForEmployee(db, settings, employee, month) {
   // Advance salary taken this month (deducted from net pay) + a food
   // allowance (ADDED to net pay) — both entered by admin on the payroll
   // screen and stored on the same monthly row (mam 2026-06-12).
-  const adjRow = db.prepare('SELECT amount, food, paid_days_override, cl_override, late_penalty_override FROM payroll_advances WHERE month=? AND employee_id=?')
+  const adjRow = db.prepare('SELECT amount, food, paid_days_override, cl_override FROM payroll_advances WHERE month=? AND employee_id=?')
     .get(month, employee.id) || {};
   const advance = round2(adjRow.amount || 0);
   const food = round2(adjRow.food || 0);
@@ -292,8 +292,16 @@ function calculateForEmployee(db, settings, employee, month) {
   const lateAfter = timeToMinutes(cut.late_after_time);
   const halfDayAfter = timeToMinutes(cut.half_day_after_time);
 
+  const joinDate = String(employee.join_date || '').slice(0, 10);
+  const hasJoinDate = isRealDate(joinDate);
+
   for (let day = 1; day <= lastDay; day++) {
     const dateStr = `${year}-${pad(mm)}-${pad(day)}`;
+    // Before employment: no holiday, weekly-off, leave, absence or penalty.
+    if (hasJoinDate && dateStr < joinDate) {
+      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: 'not_joined', pay: 0 });
+      continue;
+    }
     const sun = isSunday(year, mm, day);
     const att = attByDate[dateStr];
     const leaveType = leaveByDate[dateStr];
@@ -512,8 +520,8 @@ function calculateForEmployee(db, settings, employee, month) {
     if (!(b.label && b.label.startsWith('sunday'))) continue;
     const prev = i > 0 ? breakdown[i - 1] : null;
     const next = i < breakdown.length - 1 ? breakdown[i + 1] : null;
-    const prevAbsent = !!prev && prev.pay === 0; // Saturday absent (no pay)
-    const nextAbsent = !!next && next.pay === 0; // Monday absent (no pay)
+    const prevAbsent = !!prev && prev.label !== 'not_joined' && prev.pay === 0; // Saturday absent (no pay)
+    const nextAbsent = !!next && next.label !== 'not_joined' && next.pay === 0; // Monday absent (no pay)
     if (prevAbsent && nextAbsent) {
       // Both neighbours absent → Sunday deducted.
       if (b.pay > 0) {
@@ -561,18 +569,19 @@ function calculateForEmployee(db, settings, employee, month) {
   // calendar days (28/29/30/31).  Sundays are already paid via the
   // sandwich rule above, so the salary covers the full month evenly.
   // ─── Manual monthly overrides (mam 2026-06-13) ───────────────────
-  // Admin can hand-set Paid Days, CL (paid leaves) and the Late ₹ penalty for
+  // Admin can hand-set Paid Days and CL (paid leaves) for
   // this month to pay salary now while attendance is being corrected.  NULL =
   // use auto.  CL is part of paid days, so a CL edit shifts the auto paid-days;
   // a manual Paid Days is the final word for what's paid.
-  const clOv = adjRow.cl_override, pdOv = adjRow.paid_days_override, lpOv = adjRow.late_penalty_override;
+  const clOv = adjRow.cl_override, pdOv = adjRow.paid_days_override;
   const clOverridden = clOv != null && clOv >= 0;
   const pdOverridden = pdOv != null && pdOv >= 0;
-  const lpOverridden = lpOv != null && lpOv >= 0;
   const effPaidLeaves = clOverridden ? round2(clOv) : paidLeaves;
   let effPaidDays = round2(paidDays - paidLeaves + effPaidLeaves);
   if (pdOverridden) effPaidDays = round2(pdOv);
-  const effLatePenalty = lpOverridden ? round2(lpOv) : latePenalty;
+  // Always apply the attendance-based penalty for open months. Ignore legacy
+  // manual late overrides; finalised payroll remains a frozen snapshot.
+  const effLatePenalty = latePenalty;
 
   const baseSalary = employee.salary || 0;
   const perDayRate = totalDays > 0 ? baseSalary / totalDays : 0;
@@ -594,7 +603,7 @@ function calculateForEmployee(db, settings, employee, month) {
   const adhoc = round2(grossEarned * (settings.adhoc_pct || 0) / 100);
   const misc = round2(grossEarned * (settings.misc_pct || 0) / 100);
 
-  // Deductions = late penalty (override-aware) + any advance taken this month.
+  // Deductions = automatic late penalty + any advance taken this month.
   const totalDeductions = round2(effLatePenalty + advance);
   // Salary BEFORE overtime = earned-for-days minus deductions PLUS the food
   // allowance (mam wants base earning and the OT add-on shown separately).
@@ -635,8 +644,8 @@ function calculateForEmployee(db, settings, employee, month) {
     late_marks: lateMarks,
     lates_converted_absent: latesAsAbsent,
     late_penalty: round2(effLatePenalty),
-    late_penalty_auto: round2(latePenalty),           // before any manual override
-    late_penalty_overridden: lpOverridden,
+    late_penalty_auto: round2(latePenalty),           // automatic attendance-based amount
+    late_penalty_overridden: false,
     late_days: lateDays,
     paid_leaves: effPaidLeaves,
     paid_leaves_auto: paidLeaves,                     // before any manual override
@@ -917,16 +926,16 @@ router.put('/food/:employee_id', adminOnly, (req, res) => {
 
 // PUT a manual monthly override for Paid Days / CL / Late ₹ (admin, mam
 // 2026-06-13: "give me edit option on days, CL, late so i can give salary
-// now").  field ∈ paid_days | cl | late_penalty.  A blank / null value RESETS
+// now").  field ∈ paid_days | cl. A blank / null value RESETS
 // to the auto-calculated number.  Blocked once the month is finalised.
 router.put('/override/:employee_id', adminOnly, (req, res) => {
   try {
     const db = getDb();
     const { month, field } = req.body;
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
-    const COLS = { paid_days: 'paid_days_override', cl: 'cl_override', late_penalty: 'late_penalty_override' };
+    const COLS = { paid_days: 'paid_days_override', cl: 'cl_override' };
     const col = COLS[field];
-    if (!col) return res.status(400).json({ error: 'field must be paid_days, cl or late_penalty' });
+    if (!col) return res.status(400).json({ error: 'field must be paid_days or cl; late deductions are automatic' });
 
     const raw = req.body.value;
     const reset = raw === '' || raw === null || raw === undefined;
@@ -937,7 +946,7 @@ router.put('/override/:employee_id', adminOnly, (req, res) => {
       // Paid days can exceed the calendar days — worked Sundays add bonus days
       // on top (mam 2026-06-13: Manoj = 34). CL stays within the month.
       const dayMax = field === 'cl' ? 31 : 60;
-      if (field !== 'late_penalty' && value > dayMax) {
+      if (value > dayMax) {
         return res.status(400).json({ error: `${field === 'cl' ? 'CL' : 'days'} cannot exceed ${dayMax}` });
       }
       value = round2(value);
@@ -1143,7 +1152,7 @@ router.post('/holidays', adminOnly, (req, res) => {
     db.prepare(`INSERT INTO payroll_holidays (date, name, created_by) VALUES (?,?,?)
                 ON CONFLICT(date) DO UPDATE SET name = excluded.name`).run(date, name, req.user.id);
     logAuditEvent({ user: req.user, action: 'PAYROLL_HOLIDAY_SET', entity_type: 'payroll', entity_label: `${date} ${name}`, method: 'POST', path: '/api/payroll/holidays', status_code: 200 });
-    res.json({ message: `Holiday saved — ${date} ${name}. Everyone is paid for this day.`, date, name });
+    res.json({ message: `Holiday saved — ${date} ${name}. Employees who have joined by this date are eligible for holiday pay.`, date, name });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1167,3 +1176,4 @@ router.delete('/holidays/:date', adminOnly, (req, res) => {
 });
 
 module.exports = router;
+

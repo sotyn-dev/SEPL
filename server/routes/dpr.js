@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
-const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage } = require('../lib/aiComplete');
+const { aiComplete, aiConfig, aiErrorMessage, aiNotConfiguredMessage, extractJsonArray } = require('../lib/aiComplete');
 const router = express.Router();
 
 // (AI provider/key/model live in app_settings, set in Admin → AI Settings —
@@ -3033,6 +3033,413 @@ router.post('/admin/trigger-prompt', (req, res) => {
     res.json({ message: 'DPR prompt fired — check pm2 logs for the adherence rollup line' });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ── TSK-0827: AI in Scheduling — Monthly, Weekly & DPR Helper & Endpoints ────
+function getSitePoItemsHelper(db, siteId) {
+  const site = db.prepare('SELECT id, name, po_id, business_book_id FROM sites WHERE id=?').get(siteId);
+  if (!site) return [];
+
+  const sameNameBB = db.prepare(`SELECT DISTINCT s.business_book_id FROM sites s
+                                  WHERE s.name = ? AND s.business_book_id IS NOT NULL`).all(site.name);
+  let poBbId = null;
+  if (site.po_id) {
+    const poRow = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(site.po_id);
+    if (poRow?.business_book_id) poBbId = poRow.business_book_id;
+  }
+  const bbByProject = db.prepare(`SELECT id FROM business_book WHERE TRIM(LOWER(project_name)) = TRIM(LOWER(?))`).all(site.name);
+  const opBBs = db.prepare(`
+    SELECT DISTINCT op.business_book_id AS bb_id
+      FROM order_planning op
+      JOIN business_book bb ON bb.id = op.business_book_id
+     WHERE TRIM(LOWER(bb.project_name)) = TRIM(LOWER(?))
+        OR TRIM(LOWER(bb.client_name)) = TRIM(LOWER(?))
+        OR TRIM(LOWER(bb.company_name)) = TRIM(LOWER(?))
+  `).all(site.name, site.name, site.name);
+
+  const bbIds = Array.from(new Set([
+    ...(site.business_book_id ? [site.business_book_id] : []),
+    ...sameNameBB.map(r => r.business_book_id),
+    ...(poBbId ? [poBbId] : []),
+    ...bbByProject.map(r => r.id),
+    ...opBBs.map(r => r.bb_id),
+  ].filter(Boolean)));
+
+  if (!bbIds.length) return [];
+  const ph = bbIds.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT pi.id, pi.business_book_id, pi.item_master_id, pi.description,
+           pi.quantity, pi.unit, pi.rate, pi.amount,
+           pi.labour_rate, pi.labour_amount, pi.sr_no,
+           im.item_code, im.item_name AS master_name, im.department AS trade
+      FROM po_items pi
+      LEFT JOIN item_master im ON im.id = pi.item_master_id
+     WHERE pi.business_book_id IN (${ph})
+     ORDER BY pi.business_book_id, pi.sr_no, pi.id
+  `).all(...bbIds);
+}
+
+// 1. Weekly 7-Day Lookahead AI Generator
+router.post('/ai-suggest-week', requirePermission('dpr', 'create'), async (req, res) => {
+  const { site_id, week_start } = req.body || {};
+  if (!site_id || !week_start) {
+    return res.status(400).json({ error: 'site_id and week_start (Monday) are required' });
+  }
+
+  const db = getDb();
+  const cfg = aiConfig(db);
+  if (!cfg.configured) {
+    return res.status(400).json({ error: aiNotConfiguredMessage(cfg.provider) });
+  }
+
+  const site = db.prepare('SELECT id, name FROM sites WHERE id=?').get(site_id);
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+
+  // 1. Get site BOQ items
+  const allItems = getSitePoItemsHelper(db, site_id);
+  if (!allItems.length) {
+    return res.status(400).json({ error: `No BOQ items linked to site "${site.name}". Please link a Client PO or upload BOQ first.` });
+  }
+
+  // 2. Cumulative installed quantity per BOQ item so far
+  const installedRows = db.prepare(`
+    SELECT dwi.po_item_id, SUM(COALESCE(dwi.actual_qty, 0)) as total_installed
+      FROM dpr_work_items dwi
+      JOIN dpr d ON d.id = dwi.dpr_id
+     WHERE d.site_id = ? AND dwi.actual_qty > 0
+     GROUP BY dwi.po_item_id
+  `).all(site_id);
+  const installedMap = new Map(installedRows.map(r => [r.po_item_id, r.total_installed || 0]));
+
+  // 3. Filter items that have remaining quantity, or take active items
+  const itemsWithRemaining = allItems.map(it => {
+    const installed = installedMap.get(it.id) || 0;
+    const boqQty = it.quantity || 0;
+    const remaining = Math.max(0, boqQty - installed);
+    return {
+      id: it.id,
+      description: it.master_name || it.description || 'Item',
+      unit: it.unit || 'nos',
+      boq_qty: boqQty,
+      installed_so_far: installed,
+      remaining_qty: remaining,
+      trade: it.trade || 'General'
+    };
+  });
+
+  const activeItems = itemsWithRemaining.filter(it => it.remaining_qty > 0);
+  const itemsPool = (activeItems.length > 0 ? activeItems : itemsWithRemaining).slice(0, 30);
+
+  // 4. Past 14-day velocity and manpower
+  const recentDprs = db.prepare(`
+    SELECT d.report_date, d.grand_total_a, d.grand_total_b,
+           COALESCE(d.contractor_manpower, 0) as contractor_mp,
+           (SELECT SUM(deployed) FROM dpr_manpower WHERE dpr_id = d.id) as staff_mp
+      FROM dpr d
+     WHERE d.site_id = ? AND COALESCE(d.is_planned_template, 0) = 0 AND d.report_date < ?
+     ORDER BY d.report_date DESC LIMIT 10
+  `).all(site_id, week_start);
+
+  const avgInstalledValue = recentDprs.length
+    ? Math.round(recentDprs.reduce((s, r) => s + (r.grand_total_a || 0), 0) / recentDprs.length)
+    : 0;
+  const avgCost = recentDprs.length
+    ? Math.round(recentDprs.reduce((s, r) => s + (r.grand_total_b || 0), 0) / recentDprs.length)
+    : 0;
+
+  // 5. 7-day weather forecast (if available)
+  let weatherForecast = [];
+  try {
+    const { weatherForSite } = require('../lib/weather');
+    const w = await weatherForSite(+site_id);
+    if (w && Array.isArray(w.forecast)) {
+      weatherForecast = w.forecast.slice(0, 7).map(f => `${f.date}: ${f.condition || f.weather || 'normal'}, rain: ${f.rain || 0}mm`);
+    }
+  } catch (_) {}
+
+  // 6. 7 dates from week_start (Monday to Sunday)
+  const daysList = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(week_start + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + i);
+    daysList.push(d.toISOString().slice(0, 10));
+  }
+
+  const prompt = `You are the Lead Planning Engineer for an MEPF / Engineering project in India.
+Project Site: "${site.name}"
+Target Week: ${daysList[0]} (Monday) to ${daysList[6]} (Sunday)
+
+## AVAILABLE BOQ ITEMS (pick from these ID numbers only):
+${JSON.stringify(itemsPool.map(it => ({ id: it.id, name: it.description, unit: it.unit, remaining: it.remaining_qty, trade: it.trade })))}
+
+## HISTORICAL SITE VELOCITY (last 10 reporting days):
+- Average installed labour output value per day: Rs ${avgInstalledValue}
+- Average daily cost per day: Rs ${avgCost}
+- Recent DPR sample count: ${recentDprs.length}
+
+## WEATHER FORECAST:
+${weatherForecast.length ? weatherForecast.join('\n') : 'Normal seasonal weather expected.'}
+
+## INSTRUCTIONS:
+1. Generate a realistic, sequenced 7-day schedule for Monday through Sunday.
+2. For EACH of the 7 days (${daysList.join(', ')}):
+   - "date": Exactly the YYYY-MM-DD date.
+   - "items": Array of 1 to 3 items planned for that day: [{"po_item_id": <number from list>, "planned_qty": <realistic number>}].
+     * Never plan more than the item's remaining quantity.
+     * Realistic daily quantity for construction/MEPF (e.g. 30-80m pipe, 20-50 sprinklers, 100-200m cabling, 5-15 light fixtures).
+   - "planned_manpower": Total workforce headcount required (typically 4 to 12 skilled/helpers).
+   - "planned_grand_total_b": Estimated daily cost in Rupees (typically manpower headcount * Rs 700 + fixed costs, e.g. Rs 3,000 - Rs 9,000).
+   - "day_notes": 1 short phrase describing key milestones for that day (e.g. "Basement 2 sprinkler branch line install", "Riser pressure testing").
+   - If rain is heavy on any day, assign indoor/basement tasks or reduced quantities.
+3. "reasoning": 2-3 sentences explaining the weekly execution strategy.
+
+OUTPUT FORMAT:
+Reply with ONLY a valid JSON object, no markdown fences:
+{
+  "days": [
+    {
+      "date": "YYYY-MM-DD",
+      "planned_manpower": 6,
+      "planned_grand_total_b": 4500,
+      "items": [{"po_item_id": 123, "planned_qty": 35}],
+      "day_notes": "..."
+    }
+  ],
+  "reasoning": "..."
+}`;
+
+  try {
+    const out = await aiComplete(db, {
+      prompt,
+      maxTokens: 2500,
+      json: true,
+      timeout: 60000,
+    });
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(out.text);
+    } catch (_) {
+      const jsonMatch = out.text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try { parsed = JSON.parse(jsonMatch[0]); } catch (__) {}
+      }
+    }
+
+    if (!parsed || !Array.isArray(parsed.days)) {
+      throw new Error('AI did not return a valid schedule structure');
+    }
+
+    const parsedByDate = new Map(parsed.days.map(d => [d.date, d]));
+    const safeDays = daysList.map(dt => {
+      const p = parsedByDate.get(dt) || {};
+      const cleanItems = (Array.isArray(p.items) ? p.items : [])
+        .filter(it => it && it.po_item_id && itemsPool.some(poolIt => poolIt.id === +it.po_item_id))
+        .map(it => ({ po_item_id: +it.po_item_id, planned_qty: Math.max(0, +it.planned_qty || 0) }));
+
+      return {
+        date: dt,
+        planned_manpower: Math.max(0, parseInt(p.planned_manpower, 10) || 0),
+        planned_grand_total_b: Math.max(0, parseFloat(p.planned_grand_total_b) || 0),
+        items: cleanItems,
+        day_notes: p.day_notes || ''
+      };
+    });
+
+    res.json({
+      site_id: +site_id,
+      week_start,
+      days: safeDays,
+      reasoning: parsed.reasoning || '',
+      model: out.model
+    });
+  } catch (e) {
+    console.error('[dpr] ai-suggest-week failed:', e.status || '', e.message);
+    res.status(e.status === 429 ? 429 : 500).json({ error: aiErrorMessage(e, cfg.provider) });
+  }
+});
+
+// 2. Daily DPR Smart Field Note / Voice Parser
+router.post('/ai-parse-quick-dpr', requirePermission('dpr', 'create'), async (req, res) => {
+  const { site_id, report_date, quick_notes } = req.body || {};
+  if (!site_id || !quick_notes || !String(quick_notes).trim()) {
+    return res.status(400).json({ error: 'site_id and quick_notes are required' });
+  }
+
+  const db = getDb();
+  const cfg = aiConfig(db);
+  if (!cfg.configured) {
+    return res.status(400).json({ error: aiNotConfiguredMessage(cfg.provider) });
+  }
+
+  const site = db.prepare('SELECT id, name FROM sites WHERE id=?').get(site_id);
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+
+  const allItems = getSitePoItemsHelper(db, site_id).slice(0, 50);
+  const itemsSlim = allItems.map(it => ({
+    id: it.id,
+    name: it.master_name || it.description || '',
+    unit: it.unit || 'nos'
+  }));
+
+  const prompt = `You are an intelligent construction/MEPF project assistant.
+The site engineer on site "${site.name}" provided this raw daily field update:
+"""${String(quick_notes).trim()}"""
+
+## AVAILABLE SITE BOQ WORK ITEMS (Match installed work to these IDs if possible):
+${JSON.stringify(itemsSlim)}
+
+## INSTRUCTIONS:
+Extract structured DPR details from the engineer's raw field update.
+Return ONLY a valid JSON object with the following fields:
+{
+  "work_items": [
+    {
+      "po_item_id": <matching id from above list, or null if no match>,
+      "actual_qty": <number installed today, e.g. 45>,
+      "remarks": "<brief note, e.g. 2nd floor corridor>"
+    }
+  ],
+  "skilled_manpower": <integer count of skilled workers/fitters/welders/electricians, or 0 if not stated>,
+  "helper_manpower": <integer count of helpers/labourers, or 0 if not stated>,
+  "rental_cost": <number if rental equipment/crane cost was spent today, or 0>,
+  "safety_toolbox_talk": <true if toolbox talk / morning briefing happened, else false>,
+  "safety_ppe_compliance": <true if PPE compliant, else false>,
+  "safety_incidents": "<any incident mentioned, or empty string>",
+  "hindrances": "<any delays, material shortages, power cuts, rain mentioned, or empty string>",
+  "hindrance_category": "<one of: 'Labour Shortage', 'Material Delay', 'Site Hindrance / Access Issue', 'Client Delay', 'Rain / Weather Delay', 'Drawing Revision / Rework', 'Other', or null>",
+  "next_day_plan": "<what the engineer plans to do tomorrow, or empty string>",
+  "machinery": [
+    {
+      "equipment": "<e.g. Welding Machine, Scaffolding, Drill>",
+      "hours_used": <number>,
+      "condition": "working"
+    }
+  ],
+  "overall_status": "<'on_track' | 'delayed' | 'ahead' | 'blocked'>"
+}
+
+OUTPUT: JSON only, no markdown formatting.`;
+
+  try {
+    const out = await aiComplete(db, {
+      prompt,
+      maxTokens: 1500,
+      json: true,
+      timeout: 45000,
+    });
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(out.text);
+    } catch (_) {
+      const m = out.text.match(/\{[\s\S]*\}/);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch (__) {} }
+    }
+
+    if (!parsed) throw new Error('AI could not parse note into structured JSON');
+    res.json({ parsed, model: out.model });
+  } catch (e) {
+    console.error('[dpr] ai-parse-quick-dpr failed:', e.status || '', e.message);
+    res.status(e.status === 429 ? 429 : 500).json({ error: aiErrorMessage(e, cfg.provider) });
+  }
+});
+
+// 3. Auto-Draft Next Day Plan & Loss Root Cause
+router.post('/ai-suggest-next-day-and-loss', requirePermission('dpr', 'create'), async (req, res) => {
+  const { site_id, report_date, grand_total_a, grand_total_b, work_items, hindrances, hindrance_category } = req.body || {};
+  if (!site_id || !report_date) {
+    return res.status(400).json({ error: 'site_id and report_date are required' });
+  }
+
+  const db = getDb();
+  const cfg = aiConfig(db);
+  if (!cfg.configured) {
+    return res.status(400).json({ error: aiNotConfiguredMessage(cfg.provider) });
+  }
+
+  const site = db.prepare('SELECT id, name FROM sites WHERE id=?').get(site_id);
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+
+  const valA = parseFloat(grand_total_a) || 0;
+  const valB = parseFloat(grand_total_b) || 0;
+  const profitLoss = valA - valB;
+  const isLoss = profitLoss < 0;
+
+  // Check tomorrow's weekly planned items (if any planned row exists)
+  const tomorrow = new Date(report_date + 'T00:00:00Z');
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const tomorrowIso = tomorrow.toISOString().slice(0, 10);
+
+  const tomorrowPlan = db.prepare(`
+    SELECT d.planned_description, d.planned_manpower, d.planned_cost_b,
+           dwi.description as item_desc, dwi.planned_qty, dwi.unit
+      FROM dpr d
+      LEFT JOIN dpr_work_items dwi ON dwi.dpr_id = d.id
+     WHERE d.site_id = ? AND d.report_date = ?
+  `).all(site_id, tomorrowIso);
+
+  const prompt = `You are a Senior Project Manager reviewing daily progress on site "${site.name}".
+Report Date: ${report_date}
+Installed Work Value (Table A labour): Rs ${valA}
+Daily Cost Incurred (Table B): Rs ${valB}
+Profit/Loss Today: Rs ${profitLoss} (${isLoss ? 'LOSS DAY' : 'PROFITABLE DAY'})
+
+TODAY'S INSTALLED ITEMS:
+${JSON.stringify((work_items || []).filter(it => (it.actual_qty || 0) > 0).map(it => `${it.description || 'Item'}: ${it.actual_qty} ${it.unit || ''}`))}
+
+TODAY'S HINDRANCES/DELAYS:
+${hindrances || 'None recorded'}
+HINDRANCE CATEGORY: ${hindrance_category || 'Not specified'}
+
+TOMORROW'S PRE-SCHEDULED WEEK PLAN:
+${tomorrowPlan.length ? tomorrowPlan.map(t => `${t.item_desc || t.planned_description || 'Task'}: ${t.planned_qty || ''} ${t.unit || ''}`).join('; ') : 'No weekly plan row preset for tomorrow'}
+
+## INSTRUCTIONS:
+1. "next_day_plan": Draft a clear, actionable 2-3 sentence execution plan for tomorrow (${tomorrowIso}). Incorporate tomorrow's planned items plus any carryover or hindrance resolution from today.
+2. If this is a LOSS DAY (valA < valB):
+   - "suggested_loss_category": Pick exactly ONE of:
+     'Labour Shortage', 'Material Delay', 'Site Hindrance / Access Issue', 'Client Delay', 'Rain / Weather Delay', 'Drawing Revision / Rework', 'Productivity / Rework'
+   - "suggested_loss_reason": Write a professional, concise 1-2 sentence explanation of why costs exceeded installed value (suitable for management / CMD review).
+3. If not a loss day:
+   - "suggested_loss_category": null
+   - "suggested_loss_reason": null
+
+OUTPUT FORMAT:
+Reply with ONLY a valid JSON object:
+{
+  "next_day_plan": "...",
+  "suggested_loss_category": "...",
+  "suggested_loss_reason": "..."
+}`;
+
+  try {
+    const out = await aiComplete(db, {
+      prompt,
+      maxTokens: 1000,
+      json: true,
+      timeout: 30000,
+    });
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(out.text);
+    } catch (_) {
+      const m = out.text.match(/\{[\s\S]*\}/);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch (__) {} }
+    }
+
+    if (!parsed) throw new Error('AI could not generate next day/loss suggestion');
+    res.json({
+      next_day_plan: parsed.next_day_plan || '',
+      suggested_loss_category: parsed.suggested_loss_category || null,
+      suggested_loss_reason: parsed.suggested_loss_reason || null,
+      model: out.model
+    });
+  } catch (e) {
+    console.error('[dpr] ai-suggest-next-day-and-loss failed:', e.status || '', e.message);
+    res.status(e.status === 429 ? 429 : 500).json({ error: aiErrorMessage(e, cfg.provider) });
   }
 });
 

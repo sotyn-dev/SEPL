@@ -95,13 +95,14 @@ api.interceptors.response.use(
         return api(err.config);
       }
       if (isSessionCheck && current && used === current) {
+        // If we're currently on the login page, a 401 from a pre-login probe or
+        // initial handshake race must NOT wipe the freshly saved login token.
+        if (window.location.pathname.startsWith('/login')) {
+          return Promise.reject(err);
+        }
         clearToken();
         delete api.defaults.headers.common.Authorization;
-        // Only hard-redirect if we're NOT already on the login page — a 401
-        // from a background poll on /login would otherwise loop the page.
-        if (!window.location.pathname.startsWith('/login')) {
-          window.location.href = '/login';
-        }
+        window.location.href = '/login';
       } else if (!isSessionCheck && used && used === current) {
         // A data endpoint rejected the current token. Per mam's standing rule
         // ("automatic logout — very bad"), a single data-endpoint 401 must

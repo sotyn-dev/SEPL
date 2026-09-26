@@ -98,11 +98,11 @@ const MODULE_DEFS = {
       { key: '3', label: 'L3 Approval (MD)' },
       { key: '5', label: 'Payment Release' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const recs = safeAll(db, `
         SELECT id, request_no, vendor_name, employee_name, category, purpose,
                current_step, status, created_at, created_by
-          FROM payment_requests ORDER BY created_at DESC LIMIT 500`);
+          FROM payment_requests ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`);
       const ids = recs.map(r => r.id);
       const appr = {};
       if (ids.length) {
@@ -142,11 +142,11 @@ const MODULE_DEFS = {
       { key: 'negotiation', label: 'Negotiation' },
       { key: 'winloss', label: 'Win / Loss' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       return safeAll(db, `
         SELECT id, lead_no, client_name, company_name, created_at, created_by,
                quotation_submit_date, closed_at, final_status
-          FROM crm_funnel ORDER BY created_at DESC LIMIT 500`).map(r => {
+          FROM crm_funnel ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => {
         const stamps = { quotation: r.quotation_submit_date || null, negotiation: null, winloss: r.closed_at || null };
         return {
           id: r.id,
@@ -177,13 +177,13 @@ const MODULE_DEFS = {
       { key: 'quotation', label: 'Quotation' },
       { key: 'result', label: 'Result (Win/Loss)' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const steps = this.steps;
       return safeAll(db, `
         SELECT id, lead_no, client_name, created_at, created_by, current_stage,
                qualified_date, meeting_date, mom_date, drawing_date, boq_date,
                quotation_sent_date, result_date
-          FROM sales_funnel ORDER BY created_at DESC LIMIT 500`).map(r => {
+          FROM sales_funnel ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => {
         const stamps = {
           qualified: r.qualified_date || null, meeting: r.meeting_date || null,
           mom: r.mom_date || null, drawing: r.drawing_date || null, boq: r.boq_date || null,
@@ -211,12 +211,12 @@ const MODULE_DEFS = {
       { key: 'approval', label: 'Approval', default_sla: 168 },
       { key: 'won', label: 'Won', default_sla: 0 },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const steps = this.steps;
       const order = steps.map(s => s.key);
       const deals = safeAll(db, `
         SELECT id, deal_no, client_name, company, created_at, stage, status, owner_id
-          FROM solar_deals ORDER BY created_at DESC LIMIT 500`);
+          FROM solar_deals ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`);
       const ids = deals.map(d => d.id);
       // entryTime[dealId][stageKey] = first time the deal ENTERED that stage.
       const entry = {};
@@ -258,11 +258,11 @@ const MODULE_DEFS = {
       { key: 'negotiation', label: 'Under Negotiation' },
       { key: 'decided', label: 'Accepted / Rejected' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const statusStep = { draft: 'draft', sent: 'sent', negotiation: 'negotiation', accepted: 'decided', rejected: 'decided' };
       return safeAll(db, `
         SELECT id, quotation_number, status, created_at, created_by
-          FROM quotations ORDER BY created_at DESC LIMIT 500`).map(r => {
+          FROM quotations ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => {
         // Only the draft timestamp exists; later transitions aren't stamped yet
         // (mark-done stamps fill them in). RACI assignment still works per step.
         const stamps = { draft: r.created_at || null, sent: null, negotiation: null, decided: null };
@@ -303,10 +303,10 @@ const MODULE_DEFS = {
       { key: 'received', label: 'Material Received' },
       { key: 'purchase_bill', label: 'Purchase Bill' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const steps = stepsFor(db, 'indent_to_dispatch');
       const { purchaseCompletion } = require('../lib/indentCompletion');
-      const scope = 'SELECT id FROM indents ORDER BY created_at DESC LIMIT 500';
+      const scope = `SELECT id FROM indents ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`;
       const items = safeAll(db, `SELECT * FROM indent_items WHERE indent_id IN (${scope})`);
       const pos = safeAll(db, `SELECT * FROM vendor_pos WHERE indent_id IN (${scope})`);
       const poScope = `SELECT id FROM vendor_pos WHERE indent_id IN (${scope})`;
@@ -338,7 +338,7 @@ const MODULE_DEFS = {
                (SELECT MIN(pb.created_at) FROM purchase_bills pb
                   JOIN vendor_pos vp ON vp.id=pb.vendor_po_id
                  WHERE vp.indent_id=i.id) AS bill_at
-          FROM indents i ORDER BY i.created_at DESC LIMIT 500`).map(r => {
+          FROM indents i ORDER BY i.created_at DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => {
         const stamps = {
           raised: r.created_at || null, l1: r.l1_at || null, l2: r.l2_at || null,
           crm: r.crm_at || null, approved: r.approved_at || null,
@@ -382,12 +382,12 @@ const MODULE_DEFS = {
       { key: 'raised', label: 'Cheque Raised' },
       { key: 'settled', label: 'Cleared / Settled' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const steps = this.steps;
       return safeAll(db, `
         SELECT c.id, c.cheque_number, c.payee_to, c.bank_name, c.raised_at, c.raised_by, c.current_status,
                (SELECT MIN(ca.action_at) FROM cheque_actions ca WHERE ca.cheque_id=c.id) AS first_action_at
-          FROM cheques c ORDER BY c.raised_at DESC LIMIT 500`).map(r => {
+          FROM cheques c ORDER BY c.raised_at DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => {
         const stamps = { raised: r.raised_at || null, settled: r.first_action_at || null };
         return {
           id: r.id, title: r.cheque_number || ('CHQ #' + r.id),
@@ -418,12 +418,12 @@ const MODULE_DEFS = {
       { key: '13', label: 'Mobilization Advance' },
       { key: '14', label: 'Site Entry & Setup' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const steps = this.steps;
       const recs = safeAll(db, `
         SELECT sh.id, sh.scope_description, sh.current_step, sh.created_at, sh.created_by, s.name AS site_name
           FROM subcon_hiring sh LEFT JOIN sites s ON s.id = sh.site_id
-         ORDER BY sh.created_at DESC LIMIT 500`);
+         ORDER BY sh.created_at DESC ${allRecords ? '' : 'LIMIT 500'}`);
       const ids = recs.map(r => r.id);
       const byId = {};
       if (ids.length) {
@@ -463,11 +463,11 @@ const MODULE_DEFS = {
       { key: 'submit', label: 'Submit' },
       { key: 'approve', label: 'Approve' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       return safeAll(db, `
         SELECT id, report_date, submission_time, created_at, submitted_by, approved_by,
                approval_status, site_id
-          FROM dpr ORDER BY report_date DESC, id DESC LIMIT 500`).map(r => ({
+          FROM dpr ORDER BY report_date DESC, id DESC ${allRecords ? '' : 'LIMIT 500'}`).map(r => ({
         id: r.id,
         title: 'DPR ' + (r.report_date || ('#' + r.id)),
         subtitle: 'Site #' + (r.site_id || '—'),
@@ -492,12 +492,12 @@ const MODULE_DEFS = {
       { key: 'send', label: 'Send' },
       { key: 'paid', label: 'Paid' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const bills = safeAll(db, `
         SELECT id, bill_number, bill_type, customer_name, project_name,
                created_at, created_by, sent_at
           FROM sales_bills WHERE bill_type IS NOT NULL
-         ORDER BY created_at DESC LIMIT 500`);
+         ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`);
       if (!bills.length) return [];
       const ids = bills.map(b => b.id);
       const logByBill = {};
@@ -555,12 +555,12 @@ const MODULE_DEFS = {
       { key: 'promised', label: 'Promised' },
       { key: 'collected', label: 'Collected' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const steps = this.steps;
       const recs = safeAll(db, `
         SELECT id, client_name, invoice_number, invoice_date, outstanding_amount,
                owner_id, created_at, updated_at
-          FROM receivables ORDER BY created_at DESC LIMIT 500`);
+          FROM receivables ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`);
       if (!recs.length) return [];
       const ids = recs.map(r => r.id);
       const fu = {}, col = {};
@@ -627,14 +627,14 @@ const MODULE_DEFS = {
       { key: 'approved', label: 'Approved' },
       { key: 'paid', label: 'Payment Received' },
     ],
-    rows(db) {
+    rows(db, { allRecords = false } = {}) {
       const steps = this.steps;
       const bills = safeAll(db, `
         SELECT id, register_no, bill_number, vendor_name, project_name, category,
                created_by, approved_by, created_at,
                t0_uploaded_at, t1_tasks_created_at, t2_tasks_completed_at,
                t3_approved_at, t4_closed_at, status
-          FROM tally_bills ORDER BY created_at DESC LIMIT 500`);
+          FROM tally_bills ORDER BY created_at DESC ${allRecords ? '' : 'LIMIT 500'}`);
       if (!bills.length) return [];
 
       // Who actually closed the task stage = the reviewer of the last linked

@@ -160,6 +160,20 @@ router.post('/', (req, res) => {
       tag: `pms-${r.lastInsertRowid}`,
     });
   } catch {}
+
+  try {
+    const { createMandatoryTaskNotification } = require('../services/complianceService');
+    createMandatoryTaskNotification({
+      userId: +assigned_to,
+      taskType: 'pms_task',
+      taskId: r.lastInsertRowid,
+      title: `PMS Task: ${derivedTitle}`,
+      body: desc.slice(0, 150),
+      linkUrl: '/pms-tasks',
+      dbInstance: db,
+    });
+  } catch {}
+
   res.status(201).json({ id: r.lastInsertRowid, crm_name: proj.crm_name, project_name: proj.project_name });
 });
 
@@ -264,6 +278,12 @@ router.post('/:id/approve', (req, res) => {
   if (t.status !== 'submitted') return res.status(400).json({ error: 'Task is not awaiting approval' });
   db.prepare(`UPDATE pms_tasks SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewer_id=? WHERE id=?`)
     .run(req.user.id, req.params.id);
+
+  try {
+    const { closeMandatoryTaskNotification } = require('../services/complianceService');
+    closeMandatoryTaskNotification('pms_task', req.params.id, req.user.id, db);
+  } catch (_) {}
+
   // A task raised from a Tally bill closes Stage 3 for that bill once it is the
   // LAST one outstanding (Director CR 2026-08-13 §4). Required lazily so this
   // module keeps no load-time dependency on the tally route; the tally list/detail

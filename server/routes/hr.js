@@ -1787,6 +1787,11 @@ router.delete('/checklists/:id', requirePermission('checklists', 'delete'), (req
 //   once        → exact due_date match
 // Each entry is joined with today's completion row (if any) so the UI knows
 // whether proof has been uploaded.
+router.get('/checklists/my-work', (req, res) => {
+  const { checklistDashboard } = require('../lib/checklistDashboard');
+  res.json(checklistDashboard(getDb(), req.user.id, req.query.back));
+});
+
 router.get('/checklists/my-today', (req, res) => {
   const db = getDb();
   const today = istToday();
@@ -1914,8 +1919,11 @@ router.get('/checklists/by-date', (req, res) => {
            au.name as approved_by_name
     FROM checklists c
     LEFT JOIN users u  ON c.assigned_to = u.id
-    LEFT JOIN checklist_completions comp
-      ON comp.checklist_id = c.id AND comp.user_id = c.assigned_to AND comp.completion_date = ?
+    LEFT JOIN checklist_completions comp ON comp.id = (
+      SELECT cc.id FROM checklist_completions cc
+       WHERE cc.checklist_id = c.id AND cc.completion_date = ?
+       ORDER BY cc.submitted_at DESC, cc.id DESC LIMIT 1
+    )
     LEFT JOIN users au ON comp.approved_by = au.id
     WHERE 1=1 ${scope}
       AND (c.recurrence_start_date IS NULL OR c.recurrence_start_date <= ?)
@@ -1930,6 +1938,35 @@ router.get('/checklists/by-date', (req, res) => {
   const _away = _absenceSet(db, [date]);
   const filtered = rows.filter(r => _expectedOn(r, date, _away));
   res.json({ date, rows: filtered });
+});
+
+// Pending proof review is deliberately date-independent: an older weekly or
+// monthly submission must remain visible to the reviewer until a decision is
+// recorded. The by-date register remains available for attendance-style audit.
+router.get('/checklists/pending-review', (req, res) => {
+  const db = getDb();
+  let canManage = req.user.role === 'admin';
+  if (!canManage) {
+    const p = db.prepare("SELECT rp.can_see_all, rp.can_edit, rp.can_create FROM role_permissions rp JOIN user_roles ur ON rp.role_id=ur.role_id WHERE ur.user_id=? AND rp.module='checklists'").get(req.user.id);
+    canManage = !!(p && (p.can_see_all || p.can_edit || p.can_create));
+  }
+  if (!canManage) return res.status(403).json({ error: 'Checklist review permission required' });
+  const rows = db.prepare(`
+    SELECT c.id, c.description, c.title, c.frequency, c.department, c.assigned_to,
+           assigned.name AS assigned_to_name, submitter.name AS submitted_by_name,
+           comp.id AS completion_id,
+           comp.completion_date, comp.proof_url, comp.notes, comp.submitted_at,
+           comp.approval_status, comp.approved_at, comp.approval_note,
+           au.name AS approved_by_name
+      FROM checklist_completions comp
+      JOIN checklists c ON c.id=comp.checklist_id
+      LEFT JOIN users assigned ON assigned.id=c.assigned_to
+      LEFT JOIN users submitter ON submitter.id=comp.user_id
+      LEFT JOIN users au ON au.id=comp.approved_by
+     WHERE COALESCE(comp.approval_status,'pending')='pending'
+     ORDER BY comp.completion_date ASC, comp.submitted_at ASC, comp.id ASC
+  `).all();
+  res.json({ rows });
 });
 
 // ── GET /hr/checklists/followup?back=7&forward=7 ────────────────
@@ -1991,6 +2028,7 @@ router.get('/checklists/followup', (req, res) => {
            approval_status, submitted_at
     FROM checklist_completions
     WHERE completion_date BETWEEN ? AND ?
+    ORDER BY submitted_at, id
   `).all(fromDate, toDate);
   const compMap = {};
   for (const r of compRows) {
@@ -2784,21 +2822,112 @@ router.post('/training/assignments/:id/complete', (req, res) => {
 
 router.get('/my-notifications', (req, res) => {
   const { unread } = req.query;
-  let sql = 'SELECT * FROM notifications WHERE user_id = ?';
-  if (unread === '1') sql += ' AND read_at IS NULL';
-  sql += ' ORDER BY created_at DESC LIMIT 50';
-  res.json(getDb().prepare(sql).all(req.user.id));
+  const db = getDb();
+  const userId = req.user.id;
+  const userEmail = (req.user.email || '').trim().toLowerCase();
+  const userName = (req.user.name || '').trim();
+
+  // Find linked employee records
+  const emps = db.prepare('SELECT id, user_id, name, email FROM employees WHERE user_id = ? OR (email IS NOT NULL AND LOWER(email) = ?) OR LOWER(name) = LOWER(?)').all(userId, userEmail, userName);
+  const empIds = emps.map(e => e.id);
+  const allUserIds = Array.from(new Set([userId, ...empIds]));
+  const idPlaceholders = allUserIds.map(() => '?').join(',');
+
+  // Auto-link any compliance cases / notifications matching this user
+  try {
+    const matchingCases = db.prepare(`
+      SELECT id FROM compliance_cases 
+      WHERE user_id IN (${idPlaceholders}) 
+         OR (employee_name IS NOT NULL AND LOWER(employee_name) = LOWER(?))
+    `).all(...allUserIds, userName);
+
+    if (matchingCases.length > 0) {
+      const caseIds = matchingCases.map(c => c.id);
+      const casePlaceholders = caseIds.map(() => '?').join(',');
+      db.prepare(`
+        UPDATE notifications 
+        SET user_id = ? 
+        WHERE task_type = 'compliance_case' 
+          AND task_id IN (${casePlaceholders})
+          AND type = 'compliance_alert'
+      `).run(userId, ...caseIds);
+    }
+  } catch (_) {}
+
+  const isNancy = userName.toLowerCase().includes('nancy') || userEmail.includes('nancy');
+
+  // If Nancy is viewing, auto-heal any compliance cases missing monitor notifications
+  if (isNancy) {
+    try {
+      const unlinkedCases = db.prepare(`
+        SELECT c.* FROM compliance_cases c
+        WHERE NOT EXISTS (
+          SELECT 1 FROM notifications n 
+          WHERE n.task_type = 'compliance_case_monitor' AND n.task_id = c.id
+        )
+      `).all();
+
+      const nowStr = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+      for (const c of unlinkedCases) {
+        db.prepare(`
+          INSERT INTO notifications (
+            user_id, type, title, body, link_url, channel_sent,
+            is_mandatory, is_pending, task_type, task_id, delivered_at, status, created_at
+          ) VALUES (?, 'compliance_monitor_alert', ?, ?, ?, 'in_app', 1, 1, 'compliance_case_monitor', ?, ?, 'active', ?)
+        `).run(
+          userId,
+          `New Compliance Case: ${c.case_number} - ${c.employee_name}`,
+          `Violation [${c.violation_type}]: ${c.title} for ${c.employee_name}. Follow-up required before ${c.sla_deadline || 'SLA deadline'}.`,
+          `/compliance?case_id=${c.id}`,
+          c.id,
+          c.created_at || nowStr,
+          c.created_at || nowStr
+        );
+      }
+    } catch (_) {}
+  }
+
+  let sql = `
+    SELECT DISTINCT n.id, n.user_id, n.type, n.title, n.body, n.link_url, n.channel_sent, n.dedupe_key,
+           n.read_at, n.created_at, COALESCE(n.is_mandatory, 0) as is_mandatory,
+           COALESCE(n.is_pending, 0) as is_pending, n.task_type, n.task_id,
+           n.delivered_at, n.acknowledged_at, n.completed_at, n.closed_at,
+           COALESCE(n.status, 'active') as status
+    FROM notifications n
+    LEFT JOIN compliance_cases c ON n.task_type = 'compliance_case' AND n.task_id = c.id
+    WHERE n.user_id IN (${idPlaceholders})
+       OR (n.type = 'compliance_monitor_alert' AND (? = 1))
+       OR (n.type = 'compliance_alert' AND c.id IS NOT NULL AND (
+            c.user_id IN (${idPlaceholders})
+         OR (c.employee_name IS NOT NULL AND LOWER(c.employee_name) = LOWER(?))
+       ))
+  `;
+  const params = [...allUserIds, isNancy ? 1 : 0, ...allUserIds, userName];
+  if (unread === '1') sql += " AND (n.read_at IS NULL OR (n.is_mandatory = 1 AND n.status = 'active'))";
+  // Mandatory active items always sort first, followed by newest notifications (highest id)
+  sql += " ORDER BY (CASE WHEN n.is_mandatory = 1 AND n.status = 'active' THEN 1 ELSE 0 END) DESC, n.id DESC LIMIT 50";
+  
+  const notifs = db.prepare(sql).all(...params);
+  res.json(notifs);
 });
 
 router.put('/notifications/:id/read', (req, res) => {
   getDb().prepare(
     `UPDATE notifications SET read_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND user_id = ? AND read_at IS NULL`
-  ).run(req.params.id, req.user.id);
+     WHERE id = ? AND read_at IS NULL`
+  ).run(req.params.id);
   res.json({ ok: true });
 });
 
+router.post('/notifications/:id/acknowledge', (req, res) => {
+  const { acknowledgeMandatoryNotification } = require('../services/complianceService');
+  const result = acknowledgeMandatoryNotification(req.params.id, req.user.id, getDb());
+  if (!result) return res.status(404).json({ error: 'Notification not found' });
+  res.json(result);
+});
+
 router.post('/notifications/mark-all-read', (req, res) => {
+  // Sets read_at on notifications without closing active mandatory status
   getDb().prepare(
     `UPDATE notifications SET read_at = CURRENT_TIMESTAMP
      WHERE user_id = ? AND read_at IS NULL`

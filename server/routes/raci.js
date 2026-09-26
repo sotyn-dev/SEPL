@@ -212,11 +212,11 @@ router.put('/step-commitment/:module/:recordId', (req, res) => {
 // a per-person summary. Shared by GET /board/:module and the cross-module
 // /performance scorecard so the timing logic lives in exactly one place
 // (mam 2026-06-27: judge people on quality·quantity·time).
-function buildBoard(db, moduleKey) {
+function buildBoard(db, moduleKey, options = {}) {
   const def = MODULE_DEFS[moduleKey];
   if (!def) return null;
   const defSteps = activeSteps(db, moduleKey);   // honour L2 switch + per-step ON/OFF (mam 2026-07-21)
-  const recs = def.rows(db) || [];
+  const recs = def.rows(db, options) || [];
   const raci = getRaciForRecords(db, moduleKey, recs.map(r => r.id));
   // Module-wide DEFAULT RACI (stored under the sentinel record_id = 0). It fills
   // in any step a record hasn't been given its own R/A/C/I/SLA for, so mam can
@@ -277,6 +277,7 @@ function buildBoard(db, moduleKey) {
         consulted_id, consulted: nm(consulted_id),
         informed_id, informed: nm(informed_id),
         sla_hours: sla,
+        started_at: isCurrent && prev != null ? new Date(prev).toISOString() : null,
         elapsed_hours: elapsed != null ? Math.round(elapsed * 10) / 10 : null,
         late_hours: late > 0 ? Math.round(late * 10) / 10 : 0,
       };
@@ -299,6 +300,12 @@ function buildBoard(db, moduleKey) {
 }
 
 // GET /api/raci/board/:module — one module's Responsible board.
+router.get('/my-work', (req, res) => {
+  const permissions = require('../middleware/auth').getUserPermissions(req.user.id);
+  const { personalRaciWork } = require('../lib/personalRaciWork');
+  res.json(personalRaciWork(getDb(), req.user, permissions, buildBoard));
+});
+
 router.get('/board/:module', (req, res) => {
   if (!MODULE_DEFS[req.params.module]) return res.status(404).json({ error: 'Unknown module' });
   try { res.json(buildBoard(getDb(), req.params.module)); }
