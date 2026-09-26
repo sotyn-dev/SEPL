@@ -7,7 +7,7 @@
 //
 // A revision is never overwritten — uploading Rev 11 leaves Rev 10 fully
 // readable. The UI reflects that: every revision stays listed and openable.
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api';
 import toast from 'react-hot-toast';
@@ -18,8 +18,10 @@ import { exportCsv } from '../utils/exportCsv';
 import {
   FiPenTool, FiTrendingUp, FiGrid, FiMapPin, FiFileText, FiPlus, FiSearch,
   FiDownload, FiChevronRight, FiChevronLeft, FiLayers, FiClock, FiColumns, FiExternalLink, FiEdit2,
+  FiUsers,
 } from 'react-icons/fi';
 import { RevisionViewer, UploadRevisionModal } from '../components/DrawingRevisionModals';
+import DrawingRaciModal from '../components/DrawingRaciModal';
 
 const fmtDate = (d) => {
   if (!d) return '—';
@@ -154,9 +156,12 @@ function DrawingsTab() {
   const [data, setData] = useState({ rows: [], total: 0 });
   const [opts, setOpts] = useState(null);
   const [filters, setFilters] = useState({ search: '', site_id: '', discipline: '', drawing_type: '', status: '' });
+  const [sopFilter, setSopFilter] = useState('all');
   const [offset, setOffset] = useState(0);
   const [newOpen, setNewOpen] = useState(false);
   const [editItem, setEditItem] = useState(null);
+  const [raciOpen, setRaciOpen] = useState(false);
+  const [raciData, setRaciData] = useState(null);
   const LIMIT = 50;
 
   const load = useCallback(() => {
@@ -166,13 +171,54 @@ function DrawingsTab() {
       .then(r => setData(r.data)).catch(() => toast.error('Could not load drawings'));
   }, [filters, offset]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { api.get('/drawing-tracker/options').then(r => setOpts(r.data)).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get('/drawing-tracker/options').then(r => {
+      setOpts(r.data);
+      if (r.data?.raci) setRaciData(r.data.raci);
+    }).catch(() => {});
+  }, []);
+  const loadRaci = useCallback(() => {
+    api.get('/drawing-tracker/raci').then(r => setRaciData(r.data.raci)).catch(() => {});
+  }, []);
   useEffect(() => { setOffset(0); }, [filters]);
 
   const F = (k, v) => setFilters(f => ({ ...f, [k]: v }));
 
+  const displayedRows = useMemo(() => {
+    if (sopFilter === 'all') return data.rows;
+    if (sopFilter === 's1_s2') return data.rows.filter(r => r.sop_stage === 's1_register' || r.sop_stage === 's2_drafting' || (!r.sop_stage && !r.current_revision_id));
+    if (sopFilter === 's3') return data.rows.filter(r => r.sop_stage === 's3_internal_check' || (r.internal_review_status === 'pending' && r.current_revision_id && !r.client_submitted_at));
+    if (sopFilter === 's4_s5') return data.rows.filter(r => r.sop_stage === 's4_client_submitted' || r.sop_stage === 's5_under_review' || (r.client_submitted_at && r.site_release_status !== 'released'));
+    if (sopFilter === 's6') return data.rows.filter(r => r.sop_stage === 's6_approved_site' || r.site_release_status === 'released');
+    return data.rows;
+  }, [data.rows, sopFilter]);
+
   return (
     <div className="space-y-3">
+      {/* SOP-06 Stage Filter Pills */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+        {[
+          ['all', 'All Drawings'],
+          ['s1_s2', `S1/S2 · Drafting (${raciData?.s1_s2_drafting?.assigned_name || 'MD Asad'})`],
+          ['s3', `S3 · Senior Check (${raciData?.s3_senior_check?.assigned_name || 'Ambuj'})`],
+          ['s4_s5', `S4/S5 · With Client (${raciData?.s4_client_submit?.assigned_name || 'Lovely / Rajat sir'})`],
+          ['s6', `S6 · Released GFC (${raciData?.s6_site_release?.assigned_name || 'Ambuj'})`],
+        ].map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setSopFilter(k)}
+            className={`px-3 py-1 rounded-full font-medium border whitespace-nowrap transition-all ${
+              sopFilter === k
+                ? 'bg-red-600 text-white border-red-600 shadow-sm font-bold'
+                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <div className="card p-3 flex flex-wrap gap-2 items-end">
         <div className="flex-1 min-w-[200px]">
           <label className="label text-xs">Search</label>
@@ -208,11 +254,16 @@ function DrawingsTab() {
             <option value="cancelled">Cancelled</option>
           </select>
         </div>
-        {canCreate('drawing_tracker') && (
-          <button onClick={() => setNewOpen(true)} className="btn btn-primary flex items-center gap-1 text-sm ml-auto">
-            <FiPlus size={14} /> New Drawing
+        <div className="flex items-center gap-2 ml-auto">
+          <button onClick={() => setRaciOpen(true)} className="btn btn-secondary flex items-center gap-1.5 text-sm" title="View or Configure SOP-06 Roles & Delegation">
+            <FiUsers size={14} className="text-slate-600" /> Roles (RACI)
           </button>
-        )}
+          {canCreate('drawing_tracker') && (
+            <button onClick={() => setNewOpen(true)} className="btn btn-primary flex items-center gap-1 text-sm">
+              <FiPlus size={14} /> New Drawing
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="card p-0 overflow-x-auto">
@@ -224,6 +275,8 @@ function DrawingsTab() {
             <th className="px-3 py-2 text-left">Drawing No</th>
             <th className="px-3 py-2 text-left">Title</th>
             <th className="px-3 py-2 text-left">Discipline</th>
+            <th className="px-3 py-2 text-center">SOP-06 Stage</th>
+            <th className="px-3 py-2 text-left">Needed By</th>
             <th className="px-3 py-2 text-center">Current Rev</th>
             <th className="px-3 py-2 text-center">Revisions</th>
             <th className="px-3 py-2 text-left">Last Revised</th>
@@ -231,7 +284,7 @@ function DrawingsTab() {
             <th className="px-3 py-2 text-center">Action</th>
           </tr></thead>
           <tbody className="divide-y divide-gray-100">
-            {data.rows.map((r, idx) => (
+            {displayedRows.map((r, idx) => (
               <tr key={r.id} className="hover:bg-red-50/30">
                 <td className="px-3 py-2 text-center text-gray-400 font-medium text-xs">{offset + idx + 1}</td>
                 <td className="px-3 py-2 text-xs">{r.project_name || '—'}</td>
@@ -246,6 +299,51 @@ function DrawingsTab() {
                 </td>
                 <td className="px-3 py-2">{r.title || '—'}</td>
                 <td className="px-3 py-2 text-xs">{r.discipline || '—'}</td>
+                <td className="px-3 py-2 text-center whitespace-nowrap">
+                  {(() => {
+                    const stage = r.sop_stage || 's1_register';
+                    if (stage === 's6_approved_site' || r.site_release_status === 'released') {
+                      return (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-300" title={`Release Note: ${r.release_note_no || 'DRN'}`}>
+                          S6 · Released GFC
+                        </span>
+                      );
+                    }
+                    if (stage === 's5_under_review' || r.client_submitted_at) {
+                      return (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-800 border border-purple-300">
+                          S5 · With Client
+                        </span>
+                      );
+                    }
+                    if (stage === 's4_client_submitted' || r.internal_review_status === 'approved') {
+                      return (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-blue-100 text-blue-800 border border-blue-300">
+                          S4 · Ready Submit
+                        </span>
+                      );
+                    }
+                    if (stage === 's3_internal_check' || r.current_revision_id) {
+                      return (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                          S3 · Senior Check
+                        </span>
+                      );
+                    }
+                    return (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-slate-100 text-slate-700 border border-slate-300">
+                        S1 · Register
+                      </span>
+                    );
+                  })()}
+                </td>
+                <td className="px-3 py-2 text-xs whitespace-nowrap">
+                  {r.target_date ? (
+                    <span className={new Date(r.target_date) < new Date() && r.site_release_status !== 'released' ? 'text-red-600 font-bold' : 'text-slate-600'}>
+                      {fmtDate(r.target_date)}
+                    </span>
+                  ) : '—'}
+                </td>
                 <td className="px-3 py-2 text-center">
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${REV_CLS[r.current_status] || 'bg-gray-100 text-gray-500'}`}>
                     Rev {r.current_revision_no ?? '—'}
@@ -267,7 +365,7 @@ function DrawingsTab() {
                 </td>
               </tr>
             ))}
-            {data.rows.length === 0 && <tr><td colSpan={11} className="text-center py-8 text-gray-400">No drawings found</td></tr>}
+            {displayedRows.length === 0 && <tr><td colSpan={13} className="text-center py-8 text-gray-400">No drawings found</td></tr>}
           </tbody>
         </table>
         {data.total > LIMIT && (
@@ -283,6 +381,7 @@ function DrawingsTab() {
         )}
       </div>
 
+      {raciOpen && <DrawingRaciModal onClose={() => setRaciOpen(false)} onSaved={() => { load(); loadRaci(); }} />}
       {newOpen && <NewDrawingModal opts={opts} onClose={() => setNewOpen(false)} onSaved={() => { setNewOpen(false); load(); }} />}
       {editItem && <EditDrawingModal drawing={editItem} opts={opts} onClose={() => setEditItem(null)} onSaved={() => { setEditItem(null); load(); }} />}
     </div>
@@ -295,6 +394,7 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
     project_source: 'business_book', project_id: '', project_name: '',
     site_id: '', site_name: '',
     drawing_number: '', title: '', discipline: '', drawing_type: '',
+    target_date: '',
     revision_description: '', revision_date: new Date().toLocaleDateString('en-CA'),
     boq_required: false,
   });
@@ -411,7 +511,7 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div><label className="label">Discipline</label>
             <select className="select" value={form.discipline} onChange={e => F('discipline', e.target.value)}>
               <option value="">Select</option>
@@ -423,6 +523,13 @@ function NewDrawingModal({ opts, onClose, onSaved }) {
               <option value="">Select</option>
               {(opts?.drawing_types || []).map(d => <option key={d} value={d}>{d}</option>)}
             </select>
+          </div>
+          <div>
+            <label className="label flex items-center justify-between">
+              <span>Target Date (Needed By)</span>
+              <span className="text-[10px] text-red-600 font-semibold">SOP-06.1</span>
+            </label>
+            <input type="date" className="input" value={form.target_date} onChange={e => F('target_date', e.target.value)} />
           </div>
         </div>
 
@@ -484,6 +591,7 @@ export function EditDrawingModal({ drawing, opts, onClose, onSaved }) {
     title: drawing.title || '',
     discipline: drawing.discipline || '',
     drawing_type: drawing.drawing_type || '',
+    target_date: drawing.target_date ? String(drawing.target_date).slice(0, 10) : '',
     project_source: drawing.project_source || 'business_book',
     project_id: drawing.project_id ?? '',
     project_name: drawing.project_name || '',
@@ -620,7 +728,7 @@ export function EditDrawingModal({ drawing, opts, onClose, onSaved }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <label className="label">Discipline</label>
             <select className="select" value={form.discipline} onChange={e => F('discipline', e.target.value)}>
@@ -634,6 +742,13 @@ export function EditDrawingModal({ drawing, opts, onClose, onSaved }) {
               <option value="">Select</option>
               {(opts?.drawing_types || []).map(d => <option key={d} value={d}>{d}</option>)}
             </select>
+          </div>
+          <div>
+            <label className="label flex items-center justify-between">
+              <span>Target Needed By</span>
+              <span className="text-[10px] text-red-600 font-semibold">SOP-06.1</span>
+            </label>
+            <input type="date" className="input" value={form.target_date} onChange={e => F('target_date', e.target.value)} />
           </div>
         </div>
 

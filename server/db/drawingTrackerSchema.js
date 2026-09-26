@@ -128,6 +128,54 @@ function runDrawingTrackerMigrations(db) {
   try { db.exec(`ALTER TABLE drawings ADD COLUMN boq_required INTEGER DEFAULT 0;`); } catch (_) {}
   try { db.exec(`ALTER TABLE drawings ADD COLUMN boq_file_url TEXT;`); } catch (_) {}
   try { db.exec(`ALTER TABLE drawings ADD COLUMN boq_file_name TEXT;`); } catch (_) {}
+
+  // Idempotent column additions for SOP-06 Drawing Approval Workflow
+  const drawingCols = [
+    `target_date DATE`,
+    `sop_stage TEXT DEFAULT 's1_register'`,
+    `internal_review_status TEXT DEFAULT 'pending'`,
+    `internal_reviewed_by INTEGER`,
+    `internal_reviewed_by_name TEXT`,
+    `internal_reviewed_at DATETIME`,
+    `internal_review_notes TEXT`,
+    `internal_checklist TEXT`,
+    `client_submitted_at DATETIME`,
+    `client_submitted_by INTEGER`,
+    `client_submitted_by_name TEXT`,
+    `client_expected_date DATE`,
+    `submission_ref_no TEXT`,
+    `submission_notes TEXT`,
+    `reminder_50_sent_at DATETIME`,
+    `reminder_80_sent_at DATETIME`,
+    `reminder_escalation_status TEXT`,
+    `site_release_status TEXT DEFAULT 'pending'`,
+    `site_released_at DATETIME`,
+    `site_released_by INTEGER`,
+    `site_released_by_name TEXT`,
+    `release_note_no TEXT`,
+    `ready_checklist_ticked INTEGER DEFAULT 0`,
+    `site_release_remarks TEXT`,
+  ];
+  for (const col of drawingCols) {
+    try { db.exec(`ALTER TABLE drawings ADD COLUMN ${col};`); } catch (_) {}
+  }
+
+  const revCols = [
+    `internal_review_status TEXT DEFAULT 'pending'`,
+    `internal_reviewed_by INTEGER`,
+    `internal_reviewed_by_name TEXT`,
+    `internal_reviewed_at DATETIME`,
+    `internal_checklist TEXT`,
+    `internal_review_notes TEXT`,
+    `client_submitted_at DATETIME`,
+    `client_expected_date DATE`,
+    `submission_ref_no TEXT`,
+    `release_note_no TEXT`,
+    `site_released_at DATETIME`,
+  ];
+  for (const col of revCols) {
+    try { db.exec(`ALTER TABLE drawing_revisions ADD COLUMN ${col};`); } catch (_) {}
+  }
 }
 
 module.exports = { runDrawingTrackerMigrations };
