@@ -266,11 +266,11 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
         category, lead_type, lead_kind,
         project_name, project_location, city,
         estimated_value, tentative_timeline, sub_trades_scope, building_category,
-        remarks, source,
+        remarks, source, assigned_sc,
         current_stage, stage_entered_at,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'private', ?, ?, ?, ?, ?, ?, ?, ?, 'Website', 'lead_capture', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'private', ?, ?, ?, ?, ?, ?, ?, ?, 'Website', 'Nancy', 'lead_capture', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `).run(
       leadNo,
       clientName,
@@ -291,12 +291,12 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
 
     const leadId = r.lastInsertRowid;
 
-    // 7. Audit Log
+    // 7. Audit Log (SOP-01.1 Lead Entry Format)
     try {
       db.prepare(`
         INSERT INTO sales_funnel_audit (lead_id, stage, action, actor_name, notes)
-        VALUES (?, 'lead_capture', 'create', 'Website Webhook', ?)
-      `).run(leadId, `Auto-captured via securedengineers.com (${formTitle})`);
+        VALUES (?, 'lead_capture', 'create', 'ERP (Nancy)', ?)
+      `).run(leadId, `Auto-captured via securedengineers.com (${formTitle}) · SOP-01.1 Lead Entry Format (Assigned: Nancy)`);
     } catch (auditErr) {
       console.warn('[webhook] audit log non-fatal error:', auditErr.message);
     }
@@ -334,6 +334,34 @@ router.post('/website-lead', websiteBurstLimit, websiteDayLimit, (req, res) => {
       }
     } catch (pushErr) {
       console.warn('[webhook] notification write non-fatal error:', pushErr.message);
+    }
+
+    // 8b. Automated Thank-You Message to Client (SOP-01.1)
+    if (email) {
+      try {
+        const { sendEmail } = require('../lib/email');
+        sendEmail({
+          to: email,
+          subject: `Enquiry Received: ${projectName} — Secured Engineers Pvt Ltd`,
+          html: `
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+              <div style="background-color: #1e40af; color: #ffffff; padding: 20px; text-align: center;">
+                <h2 style="margin: 0; font-size: 20px;">Secured Engineers Pvt. Ltd.</h2>
+                <p style="margin: 5px 0 0 0; font-size: 13px; opacity: 0.9;">Thank you for getting in touch</p>
+              </div>
+              <div style="padding: 24px;">
+                <p>Dear <strong>${clientName}</strong>,</p>
+                <p>We have successfully received your enquiry regarding <strong>${projectName}</strong> (Ref: <strong>${leadNo}</strong>).</p>
+                <p>Our Sales Coordinator has received your details and our team will get in touch with you promptly.</p>
+                <br>
+                <p style="margin: 0; font-size: 13px;">Warm regards,</p>
+                <p style="margin: 4px 0 0 0; font-weight: bold; font-size: 14px;">Secured Engineers Team</p>
+              </div>
+            </div>
+          `,
+          text: `Dear ${clientName},\n\nThank you for reaching out to Secured Engineers. We have received your enquiry for ${projectName} (Ref: ${leadNo}). Our team will be in touch shortly.`,
+        }).catch(err => console.warn('[webhook] thank-you email non-fatal:', err.message));
+      } catch (_) {}
     }
 
     // 9. Real-Time Socket.IO Broadcast (No-refresh instant update + live sound & banner)

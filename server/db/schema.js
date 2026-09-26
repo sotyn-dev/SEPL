@@ -3893,6 +3893,13 @@ function initializeDatabase() {
     // stays in assigned_asm for display, FK in assigned_asm_id for the
     // ASM's "My Leads" dashboard filter.
     ['sales_funnel', 'assigned_asm_id INTEGER REFERENCES users(id)'],
+    // SOP-01: Lead to First Check (Owner: Sales Head — Rajat Sharma)
+    ['sales_funnel', 'sop_quick_check_data TEXT'],
+    ['sales_funnel', 'sop_call_script_data TEXT'],
+    ['sales_funnel', 'mom_emailed_at DATETIME'],
+    ['sales_funnel', 'mom_email_recipient TEXT'],
+    ['sales_funnel', 'sop_boq_checklist TEXT'],
+    ['sales_funnel', 'estimation_triggered_at DATETIME'],
     // Complaints — mam's Google Form (2026-04-23) adds State and Remarks.
     // Complaint Type = Paid / Free (changed from Urgent/Normal/Low)
     // Customer Type = Old Site / Running Site (changed from New/Existing)

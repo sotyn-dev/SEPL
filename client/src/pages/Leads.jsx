@@ -10,7 +10,7 @@ import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { useAppSocket } from '../context/SocketProvider';
-import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy, FiMail, FiPhoneCall, FiClock } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
 import Pagination, { usePagination } from '../components/PaginationBar';
@@ -182,6 +182,8 @@ export default function Leads() {
   // browsing the funnel).  No `influencers:view` perm required —
   // backend exposes a public /lookup path.
   const [influencers, setInfluencers] = useState([]);
+  const [emailingMom, setEmailingMom] = useState(false);
+  const [momRecipient, setMomRecipient] = useState('');
 
   // MD 2026-09-03 (TSK-0397, "Sales Funnel ... no sales tracking"): both calls
   // used to end in `.catch(() => {})`. A swallowed failure left `dashboard`
@@ -301,8 +303,41 @@ export default function Leads() {
   };
 
   const uploadFile = async (file) => { const fd = new FormData(); fd.append('file', file); const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); return r.data.url; };
-  const loadBoqs = (id) => api.get(`/sales-funnel/${id}/boqs`).then(r => setBoqList(r.data || [])).catch(() => setBoqList([]));
-  const viewLead = (l) => { setViewData(l); setStageForm({}); setViewStage(null); setModal('view'); setBoqForm({ boq_file_link: '', boq_amount: '', notes: '' }); api.get(`/sales-funnel/${l.id}/followups`).then(r => setFollowups(r.data)).catch(() => setFollowups([])); loadBoqs(l.id); };
+  const safeParse = (str) => {
+    try { return str ? JSON.parse(str) : {}; }
+    catch { return {}; }
+  };
+  const viewLead = (l) => {
+    setViewData(l);
+    setStageForm({
+      ...l,
+      sop_quick_check: safeParse(l.sop_quick_check_data),
+      sop_call_script: safeParse(l.sop_call_script_data),
+      sop_boq_checklist: safeParse(l.sop_boq_checklist),
+    });
+    setMomRecipient(l.email || '');
+    setViewStage(null);
+    setModal('view');
+    setBoqForm({ boq_file_link: '', boq_amount: '', notes: '' });
+    api.get(`/sales-funnel/${l.id}/followups`).then(r => setFollowups(r.data)).catch(() => setFollowups([]));
+    loadBoqs(l.id);
+  };
+
+  const emailMom = async (id, payload) => {
+    setEmailingMom(true);
+    try {
+      const res = await api.post(`/sales-funnel/${id}/email-mom`, payload);
+      toast.success(`MOM successfully mailed to ${res.data.recipient}`);
+      if (viewData) {
+        setViewData(v => ({ ...v, mom_emailed_at: res.data.mom_emailed_at, mom_email_recipient: res.data.recipient }));
+      }
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to email MOM');
+    } finally {
+      setEmailingMom(false);
+    }
+  };
   const addBoq = async () => {
     if (!boqForm.boq_file_link && !(+boqForm.boq_amount > 0)) return toast.error('Attach a BOQ file or enter an amount');
     setBoqAdding(true);
@@ -424,15 +459,47 @@ export default function Leads() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* Header with SOP-01 Banner */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <h1 className="text-xl font-bold flex items-center gap-2"><FiTarget className="text-red-600" /> Sales Funnel</h1>
+        <div>
+          <h1 className="text-xl font-bold flex items-center gap-2">
+            <FiTarget className="text-red-600" /> Sales Funnel
+            <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+              SOP-01 · Lead to First Check
+            </span>
+          </h1>
+          <p className="text-xs text-gray-500 mt-0.5">Owner: <span className="font-semibold text-gray-700">Sales Head — Rajat Sharma</span> · Workflow S1 to S5</p>
+        </div>
         <div className="flex gap-2">
           <button onClick={() => exportCsv('leads',
             ['Lead No', 'Client', 'Company', 'Category', 'Location', 'Phone', 'Email', 'Source', 'Stage', 'Assigned SC', 'Assigned ASM', 'Date'],
             leads.map(l => [l.lead_no, l.client_name, l.company_name, l.category, `${l.district || ''} ${l.state || ''}`.trim(), l.phone, l.email, l.source, l.current_stage, l.assigned_sc, l.assigned_asm, l.created_at]))}
             className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export Excel</button>
           {canCreate('leads') && <button onClick={() => { setForm({ client_name: '', company_name: '', phone: '', email: '', category: '', address: '', source: '', assigned_sc: user?.name || '', assigned_asm: '', remarks: '' }); setModal('add'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> New Lead</button>}
+        </div>
+      </div>
+
+      {/* SOP-01 5-Step Process Bar */}
+      <div className="hidden lg:grid grid-cols-5 gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+        <div className="p-2 rounded bg-white border border-slate-200">
+          <div className="font-bold text-blue-900 flex items-center justify-between"><span>S1 · Lead Entry</span><span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.2 rounded font-mono">1s</span></div>
+          <p className="text-[11px] text-gray-500 truncate mt-0.5">ERP auto-assign (Nancy)</p>
+        </div>
+        <div className="p-2 rounded bg-white border border-slate-200">
+          <div className="font-bold text-indigo-900 flex items-center justify-between"><span>S2 · 5-Pt Check</span><span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded font-mono">5m</span></div>
+          <p className="text-[11px] text-gray-500 truncate mt-0.5">GO / NO-GO (Rajat sir)</p>
+        </div>
+        <div className="p-2 rounded bg-white border border-slate-200">
+          <div className="font-bold text-violet-900 flex items-center justify-between"><span>S3 · Call Script</span><span className="text-[10px] bg-violet-50 text-violet-700 px-1.5 py-0.2 rounded font-mono">30m</span></div>
+          <p className="text-[11px] text-gray-500 truncate mt-0.5">GO leads only (Sales Exec)</p>
+        </div>
+        <div className="p-2 rounded bg-white border border-slate-200">
+          <div className="font-bold text-purple-900 flex items-center justify-between"><span>S4 · Site MOM</span><span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.2 rounded font-mono">2h</span></div>
+          <p className="text-[11px] text-gray-500 truncate mt-0.5">Mail MOM to client</p>
+        </div>
+        <div className="p-2 rounded bg-white border border-slate-200">
+          <div className="font-bold text-amber-900 flex items-center justify-between"><span>S5 · BOQ Upload</span><span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.2 rounded font-mono">1s</span></div>
+          <p className="text-[11px] text-gray-500 truncate mt-0.5">Auto Estimation Start</p>
         </div>
       </div>
 
@@ -777,11 +844,61 @@ export default function Leads() {
                     <span className="text-[10px] font-normal text-gray-500">Lead is currently at: <b>{STAGE_LABELS[viewData.current_stage]}</b></span>
                   )}
                 </h5>
-                {/* Stage 1 → Stage 2: Qualified or Not (GO/NO-GO) */}
-                {activeStage === 'lead_capture' && (<div className="space-y-2">
-                  <textarea className="input" rows="2" placeholder="Remarks..." value={stageForm.qualified_remarks || ''} onChange={e => setStageForm({ ...stageForm, qualified_remarks: e.target.value })} />
-                  {/* Tentative project value — captured when the lead is qualified
-                    (mam 2026-06-25). Optional; stored on the funnel lead. */}
+                {/* Stage 1 → Stage 2: Qualified or Not (S2: 5-Point Quick Check GO / NO-GO · SOP-01.2) */}
+                {activeStage === 'lead_capture' && (<div className="space-y-3">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-blue-900 flex items-center gap-1.5">
+                        <FiClock className="text-blue-600" /> SOP-01.2 · 5-Point Quick Check (GO / NO-GO)
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {(() => {
+                          const checks = stageForm.sop_quick_check || {};
+                          const verifiedCount = ['chk_client', 'chk_scale', 'chk_payment', 'chk_feasibility', 'chk_intent'].filter(k => !!checks[k]).length;
+                          return (
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${verifiedCount === 5 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-blue-100 text-blue-800'}`}>
+                              {verifiedCount}/5 Verified
+                            </span>
+                          );
+                        })()}
+                        <span className="bg-blue-200/60 text-blue-800 text-[10px] px-2 py-0.5 rounded font-semibold">SLA: 5 min · Rajat sir</span>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-blue-800 mt-1">
+                      Quickly verify client eligibility, project scale, and creditworthiness. <b>NO-GO leads never reach seniors</b>.
+                    </p>
+
+                    <div className="mt-2.5 bg-white border border-blue-100 rounded-lg p-2.5 space-y-1.5">
+                      {[
+                        { key: 'chk_client', label: '1. Client Identity: Verifiable, genuine entity & contact person' },
+                        { key: 'chk_scale', label: '2. Project Size: Scope meets SEPL minimum viable threshold' },
+                        { key: 'chk_payment', label: '3. Payment Record: Good credit record, no past dues/bad debts' },
+                        { key: 'chk_feasibility', label: '4. Scope Feasibility: Engineering matches SEPL core trades & location' },
+                        { key: 'chk_intent', label: '5. Authority & Intent: Genuine buyer intent with decision authority' },
+                      ].map(item => {
+                        const checks = stageForm.sop_quick_check || {};
+                        const isChecked = !!checks[item.key];
+                        return (
+                          <label key={item.key} className="flex items-start gap-2 cursor-pointer hover:bg-slate-50 p-1 rounded">
+                            <input
+                              type="checkbox"
+                              className="rounded text-blue-600 focus:ring-blue-500 mt-0.5"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const next = { ...checks, [item.key]: e.target.checked };
+                                setStageForm({ ...stageForm, sop_quick_check: next });
+                              }}
+                            />
+                            <span className={`text-xs ${isChecked ? 'text-gray-900 font-medium' : 'text-gray-600'}`}>{item.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <textarea className="input" rows="2" placeholder="Verification remarks / GO or NO-GO reason..." value={stageForm.qualified_remarks || ''} onChange={e => setStageForm({ ...stageForm, qualified_remarks: e.target.value })} />
+                  
+                  {/* Tentative project value */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-0.5">Tentative project amount (₹) <span className="font-normal normal-case text-gray-400">— qualified lead</span></label>
@@ -796,32 +913,155 @@ export default function Leads() {
                         onChange={e => setStageForm({ ...stageForm, closing_date: e.target.value })} />
                     </div>
                   </div>
-                  <div className="flex gap-2"><button onClick={() => advanceStage(viewData.id, 'qualification', stageForm)} className="btn btn-success flex-1"><FiCheck className="inline mr-1" />Qualified</button><button onClick={() => advanceStage(viewData.id, 'not_qualified', stageForm)} className="btn btn-danger flex-1"><FiX className="inline mr-1" />Not Qualified</button></div>
+
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={() => {
+                        const requiredKeys = ['chk_client', 'chk_scale', 'chk_payment', 'chk_feasibility', 'chk_intent'];
+                        const checks = stageForm.sop_quick_check || {};
+                        const missing = requiredKeys.filter(k => !checks[k]);
+                        if (missing.length > 0) {
+                          toast.error(`All 5 checklist points must be verified and checked before GO qualification (${5 - missing.length}/5 completed).`);
+                          return;
+                        }
+                        advanceStage(viewData.id, 'qualification', {
+                          ...stageForm,
+                          sop_quick_check_data: stageForm.sop_quick_check || {},
+                        });
+                      }}
+                      className="btn btn-success flex-1 font-bold"
+                    >
+                      <FiCheck className="inline mr-1" /> GO (Qualify Lead)
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!stageForm.qualified_remarks || !stageForm.qualified_remarks.trim()) {
+                          toast.error('Please enter a rejection / NO-GO reason in remarks before dropping the lead.');
+                          return;
+                        }
+                        advanceStage(viewData.id, 'not_qualified', {
+                          ...stageForm,
+                          sop_quick_check_data: stageForm.sop_quick_check || {},
+                        });
+                      }}
+                      className="btn btn-danger flex-1"
+                    >
+                      <FiX className="inline mr-1" /> NO-GO (Drop Lead)
+                    </button>
+                  </div>
                 </div>)}
-                {/* Stage 2 → Stage 3: Schedule Site Survey (was 'Assign Meeting') */}
-                {activeStage === 'qualification' && (<div className="space-y-2">
-                  <input className="input" type="datetime-local" value={stageForm.meeting_date || ''} onChange={e => setStageForm({ ...stageForm, meeting_date: e.target.value })} />
-                  <input className="input" placeholder="Location" value={stageForm.meeting_location || ''} onChange={e => setStageForm({ ...stageForm, meeting_location: e.target.value })} />
-                  {/* Assign Meeting → searchable employee dropdown. Stores
-                    both the name (for display) and user_id (so the
-                    assignee's dashboard can filter to their meetings). */}
-                  <SearchableSelect
-                    options={employees.map(e => ({
-                      value: e.id,
-                      label: e.name + (e.designation ? ' — ' + e.designation : ''),
-                      name: e.name,
-                      user_id: e.user_id,
-                    }))}
-                    value={stageForm.meeting_assigned_employee_id || ''}
-                    onChange={(opt) => setStageForm({
-                      ...stageForm,
-                      meeting_assigned_employee_id: opt?.value || null,
-                      meeting_assigned_to: opt?.name || '',
-                      meeting_assigned_to_id: opt?.user_id || null,
-                    })}
-                    placeholder="Assign To (search employee)..."
-                  />
-                  <button onClick={() => advanceStage(viewData.id, 'site_survey', stageForm)} className="btn btn-primary w-full">Schedule Site Survey</button>
+
+                {/* Stage 2 → Stage 3: S3 Qualification Call Script (SOP-01.3) + Schedule Site Survey (SOP-01.4) */}
+                {activeStage === 'qualification' && (<div className="space-y-3">
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-indigo-900 flex items-center gap-1.5">
+                        <FiPhoneCall className="text-indigo-600" /> SOP-01.3 · Client Qualification Call Script
+                      </span>
+                      <span className="bg-indigo-200/60 text-indigo-800 text-[10px] px-2 py-0.5 rounded font-semibold">SLA: 30 min · Rajat sir</span>
+                    </div>
+                    <p className="text-[11px] text-indigo-800 mt-1">
+                      Phone call conducted only for <b>GO leads</b> using a fixed question set.
+                    </p>
+
+                    <div className="mt-2.5 space-y-2">
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-700 uppercase">Q1. Core Requirement & Technical Scope:</label>
+                        <input
+                          className="input text-xs py-1"
+                          placeholder="e.g. Turnkey Fire Hydrant + Alarm for 50,000 sq ft warehouse"
+                          value={stageForm.sop_call_script?.q_scope || ''}
+                          onChange={e => setStageForm({
+                            ...stageForm,
+                            sop_call_script: { ...(stageForm.sop_call_script || {}), q_scope: e.target.value }
+                          })}
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-semibold text-gray-700 uppercase">Q2. Budget & Fund Approval:</label>
+                          <select
+                            className="select text-xs py-1"
+                            value={stageForm.sop_call_script?.q_budget || ''}
+                            onChange={e => setStageForm({
+                              ...stageForm,
+                              sop_call_script: { ...(stageForm.sop_call_script || {}), q_budget: e.target.value }
+                            })}
+                          >
+                            <option value="">— Select Budget Status —</option>
+                            <option value="approved">Formally Approved & Ready</option>
+                            <option value="in_planning">In Financial Planning / Approval</option>
+                            <option value="budgetary">Budgetary / Estimation Purpose</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-gray-700 uppercase">Q3. Target Execution Timeline:</label>
+                          <input
+                            className="input text-xs py-1"
+                            placeholder="e.g. Award in 15 days, work in 60 days"
+                            value={stageForm.sop_call_script?.q_timeline || ''}
+                            onChange={e => setStageForm({
+                              ...stageForm,
+                              sop_call_script: { ...(stageForm.sop_call_script || {}), q_timeline: e.target.value }
+                            })}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-lg p-3 bg-white space-y-2">
+                    <span className="text-[11px] font-bold text-gray-700 block uppercase tracking-wide">Schedule Site Survey Meeting (SOP-01.4)</span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input className="input" type="datetime-local" value={stageForm.meeting_date || ''} onChange={e => setStageForm({ ...stageForm, meeting_date: e.target.value })} />
+                      <input className="input" placeholder="Meeting Location (Site / Office / Online)" value={stageForm.meeting_location || ''} onChange={e => setStageForm({ ...stageForm, meeting_location: e.target.value })} />
+                    </div>
+                    <SearchableSelect
+                      options={employees.map(e => ({
+                        value: e.id,
+                        label: e.name + (e.designation ? ' — ' + e.designation : ''),
+                        name: e.name,
+                        user_id: e.user_id,
+                      }))}
+                      value={stageForm.meeting_assigned_employee_id || ''}
+                      onChange={(opt) => setStageForm({
+                        ...stageForm,
+                        meeting_assigned_employee_id: opt?.value || null,
+                        meeting_assigned_to: opt?.name || '',
+                        meeting_assigned_to_id: opt?.user_id || null,
+                      })}
+                      placeholder="Assign Sales Executive (search employee)..."
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      const script = stageForm.sop_call_script || {};
+                      if (!script.q_scope || !script.q_scope.trim()) {
+                        toast.error('Please enter Q1: Core Requirement & Technical Scope from the call script.');
+                        return;
+                      }
+                      if (!script.q_budget) {
+                        toast.error('Please select Q2: Budget & Fund Approval status.');
+                        return;
+                      }
+                      if (!stageForm.meeting_date) {
+                        toast.error('Please schedule the Site Survey meeting date & time (SOP-01.4).');
+                        return;
+                      }
+                      if (!stageForm.meeting_assigned_to && !stageForm.meeting_assigned_employee_id) {
+                        toast.error('Please assign a Sales Executive to conduct the site survey.');
+                        return;
+                      }
+                      advanceStage(viewData.id, 'site_survey', {
+                        ...stageForm,
+                        sop_call_script_data: stageForm.sop_call_script || {},
+                      });
+                    }}
+                    className="btn btn-primary w-full"
+                  >
+                    Save Call &amp; Schedule Site Survey
+                  </button>
                 </div>)}
                 {/* Stage 3 — Site Survey + Feasibility. Reuses the MOM form
                   (mam's Google Form layout from 2026-04-23): Customer
@@ -923,18 +1163,144 @@ export default function Leads() {
                     </div>
                   </div>
 
-                  <button onClick={() => advanceStage(viewData.id, 'mom_uploaded', stageForm)} disabled={!stageForm.mom_notes || !stageForm.meeting_purpose} className="btn btn-primary w-full disabled:opacity-50">Submit MOM &amp; Move to Design</button>
+                  {/* SOP-01.4: Mail MOM to Client within 2 hours */}
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-purple-900 flex items-center gap-1.5">
+                        <FiMail className="text-purple-600" /> SOP-01.4 · Mail MOM to Client (SLA: 2 Hours)
+                      </span>
+                      {viewData.mom_emailed_at ? (
+                        <span className="bg-emerald-100 text-emerald-800 text-[10px] px-2 py-0.5 rounded font-bold">
+                          ✓ Mailed {fmtDateIST(viewData.mom_emailed_at)}
+                        </span>
+                      ) : (
+                        <span className="bg-amber-100 text-amber-800 text-[10px] px-2 py-0.5 rounded font-semibold">
+                          Pending Mail
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        className="input text-xs flex-1 py-1"
+                        placeholder="Client recipient email..."
+                        value={momRecipient}
+                        onChange={e => setMomRecipient(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => emailMom(viewData.id, {
+                          recipient_email: momRecipient,
+                          mom_notes: stageForm.mom_notes,
+                          action_planned: stageForm.action_planned,
+                        })}
+                        disabled={emailingMom || !stageForm.mom_notes}
+                        className="btn btn-secondary text-xs px-3 py-1 flex items-center gap-1 whitespace-nowrap"
+                      >
+                        <FiMail size={13} /> {emailingMom ? 'Sending...' : 'Mail MOM Now'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (!stageForm.mom_notes || !stageForm.mom_notes.trim()) {
+                        toast.error('M.O.M. (Minutes of Meeting) notes are required.');
+                        return;
+                      }
+                      if (!stageForm.meeting_purpose || !stageForm.meeting_purpose.trim()) {
+                        toast.error('Purpose of Meeting is required.');
+                        return;
+                      }
+                      if ((momRecipient || viewData.email) && !viewData.mom_emailed_at) {
+                        if (!confirm('SOP-01.4 Reminder: Meeting notes should be emailed to client within 2 hours. The MOM has not been mailed yet. Do you want to submit anyway?')) {
+                          return;
+                        }
+                      }
+                      advanceStage(viewData.id, 'mom_uploaded', stageForm);
+                    }}
+                    disabled={!stageForm.mom_notes || !stageForm.meeting_purpose}
+                    className="btn btn-primary w-full disabled:opacity-50"
+                  >
+                    Submit MOM &amp; Move to Design
+                  </button>
                 </div>)}
                 {/* Stage 3 → Stage 4: upload drawings (concept design) */}
                 {activeStage === 'concept_design' && (<div className="space-y-2">
                   {[1, 2, 3].map(n => (<div key={n} className="flex items-center gap-2"><span className="text-xs w-16">Drawing {n}:</span><input type="file" onChange={async (e) => { const f = e.target.files[0]; if (!f) return; try { const url = await uploadFile(f); setStageForm(s => ({ ...s, [`drawing_file${n}`]: url })); toast.success(`Drawing ${n}`); } catch { toast.error('Failed'); } }} className="text-xs flex-1" />{stageForm[`drawing_file${n}`] && <span className="text-emerald-600 text-xs">OK</span>}</div>))}
                   <button onClick={() => advanceStage(viewData.id, 'concept_design', stageForm)} disabled={!stageForm.drawing_file1} className="btn btn-primary w-full disabled:opacity-50">Submit Drawings &amp; Move to BOQ</button>
                 </div>)}
-                {/* Stage 4 → Stage 5: BOQ + vendor costing */}
-                {activeStage === 'boq_costing' && (<div className="space-y-2">
+                {/* Stage 4 → Stage 5: BOQ + vendor costing (SOP-01.5) */}
+                {activeStage === 'boq_costing' && (<div className="space-y-3">
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-amber-900 flex items-center gap-1.5">
+                        <FiFileText className="text-amber-600" /> SOP-01.5 · BOQ Upload Checklist
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {(() => {
+                          const checks = stageForm.sop_boq_checklist || {};
+                          const verifiedCount = ['chk_dwg', 'chk_specs', 'chk_scope'].filter(k => !!checks[k]).length;
+                          return (
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${verifiedCount === 3 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-amber-100 text-amber-800'}`}>
+                              {verifiedCount}/3 Verified
+                            </span>
+                          );
+                        })()}
+                        <span className="bg-amber-200/70 text-amber-900 text-[10px] px-2 py-0.5 rounded font-semibold">Auto-Starts Estimation</span>
+                      </div>
+                    </div>
+                    <div className="bg-white border border-amber-100 rounded p-2 space-y-1 text-slate-700">
+                      {[
+                        { key: 'chk_dwg', label: 'Drawings & SLD attached and verified' },
+                        { key: 'chk_specs', label: 'Item specifications, makes, and UOM confirmed' },
+                        { key: 'chk_scope', label: 'Scope aligned with site meeting MOM' },
+                      ].map(item => {
+                        const checks = stageForm.sop_boq_checklist || {};
+                        const isChecked = !!checks[item.key];
+                        return (
+                          <label key={item.key} className="flex items-center gap-2 cursor-pointer p-0.5">
+                            <input
+                              type="checkbox"
+                              className="rounded text-amber-600 focus:ring-amber-500"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const next = { ...checks, [item.key]: e.target.checked };
+                                setStageForm({ ...stageForm, sop_boq_checklist: next });
+                              }}
+                            />
+                            <span className={`text-xs ${isChecked ? 'text-gray-900 font-medium' : 'text-gray-600'}`}>{item.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[11px] text-amber-800">
+                      🚀 On submit, the system immediately notifies Estimation Head (Md. Asad Ali / Naveen) to match Rate Master and begin SOP-02.
+                    </p>
+                  </div>
+
                   <input type="file" onChange={async (e) => { const f = e.target.files[0]; if (!f) return; try { stageForm.boq_file_link = await uploadFile(f); toast.success('BOQ uploaded'); } catch { toast.error('Failed'); } }} className="text-xs" />
                   <input className="input" type="number" placeholder="BOQ Amount (₹)" value={stageForm.boq_amount || ''} onChange={e => setStageForm({ ...stageForm, boq_amount: +e.target.value })} />
-                  <button onClick={() => advanceStage(viewData.id, 'boq_costing', stageForm)} className="btn btn-primary w-full">Submit BOQ &amp; Send for Pricing Review</button>
+                  <button
+                    onClick={() => {
+                      const boqChecks = stageForm.sop_boq_checklist || {};
+                      const missingBoq = ['chk_dwg', 'chk_specs', 'chk_scope'].filter(k => !boqChecks[k]);
+                      if (missingBoq.length > 0) {
+                        toast.error(`All 3 BOQ checklist items must be confirmed before starting estimation (${3 - missingBoq.length}/3 checked).`);
+                        return;
+                      }
+                      if (!stageForm.boq_file_link && !(+stageForm.boq_amount > 0)) {
+                        toast.error('Please attach a BOQ file or enter an estimated BOQ amount.');
+                        return;
+                      }
+                      advanceStage(viewData.id, 'boq_costing', {
+                        ...stageForm,
+                        sop_boq_checklist: stageForm.sop_boq_checklist || {},
+                      });
+                    }}
+                    className="btn btn-primary w-full"
+                  >
+                    Submit BOQ &amp; Start Estimation Work
+                  </button>
                 </div>)}
                 {/* Stage 5 → Stage 6: Internal Pricing Review (GATE) — stub.
                   Full margin floor / CFO sign-off / slab routing wired
