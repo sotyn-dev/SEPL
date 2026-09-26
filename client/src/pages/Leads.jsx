@@ -851,7 +851,18 @@ export default function Leads() {
                       <span className="font-bold text-blue-900 flex items-center gap-1.5">
                         <FiClock className="text-blue-600" /> SOP-01.2 · 5-Point Quick Check (GO / NO-GO)
                       </span>
-                      <span className="bg-blue-200/60 text-blue-800 text-[10px] px-2 py-0.5 rounded font-semibold">SLA: 5 min · Rajat sir</span>
+                      <div className="flex items-center gap-1.5">
+                        {(() => {
+                          const checks = stageForm.sop_quick_check || {};
+                          const verifiedCount = ['chk_client', 'chk_scale', 'chk_payment', 'chk_feasibility', 'chk_intent'].filter(k => !!checks[k]).length;
+                          return (
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${verifiedCount === 5 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-blue-100 text-blue-800'}`}>
+                              {verifiedCount}/5 Verified
+                            </span>
+                          );
+                        })()}
+                        <span className="bg-blue-200/60 text-blue-800 text-[10px] px-2 py-0.5 rounded font-semibold">SLA: 5 min · Rajat sir</span>
+                      </div>
                     </div>
                     <p className="text-[11px] text-blue-800 mt-1">
                       Quickly verify client eligibility, project scale, and creditworthiness. <b>NO-GO leads never reach seniors</b>.
@@ -905,19 +916,34 @@ export default function Leads() {
 
                   <div className="flex gap-2 pt-1">
                     <button
-                      onClick={() => advanceStage(viewData.id, 'qualification', {
-                        ...stageForm,
-                        sop_quick_check_data: stageForm.sop_quick_check || {},
-                      })}
+                      onClick={() => {
+                        const requiredKeys = ['chk_client', 'chk_scale', 'chk_payment', 'chk_feasibility', 'chk_intent'];
+                        const checks = stageForm.sop_quick_check || {};
+                        const missing = requiredKeys.filter(k => !checks[k]);
+                        if (missing.length > 0) {
+                          toast.error(`All 5 checklist points must be verified and checked before GO qualification (${5 - missing.length}/5 completed).`);
+                          return;
+                        }
+                        advanceStage(viewData.id, 'qualification', {
+                          ...stageForm,
+                          sop_quick_check_data: stageForm.sop_quick_check || {},
+                        });
+                      }}
                       className="btn btn-success flex-1 font-bold"
                     >
                       <FiCheck className="inline mr-1" /> GO (Qualify Lead)
                     </button>
                     <button
-                      onClick={() => advanceStage(viewData.id, 'not_qualified', {
-                        ...stageForm,
-                        sop_quick_check_data: stageForm.sop_quick_check || {},
-                      })}
+                      onClick={() => {
+                        if (!stageForm.qualified_remarks || !stageForm.qualified_remarks.trim()) {
+                          toast.error('Please enter a rejection / NO-GO reason in remarks before dropping the lead.');
+                          return;
+                        }
+                        advanceStage(viewData.id, 'not_qualified', {
+                          ...stageForm,
+                          sop_quick_check_data: stageForm.sop_quick_check || {},
+                        });
+                      }}
                       className="btn btn-danger flex-1"
                     >
                       <FiX className="inline mr-1" /> NO-GO (Drop Lead)
@@ -1009,10 +1035,29 @@ export default function Leads() {
                   </div>
 
                   <button
-                    onClick={() => advanceStage(viewData.id, 'site_survey', {
-                      ...stageForm,
-                      sop_call_script_data: stageForm.sop_call_script || {},
-                    })}
+                    onClick={() => {
+                      const script = stageForm.sop_call_script || {};
+                      if (!script.q_scope || !script.q_scope.trim()) {
+                        toast.error('Please enter Q1: Core Requirement & Technical Scope from the call script.');
+                        return;
+                      }
+                      if (!script.q_budget) {
+                        toast.error('Please select Q2: Budget & Fund Approval status.');
+                        return;
+                      }
+                      if (!stageForm.meeting_date) {
+                        toast.error('Please schedule the Site Survey meeting date & time (SOP-01.4).');
+                        return;
+                      }
+                      if (!stageForm.meeting_assigned_to && !stageForm.meeting_assigned_employee_id) {
+                        toast.error('Please assign a Sales Executive to conduct the site survey.');
+                        return;
+                      }
+                      advanceStage(viewData.id, 'site_survey', {
+                        ...stageForm,
+                        sop_call_script_data: stageForm.sop_call_script || {},
+                      });
+                    }}
                     className="btn btn-primary w-full"
                   >
                     Save Call &amp; Schedule Site Survey
@@ -1156,7 +1201,28 @@ export default function Leads() {
                     </div>
                   </div>
 
-                  <button onClick={() => advanceStage(viewData.id, 'mom_uploaded', stageForm)} disabled={!stageForm.mom_notes || !stageForm.meeting_purpose} className="btn btn-primary w-full disabled:opacity-50">Submit MOM &amp; Move to Design</button>
+                  <button
+                    onClick={() => {
+                      if (!stageForm.mom_notes || !stageForm.mom_notes.trim()) {
+                        toast.error('M.O.M. (Minutes of Meeting) notes are required.');
+                        return;
+                      }
+                      if (!stageForm.meeting_purpose || !stageForm.meeting_purpose.trim()) {
+                        toast.error('Purpose of Meeting is required.');
+                        return;
+                      }
+                      if ((momRecipient || viewData.email) && !viewData.mom_emailed_at) {
+                        if (!confirm('SOP-01.4 Reminder: Meeting notes should be emailed to client within 2 hours. The MOM has not been mailed yet. Do you want to submit anyway?')) {
+                          return;
+                        }
+                      }
+                      advanceStage(viewData.id, 'mom_uploaded', stageForm);
+                    }}
+                    disabled={!stageForm.mom_notes || !stageForm.meeting_purpose}
+                    className="btn btn-primary w-full disabled:opacity-50"
+                  >
+                    Submit MOM &amp; Move to Design
+                  </button>
                 </div>)}
                 {/* Stage 3 → Stage 4: upload drawings (concept design) */}
                 {activeStage === 'concept_design' && (<div className="space-y-2">
@@ -1170,7 +1236,18 @@ export default function Leads() {
                       <span className="font-bold text-amber-900 flex items-center gap-1.5">
                         <FiFileText className="text-amber-600" /> SOP-01.5 · BOQ Upload Checklist
                       </span>
-                      <span className="bg-amber-200/70 text-amber-900 text-[10px] px-2 py-0.5 rounded font-semibold">Auto-Starts Estimation</span>
+                      <div className="flex items-center gap-1.5">
+                        {(() => {
+                          const checks = stageForm.sop_boq_checklist || {};
+                          const verifiedCount = ['chk_dwg', 'chk_specs', 'chk_scope'].filter(k => !!checks[k]).length;
+                          return (
+                            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${verifiedCount === 3 ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-amber-100 text-amber-800'}`}>
+                              {verifiedCount}/3 Verified
+                            </span>
+                          );
+                        })()}
+                        <span className="bg-amber-200/70 text-amber-900 text-[10px] px-2 py-0.5 rounded font-semibold">Auto-Starts Estimation</span>
+                      </div>
                     </div>
                     <div className="bg-white border border-amber-100 rounded p-2 space-y-1 text-slate-700">
                       {[
@@ -1204,10 +1281,22 @@ export default function Leads() {
                   <input type="file" onChange={async (e) => { const f = e.target.files[0]; if (!f) return; try { stageForm.boq_file_link = await uploadFile(f); toast.success('BOQ uploaded'); } catch { toast.error('Failed'); } }} className="text-xs" />
                   <input className="input" type="number" placeholder="BOQ Amount (₹)" value={stageForm.boq_amount || ''} onChange={e => setStageForm({ ...stageForm, boq_amount: +e.target.value })} />
                   <button
-                    onClick={() => advanceStage(viewData.id, 'boq_costing', {
-                      ...stageForm,
-                      sop_boq_checklist: stageForm.sop_boq_checklist || {},
-                    })}
+                    onClick={() => {
+                      const boqChecks = stageForm.sop_boq_checklist || {};
+                      const missingBoq = ['chk_dwg', 'chk_specs', 'chk_scope'].filter(k => !boqChecks[k]);
+                      if (missingBoq.length > 0) {
+                        toast.error(`All 3 BOQ checklist items must be confirmed before starting estimation (${3 - missingBoq.length}/3 checked).`);
+                        return;
+                      }
+                      if (!stageForm.boq_file_link && !(+stageForm.boq_amount > 0)) {
+                        toast.error('Please attach a BOQ file or enter an estimated BOQ amount.');
+                        return;
+                      }
+                      advanceStage(viewData.id, 'boq_costing', {
+                        ...stageForm,
+                        sop_boq_checklist: stageForm.sop_boq_checklist || {},
+                      });
+                    }}
                     className="btn btn-primary w-full"
                   >
                     Submit BOQ &amp; Start Estimation Work

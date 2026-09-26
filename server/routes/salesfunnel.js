@@ -265,20 +265,100 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
   audit(db, r.lastInsertRowid, 'lead_capture', 'create', req.user, {
     notes: `Captured as ${leadKind === 'government' ? 'Government tender' : 'Private quote'}` + (b.tender_id ? ` · Tender ${b.tender_id}` : '')
   });
+  const leadId = r.lastInsertRowid;
+
+  // In-App Notifications (Header Bell Icon) & Web Push for Sales team (Rajat / Nancy)
+  const notifTitle = `New Lead Captured: ${b.client_name}`;
+  const notifBody = `${b.company_name ? b.company_name + ' · ' : ''}${b.project_name || b.category || 'Enquiry'} (${leadNo}) — Assigned: ${b.assigned_sc || 'Nancy'}`;
+  const notifLink = `/leads?stage=lead_capture&search=${encodeURIComponent(leadNo)}`;
+
+  try {
+    const usersToNotify = db.prepare(`
+      SELECT id FROM users
+      WHERE active = 1 AND (role = 'admin' OR department IN ('Sales', 'BD', 'Marketing', 'Management'))
+    `).all();
+
+    const insertNotif = db.prepare(`
+      INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent)
+      VALUES (?, 'new_lead', ?, ?, ?, 'in_app')
+    `);
+
+    for (const u of usersToNotify) {
+      try {
+        insertNotif.run(u.id, notifTitle, notifBody, notifLink);
+      } catch (_) {}
+    }
+
+    if (usersToNotify.length > 0) {
+      const { notifyMany } = require('../lib/push');
+      notifyMany(usersToNotify.map(u => u.id), {
+        title: `🚨 ${notifTitle}`,
+        body: notifBody,
+        url: notifLink,
+      });
+    }
+  } catch (pushErr) {
+    console.warn('[sales-funnel] notification write non-fatal error:', pushErr.message);
+  }
+
+  // Socket broadcast for real-time table refresh + bell chime & toast
   try {
     const { getIO } = require('../lib/chatSocket');
     const io = getIO();
     if (io) {
       io.emit('lead:new', {
-        lead_id: r.lastInsertRowid,
+        lead_id: leadId,
         lead_no: leadNo,
         client_name: b.client_name,
         company_name: b.company_name,
         current_stage: 'lead_capture',
       });
+      io.emit('notification:new', {
+        type: 'new_lead',
+        title: notifTitle,
+        body: notifBody,
+        link_url: notifLink,
+        created_at: new Date().toISOString(),
+      });
     }
   } catch (_) { }
-  res.status(201).json({ id: r.lastInsertRowid, lead_no: leadNo });
+
+  // Automated Thank-You Message to Client (SOP-01.1)
+  if (b.email) {
+    try {
+      const { sendEmail } = require('../lib/email');
+      const projectName = b.project_name || b.company_name || 'Project Enquiry';
+      sendEmail({
+        to: b.email,
+        subject: `Enquiry Received: ${projectName} — Secured Engineers Pvt Ltd`,
+        html: `
+          <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+            <div style="background-color: #1e40af; color: #ffffff; padding: 20px; text-align: center;">
+              <h2 style="margin: 0; font-size: 20px;">Secured Engineers Pvt. Ltd.</h2>
+              <p style="margin: 5px 0 0 0; font-size: 13px; opacity: 0.9;">Thank you for getting in touch</p>
+            </div>
+            <div style="padding: 24px;">
+              <p>Dear <strong>${b.client_name}</strong>,</p>
+              <p>We have successfully received your enquiry regarding <strong>${projectName}</strong> (Ref: <strong>${leadNo}</strong>).</p>
+              <p>Our Sales Coordinator has received your details and our team will get in touch with you promptly.</p>
+              <br>
+              <p style="margin: 0; font-size: 13px;">Warm regards,</p>
+              <p style="margin: 4px 0 0 0; font-weight: bold; font-size: 14px;">Secured Engineers Team</p>
+            </div>
+          </div>
+        `,
+        text: `Dear ${b.client_name},\n\nThank you for reaching out to Secured Engineers. We have received your enquiry for ${projectName} (Ref: ${leadNo}). Our team will be in touch shortly.`,
+      }).then(res => {
+        if (res?.skipped) {
+          console.log(`[sales-funnel] Thank-you email to ${b.email} skipped: ${res.reason}`);
+        } else {
+          console.log(`[sales-funnel] Thank-you email dispatched to ${b.email} (${leadNo})`);
+        }
+      }).catch(err => console.warn('[sales-funnel] thank-you email non-fatal:', err.message));
+    } catch (_) {}
+  }
+
+  res.status(201).json({ id: leadId, lead_no: leadNo });
 });
 
 // POST drop — close a lead with mandatory reason. Forward-only state
@@ -623,16 +703,66 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         SELECT id FROM users
         WHERE active = 1 AND (role = 'admin' OR department IN ('Estimation', 'Pricing', 'Sales'))
       `).all();
+      const notifTitle = `New BOQ Uploaded: ${lead.client_name}`;
+      const notifBody = `${lead.company_name ? lead.company_name + ' · ' : ''}Estimation work started (SOP-01.5)`;
+      const notifLink = '/quotations';
       const insertNotif = db.prepare(`
         INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent)
         VALUES (?, 'boq_uploaded', ?, ?, ?, 'in_app')
       `);
       for (const u of usersToNotify) {
         try {
-          insertNotif.run(u.id, `New BOQ Uploaded: ${lead.client_name}`, `${lead.company_name ? lead.company_name + ' · ' : ''}Estimation work started (SOP-01.5)`, '/quotations');
+          insertNotif.run(u.id, notifTitle, notifBody, notifLink);
         } catch (_) {}
       }
+      if (usersToNotify.length > 0) {
+        const { notifyMany } = require('../lib/push');
+        notifyMany(usersToNotify.map(u => u.id), {
+          title: `📑 ${notifTitle}`,
+          body: notifBody,
+          url: notifLink,
+        });
+      }
+      const io = require('../lib/chatSocket').getIO();
+      if (io) {
+        io.emit('notification:new', {
+          type: 'boq_uploaded',
+          title: notifTitle,
+          body: notifBody,
+          link_url: notifLink,
+          created_at: new Date().toISOString(),
+        });
+      }
     } catch (_) { }
+  }
+
+  // Auto-notify assigned executive when a Site Survey is scheduled (S3 -> S4)
+  if (stage === 'site_survey' && b.meeting_assigned_to_id) {
+    try {
+      const execUser = db.prepare('SELECT id, name FROM users WHERE id=?').get(b.meeting_assigned_to_id);
+      if (execUser) {
+        const notifTitle = `Site Survey Assigned: ${lead.client_name}`;
+        const notifBody = `${lead.company_name ? lead.company_name + ' · ' : ''}Meeting: ${b.meeting_date || 'Date TBD'} (${b.meeting_location || 'Site'}) · SOP-01.4`;
+        const notifLink = `/leads?stage=site_survey&search=${encodeURIComponent(lead.lead_no)}`;
+        db.prepare(`
+          INSERT INTO notifications (user_id, type, title, body, link_url, channel_sent)
+          VALUES (?, 'survey_scheduled', ?, ?, ?, 'in_app')
+        `).run(execUser.id, notifTitle, notifBody, notifLink);
+        const { notifyMany } = require('../lib/push');
+        notifyMany([execUser.id], { title: `📅 ${notifTitle}`, body: notifBody, url: notifLink });
+        const io = require('../lib/chatSocket').getIO();
+        if (io) {
+          io.emit('notification:new', {
+            type: 'survey_scheduled',
+            user_id: execUser.id,
+            title: notifTitle,
+            body: notifBody,
+            link_url: notifLink,
+            created_at: new Date().toISOString(),
+          });
+        }
+      }
+    } catch (_) {}
   }
   audit(db, req.params.id, stage, 'enter_stage', req.user, {
     notes: b.result_remarks || b.qualified_remarks || b.mom_notes || null,
