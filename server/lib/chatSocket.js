@@ -85,6 +85,8 @@ function scheduleChanged(groupId) {
 // Push an event to everyone currently in a group's room. 'changed' is coalesced
 // per group (see above); all other events fire immediately.
 function emitChat(groupId, event, payload) {
+  // Web Push must run even when no browser/socket is connected.
+  if (event === 'message' && payload?.id) require('./chatPush').notifyChat(groupId,payload.id);
   if (!io) return;
   if (event === 'changed') return scheduleChanged(groupId);
   try { io.to(`g:${groupId}`).emit(event, payload); } catch (_) {}
