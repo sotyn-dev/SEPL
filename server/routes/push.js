@@ -77,9 +77,10 @@ router.get('/devices', (req, res) => {
 router.post('/test', async (req, res) => {
   try {
     const r = await pushToUser(req.user.id, {
-      title: 'SEPL ERP — Test Notification',
+      type: 'chat_push_test',
+      title: 'SOTYN Chat — Test Notification',
       body: req.body?.message || 'If you can read this, push notifications are working on this device 🎉',
-      url: '/',
+      url: '/site-chat',
       tag: 'test',
     });
     res.json(r);

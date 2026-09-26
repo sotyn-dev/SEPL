@@ -7,6 +7,7 @@
 
 const webpush = require('web-push');
 const { getDb } = require('../db/schema');
+const { isChatPush } = require('./chatPush');
 
 let initialised = false;
 
@@ -37,10 +38,12 @@ function getPublicKey() {
 
 // Send a single push to one subscription
 async function sendOne(sub, payload) {
+  if (!isChatPush(payload)) return { ok: false, reason: 'chat_only' };
   try {
     await webpush.sendNotification(
       { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-      JSON.stringify(payload)
+      JSON.stringify(payload),
+      { TTL: 86400, timeout: 10000 }
     );
     return { ok: true };
   } catch (err) {
@@ -57,9 +60,11 @@ async function sendOne(sub, payload) {
 
 // Send to one user (all their active devices)
 async function pushToUser(userId, payload) {
+  if (!isChatPush(payload)) return { sent: 0, total: 0, skipped: 'chat_only' };
   if (!userId) return { sent: 0 };
   ensureVapid();
-  const subs = getDb().prepare(`SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id=? AND active=1`).all(userId);
+  const subs = getDb().prepare(`SELECT ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
+    JOIN users u ON u.id=ps.user_id WHERE ps.user_id=? AND ps.active=1 AND COALESCE(u.active,1)=1`).all(userId);
   let sent = 0;
   for (const s of subs) {
     const r = await sendOne(s, payload);
@@ -84,6 +89,7 @@ async function pushToUsers(userIds, payload) {
 
 // Send to every active user (announcements)
 async function pushToAll(payload) {
+  if (!isChatPush(payload)) return { sent: 0, total: 0, skipped: 'chat_only' };
   ensureVapid();
   const subs = getDb().prepare(`
     SELECT ps.endpoint, ps.p256dh, ps.auth

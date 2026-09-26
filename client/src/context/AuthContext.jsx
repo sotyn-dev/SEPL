@@ -113,7 +113,9 @@ export function AuthProvider({ children }) {
     return applySession(data);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    // Closing the app keeps push active; explicit logout disconnects this device.
+    try { await (await import('../lib/push')).disablePushNotifications(); } catch {}
     clearToken();
     delete api.defaults.headers.common['Authorization'];
     setToken(null);
