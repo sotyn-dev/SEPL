@@ -801,10 +801,6 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-          {(!navSearch || 'daily work'.includes(navSearch.toLowerCase())) && <Link to="/daily-work"
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/daily-work' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
-            <FiHome size={16} /><span>Daily Work</span>
-          </Link>}
           {/* Dashboard — always standalone at top, no group, single URL
               (mam's spec). Highlighted when on the home route. */}
           {(SIDEBAR_DASHBOARD.module == null || canView(SIDEBAR_DASHBOARD.module)) && dashboardMatches && (
