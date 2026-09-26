@@ -56,25 +56,7 @@ router.post('/login', async (req, res) => {
   // Look up regardless of `active` so we can return a distinct message when
   // the account is disabled vs. when the password is wrong — otherwise mam
   // can't tell why she's locked out.
-  // Auto-sync test users on login demand
-  if (identifier.toLowerCase() === 'rahul@securedengineers.com' || identifier.toLowerCase() === 'rahul') {
-    const rCheck = db.prepare("SELECT id FROM users WHERE LOWER(email) = 'rahul@securedengineers.com' OR LOWER(username) = 'rahul'").get();
-    const rHash = bcrypt.hashSync('User@123456', 10);
-    if (!rCheck) {
-      db.prepare("INSERT INTO users (name, email, username, password, role, department, active) VALUES ('Rahul Sharma', 'rahul@securedengineers.com', 'rahul', ?, 'user', 'Site Operations', 1)").run(rHash);
-    } else if (password === 'User@123456') {
-      db.prepare("UPDATE users SET password = ?, active = 1 WHERE id = ?").run(rHash, rCheck.id);
-    }
-  }
-  if (identifier.toLowerCase() === 'nancy@securedengineers.com' || identifier.toLowerCase() === 'nancy') {
-    const nCheck = db.prepare("SELECT id FROM users WHERE LOWER(email) = 'nancy@securedengineers.com' OR LOWER(username) = 'nancy'").get();
-    const nHash = bcrypt.hashSync('Nancy@123456', 10);
-    if (!nCheck) {
-      db.prepare("INSERT INTO users (name, email, username, password, role, department, active) VALUES ('Nancy', 'nancy@securedengineers.com', 'nancy', ?, 'user', 'HR / Compliance', 1)").run(nHash);
-    } else if (password === 'Nancy@123456') {
-      db.prepare("UPDATE users SET password = ?, active = 1 WHERE id = ?").run(nHash, nCheck.id);
-    }
-  }
+  // Login must only verify saved credentials, never provision or reset accounts.
 
   const candidates = db.prepare(
     'SELECT * FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)'
