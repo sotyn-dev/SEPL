@@ -39,6 +39,10 @@ self.addEventListener('push', (event) => {
     icon: data.icon || '/icon-192.png',
     badge: data.badge || '/icon-192.png',
     tag: data.tag || 'sepl-erp',
+    // Request an audible alert, including when replacing the test notification.
+    // The OS still controls sound volume, silent mode and notification channels.
+    silent: false,
+    renotify: true,
     requireInteraction: !!data.requireInteraction,
     data: { url: data.url || '/', ...data },
     vibrate: [120, 60, 120],
