@@ -33,6 +33,12 @@ router.post('/tracker/:indent_id/stage', requirePermission('indent_fms', 'edit')
   const { stage, notes } = req.body;
   const db = getDb();
 
+  const indentForGate = db.prepare('SELECT * FROM indents WHERE id=?').get(req.params.indent_id);
+  if (require('../lib/indentRaiserApproval').usesRaiserApproval(indentForGate)
+      && (indentForGate.l2_status !== 'approved' || indentForGate.approved_by !== indentForGate.created_by
+        || ['indent_raised', 'approval_pending', 'approved'].includes(stage))) {
+    return res.status(409).json({ error: 'Use Indent to Dispatch for this indent. Its review and raiser approval cannot be changed through the tracker.' });
+  }
   db.prepare('INSERT INTO indent_tracker (indent_id, stage, updated_by, notes) VALUES (?,?,?,?)')
     .run(req.params.indent_id, stage, req.user.id, notes);
 
