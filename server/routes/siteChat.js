@@ -491,7 +491,7 @@ router.get('/:groupId', (req, res) => {
   const readRows = db.prepare('SELECT user_id,last_read_id,updated_at FROM chat_reads WHERE group_id=?').all(g);
   const reads = Object.fromEntries(readRows.map(r => [r.user_id, r.last_read_id]));
   const readsAt = Object.fromEntries(readRows.map(r => [r.user_id, r.updated_at]));  // for Message Info read-time
-  markRead(db, g, req.user.id);
+  const lastReadId = markRead(db, g, req.user.id);
   // Soft-deleted messages keep their row for the tombstone ("deleted by X")
   // but their CONTENT never leaves the server — body + attachment stripped
   // here, recoverable only by admin directly in the DB (mam 2026-08-13).
@@ -504,7 +504,7 @@ router.get('/:groupId', (req, res) => {
   // loop that hammered the server and caused intermittent chat errors
   // (mam 2026-06-19). New messages still emit from POST; read receipts refresh
   // via the other members' poll / next message.
-  res.json({ group, messages, members, reads, readsAt, hasMore, quotedParents });
+  res.json({ group, messages, members, reads, readsAt, hasMore, quotedParents, last_read_id: lastReadId });
 });
 
 // Per-user send backpressure (2026-07): caps one user to 40 messages / 10 s → 429,
