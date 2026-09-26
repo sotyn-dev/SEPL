@@ -490,6 +490,8 @@ const { requireModuleEnabled } = require('./lib/features');
 
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/daily-work', require('./routes/dailyWork'));
+app.use('/api', require('./middleware/dailyWorkEvents'));
 app.use('/api/module-flags', require('./routes/moduleFlags'));
 app.use('/api/admin/audit', require('./routes/audit'));
 app.use('/api/dashboard', require('./routes/dashboard'));

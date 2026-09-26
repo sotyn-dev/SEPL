@@ -265,6 +265,7 @@ export default function App() {
           <Route path="labour-master" element={<ModuleRoute module="labour_master"><LabourMaster /></ModuleRoute>} />
           <Route path="bill-verification" element={<ModuleRoute module="bill_verification"><BillVerification /></ModuleRoute>} />
           <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />
+          <Route path="daily-work" element={<Navigate to="/" replace />} />
           <Route path="pms-tasks" element={<ModuleRoute module="pms_tasks"><PMSTasks /></ModuleRoute>} />
           <Route path="compliance" element={<ComplianceDashboard />} />
           {/* Other Modules */}
