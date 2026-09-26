@@ -369,12 +369,8 @@ export default function Layout() {
                 <button onClick={(e) => { e.stopPropagation(); toast.dismiss(t.id); }} className="text-white/70 hover:text-white flex-shrink-0">✕</button>
               </div>
             ), { position: 'top-center', duration: 6000, id: `wa-${gid}` });
-            if ('Notification' in window && Notification.permission === 'granted') {
-              try {
-                const n = new Notification(`SOTYN Chat · ${gname}`, { body: line, icon: '/icon.svg', tag: `wa-${gid}` });
-                n.onclick = () => { window.focus(); navigate('/site-chat'); n.close(); };
-              } catch { /* ignore */ }
-            }
+            // Phone notifications come from Web Push, including while closed.
+            // Keep this in-app toast without duplicating the system notification.
             break;                                          // one alert per refresh is enough
           }
         }
@@ -385,7 +381,6 @@ export default function Layout() {
 
   useEffect(() => {
     if (!user?.id) return;
-    if ('Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch { /* ignore */ } }
     refreshWa();
     // Chat notifications now ride the shared shell socket (SocketProvider) —
     // no own connection. subscribe() survives the socket's deferred connect and
