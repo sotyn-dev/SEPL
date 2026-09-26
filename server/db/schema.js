@@ -7053,9 +7053,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   if (!nancyUser) {
     db.prepare('INSERT INTO users (name, email, username, password, role, department, active) VALUES (?, ?, ?, ?, ?, ?, 1)')
       .run('Nancy', 'nancy@securedengineers.com', 'nancy', nancyPwdHash, 'user', 'HR / Compliance');
-  } else {
-    db.prepare("UPDATE users SET password = ?, active = 1, username = 'nancy' WHERE id = ?").run(nancyPwdHash, nancyUser.id);
-  }
+  } // Existing password, username and active state belong to account administration.
 
   // Seed / ensure Rahul Sharma Normal Test Employee
   const rahulPwdHash = bcrypt.hashSync('User@123456', 10);
@@ -7063,9 +7061,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   if (!rahulUser) {
     db.prepare('INSERT INTO users (name, email, username, password, role, department, active) VALUES (?, ?, ?, ?, ?, ?, 1)')
       .run('Rahul Sharma', 'rahul@securedengineers.com', 'rahul', rahulPwdHash, 'user', 'Site Operations');
-  } else {
-    db.prepare("UPDATE users SET password = ?, active = 1, username = 'rahul' WHERE id = ?").run(rahulPwdHash, rahulUser.id);
-  }
+  } // Existing password, username and active state belong to account administration.
 
   // ============================================
   // LOCATION TRACKING OPT-OUT seed (mam's request 2026-04-28)

@@ -1281,13 +1281,14 @@ function createAutoIndentFromPlan(db, plan, lines, approver) {
   const r = db.prepare(`
     INSERT INTO indents
       (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
-       approval_policy, l1_status, l2_status, indent_category, crm_status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+       approval_policy, l1_status, l2_status, indent_category, crm_status, raiser_approval_required)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     planningId, indentNum, 'submitted',
     `Auto-raised from Weekly Plan · ${plan.site_name} · week of ${plan.week_start} (SPOS). Plan approved by ${approver.name || 'PM'}.`,
     plan.site_name || '', `${submitter.name || 'Weekly Plan'} · auto`, plan.site_name || '',
-    plan.submitted_by || approver.id, 'two_level', 'pending', l2On ? 'pending' : null, 'material', 'n/a'
+    plan.submitted_by || approver.id, 'two_level', 'pending', l2On ? 'pending' : null, 'material', 'n/a',
+    require('../lib/indentRaiserApproval').appliesOn(istToday()) ? 1 : 0
   );
   try {
     db.prepare('INSERT INTO indent_tracker (indent_id, stage, updated_by, notes) VALUES (?,?,?,?)')

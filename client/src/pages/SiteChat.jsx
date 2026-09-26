@@ -328,7 +328,10 @@ export default function SiteChat() {
   const [q, setQ] = useState('');
   const [mineOnly, setMineOnly] = useState(false);  // admin-only "Only chats I'm in" filter
   const [showArchived, setShowArchived] = useState(false);  // Archived view — same list, archived_at IS NOT NULL
-  const [sel, setSel] = useState(null);            // selected group {id, name}
+  const [sel, setSel] = useState(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('chat'));
+    return Number.isSafeInteger(id) && id > 0 ? { id, name: 'SOTYN Chat' } : null;
+  }); // A phone notification opens its specific conversation; the API checks access.
   const [msgs, setMsgs] = useState([]);
   const [members, setMembers] = useState([]);
   const [reads, setReads] = useState({});
@@ -471,6 +474,12 @@ export default function SiteChat() {
       pendingRestoreRef.current = el ? { prevH: el.scrollHeight, prevTop: el.scrollTop } : null;
     }
     return api.get(`/site-chat/${id}`, { params }).then(r => {
+      // Clear only notifications confirmed read by the existing server workflow.
+      if ('serviceWorker' in navigator && r.data.last_read_id) {
+        navigator.serviceWorker.getRegistration().then(reg => {
+          reg?.active?.postMessage({ type: 'chat_read', groupId: Number(id), lastReadId: Number(r.data.last_read_id) });
+        }).catch(() => {});
+      }
       const incoming = r.data.messages || [];
       const qp = r.data.quotedParents || [];
       if (older) {

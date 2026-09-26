@@ -43,6 +43,7 @@
 //   approval.po.standin.email                         approval.po.standin.enabled
 
 function runIndentFlowSettingsMigrations(db) {
+  require('../lib/indentRaiserApproval').migrate(db);
   db.exec(`
     -- Scalar settings (switches + flags). Values are plain strings coerced by
     -- the catalogue's declared type ('0'/'1' for bool). No JSON: a value is one

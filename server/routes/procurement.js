@@ -92,6 +92,7 @@ const needsApprove = requirePermission('procurement', 'approve');
 // Indent → Dispatch approval gates — the catalogue + the only reader of the
 // gate settings tables. Every "who may act here" question routes through it.
 const approvalGates = require('../utils/indentToDispatchGates');
+const raiserApproval = require('../lib/indentRaiserApproval');
 
 // Who may act at an indent gate, as a LIST (2026-07-23).
 //   1. ⚙ Workflow Settings — authoritative the moment anyone is named there.
@@ -1142,6 +1143,7 @@ router.get('/indents', (req, res) => {
 
   const rows = indents.map(i => ({
     ...i,
+    can_review_indent: l1List.some(u => u.id === req.user.id) && i.created_by !== req.user.id,
     boq_file_link: findBoq(i.site_name || i.client_name),
     items: itemsByIndent.get(i.id) || [],
     budget_amount: +(budgetByIndent.get(i.id) || 0).toFixed(2),
@@ -1656,8 +1658,8 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
-        approval_policy, l1_status, l2_status, indent_category, crm_status, is_emergency, emergency_reason, department)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        approval_policy, l1_status, l2_status, indent_category, crm_status, is_emergency, emergency_reason, department, raiser_approval_required)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     resolvedPlanningId, indentNum, 'submitted',
     notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id,
@@ -1674,6 +1676,7 @@ router.post('/indents', requirePermission('procurement', 'create'), (req, res) =
     isEmergency,
     isEmergency ? (emergencyReason || 'Admin emergency window (day-open)') : null,
     department || null,
+    raiserApproval.appliesOn(today) ? 1 : 0,
   );
 
   // Seed the indent_tracker with the approval_pending stage so the IndentFMS
@@ -1791,6 +1794,20 @@ router.put('/indents/:id', (req, res) => {
   const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides, store_qty_per_item, unit_overrides, crm_margin_pct, department } = req.body;
   const db = getDb();
   const id = req.params.id;
+  const workflowRow = db.prepare('SELECT * FROM indents WHERE id=?').get(id);
+  if (!workflowRow) return res.status(404).json({ error: 'Indent not found' });
+  const raiserFlow = raiserApproval.usesRaiserApproval(workflowRow);
+  const crmPending = workflowRow.crm_status === 'pending' && workflowRow.status === 'submitted';
+  if (raiserFlow && status && !items) {
+    const denied = raiserApproval.validateAction(workflowRow, req.user.id,
+      gateApproverList(db, 'l1', legacyL1Approver).map(u => u.id), req.body);
+    if (denied) return res.status(denied.code).json({ error: denied.error });
+    if (status === 'reviewed') {
+      raiserApproval.markCorrect(db, workflowRow, req.user.id);
+      return res.json({ message: 'Marked correct — awaiting approval by the original raiser', stage: 'review_done' });
+    }
+  }
+  if (status === 'reviewed' && !raiserFlow) return res.status(400).json({ error: 'This indent uses the earlier approval flow.' });
 
   // Approve / reject path.
   if (status && !items) {
@@ -1815,7 +1832,7 @@ router.put('/indents/:id', (req, res) => {
     // Declared at handler scope so the later self-creator-check + legacy
     // approve path can also see it (re-approve skips those gates).
     let isReapprove = false;
-    if (status === 'approved' || status === 'rejected') {
+    if ((status === 'approved' || status === 'rejected') && (!raiserFlow || crmPending)) {
       const cur2 = db.prepare(
         `SELECT created_by, approval_policy, status, l1_status, l2_status, l1_by,
                 crm_status, indent_category, planning_id
@@ -2225,7 +2242,7 @@ router.put('/indents/:id', (req, res) => {
     // 'draft' → 'submitted' on their own row (that's the submit step,
     // not an approval).  Admin bypasses (handles corner cases where
     // mam herself raised an indent and needs to push it through).
-    if ((status === 'approved' || status === 'rejected') && !isReapprove) {
+    if ((status === 'approved' || status === 'rejected') && !isReapprove && (!raiserFlow || crmPending)) {
       const cur = db.prepare('SELECT created_by FROM indents WHERE id=?').get(id);
       if (cur && cur.created_by === req.user.id && req.user.role !== 'admin') {
         return res.status(403).json({
@@ -2577,6 +2594,10 @@ router.put('/indents/:id', (req, res) => {
           }
 
           // 3. Flip the indent to approved.
+          if (raiserFlow) {
+            db.prepare("UPDATE indents SET l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
+            raiserApproval.audit(db, workflowRow, req.user.id, 'raiser_approved');
+          }
           db.prepare(
             `UPDATE indents
                SET status = 'approved',
@@ -2686,6 +2707,9 @@ router.put('/indents/:id', (req, res) => {
 
   // Full edit path
   if (items) {
+    if (raiserFlow && !['submitted', 'crm_approved', 'l1_approved', 'rejected'].includes(workflowRow.status)) {
+      return res.status(409).json({ error: 'A finally approved indent cannot be rewritten. Raise a new indent for corrections.' });
+    }
     const cur = db.prepare('SELECT status, indent_category, created_by, site_name, department FROM indents WHERE id=?').get(id);
     if (!cur) return res.status(404).json({ error: 'Indent not found' });
     // Audit follow-up 2026-08-17: the items-edit path was auth-only — any
@@ -2696,7 +2720,8 @@ router.put('/indents/:id', (req, res) => {
     {
       const isCreator = cur.created_by != null && cur.created_by === req.user.id;
       const canEditProc = req.user.role === 'admin' || !!getUserPermissions(req.user.id)['procurement']?.can_edit;
-      if (!isCreator && !canEditProc) {
+      const isReviewer = raiserFlow && gateApproverList(db, 'l1', legacyL1Approver).some(u => u.id === req.user.id);
+      if (!isCreator && !canEditProc && !isReviewer) {
         return res.status(403).json({ error: 'Only the indent creator or procurement can edit this indent' });
       }
     }
@@ -2816,6 +2841,7 @@ router.put('/indents/:id', (req, res) => {
     }
 
     const tx = db.transaction(() => {
+      raiserApproval.invalidateReview(db, workflowRow, req.user.id);
       db.prepare(
         `UPDATE indents SET site_name=?, raised_by_name=?, client_name=?, notes=?, department=?,
                             status = CASE WHEN status='rejected' THEN 'submitted' ELSE status END
@@ -4394,6 +4420,14 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
     try { items = JSON.parse(b.items); } catch (e) { return res.status(400).json({ error: 'items must be valid JSON' }); }
   }
   const lines = Array.isArray(items) ? items.filter(i => i.indent_item_id && +i.quantity > 0 && +i.rate > 0) : [];
+  const linkedIds = [...new Set([indent_id, ...lines.map(line => db.prepare('SELECT indent_id FROM indent_items WHERE id=?').get(+line.indent_item_id)?.indent_id)].filter(Boolean))];
+  for (const linkedId of linkedIds) {
+    const linkedIndent = db.prepare('SELECT * FROM indents WHERE id=?').get(linkedId);
+    if (raiserApproval.usesRaiserApproval(linkedIndent)
+        && (linkedIndent.l2_status !== 'approved' || linkedIndent.approved_by !== linkedIndent.created_by)) {
+      return res.status(409).json({ error: 'The original raiser must approve this reviewed indent before a Vendor PO can be created.' });
+    }
+  }
 
   // ── At least ONE linked line is MANDATORY (mam 2026-08-27: "at least one
   // item need to link for create — as civic sense"). Zero-item POs print an

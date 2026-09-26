@@ -1894,8 +1894,12 @@ export default function Procurement() {
     let detail = indent;
     try {
       const r = await api.get(`/procurement/indents/${indent.id}`);
-      detail = { ...indent, items: r.data?.items || indent.items || [] };
+      detail = { ...indent, ...r.data, items: r.data?.items || indent.items || [] };
     } catch (err) {
+      if (indent.raiser_approval_required) {
+        toast.error('Could not load the current indent. Please retry before reviewing or approving.');
+        return;
+      }
       // Use the list-loaded row; the modal still works, just without stock.
     }
     const seed = {};
@@ -1916,7 +1920,7 @@ export default function Procurement() {
     }
     setApproveQtyOverrides(seed);
     setApproveFromStore(seedStore);
-    setApproveTarget(detail);
+    setApproveTarget({ ...detail, review_action: !!indent.review_action });
   };
   // Open the Reject modal — empty reason; saves on submit only if non-empty.
   const openRejectModal = (indent) => {
@@ -1951,6 +1955,26 @@ export default function Procurement() {
       toast.error('Could not open the billable statement');
     }
   };
+
+  const canEditIndentRow = (i) => i.raiser_approval_required
+    ? ['submitted', 'crm_approved', 'l1_approved', 'rejected'].includes(i.status) && (i.created_by === user?.id || i.can_review_indent || canEdit('procurement') || isAdmin())
+    : (canEdit('procurement') || isAdmin()) && (i.status !== 'approved' || isAdmin());
+  const renderRaiserActions = (i) => {
+    if (['submitted', 'crm_approved'].includes(i.status)) return i.can_review_indent ? (
+      <><button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>
+        <button onClick={() => openApproveModal({ ...i, review_action: true })} className="btn btn-success text-xs py-1 px-2">Mark Correct</button></>
+    ) : <span className="text-xs text-amber-700">Awaiting review: {i.approver_names?.l1}</span>;
+    if (i.status === 'l1_approved') return i.created_by === user?.id ? (
+      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve by Raiser</button>
+    ) : <span className="text-xs text-blue-700">Awaiting raiser: {i.created_by_name || i.raised_by_name}</span>;
+    return null;
+  };
+  const renderRaiserTrail = (i) => <div className="space-y-1 text-xs min-w-[160px]">
+    {i.approval_policy === 'crm_two_level' && <ApprovalLevelRow label="CRM" status={i.crm_status} name={i.crm_by_name} at={i.crm_at} />}
+    <ApprovalLevelRow label="Checked correct" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at} />
+    <ApprovalLevelRow label="Raiser approval" status={i.l2_status || 'pending'} name={i.l2_by_name || i.created_by_name || i.raised_by_name} at={i.l2_at} waiting={i.l1_status !== 'approved'} />
+    <span className="text-gray-400">Revision {i.review_revision || 0}</span>
+  </div>;
 
   const submitApprove = async () => {
     if (!approveTarget) return;
@@ -1998,7 +2022,8 @@ export default function Procurement() {
     setApproveSaving(true);
     try {
       const res = await api.put(`/procurement/indents/${approveTarget.id}`, {
-        status: 'approved',
+        status: approveTarget.review_action ? 'reviewed' : 'approved',
+        review_revision: approveTarget.review_revision,
         quantity_overrides: changed,
         store_qty_per_item: storeQty,
         unit_overrides: unitChanged,
@@ -2006,6 +2031,12 @@ export default function Procurement() {
         // indent; the server ignores it otherwise.
         crm_margin_pct: approveMargin === '' ? undefined : +approveMargin,
       });
+      if (approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending') {
+        toast.success(res.data.message);
+        setApproveTarget(null);
+        await fetchIndentsPage();
+        return;
+      }
       const noteSuffix = res.data?.stock_issue_note ? ` · Store issue ${res.data.stock_issue_note} (${storeTotalQty} pcs)` : '';
       toast.success(
         (Object.keys(changed).length ? `Approved with ${Object.keys(changed).length} qty change(s)` : 'Approved')
@@ -2074,6 +2105,7 @@ export default function Procurement() {
     try {
       await api.put(`/procurement/indents/${rejectTarget.id}`, {
         status: 'rejected',
+        review_revision: rejectTarget.review_revision,
         reason: r,
       });
       toast.success('Indent rejected');
@@ -3071,7 +3103,7 @@ export default function Procurement() {
                           </div>
                         )}
                       </td>
-                      <td><StatusBadge status={i.status} /></td>
+                      <td><StatusBadge status={i.raiser_approval_required && i.status === 'l1_approved' ? 'awaiting_raiser_approval' : i.status} /></td>
                     </tr>
                   ))}
                   {rows.length === 0 && (
@@ -3281,8 +3313,8 @@ export default function Procurement() {
                     { border: 'border-amber-300', bg: 'bg-amber-50', text: 'text-amber-800', ring: 'ring-amber-400' },
                     'submitted'
                   )}
-                  {l2Enabled && tile(
-                    'Pending L2',
+                  {tile(
+                    l2Enabled ? 'Pending Raiser / L2' : 'Pending Raiser',
                     kpis.l1_approved_count,
                     kpis.l1_approved_budget,
                     { border: 'border-orange-300', bg: 'bg-orange-50', text: 'text-orange-800', ring: 'ring-orange-400' },
@@ -3336,7 +3368,7 @@ export default function Procurement() {
                 onChange={e => { setIndFilterStatus(e.target.value); setIndPage(1); }}>
                 <option value="all">All {indKpis ? `(${indKpis.total_count})` : ''}</option>
                 <option value="submitted">{l2Enabled ? 'Pending L1' : 'Pending Approval'}</option>
-                {l2Enabled && <option value="l1_approved">Pending L2</option>}
+                <option value="l1_approved">Pending Raiser / L2</option>
                 <option value="approved">Approved</option>
                 <option value="rejected">Rejected</option>
                 <option value="po_sent">PO Sent</option>
@@ -3442,6 +3474,7 @@ export default function Procurement() {
                 const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm || approvalCtx.crmNamed;
 
                 const renderActionButtons = () => {
+                  if (i.raiser_approval_required && !needsCrm) return renderRaiserActions(i);
                   // CRM stage (Extra-billable indents) — fires first, before L1/L2.
                   if (needsCrm && i.status === 'submitted' && !isCreator) {
                     if (canActCrm) return (
@@ -3457,7 +3490,7 @@ export default function Procurement() {
                     if (canActHr) return (
                       <>
                         <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve (HR)</button>
-                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>
+                        {!i.raiser_approval_required && <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>}
                       </>
                     );
                     return <span className="text-[10px] text-teal-600 italic">Awaiting HR approval</span>;
@@ -3475,7 +3508,7 @@ export default function Procurement() {
                     if (canApprove('procurement') || isAdmin()) return (
                       <>
                         <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve</button>
-                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>
+                        {!i.raiser_approval_required && <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>}
                       </>
                     );
                   }
@@ -3505,7 +3538,7 @@ export default function Procurement() {
                     if (canActL1) return (
                       <>
                         <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve</button>
-                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>
+                        {!i.raiser_approval_required && <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>}
                       </>
                     );
                     return <span className="text-[10px] text-purple-600 italic">Awaiting {i.approver_names?.l1 || 'approver'}</span>;
@@ -3549,7 +3582,7 @@ export default function Procurement() {
                           {i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}
                         </div>
                       </div>
-                      <StatusBadge status={i.status} />
+                      <StatusBadge status={i.raiser_approval_required && i.status === 'l1_approved' ? 'awaiting_raiser_approval' : i.status} />
                     </div>
 
                     {/* Site */}
@@ -3651,7 +3684,7 @@ export default function Procurement() {
                       for crm_two_level / two_level, single line for legacy. */}
                     <div className="pt-1 border-t border-gray-100 text-[11px]">
                       <div className="text-[9px] uppercase text-gray-400 mb-0.5">Approval</div>
-                      {(isTwoLevel || isCrmTwoLevel) ? (
+                      {i.raiser_approval_required ? renderRaiserTrail(i) : (isTwoLevel || isCrmTwoLevel) ? (
                         <div className="space-y-0.5">
                           {isCrmTwoLevel && (
                             <ApprovalLevelRow label="CRM" status={i.crm_status}
@@ -3702,9 +3735,9 @@ export default function Procurement() {
                     })()}
 
                     {/* Edit + delete row */}
-                    {((canEdit('procurement') || isAdmin()) || canDelete('procurement')) && (
+                    {(canEditIndentRow(i) || canDelete('procurement')) && (
                       <div className="flex justify-end gap-2 pt-1 text-[11px]">
-                        {(canEdit('procurement') || isAdmin()) && (i.status !== 'approved' || isAdmin()) && (
+                        {canEditIndentRow(i) && (
                           <button onClick={() => openEditIndent(i)} className="text-blue-600 hover:underline flex items-center gap-1">
                             <FiEdit2 size={11} /> Edit
                           </button>
@@ -3837,14 +3870,14 @@ export default function Procurement() {
                             </a>
                           )}
                         </td>
-                        <td><StatusBadge status={i.status} /></td>
+                        <td><StatusBadge status={i.raiser_approval_required && i.status === 'l1_approved' ? 'awaiting_raiser_approval' : i.status} /></td>
                         {/* Approval cell — shows "approved by X · DD MMM" once
                       approved, or "rejected by X · reason" if rejected.
                       For two_level indents (mam 2026-05-26) also shows a
                       stacked L1 + L2 mini-row so progress is visible from
                       the list without opening each row. */}
                         <td className="text-xs">
-                          {(i.approval_policy === 'two_level' || i.approval_policy === 'crm_two_level') ? (
+                          {i.raiser_approval_required ? renderRaiserTrail(i) : (i.approval_policy === 'two_level' || i.approval_policy === 'crm_two_level') ? (
                             <div className="space-y-0.5 min-w-[150px]">
                               {/* Extra-billable indents add a CRM stage before L1/L2. */}
                               {i.approval_policy === 'crm_two_level' && (
@@ -3956,6 +3989,7 @@ export default function Procurement() {
                                 // Settings. Purely additive — nobody who could approve before loses
                                 // it. Mirrors the server gate in procurement.js.
                                 const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm || approvalCtx.crmNamed;
+                                if (i.raiser_approval_required && !needsCrm) return renderRaiserActions(i);
 
                                 // CRM stage (Extra-billable) — fires first, before L1/L2.
                                 if (needsCrm && i.status === 'submitted' && !isCreator) {
@@ -3963,7 +3997,7 @@ export default function Procurement() {
                                     return (
                                       <>
                                         <button onClick={() => openApproveModal(i)} className="btn text-xs py-1 px-2 bg-purple-600 text-white hover:bg-purple-700">Approve as CRM</button>
-                                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject CRM</button>
+                                        {!i.raiser_approval_required && <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject CRM</button>}
                                       </>
                                     );
                                   }
@@ -4057,7 +4091,7 @@ export default function Procurement() {
                           "give this permission to delete or again reject". */}
                               {/* approvalCtx.* (not a local) — these sit OUTSIDE the actions
                           IIFE above, so anything declared inside it is out of scope. */}
-                              {i.status === 'approved' && approvalCtx.canRevoke && (
+                              {!i.raiser_approval_required && i.status === 'approved' && approvalCtx.canRevoke && (
                                 <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2" title="Revoke approval and reject this indent">
                                   Re-reject
                                 </button>
@@ -4068,7 +4102,7 @@ export default function Procurement() {
                           and a Store Issue Challan cut. Admin or the L2 approver
                           / MD (mam 2026-06-04, 2026-06-23: "issue items from
                           store now" on a PO-sent indent). */}
-                              {(i.status === 'rejected' || i.status === 'approved' || i.status === 'po_sent') && approvalCtx.canRevoke && (
+                              {!i.raiser_approval_required && (i.status === 'rejected' || i.status === 'approved' || i.status === 'po_sent') && approvalCtx.canRevoke && (
                                 <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2" title={i.status === 'rejected' ? 'Revoke rejection and approve' : 'Re-open to edit qty / issue from store'}>
                                   {i.status === 'po_sent' ? 'Issue from Store' : 'Re-approve'}
                                 </button>
@@ -4077,7 +4111,7 @@ export default function Procurement() {
                           a small "Awaiting approval" hint instead so they
                           know what's happening. Works for both submitted +
                           l1_approved (two_level intermediate state). */}
-                              {(i.status === 'submitted' || i.status === 'l1_approved') && i.created_by === user?.id && (
+                              {!i.raiser_approval_required && (i.status === 'submitted' || i.status === 'l1_approved') && i.created_by === user?.id && (
                                 <span className="text-[10px] text-gray-500 italic" title="Only an approver can act on your indent">Awaiting approval</span>
                               )}
                               {i.status === 'draft' && <button onClick={() => approveIndent(i.id, 'submitted')} className="btn btn-primary text-xs py-1 px-2">Submit</button>}
@@ -4085,12 +4119,12 @@ export default function Procurement() {
                             {/* Line 2 — row utilities. Same place on every row, and only
                         rendered when there is at least one, so rows without them
                         don't carry an empty gap. */}
-                            {(((canEdit('procurement') || isAdmin()) && i.status !== 'approved') || canDelete('procurement')) && (
+                            {(canEditIndentRow(i) || canDelete('procurement')) && (
                               <div className="flex gap-1 items-center justify-end">
                                 {/* Edit — site engineers in training need to fix wrong
                             indents. Allowed for submitted / draft / rejected;
                             approved indents are frozen (server enforces too). */}
-                                {(canEdit('procurement') || isAdmin()) && (i.status !== 'approved' || isAdmin()) && (
+                                {canEditIndentRow(i) && (
                                   <button onClick={() => openEditIndent(i)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit indent"><FiEdit2 size={14} /></button>
                                 )}
                                 {canDelete('procurement') && <button onClick={async () => {
@@ -9485,7 +9519,7 @@ export default function Procurement() {
           approval time".  Approver sees the full line list with editable
           qty inputs + a live budget total at the bottom.  Only changed
           quantities go up in the request body. */}
-      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveUnitOverrides({}); setApproveMargin(''); }} title={approveTarget ? `Approve Indent ${approveTarget.indent_number}` : 'Approve Indent'} wide>
+      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveUnitOverrides({}); setApproveMargin(''); }} title={approveTarget ? `${approveTarget.review_action ? "Check Indent" : "Approve Indent"} ${approveTarget.indent_number}` : 'Approve Indent'} wide>
         {approveTarget && (() => {
           const items = approveTarget.items || [];
           const liveBudget = items.reduce((sum, it) => {
@@ -9509,6 +9543,7 @@ export default function Procurement() {
           return (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-xs bg-emerald-50 border border-emerald-200 rounded p-3">
+                {!!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending' && <p className="col-span-full rounded bg-blue-50 p-3 text-blue-800">{approveTarget.review_action ? 'Check every item. Use Review / Edit and save corrections before marking correct. The original raiser will then approve.' : 'Approve the reviewed items below. If a correction is needed, edit the indent first; it will require review again.'}</p>}
                 <div><span className="text-gray-500">Site:</span> <span className="font-medium">{approveTarget.site_name || '—'}</span></div>
                 <div><span className="text-gray-500">Raised by:</span> <span className="font-medium">{approveTarget.raised_by_name || approveTarget.created_by_name}</span></div>
                 <div><span className="text-gray-500">Items:</span> <span className="font-medium">{items.length}</span></div>
@@ -9560,7 +9595,7 @@ export default function Procurement() {
                       <th className="text-right px-2 py-1 w-24">Office<br /><span className="text-[9px] font-normal text-gray-400 normal-case">Stock</span></th>
                       <th className="text-right px-2 py-1 w-24">Site<br /><span className="text-[9px] font-normal text-gray-400 normal-case">Stock</span></th>
                       <th className="text-right px-2 py-1 w-24">Original Qty</th>
-                      <th className="text-right px-2 py-1 w-24">Approved Qty</th>
+                      <th className="text-right px-2 py-1 w-24">{approveTarget.raiser_approval_required ? 'Reviewed Qty' : 'Approved Qty'}</th>
                       {/* Mam (2026-06-02): split-source columns.  "From
                           Store" = qty issued from existing office stock
                           (auto-seeded to min(office, approved)).  "To
@@ -9591,6 +9626,7 @@ export default function Procurement() {
                           <td className="px-2 py-1">
                             <input
                               list="approve-uom-list"
+                              disabled={!!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending'}
                               value={approveUnitOverrides[it.id] ?? it.unit ?? ''}
                               onChange={(e) => setApproveUnitOverrides(prev => ({ ...prev, [it.id]: e.target.value }))}
                               placeholder="unit"
@@ -9639,6 +9675,7 @@ export default function Procurement() {
                             {/* NumInput keeps backspace/select-all-delete from
                                 snapping the field to 0 (mam 2026-05-25). */}
                             <NumInput step="any" min="0" emitZeroOnEmpty
+                              disabled={!!approveTarget.raiser_approval_required && approveTarget.crm_status !== 'pending'}
                               value={approveQtyOverrides[it.id] ?? it.quantity}
                               onChange={(v) => setApproveQtyOverrides(prev => ({ ...prev, [it.id]: v }))}
                               className="border border-gray-300 rounded px-2 py-1 w-20 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
@@ -9658,7 +9695,7 @@ export default function Procurement() {
                             const fs = +approveFromStore[it.id] || 0;
                             const maxFs = Math.min(office, usedQty);
                             const suggest = maxFs;
-                            const canIssue = !!it.item_master_id && office > 0;
+                            const canIssue = !approveTarget.review_action && !!it.item_master_id && office > 0;
                             const toProc = Math.max(0, usedQty - fs);
                             const overshoot = fs > maxFs + 0.0001;
                             return (
@@ -9763,7 +9800,7 @@ export default function Procurement() {
               <div className="flex justify-end gap-3 pt-2 border-t">
                 <button type="button" onClick={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveUnitOverrides({}); setApproveMargin(''); }} className="btn btn-secondary">Cancel</button>
                 <button type="button" onClick={submitApprove} disabled={approveSaving} className="btn btn-success flex items-center gap-1">
-                  <FiCheck /> {approveSaving ? 'Approving…' : 'Approve Indent'}
+                  <FiCheck /> {approveSaving ? 'Saving…' : approveTarget.review_action ? 'Mark Correct' : 'Approve Indent'}
                 </button>
               </div>
             </div>
