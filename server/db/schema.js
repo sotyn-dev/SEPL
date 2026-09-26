@@ -7537,6 +7537,7 @@ in your first week. If a process feels broken, raise a Help Ticket
 
   require('../lib/employeeProfessionalTax').initialize(db);
   require('./userTotp').initialize(db);
+  require('./dailyWork').initialize(db);
   require('../lib/dispatchReceiving').initialize(db);
   require('./complianceSchema').initializeComplianceSchema(db);
 
