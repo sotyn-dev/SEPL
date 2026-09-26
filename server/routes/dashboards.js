@@ -114,6 +114,10 @@ router.post('/approve/:key/:id', adminOnly, (req, res) => {
   const id = +req.params.id;
   try {
     if (req.params.key === 'indents') {
+      const indent = db.prepare('SELECT * FROM indents WHERE id=?').get(id);
+      if (require('../lib/indentRaiserApproval').usesRaiserApproval(indent)) {
+        return res.status(409).json({ error: 'Open Indent to Dispatch. This indent needs reviewer verification and final approval by its original raiser.' });
+      }
       // Admin one-click = CMD final authority (covers all levels in one shot).
       // L2 switch OFF → mark L2 'n/a'; ON → mark it approved by admin. mam 2026-07-21.
       // Shared resolver — Procurement → ⚙ Approval Settings is the source of
