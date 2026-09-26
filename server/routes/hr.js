@@ -1787,6 +1787,11 @@ router.delete('/checklists/:id', requirePermission('checklists', 'delete'), (req
 //   once        → exact due_date match
 // Each entry is joined with today's completion row (if any) so the UI knows
 // whether proof has been uploaded.
+router.get('/checklists/my-work', (req, res) => {
+  const { checklistDashboard } = require('../lib/checklistDashboard');
+  res.json(checklistDashboard(getDb(), req.user.id, req.query.back));
+});
+
 router.get('/checklists/my-today', (req, res) => {
   const db = getDb();
   const today = istToday();
