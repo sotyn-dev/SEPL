@@ -20,6 +20,15 @@ router.get('/vapid', (req, res) => {
   }
 });
 
+// The worker cannot read the user's login token when SOTYN is closed. Only a
+// random capability delivered in that specific, unexpired call push is valid.
+router.post('/call-receipt', (req, res) => {
+  const { acknowledgeCallNotification } = require('../lib/callSignalling');
+  const { getIO } = require('../lib/chatSocket');
+  const accepted = acknowledgeCallNotification(getIO(), req.body);
+  res.status(accepted ? 204 : 404).end();
+});
+
 router.use(authMiddleware);
 
 // Save / refresh a subscription. Called by the client right after the

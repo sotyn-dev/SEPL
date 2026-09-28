@@ -54,7 +54,25 @@ self.addEventListener('push', (event) => {
     data: { url: data.url || '/', ...data },
     vibrate: [120, 60, 120],
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    let status = 'displayed';
+    try {
+      await self.registration.showNotification(title, options);
+    } catch (error) {
+      status = 'failed';
+      console.warn('Could not show notification:', error.name);
+    }
+    // Provider acceptance is not device delivery. Acknowledge only after this
+    // worker tries to show the alert; OS notification settings still apply.
+    if (data.type === 'site_call' && data.receiptToken && !expiredCall) {
+      try {
+        await fetch('/api/push/call-receipt', {
+          method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callId: data.callId, receiptToken: data.receiptToken, status }),
+        });
+      } catch { /* A failed receipt must not prevent the phone notification. */ }
+    }
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {

@@ -1,7 +1,26 @@
 // Retain invitations while a recipient opens SOTYN from a push notification.
 // SDP and ICE stay on the server, never in Web Push.
 const servers = new WeakMap();
+const { randomBytes, timingSafeEqual } = require('node:crypto');
 const CALL_WAIT_MS = 60000;
+
+// A short-lived, per-call capability is sent only inside the encrypted push.
+// It allows the worker to acknowledge display without storing login tokens.
+function acknowledgeCallNotification(io, data) {
+  const call = io && servers.get(io)?.get(data?.callId);
+  if (!call || call.answered || call.expiresAt <= Date.now() ||
+      !['displayed', 'failed'].includes(data?.status) || typeof data?.receiptToken !== 'string' ||
+      !/^[a-f0-9]{48}$/.test(data.receiptToken) ||
+      !timingSafeEqual(Buffer.from(data.receiptToken), Buffer.from(call.receiptToken))) return false;
+  // One failing device must not overwrite a successful acknowledgement.
+  if (call.notificationDisplayed) return true;
+  call.notificationDisplayed = data.status === 'displayed';
+  io.to(call.callerSocket).emit('call:delivery', {
+    callId: call.callId, notificationDisplayed: call.notificationDisplayed,
+    notificationFailed: data.status === 'failed',
+  });
+  return true;
+}
 
 function attachCallSignalling(io, socket, options = {}) {
   let calls = servers.get(io);
@@ -48,7 +67,7 @@ function attachCallSignalling(io, socket, options = {}) {
     if (calls.has(data.callId) || [...calls.values()].some(c => [c.from, c.to].includes(uid) || [c.from, c.to].includes(to))) {
       reply({ ok: false, reason: 'busy' }); return;
     }
-    const call = { callId: data.callId, from: uid, to, callerSocket: socket.id,
+    const call = { callId: data.callId, from: uid, to, callerSocket: socket.id, receiptToken: randomBytes(24).toString('hex'),
       fromName: String(socket.user.name || 'Someone').slice(0, 100), video: !!data.video,
       expiresAt: Date.now() + (options.waitMs || CALL_WAIT_MS), ice: [], delivered: new Set() };
     call.offer = { callId: call.callId, from: uid, fromName: call.fromName, video: call.video,
@@ -62,7 +81,7 @@ function attachCallSignalling(io, socket, options = {}) {
     reply({ ok: true, expiresAt: call.expiresAt, mode: foreground ? 'online' : 'notifying' });
     if (!foreground) {
       Promise.resolve().then(() => notify(call)).then(result => {
-        if (calls.get(call.callId) !== call || call.answered || call.presented) return;
+        if (calls.get(call.callId) !== call || call.answered || call.presented || call.notificationDisplayed) return;
         if (result?.sent) socket.emit('call:delivery', { callId: call.callId, notificationSent: true });
         else if (!targetSockets(to).length) finish(call, 'unavailable');
       }).catch(() => { if (!targetSockets(to).length) finish(call, 'unavailable'); });
@@ -102,4 +121,4 @@ function attachCallSignalling(io, socket, options = {}) {
   socket.on('disconnect', endSocketCalls);
 }
 
-module.exports = { attachCallSignalling };
+module.exports = { attachCallSignalling, acknowledgeCallNotification };

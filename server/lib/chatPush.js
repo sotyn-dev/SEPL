@@ -29,7 +29,7 @@ function notifyChat(groupId,messageId) {
 }
 function callNotification(call) {
   return {
-    type: 'site_call', callId: call.callId, expiresAt: call.expiresAt,
+    type: 'site_call', callId: call.callId, expiresAt: call.expiresAt, receiptToken: call.receiptToken,
     title: `SOTYN · Incoming ${call.video ? 'video' : 'voice'} call`,
     body: `${call.fromName || 'Someone'} is calling. Tap to open SOTYN and answer.`,
     url: `/site-chat?call=${encodeURIComponent(call.callId)}`,

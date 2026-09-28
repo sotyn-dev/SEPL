@@ -268,7 +268,12 @@ export function CallProvider({ children }) {
       }),
       subscribe('call:delivery', (d) => {
         const c = callRef.current;
-        if (c?.callId === d.callId && c.phase === 'calling') setCall({ ...c, notificationSent: !!d.notificationSent });
+        if (c?.callId !== d.callId || c.phase !== 'calling') return;
+        setCall({ ...c,
+          notificationSent: c.notificationSent || !!d.notificationSent,
+          notificationDisplayed: c.notificationDisplayed || !!d.notificationDisplayed,
+          notificationFailed: !c.notificationDisplayed && !d.notificationDisplayed && (c.notificationFailed || !!d.notificationFailed),
+        });
       }),
       subscribe('call:answer', async (d) => {
         const c = callRef.current; if (!c || c.callId !== d.callId) return;
@@ -328,7 +333,7 @@ export function CallProvider({ children }) {
               <div className="text-2xl font-semibold">{call.peerName}</div>
               <div className="text-sm text-white/70">
                 {call.phase === 'incoming' ? `Incoming ${call.video ? 'video' : 'voice'} call…`
-                  : call.phase === 'calling' ? `${call.ringing ? 'Ringing' : call.notificationSent ? 'Notification sent — waiting for answer' : call.notifying ? 'Notifying their device' : 'Calling'}… (${call.video ? 'video' : 'voice'})`
+                  : call.phase === 'calling' ? `${call.ringing ? 'Ringing' : call.notificationDisplayed ? 'Device acknowledged — waiting for answer' : call.notificationFailed ? 'Device could not show the notification' : call.notificationSent ? 'Waiting for recipient’s device' : call.notifying ? 'Notifying their device' : 'Calling'}… (${call.video ? 'video' : 'voice'})`
                     : `${call.video ? 'Video' : 'Voice'} call`}
               </div>
             </div>

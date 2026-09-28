@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const http = require('node:http');
 const { Server } = require('socket.io');
 const { io: connect } = require('../../../client/node_modules/socket.io-client');
-const { attachCallSignalling } = require('../callSignalling');
+const { attachCallSignalling, acknowledgeCallNotification } = require('../callSignalling');
 const { callNotification } = require('../chatPush');
 
 async function fixture(t, options = {}) {
@@ -125,4 +125,23 @@ test('one device answers and another device cannot end that call', { timeout: 50
   assert.equal((await request(first, 'call:end', { to: 1, callId: 'devices' })).ok, true);
   assert.equal((await request(caller, 'call:offer', null)).ok, false);
   assert.equal((await request(caller, 'call:offer', { ...offer('self'), to: 1 })).ok, false);
+});
+
+test('only the current push capability can acknowledge device display', { timeout: 5000 }, async t => {
+  const { open, pushes, io } = await fixture(t);
+  const caller = await open(1); await ready(caller);
+  const accepted = once(caller, 'call:delivery');
+  await request(caller, 'call:offer', offer('receipt')); await accepted;
+  const receipt = { callId: 'receipt', receiptToken: pushes[0].receiptToken, status: 'displayed' };
+  assert.equal(acknowledgeCallNotification(io, { ...receipt, receiptToken: 'x'.repeat(48) }), false);
+  assert.equal(acknowledgeCallNotification(io, { ...receipt, receiptToken: 'é'.repeat(48) }), false);
+  const failed = once(caller, 'call:delivery');
+  assert.equal(acknowledgeCallNotification(io, { ...receipt, status: 'failed' }), true);
+  assert.equal((await failed).notificationFailed, true);
+  const displayed = once(caller, 'call:delivery');
+  assert.equal(acknowledgeCallNotification(io, receipt), true);
+  assert.equal((await displayed).notificationDisplayed, true);
+  assert.equal(acknowledgeCallNotification(io, { ...receipt, status: 'failed' }), true);
+  await request(caller, 'call:cancel', { to: 2, callId: 'receipt' });
+  assert.equal(acknowledgeCallNotification(io, receipt), false);
 });

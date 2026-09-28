@@ -26,6 +26,7 @@ const METHOD_TO_ACTION = {
 // dashboard polls, etc.). Blacklist instead of whitelist so everything else
 // gets recorded by default.
 const SKIP_PATH_PREFIXES = [
+  '/api/push/call-receipt', // ephemeral delivery capability; no business-data mutation
   '/api/auth/engagement', // separate daily view marker; never data-entry activity
   '/api/attendance/track-location',
   '/api/attendance/my-today',
@@ -104,7 +105,7 @@ function auditMiddleware(req, res, next) {
   // read that follows a write is always fresh. Sits ABOVE every skip rule on
   // purpose: a write is a write even when auditing is off or the path is
   // un-audited.
-  if (req && METHOD_TO_ACTION[req.method] && (req.originalUrl || '').split('?')[0] !== '/api/auth/engagement') {
+  if (req && METHOD_TO_ACTION[req.method] && !['/api/auth/engagement', '/api/push/call-receipt'].includes((req.originalUrl || '').split('?')[0])) {
     try { require('../lib/readCache').invalidateAll(); } catch (_) {}
   }
   try {

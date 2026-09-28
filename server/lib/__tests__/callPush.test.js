@@ -25,7 +25,7 @@ test('call pushes use high urgency and expire promptly; messages keep their TTL'
 });
 
 function worker() {
-  const handlers = {}, shown = [], opened = [], notices = [];
+  const handlers = {}, shown = [], opened = [], notices = [], receipts = [];
   const self = {
     addEventListener: (event, handler) => { handlers[event] = handler; },
     location: { origin: 'https://test.invalid' },
@@ -33,8 +33,10 @@ function worker() {
       getNotifications: async ({ tag }) => notices.filter(n => n.tag === tag) },
     clients: { matchAll: async () => [], openWindow: async url => opened.push(url) },
   };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../client/public/sw.js'), 'utf8'), { self, URL });
-  return { handlers, shown, opened, notices, self };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../../client/public/sw.js'), 'utf8'), {
+    self, URL, console, fetch: async (url, options) => receipts.push({ url, options }),
+  });
+  return { handlers, shown, opened, notices, self, receipts };
 }
 
 test('service worker shows incoming/missed calls and opens the invitation on tap', async () => {
@@ -49,6 +51,19 @@ test('service worker shows incoming/missed calls and opens the invitation on tap
   w.handlers.push({ data: { json: () => ({ ...payload, expiresAt: Date.now() - 1 }) }, waitUntil: p => { task = p; } }); await task;
   assert.match(w.shown[1].title, /Missed call/);
   assert.equal(w.shown[1].options.requireInteraction, false);
+});
+
+test('worker distinguishes provider acceptance from actual display success or failure', async () => {
+  const w = worker();
+  const payload = callNotification({ callId: 'receipt', expiresAt: Date.now() + 60000, receiptToken: 'test-capability' });
+  let task;
+  w.handlers.push({ data: { json: () => payload }, waitUntil: p => { task = p; } }); await task;
+  assert.equal(w.receipts[0].url, '/api/push/call-receipt');
+  assert.equal(JSON.parse(w.receipts[0].options.body).status, 'displayed');
+  assert.equal(w.receipts[0].options.credentials, 'omit');
+  w.self.registration.showNotification = async () => { throw new TypeError('cannot display'); };
+  w.handlers.push({ data: { json: () => payload }, waitUntil: p => { task = p; } }); await task;
+  assert.equal(JSON.parse(w.receipts[1].options.body).status, 'failed');
 });
 
 test('service worker closes only the matching call alert and awaits focus before navigation', async () => {
