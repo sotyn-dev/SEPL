@@ -32,13 +32,14 @@ test('removed members do not get messages and previews have a bounded size',()=>
   db.prepare('UPDATE chat_messages SET body=? WHERE id=1').run('a'.repeat(1000));
   const delivery=chatDelivery(db,1,1);assert.deepEqual(delivery.recipients,[30]);assert.equal(delivery.payload.body.length,240);db.close();
 });
-test('only chat and explicit chat tests pass the mobile notification policy',()=>{
+test('only chat, incoming calls and explicit chat tests pass the mobile notification policy',()=>{
   for(const payload of [{},{type:'ticket'},{type:'approval'},{url:'/site-chat'},null]) assert.equal(isChatPush(payload),false);
   assert.equal(isChatPush({type:'site_chat'}),true);assert.equal(isChatPush({type:'chat_push_test'}),true);
+  assert.equal(isChatPush({type:'site_call'}),true);
 });
 test('new chat messages dispatch push even before any socket server/client exists',()=>{
   const delivered=[];const module={exports:{}};
-  const deps={'socket.io':{},jsonwebtoken:{},'../middleware/auth':{},'../db/chatDb':{},'./chatPush':{notifyChat:(...args)=>delivered.push(args)}};
+  const deps={'socket.io':{},jsonwebtoken:{},'../middleware/auth':{},'../db/chatDb':{},'./callSignalling':{},'./chatPush':{notifyChat:(...args)=>delivered.push(args)}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../chatSocket.js'),'utf8'),{require:name=>deps[name],module,setTimeout,Map});
   module.exports.emitChat(1,'message',{id:7});module.exports.emitChat(1,'changed',{});
   assert.deepEqual(delivered,[[1,7]]);

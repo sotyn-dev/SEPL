@@ -32,7 +32,7 @@ export default function EnablePushButton() {
   const turnOn = async () => {
     const r = await enablePushNotifications();
     if (r.ok) {
-      toast.success('SOTYN Chat notifications enabled on this device');
+      toast.success('SOTYN chat and call notifications enabled on this device');
       refresh();
     } else if (r.reason === 'permission_denied') {
       toast.error('You blocked notifications. Open browser settings → Site Settings → Notifications → Allow.', { duration: 6000 });
@@ -76,7 +76,7 @@ export default function EnablePushButton() {
           <div className="absolute left-3 right-3 top-full mt-1.5 sm:left-auto sm:right-0 sm:mt-1 sm:w-80 max-w-[calc(100vw-1.5rem)] sm:max-w-none bg-white border border-gray-200 rounded-xl shadow-2xl z-50 p-4 text-sm">
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-bold text-gray-800 flex items-center gap-2">
-                <FiBell className="text-blue-600" /> SOTYN Chat Notifications
+                <FiBell className="text-blue-600" /> Chat & Call Notifications
               </h4>
               <button
                 type="button"
@@ -96,7 +96,7 @@ export default function EnablePushButton() {
             {state === 'off' && (
               <>
                 <p className="text-xs text-gray-600 mb-3 leading-relaxed">
-                  Get only SOTYN Chat messages in your phone notification panel, even when you close the app without logging out. Other alerts stay inside SOTYN.
+                  Get SOTYN Chat messages and incoming-call alerts even when the app is closed. Tap a call notification to open SOTYN and answer. Stay logged in; other alerts remain inside SOTYN.
                 </p>
                 <button onClick={turnOn} className="btn btn-primary w-full text-sm py-2">Enable on this device</button>
               </>
@@ -104,7 +104,7 @@ export default function EnablePushButton() {
             {state === 'on' && (
               <>
                 <p className="text-xs text-emerald-700 mb-3 leading-relaxed">
-                  ✓ SOTYN Chat alerts are enabled on this device, including when the app is closed. Logging out disconnects this device.
+                  ✓ Chat and call alerts are enabled on this device. Tap an incoming-call notification to open SOTYN and answer. Logging out disconnects this device.
                 </p>
                 <div className="flex gap-2">
                   <button onClick={test} className="btn btn-secondary flex-1 text-xs py-2">Send Test</button>

@@ -39,11 +39,14 @@ function getPublicKey() {
 // Send a single push to one subscription
 async function sendOne(sub, payload) {
   if (!isChatPush(payload)) return { ok: false, reason: 'chat_only' };
+  const isCall = payload.type === 'site_call';
+  const ttl = isCall ? Math.min(60, Math.ceil((Number(payload.expiresAt) - Date.now()) / 1000)) : 86400;
+  if (!Number.isFinite(ttl) || ttl <= 0) return { ok: false, reason: 'expired' };
   try {
     await webpush.sendNotification(
       { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
       JSON.stringify(payload),
-      { TTL: 86400, timeout: 10000 }
+      { TTL: ttl, timeout: 10000, ...(isCall ? { urgency: 'high' } : {}) }
     );
     return { ok: true };
   } catch (err) {

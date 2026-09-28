@@ -15,6 +15,12 @@ self.addEventListener('activate', (event) => {
 // Close only that conversation's read notifications, preserving newer alerts.
 self.addEventListener('message', (event) => {
   const data = event.data;
+  if (data?.type === 'call_close' && typeof data.callId === 'string') {
+    event.waitUntil(self.registration.getNotifications({ tag: `sotyn-call-${data.callId}` }).then(notifications => {
+      notifications.forEach(notification => notification.close());
+    }));
+    return;
+  }
   if (data?.type !== 'chat_read' || !Number.isSafeInteger(data.groupId) || data.groupId <= 0 ||
       !Number.isSafeInteger(data.lastReadId) || data.lastReadId <= 0) return;
   event.waitUntil(self.registration.getNotifications().then(notifications => {
@@ -33,9 +39,10 @@ self.addEventListener('push', (event) => {
   } catch (e) {
     data = { title: 'SEPL ERP', body: event.data ? event.data.text() : 'New notification' };
   }
-  const title = data.title || 'SEPL ERP';
+  const expiredCall = data.type === 'site_call' && Number(data.expiresAt) <= Date.now();
+  const title = expiredCall ? 'SOTYN · Missed call' : data.title || 'SEPL ERP';
   const options = {
-    body: data.body || '',
+    body: expiredCall ? 'This call has ended. Open SOTYN Chat to call back.' : data.body || '',
     icon: data.icon || '/icon-192.png',
     badge: data.badge || '/icon-192.png',
     tag: data.tag || 'sepl-erp',
@@ -43,7 +50,7 @@ self.addEventListener('push', (event) => {
     // The OS still controls sound volume, silent mode and notification channels.
     silent: false,
     renotify: true,
-    requireInteraction: !!data.requireInteraction,
+    requireInteraction: !expiredCall && !!data.requireInteraction,
     data: { url: data.url || '/', ...data },
     vibrate: [120, 60, 120],
   };
@@ -60,9 +67,7 @@ self.addEventListener('notificationclick', (event) => {
         try {
           const u = new URL(client.url);
           if (u.origin === self.location.origin) {
-            client.focus();
-            client.postMessage({ type: 'navigate', url: targetUrl });
-            return;
+            return client.focus().then(() => client.postMessage({ type: 'navigate', url: targetUrl }));
           }
         } catch {}
       }

@@ -37,6 +37,13 @@ export function CallProvider({ children }) {
   const callRef = useRef(null);
   const setCall = useCallback((value) => { callRef.current = value; updateCall(value); }, []);
   const ringOsc = useRef(null);
+  const checkedNotification = useRef(false);
+
+  const closeCallNotification = (callId) => {
+    if (callId && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(reg => reg.active?.postMessage({ type: 'call_close', callId })).catch(() => {});
+    }
+  };
 
   // ── ringtone (Web Audio beep loop — no asset needed) ──────────────────
   const startRing = () => {
@@ -60,6 +67,7 @@ export function CallProvider({ children }) {
 
   // ── cleanup ──────────────────────────────────────────────────────────
   const cleanup = useCallback(() => {
+    closeCallNotification(callRef.current?.callId);
     callRef.current = null;
     clearTimeout(callTimer.current);
     stopRing();
@@ -87,7 +95,10 @@ export function CallProvider({ children }) {
     };
     pc.onconnectionstatechange = () => {
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
-        if (callRef.current) cleanup();
+        if (callRef.current?.callId === callId) {
+          emit('call:end', { to: peerId, callId });
+          cleanup();
+        }
       }
     };
     pcRef.current = pc;
@@ -122,11 +133,24 @@ export function CallProvider({ children }) {
         cleanup();
         toast.error('The call did not reach their screen. Ask them to open or refresh SOTYN and try again.');
       }, 12000);
-      emit('call:offer', { to: peerId, callId, sdp: offer, video: !!video }, (result) => {
-        if (callRef.current?.callId !== callId || result?.ok) return;
+      emit('call:offer', { to: peerId, callId, sdp: pc.localDescription, video: !!video }, (result) => {
+        const current = callRef.current;
+        if (current?.callId !== callId) return;
+        if (result?.ok) {
+          if (current.phase !== 'calling') return;
+          clearTimeout(callTimer.current);
+          setCall({ ...current, expiresAt: result.expiresAt, notifying: result.mode === 'notifying' });
+          callTimer.current = setTimeout(() => {
+            if (callRef.current?.callId !== callId) return;
+            emit('call:cancel', { to: peerId, callId });
+            cleanup();
+            toast.error('No answer. Please try again later.');
+          }, Math.max(0, Math.min(60000, result.expiresAt - Date.now())));
+          return;
+        }
         cleanup();
-        toast.error(result?.reason === 'offline'
-          ? `${peerName || 'This person'} is not available for calls. They need to open or refresh SOTYN.`
+        toast.error(result?.reason === 'busy'
+          ? `${peerName || 'This person'} is already in a call.`
           : 'Could not deliver the call invitation.');
       });
     } catch (e) {
@@ -142,6 +166,7 @@ export function CallProvider({ children }) {
     const c = callRef.current; const offer = incomingOffer.current;
     if (!c || !offer) return;
     stopRing();
+    closeCallNotification(c.callId);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !!c.video });
       if (callRef.current?.callId !== c.callId) { stream.getTracks().forEach(t => t.stop()); return; }
@@ -154,7 +179,7 @@ export function CallProvider({ children }) {
       await pc.setLocalDescription(answer);
       if (callRef.current?.callId !== c.callId) return;
       clearTimeout(callTimer.current);
-      emit('call:answer', { to: c.peerId, callId: c.callId, sdp: answer });
+      emit('call:answer', { to: c.peerId, callId: c.callId, sdp: pc.localDescription });
       setCall({ ...c, phase: 'active' });
     } catch (e) {
       if (callRef.current?.callId !== c.callId) return;
@@ -191,24 +216,42 @@ export function CallProvider({ children }) {
     // subscribe() attaches now (or when the deferred connect fires) and stays
     // attached across reconnects, so an incoming call rings on any page. Auth /
     // transports / storage-blocked handling live once in the shared socket.
-    const onBye = (d) => { const c = callRef.current; if (c && c.callId === d.callId) cleanup(); };
+    const onBye = (d) => {
+      const c = callRef.current;
+      if (!c || c.callId !== d.callId) return;
+      cleanup();
+      if (d.reason === 'unavailable') toast.error('Could not notify this person. They need notifications enabled or SOTYN open.');
+      else if (d.reason === 'no_answer' && c.phase === 'calling') toast.error('No answer. Please try again later.');
+    };
+    const ready = () => {
+      const requested = new URLSearchParams(window.location.search).get('call');
+      emit('call:ready', { visible: document.visibilityState === 'visible', callId: requested }, (result) => {
+        if (!requested || checkedNotification.current) return;
+        checkedNotification.current = true;
+        if (!result?.pending && callRef.current?.callId !== requested) toast('This call has ended. You can call back from SOTYN Chat.');
+      });
+    };
+    const presence = () => { if (isConnected()) emit('call:presence', { visible: document.visibilityState === 'visible' }); };
+    document.addEventListener('visibilitychange', presence);
     const offs = [
-      subscribe('connect', () => emit('call:ready')),
+      subscribe('connect', ready),
       subscribe('disconnect', () => {
         if (!callRef.current) return;
         cleanup();
         toast.error('Call ended because the connection was lost. Please try again.');
       }),
       subscribe('call:offer', (d) => {
+        if (d.expiresAt && d.expiresAt <= Date.now()) return;
+        if (callRef.current?.callId === d.callId) return;
         if (callRef.current) { emit('call:reject', { to: d.from, callId: d.callId }); return; } // busy
         incomingOffer.current = d.sdp;
-        setCall({ phase: 'incoming', peerId: d.from, peerName: d.fromName, video: !!d.video, callId: d.callId });
+        setCall({ phase: 'incoming', peerId: d.from, peerName: d.fromName, video: !!d.video, callId: d.callId, expiresAt: d.expiresAt });
         emit('call:ringing', { to: d.from, callId: d.callId });
         callTimer.current = setTimeout(() => {
           if (callRef.current?.callId !== d.callId || callRef.current?.phase !== 'incoming') return;
           emit('call:reject', { to: d.from, callId: d.callId });
           cleanup();
-        }, 45000);
+        }, Math.max(0, Math.min(60000, (d.expiresAt || Date.now() + 45000) - Date.now())));
         startRing();
       }),
       subscribe('call:ringing', (d) => {
@@ -221,7 +264,11 @@ export function CallProvider({ children }) {
           emit('call:cancel', { to: c.peerId, callId: c.callId });
           cleanup();
           toast.error('No answer. Please try again later.');
-        }, 40000);
+        }, Math.max(0, Math.min(60000, (c.expiresAt || Date.now() + 45000) - Date.now())));
+      }),
+      subscribe('call:delivery', (d) => {
+        const c = callRef.current;
+        if (c?.callId === d.callId && c.phase === 'calling') setCall({ ...c, notificationSent: !!d.notificationSent });
       }),
       subscribe('call:answer', async (d) => {
         const c = callRef.current; if (!c || c.callId !== d.callId) return;
@@ -230,7 +277,10 @@ export function CallProvider({ children }) {
           await pcRef.current?.setRemoteDescription(new RTCSessionDescription(d.sdp));
           await drainIce();
           if (callRef.current?.callId === c.callId) setCall({ ...c, phase: 'active' });
-        } catch (_) { cleanup(); toast.error('Could not connect the call. Please try again.'); }
+        } catch (_) {
+          emit('call:end', { to: c.peerId, callId: c.callId });
+          cleanup(); toast.error('Could not connect the call. Please try again.');
+        }
       }),
       subscribe('call:ice', async (d) => {
         const c = callRef.current; if (!c || c.callId !== d.callId || !d.candidate) return;
@@ -241,8 +291,8 @@ export function CallProvider({ children }) {
       subscribe('call:reject', onBye),
       subscribe('call:cancel', onBye),
     ];
-    if (isConnected()) emit('call:ready');
-    return () => { emit('call:unready'); offs.forEach(off => off()); cleanup(); };
+    if (isConnected()) ready();
+    return () => { document.removeEventListener('visibilitychange', presence); emit('call:unready'); offs.forEach(off => off()); cleanup(); };
   }, [user?.id, cleanup, subscribe, emit, isConnected, setCall]);
 
   // attach local preview stream to the <video> when it mounts / call changes
@@ -278,7 +328,7 @@ export function CallProvider({ children }) {
               <div className="text-2xl font-semibold">{call.peerName}</div>
               <div className="text-sm text-white/70">
                 {call.phase === 'incoming' ? `Incoming ${call.video ? 'video' : 'voice'} call…`
-                  : call.phase === 'calling' ? `${call.ringing ? 'Ringing' : 'Calling'}… (${call.video ? 'video' : 'voice'})`
+                  : call.phase === 'calling' ? `${call.ringing ? 'Ringing' : call.notificationSent ? 'Notification sent — waiting for answer' : call.notifying ? 'Notifying their device' : 'Calling'}… (${call.video ? 'video' : 'voice'})`
                     : `${call.video ? 'Video' : 'Voice'} call`}
               </div>
             </div>

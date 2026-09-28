@@ -1,6 +1,6 @@
-// Only member messages in SOTYN Chat may produce phone notifications.
+// Only SOTYN Chat messages, incoming calls and explicit tests notify phones.
 function isChatPush(payload) {
-  return payload?.type === 'site_chat' || payload?.type === 'chat_push_test';
+  return payload?.type === 'site_chat' || payload?.type === 'chat_push_test' || payload?.type === 'site_call';
 }
 
 function chatDelivery(db, groupId, messageId) {
@@ -27,4 +27,16 @@ function notifyChat(groupId,messageId) {
     } catch(err) { console.warn('[chat-push]',err.message); }
   });
 }
-module.exports={isChatPush,chatDelivery,notifyChat};
+function callNotification(call) {
+  return {
+    type: 'site_call', callId: call.callId, expiresAt: call.expiresAt,
+    title: `SOTYN · Incoming ${call.video ? 'video' : 'voice'} call`,
+    body: `${call.fromName || 'Someone'} is calling. Tap to open SOTYN and answer.`,
+    url: `/site-chat?call=${encodeURIComponent(call.callId)}`,
+    tag: `sotyn-call-${call.callId}`, requireInteraction: true,
+  };
+}
+function notifyCall(call) {
+  return require('./push').pushToUser(call.to, callNotification(call));
+}
+module.exports={isChatPush,chatDelivery,notifyChat,callNotification,notifyCall};
