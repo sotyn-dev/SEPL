@@ -6,6 +6,7 @@ const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
+const { recordWorkOrder } = require('../lib/subcontractorWorkOrders');
 router.use(authMiddleware);
 
 // Lightweight picker endpoint — any authenticated user can use it,
@@ -69,65 +70,76 @@ const bool01 = (v) => (v === true || v === 1 || v === '1' || v === 'yes' || v ==
 router.post('/', requirePermission('sub_contractors', 'create'), (req, res) => {
   const b = req.body || {};
   if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Name is required' });
-  const r = getDb().prepare(
-    `INSERT INTO sub_contractors
-     (name, phone, state, district, location_extra, contractor_type,
-      experience_years, manpower, with_tools, has_gst, gst_number, rate_in_budget,
-      start_within_days, notes, active, work_order_file, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).run(
-    String(b.name).trim(),
-    b.phone || null,
-    b.state || null,
-    b.district || null,
-    b.location_extra || null,
-    b.contractor_type || null,
-    num(b.experience_years),
-    num(b.manpower),
-    bool01(b.with_tools),
-    bool01(b.has_gst),
-    b.gst_number || null,
-    b.rate_in_budget || null,
-    num(b.start_within_days),
-    b.notes || null,
-    b.active === false || b.active === 0 ? 0 : 1,
-    b.work_order_file || null,
-    req.user.id,
-  );
+  const db = getDb();
+  const r = db.transaction(() => {
+    const result = db.prepare(
+      `INSERT INTO sub_contractors
+       (name, phone, state, district, location_extra, contractor_type,
+        experience_years, manpower, with_tools, has_gst, gst_number, rate_in_budget,
+        start_within_days, notes, active, work_order_file, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      String(b.name).trim(),
+      b.phone || null,
+      b.state || null,
+      b.district || null,
+      b.location_extra || null,
+      b.contractor_type || null,
+      num(b.experience_years),
+      num(b.manpower),
+      bool01(b.with_tools),
+      bool01(b.has_gst),
+      b.gst_number || null,
+      b.rate_in_budget || null,
+      num(b.start_within_days),
+      b.notes || null,
+      b.active === false || b.active === 0 ? 0 : 1,
+      b.work_order_file || null,
+      req.user.id,
+    );
+    recordWorkOrder(db, result.lastInsertRowid, b.work_order_file, req.user.id);
+    return result;
+  })();
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
 router.put('/:id', requirePermission('sub_contractors', 'edit'), (req, res) => {
   const b = req.body || {};
-  const existing = getDb().prepare('SELECT id FROM sub_contractors WHERE id=?').get(req.params.id);
+  const db = getDb();
+  const existing = db.prepare('SELECT id, work_order_file FROM sub_contractors WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Not found' });
   if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Name is required' });
 
-  getDb().prepare(
-    `UPDATE sub_contractors SET
-       name=?, phone=?, state=?, district=?, location_extra=?, contractor_type=?,
-       experience_years=?, manpower=?, with_tools=?, has_gst=?, gst_number=?, rate_in_budget=?,
-       start_within_days=?, notes=?, active=?, work_order_file=?, updated_at=CURRENT_TIMESTAMP
-     WHERE id=?`
-  ).run(
-    String(b.name).trim(),
-    b.phone || null,
-    b.state || null,
-    b.district || null,
-    b.location_extra || null,
-    b.contractor_type || null,
-    num(b.experience_years),
-    num(b.manpower),
-    bool01(b.with_tools),
-    bool01(b.has_gst),
-    b.gst_number || null,
-    b.rate_in_budget || null,
-    num(b.start_within_days),
-    b.notes || null,
-    b.active === false || b.active === 0 ? 0 : 1,
-    b.work_order_file || null,
-    req.params.id,
-  );
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE sub_contractors SET
+         name=?, phone=?, state=?, district=?, location_extra=?, contractor_type=?,
+         experience_years=?, manpower=?, with_tools=?, has_gst=?, gst_number=?, rate_in_budget=?,
+         start_within_days=?, notes=?, active=?, work_order_file=?, updated_at=CURRENT_TIMESTAMP
+       WHERE id=?`
+    ).run(
+      String(b.name).trim(),
+      b.phone || null,
+      b.state || null,
+      b.district || null,
+      b.location_extra || null,
+      b.contractor_type || null,
+      num(b.experience_years),
+      num(b.manpower),
+      bool01(b.with_tools),
+      bool01(b.has_gst),
+      b.gst_number || null,
+      b.rate_in_budget || null,
+      num(b.start_within_days),
+      b.notes || null,
+      b.active === false || b.active === 0 ? 0 : 1,
+      b.work_order_file || null,
+      req.params.id,
+    );
+    if (String(existing.work_order_file || '').trim() !== String(b.work_order_file || '').trim()) {
+      recordWorkOrder(db, existing.id, b.work_order_file, req.user.id);
+    }
+  })();
   res.json({ message: 'Updated' });
 });
 

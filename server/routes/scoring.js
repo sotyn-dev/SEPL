@@ -1082,6 +1082,10 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       }
 
       // ===== HR Hiring =====
+      if (source === 'auto:subcontractor_work_orders') {
+        const done = require('../lib/subcontractorWorkOrders').countWorkOrders(db, sinceDate, untilDate);
+        return { given: null, done };
+      }
       if (source === 'auto:candidates_added') {
         const c = db.prepare(`SELECT COUNT(*) as c FROM candidates WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
         return { given: null, done: c };
