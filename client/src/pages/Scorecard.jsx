@@ -175,6 +175,7 @@ const SOURCE_INFO = {
   'auto:subcontractor_work_orders': { plan: 'Weekly target: 2 (editable)', actual: 'Work-order files saved in Sub-contractor Master Detail during the selected week (IST); each uploaded file counts once' },
   'auto:candidates_added':      { plan: 'You set',                            actual: 'Candidates added this week' },
   'auto:candidates_shortlisted':{ plan: 'You set',                            actual: 'Candidates shortlisted this week' },
+  'auto:offer_letters': { plan: 'Your weekly target (editable)', actual: 'Offer Letters first generated or uploaded in Hiring → Candidates during the selected week (IST); each candidate counts once' },
   'auto:candidates_onboarded':  { plan: 'You set',                            actual: 'Candidates onboarded this week' },
   // Attendance
   'auto:attendance_present_days':{ plan: '6 days target',                     actual: 'Present days this week' },
@@ -1718,6 +1719,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:subcontractor_work_orders">Work-order uploads — Sub-contractor Master Detail (weekly)</option>
                     <option value="auto:candidates_added">candidates added</option>
                     <option value="auto:candidates_shortlisted">candidates shortlisted</option>
+                    <option value="auto:offer_letters">Offer Letters — Hiring Candidates (weekly)</option>
                     <option value="auto:candidates_onboarded">candidates onboarded</option>
                   </optgroup>
                   <optgroup label="HR — Manpower">

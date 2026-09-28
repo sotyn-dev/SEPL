@@ -7549,6 +7549,7 @@ in your first week. If a process feels broken, raise a Help Ticket
   require('../lib/salesBillCheckingScore').migrateSalesBillCheckingScore(db);
   require('../lib/salesBillCheckingScore').migrateDprBillCheckingScore(db);
   require('../lib/subcontractorWorkOrders').initialize(db);
+  require('../lib/offerLetterScore').initialize(db);
   return db;
 }
 

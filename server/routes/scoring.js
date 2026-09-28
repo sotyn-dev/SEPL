@@ -1082,6 +1082,10 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
       }
 
       // ===== HR Hiring =====
+      if (source === 'auto:offer_letters') {
+        const done = require('../lib/offerLetterScore').countOfferLetters(db, sinceDate, untilDate);
+        return { given: null, done };
+      }
       if (source === 'auto:subcontractor_work_orders') {
         const done = require('../lib/subcontractorWorkOrders').countWorkOrders(db, sinceDate, untilDate);
         return { given: null, done };

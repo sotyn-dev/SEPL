@@ -641,7 +641,7 @@ router.post('/candidates/:id/md-decision', requirePermission('hr', 'approve'), (
                      md_decision        = ?,
                      md_interview_notes = COALESCE(?, md_interview_notes),
                      offer_letter_file  = COALESCE(?, offer_letter_file),
-                     offer_sent_at      = COALESCE(?, offer_sent_at),
+                     offer_sent_at      = COALESCE(offer_sent_at, ?),
                      offered_position   = COALESCE(?, offered_position),
                      offered_salary     = COALESCE(?, offered_salary),
                      joining_date       = COALESCE(?, joining_date),
