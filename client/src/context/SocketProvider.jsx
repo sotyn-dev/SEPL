@@ -37,7 +37,7 @@ export function SocketProvider({ children }) {
       if (cancelled) return;
       // Function-form auth so storage-blocked / in-app browsers still send the
       // current token (mam 2026-07-04) — same as the two sockets this replaces.
-      const socket = io({ path: '/socket.io', auth: (cb) => cb({ token: getToken() }), transports: ['websocket', 'polling'] });
+      const socket = io({ path: '/socket.io', auth: (cb) => cb({ token: getToken() }), transports: ['websocket', 'polling'], tryAllTransports: true });
       socketRef.current = socket;
       for (const [event, set] of handlersRef.current) for (const h of set) socket.on(event, h);
     };
@@ -46,8 +46,21 @@ export function SocketProvider({ children }) {
     if (window.requestIdleCallback) idleId = window.requestIdleCallback(start, { timeout: 2000 });
     else timeoutId = setTimeout(start, 0);
 
+    // A rejected handshake does not automatically retry. Retry with the latest
+    // token after REST has refreshed it, or when the user returns to the app.
+    const reconnect = () => {
+      const socket = socketRef.current;
+      if (socket && !socket.connected && !socket.active && getToken()) socket.connect();
+    };
+    const retryId = setInterval(reconnect, 15000);
+    window.addEventListener('online', reconnect);
+    window.addEventListener('focus', reconnect);
+
     return () => {
       cancelled = true;
+      clearInterval(retryId);
+      window.removeEventListener('online', reconnect);
+      window.removeEventListener('focus', reconnect);
       if (idleId != null && window.cancelIdleCallback) { try { window.cancelIdleCallback(idleId); } catch { /* ignore */ } }
       if (timeoutId != null) clearTimeout(timeoutId);
       const socket = socketRef.current;

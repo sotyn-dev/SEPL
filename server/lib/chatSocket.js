@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const { getSecret } = require('../middleware/auth');
 const { getChatDb } = require('../db/chatDb');
+const { attachCallSignalling } = require('./callSignalling');
 
 let io = null;
 
@@ -40,12 +41,7 @@ function initChatSocket(httpServer) {
     // WebRTC call signalling (mam 2026-06-19) — relay offer/answer/ICE/end to
     // the target user's personal room. Stateless pass-through; the media goes
     // peer-to-peer (WebRTC), only these tiny control messages go via the socket.
-    for (const ev of ['call:offer', 'call:answer', 'call:ice', 'call:reject', 'call:end', 'call:cancel']) {
-      socket.on(ev, (d = {}) => {
-        const to = parseInt(d.to, 10);
-        if (to) io.to('u:' + to).emit(ev, { ...d, to: undefined, from: uid, fromName: socket.user.name || '' });
-      });
-    }
+    attachCallSignalling(io, socket);
 
     // Re-join when a client opens / is added to a group. Members always may;
     // admin may join GROUP rooms but NOT a private DM they're not part of.

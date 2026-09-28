@@ -7,6 +7,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, useCal
 import api from '../api';
 import { useAuth } from './AuthContext';
 import { useAppSocket } from './SocketProvider';
+import toast from 'react-hot-toast';
 import { FiPhone, FiPhoneOff, FiVideo, FiVideoOff, FiMic, FiMicOff, FiX } from 'react-icons/fi';
 
 const CallContext = createContext(null);
@@ -17,14 +18,16 @@ const initials = (s) => String(s || '?').replace(/[^A-Za-z0-9 ]/g, '').trim().sl
 
 export function CallProvider({ children }) {
   const { user } = useAuth();
-  const { subscribe, emit } = useAppSocket();   // shared shell socket (SocketProvider)
+  const { subscribe, emit, isConnected } = useAppSocket();
   // call: null | { phase:'incoming'|'calling'|'active', peerId, peerName, video, callId }
-  const [call, setCall] = useState(null);
+  const [call, updateCall] = useState(null);
   const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
 
   const pcRef = useRef(null);
   const localRef = useRef(null);            // local MediaStream
+  const remoteRef = useRef(null);
+  const callTimer = useRef(null);
   const localVidRef = useRef(null);         // <video> for self
   const remoteVidRef = useRef(null);        // <video> for the other person
   const remoteAudRef = useRef(null);        // <audio> fallback for voice calls
@@ -32,8 +35,8 @@ export function CallProvider({ children }) {
   const pendingIce = useRef([]);            // ICE candidates that arrive before remoteDescription
   const incomingOffer = useRef(null);       // stored SDP offer for an incoming call
   const callRef = useRef(null);
+  const setCall = useCallback((value) => { callRef.current = value; updateCall(value); }, []);
   const ringOsc = useRef(null);
-  callRef.current = call;
 
   // ── ringtone (Web Audio beep loop — no asset needed) ──────────────────
   const startRing = () => {
@@ -57,15 +60,19 @@ export function CallProvider({ children }) {
 
   // ── cleanup ──────────────────────────────────────────────────────────
   const cleanup = useCallback(() => {
+    callRef.current = null;
+    clearTimeout(callTimer.current);
     stopRing();
-    try { pcRef.current?.close(); } catch (_) {}
+    const pc = pcRef.current;
     pcRef.current = null;
+    try { pc?.close(); } catch (_) {}
     try { localRef.current?.getTracks().forEach(t => t.stop()); } catch (_) {}
     localRef.current = null;
+    remoteRef.current = null;
     pendingIce.current = []; incomingOffer.current = null;
     setMuted(false); setCamOff(false);
     setCall(null);
-  }, []);
+  }, [setCall]);
 
   const newPc = useCallback((peerId, callId) => {
     const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
@@ -74,6 +81,7 @@ export function CallProvider({ children }) {
     };
     pc.ontrack = (e) => {
       const [stream] = e.streams;
+      remoteRef.current = stream;
       if (remoteVidRef.current) remoteVidRef.current.srcObject = stream;
       if (remoteAudRef.current) remoteAudRef.current.srcObject = stream;
     };
@@ -95,21 +103,39 @@ export function CallProvider({ children }) {
   // ── start an outgoing call ─────────────────────────────────────────────
   const startCall = useCallback(async (peerId, peerName, video) => {
     if (!peerId || callRef.current) return;
+    if (!isConnected()) { toast.error('Calling is disconnected. Please wait for reconnection and try again.'); return; }
     const callId = (window.crypto?.randomUUID?.() || String(peerId) + '-' + performance.now());
+    setCall({ phase: 'calling', peerId, peerName, video: !!video, callId });
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !!video });
+      if (callRef.current?.callId !== callId) { stream.getTracks().forEach(t => t.stop()); return; }
       localRef.current = stream;
       const pc = newPc(peerId, callId);
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      emit('call:offer', { to: peerId, callId, sdp: offer, video: !!video });
-      setCall({ phase: 'calling', peerId, peerName, video: !!video, callId });
+      if (callRef.current?.callId !== callId) return;
+      if (!isConnected()) throw new Error('disconnected');
+      callTimer.current = setTimeout(() => {
+        if (callRef.current?.callId !== callId) return;
+        emit('call:cancel', { to: peerId, callId });
+        cleanup();
+        toast.error('The call did not reach their screen. Ask them to open or refresh SOTYN and try again.');
+      }, 12000);
+      emit('call:offer', { to: peerId, callId, sdp: offer, video: !!video }, (result) => {
+        if (callRef.current?.callId !== callId || result?.ok) return;
+        cleanup();
+        toast.error(result?.reason === 'offline'
+          ? `${peerName || 'This person'} is not available for calls. They need to open or refresh SOTYN.`
+          : 'Could not deliver the call invitation.');
+      });
     } catch (e) {
+      if (callRef.current?.callId !== callId) return;
       cleanup();
-      alert('Could not start the call — allow microphone' + (video ? ' / camera' : '') + ' access.');
+      toast.error(e.message === 'disconnected' ? 'Calling is disconnected. Please try again.'
+        : 'Could not start the call — check microphone' + (video ? ' / camera' : '') + ' access.');
     }
-  }, [newPc, cleanup, emit]);
+  }, [newPc, cleanup, emit, isConnected, setCall]);
 
   // ── accept an incoming call ─────────────────────────────────────────────
   const acceptCall = useCallback(async () => {
@@ -118,6 +144,7 @@ export function CallProvider({ children }) {
     stopRing();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !!c.video });
+      if (callRef.current?.callId !== c.callId) { stream.getTracks().forEach(t => t.stop()); return; }
       localRef.current = stream;
       const pc = newPc(c.peerId, c.callId);
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
@@ -125,14 +152,17 @@ export function CallProvider({ children }) {
       await drainIce();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+      if (callRef.current?.callId !== c.callId) return;
+      clearTimeout(callTimer.current);
       emit('call:answer', { to: c.peerId, callId: c.callId, sdp: answer });
       setCall({ ...c, phase: 'active' });
     } catch (e) {
+      if (callRef.current?.callId !== c.callId) return;
       emit('call:reject', { to: c.peerId, callId: c.callId });
       cleanup();
       alert('Could not join the call — allow microphone' + (c.video ? ' / camera' : '') + ' access.');
     }
-  }, [newPc, cleanup, emit]);
+  }, [newPc, cleanup, emit, setCall]);
 
   const rejectCall = useCallback(() => {
     const c = callRef.current; if (c) emit('call:reject', { to: c.peerId, callId: c.callId });
@@ -163,15 +193,44 @@ export function CallProvider({ children }) {
     // transports / storage-blocked handling live once in the shared socket.
     const onBye = (d) => { const c = callRef.current; if (c && c.callId === d.callId) cleanup(); };
     const offs = [
+      subscribe('connect', () => emit('call:ready')),
+      subscribe('disconnect', () => {
+        if (!callRef.current) return;
+        cleanup();
+        toast.error('Call ended because the connection was lost. Please try again.');
+      }),
       subscribe('call:offer', (d) => {
         if (callRef.current) { emit('call:reject', { to: d.from, callId: d.callId }); return; } // busy
         incomingOffer.current = d.sdp;
         setCall({ phase: 'incoming', peerId: d.from, peerName: d.fromName, video: !!d.video, callId: d.callId });
+        emit('call:ringing', { to: d.from, callId: d.callId });
+        callTimer.current = setTimeout(() => {
+          if (callRef.current?.callId !== d.callId || callRef.current?.phase !== 'incoming') return;
+          emit('call:reject', { to: d.from, callId: d.callId });
+          cleanup();
+        }, 45000);
         startRing();
+      }),
+      subscribe('call:ringing', (d) => {
+        const c = callRef.current;
+        if (!c || c.callId !== d.callId || c.phase !== 'calling' || c.ringing) return;
+        clearTimeout(callTimer.current);
+        setCall({ ...c, ringing: true });
+        callTimer.current = setTimeout(() => {
+          if (callRef.current?.callId !== d.callId) return;
+          emit('call:cancel', { to: c.peerId, callId: c.callId });
+          cleanup();
+          toast.error('No answer. Please try again later.');
+        }, 40000);
       }),
       subscribe('call:answer', async (d) => {
         const c = callRef.current; if (!c || c.callId !== d.callId) return;
-        try { await pcRef.current?.setRemoteDescription(new RTCSessionDescription(d.sdp)); await drainIce(); setCall({ ...c, phase: 'active' }); } catch (_) {}
+        clearTimeout(callTimer.current);
+        try {
+          await pcRef.current?.setRemoteDescription(new RTCSessionDescription(d.sdp));
+          await drainIce();
+          if (callRef.current?.callId === c.callId) setCall({ ...c, phase: 'active' });
+        } catch (_) { cleanup(); toast.error('Could not connect the call. Please try again.'); }
       }),
       subscribe('call:ice', async (d) => {
         const c = callRef.current; if (!c || c.callId !== d.callId || !d.candidate) return;
@@ -182,14 +241,16 @@ export function CallProvider({ children }) {
       subscribe('call:reject', onBye),
       subscribe('call:cancel', onBye),
     ];
-    return () => { offs.forEach(off => off()); };
-  }, [user?.id, cleanup, subscribe, emit]);
+    if (isConnected()) emit('call:ready');
+    return () => { emit('call:unready'); offs.forEach(off => off()); cleanup(); };
+  }, [user?.id, cleanup, subscribe, emit, isConnected, setCall]);
 
   // attach local preview stream to the <video> when it mounts / call changes
   useEffect(() => {
     if (call?.phase === 'active' && call.video && localVidRef.current && localRef.current) {
       localVidRef.current.srcObject = localRef.current;
     }
+    if (remoteVidRef.current && remoteRef.current) remoteVidRef.current.srcObject = remoteRef.current;
   }, [call?.phase, call?.video]);
 
   // Stable context value — only changes when startCall (memoised) or the call
@@ -217,7 +278,7 @@ export function CallProvider({ children }) {
               <div className="text-2xl font-semibold">{call.peerName}</div>
               <div className="text-sm text-white/70">
                 {call.phase === 'incoming' ? `Incoming ${call.video ? 'video' : 'voice'} call…`
-                  : call.phase === 'calling' ? `Calling… (${call.video ? 'video' : 'voice'})`
+                  : call.phase === 'calling' ? `${call.ringing ? 'Ringing' : 'Calling'}… (${call.video ? 'video' : 'voice'})`
                     : `${call.video ? 'Video' : 'Voice'} call`}
               </div>
             </div>
