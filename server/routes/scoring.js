@@ -488,16 +488,11 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         } catch (e) { return { given: null, done: null }; }
       }
 
-      // Daily Active users — system engagement (mam 2026-07-04: "daily active =
-      // average of week, actual user vs active user"). Plan = total registered
-      // (active) users; Actual = AVERAGE across the week's days of the distinct
-      // users who touched the system (audit_log). Company-wide (an owner KPI).
+      // Company-wide engagement: daily users checking or updating work pages.
+      // Attendance, login-only use and background pings do not qualify.
       if (source === 'auto:daily_active_users') {
         try {
-          const given = db.prepare(`SELECT COUNT(*) c FROM users WHERE COALESCE(active,1)=1`).get().c;
-          const row = db.prepare(`SELECT AVG(cnt) a FROM (SELECT date(at) d, COUNT(DISTINCT user_id) cnt FROM audit_log WHERE at BETWEEN ? AND ? GROUP BY date(at))`).get(since, until);
-          const done = row && row.a != null ? Math.round(row.a) : 0;
-          return { given, done };
+          return require('../lib/userEngagement').dailyActiveUsers(db, sinceDate, untilDate);
         } catch (e) { return { given: null, done: null }; }
       }
 

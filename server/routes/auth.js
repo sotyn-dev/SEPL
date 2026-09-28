@@ -8,6 +8,12 @@ const { generateToken, generatePendingToken, getSecret, authMiddleware, adminOnl
 const totp = require('../db/userTotp');
 const router = express.Router();
 
+router.post('/engagement', authMiddleware, (req, res) => {
+  const { recordView } = require('../lib/userEngagement');
+  if (!recordView(getDb(), req.user.id, req.body?.path)) return res.status(400).json({ error: 'Not a work page' });
+  res.status(204).end();
+});
+
 function finishLogin(res, user, db, ip, ua) {
   // Clear any past session revocation stamp so a fresh, authenticated login
   // is never rejected by a stale lockout timestamp from an earlier password reset

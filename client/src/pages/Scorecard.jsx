@@ -135,7 +135,7 @@ const SOURCE_INFO = {
   'auto:site_manpower':         { plan: 'Σ REQUIRED manpower — value slab, all projects', actual: 'Σ ACTUAL manpower on site (DPR average)' },
   'auto:attrition':             { plan: 'You set (max acceptable leavers)',    actual: 'Count of inactive/terminated staff (all-time)' },
   // System / Engagement (from the audit trail)
-  'auto:daily_active_users':    { plan: 'Total active (registered) users',     actual: 'Avg daily distinct users active in the system this week' },
+  'auto:daily_active_users':    { plan: 'Active, non-archived users', actual: 'Average daily users checking or updating work pages (IST); excludes attendance, login-only use and background pings. Past page views were not recorded.' },
   'auto:data_entry_all':        { plan: 'You set (e.g. 300000)',               actual: 'CREATE/UPDATE/DELETE records entered company-wide this week' },
   'auto:data_completeness':     { plan: 'Every required field across Item Master, Business Book, Employees & Users', actual: 'Those fields actually filled — the same % the Data Completion bar shows on each page' },
   'auto:indents_approved':      { plan: 'You set',                            actual: 'Indents approved by user' },
@@ -1723,7 +1723,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:attrition">Attrition — staff left count (↓ lower better, you set target)</option>
                   </optgroup>
                   <optgroup label="System / Engagement">
-                    <option value="auto:daily_active_users">Daily Active users — avg/day vs total users (all)</option>
+                    <option value="auto:daily_active_users">Daily Active users — checking/updates, excluding attendance</option>
                     <option value="auto:data_entry_all">Data Entry — records entered company-wide (weekly)</option>
                     <option value="auto:data_completeness">Data Completeness — required fields filled (Item Master + Business Book + Employees + Users)</option>
                     <option value="auto:data_completeness:item_master">Data Completeness — Item Master only</option>

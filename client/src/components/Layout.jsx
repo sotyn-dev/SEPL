@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { FiArrowDownCircle } from 'react-icons/fi';
 import { flowLabel } from '../utils/moduleFlows';
 import AnnouncementBell from './AnnouncementBell';
+import EngagementTracker from './EngagementTracker';
 // Mam (2026-05-22): standalone NotificationsBell removed — its
 // functionality is now merged into AnnouncementBell as a second tab,
 // so there's a single bell icon in the header (was confusing with 3).
@@ -712,6 +713,7 @@ export default function Layout() {
 
   return (
     <CallProvider>
+      <EngagementTracker userId={user?.id} />
     <div className="flex h-screen overflow-hidden">
       {/* Mobile overlay */}
       {sidebarOpen && isMobile && (
