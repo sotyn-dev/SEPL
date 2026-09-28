@@ -1,24 +1,5 @@
-// CRM Full Kitting — one definition of "done", and one rule for whose
-// project it is, shared by the tracker and the scorecard.
-//
-// mam 2026-09-07: "CRM -> only CRM Full kitting". The Full-Kitting KPI used to
-// count crm_kitting_entry rows by uploaded_by inside the scoring week, so the
-// person who ticks the boxes (Admin) got the credit, the CRM owner named on
-// the row got 0, two edits of one checkpoint counted as two units of work, and
-// everything reset to 0 every Monday. This module fixes all four: credit the
-// project's CRM owner, count CHECKPOINTS CURRENTLY COMPLETE, cumulatively.
-//
-// "Done" is the tracker's own rule (client/src/pages/CRMKitting.jsx
-// stagePctFor): a checkpoint counts when its LATEST entry says 'yes' or 'na',
-// over the ACTIVE checkpoints. crm_kitting_entry is append-only — every
-// dropdown change and photo is a new row — so the collapse to the latest row
-// per (project_key, checkpoint_id) is what makes "two edits = one checkpoint"
-// true. Anything that scores kitting comes through here, so the KPI and the
-// screen cannot drift apart.
-
-// Latest status values that count as complete. 'partially' and 'no' do not —
-// same as the tracker.
-const DONE_STATUSES = ['yes', 'na'];
+// Full-Kitting performance counts filled cells across all active projects.
+// Owner helpers remain available for owner-specific consumers.
 
 // trim, collapse inner whitespace, lowercase — 'LOVELY  SHARMA ' and
 // 'Lovely Sharma' are the same person.
@@ -105,30 +86,30 @@ function kittingProjectsForUser(db, userId) {
   return kittingOwnerProjects(db).get(userId) || [];
 }
 
-// Cumulative kitting progress over a set of projects.
-//   checkpoints — active checkpoints in the master list (admin-editable, so
-//                 read live, never hardcoded)
-//   given       — checkpoints × projects: the whole checklist in front of them
-//   done        — checkpoints whose LATEST entry is 'yes' or 'na'
-// BOTH sides are standing totals with no date window, and that is exactly why
-// the ratio is honest: numerator and denominator are measured at the same
-// moment, so done/given is "how much of my kitting is finished" and can never
-// climb past 100%. (The old shape — a cumulative done against mam's typed
-// weekly target of 120 — had no ceiling and rewrote every past week with
-// today's total.) Cumulative on purpose: mam 2026-09-07, work already done
-// must keep counting, like lib/dataCompletion.
-// MAX(id) collapses the history rather than MAX(uploaded_at): ids are
-// monotonic with uploaded_at (both are set by the single INSERT) and unlike
-// the timestamp they cannot tie, so two entries saved inside the same second
-// can never both survive the join and double-count one checkpoint.
+// Same Business Book project grouping as the tracker; removed projects are excluded.
+function kittingAllProjects(db) {
+  const hasRemoved = db.prepare(`PRAGMA table_info(crm_kitting_project_meta)`).all().some(c => c.name === 'removed_at');
+  return db.prepare(`
+    SELECT DISTINCT COALESCE(NULLIF(TRIM(bb.company_name),''), bb.client_name) AS project_key
+      FROM business_book bb
+     WHERE COALESCE(NULLIF(TRIM(bb.company_name),''), bb.client_name) IS NOT NULL
+       ${hasRemoved ? `AND NOT EXISTS (
+         SELECT 1 FROM crm_kitting_project_meta m
+          WHERE m.project_key = COALESCE(NULLIF(TRIM(bb.company_name),''), bb.client_name)
+            AND m.removed_at IS NOT NULL
+       )` : ''}
+  `).all().map(row => row.project_key);
+}
+
+// Planned: projects times all active checkpoints across three stages.
+// Actual: nonblank latest responses, including No and Partially; history counts once.
 function kittingProgress(db, projectKeys) {
-  const keys = (projectKeys || []).map(k => String(k == null ? '' : k)).filter(k => k.trim() !== '');
+  const keys = [...new Set((projectKeys || []).filter(k => k != null).map(String))];
   const checkpoints = db.prepare(
     `SELECT COUNT(*) c FROM crm_kitting_checkpoint WHERE is_active = 1`
   ).get().c;
   if (keys.length === 0) return { projects: 0, checkpoints, given: 0, done: 0 };
   const ph = keys.map(() => '?').join(',');
-  const st = DONE_STATUSES.map(() => '?').join(',');
   const done = db.prepare(`
     SELECT COUNT(*) c
       FROM crm_kitting_entry e
@@ -139,12 +120,12 @@ function kittingProgress(db, projectKeys) {
          GROUP BY project_key, checkpoint_id
       ) lm ON lm.latest_id = e.id
       JOIN crm_kitting_checkpoint c ON c.id = e.checkpoint_id AND c.is_active = 1
-     WHERE e.status IN (${st})
-  `).get(...keys, ...DONE_STATUSES).c;
+     WHERE COALESCE(TRIM(e.status), '') <> ''
+  `).get(...keys).c;
   return { projects: keys.length, checkpoints, given: keys.length * checkpoints, done };
 }
 
 module.exports = {
-  DONE_STATUSES, nameMatches, resolveOwnerUserId,
-  kittingOwnerProjects, kittingProjectsForUser, kittingProgress,
+  nameMatches, resolveOwnerUserId,
+  kittingOwnerProjects, kittingProjectsForUser, kittingAllProjects, kittingProgress,
 };

@@ -880,36 +880,11 @@ function computeScorecard(db, userId, weekStart, opts = {}) {
         const c = db.prepare(`SELECT COUNT(*) as c FROM meetings WHERE meeting_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
         return { given: null, done: c };
       }
-      // CRM Full Kitting — mam 2026-09-07: "CRM -> only CRM Full kitting".
-      // Credits the person named in the tracker's CRM column, not whoever
-      // clicked the box: the checkpoints on Consern Pharma were ticked by the
-      // Admin login, so the CRM person scored 0 while the tracker showed real
-      // progress.
-      //   Actual  = checkpoints CURRENTLY complete on her projects — the
-      //             append-only history collapsed to the latest status per
-      //             (project_key, checkpoint_id), so two edits of one box stay
-      //             ONE unit, by the tracker's own rule;
-      //   Planned = every ACTIVE checkpoint on those same projects.
-      // BOTH sides come from lib/crmKittingProgress and both are standing
-      // totals with no week window, so the ratio is "how much of my kitting is
-      // finished" and is bounded by 100%. This RETIRES the typed weekly target
-      // (120) on purpose: a cumulative count divided by a weekly number has no
-      // ceiling, pinned the row above 100% forever and rewrote every past week
-      // with today's total. Ownership is crm_kitting_project_meta.crm_owner
-      // ONLY — a project with no owner typed counts for nobody, and a name
-      // that matches two user accounts counts for nobody either. All three
-      // stages roll up into the one number (the tracker's badge is per stage).
-      // Owns NO kitting project → null/null, NOT 0/0. The engine reads 0/0 as
-      // "nothing to judge, on plan" and scores it a weighted 100% (mam
-      // 2026-08-13), which would paint the whole company green the moment this
-      // shipped — worse than the 0 she complained about, and target_auto would
-      // hide the Target box so she could not type her way out of it. null hands
-      // the row back to the manual planned/actual it uses today.
+      // Full-Kitting uses all active projects and filled cells across all three stages, independent of CRM owner.
       if (source === 'auto:crm_kitting') {
         try {
-          const { kittingProjectsForUser, kittingProgress } = require('../lib/crmKittingProgress');
-          const keys = kittingProjectsForUser(db, userId);
-          if (!keys.length) return { given: null, done: null };
+          const { kittingAllProjects, kittingProgress } = require('../lib/crmKittingProgress');
+          const keys = kittingAllProjects(db);
           const p = kittingProgress(db, keys);
           return { given: p.given, done: p.done };
         } catch (e) { return { given: null, done: null }; }

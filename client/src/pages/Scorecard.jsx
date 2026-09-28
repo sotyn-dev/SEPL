@@ -119,7 +119,7 @@ const SOURCE_INFO = {
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
   'auto:quotations_sent':       { plan: 'You set',                            actual: 'Quotations sent by user' },
   'auto:meetings_planned':      { plan: 'You set',                            actual: 'Meetings scheduled this week' },
-  'auto:crm_kitting':           { plan: 'All active checkpoints on the projects where this user is the tracker\'s CRM owner', actual: 'Of those, checkpoints complete (latest status Yes/NA) — cumulative, all 3 stages' },
+  'auto:crm_kitting':           { plan: 'All active projects × active checkpoints across all 3 stages (regardless of CRM owner)', actual: 'Cells with a nonblank latest response (Yes, No, Partially or N/A) — cumulative, all 3 stages' },
   // Business Book
   'auto:bb_entries':            { plan: 'You set',                            actual: 'Business Book entries created by user' },
   'auto:bb_po_amount':          { plan: 'You set',                            actual: 'Σ PO amount on user\'s BB entries' },
@@ -1661,7 +1661,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:leads_qualified">leads qualified (by user)</option>
                     <option value="auto:quotations_sent">quotations sent (by user)</option>
                     <option value="auto:meetings_planned">meetings planned (this week)</option>
-                    <option value="auto:crm_kitting">CRM full kitting — checkpoints complete (user = CRM owner)</option>
+                    <option value="auto:crm_kitting">Full kitting — all projects, filled checkpoints (all 3 stages)</option>
                   </optgroup>
                   <optgroup label="Business Book">
                     <option value="auto:bb_entries">BB entries created (by user)</option>
