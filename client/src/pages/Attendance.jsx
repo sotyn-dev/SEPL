@@ -407,6 +407,23 @@ export default function Attendance() {
 
   const cellMeta = (c) => {
     const s = c?.status || '';
+    const isManual = c?.source === 'admin';
+
+    // 🌟 Manage Manual Mode -> Royal Blue
+    if (isManual && s && s !== 'sunday') {
+      let code = 'P';
+      if (s === 'present' || s === 'late') code = 'P';
+      else if (s === 'half_day' || s === 'short_day') code = 'H';
+      else if (s === 'absent') code = 'A';
+      else if (s === 'leave') code = 'L';
+      else code = s.charAt(0).toUpperCase();
+
+      return {
+        t: code,
+        cls: 'bg-blue-600 text-white font-bold ring-1 ring-inset ring-blue-700 shadow-xs'
+      };
+    }
+
     // Worked on a scheduled week-off (e.g. a Sunday punch) — flag it distinctly
     // so HR can see who's owed comp / extra-day pay.
     if (c?.worked_on_off) return { t: 'WOP', cls: 'bg-teal-100 text-teal-700 ring-1 ring-inset ring-teal-300' };
@@ -510,7 +527,11 @@ export default function Attendance() {
               <span className={`w-1.5 h-1.5 rounded-full ${cur.dot}`} />
               <span className="capitalize">{curLabel}</span>
             </span>
-            {provenance && <span className="text-[11px] text-gray-400">· {provenance}</span>}
+            {provenance && (
+              <span className={`text-[11px] px-2 py-0.5 rounded font-medium ${cellInfo.source === 'admin' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-400'}`}>
+                {cellInfo.source === 'admin' ? '✎ Admin Marked (Manual)' : `· ${provenance}`}
+              </span>
+            )}
           </div>
           <div className="mt-1.5 text-[12.5px] text-gray-500">
             In: <b className="font-medium text-gray-700">{cellInfo.in ? fmtT(cellInfo.in) : '—'}</b>
@@ -632,7 +653,8 @@ export default function Attendance() {
             <button onClick={exportGrid} disabled={!grid || !grid.employees?.length} className="btn btn-primary text-sm flex items-center gap-1" title="Download this month's attendance muster as an Excel sheet — identity columns + day-wise codes + present/half/leave/late totals">
               <FiDownload size={14} /> Export Excel
             </button>
-            <div className="flex items-center gap-2 text-[11px] text-gray-500 ml-auto">
+            <div className="flex items-center gap-2 text-[11px] text-gray-500 ml-auto flex-wrap">
+              <span className="px-1.5 py-0.5 rounded bg-blue-600 text-white font-bold shadow-xs">P/H/A manual</span>
               <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">P present</span>
               <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-600">A absent</span>
               <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">H half</span>
