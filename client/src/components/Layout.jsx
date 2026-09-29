@@ -202,7 +202,7 @@ const SIDEBAR_GROUPS = [
     { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
     { path: '/cash-flow-tracker', label: 'Cash Flow Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
-    { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing',      hidden: true },
+    { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
     { path: '/client-snag',      label: 'Client Snag', icon: FiCamera,     module: 'client_snag',  hidden: true },
     // Bank module (mam 2026-08-31): payment received / paid out from PNB & HDFC
     // in one place — statement import + reconciliation; AA sync is Phase 2.

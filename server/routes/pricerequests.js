@@ -13,6 +13,20 @@ router.use(authMiddleware);
 const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const bulkUpload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 } });
+const reqUpload = multer({ dest: uploadDir, limits: { fileSize: 25 * 1024 * 1024 } });
+
+// File upload middleware with friendly error handling
+const handleUpload = (req, res, next) => {
+  reqUpload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'File size exceeds 25 MB limit' });
+      }
+      return res.status(400).json({ error: err.message || 'File upload failed' });
+    }
+    next();
+  });
+};
 
 // Anyone with item-master view permission (or admin) can also approve /
 // finalize price requests — same gate as Procurement uses for vendor rates.
@@ -58,24 +72,42 @@ router.get('/', (req, res) => {
 
 // ------- CREATE (Stage 1) -------
 // Any authenticated user. Site engineer raises a request for a new item.
-router.post('/', (req, res) => {
+router.post('/', handleUpload, (req, res) => {
   const b = req.body || {};
   if (!b.item_name || !String(b.item_name).trim()) {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
     return res.status(400).json({ error: 'Item name is required' });
   }
   // Mam (2026-05-25): "HERE DEPARTMENT IS MEDATORY AND ACCORDING TO THAT
   // ITEM NAME CREATE AT PLACE OF PO" — department must be filled so the
   // auto-generated item_code can use the right prefix (FF / ELV / ELE...).
   if (!b.department || !String(b.department).trim()) {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
     return res.status(400).json({ error: 'Department is required (drives the item_code prefix when promoted to Item Master)' });
   }
   const allowedTypes = ['PO', 'FOC', 'RGP'];
   const itemType = allowedTypes.includes(String(b.item_type || '').toUpperCase())
     ? String(b.item_type).toUpperCase() : 'PO';
+
+  let filePath = null;
+  let fileName = null;
+  if (req.file) {
+    fileName = req.file.originalname;
+    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const newName = `${Date.now()}-${safeName}`;
+    const newPath = path.join(uploadDir, newName);
+    try {
+      fs.renameSync(req.file.path, newPath);
+      filePath = `/uploads/${newName}`;
+    } catch (e) {
+      filePath = `/uploads/${req.file.filename}`;
+    }
+  }
+
   const r = getDb().prepare(`
     INSERT INTO price_requests
-      (site_name, item_name, size, specification, make, uom, item_type, department, notes, raised_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?)
+      (site_name, item_name, size, specification, make, uom, item_type, department, notes, sheet_url, attachment_url, attachment_name, raised_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     b.site_name || null,
     String(b.item_name).trim(),
@@ -86,6 +118,9 @@ router.post('/', (req, res) => {
     itemType,
     b.department ? String(b.department).trim().toUpperCase() : null,
     b.notes || null,
+    b.sheet_url ? String(b.sheet_url).trim() : null,
+    filePath,
+    fileName,
     req.user.id,
   );
   res.status(201).json({ id: r.lastInsertRowid });
@@ -95,22 +130,52 @@ router.post('/', (req, res) => {
 // Only the item-description fields can be changed here — vendor quotes and
 // finalize state have their own endpoints. Locked after the item has been
 // promoted to Item Master so the master row's source-of-truth doesn't drift.
-router.put('/:id', (req, res) => {
+router.put('/:id', handleUpload, (req, res) => {
   const db = getDb();
   const cur = db.prepare('SELECT raised_by, status FROM price_requests WHERE id=?').get(req.params.id);
-  if (!cur) return res.status(404).json({ error: 'Not found' });
+  if (!cur) {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+    return res.status(404).json({ error: 'Not found' });
+  }
   const isOwner = cur.raised_by === req.user.id;
-  if (!(req.user.role === 'admin' || isOwner)) return res.status(403).json({ error: 'Not allowed' });
-  if (cur.status === 'added') return res.status(400).json({ error: 'Cannot edit after item promoted to master' });
+  if (!(req.user.role === 'admin' || isOwner)) {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+    return res.status(403).json({ error: 'Not allowed' });
+  }
+  if (cur.status === 'added') {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+    return res.status(400).json({ error: 'Cannot edit after item promoted to master' });
+  }
 
   const b = req.body || {};
   if (b.item_name !== undefined && !String(b.item_name).trim()) {
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
     return res.status(400).json({ error: 'Item name is required' });
   }
+
   // Pull current row to preserve fields the form didn't send.
   const full = db.prepare('SELECT * FROM price_requests WHERE id=?').get(req.params.id);
+  let filePath = full.attachment_url;
+  let fileName = full.attachment_name;
+  if (req.file) {
+    fileName = req.file.originalname;
+    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const newName = `${Date.now()}-${safeName}`;
+    const newPath = path.join(uploadDir, newName);
+    try {
+      fs.renameSync(req.file.path, newPath);
+      filePath = `/uploads/${newName}`;
+    } catch (e) {
+      filePath = `/uploads/${req.file.filename}`;
+    }
+  } else if (b.remove_attachment === 'true' || b.remove_attachment === true) {
+    filePath = null;
+    fileName = null;
+  }
+
   db.prepare(`UPDATE price_requests SET
-      site_name=?, item_name=?, size=?, specification=?, make=?, uom=?, item_type=?, department=?, notes=?
+      site_name=?, item_name=?, size=?, specification=?, make=?, uom=?, item_type=?, department=?, notes=?,
+      sheet_url=?, attachment_url=?, attachment_name=?
     WHERE id=?`).run(
     b.site_name !== undefined ? b.site_name : full.site_name,
     b.item_name !== undefined ? String(b.item_name).trim() : full.item_name,
@@ -121,6 +186,9 @@ router.put('/:id', (req, res) => {
     b.item_type !== undefined ? b.item_type : full.item_type,
     b.department !== undefined ? b.department : full.department,
     b.notes !== undefined ? b.notes : full.notes,
+    b.sheet_url !== undefined ? (b.sheet_url ? String(b.sheet_url).trim() : null) : full.sheet_url,
+    filePath,
+    fileName,
     req.params.id,
   );
   res.json({ message: 'Updated' });
@@ -162,6 +230,12 @@ router.get('/grouped', (req, res) => {
         anchor_id: r.id,
         item_name: r.item_name, size: r.size, specification: r.specification,
         make: r.make, uom: r.uom, item_type: r.item_type,
+        department: r.department,
+        sheet_url: r.sheet_url,
+        attachment_url: r.attachment_url,
+        attachment_name: r.attachment_name,
+        sheet_urls: r.sheet_url ? [r.sheet_url] : [],
+        attachments: r.attachment_url ? [{ url: r.attachment_url, name: r.attachment_name || 'Attachment' }] : [],
         request_ids: [],
         sites: [],
         // vendor + final fields are taken from the anchor (first request) so
@@ -176,6 +250,10 @@ router.get('/grouped', (req, res) => {
     const g = map.get(key);
     g.request_ids.push(r.id);
     if (r.site_name && !g.sites.includes(r.site_name)) g.sites.push(r.site_name);
+    if (r.sheet_url && !g.sheet_urls.includes(r.sheet_url)) g.sheet_urls.push(r.sheet_url);
+    if (r.attachment_url && !g.attachments.some(a => a.url === r.attachment_url)) {
+      g.attachments.push({ url: r.attachment_url, name: r.attachment_name || 'Attachment' });
+    }
   }
   res.json([...map.values()]);
 });
@@ -349,6 +427,7 @@ router.get('/template', (req, res) => {
     'Item Type',          // PO / FOC / RGP (default PO)
     'Department',         // ELECTRICAL / HVAC / FF / PLUMBING / ELV / SOLAR / CIVIL
     'Notes',              // any extra detail for purchase team
+    'Google Sheet URL',   // optional link to online sheet / document
   ];
   // One illustrative row so mam can see the expected format.
   const sample = [
@@ -361,12 +440,13 @@ router.get('/template', (req, res) => {
     'PO',
     'FIRE FIGHTING',
     'Urgent — needed for site walkthrough',
+    'https://docs.google.com/spreadsheets/d/sample',
   ];
   const sheet1 = XLSX.utils.aoa_to_sheet([header, sample, [], []]);
   // Set sensible column widths so the template is readable on first open.
   sheet1['!cols'] = [
     { wch: 22 }, { wch: 30 }, { wch: 22 }, { wch: 22 }, { wch: 14 },
-    { wch: 8 },  { wch: 10 }, { wch: 18 }, { wch: 40 },
+    { wch: 8 },  { wch: 10 }, { wch: 18 }, { wch: 40 }, { wch: 45 },
   ];
   XLSX.utils.book_append_sheet(wb, sheet1, 'Price Requests');
   // Sheet 2: instructions + allowed values, so mam doesn't have to ask.
@@ -438,8 +518,8 @@ router.post('/bulk-upload', bulkUpload.single('file'), (req, res) => {
   const db = getDb();
   const insert = db.prepare(`
     INSERT INTO price_requests
-      (site_name, item_name, size, specification, make, uom, item_type, department, notes, raised_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?)
+      (site_name, item_name, size, specification, make, uom, item_type, department, notes, sheet_url, raised_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
   `);
 
   const inserted = [];
@@ -472,6 +552,7 @@ router.post('/bulk-upload', bulkUpload.single('file'), (req, res) => {
         item_type,
         (pick(row, 'Department') || '').toUpperCase() || null,
         pick(row, 'Notes') || null,
+        pick(row, 'Google Sheet URL', 'Sheet URL', 'sheet_url', 'Google Sheet', 'Link', 'URL') || null,
         req.user.id,
       );
       inserted.push({ row: idx + 2, id: r.lastInsertRowid, item_name });

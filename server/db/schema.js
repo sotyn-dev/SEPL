@@ -2792,6 +2792,10 @@ function initializeDatabase() {
       finalized_at DATETIME,
       -- Set after the system promotes this to the catalog
       item_master_id INTEGER REFERENCES item_master(id),
+      department TEXT,
+      sheet_url TEXT,
+      attachment_url TEXT,
+      attachment_name TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -3116,6 +3120,15 @@ function initializeDatabase() {
     // ROI=1, Automations=4, etc.). Used as the Planned default when no
     // weekly entry exists.
     ['score_kpis', 'default_planned REAL DEFAULT 0'],
+    // TSK-0823: Dispatch to MB (installation) auto
+    ['mb_bills', 'delivery_note_id INTEGER REFERENCES delivery_notes(id)'],
+    ['mb_bills', "source TEXT DEFAULT 'manual'"],
+    ['mb_bills', 'items_json TEXT'],
+    ['installations', 'business_book_id INTEGER REFERENCES business_book(id)'],
+    // Price Requests attachments (Google Sheet URL + uploaded file)
+    ['price_requests', 'sheet_url TEXT'],
+    ['price_requests', 'attachment_url TEXT'],
+    ['price_requests', 'attachment_name TEXT'],
     // Vendor rating out of 10 (mam 2026-06-03: "add for rating 10 out of
     // score" on the Add Vendor form). Optional 0–10 score the team sets
     // when onboarding / reviewing a vendor.
