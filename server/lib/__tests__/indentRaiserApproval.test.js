@@ -13,6 +13,8 @@ test('new indent review and original-raiser approval through real procurement ro
     return { status: r.status, body: await r.json() };
   };
   const make = async () => {
+    // The raising window uses the real IST clock independently of the cutoff fixture.
+    assert.equal((await request('procurement/indent-raise-window', 9004, { enable: true })).status, 200);
     const r = await request('procurement/indents', 9002, {
       site_name: 'DEMO Site A', raised_by_name: 'Site Engineer A', indent_category: 'rgp',
       emergency_reason: 'Local demo date window', notes: 'Synthetic fixture',
@@ -70,6 +72,24 @@ test('new indent review and original-raiser approval through real procurement ro
     assert.equal(done.status, 'approved'); assert.equal(done.approved_by, 9002); assert.equal(done.l1_by, 9001);
     assert.equal((await act('approved', 9002, 1)).status, 409);
     assert.deepEqual(db.prepare('SELECT action FROM indent_review_audit WHERE indent_id=? ORDER BY id').all(row.id).map(x => x.action), ['marked_correct', 'edited_review_invalidated', 'marked_correct', 'raiser_approved']);
+  });
+  await t.test('admin corrections after final approval preserve stamps and audit before/after; others stay blocked', async () => {
+    const before = db.prepare('SELECT * FROM indents WHERE id=?').get(row.id);
+    const line = db.prepare('SELECT * FROM indent_items WHERE indent_id=?').get(row.id);
+    const body = { site_name: before.site_name, raised_by_name: before.raised_by_name, notes: 'Admin correction',
+      items: [{ ...line, quantity: 4 }] };
+    for (const user of [9001, 9002, 9003]) assert.equal((await request(url, user, body)).status, 409);
+    const edited = await request(url, 9004, body);
+    assert.equal(edited.status, 200, JSON.stringify(edited.body));
+    const after = db.prepare('SELECT * FROM indents WHERE id=?').get(row.id);
+    for (const field of ['status','approved_by','approved_at','l1_status','l1_by','l1_at','l2_status','l2_by','l2_at','created_by']) assert.equal(after[field], before[field], field);
+    assert.equal(after.review_revision, before.review_revision + 1);
+    assert.equal(db.prepare('SELECT quantity FROM indent_items WHERE id=?').get(line.id).quantity, 4);
+    const event = db.prepare("SELECT * FROM indent_review_audit WHERE indent_id=? AND action='admin_edited_after_approval'").get(row.id);
+    assert.equal(event.actor_id, 9004);
+    const details = JSON.parse(event.details);
+    assert.equal(details.before.items[0].quantity, line.quantity);
+    assert.equal(details.after.items[0].quantity, 4);
   });
   await t.test('dashboard and tracker cannot bypass the new workflow', async () => {
     const pending = await make();

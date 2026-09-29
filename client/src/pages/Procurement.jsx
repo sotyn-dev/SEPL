@@ -1956,9 +1956,9 @@ export default function Procurement() {
     }
   };
 
-  const canEditIndentRow = (i) => i.raiser_approval_required
+  const canEditIndentRow = (i) => isAdmin() || (i.raiser_approval_required
     ? ['submitted', 'crm_approved', 'l1_approved', 'rejected'].includes(i.status) && (i.created_by === user?.id || i.can_review_indent || canEdit('procurement') || isAdmin())
-    : (canEdit('procurement') || isAdmin()) && (i.status !== 'approved' || isAdmin());
+    : canEdit('procurement') && i.status !== 'approved');
   const renderRaiserActions = (i) => {
     if (['submitted', 'crm_approved'].includes(i.status)) return i.can_review_indent ? (
       <><button onClick={() => openEditIndent(i)} className="btn text-xs py-1 px-2">Review / Edit</button>

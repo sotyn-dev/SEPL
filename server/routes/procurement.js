@@ -2715,7 +2715,8 @@ router.put('/indents/:id', (req, res) => {
 
   // Full edit path
   if (items) {
-    if (raiserFlow && !['submitted', 'crm_approved', 'l1_approved', 'rejected'].includes(workflowRow.status)) {
+    const adminApprovedEdit = req.user.role === 'admin' && workflowRow.status === 'approved';
+    if (raiserFlow && !adminApprovedEdit && !['submitted', 'crm_approved', 'l1_approved', 'rejected'].includes(workflowRow.status)) {
       return res.status(409).json({ error: 'A finally approved indent cannot be rewritten. Raise a new indent for corrections.' });
     }
     const cur = db.prepare('SELECT status, indent_category, created_by, site_name, department FROM indents WHERE id=?').get(id);
@@ -2849,7 +2850,10 @@ router.put('/indents/:id', (req, res) => {
     }
 
     const tx = db.transaction(() => {
-      raiserApproval.invalidateReview(db, workflowRow, req.user.id);
+      const beforeItems = adminApprovedEdit ? db.prepare('SELECT * FROM indent_items WHERE indent_id=?').all(id) : null;
+      // An explicit admin correction keeps the completed approval trail. Pending
+      // edits still require review again; PO and stock-issue guards apply above.
+      if (!adminApprovedEdit) raiserApproval.invalidateReview(db, workflowRow, req.user.id);
       db.prepare(
         `UPDATE indents SET site_name=?, raised_by_name=?, client_name=?, notes=?, department=?,
                             status = CASE WHEN status='rejected' THEN 'submitted' ELSE status END
@@ -2954,6 +2958,14 @@ router.put('/indents/:id', (req, res) => {
           throw Object.assign(new Error(`"${String(old.description || 'Item').slice(0, 60)}" is on a cancelled Vendor PO, so it can't be removed. Keep it and change its quantity instead.`), { status: 400 });
         }
         deleteItem.run(lineId);   // its vendor rates go with it (ON DELETE CASCADE)
+      }
+      if (adminApprovedEdit) {
+        db.prepare('UPDATE indents SET review_revision=COALESCE(review_revision,0)+1 WHERE id=?').run(id);
+        const after = db.prepare('SELECT * FROM indents WHERE id=?').get(id);
+        raiserApproval.audit(db, after, req.user.id, 'admin_edited_after_approval', {
+          before: { indent: workflowRow, items: beforeItems },
+          after: { indent: after, items: db.prepare('SELECT * FROM indent_items WHERE indent_id=?').all(id) },
+        });
       }
     });
     try {
